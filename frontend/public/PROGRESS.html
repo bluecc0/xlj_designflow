@@ -30,327 +30,249 @@
 }
 
 html { font-size: 15px; }
-
 body {
-  background: var(--bg);
-  color: var(--text);
+  background: var(--bg); color: var(--text);
   font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  line-height: 1.55;
-  -webkit-font-smoothing: antialiased;
+  line-height: 1.55; -webkit-font-smoothing: antialiased;
 }
-
-/* ── Page shell ── */
-.page {
-  max-width: 780px;
-  margin: 0 auto;
-  padding: 48px 24px 80px;
-}
+.page { max-width: 780px; margin: 0 auto; padding: 48px 24px 80px; }
 
 /* ── Header ── */
-.header {
-  margin-bottom: 40px;
-}
+.header { margin-bottom: 32px; }
 .header-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 20px;
+  display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 20px;
 }
-.header h1 {
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--text);
-  letter-spacing: -.3px;
-}
-.header-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 6px;
-}
+.header h1 { font-size: 22px; font-weight: 600; color: var(--text); letter-spacing: -.3px; }
+.header-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 99px;
-  border: 1px solid var(--border2);
-  color: var(--sub);
-  background: var(--surface);
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px;
+  padding: 2px 8px; border-radius: 99px; border: 1px solid var(--border2);
+  color: var(--sub); background: var(--surface);
 }
-.chip-dot {
-  width: 5px; height: 5px; border-radius: 50%;
-}
+.chip-dot { width: 5px; height: 5px; border-radius: 50%; }
 
-/* ── Stats row ── */
+/* ── Tab bar ── */
+.tab-bar { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 28px; }
+.tab-btn {
+  padding: 9px 16px; border: none; background: transparent;
+  color: var(--sub); font-size: 13px; font-weight: 500; cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color .12s, border-color .12s; font-family: inherit;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* ── Buttons ── */
+.btn-sm {
+  padding: 4px 10px; border-radius: 5px; border: 1px solid var(--border2);
+  background: var(--surface); color: var(--sub); font-size: 11px;
+  cursor: pointer; transition: all .12s; font-family: inherit;
+}
+.btn-sm:hover { color: var(--text); background: var(--surface2); }
+.btn-add {
+  padding: 3px 10px; border-radius: 5px; border: 1px solid rgba(94,106,210,.4);
+  background: rgba(94,106,210,.1); color: #8b96e9; font-size: 11px; font-weight: 500;
+  cursor: pointer; white-space: nowrap; transition: all .12s; font-family: inherit;
+}
+.btn-add:hover { background: rgba(94,106,210,.18); color: #b0b8f5; }
+
+/* ── Stats ── */
 .stats {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 1px;
-  background: var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  border: 1px solid var(--border);
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px;
+  background: var(--border); border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--border); margin-bottom: 28px;
 }
-.stat {
-  background: var(--surface);
-  padding: 14px 16px;
-  cursor: pointer;
-  transition: background .1s;
-}
+.stat { background: var(--surface); padding: 14px 16px; cursor: pointer; transition: background .1s; }
 .stat:hover, .stat.active { background: var(--surface2); }
 .stat.active .stat-num { color: var(--text); }
-.stat-num {
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1;
-  margin-bottom: 5px;
-  color: var(--sub);
-  transition: color .1s;
-}
-.stat-lbl {
-  font-size: 11px;
-  color: var(--faint);
-  text-transform: uppercase;
-  letter-spacing: .06em;
-}
+.stat-num { font-size: 22px; font-weight: 700; line-height: 1; margin-bottom: 5px; color: var(--sub); transition: color .1s; }
+.stat-lbl { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
 
 /* ── Toolbar ── */
-.toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: 28px 0 12px;
-  gap: 10px;
-}
-.toolbar-left {
-  font-size: 12px;
-  color: var(--faint);
-}
-.toolbar-right {
-  display: flex; gap: 6px;
-}
-.btn-sm {
-  padding: 4px 10px;
-  border-radius: 5px;
-  border: 1px solid var(--border2);
-  background: var(--surface);
-  color: var(--sub);
-  font-size: 11px;
-  cursor: pointer;
-  transition: all .12s;
-}
-.btn-sm:hover { border-color: var(--border2); color: var(--text); background: var(--surface2); }
+.toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 10px; }
+.toolbar-left { font-size: 12px; color: var(--faint); }
 
-/* ── Section ── */
-.section {
-  margin-bottom: 2px;
-}
+/* ── Progress sections ── */
+.section { margin-bottom: 2px; }
 .section-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 14px;
-  border-radius: 7px 7px 0 0;
-  border: 1px solid var(--border);
-  border-bottom: none;
-  background: var(--surface);
-  cursor: pointer;
-  user-select: none;
-  transition: background .1s;
+  display: flex; align-items: center; gap: 10px; padding: 9px 14px;
+  border-radius: 7px 7px 0 0; border: 1px solid var(--border); border-bottom: none;
+  background: var(--surface); cursor: pointer; user-select: none; transition: background .1s;
 }
 .section-head:hover { background: var(--surface2); }
 .section-head.collapsed { border-radius: 7px; border-bottom: 1px solid var(--border); margin-bottom: 2px; }
-
-.section-icon { font-size: 13px; }
 .section-name { font-size: 13px; font-weight: 500; flex: 1; }
-.section-badge {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: 99px;
-}
-.badge-done   { background: var(--green-bg);  color: var(--green); }
-.badge-bug    { background: var(--red-bg);    color: var(--red);   }
-.badge-wip    { background: var(--blue-bg);   color: var(--blue);  }
-.badge-todo   { background: var(--amber-bg);  color: var(--amber); }
-.badge-idea   { background: var(--violet-bg); color: var(--violet);}
+.section-badge { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 99px; }
+.badge-done { background: var(--green-bg); color: var(--green); }
+.badge-bug  { background: var(--red-bg);   color: var(--red);   }
+.badge-wip  { background: var(--blue-bg);  color: var(--blue);  }
+.badge-todo { background: var(--amber-bg); color: var(--amber); }
+.badge-idea { background: var(--violet-bg);color: var(--violet);}
 .chevron { font-size: 9px; color: var(--faint); transition: transform .18s; }
 .chevron.open { transform: rotate(90deg); }
+.section-body { border: 1px solid var(--border); border-top: none; border-radius: 0 0 7px 7px; overflow: hidden; margin-bottom: 6px; }
 
-.section-body {
-  border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 7px 7px;
-  overflow: hidden;
-  margin-bottom: 6px;
-}
-
-/* ── Item ── */
+/* ── Progress items ── */
 .item {
-  display: grid;
-  grid-template-columns: 20px 1fr auto;
-  align-items: start;
-  gap: 10px;
-  padding: 11px 14px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  transition: background .08s;
-  position: relative;
+  display: grid; grid-template-columns: 20px 1fr auto;
+  align-items: start; gap: 10px; padding: 11px 14px;
+  border-bottom: 1px solid var(--border); background: var(--surface);
+  transition: background .08s; position: relative;
 }
 .item:last-of-type { border-bottom: none; }
 .item:hover { background: var(--surface2); }
 .item:hover .item-acts { opacity: 1; }
-
-.status-dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  margin-top: 5px; justify-self: center; flex-shrink: 0;
-}
-.dot-done   { background: var(--green);  box-shadow: 0 0 6px var(--green-bg); }
-.dot-bug    { background: var(--red);    box-shadow: 0 0 6px var(--red-bg);   }
-.dot-wip    { background: var(--blue);   box-shadow: 0 0 6px var(--blue-bg);  }
-.dot-todo   { background: var(--amber);  box-shadow: 0 0 6px var(--amber-bg); }
-.dot-idea   { background: var(--violet); box-shadow: 0 0 6px var(--violet-bg);}
-
+.status-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 5px; justify-self: center; flex-shrink: 0; }
+.dot-done { background: var(--green); box-shadow: 0 0 6px var(--green-bg); }
+.dot-bug  { background: var(--red);   box-shadow: 0 0 6px var(--red-bg);   }
+.dot-wip  { background: var(--blue);  box-shadow: 0 0 6px var(--blue-bg);  }
+.dot-todo { background: var(--amber); box-shadow: 0 0 6px var(--amber-bg); }
+.dot-idea { background: var(--violet);box-shadow: 0 0 6px var(--violet-bg);}
 .item-body { min-width: 0; }
-.item-title {
-  font-size: 13.5px;
-  color: var(--text);
-  line-height: 1.4;
-}
+.item-title { font-size: 13.5px; color: var(--text); line-height: 1.4; }
 .item-title.done { color: var(--sub); text-decoration: line-through; text-decoration-color: var(--faint); }
-.item-desc {
-  font-size: 12px;
-  color: var(--sub);
-  margin-top: 3px;
-  line-height: 1.5;
-}
-.item-time {
-  font-size: 11px;
-  color: var(--faint);
-  margin-top: 5px;
-}
-
+.item-desc { font-size: 12px; color: var(--sub); margin-top: 3px; line-height: 1.5; }
 code {
-  font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
-  font-size: 11px;
-  background: rgba(255,255,255,.06);
-  padding: 1px 5px;
-  border-radius: 3px;
-  color: var(--blue);
+  font-family: "SF Mono","Cascadia Code",Consolas,monospace; font-size: 11px;
+  background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 3px; color: var(--blue);
 }
-
-.item-acts {
-  display: flex; gap: 3px;
-  opacity: 0; transition: opacity .12s;
-  align-self: start; margin-top: 1px;
-}
+.item-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; align-self: start; }
+.item-time { font-size: 11px; color: var(--faint); white-space: nowrap; text-align: right; }
+.item-acts { display: flex; gap: 3px; opacity: 0; transition: opacity .12s; }
 .act-btn {
-  width: 20px; height: 20px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: var(--surface2);
-  color: var(--faint);
-  font-size: 11px; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  transition: all .1s;
+  width: 20px; height: 20px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--faint); font-size: 11px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; transition: all .1s;
 }
 .act-btn:hover { color: var(--text); border-color: var(--border2); }
 .act-btn.del:hover { color: var(--red); border-color: rgba(248,113,113,.3); background: var(--red-bg); }
 
-/* ── Add row ── */
+/* ── Add row (progress) ── */
 .add-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 14px;
-  background: var(--surface);
-  border-top: 1px dashed var(--border2);
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  background: var(--surface); border-top: 1px dashed var(--border2);
 }
 .add-row input {
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--border2);
-  color: var(--text);
-  font-size: 12px;
-  padding: 3px 0;
-  outline: none;
-  font-family: inherit;
-  transition: border-color .12s;
+  background: transparent; border: none; border-bottom: 1px solid var(--border2);
+  color: var(--text); font-size: 12px; padding: 3px 0; outline: none;
+  font-family: inherit; transition: border-color .12s;
 }
 .add-row input:focus { border-color: var(--accent); }
 .add-title { flex: 1.5; }
 .add-desc  { flex: 2; }
-.btn-add {
-  padding: 3px 10px;
-  border-radius: 5px;
-  border: 1px solid rgba(94,106,210,.4);
-  background: rgba(94,106,210,.1);
-  color: #8b96e9;
-  font-size: 11px; font-weight: 500;
-  cursor: pointer; white-space: nowrap;
-  transition: all .12s;
-}
-.btn-add:hover { background: rgba(94,106,210,.18); color: #b0b8f5; }
 
-/* ── Edit modal ── */
+/* ── Roadmap ── */
+.roadmap { display: flex; flex-direction: column; gap: 12px; }
+.roadmap-toolbar { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+
+.phase { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+
+.phase-head {
+  display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.phase-head:hover { background: var(--surface2); }
+.phase-version {
+  font-size: 11px; font-weight: 700; font-family: "SF Mono",Consolas,monospace;
+  color: var(--faint); letter-spacing: .04em; flex-shrink: 0;
+}
+.phase-title { font-size: 13.5px; font-weight: 600; color: var(--text); flex: 1; min-width: 0; }
+.phase-progress { font-size: 11px; color: var(--faint); white-space: nowrap; }
+.phase-badge {
+  font-size: 10px; font-weight: 600; padding: 2px 8px;
+  border-radius: 99px; white-space: nowrap; flex-shrink: 0;
+}
+.phase-badge.done    { background: var(--green-bg); color: var(--green); }
+.phase-badge.current { background: var(--blue-bg);  color: var(--blue);  }
+.phase-badge.planned { background: rgba(255,255,255,.04); color: var(--faint); border: 1px solid var(--border2); }
+.phase-acts { display: flex; gap: 3px; flex-shrink: 0; }
+
+.phase-desc {
+  font-size: 12px; color: var(--sub); padding: 10px 16px 8px;
+  line-height: 1.6; border-bottom: 1px solid var(--border);
+}
+.phase-desc:empty { display: none; }
+
+/* ── Goal items ── */
+.goal-item {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 9px 16px; border-bottom: 1px solid var(--border);
+  background: var(--surface); transition: background .08s;
+}
+.goal-item:last-of-type { border-bottom: none; }
+.goal-item:hover { background: var(--surface2); }
+.goal-item:hover .goal-acts { opacity: 1; }
+
+.goal-check {
+  width: 15px; height: 15px; border-radius: 50%; flex-shrink: 0; margin-top: 2px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; cursor: pointer; transition: all .12s;
+}
+.goal-check.done { background: var(--green); color: #0a0a0b; }
+.goal-check.todo { border: 1.5px solid var(--border2); }
+.goal-check.todo:hover { border-color: var(--green); }
+
+.goal-body { flex: 1; min-width: 0; }
+.goal-text { font-size: 13px; color: var(--text); line-height: 1.5; }
+.goal-text.done { color: var(--sub); text-decoration: line-through; text-decoration-color: var(--faint); }
+.goal-sub { font-size: 11px; color: var(--faint); margin-top: 2px; line-height: 1.4; }
+
+.goal-acts { display: flex; gap: 3px; opacity: 0; transition: opacity .12s; align-self: start; margin-top: 1px; flex-shrink: 0; }
+
+/* ── Goal add row ── */
+.goal-add-row {
+  display: flex; align-items: center; gap: 8px; padding: 7px 16px;
+  background: var(--surface); border-top: 1px dashed var(--border2);
+}
+.goal-add-row input {
+  flex: 1; background: transparent; border: none;
+  border-bottom: 1px solid var(--border2); color: var(--text);
+  font-size: 12px; padding: 3px 0; outline: none;
+  font-family: inherit; transition: border-color .12s;
+}
+.goal-add-row input:focus { border-color: var(--accent); }
+
+/* ── Modal ── */
 .modal-bg {
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,.6);
-  backdrop-filter: blur(4px);
-  display: none; align-items: center; justify-content: center;
-  z-index: 50;
+  position: fixed; inset: 0; background: rgba(0,0,0,.65);
+  backdrop-filter: blur(4px); display: none;
+  align-items: center; justify-content: center; z-index: 50;
 }
 .modal-bg.show { display: flex; }
 .modal {
-  background: var(--surface);
-  border: 1px solid var(--border2);
-  border-radius: 12px;
-  padding: 22px;
-  width: 460px;
-  display: flex; flex-direction: column; gap: 10px;
+  background: var(--surface); border: 1px solid var(--border2);
+  border-radius: 12px; padding: 22px; width: 480px;
+  display: flex; flex-direction: column; gap: 12px;
   box-shadow: 0 24px 64px rgba(0,0,0,.5);
 }
-.modal h3 { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
-.modal label { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; }
-.modal input, .modal textarea {
-  width: 100%;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  font-size: 13px;
-  padding: 7px 10px;
-  outline: none;
-  font-family: inherit;
-  resize: vertical;
-  margin-top: 4px;
-  transition: border-color .12s;
+.modal h3 { font-size: 14px; font-weight: 600; color: var(--text); }
+.modal-field { display: flex; flex-direction: column; gap: 5px; }
+.modal-field label { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; }
+.modal-field input, .modal-field textarea, .modal-field select {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); font-size: 13px; padding: 7px 10px; outline: none;
+  font-family: inherit; resize: vertical; transition: border-color .12s;
 }
-.modal input:focus, .modal textarea:focus { border-color: rgba(94,106,210,.5); }
+.modal-field input:focus, .modal-field textarea:focus, .modal-field select:focus { border-color: rgba(94,106,210,.5); }
+.modal-field select option { background: var(--surface2); }
 .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 .btn-cancel {
-  padding: 6px 14px; border-radius: 6px;
-  border: 1px solid var(--border2);
-  background: transparent; color: var(--sub);
-  font-size: 12px; cursor: pointer;
+  padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border2);
+  background: transparent; color: var(--sub); font-size: 12px; cursor: pointer; font-family: inherit;
 }
 .btn-cancel:hover { color: var(--text); }
 .btn-save {
-  padding: 6px 14px; border-radius: 6px;
-  border: none; background: var(--accent);
-  color: #fff; font-size: 12px; font-weight: 500; cursor: pointer;
+  padding: 6px 14px; border-radius: 6px; border: none;
+  background: var(--accent); color: #fff; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit;
 }
 .btn-save:hover { background: #6b75df; }
 
 /* ── Footer ── */
 .footer {
-  margin-top: 48px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border);
+  margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border);
   display: flex; justify-content: space-between; align-items: center;
-  font-size: 11px; color: var(--faint);
-  flex-wrap: wrap; gap: 8px;
+  font-size: 11px; color: var(--faint); flex-wrap: wrap; gap: 8px;
 }
 .footer a { color: var(--faint); text-decoration: none; }
 .footer a:hover { color: var(--sub); }
@@ -371,70 +293,125 @@ code {
           <span class="chip" id="ts-chip"></span>
         </div>
       </div>
-      <div style="display:flex;gap:6px;align-self:flex-start;margin-top:4px">
-        <button class="btn-sm" onclick="exportData()">导出</button>
-        <button class="btn-sm" onclick="importData()">导入</button>
+      <div style="display:flex;gap:6px;align-self:flex-start;margin-top:4px" id="header-actions">
+        <button class="btn-sm" id="btn-export" onclick="exportData()">导出</button>
+        <button class="btn-sm" id="btn-import" onclick="importData()">导入</button>
       </div>
     </div>
+  </div>
 
-    <!-- Stats -->
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('progress')">开发进度</button>
+    <button class="tab-btn" onclick="switchTab('roadmap')">目标规划</button>
+  </div>
+
+  <!-- Progress tab -->
+  <div id="tab-progress">
     <div class="stats" id="stats"></div>
+    <div class="toolbar">
+      <span class="toolbar-left" id="toolbar-info"></span>
+    </div>
+    <div id="board"></div>
   </div>
 
-  <!-- Toolbar -->
-  <div class="toolbar">
-    <span class="toolbar-left" id="toolbar-info"></span>
+  <!-- Roadmap tab -->
+  <div id="tab-roadmap" style="display:none">
+    <div class="roadmap-toolbar">
+      <button class="btn-add" onclick="addPhase()">+ 新增阶段</button>
+    </div>
+    <div class="roadmap" id="roadmap"></div>
   </div>
 
-  <!-- Board -->
-  <div id="board"></div>
-
-  <!-- Footer -->
   <div class="footer">
     <span>数据存储在浏览器 localStorage，随时可导出备份</span>
     <span><a href="https://github.com/bluecc0/xlj_designflow" target="_blank">GitHub ↗</a></span>
   </div>
-
 </div>
 
-<!-- Edit modal -->
+<!-- Progress item modal -->
 <div class="modal-bg" id="modalBg">
   <div class="modal">
     <h3>编辑条目</h3>
-    <div>
+    <div class="modal-field">
       <label>标题</label>
       <input id="eTitle" placeholder="条目标题" />
     </div>
-    <div>
+    <div class="modal-field">
       <label>描述</label>
       <textarea id="eDesc" placeholder="详细说明（可选）" rows="3"></textarea>
     </div>
     <div class="modal-footer">
-      <button class="btn-cancel" onclick="closeModal()">取消</button>
-      <button class="btn-save" onclick="saveModal()">保存</button>
+      <button class="btn-cancel" onclick="closeModal('modalBg')">取消</button>
+      <button class="btn-save" onclick="saveItemModal()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Phase modal -->
+<div class="modal-bg" id="phaseModalBg">
+  <div class="modal">
+    <h3 id="phaseModalTitle">编辑阶段</h3>
+    <div class="modal-field">
+      <label>版本号</label>
+      <input id="pVersion" placeholder="v0.2" />
+    </div>
+    <div class="modal-field">
+      <label>标题</label>
+      <input id="pTitle" placeholder="阶段名称" />
+    </div>
+    <div class="modal-field">
+      <label>状态</label>
+      <select id="pStatus">
+        <option value="done">已完成</option>
+        <option value="current">下一步</option>
+        <option value="planned">规划中</option>
+      </select>
+    </div>
+    <div class="modal-field">
+      <label>描述</label>
+      <textarea id="pDesc" placeholder="阶段说明（可选）" rows="3"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="closeModal('phaseModalBg')">取消</button>
+      <button class="btn-save" onclick="savePhaseModal()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Goal modal -->
+<div class="modal-bg" id="goalModalBg">
+  <div class="modal">
+    <h3>编辑目标</h3>
+    <div class="modal-field">
+      <label>目标描述</label>
+      <textarea id="gText" placeholder="具体目标" rows="3"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="closeModal('goalModalBg')">取消</button>
+      <button class="btn-save" onclick="saveGoalModal()">保存</button>
     </div>
   </div>
 </div>
 
 <script>
-// ── Config ────────────────────────────────────────────────────────────────────
-
+// ── Sections config ───────────────────────────────────────────────────────────
 const SECTIONS = [
-  { id:'done', label:'已完成',    icon:'●', badgeClass:'badge-done',  dotClass:'dot-done',  typeLabel:'done' },
-  { id:'bug',  label:'Bug 修复', icon:'●', badgeClass:'badge-bug',   dotClass:'dot-bug',   typeLabel:'bug'  },
-  { id:'wip',  label:'进行中',   icon:'●', badgeClass:'badge-wip',   dotClass:'dot-wip',   typeLabel:'wip'  },
-  { id:'todo', label:'待完成',   icon:'●', badgeClass:'badge-todo',  dotClass:'dot-todo',  typeLabel:'todo' },
-  { id:'idea', label:'想法',     icon:'●', badgeClass:'badge-idea',  dotClass:'dot-idea',  typeLabel:'idea' },
+  { id:'done', label:'已完成', badgeClass:'badge-done', dotClass:'dot-done' },
+  { id:'bug',  label:'Bug 修复', badgeClass:'badge-bug', dotClass:'dot-bug' },
+  { id:'wip',  label:'进行中', badgeClass:'badge-wip', dotClass:'dot-wip' },
+  { id:'todo', label:'待完成', badgeClass:'badge-todo', dotClass:'dot-todo' },
+  { id:'idea', label:'想法', badgeClass:'badge-idea', dotClass:'dot-idea' },
 ];
 
-// ── Default data ──────────────────────────────────────────────────────────────
+const STATUS_LABELS = { done:'已完成', current:'下一步', planned:'规划中' };
 
-// 生成今天之内的随机时间戳（offset 小时前）
+// ── Default data ──────────────────────────────────────────────────────────────
 function ago(h, m=0) {
   const d = new Date(); d.setHours(d.getHours()-h, d.getMinutes()-m); return d.toISOString();
 }
 
-const DEFAULTS = {
+const DEFAULT_PROGRESS = {
   done: [
     { id:1,  title:'Penpot Docker 本地部署',      desc:'docker-compose，启用 access token / 关闭邮件验证，localhost:9001', ts: ago(23,12) },
     { id:2,  title:'Python Penpot 客户端库',       desc:'Transit+JSON 编解码、双 token 认证、图片上传、文字/图片写入、PNG 导出', ts: ago(22,44) },
@@ -445,7 +422,7 @@ const DEFAULTS = {
     { id:7,  title:'团队模板扫描',                 desc:'get-teams 遍历所有团队，project 名含「模板」即扫描其下所有文件，Board 作为模板条目', ts: ago(15,10) },
     { id:8,  title:'硅基流动 AI 表格解析',         desc:'Qwen2.5-72B，OpenAI 兼容接口，解析产品名/价格/标签/规格', ts: ago(13,47) },
     { id:9,  title:'AI 对话 + /指令系统',          desc:'POST /chat 注入工作台上下文，/ 前缀触发操作，普通文字调 AI', ts: ago(12,3) },
-    { id:10, title:'前端完整流程串联',              desc:'上传表格 → AI 解析 → 自动选模板 → 确认 → 合成 → 实时进度 → 完成通知 + 导出', ts: ago(10,29) },
+    { id:10, title:'前端完整流程串联',              desc:'上传表格 → AI 解析 → 自动选模板 → 确认 → 生图 → 实时进度 → 完成通知 + 导出', ts: ago(10,29) },
     { id:11, title:'Linear 设计系统 UI',           desc:'#08090a 背景 + #5e6ad2 accent，typing dots 动画，Inter 字体', ts: ago(9,14) },
     { id:12, title:'模板缩略图懒加载',              desc:'首次 ~5s 生成后缓存，IntersectionObserver 按需加载', ts: ago(7,52) },
     { id:13, title:'产品图库前端管理',              desc:'拖拽/点击上传 + hover 删除，POST /products/upload + DELETE', ts: ago(6,31) },
@@ -454,234 +431,412 @@ const DEFAULTS = {
     { id:16, title:'start.bat 一键启动',            desc:'kill 旧进程 → 启后端 → 等健康检查 → 启前端 → 打开浏览器', ts: ago(1,22) },
   ],
   bug: [
-    { id:101, title:'WSL 幽灵进程',               desc:'Claude bash 工具启动的进程 Windows taskkill 看不到，127.0.0.1:8000 绕过 start.bat kill 逻辑。解决：重启电脑', ts: ago(5,33) },
-    { id:102, title:'--reload 热重载不触发',       desc:'Claude 工具写文件不触发 watchfiles，需手动 Ctrl+C 重启才加载新代码', ts: ago(2,18) },
+    { id:101, title:'WSL 幽灵进程', desc:'Claude bash 工具启动的进程 Windows taskkill 看不到，127.0.0.1:8000 绕过 start.bat kill 逻辑。解决：重启电脑', ts: ago(5,33) },
+    { id:102, title:'--reload 热重载不触发', desc:'Claude 工具写文件不触发 watchfiles，需手动 Ctrl+C 重启才加载新代码', ts: ago(2,18) },
   ],
   wip: [],
   todo: [
     { id:201, title:'移除 /debug/* 调试端点' },
-    { id:202, title:'list_templates 加缓存',       desc:'当前串行请求多团队/project/文件，数量多时慢，加 TTL 缓存' },
-    { id:203, title:'Penpot Token 自动刷新',       desc:'Token 30 天过期后全返回 401，需捕获后自动用邮密重登并重试' },
-    { id:204, title:'更多模板设计',                desc:'4宫格、6宫格等，按 slot/product_N/image 命名规范' },
+    { id:202, title:'list_templates 加缓存', desc:'当前串行请求多团队/project/文件，数量多时慢，加 TTL 缓存' },
+    { id:203, title:'Penpot Token 自动刷新', desc:'Token 30 天过期后全返回 401，需捕获后自动用邮密重登并重试' },
+    { id:204, title:'更多模板设计', desc:'4宫格、6宫格等，按 slot/product_N/image 命名规范' },
   ],
   idea: [
-    { id:301, title:'合成历史回放',                desc:'中栏展示最近几次合成结果，可一键重新导出' },
-    { id:302, title:'模板直达编辑',                desc:'模板卡片加「在 Penpot 里编辑」按钮，跳转编辑链接' },
-    { id:303, title:'批量合成队列',                desc:'支持上传多份表格，依次排队合成，完成后统一下载' },
+    { id:301, title:'合成历史回放', desc:'中栏展示最近几次合成结果，可一键重新导出' },
+    { id:302, title:'模板直达编辑', desc:'模板卡片加「在 Penpot 里编辑」按钮，跳转编辑链接' },
+    { id:303, title:'批量合成队列', desc:'支持上传多份表格，依次排队合成，完成后统一下载' },
   ],
 };
 
-// ── State ─────────────────────────────────────────────────────────────────────
+const DEFAULT_ROADMAP = [
+  {
+    id: 'p1', version: 'v0.1', title: 'PoC 验证', status: 'done',
+    desc: '跑通单条需求的完整链路，验证 Penpot API + AI 解析的技术可行性。',
+    goals: [
+      { id:'g1',  done: true,  text: 'Penpot Docker 本地部署，API 连通' },
+      { id:'g2',  done: true,  text: 'Python Penpot 客户端，Transit+JSON 读写' },
+      { id:'g3',  done: true,  text: '上传表格，AI 自动解析产品字段' },
+      { id:'g4',  done: true,  text: '产品图匹配 + 文案写入 Penpot 模板' },
+      { id:'g5',  done: true,  text: '导出 PNG，切九宫格输出 9 张图片' },
+      { id:'g6',  done: true,  text: '三栏式 Web UI，AI 对话 + 生图预览' },
+      { id:'g7',  done: true,  text: '团队模板扫描，支持多团队多项目' },
+      { id:'g8',  done: true,  text: 'start.bat 一键启动' },
+    ],
+  },
+  {
+    id: 'p2', version: 'v0.2', title: '批量生产', status: 'current',
+    desc: '支持多条需求批量处理，海报图按尺寸自动匹配，提升单次作业效率。',
+    goals: [
+      { id:'g9',  done: false, text: '表格多行数据批量生图，队列异步处理' },
+      { id:'g10', done: false, text: '海报图 slot 按尺寸自动匹配图库' },
+      { id:'g11', done: false, text: '合成历史回放，中栏展示最近几次结果' },
+      { id:'g12', done: false, text: 'list_templates 加 TTL 缓存，提速扫描' },
+      { id:'g13', done: false, text: 'Penpot Token 30 天过期自动刷新' },
+      { id:'g14', done: false, text: '移除 /debug/* 调试端点' },
+    ],
+  },
+  {
+    id: 'p3', version: 'v0.3', title: '体验打磨', status: 'planned',
+    desc: '需求表格字段规范化，更多模板类型，合成历史版本管理。',
+    goals: [
+      { id:'g15', done: false, text: '更多模板：4宫格、6宫格，完善命名规范' },
+      { id:'g16', done: false, text: '需求表格字段规范化，减少 AI 解析歧义' },
+      { id:'g17', done: false, text: '模板直达编辑，跳转 Penpot 编辑链接' },
+      { id:'g18', done: false, text: '合成版本管理，保留历史可回溯' },
+      { id:'g19', done: false, text: '对话修改指令：换产品图、改文案、换模板' },
+    ],
+  },
+  {
+    id: 'p4', version: 'v1.0', title: '团队上线', status: 'planned',
+    desc: '多人协作、权限管理，从本地工具演进为团队可用的正式产品。',
+    goals: [
+      { id:'g20', done: false, text: '用户权限管理，不同角色不同操作权限' },
+      { id:'g21', done: false, text: '云端部署，脱离本地 Docker 依赖' },
+      { id:'g22', done: false, text: '批量合成队列，多份表格排队统一下载' },
+      { id:'g23', done: false, text: '导出格式扩展：多尺寸、PDF、品牌水印' },
+      { id:'g24', done: false, text: '使用数据统计，生图量/成功率/耗时看板' },
+    ],
+  },
+];
 
-let data = (() => {
-  try { const s = localStorage.getItem('df-v2'); if (s) return JSON.parse(s); } catch(e) {}
-  return JSON.parse(JSON.stringify(DEFAULTS));
+// ── State ─────────────────────────────────────────────────────────────────────
+let progress = (() => {
+  try { const s = localStorage.getItem('df-progress'); if (s) return JSON.parse(s); } catch(e) {}
+  return JSON.parse(JSON.stringify(DEFAULT_PROGRESS));
 })();
 
-let nextId = Math.max(...Object.values(data).flat().map(i => i.id), 400) + 1;
-let editTarget = null;
-let activeFilter = 'all';
-let collapsed = {};
+let roadmap = (() => {
+  try { const s = localStorage.getItem('df-roadmap'); if (s) return JSON.parse(s); } catch(e) {}
+  return JSON.parse(JSON.stringify(DEFAULT_ROADMAP));
+})();
 
-function save() { localStorage.setItem('df-v2', JSON.stringify(data)); }
+let nextProgressId = Math.max(...Object.values(progress).flat().map(i => i.id), 400) + 1;
+let nextRoadmapId  = 1000;
+
+let editTarget     = null; // { secId, id } for progress items
+let phaseTarget    = null; // phaseId or null (new)
+let goalTarget     = null; // { phaseId, goalId }
+
+let activeFilter = 'all';
+let collapsed    = {};
+let currentTab   = 'progress';
+
+function saveProgress() { localStorage.setItem('df-progress', JSON.stringify(progress)); }
+function saveRoadmap()  { localStorage.setItem('df-roadmap',  JSON.stringify(roadmap));  }
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+    b.classList.toggle('active', (i===0 && tab==='progress') || (i===1 && tab==='roadmap'));
+  });
+  document.getElementById('tab-progress').style.display = tab==='progress' ? '' : 'none';
+  document.getElementById('tab-roadmap').style.display  = tab==='roadmap'  ? '' : 'none';
+  document.getElementById('btn-export').style.display   = tab==='progress' ? '' : 'none';
+  document.getElementById('btn-import').style.display   = tab==='progress' ? '' : 'none';
+  if (tab === 'roadmap') renderRoadmap();
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
 function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
-
-function relTime(ts) {
+function fmtTime(ts) {
   if (!ts) return '';
-  const d = new Date(ts), now = Date.now(), ms = now - d;
-  if (ms < 60000) return '刚刚';
-  if (ms < 3600000) return `${Math.floor(ms/60000)}m 前`;
-  if (ms < 86400000) return `${Math.floor(ms/3600000)}h 前`;
-  if (ms < 2592000000) return `${Math.floor(ms/86400000)}d 前`;
-  return d.toLocaleDateString('zh-CN',{month:'short',day:'numeric'});
+  const d = new Date(ts);
+  return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
+function uid() { return 'id-' + (nextRoadmapId++); }
 
-function totalItems() {
-  return Object.values(data).reduce((a,v) => a + v.length, 0);
-}
-
-// ── Render ────────────────────────────────────────────────────────────────────
-
-function render() {
-  renderStats();
-  renderBoard();
-  renderToolbar();
-}
+// ── Progress render ───────────────────────────────────────────────────────────
+function render() { renderStats(); renderBoard(); renderToolbar(); }
 
 function renderStats() {
-  const el = document.getElementById('stats');
-  el.innerHTML = SECTIONS.map(s => {
-    const n = (data[s.id]||[]).length;
-    const active = activeFilter === s.id ? ' active' : '';
-    const colors = { done:'var(--green)', bug:'var(--red)', wip:'var(--blue)', todo:'var(--amber)', idea:'var(--violet)' };
+  const colors = { done:'var(--green)', bug:'var(--red)', wip:'var(--blue)', todo:'var(--amber)', idea:'var(--violet)' };
+  document.getElementById('stats').innerHTML = SECTIONS.map(s => {
+    const n = (progress[s.id]||[]).length;
+    const active = activeFilter===s.id ? ' active' : '';
     return `<div class="stat${active}" onclick="setFilter('${s.id}')">
-      <div class="stat-num" style="color:${active ? colors[s.id] : ''}">${n}</div>
+      <div class="stat-num" style="${active ? `color:${colors[s.id]}` : ''}">${n}</div>
       <div class="stat-lbl">${s.label}</div>
     </div>`;
   }).join('');
 }
 
 function renderToolbar() {
-  const total = totalItems();
-  const done = (data.done||[]).length;
-  const pct = total ? Math.round(done/total*100) : 0;
-  document.getElementById('toolbar-info').textContent = `${total} 条记录 · ${done} 已完成 · ${pct}% 进度`;
+  const total = Object.values(progress).reduce((a,v)=>a+v.length,0);
+  const done  = (progress.done||[]).length;
+  document.getElementById('toolbar-info').textContent =
+    `${total} 条记录 · ${done} 已完成 · ${total ? Math.round(done/total*100) : 0}% 进度`;
 }
 
 function renderBoard() {
-  const board = document.getElementById('board');
-  const sections = activeFilter === 'all' ? SECTIONS : SECTIONS.filter(s => s.id === activeFilter);
-
-  board.innerHTML = sections.map(sec => {
-    const items = data[sec.id] || [];
-    const isCollapsed = collapsed[sec.id];
-    return `
-    <div class="section">
-      <div class="section-head${isCollapsed ? ' collapsed' : ''}" onclick="toggleCollapse('${sec.id}')">
-        <span class="chevron ${isCollapsed ? '' : 'open'}">▶</span>
+  const sections = activeFilter==='all' ? SECTIONS : SECTIONS.filter(s=>s.id===activeFilter);
+  document.getElementById('board').innerHTML = sections.map(sec => {
+    const items = progress[sec.id]||[];
+    const isC = collapsed[sec.id];
+    return `<div class="section">
+      <div class="section-head${isC?' collapsed':''}" onclick="toggleCollapse('${sec.id}')">
+        <span class="chevron ${isC?'':'open'}">▶</span>
         <span class="section-name">${sec.label}</span>
         <span class="section-badge ${sec.badgeClass}">${items.length}</span>
       </div>
-      ${isCollapsed ? '' : `
-      <div class="section-body">
-        ${items.map(item => renderItem(sec, item)).join('')}
+      ${isC ? '' : `<div class="section-body">
+        ${items.map(item=>renderProgressItem(sec,item)).join('')}
         ${renderAddRow(sec.id)}
       </div>`}
     </div>`;
   }).join('');
 }
 
-function renderItem(sec, item) {
-  const isDone = sec.id === 'done';
-  const time = item.ts ? `<div class="item-time">${relTime(item.ts)}</div>` : '';
-  return `
-  <div class="item">
+function renderProgressItem(sec, item) {
+  const isDone = sec.id==='done';
+  const t = fmtTime(item.ts);
+  return `<div class="item">
     <div class="status-dot ${sec.dotClass}"></div>
     <div class="item-body">
-      <div class="item-title${isDone ? ' done' : ''}">${esc(item.title)}</div>
+      <div class="item-title${isDone?' done':''}">${esc(item.title)}</div>
       ${item.desc ? `<div class="item-desc">${esc(item.desc)}</div>` : ''}
-      ${time}
     </div>
-    <div class="item-acts">
-      <button class="act-btn" onclick="openModal('${sec.id}',${item.id})" title="编辑">✎</button>
-      <button class="act-btn" onclick="moveItem('${sec.id}',${item.id})" title="移动">⇄</button>
-      <button class="act-btn del" onclick="deleteItem('${sec.id}',${item.id})" title="删除">✕</button>
+    <div class="item-right">
+      ${t ? `<div class="item-time">${t}</div>` : ''}
+      <div class="item-acts">
+        <button class="act-btn" onclick="openItemModal('${sec.id}',${item.id})" title="编辑">✎</button>
+        <button class="act-btn" onclick="moveItem('${sec.id}',${item.id})" title="移动">⇄</button>
+        <button class="act-btn del" onclick="deleteProgressItem('${sec.id}',${item.id})" title="删除">✕</button>
+      </div>
     </div>
   </div>`;
 }
 
 function renderAddRow(secId) {
-  return `
-  <div class="add-row">
-    <input class="add-title" id="at-${secId}" placeholder="添加条目…" onkeydown="if(event.key==='Enter')addItem('${secId}')"/>
+  return `<div class="add-row">
+    <input class="add-title" id="at-${secId}" placeholder="添加条目…" onkeydown="if(event.key==='Enter')addProgressItem('${secId}')"/>
     <input class="add-desc"  id="ad-${secId}" placeholder="描述"/>
-    <button class="btn-add" onclick="addItem('${secId}')">+ 添加</button>
+    <button class="btn-add" onclick="addProgressItem('${secId}')">+ 添加</button>
   </div>`;
 }
 
-// ── Actions ───────────────────────────────────────────────────────────────────
-
-function setFilter(type) {
-  activeFilter = activeFilter === type ? 'all' : type;
-  render();
+// ── Roadmap render ────────────────────────────────────────────────────────────
+function renderRoadmap() {
+  document.getElementById('roadmap').innerHTML = roadmap.map(phase => {
+    const total = phase.goals.length;
+    const done  = phase.goals.filter(g=>g.done).length;
+    return `<div class="phase">
+      <div class="phase-head">
+        <span class="phase-version">${esc(phase.version)}</span>
+        <span class="phase-title">${esc(phase.title)}</span>
+        <span class="phase-progress">${done}/${total}</span>
+        <span class="phase-badge ${phase.status}">${STATUS_LABELS[phase.status]||phase.status}</span>
+        <div class="phase-acts">
+          <button class="act-btn" onclick="openPhaseModal('${phase.id}')" title="编辑阶段">✎</button>
+          <button class="act-btn del" onclick="deletePhase('${phase.id}')" title="删除阶段">✕</button>
+        </div>
+      </div>
+      ${phase.desc ? `<div class="phase-desc">${esc(phase.desc)}</div>` : ''}
+      <div>
+        ${phase.goals.map(g => renderGoalItem(phase.id, g)).join('')}
+        <div class="goal-add-row">
+          <input id="ga-${phase.id}" placeholder="添加目标…" onkeydown="if(event.key==='Enter')addGoal('${phase.id}')"/>
+          <button class="btn-add" onclick="addGoal('${phase.id}')">+ 添加</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
-function toggleCollapse(secId) {
-  collapsed[secId] = !collapsed[secId];
-  render();
+function renderGoalItem(phaseId, goal) {
+  return `<div class="goal-item">
+    <div class="goal-check ${goal.done?'done':'todo'}" onclick="toggleGoal('${phaseId}','${goal.id}')" title="切换完成状态">
+      ${goal.done ? '✓' : ''}
+    </div>
+    <div class="goal-body">
+      <div class="goal-text ${goal.done?'done':''}">${esc(goal.text)}</div>
+    </div>
+    <div class="goal-acts">
+      <button class="act-btn" onclick="openGoalModal('${phaseId}','${goal.id}')" title="编辑">✎</button>
+      <button class="act-btn del" onclick="deleteGoal('${phaseId}','${goal.id}')" title="删除">✕</button>
+    </div>
+  </div>`;
 }
 
-function addItem(secId) {
+// ── Progress actions ──────────────────────────────────────────────────────────
+function setFilter(type) { activeFilter = activeFilter===type ? 'all' : type; render(); }
+function toggleCollapse(secId) { collapsed[secId]=!collapsed[secId]; render(); }
+
+function addProgressItem(secId) {
   const t = document.getElementById(`at-${secId}`);
-  const title = t.value.trim();
-  if (!title) { t.focus(); return; }
+  const title = t.value.trim(); if (!title) { t.focus(); return; }
   const desc = document.getElementById(`ad-${secId}`).value.trim();
-  data[secId] = data[secId] || [];
-  data[secId].push({ id: nextId++, title, desc, ts: new Date().toISOString() });
-  save(); render();
+  progress[secId] = progress[secId]||[];
+  progress[secId].push({ id:nextProgressId++, title, desc, ts:new Date().toISOString() });
+  saveProgress(); render();
 }
 
-function deleteItem(secId, id) {
+function deleteProgressItem(secId, id) {
   if (!confirm('删除这条记录？')) return;
-  data[secId] = (data[secId]||[]).filter(i => i.id !== id);
-  save(); render();
+  progress[secId] = (progress[secId]||[]).filter(i=>i.id!==id);
+  saveProgress(); render();
 }
 
 function moveItem(secId, id) {
-  const opts = SECTIONS.filter(s => s.id !== secId);
-  const names = opts.map((s,i) => `${i+1}. ${s.label}`).join('\n');
-  const choice = prompt(`移动到：\n${names}`);
+  const opts = SECTIONS.filter(s=>s.id!==secId);
+  const choice = prompt(`移动到：\n${opts.map((s,i)=>`${i+1}. ${s.label}`).join('\n')}`);
   if (!choice) return;
-  const idx = parseInt(choice) - 1;
-  if (isNaN(idx) || idx < 0 || idx >= opts.length) return;
-  const item = (data[secId]||[]).find(i => i.id === id);
-  if (!item) return;
-  data[secId] = data[secId].filter(i => i.id !== id);
+  const idx = parseInt(choice)-1;
+  if (isNaN(idx)||idx<0||idx>=opts.length) return;
+  const item = (progress[secId]||[]).find(i=>i.id===id); if (!item) return;
+  progress[secId] = progress[secId].filter(i=>i.id!==id);
   item.ts = new Date().toISOString();
-  data[opts[idx].id] = data[opts[idx].id] || [];
-  data[opts[idx].id].push(item);
-  save(); render();
+  progress[opts[idx].id] = progress[opts[idx].id]||[];
+  progress[opts[idx].id].push(item);
+  saveProgress(); render();
 }
 
-// ── Modal ─────────────────────────────────────────────────────────────────────
+// ── Roadmap actions ───────────────────────────────────────────────────────────
+function toggleGoal(phaseId, goalId) {
+  const phase = roadmap.find(p=>p.id===phaseId); if (!phase) return;
+  const goal  = phase.goals.find(g=>g.id===goalId); if (!goal) return;
+  goal.done = !goal.done;
+  saveRoadmap(); renderRoadmap();
+}
 
-function openModal(secId, id) {
-  const item = (data[secId]||[]).find(i => i.id === id);
-  if (!item) return;
+function addGoal(phaseId) {
+  const inp = document.getElementById(`ga-${phaseId}`);
+  const text = inp.value.trim(); if (!text) { inp.focus(); return; }
+  const phase = roadmap.find(p=>p.id===phaseId); if (!phase) return;
+  phase.goals.push({ id:uid(), done:false, text });
+  saveRoadmap(); renderRoadmap();
+}
+
+function deleteGoal(phaseId, goalId) {
+  if (!confirm('删除这条目标？')) return;
+  const phase = roadmap.find(p=>p.id===phaseId); if (!phase) return;
+  phase.goals = phase.goals.filter(g=>g.id!==goalId);
+  saveRoadmap(); renderRoadmap();
+}
+
+function addPhase() {
+  phaseTarget = null;
+  document.getElementById('phaseModalTitle').textContent = '新增阶段';
+  document.getElementById('pVersion').value = '';
+  document.getElementById('pTitle').value   = '';
+  document.getElementById('pStatus').value  = 'planned';
+  document.getElementById('pDesc').value    = '';
+  document.getElementById('phaseModalBg').classList.add('show');
+  document.getElementById('pVersion').focus();
+}
+
+function deletePhase(phaseId) {
+  const phase = roadmap.find(p=>p.id===phaseId);
+  if (!confirm(`删除阶段「${phase?.title||phaseId}」及其所有目标？`)) return;
+  roadmap = roadmap.filter(p=>p.id!==phaseId);
+  saveRoadmap(); renderRoadmap();
+}
+
+// ── Modals ────────────────────────────────────────────────────────────────────
+function closeModal(id) {
+  document.getElementById(id).classList.remove('show');
+  editTarget = phaseTarget = goalTarget = null;
+}
+
+// Progress item modal
+function openItemModal(secId, id) {
+  const item = (progress[secId]||[]).find(i=>i.id===id); if (!item) return;
   editTarget = { secId, id };
   document.getElementById('eTitle').value = item.title;
-  document.getElementById('eDesc').value  = item.desc || '';
+  document.getElementById('eDesc').value  = item.desc||'';
   document.getElementById('modalBg').classList.add('show');
   document.getElementById('eTitle').focus();
 }
-
-function closeModal() {
-  editTarget = null;
-  document.getElementById('modalBg').classList.remove('show');
-}
-
-function saveModal() {
+function saveItemModal() {
   if (!editTarget) return;
   const { secId, id } = editTarget;
-  const item = (data[secId]||[]).find(i => i.id === id);
-  if (!item) return;
-  item.title = document.getElementById('eTitle').value.trim() || item.title;
+  const item = (progress[secId]||[]).find(i=>i.id===id); if (!item) return;
+  item.title = document.getElementById('eTitle').value.trim()||item.title;
   item.desc  = document.getElementById('eDesc').value.trim();
   item.ts    = new Date().toISOString();
-  save(); closeModal(); render();
+  saveProgress(); closeModal('modalBg'); render();
 }
 
-document.getElementById('modalBg').addEventListener('click', e => { if(e.target===e.currentTarget) closeModal(); });
-document.addEventListener('keydown', e => { if(e.key==='Escape') closeModal(); });
+// Phase modal
+function openPhaseModal(phaseId) {
+  const phase = roadmap.find(p=>p.id===phaseId); if (!phase) return;
+  phaseTarget = phaseId;
+  document.getElementById('phaseModalTitle').textContent = '编辑阶段';
+  document.getElementById('pVersion').value = phase.version;
+  document.getElementById('pTitle').value   = phase.title;
+  document.getElementById('pStatus').value  = phase.status;
+  document.getElementById('pDesc').value    = phase.desc||'';
+  document.getElementById('phaseModalBg').classList.add('show');
+  document.getElementById('pTitle').focus();
+}
+function savePhaseModal() {
+  const version = document.getElementById('pVersion').value.trim();
+  const title   = document.getElementById('pTitle').value.trim();
+  const status  = document.getElementById('pStatus').value;
+  const desc    = document.getElementById('pDesc').value.trim();
+  if (!title) { document.getElementById('pTitle').focus(); return; }
+  if (phaseTarget) {
+    const phase = roadmap.find(p=>p.id===phaseTarget); if (!phase) return;
+    phase.version = version; phase.title = title; phase.status = status; phase.desc = desc;
+  } else {
+    roadmap.push({ id:uid(), version, title, status, desc, goals:[] });
+  }
+  saveRoadmap(); closeModal('phaseModalBg'); renderRoadmap();
+}
+
+// Goal modal
+function openGoalModal(phaseId, goalId) {
+  const phase = roadmap.find(p=>p.id===phaseId); if (!phase) return;
+  const goal  = phase.goals.find(g=>g.id===goalId); if (!goal) return;
+  goalTarget  = { phaseId, goalId };
+  document.getElementById('gText').value = goal.text;
+  document.getElementById('goalModalBg').classList.add('show');
+  document.getElementById('gText').focus();
+}
+function saveGoalModal() {
+  if (!goalTarget) return;
+  const { phaseId, goalId } = goalTarget;
+  const phase = roadmap.find(p=>p.id===phaseId); if (!phase) return;
+  const goal  = phase.goals.find(g=>g.id===goalId); if (!goal) return;
+  const text  = document.getElementById('gText').value.trim();
+  if (!text) { document.getElementById('gText').focus(); return; }
+  goal.text = text;
+  saveRoadmap(); closeModal('goalModalBg'); renderRoadmap();
+}
+
+// Close on backdrop click / Esc
+document.querySelectorAll('.modal-bg').forEach(bg => {
+  bg.addEventListener('click', e => { if (e.target===bg) closeModal(bg.id); });
+});
+document.addEventListener('keydown', e => {
+  if (e.key==='Escape') {
+    document.querySelectorAll('.modal-bg.show').forEach(bg => closeModal(bg.id));
+  }
+});
 
 // ── Import / Export ───────────────────────────────────────────────────────────
-
 function exportData() {
-  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  const blob = new Blob([JSON.stringify(progress,null,2)],{type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `designflow-${new Date().toISOString().slice(0,10)}.json`;
+  a.download = `designflow-progress-${new Date().toISOString().slice(0,10)}.json`;
   a.click();
 }
-
 function importData() {
   const input = document.createElement('input');
   input.type='file'; input.accept='.json';
   input.onchange = e => {
-    const file = e.target.files[0]; if(!file) return;
+    const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = ev => {
       try {
         const parsed = JSON.parse(ev.target.result);
-        if (confirm('导入将覆盖当前数据，确认？')) {
-          data = parsed;
-          nextId = Math.max(...Object.values(data).flat().map(i=>i.id), 400) + 1;
-          save(); render();
+        if (confirm('导入将覆盖当前进度数据，确认？')) {
+          progress = parsed;
+          nextProgressId = Math.max(...Object.values(progress).flat().map(i=>i.id),400)+1;
+          saveProgress(); render();
         }
       } catch { alert('JSON 格式错误'); }
     };
@@ -691,7 +846,6 @@ function importData() {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-
 const now = new Date();
 document.getElementById('ts-chip').textContent =
   now.toLocaleDateString('zh-CN',{month:'long',day:'numeric'}) + ' 更新';

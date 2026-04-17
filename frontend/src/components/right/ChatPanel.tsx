@@ -49,8 +49,8 @@ export default function ChatPanel() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const SLASH_COMMANDS = [
-    { cmd: "/开始生图", desc: "启动 AI 合成任务" },
-    { cmd: "/导出PNG", desc: "下载合成结果图片" },
+    { cmd: "/开始生图", desc: "启动 AI 生图任务" },
+    { cmd: "/导出PNG", desc: "下载生图结果图片" },
     { cmd: "/切九宫格", desc: "将结果裁切为九宫格" },
   ];
 

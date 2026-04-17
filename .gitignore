@@ -28,3 +28,4 @@ nul
 *.db
 ~$*
 penpot/
+backend.log
