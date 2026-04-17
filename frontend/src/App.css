@@ -471,6 +471,32 @@
 .send-btn:disabled { opacity: .3; cursor: not-allowed; box-shadow: none; }
 .send-btn:hover:not(:disabled) { opacity: .85; }
 
+/* 底部版权条 */
+.chat-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 14px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.chat-footer-text {
+  font-size: 10px;
+  color: var(--text-faint);
+  letter-spacing: .01em;
+}
+.chat-footer-link {
+  font-size: 10px;
+  color: var(--text-faint);
+  text-decoration: none;
+  display: flex; align-items: center; gap: 3px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all .15s;
+}
+.chat-footer-link:hover {
+  color: var(--text-muted);
+  background: rgba(255,255,255,.05);
+}
+
 /* ─── 左栏：产品图库面板 ─────────────────────────────────── */
 .product-library-panel { display: flex; flex-direction: column; height: 100%; }
 .lib-count { font-size: 11px; color: var(--text-faint); font-weight: 400; margin-left: auto; }

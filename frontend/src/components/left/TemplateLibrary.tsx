@@ -74,15 +74,6 @@ export default function TemplateLibrary() {
         >
           ↻
         </button>
-        <a
-          className="progress-btn"
-          href="/PROGRESS.html"
-          target="_blank"
-          rel="noreferrer"
-          title="查看项目进度"
-        >
-          📋 进度
-        </a>
       </div>
 
       {/* 筛选 */}

@@ -557,6 +557,24 @@ export default function ChatPanel() {
           发送
         </button>
       </div>
+
+      {/* 底部版权 */}
+      <div className="chat-footer">
+        <span className="chat-footer-text">DesignFlow · Penpot + SiliconFlow</span>
+        <a
+          className="chat-footer-link"
+          href="/PROGRESS.html"
+          target="_blank"
+          rel="noreferrer"
+        >
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" style={{verticalAlign:"middle",marginRight:3}}>
+            <rect x="1" y="3" width="14" height="11" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+            <path d="M5 7h6M5 10h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            <path d="M5 1v4M11 1v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+          项目进度
+        </a>
+      </div>
     </div>
   );
 }
