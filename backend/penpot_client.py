@@ -259,9 +259,10 @@ class PenpotClient:
                         "width": obj.get("width", 200),
                         "height": obj.get("height", 200),
                     }
-                    # 文字图层：提取样式供合成时使用
+                    # 文字图层：保存原始 content 结构（用于写入时只替换 text，保留所有样式）
                     if obj.get("type") == "text":
                         slot["text_style"] = self.parse_text_style(obj)
+                        slot["raw_content"] = obj.get("content")  # 原始 content，含对齐/字体/颜色
                     slots.append(slot)
         return slots
 
@@ -504,74 +505,95 @@ class PenpotClient:
         font_family: str = "sourcesanspro",
         fill_color: str = "#000000",
         text_align: str = "center",
+        raw_content: Optional[dict] = None,
     ) -> list[dict]:
         """
-        构造文字图层的 change dict 列表（未提交）。
-        只更新 content，保留图层原有的位置/尺寸/grow-type，
-        让 Penpot 自己重新计算 position-data（我们不写它，避免编辑器出错）。
+        替换文字图层内容，完整保留原始样式（对齐、字体、颜色等）。
+
+        策略：
+        1. 优先使用 raw_content（模板图层原始结构）——只替换所有 text-run 的 text 字段，
+           对齐/字体/颜色/旋转等全部保持不变。
+        2. 没有 raw_content 时才用参数手动构建 content。
+        3. 清除 position-data（设为 None），让 Penpot 重新渲染时自动重算。
+           exporter 走的是 content 路径，不依赖 position-data。
         """
-        fs = str(int(font_size)) if font_size == int(font_size) else str(font_size)
-        fw = str(font_weight)
-        # fills 必须用 kebab-case（Penpot schema :closed true，不接受 camelCase）
-        fill = {"fill-color": fill_color, "fill-opacity": 1}
+        if raw_content is not None:
+            new_content = self._replace_text_in_content(raw_content, text)
+        else:
+            # fallback：手动构建（对齐等用传入参数）
+            fs = str(int(font_size)) if font_size == int(font_size) else str(font_size)
+            fw = str(font_weight)
+            fill = {"fill-color": fill_color, "fill-opacity": 1}
+            text_run = {
+                "text": text,
+                "font-family": font_family,
+                "font-id": font_family,
+                "font-variant-id": "regular" if fw == "400" else fw,
+                "font-size": fs,
+                "font-weight": fw,
+                "font-style": "normal",
+                "text-decoration": "none",
+                "text-transform": "none",
+                "letter-spacing": "0",
+                "line-height": "1",
+                "text-direction": "ltr",
+                "text-align": text_align,
+                "fills": [fill],
+            }
+            paragraph = {
+                "type": "paragraph",
+                "key": str(uuid.uuid4())[:8],
+                "font-family": font_family,
+                "font-id": font_family,
+                "font-variant-id": "regular" if fw == "400" else fw,
+                "font-size": fs,
+                "font-weight": fw,
+                "font-style": "normal",
+                "text-decoration": "none",
+                "text-transform": "none",
+                "letter-spacing": "0",
+                "line-height": "1",
+                "text-direction": "ltr",
+                "text-align": text_align,
+                "fills": [fill],
+                "children": [text_run],
+            }
+            new_content = {
+                "type": "root",
+                "children": [{"type": "paragraph-set", "children": [paragraph]}],
+            }
 
-        text_run = {
-            "text": text,
-            "font-family": font_family,
-            "font-id": font_family,
-            "font-variant-id": "regular" if fw == "400" else fw,
-            "font-size": fs,
-            "font-weight": fw,
-            "font-style": "normal",
-            "text-decoration": "none",
-            "text-transform": "none",
-            "letter-spacing": "0",
-            "line-height": "1",
-            "text-direction": "ltr",
-            "text-align": text_align,
-            "fills": [fill],
-        }
-
-        paragraph = {
-            "type": "paragraph",
-            "key": str(uuid.uuid4())[:8],
-            "font-family": font_family,
-            "font-id": font_family,
-            "font-variant-id": "regular" if fw == "400" else fw,
-            "font-size": fs,
-            "font-weight": fw,
-            "font-style": "normal",
-            "text-decoration": "none",
-            "text-transform": "none",
-            "letter-spacing": "0",
-            "line-height": "1",
-            "text-direction": "ltr",
-            "text-align": text_align,
-            "fills": [fill],
-            "children": [text_run],
-        }
-
-        change: dict[str, Any] = {
+        return [{
             "type": kw("mod-obj"),
             "id": layer_id,
             "page-id": page_id,
             "operations": [
-                {
-                    "type": kw("set"),
-                    "attr": kw("content"),
-                    "val": {
-                        "type": "root",
-                        "children": [
-                            {
-                                "type": "paragraph-set",
-                                "children": [paragraph],
-                            }
-                        ],
-                    },
-                },
+                {"type": kw("set"), "attr": kw("content"), "val": new_content},
+                # 清除 position-data 缓存，让 Penpot 用 content 重新布局
+                {"type": kw("set"), "attr": kw("position-data"), "val": None},
             ],
-        }
-        return [change]
+        }]
+
+    def _replace_text_in_content(self, content: dict, new_text: str) -> dict:
+        """
+        深拷贝 content 结构，把所有 text-run 的 text 字段替换为 new_text。
+        保留原始的 camelCase 键名（Penpot 读出什么格式就写回什么格式，
+        Transit 编码时统一处理 keyword 转换）。
+        只替换第一个 paragraph 里的所有 text-run，合并为一段。
+        """
+        import copy
+        content = copy.deepcopy(content)
+        try:
+            para_set = content["children"][0]          # paragraph-set
+            paragraph = para_set["children"][0]        # paragraph
+            children = paragraph.get("children", [])
+            if children:
+                # 第一个 run 替换文字，其余删掉（避免多段文字残留）
+                children[0]["text"] = new_text
+                paragraph["children"] = [children[0]]
+        except (KeyError, IndexError, TypeError):
+            pass
+        return content
 
     def hide_layer(self, layer_id: str, page_id: str) -> dict:
         """构造隐藏图层的 change dict（未提交）"""
@@ -616,6 +638,42 @@ class PenpotClient:
         project_id = file_data.get("projectId") or file_data.get("project-id", "")
         team_id = file_data.get("teamId") or file_data.get("team-id", "")
         return project_id, team_id
+
+    def get_project_files(self, project_id: str) -> list[dict]:
+        """
+        返回指定 project 下的所有文件列表。
+        每项包含 id / name 等字段。
+        """
+        result = self._rpc("get-project-files", {"project-id": project_id})
+        if isinstance(result, list):
+            return result
+        return []
+
+    def get_team_projects(self, team_id: str) -> list[dict]:
+        """
+        返回指定团队下的所有 project 列表。
+        每项包含 id / name 等字段。
+        """
+        result = self._rpc("get-projects", {"team-id": team_id})
+        if isinstance(result, list):
+            return result
+        return []
+
+    def get_team_id_from_file(self, file_id: str) -> tuple[str, str]:
+        """
+        从文件 ID 逐步获取 project_id 和 team_id。
+        返回 (project_id, team_id)，任一获取失败时返回空字符串。
+        """
+        try:
+            file_data = self.get_file(file_id)
+            project_id = file_data.get("projectId") or file_data.get("project-id", "")
+            team_id = file_data.get("teamId") or file_data.get("team-id", "")
+            if project_id and not team_id:
+                proj = self._rpc("get-project", {"id": project_id})
+                team_id = proj.get("teamId") or proj.get("team-id", "")
+            return project_id, team_id
+        except Exception:
+            return "", ""
 
     # ── 导出 ──────────────────────────────────────────────────────────────────
 

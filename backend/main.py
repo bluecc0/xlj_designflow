@@ -83,7 +83,47 @@ _jobs_lock = threading.Lock()
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "team-scan-v2"}
+
+
+@app.get("/debug/team-scan")
+def debug_team_scan():
+    """调试：打印团队/project/文件扫描结果，确认模板识别逻辑"""
+    client = get_client()
+    result = {"teams": []}
+    try:
+        all_teams = client._rpc("get-teams")
+    except Exception as e:
+        return {"error": str(e)}
+
+    TEMPLATE_MARKER = "模板"
+    for team in all_teams:
+        tid = team.get("id") or team.get("~:id", "")
+        tname = team.get("name") or team.get("~:name", "")
+        is_default = bool(team.get("isDefault") or team.get("is-default"))
+        team_entry = {"id": tid, "name": tname, "is_default": is_default, "projects": []}
+        try:
+            projects = client.get_team_projects(tid)
+            for p in projects:
+                pid = p.get("id") or p.get("~:id", "")
+                pname = p.get("name") or p.get("~:name", "")
+                matched = TEMPLATE_MARKER in (pname or "")
+                proj_entry = {"id": pid, "name": pname, "is_template_project": matched, "files": []}
+                if matched:
+                    try:
+                        files = client.get_project_files(pid)
+                        for f in files:
+                            proj_entry["files"].append({
+                                "id": f.get("id") or f.get("~:id"),
+                                "name": f.get("name") or f.get("~:name"),
+                            })
+                    except Exception as e:
+                        proj_entry["files_error"] = str(e)
+                team_entry["projects"].append(proj_entry)
+        except Exception as e:
+            team_entry["projects_error"] = str(e)
+        result["teams"].append(team_entry)
+    return result
 
 
 @app.get("/debug/text-layer")
@@ -116,9 +156,12 @@ def debug_text_layer(file_id: Optional[str] = None, shape_id: Optional[str] = No
                     "name": name,
                     "page_id": page_id,
                     "content": obj.get("content"),
+                    "position_data": obj.get("positionData") or obj.get("position-data"),
                     "grow_type": obj.get("growType") or obj.get("grow-type"),
                     "width": obj.get("width"),
                     "height": obj.get("height"),
+                    "x": obj.get("x"),
+                    "y": obj.get("y"),
                 })
                 if len(results) >= 3:
                     break
@@ -126,31 +169,24 @@ def debug_text_layer(file_id: Optional[str] = None, shape_id: Optional[str] = No
     return {"summary": summary, "slot_text_layers": results}
 
 
-@app.get("/templates", response_model=list[TemplateInfo])
-def list_templates(file_id: Optional[str] = None):
-    """
-    从 penpot 拉取文件中的模板（frame）列表，包含各模板的 slot 定义。
-    file_id 默认取 .env 中的 PENPOT_FILE_ID。
-    """
-    fid = file_id or settings.penpot_file_id
-    if not fid:
-        raise HTTPException(400, "需要提供 file_id 或在 .env 中设置 PENPOT_FILE_ID")
-
-    client = get_client()
-    file_data = client.get_file(fid)
+def _extract_templates_from_file(client, fid: str) -> list[TemplateInfo]:
+    """从单个 penpot 文件中提取模板列表（内部辅助函数）"""
+    try:
+        file_data = client.get_file(fid)
+    except Exception:
+        return []
     frames = client.parse_frames(file_data)
     slots = client.parse_slots(file_data)
 
-    # 按 frame_id 分组 slot（每个 frame 只拿属于自己的 slot）
     slot_by_frame: dict[str, list[dict]] = {}
     for s in slots:
         key = s.get("frame_id") or s["page_id"]
         slot_by_frame.setdefault(key, []).append(s)
 
-    templates: list[TemplateInfo] = []
+    result: list[TemplateInfo] = []
     for f in frames:
         page_slots = slot_by_frame.get(f["id"], [])
-        templates.append(
+        result.append(
             TemplateInfo(
                 id=f["id"],
                 name=f["name"],
@@ -175,6 +211,74 @@ def list_templates(file_id: Optional[str] = None):
                 ],
             )
         )
+    return result
+
+
+@app.get("/templates", response_model=list[TemplateInfo])
+def list_templates(file_id: Optional[str] = None):
+    """
+    从 penpot 拉取模板（frame）列表，包含各模板的 slot 定义。
+
+    扫描策略：
+    1. 从 PENPOT_FILE_ID 主文件获取 team_id
+    2. 枚举该团队下所有 project 的所有文件
+    3. 只扫 project 名含「[模板]」的 project 下的所有文件
+    4. 每个文件里的每个 Board（frame）作为一个独立模板条目
+
+    团队协作约定：在 Penpot 里新建一个 project，命名包含「模板」
+    （如「测试模板」「电商模板库」），把所有模板文件放进去即可被自动识别。
+    合成副本统一放 Drafts，不会出现在模板库中。
+    """
+    fid = file_id or settings.penpot_file_id
+    if not fid:
+        raise HTTPException(400, "需要提供 file_id 或在 .env 中设置 PENPOT_FILE_ID")
+
+    client = get_client()
+
+    # Step 1: 获取该账号下所有团队（含个人团队）
+    TEMPLATE_MARKER = "模板"
+    template_file_ids: list[str] = []
+
+    try:
+        all_teams = client._rpc("get-teams")
+    except Exception:
+        all_teams = []
+
+    for team in all_teams:
+        tid = team.get("id") or team.get("~:id", "")
+        if not tid:
+            continue
+        try:
+            team_projects = client.get_team_projects(tid)
+            for p in team_projects:
+                pid = p.get("id") or p.get("~:id", "")
+                pname = p.get("name") or p.get("~:name", "")
+                if not pid or TEMPLATE_MARKER not in pname:
+                    continue
+                try:
+                    proj_files = client.get_project_files(pid)
+                    for pf in proj_files:
+                        pf_id = pf.get("id") or pf.get("~:id", "")
+                        if pf_id:
+                            template_file_ids.append(pf_id)
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    # 如果所有团队里都没有模板 project，退回主文件（兜底）
+    if not template_file_ids:
+        template_file_ids = [fid]
+
+    # Step 4: 逐文件提取模板 frame，按 (file_id, frame_id) 去重
+    templates: list[TemplateInfo] = []
+    seen: set[str] = set()
+    for scan_fid in template_file_ids:
+        for t in _extract_templates_from_file(client, scan_fid):
+            key = f"{scan_fid}:{t.id}"
+            if key not in seen:
+                seen.add(key)
+                templates.append(t)
 
     return templates
 
