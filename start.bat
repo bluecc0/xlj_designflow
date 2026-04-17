@@ -41,6 +41,9 @@ timeout /t 1 /nobreak >nul
 
 echo VITE_API_BASE=http://localhost:%BACKEND_PORT%> "%ROOT%frontend\.env.local"
 
+echo  Syncing PROGRESS.html to frontend/public...
+copy /Y "%ROOT%PROGRESS.html" "%ROOT%frontend\public\PROGRESS.html" >nul 2>&1
+
 echo  [5/6] Starting MCP server on port %MCP_PORT%...
 start "Penpot MCP :4401" cmd /k "cd /d %ROOT%penpot\mcp\packages\server && node dist/index.js"
 
