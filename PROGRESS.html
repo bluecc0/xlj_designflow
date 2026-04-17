@@ -3,655 +3,750 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>设计素材自动化工具 — 项目进度</title>
+<title>DesignFlow — 项目进度</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
-  :root {
-    --bg: #0f1117;
-    --panel: #1a1d27;
-    --border: #2a2d3a;
-    --text: #e2e8f0;
-    --muted: #64748b;
-    --green: #22c55e;
-    --green-dim: #166534;
-    --blue: #3b82f6;
-    --blue-dim: #1e3a5f;
-    --yellow: #eab308;
-    --yellow-dim: #713f12;
-    --purple: #a855f7;
-    --red: #ef4444;
-    --accent: #6366f1;
-  }
+:root {
+  --bg: #08090a;
+  --panel: #0f1011;
+  --panel2: #141516;
+  --border: rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.12);
+  --text: #e2e4e9;
+  --muted: #6b7280;
+  --accent: #5e6ad2;
+  --accent2: #7170ff;
+  --green: #22c55e;
+  --green-bg: rgba(34,197,94,0.1);
+  --yellow: #eab308;
+  --yellow-bg: rgba(234,179,8,0.1);
+  --red: #ef4444;
+  --red-bg: rgba(239,68,68,0.1);
+  --purple: #a78bfa;
+  --purple-bg: rgba(167,139,250,0.1);
+  --blue: #60a5fa;
+  --blue-bg: rgba(96,165,250,0.1);
+}
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, "Segoe UI", sans-serif;
-    font-size: 14px;
-    line-height: 1.6;
-    padding: 32px 24px;
-    min-height: 100vh;
-  }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", -apple-system, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  min-height: 100vh;
+}
 
-  /* ── Header ── */
-  .header {
-    max-width: 1100px;
-    margin: 0 auto 36px;
-  }
-  .header h1 {
-    font-size: 22px;
-    font-weight: 700;
-    color: #fff;
-    margin-bottom: 6px;
-  }
-  .header p { color: var(--muted); font-size: 13px; }
+/* ── Layout ── */
+.app { display: flex; min-height: 100vh; }
 
-  /* ── Pipeline diagram ── */
-  .pipeline {
-    max-width: 1100px;
-    margin: 0 auto 36px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 24px;
-  }
-  .pipeline h2 {
-    font-size: 13px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    color: var(--muted);
-    margin-bottom: 18px;
-  }
-  .pipe-row {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0;
-  }
-  .pipe-step {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 5px;
-    min-width: 100px;
-  }
-  .pipe-icon {
-    width: 44px; height: 44px;
-    border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px;
-    border: 1px solid var(--border);
-  }
-  .pipe-icon.done  { background: #14532d; border-color: var(--green); }
-  .pipe-icon.todo  { background: #1e1b4b; border-color: var(--accent); }
-  .pipe-label { font-size: 11px; color: var(--muted); text-align: center; }
-  .pipe-arrow {
-    color: var(--border);
-    font-size: 18px;
-    padding: 0 4px;
-    margin-top: -18px;
-  }
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  padding: 24px 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
 
-  /* ── Stats bar ── */
-  .stats {
-    max-width: 1100px;
-    margin: 0 auto 28px;
-    display: flex;
-    gap: 14px;
-    flex-wrap: wrap;
-  }
-  .stat-card {
-    flex: 1; min-width: 160px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px 20px;
-  }
-  .stat-number {
-    font-size: 28px;
-    font-weight: 700;
-    color: #fff;
-    line-height: 1;
-    margin-bottom: 4px;
-  }
-  .stat-number.green { color: var(--green); }
-  .stat-number.blue  { color: var(--blue); }
-  .stat-number.yellow { color: var(--yellow); }
-  .stat-label { font-size: 12px; color: var(--muted); }
+.sidebar-logo {
+  padding: 0 20px 20px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.sidebar-logo h1 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+}
+.sidebar-logo p { color: var(--muted); font-size: 12px; margin-top: 2px; }
 
-  .progress-bar-wrap {
-    flex: 2; min-width: 200px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px 20px;
-    display: flex; flex-direction: column; justify-content: center; gap: 8px;
-  }
-  .progress-bar-label {
-    display: flex; justify-content: space-between;
-    font-size: 12px; color: var(--muted);
-  }
-  .progress-bar-track {
-    height: 8px; background: var(--border); border-radius: 4px; overflow: hidden;
-  }
-  .progress-bar-fill {
-    height: 100%; border-radius: 4px;
-    background: linear-gradient(90deg, var(--green), #16a34a);
-    transition: width .5s ease;
-  }
+.nav-section {
+  padding: 0 12px;
+  margin-bottom: 8px;
+}
+.nav-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted);
+  padding: 4px 8px;
+  margin-bottom: 2px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all .15s;
+  text-decoration: none;
+}
+.nav-item:hover { background: rgba(255,255,255,.05); color: var(--text); }
+.nav-item.active { background: rgba(94,106,210,.15); color: var(--accent2); }
+.nav-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
 
-  /* ── Sections ── */
-  .sections {
-    max-width: 1100px;
-    margin: 0 auto;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-  }
-  @media (max-width: 800px) { .sections { grid-template-columns: 1fr; } }
+.main { flex: 1; padding: 32px 40px; max-width: 900px; }
 
-  .section {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    overflow: hidden;
-  }
-  .section.full { grid-column: 1 / -1; }
+/* ── Header ── */
+.page-header { margin-bottom: 32px; }
+.page-header h2 { font-size: 22px; font-weight: 600; color: #fff; margin-bottom: 4px; }
+.page-header p { color: var(--muted); font-size: 13px; }
 
-  .section-header {
-    padding: 14px 18px;
-    border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 10px;
-    font-size: 13px; font-weight: 600;
-  }
-  .section-badge {
-    font-size: 10px; font-weight: 600;
-    padding: 2px 8px; border-radius: 10px;
-    margin-left: auto;
-  }
-  .badge-done   { background: var(--green-dim);  color: var(--green); }
-  .badge-p0     { background: #450a0a; color: var(--red); }
-  .badge-p1     { background: var(--yellow-dim); color: var(--yellow); }
-  .badge-p2     { background: #1e1b4b; color: var(--purple); }
+/* ── Stats ── */
+.stats {
+  display: flex; gap: 12px; margin-bottom: 32px; flex-wrap: wrap;
+}
+.stat {
+  flex: 1; min-width: 100px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.stat-num { font-size: 26px; font-weight: 700; line-height: 1; margin-bottom: 4px; }
+.stat-lbl { font-size: 12px; color: var(--muted); }
 
-  /* ── Task items ── */
-  .task-list { padding: 8px 0; }
-  .task {
-    display: flex; align-items: flex-start; gap: 12px;
-    padding: 10px 18px;
-    border-bottom: 1px solid var(--border);
-    transition: background .15s;
-    cursor: default;
-  }
-  .task:last-child { border-bottom: none; }
-  .task:hover { background: rgba(255,255,255,.03); }
+/* ── Section ── */
+.section { margin-bottom: 8px; }
 
-  .task-check {
-    width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0;
-    margin-top: 1px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 11px; font-weight: 700;
-  }
-  .task-check.done   { background: var(--green-dim); color: var(--green); border: 1px solid var(--green); }
-  .task-check.todo   { background: transparent; border: 1px solid var(--border); color: transparent; }
-  .task-check.p0     { background: #450a0a; border: 1px solid var(--red); color: var(--red); }
-  .task-check.p1     { background: var(--yellow-dim); border: 1px solid var(--yellow); color: var(--yellow); }
-  .task-check.p2     { background: #1e1b4b; border: 1px solid var(--purple); color: var(--purple); }
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px 8px 0 0;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  background: var(--panel);
+  cursor: pointer;
+  user-select: none;
+}
+.section-head:hover { background: var(--panel2); }
 
-  .task-body { flex: 1; }
-  .task-title { color: var(--text); font-size: 13px; }
-  .task-title.done-text { color: var(--muted); text-decoration: line-through; }
-  .task-detail { color: var(--muted); font-size: 12px; margin-top: 3px; line-height: 1.5; }
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-count {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 8px;
+  margin-left: auto;
+}
+.count-done   { background: var(--green-bg);  color: var(--green); }
+.count-bug    { background: var(--red-bg);    color: var(--red); }
+.count-todo   { background: var(--yellow-bg); color: var(--yellow); }
+.count-idea   { background: var(--purple-bg); color: var(--purple); }
+.count-wip    { background: var(--blue-bg);   color: var(--blue); }
 
-  .task-tag {
-    font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 8px;
-    flex-shrink: 0; margin-top: 2px; align-self: flex-start;
-  }
-  .tag-backend  { background: #1e3a5f; color: var(--blue); }
-  .tag-frontend { background: #2d1b69; color: #a78bfa; }
-  .tag-design   { background: #1a2e1a; color: var(--green); }
-  .tag-devops   { background: #292524; color: #a8a29e; }
+.chevron { color: var(--muted); transition: transform .2s; font-size: 11px; }
+.chevron.open { transform: rotate(90deg); }
 
-  /* ── Architecture ── */
-  .arch-table {
-    width: 100%; border-collapse: collapse; font-size: 12px;
-  }
-  .arch-table th {
-    text-align: left; padding: 10px 18px;
-    color: var(--muted); font-weight: 600;
-    border-bottom: 1px solid var(--border);
-  }
-  .arch-table td {
-    padding: 9px 18px;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
-  .arch-table tr:last-child td { border-bottom: none; }
-  .arch-table tr:hover td { background: rgba(255,255,255,.02); }
-  code {
-    font-family: "Cascadia Code", Consolas, monospace;
-    font-size: 11px;
-    background: #0d1117;
-    padding: 1px 6px; border-radius: 4px;
-    color: #7dd3fc;
-  }
+.section-body {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+}
 
-  /* ── Footer ── */
-  .footer {
-    max-width: 1100px;
-    margin: 28px auto 0;
-    font-size: 12px;
-    color: var(--muted);
-    text-align: center;
-  }
+/* ── Items ── */
+.item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  transition: background .1s;
+  position: relative;
+}
+.item:last-child { border-bottom: none; }
+.item:hover { background: rgba(255,255,255,.02); }
+.item:hover .item-actions { opacity: 1; }
 
-  .dot-live {
-    display: inline-block; width: 7px; height: 7px;
-    border-radius: 50%; background: var(--green);
-    animation: pulse 2s ease-in-out infinite;
-    margin-right: 5px;
-    vertical-align: middle;
-  }
-  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.8)} }
+.item-icon {
+  width: 20px; height: 20px; border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+  flex-shrink: 0; margin-top: 1px;
+}
+.icon-done   { background: var(--green-bg);  color: var(--green);  border: 1px solid rgba(34,197,94,.3); }
+.icon-bug    { background: var(--red-bg);    color: var(--red);    border: 1px solid rgba(239,68,68,.3); }
+.icon-todo   { background: var(--yellow-bg); color: var(--yellow); border: 1px solid rgba(234,179,8,.3); }
+.icon-idea   { background: var(--purple-bg); color: var(--purple); border: 1px solid rgba(167,139,250,.3); }
+.icon-wip    { background: var(--blue-bg);   color: var(--blue);   border: 1px solid rgba(96,165,250,.3); }
+
+.item-body { flex: 1; min-width: 0; }
+.item-title { color: var(--text); font-size: 14px; font-weight: 500; }
+.item-title.struck { color: var(--muted); text-decoration: line-through; }
+.item-desc { color: var(--muted); font-size: 12px; margin-top: 3px; line-height: 1.5; }
+.item-time { color: var(--muted); font-size: 11px; margin-top: 4px; opacity: .6; }
+
+code {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  background: rgba(255,255,255,.07);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--blue);
+}
+
+.item-tag {
+  font-size: 11px; font-weight: 500;
+  padding: 2px 8px; border-radius: 5px;
+  flex-shrink: 0; margin-top: 2px;
+  align-self: flex-start;
+}
+.tag-be  { background: var(--blue-bg);   color: var(--blue); }
+.tag-fe  { background: var(--purple-bg); color: var(--purple); }
+.tag-ops { background: rgba(255,255,255,.06); color: var(--muted); }
+.tag-ux  { background: var(--green-bg);  color: var(--green); }
+
+.item-actions {
+  display: flex; gap: 4px;
+  opacity: 0; transition: opacity .15s;
+  align-self: flex-start; margin-top: 1px;
+}
+.btn-icon {
+  width: 22px; height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all .15s;
+}
+.btn-icon:hover { border-color: var(--border2); color: var(--text); }
+.btn-icon.danger:hover { border-color: var(--red); color: var(--red); background: var(--red-bg); }
+
+/* ── Add row ── */
+.add-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+}
+.add-row input, .add-row select {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 5px 9px;
+  outline: none;
+  transition: border-color .15s;
+}
+.add-row input:focus, .add-row select:focus { border-color: var(--accent); }
+.add-row input.title-input { flex: 1; }
+.add-row input.desc-input { flex: 2; }
+.btn-add {
+  padding: 5px 14px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s;
+}
+.btn-add:hover { background: var(--accent2); }
+
+/* ── Edit overlay ── */
+.edit-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.7);
+  display: none; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.edit-overlay.show { display: flex; }
+.edit-box {
+  background: var(--panel);
+  border: 1px solid var(--border2);
+  border-radius: 12px;
+  padding: 20px;
+  width: 480px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.edit-box h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.edit-box input, .edit-box textarea, .edit-box select {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 8px 10px;
+  width: 100%;
+  outline: none;
+  font-family: inherit;
+  resize: vertical;
+}
+.edit-box input:focus, .edit-box textarea:focus, .edit-box select:focus { border-color: var(--accent); }
+.edit-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.btn-cancel {
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-cancel:hover { color: var(--text); }
+.btn-save {
+  padding: 6px 14px;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn-save:hover { background: var(--accent2); }
+
+/* ── Footer ── */
+.footer {
+  margin-top: 40px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.dot-live {
+  display: inline-block; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--green);
+  animation: pulse 2s ease-in-out infinite;
+  margin-right: 5px; vertical-align: middle;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 </style>
 </head>
 <body>
 
-<!-- Header -->
-<div class="header">
-  <h1>🎨 设计素材自动化工具</h1>
-  <p><span class="dot-live"></span>项目进度总览 &nbsp;·&nbsp; 基于 penpot + 硅基流动 + FastAPI + React</p>
-</div>
+<div class="app">
 
-<!-- Pipeline -->
-<div class="pipeline">
-  <h2>数据流 / Pipeline</h2>
-  <div class="pipe-row">
-    <div class="pipe-step">
-      <div class="pipe-icon done">📊</div>
-      <div class="pipe-label">上传表格<br>Excel/CSV</div>
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <h1>DesignFlow</h1>
+      <p>项目进度追踪</p>
     </div>
-    <div class="pipe-arrow">→</div>
-    <div class="pipe-step">
-      <div class="pipe-icon done">🤖</div>
-      <div class="pipe-label">AI 解析<br>硅基流动</div>
+    <div class="nav-section">
+      <div class="nav-label">状态</div>
+      <a class="nav-item active" href="#" onclick="filterSection('all');return false;">
+        <span class="nav-dot" style="background:var(--accent)"></span> 全部
+      </a>
+      <a class="nav-item" href="#" onclick="filterSection('done');return false;">
+        <span class="nav-dot" style="background:var(--green)"></span> 已完成
+      </a>
+      <a class="nav-item" href="#" onclick="filterSection('bug');return false;">
+        <span class="nav-dot" style="background:var(--red)"></span> Bug 修复
+      </a>
+      <a class="nav-item" href="#" onclick="filterSection('wip');return false;">
+        <span class="nav-dot" style="background:var(--blue)"></span> 进行中
+      </a>
+      <a class="nav-item" href="#" onclick="filterSection('todo');return false;">
+        <span class="nav-dot" style="background:var(--yellow)"></span> 待完成
+      </a>
+      <a class="nav-item" href="#" onclick="filterSection('idea');return false;">
+        <span class="nav-dot" style="background:var(--purple)"></span> 想法
+      </a>
     </div>
-    <div class="pipe-arrow">→</div>
-    <div class="pipe-step">
-      <div class="pipe-icon done">🖼</div>
-      <div class="pipe-label">图库匹配<br>本地目录</div>
+    <div class="nav-section" style="margin-top:auto; padding-top:16px; border-top:1px solid var(--border);">
+      <div class="nav-label">操作</div>
+      <a class="nav-item" href="#" onclick="exportData();return false;">⬇ 导出 JSON</a>
+      <a class="nav-item" href="#" onclick="importData();return false;">⬆ 导入 JSON</a>
     </div>
-    <div class="pipe-arrow">→</div>
-    <div class="pipe-step">
-      <div class="pipe-icon done">🎨</div>
-      <div class="pipe-label">选择模板<br>penpot</div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="page-header">
+      <h2>项目进度</h2>
+      <p><span class="dot-live"></span>DesignFlow · Penpot + SiliconFlow + FastAPI + React · <span id="ts"></span></p>
     </div>
-    <div class="pipe-arrow">→</div>
-    <div class="pipe-step">
-      <div class="pipe-icon done">⚙️</div>
-      <div class="pipe-label">触发合成<br>FastAPI</div>
+
+    <!-- Stats -->
+    <div class="stats" id="stats"></div>
+
+    <!-- Sections -->
+    <div id="board"></div>
+
+    <div class="footer">
+      <span>双击 <code>start.bat</code> 启动 · GitHub: bluecc0/xlj_designflow</span>
+      <span>点击条目右侧图标可编辑或删除</span>
     </div>
-    <div class="pipe-arrow">→</div>
-    <div class="pipe-step">
-      <div class="pipe-icon done">✍️</div>
-      <div class="pipe-label">写入图层<br>Transit+JSON</div>
-    </div>
-    <div class="pipe-arrow">→</div>
-    <div class="pipe-step">
-      <div class="pipe-icon done">📸</div>
-      <div class="pipe-label">penpot 导出<br>Playwright</div>
-    </div>
-    <div class="pipe-arrow">→</div>
-    <div class="pipe-step">
-      <div class="pipe-icon done">✂️</div>
-      <div class="pipe-label">九宫格切图<br>Pillow</div>
-    </div>
-    <div class="pipe-arrow">→</div>
-    <div class="pipe-step">
-      <div class="pipe-icon done">⬇️</div>
-      <div class="pipe-label">前端展示<br>下载</div>
-    </div>
-  </div>
-</div>
-
-<!-- Stats -->
-<div class="stats">
-  <div class="stat-card">
-    <div class="stat-number green">17</div>
-    <div class="stat-label">已完成</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-number" style="color:var(--red)">0</div>
-    <div class="stat-label">P0 核心待办</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-number yellow">1</div>
-    <div class="stat-label">P1 体验待办</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-number" style="color:var(--purple)">1</div>
-    <div class="stat-label">P2 工程待办</div>
-  </div>
-  <div class="progress-bar-wrap">
-    <div class="progress-bar-label">
-      <span>总体进度</span>
-      <span>17 / 19 完成 · 89%</span>
-    </div>
-    <div class="progress-bar-track">
-      <div class="progress-bar-fill" style="width: 89%"></div>
-    </div>
-    <div class="progress-bar-label">
-      <span style="color:var(--green)">核心功能 100%</span>
-      <span style="color:var(--yellow)">剩余：多模板设计 + token 刷新</span>
-    </div>
-  </div>
-</div>
-
-<!-- Sections -->
-<div class="sections">
-
-  <!-- 已完成 -->
-  <div class="section full">
-    <div class="section-header">
-      ✅ 已完成
-      <span class="section-badge badge-done">17 项</span>
-    </div>
-    <div class="task-list">
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">penpot Docker 本地部署</div>
-          <div class="task-detail">docker-compose，启用 access token / 关闭邮件验证，本地 localhost:9001</div>
-        </div>
-        <span class="task-tag tag-devops">运维</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">PoC 全链路验证</div>
-          <div class="task-detail">认证 → 读文件结构 → 上传图片 → 写图层（Transit+JSON）→ 导出 PNG，含 positionData 坑点验证</div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">Python penpot 客户端库</div>
-          <div class="task-detail"><code>backend/penpot_client.py</code> — Transit+JSON 编解码、双 token 认证、图片上传、文字/图片图层写入、PNG 导出</div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">FastAPI 后端（12 个端点）</div>
-          <div class="task-detail"><code>GET /templates</code> &nbsp;<code>POST /compose</code> &nbsp;<code>GET /compose/{id}</code> &nbsp;<code>GET /compose</code> &nbsp;<code>POST /export/grid</code> &nbsp;<code>POST /parse-table</code> &nbsp;<code>GET /products</code> &nbsp;<code>POST /products/upload</code> &nbsp;<code>DELETE /products/{filename}</code> &nbsp;<code>GET /templates/{id}/thumbnail</code> &nbsp;静态文件服务</div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">文字样式从模板图层读取</div>
-          <div class="task-detail"><code>parse_text_style()</code> 从 <code>get-file</code> 解析字体族、大小、颜色、对齐方式，合成时原样写回，不再硬编码 sourcesanspro</div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">空字段自动隐藏图层</div>
-          <div class="task-detail">price/tag/spec/image 为 null 时调用 <code>hide_layer()</code>，保持模板整洁不残留占位文字</div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">前端完整流程串联</div>
-          <div class="task-detail">上传表格 → AI 解析 → 自动选最匹配模板 → 确认 → 合成 → 中栏实时进度 → 完成自动通知 + 导出按钮</div>
-        </div>
-        <span class="task-tag tag-frontend">前端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">模板真实缩略图懒加载</div>
-          <div class="task-detail"><code>GET /templates/{id}/thumbnail</code>，首次 5s 生成后缓存，前端用 IntersectionObserver 按需加载</div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">产品图库前端管理（拖拽上传 + 删除）</div>
-          <div class="task-detail">左栏新增「图库」Tab，图片网格 + 拖拽 / 点击上传 + hover 删除，后端 <code>POST /products/upload</code> + <code>DELETE</code></div>
-        </div>
-        <span class="task-tag tag-frontend">前端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">合成任务 SQLite 持久化</div>
-          <div class="task-detail"><code>backend/job_store.py</code>，重启不丢失历史任务，<code>GET /compose</code> 返回历史列表</div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">并发合成队列控制</div>
-          <div class="task-detail"><code>threading.Semaphore(1)</code> 保证 penpot exporter 串行，多请求自动排队，防版本号冲突</div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">React 前端三栏布局</div>
-          <div class="task-detail">左栏模板库（SVG slot 预览 + 筛选）/ 中栏合成预览（slot 可视化 + 进度）/ 右栏 AI 对话（文件上传 + 快捷操作）</div>
-        </div>
-        <span class="task-tag tag-frontend">前端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">硅基流动表格解析</div>
-          <div class="task-detail"><code>Qwen2.5-72B-Instruct</code>，OpenAI 兼容接口，解析产品名/价格/标签/规格，自动推荐模板类型</div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">产品图库管理</div>
-          <div class="task-detail">本地目录扫描，精确匹配优先，模糊包含匹配兜底；<code>GET /products</code> 返回预览 URL</div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">九宫格切图</div>
-          <div class="task-detail">Pillow crop，rows × cols 可配置，<code>POST /export/grid</code> + <code>GET /export/grid/{id}/{index}</code></div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">start.bat 一键启动</div>
-          <div class="task-detail">检测并 kill 占用端口，写 <code>.env.local</code>，等待后端健康检查后启动前端，自动打开浏览器</div>
-        </div>
-        <span class="task-tag tag-devops">运维</span>
-      </div>
-
-    </div>
-  </div>
-
-  <!-- P0 — 全部完成 -->
-  <div class="section">
-    <div class="section-header">
-      ✅ P0 — 核心功能（全部完成）
-      <span class="section-badge badge-done">0 项剩余</span>
-    </div>
-    <div class="task-list">
-      <div class="task">
-        <div class="task-check done">✓</div>
-        <div class="task-body">
-          <div class="task-title done-text">所有 P0 项目均已完成</div>
-          <div class="task-detail">文字样式读取 · 空字段隐藏 · 前端完整流程 · 合成完成自动通知 · 多产品循环合成</div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- P1 -->
-  <div class="section">
-    <div class="section-header">
-      🟡 P1 — 体验提升
-      <span class="section-badge badge-p1">1 项</span>
-    </div>
-    <div class="task-list">
-
-      <div class="task">
-        <div class="task-check p1">~</div>
-        <div class="task-body">
-          <div class="task-title">更多 penpot 模板（4宫格、6宫格）</div>
-          <div class="task-detail">在 penpot 设计更多格子模板，按 <code>slot/product_N/image</code> 命名规范。代码已支持任意数量产品 slot，只需设计师配合。</div>
-        </div>
-        <span class="task-tag tag-design">设计</span>
-      </div>
-
-    </div>
-  </div>
-
-  <!-- P2 -->
-  <div class="section">
-    <div class="section-header">
-      🟣 P2 — 工程完善
-      <span class="section-badge badge-p2">1 项</span>
-    </div>
-    <div class="task-list">
-
-      <div class="task">
-        <div class="task-check p2">·</div>
-        <div class="task-body">
-          <div class="task-title">penpot Access Token 自动刷新</div>
-          <div class="task-detail">Token 30 天过期后 API 全返回 401。捕获 401 后自动用邮密重新登录，更新 token 并重试请求。</div>
-        </div>
-        <span class="task-tag tag-backend">后端</span>
-      </div>
-
-    </div>
-  </div>
-
-  <!-- 架构速查 -->
-  <div class="section full">
-    <div class="section-header">📁 文件结构 & 端点速查</div>
-    <table class="arch-table">
-      <tr>
-        <th>模块</th>
-        <th>文件 / 路径</th>
-        <th>端口 / 端点</th>
-        <th>说明</th>
-      </tr>
-      <tr>
-        <td>penpot</td>
-        <td><code>penpot/docker/images/docker-compose.yaml</code></td>
-        <td>:9001</td>
-        <td>本地自托管，Playwright exporter，Transit+JSON API</td>
-      </tr>
-      <tr>
-        <td>后端</td>
-        <td><code>backend/main.py</code></td>
-        <td>:8000</td>
-        <td><code>GET /templates</code> &nbsp;<code>POST /compose</code> &nbsp;<code>GET /compose/{id}</code> &nbsp;<code>GET /templates/{id}/thumbnail</code> &nbsp;<code>POST /products/upload</code> &nbsp;<code>DELETE /products/{f}</code> &nbsp;等 12 个端点</td>
-      </tr>
-      <tr>
-        <td>penpot 客户端</td>
-        <td><code>backend/penpot_client.py</code></td>
-        <td>—</td>
-        <td>Transit 编解码，<code>upload_image()</code> <code>set_text_content()</code> <code>parse_text_style()</code> <code>export_frame()</code></td>
-      </tr>
-      <tr>
-        <td>合成引擎</td>
-        <td><code>backend/compose.py</code></td>
-        <td>—</td>
-        <td>Semaphore 串行队列，slot 循环写入（多产品），文字样式读取，空字段隐藏</td>
-      </tr>
-      <tr>
-        <td>任务持久化</td>
-        <td><code>backend/job_store.py</code></td>
-        <td><code>jobs.db</code></td>
-        <td>SQLite，<code>save_job()</code> <code>load_job()</code> <code>load_recent_jobs()</code>，重启不丢失</td>
-      </tr>
-      <tr>
-        <td>表格解析</td>
-        <td><code>backend/table_parser.py</code></td>
-        <td>—</td>
-        <td>硅基流动 Qwen2.5-72B，OpenAI SDK，返回 ParseResult</td>
-      </tr>
-      <tr>
-        <td>产品图库</td>
-        <td><code>backend/product_library.py</code></td>
-        <td><code>/product-library/*</code></td>
-        <td>本地目录扫描，精确/模糊匹配，静态文件服务</td>
-      </tr>
-      <tr>
-        <td>前端</td>
-        <td><code>frontend/src/</code></td>
-        <td>:5173</td>
-        <td>React + Vite + Zustand，三栏布局 + Tab 切换（模板库/图库），自动模板选择，合成完成通知</td>
-      </tr>
-      <tr>
-        <td>图库</td>
-        <td><code>product-library/</code></td>
-        <td>—</td>
-        <td>产品图片目录，按产品名命名，PNG 透明背景推荐</td>
-      </tr>
-      <tr>
-        <td>输出</td>
-        <td><code>output/</code></td>
-        <td><code>/output/*</code></td>
-        <td>合成结果 PNG，九宫格分片，静态文件服务</td>
-      </tr>
-      <tr>
-        <td>启动</td>
-        <td><code>start.bat</code></td>
-        <td>—</td>
-        <td>kill 旧进程 → 启后端 → 等健康检查 → 启前端 → 打开浏览器</td>
-      </tr>
-    </table>
-  </div>
+  </main>
 
 </div>
 
-<div class="footer">
-  <p>最后更新：<span id="ts"></span> &nbsp;·&nbsp; 双击 <code>start.bat</code> 启动所有服务</p>
+<!-- Edit overlay -->
+<div class="edit-overlay" id="editOverlay">
+  <div class="edit-box">
+    <h3>编辑条目</h3>
+    <input id="editTitle" placeholder="标题" />
+    <textarea id="editDesc" placeholder="描述（可选）" rows="3"></textarea>
+    <select id="editTag">
+      <option value="be">后端</option>
+      <option value="fe">前端</option>
+      <option value="ops">运维</option>
+      <option value="ux">设计/UX</option>
+    </select>
+    <div class="edit-actions">
+      <button class="btn-cancel" onclick="closeEdit()">取消</button>
+      <button class="btn-save" onclick="saveEdit()">保存</button>
+    </div>
+  </div>
 </div>
 
 <script>
-  document.getElementById('ts').textContent = new Date().toLocaleString('zh-CN');
+// ── Data ──────────────────────────────────────────────────────────────────────
+
+const SECTIONS = [
+  { id: 'done', label: '✅ 已完成', type: 'done',  countClass: 'count-done' },
+  { id: 'bug',  label: '🐛 Bug 修复', type: 'bug', countClass: 'count-bug'  },
+  { id: 'wip',  label: '🔵 进行中', type: 'wip',   countClass: 'count-wip'  },
+  { id: 'todo', label: '🟡 待完成', type: 'todo',  countClass: 'count-todo' },
+  { id: 'idea', label: '💡 想法 / 待议', type: 'idea', countClass: 'count-idea' },
+];
+
+const ICON = { done:'✓', bug:'✗', wip:'…', todo:'·', idea:'?' };
+const TAG_LABEL = { be:'后端', fe:'前端', ops:'运维', ux:'设计' };
+
+const DEFAULT_DATA = {
+  done: [
+    { id:1,  title:'Penpot Docker 本地部署',        desc:'docker-compose，启用 access token / 关闭邮件验证，localhost:9001',                           tag:'ops' },
+    { id:2,  title:'PoC 全链路验证',                desc:'认证 → 读文件结构 → 上传图片 → 写图层（Transit+JSON）→ 导出 PNG',                           tag:'be' },
+    { id:3,  title:'Python Penpot 客户端库',         desc:'Transit+JSON 编解码、双 token 认证、图片上传、文字/图片图层写入、PNG 导出',                 tag:'be' },
+    { id:4,  title:'FastAPI 后端（14 个端点）',      desc:'GET /templates · POST /compose · GET /compose/{id} · POST /export/grid · POST /parse-table · GET/POST/DELETE /products · GET /templates/{id}/thumbnail · POST /chat · GET /debug/team-scan',  tag:'be' },
+    { id:5,  title:'文字样式从模板图层读取',          desc:'parse_text_style() 解析字体族、大小、颜色、对齐，raw_content 策略保留原始样式，不再硬编码', tag:'be' },
+    { id:6,  title:'文字 position-data 修复',        desc:'设为 None 强制 Penpot 重计算渲染缓存，解决 canvas 显示旧文字 / 编辑显示新文字的双层问题',  tag:'be' },
+    { id:7,  title:'Transit+JSON 字段格式修复',      desc:'写操作必须用 kebab-case（fill-color），读操作返回 camelCase，修复了多个 HTTP 500 错误',     tag:'be' },
+    { id:8,  title:'空字段自动隐藏图层',              desc:'price/tag/spec/image 为 null 时调用 hide_layer()，保持模板整洁',                            tag:'be' },
+    { id:9,  title:'前端完整流程串联',               desc:'上传表格 → AI 解析 → 自动选模板 → 确认 → 合成 → 实时进度 → 完成通知 + 导出',               tag:'fe' },
+    { id:10, title:'模板真实缩略图懒加载',            desc:'GET /templates/{id}/thumbnail，首次 5s 生成后缓存，IntersectionObserver 按需加载',          tag:'be' },
+    { id:11, title:'产品图库前端管理',               desc:'图库 Tab，图片网格 + 拖拽/点击上传 + hover 删除，POST /products/upload + DELETE',            tag:'fe' },
+    { id:12, title:'合成任务 SQLite 持久化',          desc:'job_store.py，重启不丢失历史任务，GET /compose 返回历史列表',                               tag:'be' },
+    { id:13, title:'硅基流动 AI 表格解析',            desc:'Qwen2.5-72B，OpenAI 兼容接口，解析产品名/价格/标签/规格，自动推荐模板类型',                 tag:'be' },
+    { id:14, title:'AI 对话 + /指令系统',            desc:'POST /chat 端点，注入工作台上下文；/ 前缀触发操作，普通文字调 AI，SVG 上传图标',             tag:'fe' },
+    { id:15, title:'Linear 设计系统 UI',             desc:'#08090a 背景 + #5e6ad2 accent + Inter 字体，输入框 typing dots 动画',                       tag:'fe' },
+    { id:16, title:'九宫格切图',                     desc:'Pillow crop，rows×cols 可配置，POST /export/grid + GET /export/grid/{id}/{index}',           tag:'be' },
+    { id:17, title:'start.bat 一键启动',              desc:'kill 旧进程 → 启后端 → 等健康检查 → 启前端 → 打开浏览器',                                  tag:'ops' },
+    { id:18, title:'团队模板扫描',                   desc:'get-teams 遍历所有团队，project 名含「模板」即扫描，Board 作为模板条目，兜底主文件',          tag:'be' },
+    { id:19, title:'合成副本与模板分离',              desc:'compose 生成副本放 Drafts，模板 project 约定命名，前端模板库不混入合成结果',                  tag:'be' },
+  ],
+  bug: [
+    { id:101, title:'WSL 幽灵进程问题',              desc:'Claude bash 工具启动的进程 Windows taskkill 看不到，start.bat kill 逻辑只匹配 0.0.0.0:8000，127.0.0.1:8000 会漏掉。解决：重启电脑',  tag:'ops' },
+  ],
+  wip: [],
+  todo: [
+    { id:201, title:'移除 /debug/* 调试端点',        desc:'team-scan 和 text-layer 端点上线前应移除或加权限保护',                                        tag:'be' },
+    { id:202, title:'更多 Penpot 模板设计',           desc:'4宫格、6宫格等，按 slot/product_N/image 命名规范，代码已支持任意数量',                       tag:'ux' },
+    { id:203, title:'list_templates 性能优化',        desc:'当前串行请求多团队/project/文件，数量多时慢，后续加 TTL 缓存',                               tag:'be' },
+    { id:204, title:'Penpot Token 自动刷新',          desc:'Token 30 天过期后全返回 401，已有框架，需捕获 401 自动用邮密重新登录并重试',                  tag:'be' },
+  ],
+  idea: [
+    { id:301, title:'合成历史回放',                  desc:'中栏展示最近几次合成结果，可一键重新导出',                                                    tag:'fe' },
+    { id:302, title:'模板在线编辑直达',               desc:'每个模板卡片加「在 Penpot 里编辑」按钮，跳转到对应的编辑链接',                               tag:'fe' },
+  ],
+};
+
+// ── Storage ───────────────────────────────────────────────────────────────────
+
+function loadData() {
+  try {
+    const saved = localStorage.getItem('df-progress');
+    if (saved) return JSON.parse(saved);
+  } catch(e) {}
+  return JSON.parse(JSON.stringify(DEFAULT_DATA));
+}
+
+function saveData() {
+  localStorage.setItem('df-progress', JSON.stringify(data));
+}
+
+let data = loadData();
+let nextId = Math.max(...Object.values(data).flat().map(i => i.id), 400) + 1;
+let editTarget = null; // { sectionId, itemId }
+let currentFilter = 'all';
+
+// ── Render ────────────────────────────────────────────────────────────────────
+
+function render() {
+  renderStats();
+  renderBoard();
+}
+
+function renderStats() {
+  const counts = {};
+  SECTIONS.forEach(s => counts[s.id] = data[s.id]?.length || 0);
+  const total = Object.values(counts).reduce((a,b) => a+b, 0);
+
+  document.getElementById('stats').innerHTML = `
+    <div class="stat">
+      <div class="stat-num" style="color:var(--green)">${counts.done}</div>
+      <div class="stat-lbl">已完成</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" style="color:var(--red)">${counts.bug}</div>
+      <div class="stat-lbl">Bug 修复</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" style="color:var(--blue)">${counts.wip}</div>
+      <div class="stat-lbl">进行中</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" style="color:var(--yellow)">${counts.todo}</div>
+      <div class="stat-lbl">待完成</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" style="color:var(--purple)">${counts.idea}</div>
+      <div class="stat-lbl">想法</div>
+    </div>
+  `;
+}
+
+function renderBoard() {
+  const board = document.getElementById('board');
+  const sections = currentFilter === 'all'
+    ? SECTIONS
+    : SECTIONS.filter(s => s.id === currentFilter);
+
+  board.innerHTML = sections.map(sec => {
+    const items = data[sec.id] || [];
+    const isCollapsed = !sec.open && items.length === 0 && currentFilter === 'all';
+    return `
+      <div class="section" id="sec-${sec.id}">
+        <div class="section-head" onclick="toggleSection('${sec.id}')">
+          <span class="chevron ${!isCollapsed ? 'open' : ''}" id="chev-${sec.id}">▶</span>
+          <span class="section-title">${sec.label}</span>
+          <span class="section-count ${sec.countClass}">${items.length}</span>
+        </div>
+        <div class="section-body" id="body-${sec.id}" style="${isCollapsed ? 'display:none' : ''}">
+          ${items.map(item => renderItem(sec.id, item)).join('')}
+          ${renderAddRow(sec.id)}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function fmtTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  const diffMs = now - d;
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffH = Math.floor(diffMs / 3600000);
+  const diffD = Math.floor(diffMs / 86400000);
+  if (diffMin < 1)  return '刚刚';
+  if (diffMin < 60) return `${diffMin} 分钟前`;
+  if (diffH < 24)   return `${diffH} 小时前`;
+  if (diffD < 30)   return `${diffD} 天前`;
+  return d.toLocaleDateString('zh-CN', { month:'short', day:'numeric' });
+}
+
+function renderItem(secId, item) {
+  const type = SECTIONS.find(s => s.id === secId)?.type || secId;
+  const struck = type === 'done' ? 'struck' : '';
+  const timeStr = item.ts ? fmtTime(item.ts) : '';
+  return `
+    <div class="item" id="item-${item.id}">
+      <div class="item-icon icon-${type}">${ICON[type]}</div>
+      <div class="item-body">
+        <div class="item-title ${struck}">${escHtml(item.title)}</div>
+        ${item.desc ? `<div class="item-desc">${escHtml(item.desc)}</div>` : ''}
+        ${timeStr ? `<div class="item-time">${timeStr}</div>` : ''}
+      </div>
+      <span class="item-tag tag-${item.tag}">${TAG_LABEL[item.tag] || item.tag}</span>
+      <div class="item-actions">
+        <button class="btn-icon" onclick="openEdit('${secId}',${item.id})" title="编辑">✎</button>
+        <button class="btn-icon" onclick="moveItem('${secId}',${item.id})" title="移动到…">⇄</button>
+        <button class="btn-icon danger" onclick="deleteItem('${secId}',${item.id})" title="删除">✕</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderAddRow(secId) {
+  return `
+    <div class="add-row">
+      <input class="title-input" id="add-title-${secId}" placeholder="+ 新增条目标题…" onkeydown="if(event.key==='Enter')addItem('${secId}')"/>
+      <input class="desc-input" id="add-desc-${secId}" placeholder="描述（可选）"/>
+      <select id="add-tag-${secId}">
+        <option value="be">后端</option>
+        <option value="fe">前端</option>
+        <option value="ops">运维</option>
+        <option value="ux">设计</option>
+      </select>
+      <button class="btn-add" onclick="addItem('${secId}')">添加</button>
+    </div>
+  `;
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+
+function toggleSection(secId) {
+  const body = document.getElementById(`body-${secId}`);
+  const chev = document.getElementById(`chev-${secId}`);
+  const hidden = body.style.display === 'none';
+  body.style.display = hidden ? '' : 'none';
+  chev.classList.toggle('open', hidden);
+}
+
+function addItem(secId) {
+  const titleEl = document.getElementById(`add-title-${secId}`);
+  const descEl  = document.getElementById(`add-desc-${secId}`);
+  const tagEl   = document.getElementById(`add-tag-${secId}`);
+  const title = titleEl.value.trim();
+  if (!title) { titleEl.focus(); return; }
+  const item = { id: nextId++, title, desc: descEl.value.trim(), tag: tagEl.value, ts: new Date().toISOString() };
+  data[secId] = data[secId] || [];
+  data[secId].push(item);
+  saveData();
+  render();
+  // re-expand the section
+  const body = document.getElementById(`body-${secId}`);
+  if (body) body.style.display = '';
+}
+
+function deleteItem(secId, itemId) {
+  if (!confirm('确认删除这条记录？')) return;
+  data[secId] = (data[secId] || []).filter(i => i.id !== itemId);
+  saveData();
+  render();
+}
+
+function moveItem(secId, itemId) {
+  const targets = SECTIONS.filter(s => s.id !== secId).map(s => s.id);
+  const choice = prompt(`移动到哪个分组？\n${targets.map((t,i)=>`${i+1}. ${t}`).join('\n')}`);
+  if (!choice) return;
+  const idx = parseInt(choice) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= targets.length) return;
+  const dest = targets[idx];
+  const item = (data[secId] || []).find(i => i.id === itemId);
+  if (!item) return;
+  data[secId] = data[secId].filter(i => i.id !== itemId);
+  data[dest] = data[dest] || [];
+  data[dest].push(item);
+  saveData();
+  render();
+}
+
+// ── Edit overlay ──────────────────────────────────────────────────────────────
+
+function openEdit(secId, itemId) {
+  const item = (data[secId] || []).find(i => i.id === itemId);
+  if (!item) return;
+  editTarget = { secId, itemId };
+  document.getElementById('editTitle').value = item.title;
+  document.getElementById('editDesc').value  = item.desc || '';
+  document.getElementById('editTag').value   = item.tag || 'be';
+  document.getElementById('editOverlay').classList.add('show');
+  document.getElementById('editTitle').focus();
+}
+
+function closeEdit() {
+  editTarget = null;
+  document.getElementById('editOverlay').classList.remove('show');
+}
+
+function saveEdit() {
+  if (!editTarget) return;
+  const { secId, itemId } = editTarget;
+  const item = (data[secId] || []).find(i => i.id === itemId);
+  if (!item) return;
+  item.title = document.getElementById('editTitle').value.trim() || item.title;
+  item.desc  = document.getElementById('editDesc').value.trim();
+  item.tag   = document.getElementById('editTag').value;
+  item.ts    = new Date().toISOString();
+  saveData();
+  closeEdit();
+  render();
+}
+
+document.getElementById('editOverlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeEdit();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeEdit();
+});
+
+// ── Filter ────────────────────────────────────────────────────────────────────
+
+function filterSection(type) {
+  currentFilter = type;
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  renderBoard();
+}
+
+// ── Import / Export ───────────────────────────────────────────────────────────
+
+function exportData() {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `designflow-progress-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+}
+
+function importData() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const parsed = JSON.parse(ev.target.result);
+        if (confirm('导入将覆盖当前数据，确认？')) {
+          data = parsed;
+          nextId = Math.max(...Object.values(data).flat().map(i => i.id), 400) + 1;
+          saveData();
+          render();
+        }
+      } catch(e) {
+        alert('JSON 格式错误');
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+document.getElementById('ts').textContent = new Date().toLocaleString('zh-CN');
+// default: expand all sections
+SECTIONS.forEach(s => s.open = true);
+render();
 </script>
 </body>
 </html>
