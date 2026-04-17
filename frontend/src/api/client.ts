@@ -169,14 +169,18 @@ export async function fetchProducts(): Promise<{ products: ProductItem[] }> {
   return request<{ products: ProductItem[] }>("/products");
 }
 
-/** 获取模板缩略图 URL（首次调用后端会生成并缓存，约 5 秒） */
+/** 获取模板缩略图 URL（首次调用后端会生成并缓存，约 5 秒）
+ * @param refresh=true 强制重新生成（绕过缓存）
+ */
 export function getTemplateThumbnailUrl(
   templateId: string,
   pageId: string,
-  fileId?: string
+  fileId?: string,
+  refresh?: boolean
 ): string {
   const qs = new URLSearchParams({ page_id: pageId });
   if (fileId) qs.set("file_id", fileId);
+  if (refresh) qs.set("refresh", "1");
   return `${BASE}/templates/${templateId}/thumbnail?${qs}`;
 }
 

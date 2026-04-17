@@ -1,15 +1,34 @@
 /**
  * 全局状态 — Zustand store
- * slots 和已选模板持久化到 localStorage，刷新页面后自动恢复
+ *
+ * 不做任何持久化，每次刷新页面都是初始状态。
+ * 上传表格后 slots 保存在内存中，刷新页面会丢失。
  */
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
 import type {
   ComposeJob,
   ParsedProduct,
   ProductItem,
   TemplateInfo,
 } from "../api/client";
+
+// ─── 常量 ────────────────────────────────────────────────────────────────────
+
+const WELCOME_CONTENT = `你好！我是 DesignFlow AI 助手，可以自由对话，也可以帮你操作生图流程。
+
+**快速开始：**
+1. 在左侧选择模板
+2. 上传产品需求表格（Excel/CSV）
+3. 点击「开始合成」
+
+快捷指令：\`/开始合成\` \`/导出PNG\` \`/切九宫格\``;
+
+const makeWelcomeMsg = () => ({
+  id: "0",
+  role: "assistant" as const,
+  content: WELCOME_CONTENT,
+  timestamp: Date.now(),
+});
 
 // ─── 聊天消息 ────────────────────────────────────────────────────────────────
 
@@ -66,96 +85,87 @@ interface AppStore {
 let _msgId = 0;
 const nextId = () => String(++_msgId);
 
-export const useAppStore = create<AppStore>()(
-  persist(
-    (set) => ({
-      templates: [],
-      templatesLoading: false,
-      setTemplates: (templates) => set({ templates }),
-      setTemplatesLoading: (templatesLoading) => set({ templatesLoading }),
+export const useAppStore = create<AppStore>()((set) => ({
+  templates: [],
+  templatesLoading: false,
+  setTemplates: (templates) => set({ templates }),
+  setTemplatesLoading: (templatesLoading) => set({ templatesLoading }),
 
-      products: [],
-      setProducts: (products) => set({ products }),
+  products: [],
+  setProducts: (products) => set({ products }),
 
+  compose: {
+    selectedTemplate: null,
+    slots: {},
+    currentJob: null,
+    resultImageUrl: null,
+    gridUrls: [],
+  },
+
+  selectTemplate: (t) =>
+    set((s) => ({
       compose: {
-        selectedTemplate: null,
+        ...s.compose,
+        selectedTemplate: t,
+        resultImageUrl: null,
+        gridUrls: [],
+        currentJob: null,
+      },
+    })),
+
+  setSlot: (key, product, localImageUrl) =>
+    set((s) => ({
+      compose: {
+        ...s.compose,
+        slots: { ...s.compose.slots, [key]: { product, localImageUrl } },
+      },
+    })),
+
+  clearSlots: () =>
+    set((s) => ({
+      compose: {
+        ...s.compose,
         slots: {},
         currentJob: null,
         resultImageUrl: null,
         gridUrls: [],
       },
+      messages: [makeWelcomeMsg()],
+    })),
 
-      selectTemplate: (t) =>
-        set((s) => ({
-          compose: {
-            ...s.compose,
-            selectedTemplate: t,
-            resultImageUrl: null,
-            gridUrls: [],
-            currentJob: null,
-          },
-        })),
+  setJob: (job) =>
+    set((s) => ({
+      compose: {
+        ...s.compose,
+        currentJob: job ? { progress: [], ...job } : null,
+      },
+    })),
 
-      setSlot: (key, product, localImageUrl) =>
-        set((s) => ({
-          compose: {
-            ...s.compose,
-            slots: { ...s.compose.slots, [key]: { product, localImageUrl } },
-          },
-        })),
+  setResultImageUrl: (url) =>
+    set((s) => ({ compose: { ...s.compose, resultImageUrl: url } })),
 
-      clearSlots: () =>
-        set((s) => ({
-          compose: { ...s.compose, slots: {}, resultImageUrl: null, gridUrls: [] },
-        })),
+  setGridUrls: (urls) =>
+    set((s) => ({ compose: { ...s.compose, gridUrls: urls } })),
 
-      setJob: (job) =>
-        set((s) => ({
-          compose: {
-            ...s.compose,
-            currentJob: job ? { progress: [], ...job } : null,
-          },
-        })),
+  messages: [makeWelcomeMsg()],
 
-      setResultImageUrl: (url) =>
-        set((s) => ({ compose: { ...s.compose, resultImageUrl: url } })),
-
-      setGridUrls: (urls) =>
-        set((s) => ({ compose: { ...s.compose, gridUrls: urls } })),
-
+  addMessage: (msg) =>
+    set((s) => ({
       messages: [
-        {
-          id: "0",
-          role: "assistant",
-          content:
-            "你好！我是 DesignFlow AI 助手，可以自由对话，也可以帮你操作生图流程。\n\n**快速开始：**\n1. 在左侧选择模板\n2. 上传产品需求表格（Excel/CSV）\n3. 输入 `/开始生图` 开始合成\n\n快捷指令：`/开始生图` `/导出PNG` `/切九宫格`",
-          timestamp: Date.now(),
-        },
+        ...s.messages,
+        { ...msg, id: msg.id ?? nextId(), timestamp: Date.now() },
       ],
-      addMessage: (msg) =>
-        set((s) => ({
-          messages: [
-            ...s.messages,
-            { ...msg, id: msg.id ?? nextId(), timestamp: Date.now() },
-          ],
-        })),
-      replaceMessage: (id, content) =>
-        set((s) => ({
-          messages: s.messages.map((m) =>
-            m.id === id ? { ...m, content } : m
-          ),
-        })),
-      clearMessages: () => set({ messages: [] }),
-    }),
-    {
-      name: "design-tool-store",
-      storage: createJSONStorage(() => localStorage),
-      // 只持久化 slots，不持久化已选模板（每次打开从空白开始）
-      partialize: (state) => ({
-        compose: {
-          slots: state.compose.slots,
-        },
-      }),
-    }
-  )
-);
+    })),
+
+  replaceMessage: (id, content) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === id ? { ...m, content } : m
+      ),
+    })),
+
+  clearMessages: () =>
+    set(() => ({
+      messages: [makeWelcomeMsg()],
+    })),
+}));

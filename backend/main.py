@@ -435,10 +435,12 @@ def get_template_thumbnail(
     template_id: str,
     page_id: str,
     file_id: Optional[str] = None,
+    refresh: bool = False,
 ):
     """
     导出模板缩略图（scale=0.3 的小图），首次调用耗时约 5 秒，之后命中缓存立即返回。
     缩略图缓存到 output/thumbnails/{template_id}.png。
+    - refresh=true: 强制重新生成（绕过缓存）
     """
     fid = file_id or settings.penpot_file_id
     if not fid:
@@ -447,6 +449,10 @@ def get_template_thumbnail(
     thumb_dir = settings.output_path / "thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
     cache_path = thumb_dir / f"{template_id}.png"
+
+    # refresh=true 时删除缓存，强制重新生成
+    if refresh and cache_path.exists():
+        cache_path.unlink()
 
     if cache_path.exists():
         return FileResponse(str(cache_path), media_type="image/png")
@@ -579,7 +585,7 @@ async def chat_endpoint(req: ChatRequest):
             json={
                 "model": settings.siliconflow_model,
                 "messages": messages,
-                "max_tokens": 1024,
+                "max_tokens": 2048,
                 "temperature": 0.8,
             },
         )
@@ -587,5 +593,13 @@ async def chat_endpoint(req: ChatRequest):
         raise HTTPException(500, f"AI 服务返回错误: {resp.text[:200]}")
 
     data = resp.json()
-    reply = data["choices"][0]["message"]["content"]
+    try:
+        reply = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError) as e:
+        raise HTTPException(500, f"AI 响应格式异常: {e}, 原始响应: {str(data)[:200]}")
+
+    # 防御：AI 返回空内容时返回友好提示
+    if not reply or not reply.strip():
+        reply = "抱歉，AI 暂时没有生成有效回复，请重试或换个问题。"
+
     return {"reply": reply}

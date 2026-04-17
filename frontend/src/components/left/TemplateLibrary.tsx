@@ -33,14 +33,28 @@ export default function TemplateLibrary() {
   const { compose, selectTemplate } = useAppStore();
   const [filter, setFilter] = useState("all");
   const [error, setError] = useState<string | null>(null);
+  const [thumbRefreshKey, setThumbRefreshKey] = useState(0);
 
-  useEffect(() => {
+  // 加载模板列表
+  const loadTemplates = () => {
     setTemplatesLoading(true);
     setError(null);
     fetchTemplates()
       .then(setTemplates)
       .catch((e) => setError(String(e)))
       .finally(() => setTemplatesLoading(false));
+  };
+
+  // 刷新模板（仅刷新列表 + 缩略图，保留 slots 和消息）
+  const handleRefresh = () => {
+    setThumbRefreshKey((k) => k + 1);
+    loadTemplates();
+    // 注意：不清空 slots 和 messages，保留上传的表格数据
+  };
+
+  // 首次加载
+  useEffect(() => {
+    loadTemplates();
   }, []);
 
   const visible = templates.filter(
@@ -52,6 +66,14 @@ export default function TemplateLibrary() {
       <div className="panel-header">
         <span className="panel-title">模板库</span>
         {templatesLoading && <span className="loading-dot" />}
+        <button
+          className="refresh-btn"
+          onClick={handleRefresh}
+          title="刷新模板和缩略图"
+          disabled={templatesLoading}
+        >
+          ↻
+        </button>
       </div>
 
       {/* 筛选 */}
@@ -80,6 +102,7 @@ export default function TemplateLibrary() {
             template={t}
             selected={compose.selectedTemplate?.id === t.id}
             onClick={() => selectTemplate(t)}
+            thumbRefreshKey={thumbRefreshKey}
           />
         ))}
       </div>
@@ -91,10 +114,12 @@ function TemplateCard({
   template,
   selected,
   onClick,
+  thumbRefreshKey,
 }: {
   template: TemplateInfo;
   selected: boolean;
   onClick: () => void;
+  thumbRefreshKey: number;
 }) {
   const productCount = new Set(
     template.slots
@@ -111,7 +136,7 @@ function TemplateCard({
       onClick={onClick}
     >
       <div className="template-thumb">
-        <LazyThumbnail template={template} />
+        <LazyThumbnail template={template} thumbRefreshKey={thumbRefreshKey} />
       </div>
       <div className="template-meta">
         <span className="template-name">{template.name}</span>
@@ -129,11 +154,21 @@ function TemplateCard({
  * 卡片进入视口后才发起请求（IntersectionObserver），
  * 后端首次生成约 5 秒，命中缓存后立即返回。
  * 加载期间显示 slot 骨架预览，加载成功后替换为真实截图。
+ * thumbRefreshKey > 0 时强制重新生成（绕过缓存）
  */
-function LazyThumbnail({ template }: { template: TemplateInfo }) {
+function LazyThumbnail({ template, thumbRefreshKey }: { template: TemplateInfo; thumbRefreshKey: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+
+  // 构建缩略图 URL，thumbRefreshKey 作为 cache-buster
+  const getThumbUrl = () =>
+    getTemplateThumbnailUrl(
+      template.id,
+      template.page_id,
+      template.file_id,
+      thumbRefreshKey > 0
+    );
 
   useEffect(() => {
     const el = ref.current;
@@ -143,16 +178,14 @@ function LazyThumbnail({ template }: { template: TemplateInfo }) {
       (entries) => {
         if (entries[0].isIntersecting) {
           observer.disconnect();
-          setSrc(
-            getTemplateThumbnailUrl(template.id, template.page_id, template.file_id)
-          );
+          setSrc(getThumbUrl());
         }
       },
       { rootMargin: "120px" }
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [template.id]);
+  }, [template.id, thumbRefreshKey]);
 
   return (
     <div ref={ref} className="thumb-inner">

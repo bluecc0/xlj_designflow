@@ -126,7 +126,7 @@ export default function ChatPanel() {
       return;
     }
 
-    // 简单意图识别（不调 Claude，直接关键词匹配）
+    // 简单意图识别（关键词匹配 + 转发给 AI）
     await handleTextCommand(text);
     scrollBottom();
   }
@@ -225,6 +225,7 @@ export default function ChatPanel() {
     } catch {}
 
     // 把解析结果填入 store slots
+    console.debug("[handleParseResult] setting slots:", result.products.length, "products");
     result.products.forEach((p, i) => {
       const key = `product_${i + 1}`;
       setSlot(key, p, undefined);
@@ -238,7 +239,8 @@ export default function ChatPanel() {
     };
 
     // ── 模板匹配分析 ──────────────────────────────────────────────────────────
-    const template = compose.selectedTemplate;
+    // 每次从 store 读取最新状态，避免闭包捕获旧值
+    const template = useAppStore.getState().compose.selectedTemplate;
 
     // 模板期望的产品数和字段
     const templateProductKeys = template
@@ -320,7 +322,8 @@ export default function ChatPanel() {
 
   // ── 合成 ──────────────────────────────────────────────────────────────────
   async function doCompose() {
-    const { selectedTemplate, slots } = compose;
+    // 每次都从 store 读取最新状态，避免闭包捕获旧值
+    const { selectedTemplate, slots } = useAppStore.getState().compose;
 
     if (!selectedTemplate) {
       addMessage({
