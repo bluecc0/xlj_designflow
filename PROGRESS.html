@@ -39,63 +39,41 @@ body {
 }
 
 /* ── Layout ── */
-.app { display: flex; min-height: 100vh; }
+.app { max-width: 860px; margin: 0 auto; padding: 36px 24px 60px; }
 
-.sidebar {
-  width: 220px;
-  flex-shrink: 0;
-  border-right: 1px solid var(--border);
-  padding: 24px 0;
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  overflow-y: auto;
+/* ── Top bar ── */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 28px; flex-wrap: wrap; gap: 12px;
 }
+.topbar-left h1 { font-size: 20px; font-weight: 600; color: #fff; }
+.topbar-left p  { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.topbar-right { display: flex; gap: 8px; flex-wrap: wrap; }
 
-.sidebar-logo {
-  padding: 0 20px 20px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 16px;
-}
-.sidebar-logo h1 {
-  font-size: 16px;
-  font-weight: 600;
-  color: #fff;
-}
-.sidebar-logo p { color: var(--muted); font-size: 12px; margin-top: 2px; }
-
-.nav-section {
-  padding: 0 12px;
-  margin-bottom: 8px;
-}
-.nav-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .08em;
-  color: var(--muted);
-  padding: 4px 8px;
-  margin-bottom: 2px;
-}
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
+.filter-btn {
+  padding: 5px 12px;
   border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13px;
   cursor: pointer;
   transition: all .15s;
-  text-decoration: none;
 }
-.nav-item:hover { background: rgba(255,255,255,.05); color: var(--text); }
-.nav-item.active { background: rgba(94,106,210,.15); color: var(--accent2); }
-.nav-dot {
-  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
-}
+.filter-btn:hover { border-color: var(--border2); color: var(--text); }
+.filter-btn.active { background: rgba(94,106,210,.15); border-color: var(--accent); color: var(--accent2); }
 
-.main { flex: 1; padding: 32px 40px; max-width: 900px; }
+.btn-export {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.btn-export:hover { border-color: var(--border2); color: var(--text); }
 
 /* ── Header ── */
 .page-header { margin-bottom: 32px; }
@@ -343,58 +321,34 @@ code {
 
 <div class="app">
 
-  <!-- Sidebar -->
-  <aside class="sidebar">
-    <div class="sidebar-logo">
-      <h1>DesignFlow</h1>
-      <p>项目进度追踪</p>
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <h1>DesignFlow 进度</h1>
+      <p><span class="dot-live"></span>Penpot + SiliconFlow + FastAPI + React &nbsp;·&nbsp; <span id="ts"></span></p>
     </div>
-    <div class="nav-section">
-      <div class="nav-label">状态</div>
-      <a class="nav-item active" href="#" onclick="filterSection('all');return false;">
-        <span class="nav-dot" style="background:var(--accent)"></span> 全部
-      </a>
-      <a class="nav-item" href="#" onclick="filterSection('done');return false;">
-        <span class="nav-dot" style="background:var(--green)"></span> 已完成
-      </a>
-      <a class="nav-item" href="#" onclick="filterSection('bug');return false;">
-        <span class="nav-dot" style="background:var(--red)"></span> Bug 修复
-      </a>
-      <a class="nav-item" href="#" onclick="filterSection('wip');return false;">
-        <span class="nav-dot" style="background:var(--blue)"></span> 进行中
-      </a>
-      <a class="nav-item" href="#" onclick="filterSection('todo');return false;">
-        <span class="nav-dot" style="background:var(--yellow)"></span> 待完成
-      </a>
-      <a class="nav-item" href="#" onclick="filterSection('idea');return false;">
-        <span class="nav-dot" style="background:var(--purple)"></span> 想法
-      </a>
+    <div class="topbar-right">
+      <button class="filter-btn active" onclick="filterSection('all', this)">全部</button>
+      <button class="filter-btn" onclick="filterSection('done', this)">✅ 已完成</button>
+      <button class="filter-btn" onclick="filterSection('bug', this)">🐛 Bug</button>
+      <button class="filter-btn" onclick="filterSection('wip', this)">🔵 进行中</button>
+      <button class="filter-btn" onclick="filterSection('todo', this)">🟡 待完成</button>
+      <button class="filter-btn" onclick="filterSection('idea', this)">💡 想法</button>
+      <button class="btn-export" onclick="exportData()">⬇ 导出</button>
+      <button class="btn-export" onclick="importData()">⬆ 导入</button>
     </div>
-    <div class="nav-section" style="margin-top:auto; padding-top:16px; border-top:1px solid var(--border);">
-      <div class="nav-label">操作</div>
-      <a class="nav-item" href="#" onclick="exportData();return false;">⬇ 导出 JSON</a>
-      <a class="nav-item" href="#" onclick="importData();return false;">⬆ 导入 JSON</a>
-    </div>
-  </aside>
+  </div>
 
-  <!-- Main -->
-  <main class="main">
-    <div class="page-header">
-      <h2>项目进度</h2>
-      <p><span class="dot-live"></span>DesignFlow · Penpot + SiliconFlow + FastAPI + React · <span id="ts"></span></p>
-    </div>
+  <!-- Stats -->
+  <div class="stats" id="stats"></div>
 
-    <!-- Stats -->
-    <div class="stats" id="stats"></div>
+  <!-- Sections -->
+  <div id="board"></div>
 
-    <!-- Sections -->
-    <div id="board"></div>
-
-    <div class="footer">
-      <span>双击 <code>start.bat</code> 启动 · GitHub: bluecc0/xlj_designflow</span>
-      <span>点击条目右侧图标可编辑或删除</span>
-    </div>
-  </main>
+  <div class="footer">
+    <span>双击 <code>start.bat</code> 启动 · <a href="https://github.com/bluecc0/xlj_designflow" style="color:var(--accent);text-decoration:none">GitHub</a></span>
+    <span>hover 条目 → 右侧图标可编辑 / 移动 / 删除</span>
+  </div>
 
 </div>
 
@@ -692,10 +646,10 @@ document.addEventListener('keydown', e => {
 
 // ── Filter ────────────────────────────────────────────────────────────────────
 
-function filterSection(type) {
+function filterSection(type, btn) {
   currentFilter = type;
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-  event.currentTarget.classList.add('active');
+  document.querySelectorAll('.filter-btn').forEach(el => el.classList.remove('active'));
+  if (btn) btn.classList.add('active');
   renderBoard();
 }
 

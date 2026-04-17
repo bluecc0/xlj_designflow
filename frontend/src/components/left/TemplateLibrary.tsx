@@ -74,6 +74,14 @@ export default function TemplateLibrary() {
         >
           ↻
         </button>
+        <button
+          className="refresh-btn"
+          onClick={() => window.open("PROGRESS.html", "_blank")}
+          title="查看项目进度"
+          style={{ fontSize: "12px" }}
+        >
+          📋
+        </button>
       </div>
 
       {/* 筛选 */}
