@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>设计素材自动化工具 — 项目进度</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --panel: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --green: #22c55e;
+    --green-dim: #166534;
+    --blue: #3b82f6;
+    --blue-dim: #1e3a5f;
+    --yellow: #eab308;
+    --yellow-dim: #713f12;
+    --purple: #a855f7;
+    --red: #ef4444;
+    --accent: #6366f1;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    padding: 32px 24px;
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  .header {
+    max-width: 1100px;
+    margin: 0 auto 36px;
+  }
+  .header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 6px;
+  }
+  .header p { color: var(--muted); font-size: 13px; }
+
+  /* ── Pipeline diagram ── */
+  .pipeline {
+    max-width: 1100px;
+    margin: 0 auto 36px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+  }
+  .pipeline h2 {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+    margin-bottom: 18px;
+  }
+  .pipe-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0;
+  }
+  .pipe-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    min-width: 100px;
+  }
+  .pipe-icon {
+    width: 44px; height: 44px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+    border: 1px solid var(--border);
+  }
+  .pipe-icon.done  { background: #14532d; border-color: var(--green); }
+  .pipe-icon.todo  { background: #1e1b4b; border-color: var(--accent); }
+  .pipe-label { font-size: 11px; color: var(--muted); text-align: center; }
+  .pipe-arrow {
+    color: var(--border);
+    font-size: 18px;
+    padding: 0 4px;
+    margin-top: -18px;
+  }
+
+  /* ── Stats bar ── */
+  .stats {
+    max-width: 1100px;
+    margin: 0 auto 28px;
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .stat-card {
+    flex: 1; min-width: 160px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+  }
+  .stat-number {
+    font-size: 28px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .stat-number.green { color: var(--green); }
+  .stat-number.blue  { color: var(--blue); }
+  .stat-number.yellow { color: var(--yellow); }
+  .stat-label { font-size: 12px; color: var(--muted); }
+
+  .progress-bar-wrap {
+    flex: 2; min-width: 200px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    display: flex; flex-direction: column; justify-content: center; gap: 8px;
+  }
+  .progress-bar-label {
+    display: flex; justify-content: space-between;
+    font-size: 12px; color: var(--muted);
+  }
+  .progress-bar-track {
+    height: 8px; background: var(--border); border-radius: 4px; overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%; border-radius: 4px;
+    background: linear-gradient(90deg, var(--green), #16a34a);
+    transition: width .5s ease;
+  }
+
+  /* ── Sections ── */
+  .sections {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  @media (max-width: 800px) { .sections { grid-template-columns: 1fr; } }
+
+  .section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .section.full { grid-column: 1 / -1; }
+
+  .section-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px; font-weight: 600;
+  }
+  .section-badge {
+    font-size: 10px; font-weight: 600;
+    padding: 2px 8px; border-radius: 10px;
+    margin-left: auto;
+  }
+  .badge-done   { background: var(--green-dim);  color: var(--green); }
+  .badge-p0     { background: #450a0a; color: var(--red); }
+  .badge-p1     { background: var(--yellow-dim); color: var(--yellow); }
+  .badge-p2     { background: #1e1b4b; color: var(--purple); }
+
+  /* ── Task items ── */
+  .task-list { padding: 8px 0; }
+  .task {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border);
+    transition: background .15s;
+    cursor: default;
+  }
+  .task:last-child { border-bottom: none; }
+  .task:hover { background: rgba(255,255,255,.03); }
+
+  .task-check {
+    width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0;
+    margin-top: 1px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700;
+  }
+  .task-check.done   { background: var(--green-dim); color: var(--green); border: 1px solid var(--green); }
+  .task-check.todo   { background: transparent; border: 1px solid var(--border); color: transparent; }
+  .task-check.p0     { background: #450a0a; border: 1px solid var(--red); color: var(--red); }
+  .task-check.p1     { background: var(--yellow-dim); border: 1px solid var(--yellow); color: var(--yellow); }
+  .task-check.p2     { background: #1e1b4b; border: 1px solid var(--purple); color: var(--purple); }
+
+  .task-body { flex: 1; }
+  .task-title { color: var(--text); font-size: 13px; }
+  .task-title.done-text { color: var(--muted); text-decoration: line-through; }
+  .task-detail { color: var(--muted); font-size: 12px; margin-top: 3px; line-height: 1.5; }
+
+  .task-tag {
+    font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 8px;
+    flex-shrink: 0; margin-top: 2px; align-self: flex-start;
+  }
+  .tag-backend  { background: #1e3a5f; color: var(--blue); }
+  .tag-frontend { background: #2d1b69; color: #a78bfa; }
+  .tag-design   { background: #1a2e1a; color: var(--green); }
+  .tag-devops   { background: #292524; color: #a8a29e; }
+
+  /* ── Architecture ── */
+  .arch-table {
+    width: 100%; border-collapse: collapse; font-size: 12px;
+  }
+  .arch-table th {
+    text-align: left; padding: 10px 18px;
+    color: var(--muted); font-weight: 600;
+    border-bottom: 1px solid var(--border);
+  }
+  .arch-table td {
+    padding: 9px 18px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .arch-table tr:last-child td { border-bottom: none; }
+  .arch-table tr:hover td { background: rgba(255,255,255,.02); }
+  code {
+    font-family: "Cascadia Code", Consolas, monospace;
+    font-size: 11px;
+    background: #0d1117;
+    padding: 1px 6px; border-radius: 4px;
+    color: #7dd3fc;
+  }
+
+  /* ── Footer ── */
+  .footer {
+    max-width: 1100px;
+    margin: 28px auto 0;
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  .dot-live {
+    display: inline-block; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--green);
+    animation: pulse 2s ease-in-out infinite;
+    margin-right: 5px;
+    vertical-align: middle;
+  }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.8)} }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <h1>🎨 设计素材自动化工具</h1>
+  <p><span class="dot-live"></span>项目进度总览 &nbsp;·&nbsp; 基于 penpot + 硅基流动 + FastAPI + React</p>
+</div>
+
+<!-- Pipeline -->
+<div class="pipeline">
+  <h2>数据流 / Pipeline</h2>
+  <div class="pipe-row">
+    <div class="pipe-step">
+      <div class="pipe-icon done">📊</div>
+      <div class="pipe-label">上传表格<br>Excel/CSV</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon done">🤖</div>
+      <div class="pipe-label">AI 解析<br>硅基流动</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon done">🖼</div>
+      <div class="pipe-label">图库匹配<br>本地目录</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon done">🎨</div>
+      <div class="pipe-label">选择模板<br>penpot</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon done">⚙️</div>
+      <div class="pipe-label">触发合成<br>FastAPI</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon done">✍️</div>
+      <div class="pipe-label">写入图层<br>Transit+JSON</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon done">📸</div>
+      <div class="pipe-label">penpot 导出<br>Playwright</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon done">✂️</div>
+      <div class="pipe-label">九宫格切图<br>Pillow</div>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon done">⬇️</div>
+      <div class="pipe-label">前端展示<br>下载</div>
+    </div>
+  </div>
+</div>
+
+<!-- Stats -->
+<div class="stats">
+  <div class="stat-card">
+    <div class="stat-number green">17</div>
+    <div class="stat-label">已完成</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-number" style="color:var(--red)">0</div>
+    <div class="stat-label">P0 核心待办</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-number yellow">1</div>
+    <div class="stat-label">P1 体验待办</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-number" style="color:var(--purple)">1</div>
+    <div class="stat-label">P2 工程待办</div>
+  </div>
+  <div class="progress-bar-wrap">
+    <div class="progress-bar-label">
+      <span>总体进度</span>
+      <span>17 / 19 完成 · 89%</span>
+    </div>
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill" style="width: 89%"></div>
+    </div>
+    <div class="progress-bar-label">
+      <span style="color:var(--green)">核心功能 100%</span>
+      <span style="color:var(--yellow)">剩余：多模板设计 + token 刷新</span>
+    </div>
+  </div>
+</div>
+
+<!-- Sections -->
+<div class="sections">
+
+  <!-- 已完成 -->
+  <div class="section full">
+    <div class="section-header">
+      ✅ 已完成
+      <span class="section-badge badge-done">17 项</span>
+    </div>
+    <div class="task-list">
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">penpot Docker 本地部署</div>
+          <div class="task-detail">docker-compose，启用 access token / 关闭邮件验证，本地 localhost:9001</div>
+        </div>
+        <span class="task-tag tag-devops">运维</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">PoC 全链路验证</div>
+          <div class="task-detail">认证 → 读文件结构 → 上传图片 → 写图层（Transit+JSON）→ 导出 PNG，含 positionData 坑点验证</div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">Python penpot 客户端库</div>
+          <div class="task-detail"><code>backend/penpot_client.py</code> — Transit+JSON 编解码、双 token 认证、图片上传、文字/图片图层写入、PNG 导出</div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">FastAPI 后端（12 个端点）</div>
+          <div class="task-detail"><code>GET /templates</code> &nbsp;<code>POST /compose</code> &nbsp;<code>GET /compose/{id}</code> &nbsp;<code>GET /compose</code> &nbsp;<code>POST /export/grid</code> &nbsp;<code>POST /parse-table</code> &nbsp;<code>GET /products</code> &nbsp;<code>POST /products/upload</code> &nbsp;<code>DELETE /products/{filename}</code> &nbsp;<code>GET /templates/{id}/thumbnail</code> &nbsp;静态文件服务</div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">文字样式从模板图层读取</div>
+          <div class="task-detail"><code>parse_text_style()</code> 从 <code>get-file</code> 解析字体族、大小、颜色、对齐方式，合成时原样写回，不再硬编码 sourcesanspro</div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">空字段自动隐藏图层</div>
+          <div class="task-detail">price/tag/spec/image 为 null 时调用 <code>hide_layer()</code>，保持模板整洁不残留占位文字</div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">前端完整流程串联</div>
+          <div class="task-detail">上传表格 → AI 解析 → 自动选最匹配模板 → 确认 → 合成 → 中栏实时进度 → 完成自动通知 + 导出按钮</div>
+        </div>
+        <span class="task-tag tag-frontend">前端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">模板真实缩略图懒加载</div>
+          <div class="task-detail"><code>GET /templates/{id}/thumbnail</code>，首次 5s 生成后缓存，前端用 IntersectionObserver 按需加载</div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">产品图库前端管理（拖拽上传 + 删除）</div>
+          <div class="task-detail">左栏新增「图库」Tab，图片网格 + 拖拽 / 点击上传 + hover 删除，后端 <code>POST /products/upload</code> + <code>DELETE</code></div>
+        </div>
+        <span class="task-tag tag-frontend">前端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">合成任务 SQLite 持久化</div>
+          <div class="task-detail"><code>backend/job_store.py</code>，重启不丢失历史任务，<code>GET /compose</code> 返回历史列表</div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">并发合成队列控制</div>
+          <div class="task-detail"><code>threading.Semaphore(1)</code> 保证 penpot exporter 串行，多请求自动排队，防版本号冲突</div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">React 前端三栏布局</div>
+          <div class="task-detail">左栏模板库（SVG slot 预览 + 筛选）/ 中栏合成预览（slot 可视化 + 进度）/ 右栏 AI 对话（文件上传 + 快捷操作）</div>
+        </div>
+        <span class="task-tag tag-frontend">前端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">硅基流动表格解析</div>
+          <div class="task-detail"><code>Qwen2.5-72B-Instruct</code>，OpenAI 兼容接口，解析产品名/价格/标签/规格，自动推荐模板类型</div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">产品图库管理</div>
+          <div class="task-detail">本地目录扫描，精确匹配优先，模糊包含匹配兜底；<code>GET /products</code> 返回预览 URL</div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">九宫格切图</div>
+          <div class="task-detail">Pillow crop，rows × cols 可配置，<code>POST /export/grid</code> + <code>GET /export/grid/{id}/{index}</code></div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">start.bat 一键启动</div>
+          <div class="task-detail">检测并 kill 占用端口，写 <code>.env.local</code>，等待后端健康检查后启动前端，自动打开浏览器</div>
+        </div>
+        <span class="task-tag tag-devops">运维</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- P0 — 全部完成 -->
+  <div class="section">
+    <div class="section-header">
+      ✅ P0 — 核心功能（全部完成）
+      <span class="section-badge badge-done">0 项剩余</span>
+    </div>
+    <div class="task-list">
+      <div class="task">
+        <div class="task-check done">✓</div>
+        <div class="task-body">
+          <div class="task-title done-text">所有 P0 项目均已完成</div>
+          <div class="task-detail">文字样式读取 · 空字段隐藏 · 前端完整流程 · 合成完成自动通知 · 多产品循环合成</div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- P1 -->
+  <div class="section">
+    <div class="section-header">
+      🟡 P1 — 体验提升
+      <span class="section-badge badge-p1">1 项</span>
+    </div>
+    <div class="task-list">
+
+      <div class="task">
+        <div class="task-check p1">~</div>
+        <div class="task-body">
+          <div class="task-title">更多 penpot 模板（4宫格、6宫格）</div>
+          <div class="task-detail">在 penpot 设计更多格子模板，按 <code>slot/product_N/image</code> 命名规范。代码已支持任意数量产品 slot，只需设计师配合。</div>
+        </div>
+        <span class="task-tag tag-design">设计</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- P2 -->
+  <div class="section">
+    <div class="section-header">
+      🟣 P2 — 工程完善
+      <span class="section-badge badge-p2">1 项</span>
+    </div>
+    <div class="task-list">
+
+      <div class="task">
+        <div class="task-check p2">·</div>
+        <div class="task-body">
+          <div class="task-title">penpot Access Token 自动刷新</div>
+          <div class="task-detail">Token 30 天过期后 API 全返回 401。捕获 401 后自动用邮密重新登录，更新 token 并重试请求。</div>
+        </div>
+        <span class="task-tag tag-backend">后端</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 架构速查 -->
+  <div class="section full">
+    <div class="section-header">📁 文件结构 & 端点速查</div>
+    <table class="arch-table">
+      <tr>
+        <th>模块</th>
+        <th>文件 / 路径</th>
+        <th>端口 / 端点</th>
+        <th>说明</th>
+      </tr>
+      <tr>
+        <td>penpot</td>
+        <td><code>penpot/docker/images/docker-compose.yaml</code></td>
+        <td>:9001</td>
+        <td>本地自托管，Playwright exporter，Transit+JSON API</td>
+      </tr>
+      <tr>
+        <td>后端</td>
+        <td><code>backend/main.py</code></td>
+        <td>:8000</td>
+        <td><code>GET /templates</code> &nbsp;<code>POST /compose</code> &nbsp;<code>GET /compose/{id}</code> &nbsp;<code>GET /templates/{id}/thumbnail</code> &nbsp;<code>POST /products/upload</code> &nbsp;<code>DELETE /products/{f}</code> &nbsp;等 12 个端点</td>
+      </tr>
+      <tr>
+        <td>penpot 客户端</td>
+        <td><code>backend/penpot_client.py</code></td>
+        <td>—</td>
+        <td>Transit 编解码，<code>upload_image()</code> <code>set_text_content()</code> <code>parse_text_style()</code> <code>export_frame()</code></td>
+      </tr>
+      <tr>
+        <td>合成引擎</td>
+        <td><code>backend/compose.py</code></td>
+        <td>—</td>
+        <td>Semaphore 串行队列，slot 循环写入（多产品），文字样式读取，空字段隐藏</td>
+      </tr>
+      <tr>
+        <td>任务持久化</td>
+        <td><code>backend/job_store.py</code></td>
+        <td><code>jobs.db</code></td>
+        <td>SQLite，<code>save_job()</code> <code>load_job()</code> <code>load_recent_jobs()</code>，重启不丢失</td>
+      </tr>
+      <tr>
+        <td>表格解析</td>
+        <td><code>backend/table_parser.py</code></td>
+        <td>—</td>
+        <td>硅基流动 Qwen2.5-72B，OpenAI SDK，返回 ParseResult</td>
+      </tr>
+      <tr>
+        <td>产品图库</td>
+        <td><code>backend/product_library.py</code></td>
+        <td><code>/product-library/*</code></td>
+        <td>本地目录扫描，精确/模糊匹配，静态文件服务</td>
+      </tr>
+      <tr>
+        <td>前端</td>
+        <td><code>frontend/src/</code></td>
+        <td>:5173</td>
+        <td>React + Vite + Zustand，三栏布局 + Tab 切换（模板库/图库），自动模板选择，合成完成通知</td>
+      </tr>
+      <tr>
+        <td>图库</td>
+        <td><code>product-library/</code></td>
+        <td>—</td>
+        <td>产品图片目录，按产品名命名，PNG 透明背景推荐</td>
+      </tr>
+      <tr>
+        <td>输出</td>
+        <td><code>output/</code></td>
+        <td><code>/output/*</code></td>
+        <td>合成结果 PNG，九宫格分片，静态文件服务</td>
+      </tr>
+      <tr>
+        <td>启动</td>
+        <td><code>start.bat</code></td>
+        <td>—</td>
+        <td>kill 旧进程 → 启后端 → 等健康检查 → 启前端 → 打开浏览器</td>
+      </tr>
+    </table>
+  </div>
+
+</div>
+
+<div class="footer">
+  <p>最后更新：<span id="ts"></span> &nbsp;·&nbsp; 双击 <code>start.bat</code> 启动所有服务</p>
+</div>
+
+<script>
+  document.getElementById('ts').textContent = new Date().toLocaleString('zh-CN');
+</script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+/* ─── 全局重置 ──────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --font: "Inter", system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "SF Mono", Consolas, monospace;
+
+  /* Linear-inspired near-black palette */
+  --bg:          #08090a;
+  --panel-bg:    #0f1011;
+  --panel-bg-2:  #191a1b;
+  --panel-bg-3:  #28282c;
+  --border:      rgba(255,255,255,0.07);
+  --border-soft: rgba(255,255,255,0.04);
+  --border-std:  rgba(255,255,255,0.10);
+
+  --text:        #f7f8f8;
+  --text-sub:    #d0d6e0;
+  --text-muted:  #8a8f98;
+  --text-faint:  #62666d;
+
+  /* Indigo-violet accent (Linear brand) */
+  --accent:      #5e6ad2;
+  --accent-2:    #7170ff;
+  --accent-3:    #828fff;
+  --accent-light: rgba(94,106,210,0.12);
+
+  --green:       #10b981;
+  --blue:        #60a5fa;
+  --yellow:      #fbbf24;
+  --red:         #f87171;
+
+  font: 13px/1.55 var(--font);
+  font-feature-settings: "cv01", "ss03";
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+html, body { margin: 0; height: 100%; }
+#root { height: 100vh; display: flex; flex-direction: column; }
+
+/* 全局滚动条 */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }

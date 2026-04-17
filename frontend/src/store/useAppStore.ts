@@ -1,0 +1,161 @@
+/**
+ * 全局状态 — Zustand store
+ * slots 和已选模板持久化到 localStorage，刷新页面后自动恢复
+ */
+import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
+import type {
+  ComposeJob,
+  ParsedProduct,
+  ProductItem,
+  TemplateInfo,
+} from "../api/client";
+
+// ─── 聊天消息 ────────────────────────────────────────────────────────────────
+
+export type MessageRole = "user" | "assistant" | "system";
+
+export interface ChatMessage {
+  id: string;
+  role: MessageRole;
+  content: string;
+  actions?: ChatAction[];
+  timestamp: number;
+}
+
+export interface ChatAction {
+  label: string;
+  handler: () => void;
+}
+
+// ─── 当前合成状态 ─────────────────────────────────────────────────────────────
+
+export interface ComposeState {
+  selectedTemplate: TemplateInfo | null;
+  slots: Record<string, { product: ParsedProduct; localImageUrl?: string }>;
+  currentJob: ComposeJob | null;
+  resultImageUrl: string | null;
+  gridUrls: string[];
+}
+
+// ─── Store ────────────────────────────────────────────────────────────────────
+
+interface AppStore {
+  templates: TemplateInfo[];
+  templatesLoading: boolean;
+  setTemplates: (t: TemplateInfo[]) => void;
+  setTemplatesLoading: (v: boolean) => void;
+
+  products: ProductItem[];
+  setProducts: (p: ProductItem[]) => void;
+
+  compose: ComposeState;
+  selectTemplate: (t: TemplateInfo) => void;
+  setSlot: (key: string, product: ParsedProduct, localImageUrl?: string) => void;
+  clearSlots: () => void;
+  setJob: (job: ComposeJob | null) => void;
+  setResultImageUrl: (url: string | null) => void;
+  setGridUrls: (urls: string[]) => void;
+
+  messages: ChatMessage[];
+  addMessage: (msg: Omit<ChatMessage, "id" | "timestamp"> & { id?: string }) => void;
+  replaceMessage: (id: string, content: string) => void;
+  clearMessages: () => void;
+}
+
+let _msgId = 0;
+const nextId = () => String(++_msgId);
+
+export const useAppStore = create<AppStore>()(
+  persist(
+    (set) => ({
+      templates: [],
+      templatesLoading: false,
+      setTemplates: (templates) => set({ templates }),
+      setTemplatesLoading: (templatesLoading) => set({ templatesLoading }),
+
+      products: [],
+      setProducts: (products) => set({ products }),
+
+      compose: {
+        selectedTemplate: null,
+        slots: {},
+        currentJob: null,
+        resultImageUrl: null,
+        gridUrls: [],
+      },
+
+      selectTemplate: (t) =>
+        set((s) => ({
+          compose: {
+            ...s.compose,
+            selectedTemplate: t,
+            resultImageUrl: null,
+            gridUrls: [],
+            currentJob: null,
+          },
+        })),
+
+      setSlot: (key, product, localImageUrl) =>
+        set((s) => ({
+          compose: {
+            ...s.compose,
+            slots: { ...s.compose.slots, [key]: { product, localImageUrl } },
+          },
+        })),
+
+      clearSlots: () =>
+        set((s) => ({
+          compose: { ...s.compose, slots: {}, resultImageUrl: null, gridUrls: [] },
+        })),
+
+      setJob: (job) =>
+        set((s) => ({
+          compose: {
+            ...s.compose,
+            currentJob: job ? { progress: [], ...job } : null,
+          },
+        })),
+
+      setResultImageUrl: (url) =>
+        set((s) => ({ compose: { ...s.compose, resultImageUrl: url } })),
+
+      setGridUrls: (urls) =>
+        set((s) => ({ compose: { ...s.compose, gridUrls: urls } })),
+
+      messages: [
+        {
+          id: "0",
+          role: "assistant",
+          content:
+            "你好！我是 DesignFlow AI 助手，可以自由对话，也可以帮你操作生图流程。\n\n**快速开始：**\n1. 在左侧选择模板\n2. 上传产品需求表格（Excel/CSV）\n3. 输入 `/开始生图` 开始合成\n\n快捷指令：`/开始生图` `/导出PNG` `/切九宫格`",
+          timestamp: Date.now(),
+        },
+      ],
+      addMessage: (msg) =>
+        set((s) => ({
+          messages: [
+            ...s.messages,
+            { ...msg, id: msg.id ?? nextId(), timestamp: Date.now() },
+          ],
+        })),
+      replaceMessage: (id, content) =>
+        set((s) => ({
+          messages: s.messages.map((m) =>
+            m.id === id ? { ...m, content } : m
+          ),
+        })),
+      clearMessages: () => set({ messages: [] }),
+    }),
+    {
+      name: "design-tool-store",
+      storage: createJSONStorage(() => localStorage),
+      // 只持久化 slots，不持久化已选模板（每次打开从空白开始）
+      partialize: (state) => ({
+        compose: {
+          slots: state.compose.slots,
+        },
+      }),
+    }
+  )
+);
