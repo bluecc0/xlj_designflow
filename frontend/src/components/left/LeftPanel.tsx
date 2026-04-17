@@ -47,6 +47,21 @@ export default function LeftPanel() {
           </div>
         )}
       </div>
+
+      {/* 底部进度入口 */}
+      <a
+        className="left-footer-link"
+        href="/PROGRESS.html"
+        target="_blank"
+        rel="noreferrer"
+      >
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none">
+          <rect x="1" y="3" width="14" height="11" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+          <path d="M5 7h6M5 10h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          <path d="M5 1v4M11 1v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+        </svg>
+        项目进度
+      </a>
     </div>
   );
 }
