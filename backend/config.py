@@ -23,10 +23,20 @@ class Settings:
     # 目标文件/项目（可选，不强制配置）
     penpot_file_id: str = os.getenv("PENPOT_FILE_ID", "")
 
-    # 产品图库目录（相对于项目根目录）
+    # 产品图库根目录（支持 UNC 路径，如 \\192.168.1.1\素材库）
     product_library_path: Path = Path(
         os.getenv("PRODUCT_LIBRARY_PATH", "./product-library")
     )
+
+    # 图片类型子文件夹映射（类型key → 实际文件夹名）
+    # 前端传 image_type="white" → 在 product_library_path/White_Base/ 下查找
+    IMAGE_TYPE_FOLDERS: dict[str, str] = {
+        "png":     "PNG",
+        "model":   "Model_Images",
+        "shadow":  "PNG_Shadow",
+        "white":   "White_Base",
+        "white2x": "White_Basex2",
+    }
 
     # 导出结果目录
     output_path: Path = Path(os.getenv("OUTPUT_PATH", "./output"))

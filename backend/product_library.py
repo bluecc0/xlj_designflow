@@ -14,6 +14,7 @@ from typing import Optional
 
 
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+EXT_PRIORITY = [".png", ".jpg", ".jpeg", ".webp"]  # 同名时优先选 PNG
 
 
 class ProductLibrary:
@@ -37,61 +38,70 @@ class ProductLibrary:
                 )
         return products
 
-    def find(self, product_name: str) -> Optional[str]:
+    def find(self, product_name: str, search_dir: Optional["Path"] = None) -> Optional[str]:
         """
-        按产品名查找图片路径。
-        1. 精确匹配文件名（不含扩展名）
-        2. 忽略大小写匹配
-        3. 包含关系匹配（产品名是文件名的子串，或反之）
-        返回匹配到的文件路径，未找到返回 None。
+        按产品名查找图片路径（只做路径构造，不遍历目录）。
+        search_dir 未指定时默认用 self.path。
+        只按扩展名优先级逐一拼接路径检查是否存在，避免 iterdir() 遍历大目录。
         """
-        if not self.path.exists():
+        base = search_dir if search_dir is not None else self.path
+        if not base.exists():
             return None
-
-        name_lower = product_name.lower().strip()
-        candidates = []
-
-        for entry in self.path.iterdir():
-            if entry.suffix.lower() not in SUPPORTED_EXTS or not entry.is_file():
-                continue
-            stem_lower = entry.stem.lower().strip()
-
-            # 精确匹配
-            if stem_lower == name_lower:
-                return str(entry)
-
-            # 包含匹配
-            if name_lower in stem_lower or stem_lower in name_lower:
-                candidates.append((len(stem_lower), str(entry)))
-
-        if candidates:
-            # 优先返回名称最短的（最精确）
-            candidates.sort(key=lambda x: x[0])
-            return candidates[0][1]
-
+        name = product_name.strip()
+        for ext in EXT_PRIORITY:
+            p = base / (name + ext)
+            if p.exists():
+                return str(p)
         return None
 
-    def find_by_filename(self, filename: str) -> Optional[str]:
-        """按文件名精确查找（含扩展名或不含均可）"""
-        if not self.path.exists():
+    def find_by_filename(self, filename: str, search_dir: Optional["Path"] = None) -> Optional[str]:
+        """
+        按文件名查找（含扩展名或不含均可），只做路径构造，不遍历目录。
+        search_dir 未指定时默认用 self.path。
+        """
+        base = search_dir if search_dir is not None else self.path
+        if not base.exists():
             return None
         target = filename.strip()
-        # 先精确匹配完整文件名
-        p = self.path / target
+        # 先直接拼接完整文件名
+        p = base / target
         if p.exists() and p.suffix.lower() in SUPPORTED_EXTS:
             return str(p)
-        # 再尝试补扩展名
-        for ext in SUPPORTED_EXTS:
-            p2 = self.path / (target + ext)
+        # 再按扩展名优先级补后缀
+        stem = target.rsplit(".", 1)[0] if "." in target else target
+        for ext in EXT_PRIORITY:
+            p2 = base / (stem + ext)
             if p2.exists():
                 return str(p2)
-        # 最后不区分大小写匹配
-        target_lower = target.lower()
-        for entry in self.path.iterdir():
-            if entry.suffix.lower() not in SUPPORTED_EXTS or not entry.is_file():
+        return None
+
+    def find_in_folder(self, product_name: str, folder: str) -> Optional[str]:
+        """
+        在指定子文件夹里按产品名（SKU）查找图片。
+        只做路径构造 + exists()，绝不 iterdir()。
+        UNC 路径下 iterdir()+is_file() 每个文件都是独立网络请求，5万文件=500秒。
+        """
+        target_dir = self.path / folder
+        if not target_dir.exists():
+            return None
+
+        name = product_name.strip()
+
+        # 按扩展名优先级逐一拼路径，直接 exists() 检查
+        for ext in EXT_PRIORITY:
+            p = target_dir / (name + ext)
+            if p.exists():
+                return str(p)
+
+        # 大小写变体：全大写 / 全小写
+        for variant in (name.upper(), name.lower()):
+            if variant == name:
                 continue
-            if entry.name.lower() == target_lower or entry.stem.lower() == target_lower:
-                return str(entry)
+            for ext in EXT_PRIORITY:
+                p = target_dir / (variant + ext)
+                if p.exists():
+                    return str(p)
+
         return None
 
     def find_all(self, product_name: str) -> list[str]:

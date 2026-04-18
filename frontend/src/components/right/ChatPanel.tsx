@@ -8,11 +8,11 @@ import {
   chatWithAI,
   createCompose,
   exportGrid,
-  fetchProducts,
+  fetchImageTypes,
   getGridCellUrl,
-  getImageUrl,
   parseTable,
   type ComposeRequest,
+  type ImageTypeInfo,
   type ParseResult,
 } from "../../api/client";
 import { useAppStore, type ChatAction } from "../../store/useAppStore";
@@ -39,14 +39,34 @@ export default function ChatPanel() {
   const {
     messages, addMessage,
     compose, setJob, setResultImageUrl, setGridUrls, setSlot,
-    products, setProducts,
     templates, selectTemplate,
   } = useAppStore();
   const [input, setInput] = useState("");
   const [uploading, setUploading] = useState(false);
   const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [imageTypes, setImageTypes] = useState<ImageTypeInfo[]>([]);
+  const [selectedImageType, setSelectedImageType] = useState<string>("");
+  // ref 保持最新值，让 stale-closure 里的 handler 也能读到正确的 imageType
+  const selectedImageTypeRef = useRef<string>("");
+  const selectImageType = (key: string) => {
+    setSelectedImageType(key);
+    selectedImageTypeRef.current = key;
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const pendingFileRef = useRef<File | null>(null);
+
+  // 加载可用图片类型
+  useEffect(() => {
+    fetchImageTypes()
+      .then((types) => {
+        setImageTypes(types);
+        // 默认选第一个存在的类型
+        const first = types.find((t) => t.exists);
+        if (first) selectImageType(first.key);
+      })
+      .catch(() => {});
+  }, []);
 
   const SLASH_COMMANDS = [
     { cmd: "/开始生图", desc: "启动 AI 生图任务" },
@@ -181,7 +201,10 @@ export default function ChatPanel() {
     const fields = new Set<string>();
     for (const slot of template.slots) {
       const field = slot.name.split("/")[2]; // slot/product_N/<field>
-      if (field) fields.add(field === "image" || slot.type === "rect" ? "image" : field);
+      if (!field) continue;
+      // image/rect slot 对应 image_filename，后端已硬编码处理，不需要传
+      if (field === "image" || slot.type === "rect") continue;
+      fields.add(field);
     }
     return Array.from(fields);
   }
@@ -194,17 +217,61 @@ export default function ChatPanel() {
 
     addMessage({ role: "user", content: `上传了表格：${file.name}` });
     scrollBottom();
-    setUploading(true);
 
+    // 如果有可用图片类型，先让用户选择再解析
+    if (imageTypes.length > 0) {
+      pendingFileRef.current = file;
+      const actions: ChatAction[] = [
+        {
+          label: "确认解析",
+          handler: () => doParseWithType(pendingFileRef.current!),
+        },
+      ];
+      addMessage({
+        role: "assistant",
+        content: "请选择本次生图使用的**图片类型**，系统将从对应素材文件夹匹配产品图：",
+        actions,
+        extra: { type: "image-type-selector" },
+      } as any);
+      scrollBottom();
+    } else {
+      // 没有类型配置，直接解析
+      await doParseWithType(file);
+    }
+  }
+
+  async function doParseWithType(file: File) {
+    setUploading(true);
     const requiredFields = deriveRequiredFields();
-    const fieldHint = requiredFields.length > 0
-      ? `（模板需要字段：${requiredFields.join("、")}）`
+    // 显示用：加回"图片"（image 字段后端硬编码处理，但用户需要看到）
+    const fieldLabel: Record<string, string> = {
+      name: "名称", price: "价格", tag: "标签", spec: "规格",
+    };
+    const template = compose.selectedTemplate;
+    const hasImage = template?.slots.some(s => {
+      const f = s.name.split("/")[2];
+      return f === "image" || s.type === "rect";
+    });
+    const displayFields = [
+      ...(hasImage ? ["图片"] : []),
+      ...requiredFields.map(f => fieldLabel[f] ?? f),
+    ];
+    const fieldHint = displayFields.length > 0
+      ? `（模板需要字段：${displayFields.join("、")}）`
       : "";
-    addMessage({ role: "assistant", content: `正在解析表格${fieldHint}，请稍候…` });
+    // 读 ref 而非 state，避免 stale closure 导致的旧值问题
+    const currentType = selectedImageTypeRef.current;
+    const typeLabel = imageTypes.find((t) => t.key === currentType)?.folder ?? currentType;
+    const typeHint = currentType ? `，图片类型：${typeLabel}` : "";
+    addMessage({ role: "assistant", content: `正在解析表格${fieldHint}${typeHint}，请稍候…` });
     scrollBottom();
 
     try {
-      const result = await parseTable(file, requiredFields.length > 0 ? requiredFields : undefined);
+      const result = await parseTable(
+        file,
+        requiredFields.length > 0 ? requiredFields : undefined,
+        currentType || undefined,
+      );
       await handleParseResult(result);
     } catch (err) {
       addMessage({
@@ -218,17 +285,9 @@ export default function ChatPanel() {
   }
 
   async function handleParseResult(result: ParseResult) {
-    // 加载产品图库（用于显示匹配结果）
-    try {
-      const { products: prods } = await fetchProducts();
-      setProducts(prods);
-    } catch {}
-
     // 把解析结果填入 store slots
-    console.debug("[handleParseResult] setting slots:", result.products.length, "products");
     result.products.forEach((p, i) => {
-      const key = `product_${i + 1}`;
-      setSlot(key, p, undefined);
+      setSlot(`product_${i + 1}`, p, undefined);
     });
 
     const typeLabel: Record<string, string> = {
@@ -463,6 +522,21 @@ export default function ChatPanel() {
                   : <ReactMarkdown>{msg.content}</ReactMarkdown>
                 }
               </div>
+              {(msg as any).extra?.type === "image-type-selector" && (
+                <div className="image-type-selector">
+                  {imageTypes.map((t) => (
+                    <button
+                      key={t.key}
+                      className={`type-btn${selectedImageType === t.key ? " active" : ""}${!t.exists ? " missing" : ""}`}
+                      onClick={() => selectImageType(t.key)}
+                      title={t.exists ? t.folder : `文件夹不存在：${t.folder}`}
+                    >
+                      {t.folder}
+                      {!t.exists && <span className="type-missing">!</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
               {msg.actions && msg.actions.length > 0 && (
                 <div className="msg-actions">
                   {msg.actions.map((a, i) => (

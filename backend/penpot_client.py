@@ -574,15 +574,84 @@ class PenpotClient:
             ],
         }]
 
+    # Penpot GET 返回的 content 结构用 camelCase，但 update-file 要求全部 kebab-case
+    _CONTENT_KEY_MAP = {
+        # fills 相关
+        "fillColor":          "fill-color",
+        "fillOpacity":        "fill-opacity",
+        "fillColorGradient":  "fill-color-gradient",
+        "fillColorRefFile":   "fill-color-ref-file",
+        "fillColorRefId":     "fill-color-ref-id",
+        "fillImage":          "fill-image",
+        # 文字排版
+        "fontSize":           "font-size",
+        "fontFamily":         "font-family",
+        "fontId":             "font-id",
+        "fontWeight":         "font-weight",
+        "fontStyle":          "font-style",
+        "fontVariantId":      "font-variant-id",
+        "textAlign":          "text-align",
+        "textDecoration":     "text-decoration",
+        "textTransform":      "text-transform",
+        "textDirection":      "text-direction",
+        "letterSpacing":      "letter-spacing",
+        "lineHeight":         "line-height",
+        # 段落
+        "paragraphSet":       "paragraph-set",
+        # 位置/布局（content 节点内偶尔携带）
+        "positionData":       "position-data",
+        "growType":           "grow-type",
+    }
+
+    @classmethod
+    def _camel_to_kebab(cls, key: str) -> str:
+        """
+        先查 _CONTENT_KEY_MAP 精确映射；
+        找不到则用正则把 camelCase 自动转为 kebab-case（如 lineHeight → line-height）。
+        已经是 kebab-case（含连字符）或纯小写的键原样返回。
+        """
+        if key in cls._CONTENT_KEY_MAP:
+            return cls._CONTENT_KEY_MAP[key]
+        # 自动转换：在大写字母前插入连字符并转小写
+        import re
+        converted = re.sub(r'([A-Z])', lambda m: '-' + m.group(1).lower(), key)
+        return converted
+
+    def _normalize_content_node(self, node: dict) -> dict:
+        """
+        递归把 content 树的每个节点的键名转为 kebab-case。
+        同时对 fills 数组里的每个 fill dict 也做同样转换。
+        返回新 dict（浅层新建，值本身原地复用）。
+        """
+        new_node: dict = {}
+        for k, v in node.items():
+            new_k = self._camel_to_kebab(k)
+            if k == "fills" and isinstance(v, list):
+                new_node[new_k] = [
+                    {self._camel_to_kebab(fk): fv for fk, fv in fill.items()}
+                    if isinstance(fill, dict) else fill
+                    for fill in v
+                ]
+            elif k == "children" and isinstance(v, list):
+                new_node[new_k] = [
+                    self._normalize_content_node(child)
+                    if isinstance(child, dict) else child
+                    for child in v
+                ]
+            else:
+                new_node[new_k] = v
+        return new_node
+
     def _replace_text_in_content(self, content: dict, new_text: str) -> dict:
         """
-        深拷贝 content 结构，把所有 text-run 的 text 字段替换为 new_text。
-        保留原始的 camelCase 键名（Penpot 读出什么格式就写回什么格式，
-        Transit 编码时统一处理 keyword 转换）。
-        只替换第一个 paragraph 里的所有 text-run，合并为一段。
+        深拷贝 content 结构，把所有键名转为 kebab-case（GET 返回 camelCase，
+        update-file 要求全部 kebab-case），然后把第一个 text-run 的 text 替换为
+        new_text，并丢弃其余 run（避免多段残留）。
         """
         import copy
         content = copy.deepcopy(content)
+        # 把整棵 content 树的键名统一转为 kebab-case
+        content = self._normalize_content_node(content)
         try:
             para_set = content["children"][0]          # paragraph-set
             paragraph = para_set["children"][0]        # paragraph

@@ -96,6 +96,21 @@ async function request<T>(
   return resp.json() as Promise<T>;
 }
 
+export interface HealthStatus {
+  status: string;
+  version: string;
+  library: {
+    connected: boolean;
+    path: string;
+    folders: string[];
+  };
+}
+
+/** 健康检查（含素材库状态） */
+export async function fetchHealth(): Promise<HealthStatus> {
+  return request<HealthStatus>("/health");
+}
+
 /** 获取模板列表 */
 export async function fetchTemplates(fileId?: string): Promise<TemplateInfo[]> {
   const qs = fileId ? `?file_id=${encodeURIComponent(fileId)}` : "";
@@ -147,11 +162,18 @@ export function getGridCellUrl(jobId: string, index: number): string {
 /** 上传表格解析
  * @param requiredFields 从模板 slot 推导出的字段列表，如 ["image","name","price"]
  */
-export async function parseTable(file: File, requiredFields?: string[]): Promise<ParseResult> {
+export async function parseTable(
+  file: File,
+  requiredFields?: string[],
+  imageType?: string,
+): Promise<ParseResult> {
   const form = new FormData();
   form.append("file", file);
   if (requiredFields && requiredFields.length > 0) {
     form.append("required_fields", requiredFields.join(","));
+  }
+  if (imageType) {
+    form.append("image_type", imageType);
   }
   const resp = await fetch(`${BASE}/parse-table`, {
     method: "POST",
@@ -162,6 +184,18 @@ export async function parseTable(file: File, requiredFields?: string[]): Promise
     throw new Error(`解析失败 HTTP ${resp.status}: ${text.slice(0, 200)}`);
   }
   return resp.json();
+}
+
+export interface ImageTypeInfo {
+  key: string;
+  folder: string;
+  exists: boolean;
+}
+
+/** 获取可用图片类型列表 */
+export async function fetchImageTypes(): Promise<ImageTypeInfo[]> {
+  const res = await request<{ types: ImageTypeInfo[] }>("/image-types");
+  return res.types;
 }
 
 /** 列出产品图库 */

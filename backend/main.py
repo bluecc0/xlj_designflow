@@ -83,7 +83,23 @@ _jobs_lock = threading.Lock()
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "team-scan-v2"}
+    library_path = settings.product_library_path
+    library_ok = library_path.exists()
+    # 统计子文件夹情况
+    folders_found = []
+    if library_ok:
+        for key, folder in settings.IMAGE_TYPE_FOLDERS.items():
+            if (library_path / folder).exists():
+                folders_found.append(folder)
+    return {
+        "status": "ok",
+        "version": "team-scan-v2",
+        "library": {
+            "connected": library_ok,
+            "path": str(library_path),
+            "folders": folders_found,
+        },
+    }
 
 
 @app.get("/debug/team-scan")
@@ -259,7 +275,10 @@ def list_templates(file_id: Optional[str] = None):
                     proj_files = client.get_project_files(pid)
                     for pf in proj_files:
                         pf_id = pf.get("id") or pf.get("~:id", "")
-                        if pf_id:
+                        pf_name = pf.get("name") or pf.get("~:name", "")
+                        # 二级过滤：文件名本身也必须含「模板」才认定为模板文件
+                        # 避免合成时 duplicate_file 产生的副本（副本名称不含「模板」）被误识别
+                        if pf_id and TEMPLATE_MARKER in pf_name:
                             template_file_ids.append(pf_id)
                 except Exception:
                     continue
@@ -440,10 +459,13 @@ def download_grid_cell(job_id: str, index: int):
 async def parse_table_endpoint(
     file: UploadFile = File(...),
     required_fields: str = Form(default=""),
+    image_type: str = Form(default=""),
 ):
     """
     上传 Excel / CSV 表格，AI 解析后返回结构化产品数据和推荐模板类型。
     required_fields: 逗号分隔的字段列表，如 "image,name,price"，由前端从模板 slot 推导。
+    image_type: 图片类型，如 "white"/"png"/"model"/"shadow"/"white2x"，
+                对应素材库子文件夹，不传则在根目录匹配。
     """
     if not settings.siliconflow_api_key:
         raise HTTPException(500, "未配置 SILICONFLOW_API_KEY，无法使用 AI 解析")
@@ -454,18 +476,37 @@ async def parse_table_endpoint(
 
     content = await file.read()
     try:
-        result = parse_table(content, file.filename or "upload.xlsx", required_fields=fields)
+        result = parse_table(
+            content,
+            file.filename or "upload.xlsx",
+            required_fields=fields,
+            image_type=image_type or None,
+        )
     except Exception as e:
         raise HTTPException(500, f"解析失败: {e}")
 
     return result
 
 
+@app.get("/image-types")
+def list_image_types():
+    """返回可用的图片类型列表（key + 显示名 + 子文件夹是否存在）"""
+    result = []
+    for key, folder in settings.IMAGE_TYPE_FOLDERS.items():
+        folder_path = settings.product_library_path / folder
+        result.append({
+            "key": key,
+            "folder": folder,
+            "exists": folder_path.exists(),
+        })
+    return {"types": result}
+
+
 @app.get("/products")
-def list_products():
-    """列出本地产品图库中的所有图片（含预览 URL）"""
+def list_products(limit: int = 200):
+    """列出本地产品图库根目录中的图片（仅用于预览，默认最多 200 条）"""
     library = ProductLibrary(settings.product_library_path)
-    items = library.list_products()
+    items = library.list_products()[:limit]
     for item in items:
         item["url"] = f"/product-library/{item['filename']}"
     return {"products": items}
