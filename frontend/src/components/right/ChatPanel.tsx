@@ -11,6 +11,7 @@ import {
   fetchImageTypes,
   getGridCellUrl,
   parseTable,
+  type ParsedProduct,
   type ComposeRequest,
   type ImageTypeInfo,
   type ParseResult,
@@ -224,6 +225,7 @@ export default function ChatPanel() {
       const actions: ChatAction[] = [
         {
           label: "确认解析",
+          primary: true,
           handler: () => doParseWithType(pendingFileRef.current!),
         },
       ];
@@ -263,7 +265,9 @@ export default function ChatPanel() {
     const currentType = selectedImageTypeRef.current;
     const typeLabel = imageTypes.find((t) => t.key === currentType)?.folder ?? currentType;
     const typeHint = currentType ? `，图片类型：${typeLabel}` : "";
-    addMessage({ role: "assistant", content: `正在解析表格${fieldHint}${typeHint}，请稍候…` });
+    // 分步进度：先显示"读取表格"，给用户 AI 处理感
+    const thinkingId = `thinking-${Date.now()}`;
+    addMessage({ role: "assistant", content: "正在读取表格…", id: thinkingId });
     scrollBottom();
 
     try {
@@ -272,6 +276,10 @@ export default function ChatPanel() {
         requiredFields.length > 0 ? requiredFields : undefined,
         currentType || undefined,
       );
+      // 替换 loading 消息为"匹配图库"提示，短暂停留后显示结果
+      useAppStore.getState().replaceMessage(thinkingId, "正在匹配产品图库…");
+      scrollBottom();
+      await new Promise(r => setTimeout(r, 600));
       await handleParseResult(result);
     } catch (err) {
       addMessage({
@@ -285,89 +293,44 @@ export default function ChatPanel() {
   }
 
   async function handleParseResult(result: ParseResult) {
-    // 把解析结果填入 store slots
+    // 填入 store slots
     result.products.forEach((p, i) => {
       setSlot(`product_${i + 1}`, p, undefined);
     });
 
-    const typeLabel: Record<string, string> = {
-      single: "单品",
-      grid_4: "4宫格",
-      grid_6: "6宫格",
-      grid_9: "9宫格",
-    };
-
-    // ── 模板匹配分析 ──────────────────────────────────────────────────────────
-    // 每次从 store 读取最新状态，避免闭包捕获旧值
     const template = useAppStore.getState().compose.selectedTemplate;
-
-    // 模板期望的产品数和字段
-    const templateProductKeys = template
-      ? Array.from(new Set(
-          template.slots
-            .map(s => s.name.split("/")[1])
-            .filter(Boolean)
-        ))
-      : [];
-    const templateFields = template
-      ? Array.from(new Set(
-          template.slots
-            .map(s => s.name.split("/")[2])
-            .filter(Boolean)
-        ))
-      : [];
-    const fieldLabel: Record<string, string> = {
-      image: "产品图", name: "名称", price: "价格", tag: "标签", spec: "规格",
-    };
-
-    // 统计匹配情况
     const imgMatched = result.products.filter(p => p.image_path).length;
     const imgMissed = result.products.length - imgMatched;
+    const total = result.products.length;
 
-    // 模板 vs 表格的产品数对比
-    let templateHint = "";
-    if (template) {
-      const need = templateProductKeys.length;
-      const got = result.products.length;
-      const fieldsDesc = templateFields.map(f => fieldLabel[f] ?? f).join("、");
-      if (got === need) {
-        templateHint = `\n\n**模板检测**：「${template.name}」需要 **${need}** 个产品位，需填充字段：${fieldsDesc}。表格恰好提供 ${got} 个产品，✓ 数量匹配。`;
-      } else if (got < need) {
-        templateHint = `\n\n**模板检测**：「${template.name}」需要 **${need}** 个产品位，表格只有 ${got} 个产品，⚠ 少了 ${need - got} 个，剩余位置将留空。`;
-      } else {
-        templateHint = `\n\n**模板检测**：「${template.name}」需要 **${need}** 个产品位，表格有 ${got} 个产品，⚠ 多了 ${got - need} 个，将只使用前 ${need} 个。`;
-      }
+    // 模板产品位数量
+    const templateProductCount = template
+      ? new Set(template.slots.map(s => s.name.split("/")[1]).filter(Boolean)).size
+      : 0;
+
+    // 构造自然语气的引导语
+    let lead = "";
+    if (!template) {
+      lead = `分析完成，识别到 ${total} 款产品，图片匹配了 ${imgMatched} 张。记得在左侧选一个模板，然后就可以生图了。`;
     } else {
-      templateHint = "\n\n**模板**：尚未选择，请在左侧选择后再生图。";
+      const countMatch = templateProductCount === total;
+      const allImg = imgMissed === 0;
+      if (countMatch && allImg) {
+        lead = `好的，${total} 款产品和「${template.name}」完全匹配，图片也全部找到了，可以直接生图。`;
+      } else if (countMatch && !allImg) {
+        lead = `${total} 款产品和模板数量吻合，不过有 ${imgMissed} 张图没找到，生图时那几个位置会留空。`;
+      } else if (!countMatch) {
+        const diff = total - templateProductCount;
+        lead = diff > 0
+          ? `表格有 ${total} 款，模板只有 ${templateProductCount} 个位置，我会用前 ${templateProductCount} 款来生图。`
+          : `模板需要 ${templateProductCount} 款产品，表格只提供了 ${total} 款，剩余位置留空处理。`;
+      }
     }
-
-    // 图片匹配汇总
-    const imgSummary = imgMissed === 0
-      ? `✓ 全部 ${imgMatched} 张产品图已从图库匹配`
-      : `⚠ ${imgMatched} 张已匹配，${imgMissed} 张未找到对应图片`;
-
-    // 逐产品明细
-    const lines = result.products.map((p, i) => {
-      const sku = p.image_path
-        ? p.image_path.replace(/\\/g, "/").split("/").pop()?.replace(/\.[^.]+$/, "") ?? ""
-        : "";
-      const imgStatus = p.image_path ? `✓ ${sku}` : "✗ 无图";
-      const fields = [p.name ?? "—"];
-      if (p.price) fields.push(p.price);
-      if (p.tag) fields.push(p.tag);
-      return `**${i + 1}.** ${fields.join(" | ")}　${imgStatus}`;
-    });
-
-    const content =
-      `表格解析完成，共识别 **${result.products.length}** 个产品：\n\n` +
-      lines.join("\n") +
-      `\n\n${imgSummary}` +
-      templateHint +
-      `\n\n确认无误后点击「开始生图」。`;
 
     const actions: ChatAction[] = [
       {
         label: "开始生图",
+        primary: true,
         handler: () => {
           addMessage({ role: "user", content: "开始生图" });
           doCompose();
@@ -376,7 +339,17 @@ export default function ChatPanel() {
       },
     ];
 
-    addMessage({ role: "assistant", content, actions });
+    addMessage({
+      role: "assistant",
+      content: lead,
+      actions,
+      extra: {
+        type: "parse-result",
+        products: result.products,
+        imgMatched,
+        imgMissed,
+      },
+    } as any);
   }
 
   // ── 合成 ──────────────────────────────────────────────────────────────────
@@ -522,6 +495,26 @@ export default function ChatPanel() {
                   : <ReactMarkdown>{msg.content}</ReactMarkdown>
                 }
               </div>
+              {(msg as any).extra?.type === "parse-result" && (
+                <div className="parse-card">
+                  {((msg as any).extra.products as ParsedProduct[]).map((p, i) => (
+                    <div key={i} className="parse-row">
+                      <span className="parse-idx">{i + 1}</span>
+                      <span className="parse-name">{p.name ?? "—"}</span>
+                      {p.price && <span className="parse-price">{p.price}</span>}
+                      <span className={`parse-img ${p.image_path ? "ok" : "miss"}`}>
+                        {p.image_path ? "图✓" : "无图"}
+                      </span>
+                    </div>
+                  ))}
+                  <div className="parse-summary">
+                    {(msg as any).extra.imgMissed === 0
+                      ? `全部 ${(msg as any).extra.imgMatched} 张图片已匹配`
+                      : `${(msg as any).extra.imgMatched} 张已匹配 · ${(msg as any).extra.imgMissed} 张缺失`
+                    }
+                  </div>
+                </div>
+              )}
               {(msg as any).extra?.type === "image-type-selector" && (
                 <div className="image-type-selector">
                   {imageTypes.map((t) => (
@@ -540,7 +533,11 @@ export default function ChatPanel() {
               {msg.actions && msg.actions.length > 0 && (
                 <div className="msg-actions">
                   {msg.actions.map((a, i) => (
-                    <button key={i} className="action-btn" onClick={a.handler}>
+                    <button
+                      key={i}
+                      className={`action-btn${a.primary ? " primary" : ""}`}
+                      onClick={a.handler}
+                    >
                       {a.label}
                     </button>
                   ))}

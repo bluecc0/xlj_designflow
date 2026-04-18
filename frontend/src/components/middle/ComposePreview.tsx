@@ -2,7 +2,7 @@
  * 中栏 — 合成预览
  * 展示当前模板的 slot 布局、合成进度和导出结果
  */
-import { useCallback, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { getCompose, getGridCellUrl, getImageUrl } from "../../api/client";
 import { useAppStore } from "../../store/useAppStore";
 
@@ -146,27 +146,7 @@ export default function ComposePreview() {
 
         {/* 合成进行中 */}
         {isRunning && (
-          <div className="progress-area">
-            <div className="ai-generating">
-              <div className="ai-glow-ring" />
-              <div className="ai-label">AI 生图中</div>
-            </div>
-            <div className="progress-steps">
-              {(currentJob!.progress ?? [])
-                .map((p) => friendlyProgress(p))
-                .filter(Boolean)
-                .map((p, i) => (
-                  <div key={i} className="progress-step done">
-                    <span className="step-dot">✓</span>
-                    {p}
-                  </div>
-                ))}
-              <div className="progress-step running">
-                <span className="step-dot blink">·</span>
-                AI 生图中…
-              </div>
-            </div>
-          </div>
+          <ProgressLog progress={currentJob!.progress ?? []} />
         )}
 
         {/* 失败 */}
@@ -174,6 +154,49 @@ export default function ComposePreview() {
           <div className="error-area">
             <p>生图失败</p>
             <pre>{currentJob.error}</pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Terminal-style Progress Log ──────────────────────────────────────────────
+
+function ProgressLog({ progress }: { progress: string[] }) {
+  const logRef = useRef<HTMLDivElement>(null);
+  const lines = progress.map((p) => friendlyProgress(p)).filter(Boolean) as string[];
+
+  // Auto-scroll to bottom whenever new lines arrive
+  useEffect(() => {
+    if (logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [lines.length]);
+
+  return (
+    <div className="progress-area">
+      <div className="progress-header">
+        <div className="progress-spinner" />
+        <span className="progress-title">AI 生图中</span>
+      </div>
+      <div className="progress-log" ref={logRef}>
+        {lines.map((line, i) => {
+          const isActive = i === lines.length - 1;
+          return (
+            <div key={i} className={`log-line ${isActive ? "active" : "done"}`}>
+              {isActive
+                ? <span className="log-active-dot">·</span>
+                : <span className="log-check">✓</span>
+              }
+              <span className="log-text">{line}</span>
+            </div>
+          );
+        })}
+        {lines.length === 0 && (
+          <div className="log-line active">
+            <span className="log-active-dot">·</span>
+            <span className="log-text">正在启动…</span>
           </div>
         )}
       </div>

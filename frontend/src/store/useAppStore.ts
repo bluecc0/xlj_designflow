@@ -44,6 +44,7 @@ export interface ChatMessage {
 
 export interface ChatAction {
   label: string;
+  primary?: boolean;
   handler: () => void;
 }
 
