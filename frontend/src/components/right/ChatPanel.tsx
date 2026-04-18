@@ -423,10 +423,22 @@ export default function ChatPanel() {
 
   // Prompt suggestions for empty state
   const SUGGESTIONS = [
-    { icon: "✨", text: "帮我分析选好的模板，怎么填入产品数据？" },
-    { icon: "📊", text: "上传表格后如何快速生图？" },
-    { icon: "🎨", text: "生图完成后有哪些导出选项？" },
-    { icon: "🔧", text: "模板的产品位和图片怎么匹配？" },
+    {
+      icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m3 17 5-5 5 5 3-3 5 5"/></svg>,
+      text: "上传产品图片，描述整体风格",
+    },
+    {
+      icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7V5h16v2M9 20h6M12 5v15"/></svg>,
+      text: "粘贴品牌手册，提取配色和字体",
+    },
+    {
+      icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
+      text: "上传需求表格，批量生成产品图",
+    },
+    {
+      icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18M7 17V9m-4 4h4m10 0h4m-4 4V9"/></svg>,
+      text: "切换尺寸为 9:16，适配竖版投流",
+    },
   ];
 
   return (
@@ -454,26 +466,30 @@ export default function ChatPanel() {
       </div>
 
       {/* Messages or empty state */}
-      {messages.length === 0 ? (
+      {messages.length <= 1 ? (
         <div className="chat-empty">
-          <div className="chat-empty-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 3L13.4 8.6L19 9.5L14.9 13.6L15.8 19.2L12 16.5L8.2 19.2L9.1 13.6L5 9.5L10.6 8.6Z"/>
-            </svg>
+          <div style={{ padding: "20px 4px 16px", display: "flex", flexDirection: "column", gap: 10, alignItems: "center" }}>
+            <div className="chat-empty-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/>
+              </svg>
+            </div>
+            <div className="chat-empty-title">How can I help design today?</div>
+            <div style={{ fontSize: 12, color: "var(--ink-3)", textAlign: "center", maxWidth: 240, lineHeight: 1.5 }}>
+              上传需求表格、产品图片或参考图，或直接输入指令。
+            </div>
           </div>
-          <div className="chat-empty-title">How can I help design today?</div>
+          <div className="mono" style={{ fontSize: "9.5px", color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.08em", padding: "0 4px 6px" }}>Try</div>
           <div className="chat-empty-cards">
             {SUGGESTIONS.map((s, i) => (
               <button
                 key={i}
                 className="chat-empty-card"
-                onClick={() => {
-                  setInput(s.text);
-                }}
+                onClick={() => setInput(s.text)}
               >
                 <span className="chat-empty-card-icon">{s.icon}</span>
                 <span className="chat-empty-card-text">{s.text}</span>
-                <span className="chat-empty-card-arrow">→</span>
+                <svg className="chat-empty-card-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
               </button>
             ))}
           </div>
@@ -483,7 +499,11 @@ export default function ChatPanel() {
           {messages.map((msg) => (
             <div key={msg.id} className={`chat-msg ${msg.role}`}>
               {msg.role === "assistant"
-                ? <div className="msg-avatar">AI</div>
+                ? <div className="msg-avatar">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/>
+                    </svg>
+                  </div>
                 : <div className="msg-avatar-placeholder" />
               }
               <div className="msg-content">
@@ -550,27 +570,16 @@ export default function ChatPanel() {
 
       {/* Input area */}
       <div className="chat-input-area">
-        {/* Quick slash buttons */}
-        <div className="quick-slash-row">
-          {["/开始生图", "/分析素材", "/导出PNG"].map((cmd) => (
-            <button
-              key={cmd}
-              className="quick-slash-btn"
-              onClick={() => {
-                setInput(cmd);
-                setShowSlashMenu(false);
-              }}
-            >
-              {cmd}
-            </button>
-          ))}
-        </div>
-
-        {/* Slash command popup */}
-        {showSlashMenu && (
-          <div className="slash-menu">
-            <div className="slash-menu-group">
-              <div className="slash-menu-group-label">Commands</div>
+        {/* Composer box — slash menu and quick pills live INSIDE */}
+        <div className={`composer-box${showSlashMenu ? " slash-active" : ""}`}>
+          {/* Slash command popup (inside box, above textarea) */}
+          {showSlashMenu && (
+            <div className="slash-menu">
+              <div className="slash-menu-header mono">
+                <span>Commands</span>
+                <div style={{ flex: 1 }} />
+                <span>↑↓ navigate · ⏎ pick · esc close</span>
+              </div>
               {SLASH_COMMANDS.filter(
                 (c) => input === "/" || c.cmd.toLowerCase().includes(input.toLowerCase().slice(1))
               ).map((c) => (
@@ -589,11 +598,7 @@ export default function ChatPanel() {
                 </button>
               ))}
             </div>
-          </div>
-        )}
-
-        {/* Composer box */}
-        <div className={`composer-box${showSlashMenu ? " slash-active" : ""}`}>
+          )}
           <textarea
             className="chat-input"
             placeholder="输入指令或 / 触发快捷命令…"
@@ -613,6 +618,24 @@ export default function ChatPanel() {
             }}
             onBlur={() => setTimeout(() => setShowSlashMenu(false), 150)}
           />
+          {/* Quick slash pills — inside box, only when slash menu is not showing */}
+          {!showSlashMenu && (
+            <div className="quick-slash-row">
+              {["/开始生图", "/分析素材", "/导出PNG"].map((cmd) => (
+                <button
+                  key={cmd}
+                  className="quick-slash-btn"
+                  onClick={() => {
+                    setInput(cmd);
+                    setShowSlashMenu(false);
+                  }}
+                >
+                  {cmd}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Composer toolbar */}
           <div className="composer-toolbar">
             {/* Upload button */}
