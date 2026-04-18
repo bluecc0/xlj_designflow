@@ -1,38 +1,58 @@
+/* ─── Google Fonts ──────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif&display=swap');
+
 /* ─── 全局重置 ──────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --font: "Inter", system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --mono: ui-monospace, "SF Mono", Consolas, monospace;
+  /* ── Loom Design System ── */
+  --bg:            oklch(0.985 0.003 260);
+  --panel:         #ffffff;
+  --panel-2:       oklch(0.975 0.004 260);
+  --line:          oklch(0.92 0.005 260);
+  --line-2:        oklch(0.95 0.005 260);
+  --ink:           oklch(0.18 0.01 260);
+  --ink-2:         oklch(0.38 0.01 260);
+  --ink-3:         oklch(0.58 0.008 260);
+  --accent:        oklch(0.55 0.22 275);
+  --accent-soft:   oklch(0.96 0.03 275);
+  --accent-ink:    oklch(0.38 0.18 275);
+  --warn:          oklch(0.72 0.15 70);
+  --ok:            oklch(0.65 0.15 155);
 
-  /* Linear-inspired near-black palette */
-  --bg:          #08090a;
-  --panel-bg:    #0f1011;
-  --panel-bg-2:  #191a1b;
-  --panel-bg-3:  #28282c;
-  --border:      rgba(255,255,255,0.07);
-  --border-soft: rgba(255,255,255,0.04);
-  --border-std:  rgba(255,255,255,0.10);
+  --radius:        10px;
+  --radius-sm:     6px;
+  --radius-lg:     14px;
+  --shadow-1:      0 1px 2px rgba(20,22,40,0.04), 0 1px 1px rgba(20,22,40,0.03);
+  --shadow-2:      0 6px 24px rgba(20,22,40,0.06), 0 1px 2px rgba(20,22,40,0.04);
 
-  --text:        #f7f8f8;
-  --text-sub:    #d0d6e0;
-  --text-muted:  #8a8f98;
-  --text-faint:  #62666d;
+  /* Legacy aliases (still used in components) */
+  --font:          'Inter', system-ui, sans-serif;
+  --mono:          'JetBrains Mono', ui-monospace, monospace;
 
-  /* Indigo-violet accent (Linear brand) */
-  --accent:      #5e6ad2;
-  --accent-2:    #7170ff;
-  --accent-3:    #828fff;
-  --accent-light: rgba(94,106,210,0.12);
+  --panel-bg:      var(--panel);
+  --panel-bg-2:    var(--panel-2);
+  --border:        var(--line);
+  --border-soft:   var(--line-2);
+  --border-std:    var(--line);
 
-  --green:       #10b981;
-  --blue:        #60a5fa;
-  --yellow:      #fbbf24;
-  --red:         #f87171;
+  --text:          var(--ink);
+  --text-sub:      var(--ink-2);
+  --text-muted:    var(--ink-3);
+  --text-faint:    oklch(0.72 0.006 260);
+
+  --green:         var(--ok);
+  --red:           oklch(0.60 0.18 25);
+  --yellow:        var(--warn);
+  --blue:          var(--accent);
+
+  --accent-2:      var(--accent);
+  --accent-3:      var(--accent-ink);
+  --accent-light:  var(--accent-soft);
 
   font: 13px/1.55 var(--font);
-  font-feature-settings: "cv01", "ss03";
-  color: var(--text);
+  letter-spacing: -0.005em;
+  color: var(--ink);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
 }
@@ -40,8 +60,17 @@
 html, body { margin: 0; height: 100%; }
 #root { height: 100vh; display: flex; flex-direction: column; }
 
+/* Utility classes */
+.mono { font-family: var(--mono); }
+.serif { font-family: 'Instrument Serif', serif; }
+
 /* 全局滚动条 */
-::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 5px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--line-2); background-clip: content-box; }

@@ -18,29 +18,10 @@ import {
 } from "../../api/client";
 import { useAppStore, type ChatAction } from "../../store/useAppStore";
 
-// ── 从模板列表中挑选最匹配的模板 ──────────────────────────────────────────────
-function findBestTemplate(
-  templates: ReturnType<typeof useAppStore>["templates"],
-  productCount: number
-) {
-  if (templates.length === 0) return null;
-  const scored = templates.map((t) => {
-    const keys = new Set(
-      t.slots
-        .filter((s) => s.name.startsWith("slot/product_"))
-        .map((s) => s.name.split("/")[1])
-    );
-    return { t, diff: Math.abs(keys.size - productCount) };
-  });
-  scored.sort((a, b) => a.diff - b.diff);
-  return scored[0]?.t ?? null;
-}
-
 export default function ChatPanel() {
   const {
     messages, addMessage,
-    compose, setJob, setResultImageUrl, setGridUrls, setSlot,
-    templates, selectTemplate,
+    compose, setJob, setGridUrls, setSlot,
   } = useAppStore();
   const [input, setInput] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -62,7 +43,6 @@ export default function ChatPanel() {
     fetchImageTypes()
       .then((types) => {
         setImageTypes(types);
-        // 默认选第一个存在的类型
         const first = types.find((t) => t.exists);
         if (first) selectImageType(first.key);
       })
@@ -70,9 +50,9 @@ export default function ChatPanel() {
   }, []);
 
   const SLASH_COMMANDS = [
-    { cmd: "/开始生图", desc: "启动 AI 生图任务" },
-    { cmd: "/导出PNG", desc: "下载生图结果图片" },
-    { cmd: "/切九宫格", desc: "将结果裁切为九宫格" },
+    { cmd: "/开始生图", desc: "启动 AI 生图任务", icon: "✨", group: "Generation" },
+    { cmd: "/导出PNG", desc: "下载生图结果图片", icon: "📥", group: "Export" },
+    { cmd: "/切九宫格", desc: "将结果裁切为九宫格", icon: "⊞", group: "Tools" },
   ];
 
   // 滚动到底部
@@ -134,7 +114,6 @@ export default function ChatPanel() {
     addMessage({ role: "user", content: text });
     scrollBottom();
 
-    // 斜杠指令直接映射，不走 AI
     if (text.startsWith("/")) {
       const cmd = text.split(" ")[0].toLowerCase();
       if (cmd === "/开始生图") { await doCompose(); }
@@ -147,7 +126,6 @@ export default function ChatPanel() {
       return;
     }
 
-    // 简单意图识别（关键词匹配 + 转发给 AI）
     await handleTextCommand(text);
     scrollBottom();
   }
@@ -162,13 +140,11 @@ export default function ChatPanel() {
     } else if (lower.includes("生图") || lower.includes("合成") || lower.includes("生成") || lower.includes("开始")) {
       await doCompose();
     } else {
-      // 普通对话 → 转发给 AI
       const history = messages
         .filter((m) => m.role === "user" || m.role === "assistant")
         .slice(-10)
         .map((m) => ({ role: m.role, content: m.content }));
 
-      // 构造当前工作台状态，注入给 AI 作为上下文
       const ctx = {
         templateName: compose.selectedTemplate?.name,
         templateSlotCount: compose.selectedTemplate?.slots.length,
@@ -177,14 +153,12 @@ export default function ChatPanel() {
         hasResult: !!compose.resultImageUrl,
       };
 
-      // 显示"输入中"占位
       const thinkingId = "thinking-" + Date.now();
       addMessage({ role: "assistant", content: "…", id: thinkingId } as any);
       scrollBottom();
 
       try {
         const reply = await chatWithAI(history, ctx);
-        // 替换占位消息
         useAppStore.getState().replaceMessage(thinkingId, reply);
       } catch {
         useAppStore.getState().replaceMessage(
@@ -201,9 +175,8 @@ export default function ChatPanel() {
     if (!template) return [];
     const fields = new Set<string>();
     for (const slot of template.slots) {
-      const field = slot.name.split("/")[2]; // slot/product_N/<field>
+      const field = slot.name.split("/")[2];
       if (!field) continue;
-      // image/rect slot 对应 image_filename，后端已硬编码处理，不需要传
       if (field === "image" || slot.type === "rect") continue;
       fields.add(field);
     }
@@ -219,7 +192,6 @@ export default function ChatPanel() {
     addMessage({ role: "user", content: `上传了表格：${file.name}` });
     scrollBottom();
 
-    // 如果有可用图片类型，先让用户选择再解析
     if (imageTypes.length > 0) {
       pendingFileRef.current = file;
       const actions: ChatAction[] = [
@@ -237,7 +209,6 @@ export default function ChatPanel() {
       } as any);
       scrollBottom();
     } else {
-      // 没有类型配置，直接解析
       await doParseWithType(file);
     }
   }
@@ -245,7 +216,6 @@ export default function ChatPanel() {
   async function doParseWithType(file: File) {
     setUploading(true);
     const requiredFields = deriveRequiredFields();
-    // 显示用：加回"图片"（image 字段后端硬编码处理，但用户需要看到）
     const fieldLabel: Record<string, string> = {
       name: "名称", price: "价格", tag: "标签", spec: "规格",
     };
@@ -261,13 +231,12 @@ export default function ChatPanel() {
     const fieldHint = displayFields.length > 0
       ? `（模板需要字段：${displayFields.join("、")}）`
       : "";
-    // 读 ref 而非 state，避免 stale closure 导致的旧值问题
     const currentType = selectedImageTypeRef.current;
     const typeLabel = imageTypes.find((t) => t.key === currentType)?.folder ?? currentType;
     const typeHint = currentType ? `，图片类型：${typeLabel}` : "";
-    // 分步进度：先显示"读取表格"，给用户 AI 处理感
     const thinkingId = `thinking-${Date.now()}`;
-    addMessage({ role: "assistant", content: "正在读取表格…", id: thinkingId });
+    const hintSuffix = `${fieldHint}${typeHint}`;
+    addMessage({ role: "assistant", content: `正在读取表格…${hintSuffix ? " " + hintSuffix : ""}`, id: thinkingId });
     scrollBottom();
 
     try {
@@ -276,7 +245,6 @@ export default function ChatPanel() {
         requiredFields.length > 0 ? requiredFields : undefined,
         currentType || undefined,
       );
-      // 替换 loading 消息为"匹配图库"提示，短暂停留后显示结果
       useAppStore.getState().replaceMessage(thinkingId, "正在匹配产品图库…");
       scrollBottom();
       await new Promise(r => setTimeout(r, 600));
@@ -293,7 +261,6 @@ export default function ChatPanel() {
   }
 
   async function handleParseResult(result: ParseResult) {
-    // 填入 store slots
     result.products.forEach((p, i) => {
       setSlot(`product_${i + 1}`, p, undefined);
     });
@@ -303,12 +270,10 @@ export default function ChatPanel() {
     const imgMissed = result.products.length - imgMatched;
     const total = result.products.length;
 
-    // 模板产品位数量
     const templateProductCount = template
       ? new Set(template.slots.map(s => s.name.split("/")[1]).filter(Boolean)).size
       : 0;
 
-    // 构造自然语气的引导语
     let lead = "";
     if (!template) {
       lead = `分析完成，识别到 ${total} 款产品，图片匹配了 ${imgMatched} 张。记得在左侧选一个模板，然后就可以生图了。`;
@@ -354,26 +319,18 @@ export default function ChatPanel() {
 
   // ── 合成 ──────────────────────────────────────────────────────────────────
   async function doCompose() {
-    // 每次都从 store 读取最新状态，避免闭包捕获旧值
     const { selectedTemplate, slots } = useAppStore.getState().compose;
 
     if (!selectedTemplate) {
-      addMessage({
-        role: "assistant",
-        content: "请先在左侧选择一个模板。",
-      });
+      addMessage({ role: "assistant", content: "请先在左侧选择一个模板。" });
       return;
     }
 
     if (Object.keys(slots).length === 0) {
-      addMessage({
-        role: "assistant",
-        content: "还没有填入产品信息，请先上传需求表格。",
-      });
+      addMessage({ role: "assistant", content: "还没有填入产品信息，请先上传需求表格。" });
       return;
     }
 
-    // 构造请求
     const slotsReq: ComposeRequest["slots"] = {};
     for (const [key, val] of Object.entries(slots)) {
       slotsReq[key] = {
@@ -407,10 +364,7 @@ export default function ChatPanel() {
         content: `⚡ 生图任务已启动\n\n任务 ID：\`${job.id.slice(0, 8)}\`，完成后自动显示结果。`,
       });
     } catch (err) {
-      addMessage({
-        role: "assistant",
-        content: `生图启动失败：${String(err)}`,
-      });
+      addMessage({ role: "assistant", content: `生图启动失败：${String(err)}` });
     }
     scrollBottom();
   }
@@ -419,31 +373,21 @@ export default function ChatPanel() {
   function doExportPng() {
     const { currentJob, resultImageUrl } = compose;
     if (!currentJob || currentJob.status !== "done" || !resultImageUrl) {
-      addMessage({
-        role: "assistant",
-        content: "还没有完成的生图结果，请先生图。",
-      });
+      addMessage({ role: "assistant", content: "还没有完成的生图结果，请先生图。" });
       return;
     }
-    // 直接触发下载
     const a = document.createElement("a");
     a.href = resultImageUrl;
     a.download = `result_${currentJob.id.slice(0, 8)}.png`;
     a.click();
-    addMessage({
-      role: "assistant",
-      content: "PNG 下载已开始。",
-    });
+    addMessage({ role: "assistant", content: "PNG 下载已开始。" });
   }
 
   // ── 九宫格 ────────────────────────────────────────────────────────────────
   async function doExportGrid() {
     const { currentJob } = compose;
     if (!currentJob || currentJob.status !== "done") {
-      addMessage({
-        role: "assistant",
-        content: "请先完成生图，再切九宫格。",
-      });
+      addMessage({ role: "assistant", content: "请先完成生图，再切九宫格。" });
       return;
     }
 
@@ -474,126 +418,253 @@ export default function ChatPanel() {
     scrollBottom();
   }
 
+  const isGenerating = compose.currentJob?.status === "pending" || compose.currentJob?.status === "running";
+  const hasContent = input.trim().length > 0;
+
+  // Prompt suggestions for empty state
+  const SUGGESTIONS = [
+    { icon: "✨", text: "帮我分析选好的模板，怎么填入产品数据？" },
+    { icon: "📊", text: "上传表格后如何快速生图？" },
+    { icon: "🎨", text: "生图完成后有哪些导出选项？" },
+    { icon: "🔧", text: "模板的产品位和图片怎么匹配？" },
+  ];
+
   return (
     <div className="chat-panel">
+      {/* Header */}
       <div className="panel-header">
-        <span className="panel-title">AI 助手</span>
+        <span className={`chat-status-dot ${isGenerating ? "generating" : "ready"}`} />
+        <span className="chat-header-name">Loom</span>
+        <span className="chat-header-status">
+          {isGenerating ? "生成中…" : "就绪"}
+        </span>
+        <div className="chat-header-actions">
+          <button className="chat-icon-btn" title="历史记录">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </button>
+          <button className="chat-icon-btn" title="更多">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
-      {/* 消息列表 */}
-      <div className="chat-messages">
-        {messages.map((msg) => (
-          <div key={msg.id} className={`chat-msg ${msg.role}`}>
-            {msg.role === "assistant"
-              ? <div className="msg-avatar">AI</div>
-              : <div className="msg-avatar-placeholder" />
-            }
-            <div className="msg-content">
-              <div className="msg-bubble">
-                {msg.content === "…"
-                  ? <span className="typing-dots"><span/><span/><span/></span>
-                  : <ReactMarkdown>{msg.content}</ReactMarkdown>
-                }
-              </div>
-              {(msg as any).extra?.type === "parse-result" && (
-                <div className="parse-card">
-                  {((msg as any).extra.products as ParsedProduct[]).map((p, i) => (
-                    <div key={i} className="parse-row">
-                      <span className="parse-idx">{i + 1}</span>
-                      <span className="parse-name">{p.name ?? "—"}</span>
-                      {p.price && <span className="parse-price">{p.price}</span>}
-                      <span className={`parse-img ${p.image_path ? "ok" : "miss"}`}>
-                        {p.image_path ? "图✓" : "无图"}
-                      </span>
-                    </div>
-                  ))}
-                  <div className="parse-summary">
-                    {(msg as any).extra.imgMissed === 0
-                      ? `全部 ${(msg as any).extra.imgMatched} 张图片已匹配`
-                      : `${(msg as any).extra.imgMatched} 张已匹配 · ${(msg as any).extra.imgMissed} 张缺失`
-                    }
-                  </div>
-                </div>
-              )}
-              {(msg as any).extra?.type === "image-type-selector" && (
-                <div className="image-type-selector">
-                  {imageTypes.map((t) => (
-                    <button
-                      key={t.key}
-                      className={`type-btn${selectedImageType === t.key ? " active" : ""}${!t.exists ? " missing" : ""}`}
-                      onClick={() => selectImageType(t.key)}
-                      title={t.exists ? t.folder : `文件夹不存在：${t.folder}`}
-                    >
-                      {t.folder}
-                      {!t.exists && <span className="type-missing">!</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {msg.actions && msg.actions.length > 0 && (
-                <div className="msg-actions">
-                  {msg.actions.map((a, i) => (
-                    <button
-                      key={i}
-                      className={`action-btn${a.primary ? " primary" : ""}`}
-                      onClick={a.handler}
-                    >
-                      {a.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+      {/* Messages or empty state */}
+      {messages.length === 0 ? (
+        <div className="chat-empty">
+          <div className="chat-empty-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 3L13.4 8.6L19 9.5L14.9 13.6L15.8 19.2L12 16.5L8.2 19.2L9.1 13.6L5 9.5L10.6 8.6Z"/>
+            </svg>
           </div>
-        ))}
-
-
-        <div ref={bottomRef} />
-      </div>
-
-      {/* 输入区 */}
-      <div className="chat-input-area">
-        {/* 斜杠指令弹出菜单 */}
-        {showSlashMenu && (
-          <div className="slash-menu">
-            {SLASH_COMMANDS.filter(
-              (c) => input === "/" || c.cmd.toLowerCase().includes(input.toLowerCase().slice(1))
-            ).map((c) => (
+          <div className="chat-empty-title">How can I help design today?</div>
+          <div className="chat-empty-cards">
+            {SUGGESTIONS.map((s, i) => (
               <button
-                key={c.cmd}
-                className="slash-item"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setInput(c.cmd);
-                  setShowSlashMenu(false);
+                key={i}
+                className="chat-empty-card"
+                onClick={() => {
+                  setInput(s.text);
                 }}
               >
-                <span className="slash-cmd">{c.cmd}</span>
-                <span className="slash-desc">{c.desc}</span>
+                <span className="chat-empty-card-icon">{s.icon}</span>
+                <span className="chat-empty-card-text">{s.text}</span>
+                <span className="chat-empty-card-arrow">→</span>
               </button>
             ))}
           </div>
+        </div>
+      ) : (
+        <div className="chat-messages">
+          {messages.map((msg) => (
+            <div key={msg.id} className={`chat-msg ${msg.role}`}>
+              {msg.role === "assistant"
+                ? <div className="msg-avatar">AI</div>
+                : <div className="msg-avatar-placeholder" />
+              }
+              <div className="msg-content">
+                <div className="msg-bubble">
+                  {msg.content === "…"
+                    ? <span className="typing-dots"><span/><span/><span/></span>
+                    : <ReactMarkdown>{msg.content}</ReactMarkdown>
+                  }
+                </div>
+                {(msg as any).extra?.type === "parse-result" && (
+                  <div className="parse-card">
+                    {((msg as any).extra.products as ParsedProduct[]).map((p, i) => (
+                      <div key={i} className="parse-row">
+                        <span className="parse-idx">{i + 1}</span>
+                        <span className="parse-name">{p.name ?? "—"}</span>
+                        {p.price && <span className="parse-price">{p.price}</span>}
+                        <span className={`parse-img ${p.image_path ? "ok" : "miss"}`}>
+                          {p.image_path ? "图✓" : "无图"}
+                        </span>
+                      </div>
+                    ))}
+                    <div className="parse-summary">
+                      {(msg as any).extra.imgMissed === 0
+                        ? `全部 ${(msg as any).extra.imgMatched} 张图片已匹配`
+                        : `${(msg as any).extra.imgMatched} 张已匹配 · ${(msg as any).extra.imgMissed} 张缺失`
+                      }
+                    </div>
+                  </div>
+                )}
+                {(msg as any).extra?.type === "image-type-selector" && (
+                  <div className="image-type-selector">
+                    {imageTypes.map((t) => (
+                      <button
+                        key={t.key}
+                        className={`type-btn${selectedImageType === t.key ? " active" : ""}${!t.exists ? " missing" : ""}`}
+                        onClick={() => selectImageType(t.key)}
+                        title={t.exists ? t.folder : `文件夹不存在：${t.folder}`}
+                      >
+                        {t.folder}
+                        {!t.exists && <span className="type-missing">!</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {msg.actions && msg.actions.length > 0 && (
+                  <div className="msg-actions">
+                    {msg.actions.map((a, i) => (
+                      <button
+                        key={i}
+                        className={`action-btn${a.primary ? " primary" : ""}`}
+                        onClick={a.handler}
+                      >
+                        {a.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
+      )}
+
+      {/* Input area */}
+      <div className="chat-input-area">
+        {/* Quick slash buttons */}
+        <div className="quick-slash-row">
+          {["/开始生图", "/分析素材", "/导出PNG"].map((cmd) => (
+            <button
+              key={cmd}
+              className="quick-slash-btn"
+              onClick={() => {
+                setInput(cmd);
+                setShowSlashMenu(false);
+              }}
+            >
+              {cmd}
+            </button>
+          ))}
+        </div>
+
+        {/* Slash command popup */}
+        {showSlashMenu && (
+          <div className="slash-menu">
+            <div className="slash-menu-group">
+              <div className="slash-menu-group-label">Commands</div>
+              {SLASH_COMMANDS.filter(
+                (c) => input === "/" || c.cmd.toLowerCase().includes(input.toLowerCase().slice(1))
+              ).map((c) => (
+                <button
+                  key={c.cmd}
+                  className="slash-item"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setInput(c.cmd);
+                    setShowSlashMenu(false);
+                  }}
+                >
+                  <span className="slash-item-icon">{c.icon}</span>
+                  <span className="slash-cmd">{c.cmd}</span>
+                  <span className="slash-desc">{c.desc}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         )}
 
-        {/* 上传按钮 */}
-        <button
-          className="upload-btn"
-          title="上传需求表格 (.xlsx/.csv)"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
-        >
-          {uploading ? (
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}>
-              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-            </svg>
-          ) : (
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="17 8 12 3 7 8"/>
-              <line x1="12" y1="3" x2="12" y2="15"/>
-            </svg>
-          )}
-        </button>
+        {/* Composer box */}
+        <div className={`composer-box${showSlashMenu ? " slash-active" : ""}`}>
+          <textarea
+            className="chat-input"
+            placeholder="输入指令或 / 触发快捷命令…"
+            value={input}
+            rows={2}
+            onChange={(e) => {
+              const v = e.target.value;
+              setInput(v);
+              setShowSlashMenu(v.startsWith("/"));
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") { setShowSlashMenu(false); return; }
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            onBlur={() => setTimeout(() => setShowSlashMenu(false), 150)}
+          />
+          {/* Composer toolbar */}
+          <div className="composer-toolbar">
+            {/* Upload button */}
+            <button
+              className="composer-icon-btn"
+              title="上传需求表格 (.xlsx/.csv)"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+            >
+              {uploading ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}>
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+              )}
+            </button>
+            <button className="composer-icon-btn" title="插入图片">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <polyline points="21 15 16 10 5 21"/>
+              </svg>
+            </button>
+            <button className="composer-icon-btn" title="调色板">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/>
+                <circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/>
+                <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>
+              </svg>
+            </button>
+
+            <div className="composer-spacer" />
+
+            <div className="model-selector">
+              <span>Claude 4 Haiku</span>
+              <span className="model-selector-chevron">⌄</span>
+            </div>
+            <button
+              className={`send-btn${hasContent ? " has-content" : ""}`}
+              onClick={handleSend}
+              disabled={!hasContent}
+            >
+              发送
+            </button>
+          </div>
+        </div>
+
         <input
           ref={fileInputRef}
           type="file"
@@ -601,34 +672,13 @@ export default function ChatPanel() {
           style={{ display: "none" }}
           onChange={handleFileUpload}
         />
-
-        <input
-          className="chat-input"
-          placeholder="输入指令或 / 触发快捷命令…"
-          value={input}
-          onChange={(e) => {
-            const v = e.target.value;
-            setInput(v);
-            setShowSlashMenu(v.startsWith("/"));
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") { setShowSlashMenu(false); return; }
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-          onBlur={() => setTimeout(() => setShowSlashMenu(false), 150)}
-        />
-        <button
-          className="send-btn"
-          onClick={handleSend}
-          disabled={!input.trim()}
-        >
-          发送
-        </button>
       </div>
 
+      {/* Footer */}
+      <div className="chat-footer">
+        <span className="chat-footer-text">⏎ send · ⇧⏎ newline</span>
+        <span className="chat-footer-credits">12 credits · 488 left</span>
+      </div>
     </div>
   );
 }

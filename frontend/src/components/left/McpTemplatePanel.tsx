@@ -3,7 +3,7 @@
  * 提供一键创建模板的功能，通过 MCP 协议执行代码
  */
 import { useEffect, useState } from "react";
-import { executeMcp, getMcpStatus, type McpStatus, type McpExecuteResult } from "../../api/client";
+import { executeMcp, getMcpStatus, type McpStatus } from "../../api/client";
 
 interface McpTemplatePanelProps {
   onTemplateCreated?: (boardId: string, boardName: string) => void;

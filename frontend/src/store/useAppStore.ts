@@ -138,7 +138,7 @@ export const useAppStore = create<AppStore>()((set) => ({
     set((s) => ({
       compose: {
         ...s.compose,
-        currentJob: job ? { progress: [], ...job } : null,
+        currentJob: job ? { ...job, progress: job.progress ?? [] } : null,
       },
     })),
 

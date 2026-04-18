@@ -3,7 +3,7 @@
  * 展示当前模板的 slot 布局、合成进度和导出结果
  */
 import { useEffect, useRef } from "react";
-import { getCompose, getGridCellUrl, getImageUrl } from "../../api/client";
+import { getCompose, getImageUrl, type TemplateInfo, type ParsedProduct } from "../../api/client";
 import { useAppStore } from "../../store/useAppStore";
 
 // 把后端进度日志转为用户友好文案，返回 null 表示跳过不显示
@@ -34,7 +34,7 @@ function friendlyProgress(msg: string): string | null {
 }
 
 export default function ComposePreview() {
-  const { compose, setJob, setResultImageUrl, setGridUrls } = useAppStore();
+  const { compose, setJob, setResultImageUrl } = useAppStore();
   const { selectedTemplate, currentJob, resultImageUrl, gridUrls, slots } =
     compose;
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -71,16 +71,16 @@ export default function ComposePreview() {
     return (
       <div className="compose-preview empty">
         <div className="empty-illustration">
-          <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-            <rect x="4" y="4" width="56" height="56" rx="8" fill="#1e2029" />
-            <rect x="12" y="12" width="24" height="32" rx="3" fill="#2a2d3a" />
-            <rect x="40" y="12" width="12" height="14" rx="2" fill="#1a3a2a" />
-            <rect x="40" y="30" width="12" height="14" rx="2" fill="#0f1e3a" />
-            <rect x="12" y="48" width="40" height="4" rx="2" fill="#2a2d3a" />
+          <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+            <rect width="72" height="72" rx="14" fill="oklch(0.975 0.004 260)"/>
+            <rect x="10" y="10" width="28" height="40" rx="4" fill="oklch(0.93 0.005 260)" stroke="oklch(0.88 0.007 260)" strokeWidth="1"/>
+            <rect x="44" y="10" width="18" height="18" rx="3" fill="oklch(0.96 0.03 275)" stroke="oklch(0.55 0.22 275)" strokeWidth="1" opacity="0.6"/>
+            <rect x="44" y="34" width="18" height="16" rx="3" fill="oklch(0.95 0.04 155)" stroke="oklch(0.65 0.15 155)" strokeWidth="1" opacity="0.6"/>
+            <rect x="10" y="56" width="52" height="5" rx="2" fill="oklch(0.93 0.005 260)"/>
           </svg>
         </div>
         <p className="empty-text">选择模板，开始 AI 生图</p>
-        <p className="empty-sub">上传产品表格，AI 自动生图</p>
+        <p className="empty-sub">从左侧选择模板，上传产品表格，AI 自动匹配合成</p>
       </div>
     );
   }
@@ -93,10 +93,18 @@ export default function ComposePreview() {
     <div className="compose-preview">
       {/* 顶栏 */}
       <div className="preview-header">
-        <span className="preview-title">{selectedTemplate.name}</span>
-        <span className="preview-size">
-          {selectedTemplate.width} × {selectedTemplate.height}
-        </span>
+        <div className="preview-header-left">
+          <span className="preview-label">Template</span>
+          <span className="preview-title">{selectedTemplate.name}</span>
+          <span className="preview-tag">{selectedTemplate.width}×{selectedTemplate.height}</span>
+        </div>
+        <div className="preview-header-right">
+          <button className="zoom-btn" title="缩小">−</button>
+          <span className="zoom-level">100%</span>
+          <button className="zoom-btn" title="放大">+</button>
+          <div style={{ width: 1, height: 16, background: "var(--line)", margin: "0 4px" }} />
+          <button className="zoom-btn" title="适应窗口">⊡</button>
+        </div>
       </div>
 
       {/* 主内容区 */}
@@ -210,8 +218,8 @@ function SlotLayout({
   template,
   slots,
 }: {
-  template: NonNullable<ReturnType<typeof useAppStore>["compose"]["selectedTemplate"]>;
-  slots: ReturnType<typeof useAppStore>["compose"]["slots"];
+  template: TemplateInfo;
+  slots: Record<string, { product: ParsedProduct; localImageUrl?: string }>;
 }) {
   const tw = template.width;
   const th = template.height;
@@ -225,6 +233,7 @@ function SlotLayout({
 
   return (
     <div className="slot-layout">
+      <div className="slot-layout-wrapper">
       <svg
         width={tw * scale}
         height={th * scale}
@@ -232,7 +241,7 @@ function SlotLayout({
         className="slot-svg"
       >
         {/* 背景 */}
-        <rect width={tw} height={th} fill="#fafafa" stroke="#e5e7eb" strokeWidth={1} />
+        <rect width={tw} height={th} fill="white" stroke="oklch(0.92 0.005 260)" strokeWidth={1} />
 
         {template.slots.map((s) => {
           const rx = s.x - frameX;
@@ -245,8 +254,8 @@ function SlotLayout({
           const isImage = s.type === "rect" || field === "image";
           const isText = s.type === "text";
 
-          const fill = isImage ? "#d1fae5" : isText ? "#dbeafe" : "#fef9c3";
-          const stroke = isImage ? "#22c55e" : isText ? "#3b82f6" : "#eab308";
+          const fill = isImage ? "oklch(0.94 0.06 155)" : isText ? "oklch(0.96 0.03 275)" : "oklch(0.96 0.05 80)";
+          const stroke = isImage ? "oklch(0.65 0.15 155)" : isText ? "oklch(0.55 0.22 275)" : "oklch(0.72 0.15 70)";
 
           const hasContent =
             isImage
@@ -284,7 +293,7 @@ function SlotLayout({
                   y={ry + s.height / 2 + 5}
                   textAnchor="middle"
                   fontSize={Math.min(12, s.height * 0.4)}
-                  fill="#1e40af"
+                  fill="oklch(0.38 0.18 275)"
                 >
                   {String(
                     slotData.product[field as keyof typeof slotData.product]
@@ -298,7 +307,7 @@ function SlotLayout({
                   y={ry + s.height / 2 + 5}
                   textAnchor="middle"
                   fontSize={Math.min(10, s.height * 0.3)}
-                  fill="#9ca3af"
+                  fill="oklch(0.58 0.008 260)"
                 >
                   {field ?? s.name}
                 </text>
@@ -307,6 +316,20 @@ function SlotLayout({
           );
         })}
       </svg>
+      </div>{/* .slot-layout-wrapper */}
+
+      {/* Meta strip pill */}
+      <div className="preview-meta-pill">
+        <span>{template.width} × {template.height}</span>
+        <span className="preview-meta-pill-sep">·</span>
+        <span>
+          {template.slots.filter(s => s.type === "rect" || s.name.split("/")[2] === "image").length} 图
+          &nbsp;/&nbsp;
+          {template.slots.filter(s => s.type === "text").length} 文
+        </span>
+        <span className="preview-meta-pill-sep">·</span>
+        <span>Ready</span>
+      </div>
 
       <div className="slot-legend">
         <span className="legend-item image">产品图</span>
