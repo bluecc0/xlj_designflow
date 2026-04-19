@@ -50,4 +50,6 @@ const App = () => {
   );
 };
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+document.addEventListener('DOMContentLoaded', () => {
+  ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+});

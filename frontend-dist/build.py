@@ -38,17 +38,15 @@ def build():
     # Find injection point — everything after vendor scripts up to </body>
     # We look for the first <script> after babel.min.js (our injected section)
     vendor_end = html.find('<script src="vendor/babel.min.js"></script>') + len('<script src="vendor/babel.min.js"></script>')
-    body_end = html.rfind('</body></html>')
 
-    if body_end == -1:
-        print('ERROR: </body></html> not found in index.html')
+    if vendor_end == len('<script src="vendor/babel.min.js"></script>') - 1:
+        print('ERROR: vendor/babel.min.js script tag not found in index.html')
         sys.exit(1)
 
     before = html[:vendor_end]
-    after = '\n</body></html>'
 
-    # Build inline scripts
-    inline = '\n'
+    # Build inline scripts — always include #root mount point
+    inline = '\n<div id="root"></div>\n'
 
     for f in PLAIN_JS:
         src = read(f)
@@ -61,7 +59,7 @@ def build():
         src = read(f)
         inline += f'<script type="text/babel">\n// ── {f} ──\n{src}\n</script>\n'
 
-    new_html = before + inline + after
+    new_html = before + inline + '\n</body></html>'
     write(TEMPLATE, new_html)
 
     size_kb = len(new_html.encode('utf-8')) / 1024
