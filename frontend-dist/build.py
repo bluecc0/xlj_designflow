@@ -18,6 +18,7 @@ BABEL_JSX = [
     'src/ChatExtras.jsx',
     'src/Canvas.jsx',
     'src/Chat.jsx',
+    'src/Tweaks.jsx',
     'src/app.jsx',
 ]
 

@@ -1,16 +1,31 @@
-// App root — wires panels together, shares job/result state between Canvas and Chat
+// App root — wires panels + tweaks + host communication
 
 const App = () => {
-  const [activeTemplate, setActiveTemplate] = React.useState(null);
-  const [currentJob, setCurrentJob] = React.useState(null);
-  const [resultImageUrl, setResultImageUrl] = React.useState(null);
+  const [tweaks, setTweaks] = React.useState(window.TWEAKS);
+  const [tweaksVisible, setTweaksVisible] = React.useState(false);
+  const [activeTemplate, setActiveTemplate] = React.useState(TEMPLATES[0]);
 
-  // When template changes, reset job + result
-  const handleSelectTemplate = (t) => {
-    setActiveTemplate(t);
-    setCurrentJob(null);
-    setResultImageUrl(null);
+  const updateTweaks = (partial) => {
+    const next = { ...tweaks, ...partial };
+    setTweaks(next);
+    try {
+      window.parent.postMessage({ type: '__edit_mode_set_keys', edits: partial }, '*');
+    } catch (e) {}
   };
+
+  React.useEffect(() => {
+    const handler = (e) => {
+      const d = e.data;
+      if (!d || typeof d !== 'object') return;
+      if (d.type === '__activate_edit_mode') setTweaksVisible(true);
+      if (d.type === '__deactivate_edit_mode') setTweaksVisible(false);
+    };
+    window.addEventListener('message', handler);
+    try {
+      window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    } catch (e) {}
+    return () => window.removeEventListener('message', handler);
+  }, []);
 
   return (
     <div style={{
@@ -18,34 +33,17 @@ const App = () => {
       overflow: 'hidden',
     }}>
       <TopBar/>
-      <div style={{
-        flex: 1,
-        display: 'grid',
-        gridTemplateColumns: '260px 1fr 360px',
-        gridTemplateRows: 'minmax(0, 1fr)',
-        minHeight: 0,
-      }}>
-        <TemplatePanel
-          activeId={activeTemplate?.id}
-          onSelect={handleSelectTemplate}
-        />
-        <Canvas
-          template={activeTemplate}
-          job={currentJob}
-          resultImageUrl={resultImageUrl}
-          onJobUpdate={setCurrentJob}
-        />
-        <Chat
-          template={activeTemplate}
-          onJobUpdate={(job) => {
-            setCurrentJob(job);
-            if (job?.status === 'done') {
-              setResultImageUrl(API.getImageUrl(job.id));
-            }
-          }}
-          onResultUrl={setResultImageUrl}
-        />
+      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '260px 1fr 360px', gridTemplateRows: 'minmax(0, 1fr)', minHeight: 0 }}>
+        <TemplatePanel activeId={activeTemplate?.id} onSelect={setActiveTemplate}/>
+        <Canvas template={activeTemplate}/>
+        <Chat state={tweaks.chatState}/>
       </div>
+      <Tweaks
+        visible={tweaksVisible}
+        tweaks={tweaks}
+        onChange={updateTweaks}
+        onClose={() => setTweaksVisible(false)}
+      />
     </div>
   );
 };
