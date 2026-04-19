@@ -73,6 +73,15 @@ if settings.output_path.exists():
         name="output",
     )
 
+# 前端静态文件（frontend-dist）
+_frontend_dist = Path(__file__).parent.parent / "frontend-dist"
+if _frontend_dist.exists():
+    app.mount(
+        "/ui",
+        StaticFiles(directory=str(_frontend_dist), html=True),
+        name="frontend",
+    )
+
 # ─── 内存任务存储（PoC 阶段，后续换 Redis / DB）────────────────────────────────
 _jobs: dict[str, ComposeJob] = {}
 _jobs_lock = threading.Lock()
