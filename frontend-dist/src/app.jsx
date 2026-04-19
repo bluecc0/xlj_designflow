@@ -1,7 +1,8 @@
 // App root — wires panels + tweaks + host communication
 
 const App = () => {
-  const [tweaks, setTweaks] = React.useState(window.TWEAKS);
+  const DEFAULT_TWEAKS = { chatState: 'returned', canvasState: 'candidates', theme: 'light' };
+  const [tweaks, setTweaks] = React.useState(window.TWEAKS || DEFAULT_TWEAKS);
   const [tweaksVisible, setTweaksVisible] = React.useState(false);
   const [activeTemplate, setActiveTemplate] = React.useState(TEMPLATES[0]);
 
