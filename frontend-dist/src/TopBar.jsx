@@ -1,3 +1,52 @@
+// Polls /health every 30s and renders a status dot + label
+const StatusChip = ({ label, fetchUrl, okKey, okText, errText }) => {
+  const [status, setStatus] = React.useState('loading'); // 'loading' | 'ok' | 'err'
+
+  React.useEffect(() => {
+    let alive = true;
+    const check = async () => {
+      try {
+        const res = await fetch(fetchUrl);
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        if (!alive) return;
+        if (okKey) {
+          // e.g. okKey='library' → data.library.connected
+          setStatus(data[okKey]?.connected ? 'ok' : 'err');
+        } else {
+          setStatus(data.status === 'ok' ? 'ok' : 'err');
+        }
+      } catch {
+        if (alive) setStatus('err');
+      }
+    };
+    check();
+    const iv = setInterval(check, 30000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [fetchUrl, okKey]);
+
+  const color = status === 'loading' ? 'var(--warn)' : status === 'ok' ? 'var(--ok)' : 'oklch(0.6 0.18 25)';
+  const text  = status === 'loading' ? '检测中…'   : status === 'ok' ? okText      : errText;
+  const pulse = status === 'loading';
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 5,
+      padding: '4px 8px', borderRadius: 6,
+      background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+      fontSize: 11,
+    }}>
+      <span style={{ position: 'relative', width: 7, height: 7, flexShrink: 0 }}>
+        <span style={{ position: 'absolute', inset: 0, borderRadius: 99, background: color, transition: 'background 300ms' }}/>
+        {pulse && <span style={{ position: 'absolute', inset: -2, borderRadius: 99, background: color, opacity: 0.3, animation: 'statusPulse 1.6s ease-in-out infinite' }}/>}
+      </span>
+      <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>{label}</span>
+      <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{text}</span>
+      <style>{`@keyframes statusPulse{0%,100%{transform:scale(1);opacity:.3}50%{transform:scale(1.8);opacity:0}}`}</style>
+    </div>
+  );
+};
+
 const TopBar = () => {
   return (
     <div style={{
@@ -38,42 +87,10 @@ const TopBar = () => {
 
       <div style={{ flex: 1 }}/>
 
-      {/* Right cluster */}
+      {/* Right cluster — live status chips */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          padding: '4px 8px', borderRadius: 6,
-          background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-          fontSize: 11,
-        }}>
-          <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--ok)', flexShrink: 0 }}/>
-          <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>Backend</span>
-          <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>api.loom.ai</span>
-        </div>
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          padding: '4px 8px', borderRadius: 6,
-          background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-          fontSize: 11,
-        }}>
-          <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--warn)', flexShrink: 0 }}/>
-          <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>Frontend</span>
-          <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>v0.4.2</span>
-        </div>
-        <div style={{ width: 1, height: 18, background: 'var(--line)', margin: '0 4px' }}/>
-        <div style={{ display: 'flex' }}>
-          {['EM','JR','KT'].map((n, i) => (
-            <div key={n} style={{
-              width: 22, height: 22, borderRadius: 99,
-              background: ['oklch(0.85 0.06 40)', 'oklch(0.82 0.07 200)', 'oklch(0.84 0.07 140)'][i],
-              color: 'oklch(0.3 0.05 0)',
-              fontSize: 9, fontWeight: 600,
-              display: 'grid', placeItems: 'center',
-              border: '2px solid var(--panel)',
-              marginLeft: i ? -6 : 0,
-            }}>{n}</div>
-          ))}
-        </div>
+        <StatusChip label="后端服务" fetchUrl="/health" okText="已连接" errText="离线"/>
+        <StatusChip label="素材库" fetchUrl="/health" okKey="library" okText="已连接" errText="未连接"/>
       </div>
     </div>
   );

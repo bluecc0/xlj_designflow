@@ -383,59 +383,141 @@
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 </style>
+<body>
+<div id="root"></div>
+
 <script src="vendor/react.js"></script>
 <script src="vendor/react-dom.js"></script>
 <script src="vendor/babel.min.js"></script>
-<style>
-  :root {
-    --bg: oklch(0.985 0.003 260);
-    --panel: #ffffff;
-    --panel-2: oklch(0.975 0.004 260);
-    --line: oklch(0.92 0.005 260);
-    --line-2: oklch(0.95 0.005 260);
-    --ink: oklch(0.18 0.01 260);
-    --ink-2: oklch(0.38 0.01 260);
-    --ink-3: oklch(0.58 0.008 260);
-    --accent: oklch(0.55 0.22 275);
-    --accent-soft: oklch(0.96 0.03 275);
-    --accent-ink: oklch(0.38 0.18 275);
-    --warn: oklch(0.72 0.15 70);
-    --ok: oklch(0.65 0.15 155);
-    --radius: 10px;
-    --radius-sm: 6px;
-    --radius-lg: 14px;
-    --shadow-1: 0 1px 2px rgba(20,22,40,0.04), 0 1px 1px rgba(20,22,40,0.03);
-    --shadow-2: 0 6px 24px rgba(20,22,40,0.06), 0 1px 2px rgba(20,22,40,0.04);
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: 'Inter', system-ui, sans-serif; font-size: 13px; letter-spacing: -0.005em; }
-  button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
-  input, textarea { font-family: inherit; }
-  ::selection { background: var(--accent-soft); color: var(--accent-ink); }
-  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
-  .serif { font-family: 'Instrument Serif', serif; }
-
-  /* Scrollbars */
-  ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: oklch(0.88 0.005 260); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
-  ::-webkit-scrollbar-thumb:hover { background: oklch(0.80 0.008 260); border: 3px solid transparent; background-clip: padding-box; }
-</style>
-</head>
-<body>
-
-<div id="root"></div>
 
 <script>
-  // Tweakable defaults — persisted by host
-  window.TWEAKS = /*EDITMODE-BEGIN*/{
-    "chatState": "returned",
-    "canvasState": "candidates",
-    "theme": "light"
-  }/*EDITMODE-END*/;
+// -- src/api.js --
+// API client — wraps all backend calls (FastAPI at localhost:8000)
+
+const BASE = window.API_BASE || 'http://localhost:8000';
+
+async function request(path, init) {
+  const resp = await fetch(`${BASE}${path}`, init);
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`HTTP ${resp.status}: ${text.slice(0, 200)}`);
+  }
+  return resp.json();
+}
+
+// ── Health ────────────────────────────────────────────────────────────────────
+async function fetchHealth() {
+  return request('/health');
+}
+
+// ── Templates ─────────────────────────────────────────────────────────────────
+async function fetchTemplates(fileId) {
+  const qs = fileId ? `?file_id=${encodeURIComponent(fileId)}` : '';
+  return request(`/templates${qs}`);
+}
+
+function getTemplateThumbnailUrl(templateId, pageId, fileId, refresh) {
+  const qs = new URLSearchParams({ page_id: pageId });
+  if (fileId) qs.set('file_id', fileId);
+  if (refresh) qs.set('refresh', '1');
+  return `${BASE}/templates/${templateId}/thumbnail?${qs}`;
+}
+
+// ── Parse table ───────────────────────────────────────────────────────────────
+async function parseTable(file, requiredFields, imageType) {
+  const form = new FormData();
+  form.append('file', file);
+  if (requiredFields && requiredFields.length > 0) {
+    form.append('required_fields', requiredFields.join(','));
+  }
+  if (imageType) form.append('image_type', imageType);
+  const resp = await fetch(`${BASE}/parse-table`, { method: 'POST', body: form });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`解析失败 HTTP ${resp.status}: ${text.slice(0, 200)}`);
+  }
+  return resp.json();
+}
+
+// ── Compose ───────────────────────────────────────────────────────────────────
+async function createCompose(req) {
+  return request('/compose', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+}
+
+async function getCompose(jobId) {
+  return request(`/compose/${jobId}`);
+}
+
+async function listComposes(limit = 20) {
+  return request(`/compose?limit=${limit}`);
+}
+
+function getImageUrl(jobId) {
+  return `${BASE}/compose/${jobId}/image`;
+}
+
+// ── Grid export ───────────────────────────────────────────────────────────────
+async function exportGrid(jobId, rows, cols) {
+  return request('/export/grid', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ job_id: jobId, rows, cols }),
+  });
+}
+
+function getGridCellUrl(jobId, index) {
+  return `${BASE}/export/grid/${jobId}/${String(index).padStart(2, '0')}`;
+}
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+async function chatWithAI(messages, context) {
+  const resp = await fetch(`${BASE}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages, context: context || {} }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`HTTP ${resp.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await resp.json();
+  return data.reply;
+}
+
+// ── Products ──────────────────────────────────────────────────────────────────
+async function fetchProducts() {
+  return request('/products');
+}
+
+async function fetchImageTypes() {
+  const res = await request('/image-types');
+  return res.types;
+}
+
+window.API = {
+  fetchHealth,
+  fetchTemplates,
+  getTemplateThumbnailUrl,
+  parseTable,
+  createCompose,
+  getCompose,
+  listComposes,
+  getImageUrl,
+  exportGrid,
+  getGridCellUrl,
+  chatWithAI,
+  fetchProducts,
+  fetchImageTypes,
+};
+
 </script>
 
 <script type="text/babel">
+// -- src/Icons.jsx --
 // Minimal stroke icon set
 const Icon = ({ d, size = 14, stroke = 1.5, fill = 'none', children, style }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke="currentColor"
@@ -488,7 +570,9 @@ window.I = I;
 window.Icon = Icon;
 
 </script>
+
 <script type="text/babel">
+// -- src/Placeholders.jsx --
 // Striped / gradient placeholder imagery. No hand-drawn illustrations.
 
 const hashHue = (s) => {
@@ -542,7 +626,58 @@ window.Stripe = Stripe;
 window.Swatch = Swatch;
 
 </script>
+
 <script type="text/babel">
+// -- src/TopBar.jsx --
+// Polls /health every 30s and renders a status dot + label
+const StatusChip = ({ label, fetchUrl, okKey, okText, errText }) => {
+  const [status, setStatus] = React.useState('loading'); // 'loading' | 'ok' | 'err'
+
+  React.useEffect(() => {
+    let alive = true;
+    const check = async () => {
+      try {
+        const res = await fetch(fetchUrl);
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        if (!alive) return;
+        if (okKey) {
+          // e.g. okKey='library' → data.library.connected
+          setStatus(data[okKey]?.connected ? 'ok' : 'err');
+        } else {
+          setStatus(data.status === 'ok' ? 'ok' : 'err');
+        }
+      } catch {
+        if (alive) setStatus('err');
+      }
+    };
+    check();
+    const iv = setInterval(check, 30000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [fetchUrl, okKey]);
+
+  const color = status === 'loading' ? 'var(--warn)' : status === 'ok' ? 'var(--ok)' : 'oklch(0.6 0.18 25)';
+  const text  = status === 'loading' ? '检测中…'   : status === 'ok' ? okText      : errText;
+  const pulse = status === 'loading';
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 5,
+      padding: '4px 8px', borderRadius: 6,
+      background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+      fontSize: 11,
+    }}>
+      <span style={{ position: 'relative', width: 7, height: 7, flexShrink: 0 }}>
+        <span style={{ position: 'absolute', inset: 0, borderRadius: 99, background: color, transition: 'background 300ms' }}/>
+        {pulse && <span style={{ position: 'absolute', inset: -2, borderRadius: 99, background: color, opacity: 0.3, animation: 'statusPulse 1.6s ease-in-out infinite' }}/>}
+      </span>
+      <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>{label}</span>
+      <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{text}</span>
+      <style>{`@keyframes statusPulse{0%,100%{transform:scale(1);opacity:.3}50%{transform:scale(1.8);opacity:0}}`}</style>
+    </div>
+  );
+};
+
 const TopBar = () => {
   return (
     <div style={{
@@ -583,42 +718,10 @@ const TopBar = () => {
 
       <div style={{ flex: 1 }}/>
 
-      {/* Right cluster */}
+      {/* Right cluster — live status chips */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          padding: '4px 8px', borderRadius: 6,
-          background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-          fontSize: 11,
-        }}>
-          <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--ok)', flexShrink: 0 }}/>
-          <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>Backend</span>
-          <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>api.loom.ai</span>
-        </div>
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          padding: '4px 8px', borderRadius: 6,
-          background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-          fontSize: 11,
-        }}>
-          <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--warn)', flexShrink: 0 }}/>
-          <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>Frontend</span>
-          <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>v0.4.2</span>
-        </div>
-        <div style={{ width: 1, height: 18, background: 'var(--line)', margin: '0 4px' }}/>
-        <div style={{ display: 'flex' }}>
-          {['EM','JR','KT'].map((n, i) => (
-            <div key={n} style={{
-              width: 22, height: 22, borderRadius: 99,
-              background: ['oklch(0.85 0.06 40)', 'oklch(0.82 0.07 200)', 'oklch(0.84 0.07 140)'][i],
-              color: 'oklch(0.3 0.05 0)',
-              fontSize: 9, fontWeight: 600,
-              display: 'grid', placeItems: 'center',
-              border: '2px solid var(--panel)',
-              marginLeft: i ? -6 : 0,
-            }}>{n}</div>
-          ))}
-        </div>
+        <StatusChip label="后端服务" fetchUrl="/health" okText="已连接" errText="离线"/>
+        <StatusChip label="素材库" fetchUrl="/health" okKey="library" okText="已连接" errText="未连接"/>
       </div>
     </div>
   );
@@ -627,7 +730,9 @@ const TopBar = () => {
 window.TopBar = TopBar;
 
 </script>
+
 <script type="text/babel">
+// -- src/TemplatePanel.jsx --
 const TEMPLATE_CATS = ['All', 'Social', 'E-commerce', 'Brand', 'Print', 'Web', 'Packaging'];
 
 const TEMPLATES = [
@@ -675,7 +780,14 @@ const TemplateCard = ({ t, active, onClick }) => (
   </button>
 );
 
+const PANEL_TABS = [
+  { id: 'templates', label: '模板' },
+  { id: 'history',   label: '历史记录' },
+  { id: 'mcp',       label: 'MCP', soon: true },
+];
+
 const TemplatePanel = ({ activeId, onSelect }) => {
+  const [tab, setTab] = React.useState('templates');
   const [cat, setCat] = React.useState('All');
   const [q, setQ] = React.useState('');
 
@@ -684,114 +796,144 @@ const TemplatePanel = ({ activeId, onSelect }) => {
     (!q || t.name.toLowerCase().includes(q.toLowerCase()))
   );
 
-  // Masonry: two columns, distribute by index
   const colA = filtered.filter((_, i) => i % 2 === 0);
   const colB = filtered.filter((_, i) => i % 2 === 1);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--panel)', borderRight: '1px solid var(--line)' }}>
-      {/* Header */}
-      <div style={{ padding: '14px 14px 10px', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>Templates</div>
 
-        </div>
-
-        {/* Search */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 7,
-          padding: '7px 10px', borderRadius: 7,
-          background: 'var(--panel-2)',
-          border: '1px solid var(--line-2)',
-        }}>
-          <I.search size={13} style={{ color: 'var(--ink-3)' }}/>
-          <input
-            value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder="Search templates…"
-            style={{
-              flex: 1, border: 'none', outline: 'none', background: 'transparent',
-              fontSize: 12, color: 'var(--ink)',
-            }}
-          />
-          <kbd className="mono" style={{ fontSize: 9, color: 'var(--ink-3)', padding: '1px 4px', borderRadius: 3, border: '1px solid var(--line)' }}>⌘K</kbd>
-        </div>
-      </div>
-
-      {/* Category chips */}
+      {/* Tab bar */}
       <div style={{
-        padding: '0 14px 10px',
-        display: 'flex', gap: 4, flexShrink: 0,
-        overflowX: 'auto', scrollbarWidth: 'none',
+        display: 'flex', flexShrink: 0,
+        borderBottom: '1px solid var(--line)',
+        padding: '0 10px',
+        gap: 2,
       }}>
-        {TEMPLATE_CATS.map(c => (
-          <button key={c} onClick={() => setCat(c)} style={{
-            fontSize: 11, padding: '4px 9px', borderRadius: 99,
-            background: cat === c ? 'var(--ink)' : 'transparent',
-            color: cat === c ? 'white' : 'var(--ink-2)',
-            fontWeight: cat === c ? 500 : 400,
-            whiteSpace: 'nowrap',
-            border: cat === c ? 'none' : '1px solid var(--line)',
-            transition: 'all 120ms',
-          }}>{c}</button>
+        {PANEL_TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => !t.soon && setTab(t.id)}
+            style={{
+              padding: '10px 10px 9px',
+              fontSize: 12, fontWeight: tab === t.id ? 600 : 400,
+              color: t.soon ? 'var(--ink-3)' : tab === t.id ? 'var(--ink)' : 'var(--ink-2)',
+              borderBottom: tab === t.id ? '2px solid var(--ink)' : '2px solid transparent',
+              marginBottom: -1,
+              display: 'flex', alignItems: 'center', gap: 5,
+              cursor: t.soon ? 'default' : 'pointer',
+              transition: 'color 120ms',
+            }}
+          >
+            {t.label}
+            {t.soon && (
+              <span className="mono" style={{
+                fontSize: 8, padding: '1px 4px', borderRadius: 3,
+                background: 'var(--panel-2)', border: '1px solid var(--line)',
+                color: 'var(--ink-3)', letterSpacing: '0.03em',
+              }}>soon</span>
+            )}
+          </button>
         ))}
       </div>
 
-      {/* Masonry grid */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '0 10px 14px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {colA.map(t => <TemplateCard key={t.id} t={t} active={activeId === t.id} onClick={() => onSelect(t)}/>)}
+      {/* Templates tab */}
+      {tab === 'templates' && (
+        <>
+          {/* Search */}
+          <div style={{ padding: '10px 14px 8px', flexShrink: 0 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 7,
+              padding: '7px 10px', borderRadius: 7,
+              background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+            }}>
+              <I.search size={13} style={{ color: 'var(--ink-3)' }}/>
+              <input
+                value={q} onChange={(e) => setQ(e.target.value)}
+                placeholder="搜索模板…"
+                style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 12, color: 'var(--ink)' }}
+              />
+              <kbd className="mono" style={{ fontSize: 9, color: 'var(--ink-3)', padding: '1px 4px', borderRadius: 3, border: '1px solid var(--line)' }}>⌘K</kbd>
+            </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {colB.map(t => <TemplateCard key={t.id} t={t} active={activeId === t.id} onClick={() => onSelect(t)}/>)}
+
+          {/* Category chips */}
+          <div style={{ padding: '0 14px 10px', display: 'flex', gap: 4, flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
+            {TEMPLATE_CATS.map(c => (
+              <button key={c} onClick={() => setCat(c)} style={{
+                fontSize: 11, padding: '4px 9px', borderRadius: 99,
+                background: cat === c ? 'var(--ink)' : 'transparent',
+                color: cat === c ? 'white' : 'var(--ink-2)',
+                fontWeight: cat === c ? 500 : 400,
+                whiteSpace: 'nowrap',
+                border: cat === c ? 'none' : '1px solid var(--line)',
+                transition: 'all 120ms',
+              }}>{c}</button>
+            ))}
           </div>
+
+          {/* Masonry grid */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '0 10px 14px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {colA.map(t => <TemplateCard key={t.id} t={t} active={activeId === t.id} onClick={() => onSelect(t)}/>)}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {colB.map(t => <TemplateCard key={t.id} t={t} active={activeId === t.id} onClick={() => onSelect(t)}/>)}
+              </div>
+            </div>
+            {filtered.length === 0 && (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--ink-3)', fontSize: 12 }}>
+                没有匹配的模板「{q}」
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* History tab */}
+      {tab === 'history' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)' }}>
+          <I.layers size={24} style={{ opacity: 0.3 }}/>
+          <div style={{ fontSize: 12 }}>暂无历史记录</div>
         </div>
+      )}
 
-        {filtered.length === 0 && (
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--ink-3)', fontSize: 12 }}>
-            No templates match "{q}"
-          </div>
-        )}
-      </div>
-
-      {/* Status footer */}
+      {/* Footer */}
       <StatusFooter count={filtered.length}/>
     </div>
   );
 };
 
-const StatusFooter = ({ count }) => {
-  const [progressOpen, setProgressOpen] = React.useState(false);
-
-  return (
-    <div style={{
-      flexShrink: 0,
-      borderTop: '1px solid var(--line)',
-      background: 'var(--panel-2)',
-      position: 'relative',
-    }}>
-      <div style={{
-        padding: '8px 10px',
-        display: 'flex', flexDirection: 'column', gap: 6,
-      }}>
-        <button onClick={() => setProgressOpen(o => !o)} style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          padding: '5px 8px', borderRadius: 6,
-          border: '1px solid var(--line)',
-          background: 'var(--panel)',
-          fontSize: 11, color: 'var(--ink-2)',
-        }}>
-          <I.film size={11} style={{ color: 'var(--ink-3)' }}/>
-          <span style={{ flex: 1, textAlign: 'left' }}>Dev progress</span>
-          <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>v0.4.2 · 7/12</span>
-          <I.chevronDown size={10} style={{ transform: progressOpen ? 'rotate(180deg)' : 'none', transition: 'transform 150ms', color: 'var(--ink-3)' }}/>
-        </button>
-
-        {progressOpen && <DevProgressPanel/>}
-      </div>
-    </div>
-  );
-};
+const StatusFooter = ({ count }) => (
+  <div style={{
+    flexShrink: 0,
+    borderTop: '1px solid var(--line)',
+    background: 'var(--panel-2)',
+    padding: '8px 10px',
+    display: 'flex', alignItems: 'center', gap: 6,
+  }}>
+    <I.layers size={11} style={{ color: 'var(--ink-3)' }}/>
+    <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', flex: 1 }}>{count} 个模板</span>
+    <a
+      href="/ui/PROGRESS.html"
+      target="_blank"
+      rel="noreferrer"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5,
+        padding: '4px 9px', borderRadius: 6,
+        border: '1px solid var(--line)',
+        background: 'var(--panel)',
+        fontSize: 11, color: 'var(--ink-2)',
+        textDecoration: 'none',
+      }}
+      onMouseEnter={e => e.currentTarget.style.background = 'var(--panel-2)'}
+      onMouseLeave={e => e.currentTarget.style.background = 'var(--panel)'}
+    >
+      <I.film size={11}/>
+      开发进度
+    </a>
+  </div>
+);
 
 const StatusRow = ({ label, sub, state }) => {
   const stateMap = {
@@ -875,160 +1017,9 @@ window.TemplatePanel = TemplatePanel;
 window.TEMPLATES = TEMPLATES;
 
 </script>
+
 <script type="text/babel">
-// Main canvas — now simplified to just show the selected template preview.
-
-const Canvas = ({ template }) => {
-  const t = template;
-
-  return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0,
-      overflow: 'hidden',
-      background: 'var(--panel-2)',
-    }}>
-      {/* Minimal toolbar */}
-      <div style={{
-        height: 44, flexShrink: 0,
-        borderBottom: '1px solid var(--line)',
-        display: 'flex', alignItems: 'center',
-        padding: '0 16px', gap: 10,
-        background: 'var(--panel)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-          <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Template</span>
-          <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{t?.name || 'None selected'}</span>
-          {t && (
-            <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', padding: '2px 6px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line-2)' }}>{t.tag}</span>
-          )}
-        </div>
-
-        <div style={{ flex: 1 }}/>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--ink-3)' }}>
-          <button style={iconBtnStyle} title="Zoom out"><I.close size={12}/></button>
-          <span className="mono">100%</span>
-          <button style={iconBtnStyle} title="Zoom in"><I.plus size={12}/></button>
-          <div style={{ width: 1, height: 16, background: 'var(--line)', margin: '0 4px' }}/>
-          <button style={iconBtnStyle} title="Fit"><I.dims size={12}/></button>
-        </div>
-      </div>
-
-      {/* Canvas stage */}
-      <div style={{
-        flex: 1, minHeight: 0, overflow: 'hidden',
-        position: 'relative',
-        background: `
-          radial-gradient(circle at 1px 1px, oklch(0.9 0.005 260) 1px, transparent 0)
-        `,
-        backgroundSize: '20px 20px',
-        backgroundColor: 'oklch(0.98 0.003 260)',
-      }}>
-        {t ? <TemplatePreview t={t}/> : <EmptyCanvas/>}
-      </div>
-    </div>
-  );
-};
-
-const iconBtnStyle = {
-  width: 24, height: 24, borderRadius: 5,
-  display: 'grid', placeItems: 'center',
-  color: 'var(--ink-2)',
-};
-
-const TemplatePreview = ({ t }) => {
-  const stageRef = React.useRef(null);
-  const [box, setBox] = React.useState({ w: 560, h: 480 });
-  React.useEffect(() => {
-    if (!stageRef.current) return;
-    const ro = new ResizeObserver(entries => {
-      for (const e of entries) {
-        const { width, height } = e.contentRect;
-        setBox({ w: Math.max(200, width - 80), h: Math.max(200, height - 120) });
-      }
-    });
-    ro.observe(stageRef.current);
-    return () => ro.disconnect();
-  }, []);
-  const [w, h] = ratioToSize(t.ratio, box.w, box.h);
-  const cat = t.cat;
-
-  return (
-    <div ref={stageRef} style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: 24 }}>
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-      <div style={{
-        position: 'relative',
-        width: w, height: h,
-        background: 'var(--panel)',
-        borderRadius: 6,
-        boxShadow: '0 30px 60px rgba(20,22,40,0.10), 0 4px 14px rgba(20,22,40,0.06), 0 0 0 1px var(--line)',
-        overflow: 'hidden',
-      }}>
-        <Stripe ratio={`${w}/${h}`} tone={t.tone} seed={t.id} label={t.name.split(' ')[0]} tag={t.tag}/>
-        {/* ruler handles */}
-        <Handles/>
-      </div>
-
-      {/* Meta strip */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 10,
-        padding: '6px 12px', borderRadius: 99,
-        background: 'var(--panel)',
-        border: '1px solid var(--line)',
-        boxShadow: 'var(--shadow-1)',
-        fontSize: 11,
-      }}>
-        <span className="mono" style={{ color: 'var(--ink-3)' }}>{cat}</span>
-        <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
-        <span className="mono" style={{ color: 'var(--ink-2)' }}>{t.ratio.replace('/', ':')}</span>
-        <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
-        <span className="mono" style={{ color: 'var(--ink-2)' }}>1280 × 1600 px</span>
-        <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
-        <span style={{ color: 'var(--ink-2)' }}>Ready for chat input →</span>
-      </div>
-    </div>
-    </div>
-  );
-};
-
-const Handles = () => {
-  const corners = [
-    { top: -4, left: -4 }, { top: -4, right: -4 },
-    { bottom: -4, left: -4 }, { bottom: -4, right: -4 },
-  ];
-  return (
-    <>
-      {corners.map((c, i) => (
-        <div key={i} style={{
-          position: 'absolute', ...c,
-          width: 8, height: 8,
-          background: 'white',
-          border: '1.5px solid var(--accent)',
-          borderRadius: 2,
-        }}/>
-      ))}
-    </>
-  );
-};
-
-const EmptyCanvas = () => (
-  <div style={{ textAlign: 'center', color: 'var(--ink-3)', fontSize: 13 }}>
-    Pick a template from the left rail to begin.
-  </div>
-);
-
-// Translate ratio to pixel dimensions that fit nicely in the canvas area
-const ratioToSize = (ratio, maxW = 560, maxH = 480) => {
-  const [a, b] = ratio.split('/').map(Number);
-  let w = maxW, h = (b / a) * maxW;
-  if (h > maxH) { h = maxH; w = (a / b) * maxH; }
-  return [Math.round(w), Math.round(h)];
-};
-
-window.Canvas = Canvas;
-
-</script>
-<script type="text/babel">
+// -- src/ChatExtras.jsx --
 // Slash commands, parse table, AI message list — additions to the chat surface.
 
 const SLASH_COMMANDS = [
@@ -1336,7 +1327,164 @@ window.MessageList = MessageList;
 window.CommandEcho = CommandEcho;
 
 </script>
+
 <script type="text/babel">
+// -- src/Canvas.jsx --
+// Main canvas — now simplified to just show the selected template preview.
+
+const Canvas = ({ template }) => {
+  const t = template;
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0,
+      overflow: 'hidden',
+      background: 'var(--panel-2)',
+    }}>
+      {/* Minimal toolbar */}
+      <div style={{
+        height: 44, flexShrink: 0,
+        borderBottom: '1px solid var(--line)',
+        display: 'flex', alignItems: 'center',
+        padding: '0 16px', gap: 10,
+        background: 'var(--panel)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+          <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Template</span>
+          <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{t?.name || 'None selected'}</span>
+          {t && (
+            <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', padding: '2px 6px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line-2)' }}>{t.tag}</span>
+          )}
+        </div>
+
+        <div style={{ flex: 1 }}/>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--ink-3)' }}>
+          <button style={iconBtnStyle} title="Zoom out"><I.close size={12}/></button>
+          <span className="mono">100%</span>
+          <button style={iconBtnStyle} title="Zoom in"><I.plus size={12}/></button>
+          <div style={{ width: 1, height: 16, background: 'var(--line)', margin: '0 4px' }}/>
+          <button style={iconBtnStyle} title="Fit"><I.dims size={12}/></button>
+        </div>
+      </div>
+
+      {/* Canvas stage */}
+      <div style={{
+        flex: 1, minHeight: 0, overflow: 'hidden',
+        position: 'relative',
+        background: `
+          radial-gradient(circle at 1px 1px, oklch(0.9 0.005 260) 1px, transparent 0)
+        `,
+        backgroundSize: '20px 20px',
+        backgroundColor: 'oklch(0.98 0.003 260)',
+      }}>
+        {t ? <TemplatePreview t={t}/> : <EmptyCanvas/>}
+      </div>
+    </div>
+  );
+};
+
+const iconBtnStyle = {
+  width: 24, height: 24, borderRadius: 5,
+  display: 'grid', placeItems: 'center',
+  color: 'var(--ink-2)',
+};
+
+const TemplatePreview = ({ t }) => {
+  const stageRef = React.useRef(null);
+  const [box, setBox] = React.useState({ w: 560, h: 480 });
+  React.useEffect(() => {
+    if (!stageRef.current) return;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const { width, height } = e.contentRect;
+        setBox({ w: Math.max(200, width - 80), h: Math.max(200, height - 120) });
+      }
+    });
+    ro.observe(stageRef.current);
+    return () => ro.disconnect();
+  }, []);
+  const [w, h] = ratioToSize(t.ratio, box.w, box.h);
+  const cat = t.cat;
+
+  return (
+    <div ref={stageRef} style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: 24 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+      <div style={{
+        position: 'relative',
+        width: w, height: h,
+        background: 'var(--panel)',
+        borderRadius: 6,
+        boxShadow: '0 30px 60px rgba(20,22,40,0.10), 0 4px 14px rgba(20,22,40,0.06), 0 0 0 1px var(--line)',
+        overflow: 'hidden',
+      }}>
+        <Stripe ratio={`${w}/${h}`} tone={t.tone} seed={t.id} label={t.name.split(' ')[0]} tag={t.tag}/>
+        {/* ruler handles */}
+        <Handles/>
+      </div>
+
+      {/* Meta strip */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '6px 12px', borderRadius: 99,
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+        boxShadow: 'var(--shadow-1)',
+        fontSize: 11,
+      }}>
+        <span className="mono" style={{ color: 'var(--ink-3)' }}>{cat}</span>
+        <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
+        <span className="mono" style={{ color: 'var(--ink-2)' }}>{t.ratio.replace('/', ':')}</span>
+        <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
+        <span className="mono" style={{ color: 'var(--ink-2)' }}>1280 × 1600 px</span>
+        <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
+        <span style={{ color: 'var(--ink-2)' }}>Ready for chat input →</span>
+      </div>
+    </div>
+    </div>
+  );
+};
+
+const Handles = () => {
+  const corners = [
+    { top: -4, left: -4 }, { top: -4, right: -4 },
+    { bottom: -4, left: -4 }, { bottom: -4, right: -4 },
+  ];
+  return (
+    <>
+      {corners.map((c, i) => (
+        <div key={i} style={{
+          position: 'absolute', ...c,
+          width: 8, height: 8,
+          background: 'white',
+          border: '1.5px solid var(--accent)',
+          borderRadius: 2,
+        }}/>
+      ))}
+    </>
+  );
+};
+
+const EmptyCanvas = () => (
+  <div style={{ textAlign: 'center', color: 'var(--ink-3)', fontSize: 13 }}>
+    Pick a template from the left rail to begin.
+  </div>
+);
+
+// Translate ratio to pixel dimensions that fit nicely in the canvas area
+const ratioToSize = (ratio, maxW = 560, maxH = 480) => {
+  const [a, b] = ratio.split('/').map(Number);
+  let w = maxW, h = (b / a) * maxW;
+  if (h > maxH) { h = maxH; w = (a / b) * maxH; }
+  return [Math.round(w), Math.round(h)];
+};
+
+window.Canvas = Canvas;
+
+</script>
+
+<script type="text/babel">
+// -- src/Chat.jsx --
 // AI chat column. Three states: empty / generating / returned.
 // Rich message types: text, option chips, file cards, action buttons, thinking trace, image results.
 
@@ -1869,7 +2017,9 @@ const Chat = ({ state }) => {
 window.Chat = Chat;
 
 </script>
+
 <script type="text/babel">
+// -- src/Tweaks.jsx --
 // Tweaks panel — toggle between chat/canvas states
 
 const Tweaks = ({ visible, tweaks, onChange, onClose }) => {
@@ -1938,7 +2088,9 @@ const TweakRow = ({ label, sub, value, options, onChange }) => (
 window.Tweaks = Tweaks;
 
 </script>
+
 <script type="text/babel">
+// -- src/app.jsx --
 // App root — wires panels + tweaks + host communication
 
 const App = () => {
@@ -1992,6 +2144,5 @@ const App = () => {
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 
 </script>
-
 
 </body></html>

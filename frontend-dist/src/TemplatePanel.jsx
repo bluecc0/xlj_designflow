@@ -45,7 +45,14 @@ const TemplateCard = ({ t, active, onClick }) => (
   </button>
 );
 
+const PANEL_TABS = [
+  { id: 'templates', label: '模板' },
+  { id: 'history',   label: '历史记录' },
+  { id: 'mcp',       label: 'MCP', soon: true },
+];
+
 const TemplatePanel = ({ activeId, onSelect }) => {
+  const [tab, setTab] = React.useState('templates');
   const [cat, setCat] = React.useState('All');
   const [q, setQ] = React.useState('');
 
@@ -54,114 +61,144 @@ const TemplatePanel = ({ activeId, onSelect }) => {
     (!q || t.name.toLowerCase().includes(q.toLowerCase()))
   );
 
-  // Masonry: two columns, distribute by index
   const colA = filtered.filter((_, i) => i % 2 === 0);
   const colB = filtered.filter((_, i) => i % 2 === 1);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--panel)', borderRight: '1px solid var(--line)' }}>
-      {/* Header */}
-      <div style={{ padding: '14px 14px 10px', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>Templates</div>
 
-        </div>
-
-        {/* Search */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 7,
-          padding: '7px 10px', borderRadius: 7,
-          background: 'var(--panel-2)',
-          border: '1px solid var(--line-2)',
-        }}>
-          <I.search size={13} style={{ color: 'var(--ink-3)' }}/>
-          <input
-            value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder="Search templates…"
-            style={{
-              flex: 1, border: 'none', outline: 'none', background: 'transparent',
-              fontSize: 12, color: 'var(--ink)',
-            }}
-          />
-          <kbd className="mono" style={{ fontSize: 9, color: 'var(--ink-3)', padding: '1px 4px', borderRadius: 3, border: '1px solid var(--line)' }}>⌘K</kbd>
-        </div>
-      </div>
-
-      {/* Category chips */}
+      {/* Tab bar */}
       <div style={{
-        padding: '0 14px 10px',
-        display: 'flex', gap: 4, flexShrink: 0,
-        overflowX: 'auto', scrollbarWidth: 'none',
+        display: 'flex', flexShrink: 0,
+        borderBottom: '1px solid var(--line)',
+        padding: '0 10px',
+        gap: 2,
       }}>
-        {TEMPLATE_CATS.map(c => (
-          <button key={c} onClick={() => setCat(c)} style={{
-            fontSize: 11, padding: '4px 9px', borderRadius: 99,
-            background: cat === c ? 'var(--ink)' : 'transparent',
-            color: cat === c ? 'white' : 'var(--ink-2)',
-            fontWeight: cat === c ? 500 : 400,
-            whiteSpace: 'nowrap',
-            border: cat === c ? 'none' : '1px solid var(--line)',
-            transition: 'all 120ms',
-          }}>{c}</button>
+        {PANEL_TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => !t.soon && setTab(t.id)}
+            style={{
+              padding: '10px 10px 9px',
+              fontSize: 12, fontWeight: tab === t.id ? 600 : 400,
+              color: t.soon ? 'var(--ink-3)' : tab === t.id ? 'var(--ink)' : 'var(--ink-2)',
+              borderBottom: tab === t.id ? '2px solid var(--ink)' : '2px solid transparent',
+              marginBottom: -1,
+              display: 'flex', alignItems: 'center', gap: 5,
+              cursor: t.soon ? 'default' : 'pointer',
+              transition: 'color 120ms',
+            }}
+          >
+            {t.label}
+            {t.soon && (
+              <span className="mono" style={{
+                fontSize: 8, padding: '1px 4px', borderRadius: 3,
+                background: 'var(--panel-2)', border: '1px solid var(--line)',
+                color: 'var(--ink-3)', letterSpacing: '0.03em',
+              }}>soon</span>
+            )}
+          </button>
         ))}
       </div>
 
-      {/* Masonry grid */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '0 10px 14px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {colA.map(t => <TemplateCard key={t.id} t={t} active={activeId === t.id} onClick={() => onSelect(t)}/>)}
+      {/* Templates tab */}
+      {tab === 'templates' && (
+        <>
+          {/* Search */}
+          <div style={{ padding: '10px 14px 8px', flexShrink: 0 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 7,
+              padding: '7px 10px', borderRadius: 7,
+              background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+            }}>
+              <I.search size={13} style={{ color: 'var(--ink-3)' }}/>
+              <input
+                value={q} onChange={(e) => setQ(e.target.value)}
+                placeholder="搜索模板…"
+                style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 12, color: 'var(--ink)' }}
+              />
+              <kbd className="mono" style={{ fontSize: 9, color: 'var(--ink-3)', padding: '1px 4px', borderRadius: 3, border: '1px solid var(--line)' }}>⌘K</kbd>
+            </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {colB.map(t => <TemplateCard key={t.id} t={t} active={activeId === t.id} onClick={() => onSelect(t)}/>)}
+
+          {/* Category chips */}
+          <div style={{ padding: '0 14px 10px', display: 'flex', gap: 4, flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
+            {TEMPLATE_CATS.map(c => (
+              <button key={c} onClick={() => setCat(c)} style={{
+                fontSize: 11, padding: '4px 9px', borderRadius: 99,
+                background: cat === c ? 'var(--ink)' : 'transparent',
+                color: cat === c ? 'white' : 'var(--ink-2)',
+                fontWeight: cat === c ? 500 : 400,
+                whiteSpace: 'nowrap',
+                border: cat === c ? 'none' : '1px solid var(--line)',
+                transition: 'all 120ms',
+              }}>{c}</button>
+            ))}
           </div>
+
+          {/* Masonry grid */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '0 10px 14px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {colA.map(t => <TemplateCard key={t.id} t={t} active={activeId === t.id} onClick={() => onSelect(t)}/>)}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {colB.map(t => <TemplateCard key={t.id} t={t} active={activeId === t.id} onClick={() => onSelect(t)}/>)}
+              </div>
+            </div>
+            {filtered.length === 0 && (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--ink-3)', fontSize: 12 }}>
+                没有匹配的模板「{q}」
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* History tab */}
+      {tab === 'history' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)' }}>
+          <I.layers size={24} style={{ opacity: 0.3 }}/>
+          <div style={{ fontSize: 12 }}>暂无历史记录</div>
         </div>
+      )}
 
-        {filtered.length === 0 && (
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--ink-3)', fontSize: 12 }}>
-            No templates match "{q}"
-          </div>
-        )}
-      </div>
-
-      {/* Status footer */}
+      {/* Footer */}
       <StatusFooter count={filtered.length}/>
     </div>
   );
 };
 
-const StatusFooter = ({ count }) => {
-  const [progressOpen, setProgressOpen] = React.useState(false);
-
-  return (
-    <div style={{
-      flexShrink: 0,
-      borderTop: '1px solid var(--line)',
-      background: 'var(--panel-2)',
-      position: 'relative',
-    }}>
-      <div style={{
-        padding: '8px 10px',
-        display: 'flex', flexDirection: 'column', gap: 6,
-      }}>
-        <button onClick={() => setProgressOpen(o => !o)} style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          padding: '5px 8px', borderRadius: 6,
-          border: '1px solid var(--line)',
-          background: 'var(--panel)',
-          fontSize: 11, color: 'var(--ink-2)',
-        }}>
-          <I.film size={11} style={{ color: 'var(--ink-3)' }}/>
-          <span style={{ flex: 1, textAlign: 'left' }}>Dev progress</span>
-          <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>v0.4.2 · 7/12</span>
-          <I.chevronDown size={10} style={{ transform: progressOpen ? 'rotate(180deg)' : 'none', transition: 'transform 150ms', color: 'var(--ink-3)' }}/>
-        </button>
-
-        {progressOpen && <DevProgressPanel/>}
-      </div>
-    </div>
-  );
-};
+const StatusFooter = ({ count }) => (
+  <div style={{
+    flexShrink: 0,
+    borderTop: '1px solid var(--line)',
+    background: 'var(--panel-2)',
+    padding: '8px 10px',
+    display: 'flex', alignItems: 'center', gap: 6,
+  }}>
+    <I.layers size={11} style={{ color: 'var(--ink-3)' }}/>
+    <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', flex: 1 }}>{count} 个模板</span>
+    <a
+      href="/ui/PROGRESS.html"
+      target="_blank"
+      rel="noreferrer"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5,
+        padding: '4px 9px', borderRadius: 6,
+        border: '1px solid var(--line)',
+        background: 'var(--panel)',
+        fontSize: 11, color: 'var(--ink-2)',
+        textDecoration: 'none',
+      }}
+      onMouseEnter={e => e.currentTarget.style.background = 'var(--panel-2)'}
+      onMouseLeave={e => e.currentTarget.style.background = 'var(--panel)'}
+    >
+      <I.film size={11}/>
+      开发进度
+    </a>
+  </div>
+);
 
 const StatusRow = ({ label, sub, state }) => {
   const stateMap = {
