@@ -65,9 +65,9 @@ def build():
     write(TEMPLATE, new_html)
 
     size_kb = len(new_html.encode('utf-8')) / 1024
-    print(f'✓ Built index.html ({size_kb:.1f} KB)')
-    print(f'  Inlined: {", ".join(PLAIN_JS + BABEL_JSX)}')
-    print(f'  → Refresh http://localhost:8000/ui/')
+    print(f'[OK] Built index.html ({size_kb:.1f} KB)')
+    print(f'     Inlined: {", ".join(PLAIN_JS + BABEL_JSX)}')
+    print(f'     -> Refresh http://localhost:8000/ui/')
 
 if __name__ == '__main__':
     build()

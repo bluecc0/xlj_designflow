@@ -1,25 +1,25 @@
 // Slash commands, parse table, AI message list — additions to the chat surface.
 
 const SLASH_COMMANDS = [
-  { cmd: '/generate',   cn: '开始生图',   desc: 'Generate variations from current parameters', icon: 'zap',     shortcut: '⌘⏎',  group: 'Generation' },
-  { cmd: '/regenerate', cn: '重新生成',   desc: 'Re-run the last prompt with a new seed',       icon: 'refresh', group: 'Generation' },
-  { cmd: '/upscale',    cn: '放大',       desc: 'Upscale selected option to 2K / 4K',           icon: 'layers',  group: 'Generation' },
-  { cmd: '/variations', cn: '出更多版本', desc: 'Produce 4 more variants of the selected one',  icon: 'grid',    group: 'Generation' },
+  { cmd: '/生图',    cn: '开始生图',   desc: '根据当前模板和产品数据生成图片', icon: 'zap',      shortcut: '⌘⏎', group: '生成' },
+  { cmd: '/重新生成', cn: '重新生成',  desc: '用新的随机种子重新跑一遍',        icon: 'refresh',             group: '生成' },
+  { cmd: '/放大',    cn: '放大',       desc: '将选中结果放大到 2K / 4K',        icon: 'layers',              group: '生成' },
+  { cmd: '/出变体',  cn: '出更多版本', desc: '基于选中结果再出 4 个变体',        icon: 'grid',                group: '生成' },
 
-  { cmd: '/analyze',    cn: '分析素材',   desc: 'Parse an uploaded image, brief, or CSV',       icon: 'eye',     group: 'Tools' },
-  { cmd: '/palette',    cn: '提取配色',   desc: 'Extract a palette from a reference',            icon: 'palette', group: 'Tools' },
-  { cmd: '/resize',     cn: '换尺寸',     desc: 'Reflow the design into a new ratio',            icon: 'dims',    group: 'Tools' },
-  { cmd: '/copy',       cn: '换文案',     desc: 'Rewrite on-image copy',                         icon: 'type',    group: 'Tools' },
+  { cmd: '/分析',    cn: '分析素材',   desc: '解析上传的图片、简报或 CSV',       icon: 'eye',                 group: '工具' },
+  { cmd: '/配色',    cn: '提取配色',   desc: '从参考图中提取色板',               icon: 'palette',             group: '工具' },
+  { cmd: '/换尺寸',  cn: '换尺寸',     desc: '将设计重排为新的比例',             icon: 'dims',                group: '工具' },
+  { cmd: '/换文案',  cn: '换文案',     desc: '重写图上的文字',                   icon: 'type',                group: '工具' },
 
-  { cmd: '/export-png', cn: '导出PNG',    desc: 'Export selected option as PNG',                 icon: 'download', group: 'Export' },
-  { cmd: '/export-psd', cn: '导出PSD',    desc: 'Export with editable layers',                   icon: 'download', group: 'Export' },
-  { cmd: '/share',      cn: '分享链接',   desc: 'Generate a review link',                        icon: 'share',    group: 'Export' },
+  { cmd: '/导出',    cn: '导出PNG',    desc: '将结果导出为 PNG 文件',            icon: 'download',            group: '导出' },
+  { cmd: '/九宫格',  cn: '切九宫格',   desc: '将结果切成 3×3 九宫格',           icon: 'grid',                group: '导出' },
+  { cmd: '/分享',    cn: '分享链接',   desc: '生成可分享的预览链接',             icon: 'share',               group: '导出' },
 ];
 
 const SlashMenu = ({ query, onPick, onClose }) => {
   const q = query.toLowerCase().replace(/^\//, '');
   const filtered = SLASH_COMMANDS.filter(c =>
-    !q || c.cmd.includes(q) || c.cn.includes(query.replace(/^\//, '')) || c.desc.toLowerCase().includes(q)
+    !q || c.cmd.includes(query.replace(/^\//, '')) || c.cn.includes(q) || c.desc.includes(q)
   );
 
   const groups = filtered.reduce((acc, c) => {
@@ -46,7 +46,7 @@ const SlashMenu = ({ query, onPick, onClose }) => {
     return (
       <div style={slashMenuStyle}>
         <div style={{ padding: 14, fontSize: 12, color: 'var(--ink-3)', textAlign: 'center' }}>
-          No command matches "{query}"
+          没有匹配的指令「{query}」
         </div>
       </div>
     );
@@ -60,9 +60,9 @@ const SlashMenu = ({ query, onPick, onClose }) => {
         display: 'flex', alignItems: 'center', gap: 8,
         borderBottom: '1px solid var(--line-2)',
       }} className="mono">
-        <span style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>Commands</span>
+        <span style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>指令</span>
         <div style={{ flex: 1 }}/>
-        <span>↑↓ navigate · ⏎ pick · esc close</span>
+        <span>↑↓ 选择 · ⏎ 确认 · esc 关闭</span>
       </div>
 
       <div style={{ maxHeight: 280, overflowY: 'auto', padding: 4 }}>
@@ -121,7 +121,7 @@ const slashMenuStyle = {
   zIndex: 20,
 };
 
-// ---------- Parse table (structured analysis output) ----------
+// ---------- Parse table ----------
 
 const ParseTable = ({ title, subtitle, rows, source }) => {
   return (
@@ -146,9 +146,9 @@ const ParseTable = ({ title, subtitle, rows, source }) => {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '92px 1fr 54px', fontSize: 11 }}>
-        <HeadCell>Field</HeadCell>
-        <HeadCell>Value</HeadCell>
-        <HeadCell right>Conf.</HeadCell>
+        <HeadCell>字段</HeadCell>
+        <HeadCell>内容</HeadCell>
+        <HeadCell right>置信度</HeadCell>
 
         {rows.map((r, i) => (
           <React.Fragment key={i}>
@@ -183,11 +183,11 @@ const ParseTable = ({ title, subtitle, rows, source }) => {
         display: 'flex', alignItems: 'center', gap: 6,
         background: 'var(--panel-2)',
       }}>
-        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{rows.length} fields parsed</span>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>共 {rows.length} 个字段</span>
         <div style={{ flex: 1 }}/>
-        <button style={ghostBtn}>Edit</button>
+        <button style={ghostBtn}>编辑</button>
         <button style={{ ...ghostBtn, background: 'var(--ink)', color: 'white', border: 'none' }}>
-          Apply to design
+          应用到设计
         </button>
       </div>
     </div>
@@ -217,9 +217,9 @@ const Cell = ({ children, right, top }) => (
 
 const ConfBadge = ({ conf }) => {
   const map = {
-    high:   { l: 'High', c: 'var(--ok)',    bg: 'oklch(0.95 0.04 155)' },
-    med:    { l: 'Med',  c: 'var(--warn)',  bg: 'oklch(0.96 0.04 70)' },
-    low:    { l: 'Low',  c: 'oklch(0.55 0.15 25)', bg: 'oklch(0.95 0.04 25)' },
+    high: { l: '高',  c: 'var(--ok)',           bg: 'oklch(0.95 0.04 155)' },
+    med:  { l: '中',  c: 'var(--warn)',          bg: 'oklch(0.96 0.04 70)'  },
+    low:  { l: '低',  c: 'oklch(0.55 0.15 25)', bg: 'oklch(0.95 0.04 25)'  },
   }[conf] || { l: '–', c: 'var(--ink-3)', bg: 'var(--panel-2)' };
   return (
     <span style={{
@@ -239,7 +239,7 @@ const ghostBtn = {
 
 // ---------- AI structured message list ----------
 
-const MessageList = ({ title, items }) => (
+const AIMessageList = ({ title, items }) => (
   <div style={{
     width: '100%', borderRadius: 10,
     background: 'var(--panel)', border: '1px solid var(--line-2)',
@@ -249,7 +249,7 @@ const MessageList = ({ title, items }) => (
       <I.layers size={12} style={{ color: 'var(--ink-2)' }}/>
       <span style={{ fontSize: 11.5, fontWeight: 600 }}>{title}</span>
       <div style={{ flex: 1 }}/>
-      <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{items.length} items</span>
+      <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{items.length} 条</span>
     </div>
     <div>
       {items.map((it, i) => (
@@ -283,7 +283,7 @@ const MessageList = ({ title, items }) => (
   </div>
 );
 
-// ---------- Slash command acknowledgement bubble ----------
+// ---------- Slash command echo bubble ----------
 
 const CommandEcho = ({ cmd, cn }) => (
   <div style={{
@@ -301,5 +301,5 @@ const CommandEcho = ({ cmd, cn }) => (
 window.SlashMenu = SlashMenu;
 window.SLASH_COMMANDS = SLASH_COMMANDS;
 window.ParseTable = ParseTable;
-window.MessageList = MessageList;
+window.AIMessageList = AIMessageList;
 window.CommandEcho = CommandEcho;

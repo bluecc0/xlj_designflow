@@ -1,7 +1,7 @@
-// Top bar — logo, project crumb, backend health status
+// Top bar — logo, backend + library health status (Chinese)
 
 const TopBar = () => {
-  const [health, setHealth] = React.useState(null); // null=loading, object=ok, 'error'=fail
+  const [health, setHealth] = React.useState(null); // null=loading, obj=ok, 'error'=fail
 
   React.useEffect(() => {
     let alive = true;
@@ -19,8 +19,13 @@ const TopBar = () => {
   }, []);
 
   const backendOk = health && health !== 'error' && health.status === 'ok';
+  const libraryOk = health && health !== 'error' && health.library?.connected;
+
   const backendColor = health === null ? 'var(--warn)' : backendOk ? 'var(--ok)' : 'oklch(0.6 0.18 25)';
-  const backendLabel = health === null ? 'connecting…' : backendOk ? 'connected' : 'offline';
+  const libraryColor = health === null ? 'var(--warn)' : libraryOk ? 'var(--ok)' : 'oklch(0.6 0.18 25)';
+
+  const backendText = health === null ? '连接中…' : backendOk ? '已连接' : '离线';
+  const libraryText = health === null ? '检测中…' : libraryOk ? '已连接' : '未连接';
 
   return (
     <div style={{
@@ -31,7 +36,7 @@ const TopBar = () => {
       borderBottom: '1px solid var(--line)',
     }}>
       {/* Logo */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 180 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 160 }}>
         <div style={{
           width: 22, height: 22, borderRadius: 6,
           background: 'linear-gradient(135deg, var(--ink) 0%, oklch(0.28 0.04 275) 100%)',
@@ -48,41 +53,60 @@ const TopBar = () => {
 
       {/* Project crumb */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink-2)' }}>
-        <span style={{ color: 'var(--ink-3)' }}>Design Tool</span>
-        <I.chevronRight size={10} stroke={1.8}/>
-        <span style={{ color: 'var(--ink)' }}>AI 生图工作台</span>
+        <span style={{ color: 'var(--ink-3)' }}>AI 生图工作台</span>
       </div>
 
       <div style={{ flex: 1 }}/>
 
-      {/* Right cluster */}
+      {/* Status indicators */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        {/* Backend status */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          padding: '4px 8px', borderRadius: 6,
-          background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-          fontSize: 11,
-        }}>
-          <span style={{ width: 7, height: 7, borderRadius: 99, background: backendColor, flexShrink: 0, transition: 'background 300ms' }}/>
-          <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>Backend</span>
-          <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{backendLabel}</span>
-        </div>
 
-        {/* Version */}
-        {backendOk && health.version && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-            padding: '4px 8px', borderRadius: 6,
-            background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-            fontSize: 11,
-          }}>
-            <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>v{health.version}</span>
-          </div>
-        )}
+        {/* 后端状态 */}
+        <StatusChip
+          color={backendColor}
+          label="后端服务"
+          value={backendText}
+          pulse={health === null}
+        />
+
+        {/* 素材库状态 */}
+        <StatusChip
+          color={libraryColor}
+          label="素材库"
+          value={libraryText}
+          pulse={health === null}
+          title={health && health !== 'error' && health.library?.path ? `路径：${health.library.path}` : ''}
+        />
+
       </div>
     </div>
   );
 };
+
+const StatusChip = ({ color, label, value, pulse, title }) => (
+  <div title={title || ''} style={{
+    display: 'flex', alignItems: 'center', gap: 5,
+    padding: '4px 9px', borderRadius: 6,
+    background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+    fontSize: 11, cursor: title ? 'help' : 'default',
+  }}>
+    <span style={{ position: 'relative', width: 7, height: 7, flexShrink: 0 }}>
+      <span style={{
+        position: 'absolute', inset: 0, borderRadius: 99,
+        background: color, transition: 'background 300ms',
+      }}/>
+      {pulse && (
+        <span style={{
+          position: 'absolute', inset: -2, borderRadius: 99,
+          background: color, opacity: 0.3,
+          animation: 'statusPulse 1.6s ease-in-out infinite',
+        }}/>
+      )}
+    </span>
+    <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>{label}</span>
+    <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{value}</span>
+    <style>{`@keyframes statusPulse { 0%,100%{transform:scale(1);opacity:0.3} 50%{transform:scale(1.8);opacity:0} }`}</style>
+  </div>
+);
 
 window.TopBar = TopBar;

@@ -386,49 +386,8 @@
 <script src="vendor/react.js"></script>
 <script src="vendor/react-dom.js"></script>
 <script src="vendor/babel.min.js"></script>
-<style>
-  :root {
-    --bg: oklch(0.985 0.003 260);
-    --panel: #ffffff;
-    --panel-2: oklch(0.975 0.004 260);
-    --line: oklch(0.92 0.005 260);
-    --line-2: oklch(0.95 0.005 260);
-    --ink: oklch(0.18 0.01 260);
-    --ink-2: oklch(0.38 0.01 260);
-    --ink-3: oklch(0.58 0.008 260);
-    --accent: oklch(0.55 0.22 275);
-    --accent-soft: oklch(0.96 0.03 275);
-    --accent-ink: oklch(0.38 0.18 275);
-    --warn: oklch(0.72 0.15 70);
-    --ok: oklch(0.65 0.15 155);
-    --radius: 10px;
-    --radius-sm: 6px;
-    --radius-lg: 14px;
-    --shadow-1: 0 1px 2px rgba(20,22,40,0.04), 0 1px 1px rgba(20,22,40,0.03);
-    --shadow-2: 0 6px 24px rgba(20,22,40,0.06), 0 1px 2px rgba(20,22,40,0.04);
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: 'Inter', system-ui, sans-serif; font-size: 13px; letter-spacing: -0.005em; }
-  button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
-  input, textarea { font-family: inherit; }
-  ::selection { background: var(--accent-soft); color: var(--accent-ink); }
-  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
-  .serif { font-family: 'Instrument Serif', serif; }
-
-  /* Scrollbars */
-  ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: oklch(0.88 0.005 260); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
-  ::-webkit-scrollbar-thumb:hover { background: oklch(0.80 0.008 260); border: 3px solid transparent; background-clip: padding-box; }
-</style>
-</head>
-<body>
-
-<div id="root"></div>
-
-
 <script>
-// --- src/api.js ---
+// ── src/api.js ──
 // API client — wraps all backend calls (FastAPI at localhost:8000)
 
 const BASE = window.API_BASE || 'http://localhost:8000';
@@ -552,9 +511,8 @@ window.API = {
 };
 
 </script>
-
 <script type="text/babel">
-// --- src/Icons.jsx ---
+// ── src/Icons.jsx ──
 // Minimal stroke icon set
 const Icon = ({ d, size = 14, stroke = 1.5, fill = 'none', children, style }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke="currentColor"
@@ -607,9 +565,8 @@ window.I = I;
 window.Icon = Icon;
 
 </script>
-
 <script type="text/babel">
-// --- src/Placeholders.jsx ---
+// ── src/Placeholders.jsx ──
 // Striped / gradient placeholder imagery. No hand-drawn illustrations.
 
 const hashHue = (s) => {
@@ -663,13 +620,12 @@ window.Stripe = Stripe;
 window.Swatch = Swatch;
 
 </script>
-
 <script type="text/babel">
-// --- src/TopBar.jsx ---
-// Top bar — logo, project crumb, backend health status
+// ── src/TopBar.jsx ──
+// Top bar — logo, backend + library health status (Chinese)
 
 const TopBar = () => {
-  const [health, setHealth] = React.useState(null); // null=loading, object=ok, 'error'=fail
+  const [health, setHealth] = React.useState(null); // null=loading, obj=ok, 'error'=fail
 
   React.useEffect(() => {
     let alive = true;
@@ -687,8 +643,13 @@ const TopBar = () => {
   }, []);
 
   const backendOk = health && health !== 'error' && health.status === 'ok';
+  const libraryOk = health && health !== 'error' && health.library?.connected;
+
   const backendColor = health === null ? 'var(--warn)' : backendOk ? 'var(--ok)' : 'oklch(0.6 0.18 25)';
-  const backendLabel = health === null ? 'connecting…' : backendOk ? 'connected' : 'offline';
+  const libraryColor = health === null ? 'var(--warn)' : libraryOk ? 'var(--ok)' : 'oklch(0.6 0.18 25)';
+
+  const backendText = health === null ? '连接中…' : backendOk ? '已连接' : '离线';
+  const libraryText = health === null ? '检测中…' : libraryOk ? '已连接' : '未连接';
 
   return (
     <div style={{
@@ -699,7 +660,7 @@ const TopBar = () => {
       borderBottom: '1px solid var(--line)',
     }}>
       {/* Logo */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 180 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 160 }}>
         <div style={{
           width: 22, height: 22, borderRadius: 6,
           background: 'linear-gradient(135deg, var(--ink) 0%, oklch(0.28 0.04 275) 100%)',
@@ -716,49 +677,67 @@ const TopBar = () => {
 
       {/* Project crumb */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink-2)' }}>
-        <span style={{ color: 'var(--ink-3)' }}>Design Tool</span>
-        <I.chevronRight size={10} stroke={1.8}/>
-        <span style={{ color: 'var(--ink)' }}>AI 生图工作台</span>
+        <span style={{ color: 'var(--ink-3)' }}>AI 生图工作台</span>
       </div>
 
       <div style={{ flex: 1 }}/>
 
-      {/* Right cluster */}
+      {/* Status indicators */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        {/* Backend status */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          padding: '4px 8px', borderRadius: 6,
-          background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-          fontSize: 11,
-        }}>
-          <span style={{ width: 7, height: 7, borderRadius: 99, background: backendColor, flexShrink: 0, transition: 'background 300ms' }}/>
-          <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>Backend</span>
-          <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{backendLabel}</span>
-        </div>
 
-        {/* Version */}
-        {backendOk && health.version && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-            padding: '4px 8px', borderRadius: 6,
-            background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-            fontSize: 11,
-          }}>
-            <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>v{health.version}</span>
-          </div>
-        )}
+        {/* 后端状态 */}
+        <StatusChip
+          color={backendColor}
+          label="后端服务"
+          value={backendText}
+          pulse={health === null}
+        />
+
+        {/* 素材库状态 */}
+        <StatusChip
+          color={libraryColor}
+          label="素材库"
+          value={libraryText}
+          pulse={health === null}
+          title={health && health !== 'error' && health.library?.path ? `路径：${health.library.path}` : ''}
+        />
+
       </div>
     </div>
   );
 };
 
+const StatusChip = ({ color, label, value, pulse, title }) => (
+  <div title={title || ''} style={{
+    display: 'flex', alignItems: 'center', gap: 5,
+    padding: '4px 9px', borderRadius: 6,
+    background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+    fontSize: 11, cursor: title ? 'help' : 'default',
+  }}>
+    <span style={{ position: 'relative', width: 7, height: 7, flexShrink: 0 }}>
+      <span style={{
+        position: 'absolute', inset: 0, borderRadius: 99,
+        background: color, transition: 'background 300ms',
+      }}/>
+      {pulse && (
+        <span style={{
+          position: 'absolute', inset: -2, borderRadius: 99,
+          background: color, opacity: 0.3,
+          animation: 'statusPulse 1.6s ease-in-out infinite',
+        }}/>
+      )}
+    </span>
+    <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>{label}</span>
+    <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{value}</span>
+    <style>{`@keyframes statusPulse { 0%,100%{transform:scale(1);opacity:0.3} 50%{transform:scale(1.8);opacity:0} }`}</style>
+  </div>
+);
+
 window.TopBar = TopBar;
 
 </script>
-
 <script type="text/babel">
-// --- src/TemplatePanel.jsx ---
+// ── src/TemplatePanel.jsx ──
 // Left panel — template library, backed by GET /templates
 
 const TEMPLATE_CATS = ['All', 'Social', 'E-commerce', 'Brand', 'Print', 'Web', 'Packaging'];
@@ -894,7 +873,7 @@ const TemplatePanel = ({ activeId, onSelect }) => {
           <I.search size={13} style={{ color: 'var(--ink-3)' }}/>
           <input
             value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder="Search templates…"
+            placeholder="搜索模板…"
             style={{
               flex: 1, border: 'none', outline: 'none', background: 'transparent',
               fontSize: 12, color: 'var(--ink)',
@@ -964,20 +943,34 @@ const TemplatePanel = ({ activeId, onSelect }) => {
         )}
       </div>
 
-      {/* Footer */}
+      {/* Footer — 开发进度入口 */}
       <div style={{
         flexShrink: 0, borderTop: '1px solid var(--line)',
         background: 'var(--panel-2)',
-        padding: '8px 12px',
+        padding: '8px 10px',
         display: 'flex', alignItems: 'center', gap: 6,
-        fontSize: 11, color: 'var(--ink-3)',
       }}>
-        <I.layers size={11}/>
-        <span className="mono">{templates.length} templates</span>
+        <I.layers size={11} style={{ color: 'var(--ink-3)' }}/>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>{templates.length} 个模板</span>
         <div style={{ flex: 1 }}/>
-        {!loading && !error && (
-          <span className="mono" style={{ fontSize: 9.5 }}>from Penpot</span>
-        )}
+        <a
+          href="/ui/PROGRESS.html"
+          target="_blank"
+          rel="noreferrer"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            fontSize: 11, color: 'var(--ink-2)',
+            padding: '4px 8px', borderRadius: 6,
+            border: '1px solid var(--line)',
+            background: 'var(--panel)',
+            textDecoration: 'none',
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = 'var(--panel-2)'}
+          onMouseLeave={e => e.currentTarget.style.background = 'var(--panel)'}
+        >
+          <I.film size={11}/>
+          开发进度
+        </a>
       </div>
     </div>
   );
@@ -988,31 +981,30 @@ window.TemplatePanel = TemplatePanel;
 window.TEMPLATES = [];
 
 </script>
-
 <script type="text/babel">
-// --- src/ChatExtras.jsx ---
+// ── src/ChatExtras.jsx ──
 // Slash commands, parse table, AI message list — additions to the chat surface.
 
 const SLASH_COMMANDS = [
-  { cmd: '/generate',   cn: '开始生图',   desc: 'Generate variations from current parameters', icon: 'zap',     shortcut: '⌘⏎',  group: 'Generation' },
-  { cmd: '/regenerate', cn: '重新生成',   desc: 'Re-run the last prompt with a new seed',       icon: 'refresh', group: 'Generation' },
-  { cmd: '/upscale',    cn: '放大',       desc: 'Upscale selected option to 2K / 4K',           icon: 'layers',  group: 'Generation' },
-  { cmd: '/variations', cn: '出更多版本', desc: 'Produce 4 more variants of the selected one',  icon: 'grid',    group: 'Generation' },
+  { cmd: '/生图',    cn: '开始生图',   desc: '根据当前模板和产品数据生成图片', icon: 'zap',      shortcut: '⌘⏎', group: '生成' },
+  { cmd: '/重新生成', cn: '重新生成',  desc: '用新的随机种子重新跑一遍',        icon: 'refresh',             group: '生成' },
+  { cmd: '/放大',    cn: '放大',       desc: '将选中结果放大到 2K / 4K',        icon: 'layers',              group: '生成' },
+  { cmd: '/出变体',  cn: '出更多版本', desc: '基于选中结果再出 4 个变体',        icon: 'grid',                group: '生成' },
 
-  { cmd: '/analyze',    cn: '分析素材',   desc: 'Parse an uploaded image, brief, or CSV',       icon: 'eye',     group: 'Tools' },
-  { cmd: '/palette',    cn: '提取配色',   desc: 'Extract a palette from a reference',            icon: 'palette', group: 'Tools' },
-  { cmd: '/resize',     cn: '换尺寸',     desc: 'Reflow the design into a new ratio',            icon: 'dims',    group: 'Tools' },
-  { cmd: '/copy',       cn: '换文案',     desc: 'Rewrite on-image copy',                         icon: 'type',    group: 'Tools' },
+  { cmd: '/分析',    cn: '分析素材',   desc: '解析上传的图片、简报或 CSV',       icon: 'eye',                 group: '工具' },
+  { cmd: '/配色',    cn: '提取配色',   desc: '从参考图中提取色板',               icon: 'palette',             group: '工具' },
+  { cmd: '/换尺寸',  cn: '换尺寸',     desc: '将设计重排为新的比例',             icon: 'dims',                group: '工具' },
+  { cmd: '/换文案',  cn: '换文案',     desc: '重写图上的文字',                   icon: 'type',                group: '工具' },
 
-  { cmd: '/export-png', cn: '导出PNG',    desc: 'Export selected option as PNG',                 icon: 'download', group: 'Export' },
-  { cmd: '/export-psd', cn: '导出PSD',    desc: 'Export with editable layers',                   icon: 'download', group: 'Export' },
-  { cmd: '/share',      cn: '分享链接',   desc: 'Generate a review link',                        icon: 'share',    group: 'Export' },
+  { cmd: '/导出',    cn: '导出PNG',    desc: '将结果导出为 PNG 文件',            icon: 'download',            group: '导出' },
+  { cmd: '/九宫格',  cn: '切九宫格',   desc: '将结果切成 3×3 九宫格',           icon: 'grid',                group: '导出' },
+  { cmd: '/分享',    cn: '分享链接',   desc: '生成可分享的预览链接',             icon: 'share',               group: '导出' },
 ];
 
 const SlashMenu = ({ query, onPick, onClose }) => {
   const q = query.toLowerCase().replace(/^\//, '');
   const filtered = SLASH_COMMANDS.filter(c =>
-    !q || c.cmd.includes(q) || c.cn.includes(query.replace(/^\//, '')) || c.desc.toLowerCase().includes(q)
+    !q || c.cmd.includes(query.replace(/^\//, '')) || c.cn.includes(q) || c.desc.includes(q)
   );
 
   const groups = filtered.reduce((acc, c) => {
@@ -1039,7 +1031,7 @@ const SlashMenu = ({ query, onPick, onClose }) => {
     return (
       <div style={slashMenuStyle}>
         <div style={{ padding: 14, fontSize: 12, color: 'var(--ink-3)', textAlign: 'center' }}>
-          No command matches "{query}"
+          没有匹配的指令「{query}」
         </div>
       </div>
     );
@@ -1053,9 +1045,9 @@ const SlashMenu = ({ query, onPick, onClose }) => {
         display: 'flex', alignItems: 'center', gap: 8,
         borderBottom: '1px solid var(--line-2)',
       }} className="mono">
-        <span style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>Commands</span>
+        <span style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>指令</span>
         <div style={{ flex: 1 }}/>
-        <span>↑↓ navigate · ⏎ pick · esc close</span>
+        <span>↑↓ 选择 · ⏎ 确认 · esc 关闭</span>
       </div>
 
       <div style={{ maxHeight: 280, overflowY: 'auto', padding: 4 }}>
@@ -1114,7 +1106,7 @@ const slashMenuStyle = {
   zIndex: 20,
 };
 
-// ---------- Parse table (structured analysis output) ----------
+// ---------- Parse table ----------
 
 const ParseTable = ({ title, subtitle, rows, source }) => {
   return (
@@ -1139,9 +1131,9 @@ const ParseTable = ({ title, subtitle, rows, source }) => {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '92px 1fr 54px', fontSize: 11 }}>
-        <HeadCell>Field</HeadCell>
-        <HeadCell>Value</HeadCell>
-        <HeadCell right>Conf.</HeadCell>
+        <HeadCell>字段</HeadCell>
+        <HeadCell>内容</HeadCell>
+        <HeadCell right>置信度</HeadCell>
 
         {rows.map((r, i) => (
           <React.Fragment key={i}>
@@ -1176,11 +1168,11 @@ const ParseTable = ({ title, subtitle, rows, source }) => {
         display: 'flex', alignItems: 'center', gap: 6,
         background: 'var(--panel-2)',
       }}>
-        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{rows.length} fields parsed</span>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>共 {rows.length} 个字段</span>
         <div style={{ flex: 1 }}/>
-        <button style={ghostBtn}>Edit</button>
+        <button style={ghostBtn}>编辑</button>
         <button style={{ ...ghostBtn, background: 'var(--ink)', color: 'white', border: 'none' }}>
-          Apply to design
+          应用到设计
         </button>
       </div>
     </div>
@@ -1210,9 +1202,9 @@ const Cell = ({ children, right, top }) => (
 
 const ConfBadge = ({ conf }) => {
   const map = {
-    high:   { l: 'High', c: 'var(--ok)',    bg: 'oklch(0.95 0.04 155)' },
-    med:    { l: 'Med',  c: 'var(--warn)',  bg: 'oklch(0.96 0.04 70)' },
-    low:    { l: 'Low',  c: 'oklch(0.55 0.15 25)', bg: 'oklch(0.95 0.04 25)' },
+    high: { l: '高',  c: 'var(--ok)',           bg: 'oklch(0.95 0.04 155)' },
+    med:  { l: '中',  c: 'var(--warn)',          bg: 'oklch(0.96 0.04 70)'  },
+    low:  { l: '低',  c: 'oklch(0.55 0.15 25)', bg: 'oklch(0.95 0.04 25)'  },
   }[conf] || { l: '–', c: 'var(--ink-3)', bg: 'var(--panel-2)' };
   return (
     <span style={{
@@ -1232,7 +1224,7 @@ const ghostBtn = {
 
 // ---------- AI structured message list ----------
 
-const MessageList = ({ title, items }) => (
+const AIMessageList = ({ title, items }) => (
   <div style={{
     width: '100%', borderRadius: 10,
     background: 'var(--panel)', border: '1px solid var(--line-2)',
@@ -1242,7 +1234,7 @@ const MessageList = ({ title, items }) => (
       <I.layers size={12} style={{ color: 'var(--ink-2)' }}/>
       <span style={{ fontSize: 11.5, fontWeight: 600 }}>{title}</span>
       <div style={{ flex: 1 }}/>
-      <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{items.length} items</span>
+      <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{items.length} 条</span>
     </div>
     <div>
       {items.map((it, i) => (
@@ -1276,7 +1268,7 @@ const MessageList = ({ title, items }) => (
   </div>
 );
 
-// ---------- Slash command acknowledgement bubble ----------
+// ---------- Slash command echo bubble ----------
 
 const CommandEcho = ({ cmd, cn }) => (
   <div style={{
@@ -1294,13 +1286,12 @@ const CommandEcho = ({ cmd, cn }) => (
 window.SlashMenu = SlashMenu;
 window.SLASH_COMMANDS = SLASH_COMMANDS;
 window.ParseTable = ParseTable;
-window.MessageList = MessageList;
+window.AIMessageList = AIMessageList;
 window.CommandEcho = CommandEcho;
 
 </script>
-
 <script type="text/babel">
-// --- src/Canvas.jsx ---
+// ── src/Canvas.jsx ──
 // Middle canvas — shows selected template preview, compose progress, and result image.
 
 const Canvas = ({ template, job, resultImageUrl, onJobUpdate }) => {
@@ -1683,9 +1674,8 @@ const Handles = () => {
 window.Canvas = Canvas;
 
 </script>
-
 <script type="text/babel">
-// --- src/Chat.jsx ---
+// ── src/Chat.jsx ──
 // AI chat panel — real backend integration
 // Handles: text chat, file upload (Excel/CSV), /generate, /export-png, /resize grid
 
@@ -2332,9 +2322,8 @@ const Chat = ({ template, onJobUpdate, onResultUrl }) => {
 window.Chat = Chat;
 
 </script>
-
 <script type="text/babel">
-// --- src/app.jsx ---
+// ── src/app.jsx ──
 // App root — wires panels together, shares job/result state between Canvas and Chat
 
 const App = () => {

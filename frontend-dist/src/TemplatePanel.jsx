@@ -133,7 +133,7 @@ const TemplatePanel = ({ activeId, onSelect }) => {
           <I.search size={13} style={{ color: 'var(--ink-3)' }}/>
           <input
             value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder="Search templates…"
+            placeholder="搜索模板…"
             style={{
               flex: 1, border: 'none', outline: 'none', background: 'transparent',
               fontSize: 12, color: 'var(--ink)',
@@ -203,20 +203,34 @@ const TemplatePanel = ({ activeId, onSelect }) => {
         )}
       </div>
 
-      {/* Footer */}
+      {/* Footer — 开发进度入口 */}
       <div style={{
         flexShrink: 0, borderTop: '1px solid var(--line)',
         background: 'var(--panel-2)',
-        padding: '8px 12px',
+        padding: '8px 10px',
         display: 'flex', alignItems: 'center', gap: 6,
-        fontSize: 11, color: 'var(--ink-3)',
       }}>
-        <I.layers size={11}/>
-        <span className="mono">{templates.length} templates</span>
+        <I.layers size={11} style={{ color: 'var(--ink-3)' }}/>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>{templates.length} 个模板</span>
         <div style={{ flex: 1 }}/>
-        {!loading && !error && (
-          <span className="mono" style={{ fontSize: 9.5 }}>from Penpot</span>
-        )}
+        <a
+          href="/ui/PROGRESS.html"
+          target="_blank"
+          rel="noreferrer"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            fontSize: 11, color: 'var(--ink-2)',
+            padding: '4px 8px', borderRadius: 6,
+            border: '1px solid var(--line)',
+            background: 'var(--panel)',
+            textDecoration: 'none',
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = 'var(--panel-2)'}
+          onMouseLeave={e => e.currentTarget.style.background = 'var(--panel)'}
+        >
+          <I.film size={11}/>
+          开发进度
+        </a>
       </div>
     </div>
   );
