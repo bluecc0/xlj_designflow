@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-Build script — inlines all src/*.jsx and src/api.js into index.html.
+Build script -- inlines all src/*.jsx and src/api.js into index.html.
 Run after editing any .jsx file:
   python build.py
 Then refresh http://localhost:8000/ui/
 """
-import os, re, sys
+import os, sys
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(BASE, 'src')
 
 PLAIN_JS = ['src/api.js']
 BABEL_JSX = [
@@ -35,36 +34,59 @@ def write(path, content):
 def build():
     html = read('index.html')
 
-    # Find injection point — everything after vendor scripts up to </body>
-    # We look for the first <script> after babel.min.js (our injected section)
-    vendor_end = html.find('<script src="vendor/babel.min.js"></script>') + len('<script src="vendor/babel.min.js"></script>')
+    # Cut point: right before vendor scripts
+    # Structure: <styles> ... </style>  <-- cut here
+    #            <body>
+    #            <div id="root"></div>
+    #            <script src="vendor/react.js"> ...
+    #            <script src="vendor/babel.min.js">
+    #            <our inline scripts>
+    #            </body></html>
 
-    if vendor_end == len('<script src="vendor/babel.min.js"></script>') - 1:
-        print('ERROR: vendor/babel.min.js script tag not found in index.html')
+    vendor_react = '<script src="vendor/react.js"></script>'
+    vendor_babel = '<script src="vendor/babel.min.js"></script>'
+
+    vendor_react_idx = html.find(vendor_react)
+    vendor_babel_end = html.find(vendor_babel) + len(vendor_babel)
+
+    if vendor_react_idx == -1 or vendor_babel_end == len(vendor_babel) - 1:
+        print('ERROR: vendor script tags not found in index.html')
         sys.exit(1)
 
-    before = html[:vendor_end]
+    # Keep everything up to and including vendor scripts
+    # But first find where the style section ends (before vendor scripts)
+    style_end = html.rfind('</style>', 0, vendor_react_idx) + len('</style>')
+    if style_end == len('</style>') - 1:
+        style_end = vendor_react_idx  # fallback
 
-    # Build inline scripts — always include #root mount point
-    inline = '\n<div id="root"></div>\n'
+    css_section = html[:style_end]
+    vendor_section = html[vendor_react_idx:vendor_babel_end]
 
+    # Build inline scripts
+    inline = ''
     for f in PLAIN_JS:
         src = read(f)
-        # Strip ES module export so it runs as plain script
         src = src.replace('export async function ', 'async function ')
         src = src.replace('export function ', 'function ')
-        inline += f'<script>\n// ── {f} ──\n{src}\n</script>\n'
+        inline += f'\n<script>\n// -- {f} --\n{src}\n</script>\n'
 
     for f in BABEL_JSX:
         src = read(f)
-        inline += f'<script type="text/babel">\n// ── {f} ──\n{src}\n</script>\n'
+        inline += f'\n<script type="text/babel">\n// -- {f} --\n{src}\n</script>\n'
 
-    new_html = before + inline + '\n</body></html>'
+    new_html = (
+        css_section + '\n'
+        '<body>\n'
+        '<div id="root"></div>\n\n'
+        + vendor_section + '\n'
+        + inline
+        + '\n</body></html>'
+    )
+
     write(TEMPLATE, new_html)
 
     size_kb = len(new_html.encode('utf-8')) / 1024
     print(f'[OK] Built index.html ({size_kb:.1f} KB)')
-    print(f'     Inlined: {", ".join(PLAIN_JS + BABEL_JSX)}')
     print(f'     -> Refresh http://localhost:8000/ui/')
 
 if __name__ == '__main__':
