@@ -60,6 +60,7 @@ def init_db() -> None:
 def save_job(job: ComposeJob) -> None:
     """插入或更新 job 记录"""
     now = time.time()
+    print(f"[job_store] Saving job {job.id}, status={job.status.value}, db_path={_DB_PATH}")
     with _lock, _connect() as conn:
         conn.execute("""
             INSERT INTO jobs (id, status, request_json, result_path, penpot_file_id, penpot_edit_url, error, progress_json, created_at, updated_at)
@@ -102,10 +103,12 @@ def load_job(job_id: str) -> Optional[ComposeJob]:
 
 def load_recent_jobs(limit: int = 50) -> list[ComposeJob]:
     """按时间倒序返回最近 N 条任务"""
+    print(f"[job_store] Loading recent jobs, limit={limit}, db_path={_DB_PATH}")
     with _connect() as conn:
         rows = conn.execute(
             "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
+        print(f"[job_store] Found {len(rows)} rows in database")
     return [_row_to_job(r) for r in rows]
 
 

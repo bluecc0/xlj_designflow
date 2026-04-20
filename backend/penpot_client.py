@@ -517,51 +517,59 @@ class PenpotClient:
         3. 清除 position-data（设为 None），让 Penpot 重新渲染时自动重算。
            exporter 走的是 content 路径，不依赖 position-data。
         """
+        # 从 raw_content 提取样式参数（字体/颜色/对齐），然后用干净结构重建
+        # 不直接复用 raw_content 是因为其中携带的 position-data 无法通过 update-file 清除，
+        # 导出时 Penpot 会用缓存坐标（x≈-4000）定位文字，造成文字偏移到画布外显示居左
         if raw_content is not None:
-            new_content = self._replace_text_in_content(raw_content, text)
-        else:
-            # fallback：手动构建（对齐等用传入参数）
-            fs = str(int(font_size)) if font_size == int(font_size) else str(font_size)
-            fw = str(font_weight)
-            fill = {"fill-color": fill_color, "fill-opacity": 1}
-            text_run = {
-                "text": text,
-                "font-family": font_family,
-                "font-id": font_family,
-                "font-variant-id": "regular" if fw == "400" else fw,
-                "font-size": fs,
-                "font-weight": fw,
-                "font-style": "normal",
-                "text-decoration": "none",
-                "text-transform": "none",
-                "letter-spacing": "0",
-                "line-height": "1",
-                "text-direction": "ltr",
-                "text-align": text_align,
-                "fills": [fill],
-            }
-            paragraph = {
-                "type": "paragraph",
-                "key": str(uuid.uuid4())[:8],
-                "font-family": font_family,
-                "font-id": font_family,
-                "font-variant-id": "regular" if fw == "400" else fw,
-                "font-size": fs,
-                "font-weight": fw,
-                "font-style": "normal",
-                "text-decoration": "none",
-                "text-transform": "none",
-                "letter-spacing": "0",
-                "line-height": "1",
-                "text-direction": "ltr",
-                "text-align": text_align,
-                "fills": [fill],
-                "children": [text_run],
-            }
-            new_content = {
-                "type": "root",
-                "children": [{"type": "paragraph-set", "children": [paragraph]}],
-            }
+            style = self.parse_text_style({"content": raw_content})
+            font_size   = style.get("font_size", font_size)
+            font_weight = style.get("font_weight", font_weight)
+            font_family = style.get("font_family", font_family)
+            fill_color  = style.get("fill_color", fill_color)
+            text_align  = style.get("text_align", text_align)
+
+        # 始终用手动构建的干净 content，不携带任何历史 position-data
+        fs = str(int(font_size)) if font_size == int(font_size) else str(font_size)
+        fw = str(font_weight)
+        fill = {"fill-color": fill_color, "fill-opacity": 1}
+        text_run = {
+            "text": text,
+            "font-family": font_family,
+            "font-id": font_family,
+            "font-variant-id": "regular" if fw == "400" else fw,
+            "font-size": fs,
+            "font-weight": fw,
+            "font-style": "normal",
+            "text-decoration": "none",
+            "text-transform": "none",
+            "letter-spacing": "0",
+            "line-height": "1",
+            "text-direction": "ltr",
+            "text-align": text_align,
+            "fills": [fill],
+        }
+        paragraph = {
+            "type": "paragraph",
+            "key": str(uuid.uuid4())[:8],
+            "font-family": font_family,
+            "font-id": font_family,
+            "font-variant-id": "regular" if fw == "400" else fw,
+            "font-size": fs,
+            "font-weight": fw,
+            "font-style": "normal",
+            "text-decoration": "none",
+            "text-transform": "none",
+            "letter-spacing": "0",
+            "line-height": "1",
+            "text-direction": "ltr",
+            "text-align": text_align,
+            "fills": [fill],
+            "children": [text_run],
+        }
+        new_content = {
+            "type": "root",
+            "children": [{"type": "paragraph-set", "children": [paragraph]}],
+        }
 
         return [{
             "type": kw("mod-obj"),
@@ -657,9 +665,14 @@ class PenpotClient:
             paragraph = para_set["children"][0]        # paragraph
             children = paragraph.get("children", [])
             if children:
-                # 第一个 run 替换文字，其余删掉（避免多段文字残留）
-                children[0]["text"] = new_text
-                paragraph["children"] = [children[0]]
+                run = children[0]
+                run["text"] = new_text
+                # text-run 的 text-align 必须和 paragraph 一致
+                # Penpot 渲染时 run 级优先级更高，run 是 left 则即使 paragraph 是 center 也显示居左
+                para_align = paragraph.get("text-align")
+                if para_align:
+                    run["text-align"] = para_align
+                paragraph["children"] = [run]
         except (KeyError, IndexError, TypeError):
             pass
         return content

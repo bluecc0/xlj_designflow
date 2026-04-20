@@ -1,11 +1,26 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 title Design Tool
 
 set BACKEND_PORT=8000
 set MCP_PORT=4401
 set PLUGIN_PORT=4400
 set ROOT=%~dp0
+
+:: Auto detect local IPv4 (skip 127.x.x.x)
+set "LOCAL_IP="
+for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /i "IPv4"') do (
+    for /f "tokens=1" %%b in ("%%a") do (
+        if not defined LOCAL_IP (
+            echo %%b | findstr /i /v "127." >nul && set "LOCAL_IP=%%b"
+        )
+    )
+)
+if not defined LOCAL_IP set LOCAL_IP=localhost
+
+:: Use local IP for Penpot
+set PENPOT_BASE_URL=http://%LOCAL_IP%:9001
+echo  [+] PENPOT_BASE_URL=%PENPOT_BASE_URL%
 
 echo.
 echo  Design Tool - Starting...

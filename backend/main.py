@@ -316,8 +316,9 @@ def create_compose(
     request: ComposeRequest, background_tasks: BackgroundTasks
 ):
     """触发合成任务，立即返回 job id，后台异步执行"""
+    import time
     job_id = str(uuid.uuid4())
-    job = ComposeJob(id=job_id, request=request)
+    job = ComposeJob(id=job_id, request=request, created_at=time.time())
 
     with _jobs_lock:
         _jobs[job_id] = job
