@@ -40,12 +40,30 @@ class TemplateInfo(BaseModel):
 
 
 class ProductSlot(BaseModel):
-    """单个产品格子的内容"""
-    image_path: Optional[str] = None   # 本地图片路径
-    name: Optional[str] = None         # 产品名称
-    price: Optional[str] = None
-    tag: Optional[str] = None
-    spec: Optional[str] = None
+    """
+    单个产品格子的内容。
+    image_path 固定字段；其余文字字段由 slot_schema.json 定义，
+    用 extra="allow" 动态接收，不在 schema 里的字段也不会报错。
+    """
+    model_config = {"extra": "allow"}
+
+    image_path: Optional[str] = None   # 本地图片路径（image 类型 slot 专用）
+
+    def get_text_fields(self) -> dict[str, Optional[str]]:
+        """返回所有文字字段 key→value，包含 schema 里定义的和动态传入的额外字段"""
+        excluded = {"image_path"}
+        result: dict[str, Optional[str]] = {}
+        # Pydantic v2: model_fields_set + __pydantic_extra__
+        for k, v in self.__dict__.items():
+            if k.startswith("_") or k in excluded:
+                continue
+            result[k] = v if isinstance(v, str) else None
+        # 动态 extra 字段
+        extras = self.__pydantic_extra__ or {}
+        for k, v in extras.items():
+            if k not in excluded:
+                result[k] = str(v) if v is not None else None
+        return result
 
 
 class ComposeRequest(BaseModel):
@@ -84,10 +102,11 @@ class ComposeJob(BaseModel):
 
 
 class ParsedProduct(BaseModel):
-    name: Optional[str] = None
-    price: Optional[str] = None
-    tag: Optional[str] = None
-    spec: Optional[str] = None
+    """
+    解析出的单个产品。image_path 固定；文字字段动态，由 slot_schema.json 决定。
+    """
+    model_config = {"extra": "allow"}
+
     image_path: Optional[str] = None   # 匹配到的本地图片路径（可能为 None）
 
 

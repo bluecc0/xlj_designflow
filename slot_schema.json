@@ -1,0 +1,56 @@
+{
+  "version": "1.0",
+  "comment": "Loom slot 字段定义。修改此文件即可新增/删除字段，无需改代码。",
+
+  "fields": [
+    {
+      "key": "image",
+      "type": "image",
+      "label": "产品主图",
+      "required": true,
+      "comment": "对应 Penpot 图层命名：slot/product_1/image（rect 类型）"
+    },
+    {
+      "key": "name",
+      "type": "text",
+      "label": "产品名称",
+      "required": true,
+      "column_aliases": ["商品名称", "品名", "产品名称", "名称", "商品名", "产品名", "product name", "title"],
+      "comment": "对应 Penpot 图层命名：slot/product_1/name"
+    },
+    {
+      "key": "price",
+      "type": "text",
+      "label": "价格",
+      "required": false,
+      "column_aliases": ["到手价", "售价", "活动价", "最终价", "成交价", "实付", "优惠价", "price", "sale price"],
+      "comment": "对应 Penpot 图层命名：slot/product_1/price"
+    },
+    {
+      "key": "tag",
+      "type": "text",
+      "label": "角标",
+      "required": false,
+      "column_aliases": ["标签", "促销", "活动标签", "tag", "label", "badge"],
+      "comment": "对应 Penpot 图层命名：slot/product_1/tag"
+    },
+    {
+      "key": "spec",
+      "type": "text",
+      "label": "规格",
+      "required": false,
+      "column_aliases": ["规格", "尺码", "颜色", "容量", "型号规格", "spec", "size", "color"],
+      "comment": "对应 Penpot 图层命名：slot/product_1/spec"
+    }
+  ],
+
+  "image_filename_aliases": [
+    "sku", "货号", "编码", "型号", "款号", "article", "item no", "itemno",
+    "图片文件名", "图片名", "filename", "image"
+  ],
+
+  "discard_column_keywords": [
+    "吊牌价", "原价", "市场价", "折扣", "优惠金额",
+    "库存", "销量", "数量", "备注", "remark"
+  ]
+}

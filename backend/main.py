@@ -40,6 +40,7 @@ from .models import (
     TemplateInfo,
 )
 from .product_library import ProductLibrary
+from .slot_schema import schema as slot_schema
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -510,6 +511,19 @@ def list_image_types():
             "exists": folder_path.exists(),
         })
     return {"types": result}
+
+
+@app.get("/slot-schema")
+def get_slot_schema():
+    """返回当前 slot_schema.json 的完整内容，供前端/插件使用"""
+    return slot_schema.to_dict()
+
+
+@app.post("/slot-schema/reload")
+def reload_slot_schema():
+    """热重载 slot_schema.json，修改文件后无需重启服务"""
+    slot_schema.reload()
+    return {"ok": True, "version": slot_schema.version, "fields": slot_schema.all_fields}
 
 
 @app.get("/products")

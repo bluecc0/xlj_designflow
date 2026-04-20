@@ -14,40 +14,37 @@ import pandas as pd
 from .config import settings
 from .models import ParsedProduct, ParseResult
 from .product_library import ProductLibrary
+from .slot_schema import schema as slot_schema
 
 
-# ── 列名规则映射表 ─────────────────────────────────────────────────────────────
-_COLUMN_RULES: dict[str, list[str]] = {
-    "image_filename": ["sku", "货号", "编码", "型号", "款号", "article", "item no", "itemno",
-                       "图片文件名", "图片名", "filename", "image"],
-    "name":           ["商品名称", "品名", "产品名称", "名称", "商品名", "产品名", "product name", "title"],
-    "price":          ["到手价", "售价", "活动价", "最终价", "成交价", "实付", "优惠价",
-                       "price", "sale price"],
-    "tag":            ["标签", "促销", "活动标签", "tag", "label", "badge"],
-    "spec":           ["规格", "尺码", "颜色", "容量", "型号规格", "spec", "size", "color"],
-}
-
-# 明确丢弃的列（吊牌价、立省等干扰列）
-_DISCARD_KEYWORDS = ["吊牌价", "原价", "市场价", "折扣", "优惠金额",
-                     "库存", "销量", "数量", "备注", "remark"]
+def _build_column_rules() -> dict[str, list[str]]:
+    """从 slot_schema.json 动态构建列名映射表"""
+    rules: dict[str, list[str]] = {
+        "image_filename": slot_schema.image_filename_aliases,
+    }
+    for field_key, aliases in slot_schema.column_aliases.items():
+        rules[field_key] = aliases
+    return rules
 
 
 def _normalize_columns(df: pd.DataFrame, required_fields: list[str]) -> pd.DataFrame:
     """
     将原始 DataFrame 的列名映射为标准字段名。
-    只保留 required_fields 中需要的列（image_filename 始终保留）。
+    列名规则从 slot_schema.json 动态加载。
     """
+    column_rules = _build_column_rules()
+    discard_keywords = slot_schema.discard_keywords
     needed = list(dict.fromkeys(["image_filename"] + required_fields))
     col_map: dict[str, str] = {}
 
     for col in df.columns:
         col_lower = col.lower().strip()
-        if any(kw in col_lower for kw in _DISCARD_KEYWORDS):
+        if any(kw in col_lower for kw in discard_keywords):
             continue
         for target in needed:
             if target in col_map.values():
                 continue
-            keywords = _COLUMN_RULES.get(target, [])
+            keywords = column_rules.get(target, [])
             if any(kw.lower() in col_lower or col_lower in kw.lower() for kw in keywords):
                 col_map[col] = target
                 break
@@ -89,8 +86,11 @@ def parse_table(
     print(f"[table_parser] 原始列名: {list(df.columns)}")
 
     # ── 列名标准化 ────────────────────────────────────────────────────────────
+    # 从 schema 取所有文字字段，required_fields 可进一步限定
+    all_text_fields = slot_schema.text_fields  # ["name", "price", "tag", "spec", ...]
     clean_required = [f for f in (required_fields or []) if f not in ("image", "image_filename")]
-    active_fields = list(dict.fromkeys(["image_filename", "name"] + (clean_required or ["price", "tag", "spec"])))
+    active_text = clean_required if clean_required else all_text_fields
+    active_fields = list(dict.fromkeys(["image_filename"] + active_text))
     normalized_df = _normalize_columns(df, [f for f in active_fields if f != "image_filename"])
 
     print(f"[table_parser] 标准化后: {list(normalized_df.columns)}")
@@ -115,9 +115,6 @@ def parse_table(
     for _, row in normalized_df.iterrows():
         image_filename = get_val(row, "image_filename") or ""
         name = get_val(row, "name") or ""
-        price = get_val(row, "price")
-        tag = get_val(row, "tag")
-        spec = get_val(row, "spec")
 
         sku = image_filename or name
         img_path: Optional[str] = None
@@ -130,12 +127,14 @@ def parse_table(
             if img_path is None and name:
                 img_path = library.find(name)
 
+        # 动态构建产品字段（从 schema 的所有文字字段中取值）
+        text_values: dict[str, Optional[str]] = {}
+        for field_key in slot_schema.text_fields:
+            text_values[field_key] = get_val(row, field_key)
+
         products.append(ParsedProduct(
-            name=name or None,
-            price=price,
-            tag=tag,
-            spec=spec,
             image_path=img_path,
+            **text_values,
         ))
 
     print(f"[table_parser] 解析完成: {len(products)} 个产品, image_type={image_type}, folder={folder}")

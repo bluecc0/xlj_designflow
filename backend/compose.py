@@ -19,6 +19,7 @@ from typing import Any, Optional
 from .config import settings
 from .models import ComposeJob, ComposeRequest, ComposeStatus
 from .penpot_client import PenpotClient, PenpotError
+from .slot_schema import schema as slot_schema
 
 
 # ─── 全局客户端（懒初始化） + 串行锁 ─────────────────────────────────────────
@@ -177,10 +178,9 @@ def _run_compose_inner(job: ComposeJob) -> None:
                     _log(job, f"隐藏空图层: {slot_name}")
                     changes.append(client.hide_layer(slot["id"], slot["page_id"]))
 
-            write_text_slot("name", product.name)
-            write_text_slot("price", product.price)
-            write_text_slot("tag", product.tag)
-            write_text_slot("spec", product.spec)
+            # 动态写入所有文字字段（由 slot_schema.json 定义，无需硬编码）
+            for field_key, text_value in product.get_text_fields().items():
+                write_text_slot(field_key, text_value)
 
         # ── Step 4: 提交变更到副本 ────────────────────────────────────────────
         if changes:
