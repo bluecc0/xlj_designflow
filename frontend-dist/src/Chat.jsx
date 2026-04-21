@@ -212,14 +212,55 @@ const AnalyzedSubject = () => (
   </div>
 );
 
+// ---------- LogBox（实时滚动日志）----------
+
+const LogBox = ({ logs, running }) => {
+  const bottomRef = React.useRef(null);
+  React.useEffect(() => {
+    if (bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs && logs.length]);
+
+  return (
+    <div style={{ border: '1px solid var(--line)', borderRadius: 8, background: 'var(--panel)', overflow: 'hidden' }}>
+      <div style={{ padding: '7px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 500 }}>进度日志</span>
+        {running && <div style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--accent)', animation: 'pulse 1.2s ease-in-out infinite' }}/>}
+      </div>
+      <div style={{ maxHeight: 140, overflowY: 'auto', padding: '6px 0' }}>
+        {logs.map((log, i) => {
+          const isError = log.includes('失败') || log.includes('Error') || log.includes('error');
+          const isOk = log.includes('完成') || log.includes('就绪') || log.includes('保存');
+          const isPath = log.includes('/') && (log.includes('.png') || log.includes('.py') || log.includes('\\'));
+          const display = isPath ? log.split(/[/\\]/).pop() : log;
+          return (
+            <div key={i} style={{
+              padding: '3px 12px',
+              fontSize: 11.5,
+              fontFamily: 'JetBrains Mono, monospace',
+              color: isError ? 'var(--warn)' : isOk ? 'var(--ok)' : 'var(--ink-2)',
+              display: 'flex', gap: 8, alignItems: 'baseline',
+            }}>
+              <span style={{ color: isError ? 'var(--warn)' : isOk ? 'var(--ok)' : 'var(--accent)', flexShrink: 0 }}>›</span>
+              <span>{display}</span>
+            </div>
+          );
+        })}
+        <div ref={bottomRef}/>
+      </div>
+    </div>
+  );
+};
+
 // ---------- States ----------
 
 const ChatEmpty = () => {
   const prompts = [
-    { icon: <I.image size={13}/>,    text: 'Upload product photos and describe the vibe' },
-    { icon: <I.type size={13}/>,     text: 'Paste brand guidelines from a PDF' },
-    { icon: <I.palette size={13}/>,  text: 'Generate 4 variations in a muted palette' },
-    { icon: <I.dims size={13}/>,     text: 'Resize this to 9:16 for Instagram Stories' },
+    { icon: <I.image size={13}/>,    text: '上传产品图，描述想要的风格' },
+    { icon: <I.palette size={13}/>,  text: '生成4张哑光色调的变体图' },
+    { icon: <I.copy size={13}/>,     text: '复制当前模板的文案' },
+    { icon: <I.dims size={13}/>,     text: '调整尺寸为9:16适配Instagram' },
   ];
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px' }}>
@@ -233,13 +274,13 @@ const ChatEmpty = () => {
         }}>
           <I.sparkles size={18} stroke={1.8}/>
         </div>
-        <div className="serif" style={{ fontSize: 19, letterSpacing: '-0.01em' }}>How can I help design today?</div>
+        <div className="serif" style={{ fontSize: 19, letterSpacing: '-0.01em' }}>今天想设计点什么？</div>
         <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
-          Upload anything — product shots, references, brand kits — or just start typing.
+          上传产品图、参考图、品牌素材，或者直接输入描述。
         </div>
       </div>
 
-      <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '12px 4px 6px' }}>Try</div>
+      <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '12px 4px 6px' }}>试试</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {prompts.map((p, i) => (
           <button key={i} style={{
@@ -291,103 +332,249 @@ const ChatGenerating = () => (
   </div>
 );
 
-const ChatReturned = () => (
-  <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
-    {/* Session header */}
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 6,
-      padding: '4px 0', fontSize: 10,
-    }}>
-      <span className="mono" style={{ color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Session · Product Hero</span>
-      <div style={{ flex: 1, height: 1, background: 'var(--line-2)' }}/>
-      <span className="mono" style={{ color: 'var(--ink-3)' }}>5 turns</span>
+const ChatReturned = ({ messages, template, onCompose, isGenerating }) => {
+  const userMsgs = messages.filter(m => m.who === 'user').length;
+  const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Session header */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '4px 0', fontSize: 10,
+      }}>
+        <span className="mono" style={{ color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>对话</span>
+        <div style={{ flex: 1, height: 1, background: 'var(--line-2)' }}/>
+        <span className="mono" style={{ color: 'var(--ink-3)' }}>{turnCount}</span>
+      </div>
+
+      {messages.length === 0 ? (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+          <div style={{
+            width: 40, height: 40, borderRadius: 11,
+            background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
+            color: 'white', display: 'grid', placeItems: 'center',
+          }}>
+            <I.sparkles size={18} stroke={1.8}/>
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)' }}>今天想设计点什么？</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
+            上传产品图、参考图、品牌素材，或者直接输入描述。
+          </div>
+        </div>
+      ) : (
+        messages.map((m, i) => (
+          <Bubble key={i} who={m.who} meta={m.meta}>
+            {m.type === 'parse-result' ? (() => {
+                const matchedCount = m.data.products.filter(p => p.image_path).length;
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <TextBubble who="ai">找到 {m.data.products.length} 个产品，其中 {matchedCount} 个已匹配图片，建议模板类型：<b>{m.data.suggested_template_type}</b></TextBubble>
+                    <div style={{
+                      width: '100%', borderRadius: 10,
+                      background: 'var(--panel)', border: '1px solid var(--line-2)',
+                      overflow: 'hidden',
+                    }}>
+                      <div style={{ padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ width: 20, height: 20, borderRadius: 5, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' }}>
+                          <I.file size={11}/>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 11.5, fontWeight: 600 }}>{m.data.products.length} 个产品</div>
+                          <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>CSV · {m.data.suggested_template_type}</div>
+                        </div>
+                      </div>
+                      {m.fields && m.fields.length > 0 && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr '.repeat(m.fields.length).trim() + ' 60px', fontSize: 11 }}>
+                          {m.fields.map((f, fi) => (
+                            <HeadCell key={f}>{f === 'image' ? '图片' : f === 'name' ? '产品名' : f === 'price' ? '价格' : f === 'tag' ? '标签' : f === 'spec' ? '规格' : f}</HeadCell>
+                          ))}
+                          <HeadCell right>匹配</HeadCell>
+                          {m.data.products.map((p, j) => (
+                            <React.Fragment key={j}>
+                              {m.fields.map((f) => {
+                                const val = p[f === 'image' ? 'image_path' : f];
+                                return (
+                                  <Cell key={f} top={j > 0}>
+                                    {f === 'image' ? (
+                                      val ? <span style={{ color: 'var(--ok)', fontSize: 10 }}>已匹配</span> : <span style={{ color: 'var(--ink-3)', fontSize: 10 }}>未匹配</span>
+                                    ) : (
+                                      <span style={{ fontWeight: f === 'name' ? 500 : 400 }}>{val || '—'}</span>
+                                    )}
+                                  </Cell>
+                                );
+                              })}
+                              <Cell top={j > 0} right>
+                                <span style={{ color: p.image_path ? 'var(--ok)' : 'var(--warn)', fontSize: 10 }}>
+                                  {p.image_path ? '✓' : '—'}
+                                </span>
+                              </Cell>
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      )}
+                      {matchedCount > 0 && !isGenerating && (
+                        <div style={{ padding: '10px 12px', borderTop: '1px solid var(--line-2)', display: 'flex', justifyContent: 'center' }}>
+                          <button
+                            onClick={() => onCompose && onCompose(template, m.data)}
+                            style={{
+                              fontSize: 12,
+                              padding: '6px 20px',
+                              borderRadius: 6,
+                              background: 'var(--ink)',
+                              color: 'white',
+                              border: 'none',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            开始生图
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })() : m.type === 'generating' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {m.status === 'done' ? (
+                    <>
+                      <div style={{ width: 18, height: 18, borderRadius: 99, background: 'var(--ok)' }}/>
+                      <span style={{ fontSize: 13, color: 'var(--ok)', fontWeight: 600 }}>生成完成</span>
+                    </>
+                  ) : m.status === 'failed' ? (
+                    <>
+                      <div style={{ width: 18, height: 18, borderRadius: 99, background: 'var(--warn)' }}/>
+                      <span style={{ fontSize: 13, color: 'var(--warn)', fontWeight: 600 }}>生成失败</span>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ width: 18, height: 18, borderRadius: 99, border: '2px solid var(--line)', borderRightColor: 'transparent', animation: 'spin 0.8s linear infinite' }}/>
+                      <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500 }}>生成中...</span>
+                    </>
+                  )}
+                </div>
+                {m.logs && m.logs.length > 0 && (
+                  <LogBox logs={m.logs} running={m.status !== 'done' && m.status !== 'failed'}/>
+                )}
+                {m.status === 'done' && m.specialUrls && m.specialUrls.length > 0 && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
+                    {m.penpotUrl && (
+                      <a href={m.penpotUrl} target="_blank" rel="noreferrer" style={{
+                        fontSize: 11.5, padding: '5px 12px', borderRadius: 6,
+                        background: 'var(--accent)', color: 'white',
+                        textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5,
+                      }}>
+                        <I.edit size={11}/>在Penpot中编辑
+                      </a>
+                    )}
+                    {m.specialUrls.map((url, si) => (
+                      <a key={si} href={url} target="_blank" rel="noreferrer" style={{
+                        fontSize: 11.5, padding: '5px 12px', borderRadius: 6,
+                        background: 'var(--ink)', color: 'white',
+                        textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5,
+                      }}>
+                        <I.download size={11}/>图{si + 1}
+                      </a>
+                    ))}
+                  </div>
+                )}
+                {m.status === 'failed' && m.error && (
+                  <div style={{ padding: '10px 12px', borderRadius: 6, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 12, color: 'var(--warn)' }}>
+                    {m.error}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <TextBubble who={m.who}>{m.text}</TextBubble>
+            )}
+          </Bubble>
+        ))
+      )}
     </div>
-
-    <Bubble who="user">
-      <FileCard name="autumn-brief.csv" size="3.1 KB" type="CSV"/>
-      <FileCard name="vase-shelf-ref.jpg" size="2.4 MB" type="JPG"/>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
-        <CommandEcho cmd="/analyze" cn="分析素材"/>
-      </div>
-    </Bubble>
-
-    <Bubble who="ai" meta="Loom · parsed 2 files">
-      <TextBubble who="ai">
-        I pulled the brief and the reference. Here's what I got — anything with <b>Med</b> or <b>Low</b> confidence is worth a quick look.
-      </TextBubble>
-      <ParseTable
-        title="Brief parsed"
-        subtitle="autumn-brief.csv"
-        source="CSV"
-        rows={[
-          { field: 'Campaign', value: 'Autumn \'26 — ceramic drop',           conf: 'high' },
-          { field: 'Audience', value: 'Japandi home, 28–40, design-forward',  conf: 'high' },
-          { field: 'Channel',  value: 'Homepage hero + social',                conf: 'high' },
-          { field: 'Ratio',    value: '4:5 (primary), 9:16 (story)',           conf: 'high', editable: true },
-          { field: 'Copy',     value: '"New in · Autumn \'26"',                 conf: 'med', editable: true, note: 'CSV listed two variants — picked the shorter one.' },
-          { field: 'Palette',  value: 'Clay, ivory, muted olive',              conf: 'med' },
-          { field: 'Deadline', value: 'Oct 14 (estimated)',                    conf: 'low', note: 'Not explicit in brief — inferred from campaign name.' },
-        ]}
-      />
-      <MessageList
-        title="Before we generate"
-        items={[
-          { kind: 'warn', title: 'Copy length risks overflowing 9:16',  body: '"New in · Autumn \'26" at 48pt will cut on narrow aspect. Shorten to "New in" for stories.', action: 'Auto-shorten for 9:16' },
-          { kind: 'info', title: 'Brand kit not linked yet',             body: 'Without it I\'ll use inferred palette. Link the kit to lock exact tokens.', action: 'Link brand kit' },
-          { kind: 'ok',   title: 'Reference image clean and high-res',   body: '2400 × 3000, no visible compression, subject centered.' },
-        ]}
-      />
-    </Bubble>
-
-    <Bubble who="user">
-      <TextBubble who="user">Looks right. Shorten the copy for 9:16, keep Clay & ivory, and generate.</TextBubble>
-      <CommandEcho cmd="/generate" cn="开始生图"/>
-    </Bubble>
-
-    <Bubble who="ai" meta="Loom · 2.1s">
-      <ThinkingTrace done steps={[
-        'Locked parameters from parse table + user edits',
-        'Shortened copy variant for 9:16 output',
-        'Sampled 4 layout variants within Japandi reference space',
-        'Synthesized at 1280×1600, delivered to canvas',
-      ]}/>
-      <TextBubble who="ai">
-        Here are 4 directions in the canvas. <b>Option B (Minimal)</b> has the cleanest copy hierarchy — that's my pick. Want me to iterate on any of them?
-      </TextBubble>
-      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-        {['/upscale', '/variations', '/resize 9:16', '/export-png', 'Compare A vs B'].map(t => (
-          <button key={t} style={{
-            fontSize: 11, padding: '4px 9px', borderRadius: 99,
-            color: t.startsWith('/') ? 'var(--accent-ink)' : 'var(--ink-2)',
-            border: '1px solid',
-            borderColor: t.startsWith('/') ? 'transparent' : 'var(--line)',
-            background: t.startsWith('/') ? 'var(--accent-soft)' : 'var(--panel)',
-            fontFamily: t.startsWith('/') ? 'JetBrains Mono, monospace' : 'inherit',
-          }}>{t}</button>
-        ))}
-      </div>
-    </Bubble>
-  </div>
-);
+  );
+};
 
 // ---------- Composer ----------
 
-const Composer = () => {
-  const [text, setText] = React.useState('/');
-  const [files, setFiles] = React.useState([
-    { name: 'moodboard.pdf', size: '1.8 MB', type: 'PDF' },
-  ]);
+const Composer = ({ onSend, onParseTable, isLoading }) => {
+  const [text, setText] = React.useState('');
+  const [files, setFiles] = React.useState([]);
+  const [imageType, setImageType] = React.useState('png');
   const taRef = React.useRef(null);
+  const fileInputRef = React.useRef(null);
 
-  // Detect the current /slash token at the start of the input (simple model: line starts with /)
-  const slashQuery = React.useMemo(() => {
-    const m = text.match(/^\/\S*/);
-    return m ? m[0] : null;
+  // Image type options
+  const IMAGE_TYPES = [
+    { key: 'png', label: 'PNG' },
+    { key: 'white', label: '白底' },
+    { key: 'model', label: '模特' },
+    { key: 'shadow', label: '阴影' },
+    { key: 'white2x', label: '白底x2' },
+  ];
+
+  // menuOpen: 独立控制菜单显示，选完命令后关闭，避免继续匹配 text
+  const [menuOpen, setMenuOpen] = React.useState(false);
+
+  // 当 text 重新以 / 开头且没有空格时自动打开菜单
+  React.useEffect(() => {
+    if (/^\/\S*$/.test(text)) {
+      setMenuOpen(true);
+    } else {
+      setMenuOpen(false);
+    }
   }, [text]);
 
+  // slashQuery 只在菜单打开时有效
+  const slashQuery = menuOpen ? (text.match(/^\/\S*/) || [null])[0] : null;
+
   const pickCommand = (c) => {
-    setText(c.cmd + ' ');
-    setTimeout(() => taRef.current?.focus(), 0);
+    const val = c.cmd + ' ';
+    setText(val);
+    setMenuOpen(false);  // 选完立刻关闭菜单
+    // 等 React 更新 DOM 后，把光标移到末尾
+    setTimeout(() => {
+      const el = taRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(val.length, val.length);
+    }, 0);
+  };
+
+  const handleSend = () => {
+    if (!text.trim() || isLoading) return;
+    const msg = text.trim();
+    setText('');
+    onSend(msg);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  const handleFileSelect = (e) => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+    const file = fileList[0];
+    const fileObj = { name: file.name, size: formatFileSize(file.size), file: file, imageType };
+    setFiles(prev => [...prev, fileObj]);
+    // Call onParseTable if provided
+    if (onParseTable) {
+      onParseTable(file, file.name, imageType).catch(err => {
+        console.error('Parse table error:', err);
+      });
+    }
+    // Reset input
+    e.target.value = '';
+  };
+
+  const formatFileSize = (bytes) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
 
   return (
@@ -399,42 +586,57 @@ const Composer = () => {
     }}>
       <div style={{
         borderRadius: 12,
-        border: slashQuery ? '1px solid var(--accent)' : '1px solid var(--line)',
+        border: menuOpen ? '1px solid var(--accent)' : '1px solid var(--line)',
         background: 'var(--panel-2)',
         padding: 10,
         display: 'flex', flexDirection: 'column', gap: 8,
-        boxShadow: slashQuery ? '0 0 0 4px var(--accent-soft), var(--shadow-1)' : 'var(--shadow-1)',
+        boxShadow: menuOpen ? '0 0 0 4px var(--accent-soft), var(--shadow-1)' : 'var(--shadow-1)',
         transition: 'box-shadow 150ms, border-color 150ms',
         position: 'relative',
       }}>
-        {slashQuery && (
-          <SlashMenu query={slashQuery} onPick={pickCommand} onClose={() => setText('')}/>
-        )}
-        {files.length > 0 && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {files.map((f, i) => (
-              <div key={i} style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '4px 6px 4px 8px', borderRadius: 6,
-                background: 'var(--panel)', border: '1px solid var(--line-2)',
-                fontSize: 11,
-              }}>
-                <I.file size={11} style={{ color: 'var(--ink-3)' }}/>
-                <span style={{ fontWeight: 500 }}>{f.name}</span>
-                <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 9.5 }}>{f.size}</span>
-                <button onClick={() => setFiles(fs => fs.filter((_, j) => j !== i))} style={{ padding: 2, color: 'var(--ink-3)' }}>
-                  <I.close size={11}/>
-                </button>
-              </div>
-            ))}
-          </div>
+        {menuOpen && slashQuery && (
+          <SlashMenu query={slashQuery} onPick={pickCommand} onClose={() => { setText(''); setMenuOpen(false); }}/>
         )}
 
+        {/* Image type selector */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          {IMAGE_TYPES.map(t => (
+            <button
+              key={t.key}
+              onClick={() => setImageType(t.key)}
+              style={{
+                fontSize: 11,
+                padding: '3px 0',
+                background: 'transparent',
+                border: 'none',
+                color: imageType === t.key ? 'var(--ink)' : 'var(--ink-3)',
+                cursor: 'pointer',
+                position: 'relative',
+              }}
+            >
+              {t.label}
+              {imageType === t.key && (
+                <div style={{
+                  position: 'absolute',
+                  bottom: -2,
+                  left: 0,
+                  right: 0,
+                  height: 2,
+                  background: 'var(--accent)',
+                  borderRadius: 1,
+                }}/>
+              )}
+            </button>
+          ))}
+        </div>
+
         <textarea
+          className="composer-textarea"
           ref={taRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Ask Loom, or type / for commands…"
+          onKeyDown={handleKeyDown}
+          placeholder="在这里开启对话吧，或者按/唤起指令菜单"
           rows={2}
           style={{
             border: 'none', outline: 'none', resize: 'none',
@@ -443,21 +645,23 @@ const Composer = () => {
             fontFamily: 'inherit',
           }}
         />
+        <style>{`.composer-textarea::placeholder { color: var(--ink-3); font-style: italic; font-size: 12px; opacity: 1; }`}</style>
 
-        {!slashQuery && (
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: -2 }}>
-            {['/开始生图', '/分析素材', '/导出PNG'].map(s => (
-              <button key={s} onClick={() => { const c = SLASH_COMMANDS.find(x => x.cn === s.slice(1) || x.cmd === s); if (c) pickCommand(c); }} style={{
-                fontSize: 10, padding: '2px 7px', borderRadius: 99,
-                color: 'var(--accent-ink)', background: 'var(--accent-soft)',
-                fontFamily: 'JetBrains Mono, monospace',
-              }}>{s}</button>
-            ))}
-          </div>
-        )}
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileSelect}
+          accept=".csv,.xlsx,.xls"
+          style={{ display: 'none' }}
+        />
 
+        
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <button style={{ padding: 6, borderRadius: 6, color: 'var(--ink-2)' }} title="Attach file">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            style={{ padding: 6, borderRadius: 6, color: 'var(--ink-2)', cursor: 'pointer' }}
+            title="Attach file"
+          >
             <I.paperclip size={14}/>
           </button>
           <button style={{ padding: 6, borderRadius: 6, color: 'var(--ink-2)' }} title="Insert image">
@@ -470,13 +674,20 @@ const Composer = () => {
           <div style={{ flex: 1 }}/>
 
 
-          <button style={{
-            width: 30, height: 30, borderRadius: 8,
-            background: text || files.length ? 'var(--ink)' : 'var(--line)',
-            color: text || files.length ? 'white' : 'var(--ink-3)',
-            display: 'grid', placeItems: 'center',
-          }}>
-            <I.arrowUp size={14} stroke={2.2}/>
+          <button
+            onClick={handleSend}
+            style={{
+              width: 30, height: 30, borderRadius: 8,
+              background: (text || files.length) && !isLoading ? 'var(--ink)' : 'var(--line)',
+              color: (text || files.length) && !isLoading ? 'white' : 'var(--ink-3)',
+              display: 'grid', placeItems: 'center',
+              cursor: (text || files.length) && !isLoading ? 'pointer' : 'default',
+            }}>
+            {isLoading ? (
+              <div style={{ width: 14, height: 14, borderRadius: 99, border: '2px solid var(--ink-3)', borderRightColor: 'transparent', animation: 'spin 0.7s linear infinite' }}/>
+            ) : (
+              <I.arrowUp size={14} stroke={2.2}/>
+            )}
           </button>
         </div>
       </div>
@@ -486,9 +697,377 @@ const Composer = () => {
   );
 };
 
+// ---------- History Dropdown ----------
+
+console.log('[History] Component definition starting');
+const HistoryDropdown = () => {
+  console.log('[History] Component rendering');
+  const [open, setOpen] = React.useState(false);
+  const [jobs, setJobs] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const ref = React.useRef(null);
+
+  React.useEffect(() => {
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    if (open) {
+      document.addEventListener('mousedown', handler);
+    }
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  // Attach native click listener to button
+  React.useEffect(() => {
+    const btn = ref.current?.querySelector('.history-btn');
+    if (btn) {
+      const nativeHandler = (e) => {
+        console.log('[History] NATIVE CLICK!');
+        setOpen(o => {
+          if (!o) loadHistory();
+          return !o;
+        });
+      };
+      btn.addEventListener('click', nativeHandler);
+      return () => btn.removeEventListener('click', nativeHandler);
+    }
+  }, []);
+
+  const loadHistory = async () => {
+    console.log('[History] loadHistory called');
+    setLoading(true);
+    setJobs([]);
+    try {
+      console.log('[History] Calling listComposes API, window.API:', !!window.API);
+      const data = await window.API.listComposes(20);
+      console.log('[History] Received data:', data);
+      setJobs(data || []);
+    } catch (e) {
+      console.error('[History] Failed to load history:', e);
+    }
+    setLoading(false);
+  };
+
+  const handleClick = (e) => {
+    e.stopPropagation();
+    console.log('[History] handleClick called, open was:', open);
+    try {
+      if (!open) {
+        loadHistory();
+      }
+      setOpen(!open);
+    } catch (err) {
+      console.error('[History] Error in handleClick:', err);
+    }
+  };
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }} onClick={() => console.log('[History] DIV CLICK!')}>
+      <button
+        className="history-btn"
+        type="button"
+        onClick={handleClick}
+        onMouseDown={() => console.log('[History] MOUSE DOWN!')}
+        style={{ padding: '5px 10px', borderRadius: 5, color: 'var(--ink)', background: 'var(--panel-2)', border: '1px solid var(--line)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        title="历史记录"
+      >
+        <span style={{ display: 'flex', fontSize: 12, fontWeight: 600 }}>历史</span>
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute',
+          top: '100%',
+          right: 0,
+          marginTop: 4,
+          width: 300,
+          maxHeight: 360,
+          overflowY: 'auto',
+          background: 'var(--panel)',
+          border: '1px solid var(--line)',
+          borderRadius: 8,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+          zIndex: 1000,
+        }}>
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--line)', fontSize: 11, fontWeight: 600, color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>历史记录</span>
+            <button
+              onClick={(e) => { e.stopPropagation(); loadHistory(); }}
+              style={{ padding: 2, borderRadius: 3, color: 'var(--ink-3)', cursor: 'pointer' }}
+              title="刷新"
+            >
+              <I.refresh size={11}/>
+            </button>
+          </div>
+          {loading && (
+            <div style={{ padding: 16, textAlign: 'center', color: 'var(--ink-3)', fontSize: 11 }}>
+              加载中...
+            </div>
+          )}
+          {!loading && jobs.length === 0 && (
+            <div style={{ padding: 24, textAlign: 'center', color: 'var(--ink-3)', fontSize: 11 }}>
+              暂无历史记录
+            </div>
+          )}
+          {!loading && jobs.map(job => (
+            <div
+              key={job.id}
+              onClick={() => {
+                if (job.status === 'done') {
+                  const imgUrl = window.API.getImageUrl(job.id);
+                  window.open(imgUrl, '_blank');
+                }
+                setOpen(false);
+              }}
+              style={{
+                padding: '10px 12px',
+                borderBottom: '1px solid var(--line-2)',
+                cursor: job.status === 'done' ? 'pointer' : 'default',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <div style={{
+                  width: 8, height: 8, borderRadius: 99,
+                  background: job.status === 'done' ? 'var(--ok)' : job.status === 'failed' ? 'var(--warn)' : 'var(--accent)',
+                  flexShrink: 0,
+                }}/>
+                <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--ink)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {job.request?.template_frame_id?.slice(0, 24) || '未知模板'}
+                </span>
+                <span style={{ fontSize: 9.5, color: job.status === 'done' ? 'var(--ok)' : job.status === 'failed' ? 'var(--warn)' : 'var(--ink-3)' }}>
+                  {job.status === 'done' ? '完成' : job.status === 'failed' ? '失败' : '进行中'}
+                </span>
+              </div>
+              <div style={{ fontSize: 9.5, color: 'var(--ink-3)', fontFamily: 'monospace' }}>
+                {job.created_at ? new Date(job.created_at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
+                {job.progress && job.progress.length > 0 && <span style={{ marginLeft: 8 }}>· {job.progress.length} 步</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ---------- Main ----------
 
-const Chat = ({ state }) => {
+console.log('[Main] Chat component definition');
+const Chat = ({ state, template, onComposeComplete }) => {
+  const [messages, setMessages] = React.useState([]);
+  const [isLoading, setIsLoading] = React.useState(false);
+
+  // Extract required fields from template slots (e.g., "slot/product_1/name" -> "name")
+  const getTemplateFields = React.useCallback((t) => {
+    if (!t || !t.slots || t.slots.length === 0) return ['name'];
+    const fields = new Set();
+    t.slots.forEach(s => {
+      const parts = (s.name || '').split('/');
+      if (parts.length >= 3) {
+        fields.add(parts[2]); // e.g., "name" from "slot/product_1/name"
+      }
+    });
+    const result = Array.from(fields);
+    return result.length > 0 ? result : ['name'];
+  }, []);
+
+  const templateFields = getTemplateFields(template);
+
+  const handleSend = React.useCallback(async (text) => {
+    if (!text.trim() || isLoading) return;
+
+    // ── 特殊品流程 ────────────────────────────────────────────────────────────
+    if (text.trimStart().startsWith('/特殊品')) {
+      setMessages(msgs => [...msgs, { who: 'user', text }]);
+      setIsLoading(true);
+      // 先插入 generating 消息占位
+      let specialMsgIdx = null;
+      setMessages(msgs => {
+        specialMsgIdx = msgs.length;
+        return [...msgs, {
+          who: 'ai', type: 'generating',
+          logs: ['正在启动特殊品合成…'],
+          status: 'running', meta: 'Loom · 特殊品',
+        }];
+      });
+      try {
+        const args = text.replace(/^\/特殊品\s*/, '').trim();
+        const parts = args.split('，').map(s => s.trim());
+        const sku = parts[0] || '';
+        const fields = { name: parts[1] || '', time: parts[2] || '' };
+        if (!sku) throw new Error('请提供 SKU，格式：/特殊品 SKU，文案，时间文案');
+        if (!template) throw new Error('请先在左侧选择特殊品模板');
+
+        const frameIds = template.frames ? template.frames.map(f => f.id) : [template.id];
+        const fileId = template.file_id || (template.frames && template.frames[0]?.file_id);
+        const pageId = template.page_id || (template.frames && template.frames[0]?.page_id);
+
+        const resp = await fetch('/special-compose', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ file_id: fileId, page_id: pageId, frame_ids: frameIds, sku, fields, export_scale: 2.0 }),
+        });
+        if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || resp.status); }
+        const job = await resp.json();
+
+        // 轮询 + 实时更新日志
+        let done = false;
+        for (let i = 0; i < 120 && !done; i++) {
+          await new Promise(r => setTimeout(r, 1500));
+          const s = await fetch(`/special-compose/${job.id}`).then(r => r.json());
+          setMessages(msgs => msgs.map((m, idx) => {
+            if (idx !== specialMsgIdx) return m;
+            return { ...m, logs: s.progress || [], status: s.status };
+          }));
+          if (s.status === 'done') {
+            // 用副本 file_id 走同一套 thumbnail 端点（与模板预览同路径）
+            // refresh=true 跳过缓存，先试内部缩略图，降级走 export_frame
+            const frameIds = s.result_frame_ids || [];
+            const workFileId = s.penpot_file_id;
+            const workPageId = s.penpot_page_id || s.request?.page_id || job.request?.page_id;
+            const urls = frameIds.length > 0 && workFileId
+              ? frameIds.map(fid => window.API.getTemplateThumbnailUrl(fid, workPageId, workFileId))
+              : (s.result_paths || []).map(p => `/output/${p.split(/[\\/]/).pop()}`);
+            setMessages(msgs => msgs.map((m, idx) => {
+              if (idx !== specialMsgIdx) return m;
+              return { ...m, status: 'done', specialUrls: urls, penpotUrl: s.penpot_edit_url };
+            }));
+            // 把所有结果图渲染到画布
+            if (onComposeComplete && urls.length > 0) {
+              onComposeComplete(null, s.penpot_edit_url, urls);
+            }
+            done = true;
+          } else if (s.status === 'failed') {
+            throw new Error(s.error || '合成失败');
+          }
+        }
+        if (!done) throw new Error('合成超时，请检查后端日志');
+      } catch (e) {
+        setMessages(msgs => msgs.map((m, idx) => {
+          if (idx !== specialMsgIdx) return m;
+          return { ...m, status: 'failed', error: e.message };
+        }));
+      }
+      setIsLoading(false);
+      return;
+    }
+
+    // ── 普通消息 ─────────────────────────────────────────────────────────────
+    setIsLoading(true);
+    // Add user message
+    setMessages(msgs => [...msgs, { who: 'user', text }]);
+    try {
+      const reply = await window.API.chatWithAI(
+        [{ role: 'user', content: text }],
+        {}
+      );
+      setMessages(msgs => [...msgs, { who: 'ai', text: reply || '...', meta: 'Loom' }]);
+    } catch (e) {
+      setMessages(msgs => [...msgs, { who: 'ai', text: '错误: ' + (e.message || '未知错误'), meta: '错误' }]);
+    }
+    setIsLoading(false);
+  }, [isLoading, template]);
+
+  const handleParseTable = React.useCallback(async (file, filename, imageType) => {
+    // Add user message showing file was uploaded
+    setMessages(msgs => [...msgs, { who: 'user', text: '已上传 ' + filename, file: filename, imageType: imageType }]);
+    setIsLoading(true);
+    try {
+      const result = await window.API.parseTable(file, templateFields, imageType);
+      // Add AI message with parse result
+      setMessages(msgs => [...msgs, {
+        who: 'ai',
+        type: 'parse-result',
+        data: result,
+        meta: '解析了 ' + result.products.length + ' 个产品',
+        fields: templateFields
+      }]);
+    } catch (e) {
+      setMessages(msgs => [...msgs, { who: 'ai', text: '解析错误: ' + (e.message || '未知错误'), meta: '错误' }]);
+    }
+    setIsLoading(false);
+  }, [isLoading, templateFields]);
+
+  const handleCompose = React.useCallback(async (template, parseResult) => {
+    if (!template || !parseResult) return;
+    // Build slots from products with image_path
+    const slots = {};
+    parseResult.products.forEach((p, i) => {
+      if (p.image_path) {
+        slots['product_' + (i + 1)] = {
+          image_path: p.image_path,
+          name: p.name || null,
+          price: p.price || null,
+          tag: p.tag || null,
+          spec: p.spec || null,
+        };
+      }
+    });
+    if (Object.keys(slots).length === 0) return;
+    setIsLoading(true);
+    // Add generating message
+    let msgId = null;
+    setMessages(msgs => {
+      msgId = msgs.length;
+      return [...msgs, {
+        who: 'ai',
+        type: 'generating',
+        jobId: null,
+        logs: ['正在启动合成任务...'],
+        meta: '生成中'
+      }];
+    });
+    try {
+      const job = await window.API.createCompose({
+        file_id: template.file_id,
+        template_frame_id: template.id,
+        page_id: template.page_id,
+        slots: slots,
+        export_scale: 2.0,
+      });
+      // Poll for status
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await window.API.getCompose(job.id);
+          // Update logs
+          setMessages(msgs => msgs.map((m, i) => {
+            if (i !== msgId) return m;
+            return {
+              ...m,
+              jobId: job.id,
+              status: status.status,
+              logs: status.progress || [],
+              resultPath: status.result_path,
+              error: status.error,
+            };
+          }));
+          // Stop polling if done or failed
+          if (status.status === 'done' || status.status === 'failed') {
+            clearInterval(pollInterval);
+            setIsLoading(false);
+            if (status.status === 'done' && onComposeComplete) {
+              onComposeComplete(job.id, status.penpot_edit_url);
+            }
+          }
+        } catch (e) {
+          clearInterval(pollInterval);
+          setIsLoading(false);
+          setMessages(msgs => msgs.map((m, i) => {
+            if (i !== msgId) return m;
+            return { ...m, status: 'failed', error: e.message };
+          }));
+        }
+      }, 1000);
+    } catch (e) {
+      setMessages(msgs => msgs.map((m, i) => {
+        if (i !== msgId) return m;
+        return { ...m, status: 'failed', error: e.message };
+      }));
+      setIsLoading(false);
+    }
+  }, [templateFields]);
+
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', height: '100%',
@@ -505,24 +1084,23 @@ const Chat = ({ state }) => {
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           <span style={{
             width: 7, height: 7, borderRadius: 99,
-            background: state === 'generating' ? 'var(--accent)' : 'var(--ok)',
-            animation: state === 'generating' ? 'pulse 1.2s ease-in-out infinite' : 'none',
+            background: isLoading ? 'var(--accent)' : 'var(--ok)',
+            animation: isLoading ? 'pulse 1.2s ease-in-out infinite' : 'none',
           }}/>
-          <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>Loom</span>
+          <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>Ai助手</span>
           <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>
-            {state === 'generating' ? 'working…' : state === 'empty' ? 'ready' : 'suggested direction'}
+            {isLoading ? 'working…' : messages.length === 0 ? 'ready' : messages.length + ' messages'}
           </span>
         </div>
         <div style={{ flex: 1 }}/>
-        <button style={{ padding: 5, borderRadius: 5, color: 'var(--ink-3)' }} title="History"><I.layers size={13}/></button>
-        <button style={{ padding: 5, borderRadius: 5, color: 'var(--ink-3)' }} title="More"><I.more size={13}/></button>
       </div>
 
-      {state === 'empty' && <ChatEmpty/>}
+      {state === 'empty' && messages.length === 0 && <ChatEmpty/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading}/>}
 
-      <Composer/>
+      <Composer onSend={handleSend} onParseTable={handleParseTable} isLoading={isLoading}/>
     </div>
   );
 };

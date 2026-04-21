@@ -1,19 +1,19 @@
 // Slash commands, parse table, AI message list — additions to the chat surface.
 
 const SLASH_COMMANDS = [
-  { cmd: '/generate',   cn: '开始生图',   desc: 'Generate variations from current parameters', icon: 'zap',     shortcut: '⌘⏎',  group: 'Generation' },
-  { cmd: '/regenerate', cn: '重新生成',   desc: 'Re-run the last prompt with a new seed',       icon: 'refresh', group: 'Generation' },
-  { cmd: '/upscale',    cn: '放大',       desc: 'Upscale selected option to 2K / 4K',           icon: 'layers',  group: 'Generation' },
-  { cmd: '/variations', cn: '出更多版本', desc: 'Produce 4 more variants of the selected one',  icon: 'grid',    group: 'Generation' },
+  { cmd: '/generate',   cn: '开始生图',   desc: 'Generate variations from current parameters', icon: 'zap',     shortcut: '⌘⏎',  group: 'Generation', available: true },
+  { cmd: '/regenerate', cn: '重新生成',   desc: 'Re-run the last prompt with a new seed',       icon: 'refresh', group: 'Generation', available: true },
+  { cmd: '/upscale',    cn: '放大',       desc: 'Upscale selected option to 2K / 4K',           icon: 'layers',  group: 'Generation', available: true },
+  { cmd: '/特殊品',    cn: '特殊品合成', desc: '多画板特殊品合成，格式：/特殊品 SKU，文案，时间', icon: 'grid', group: 'Generation', available: true },
 
-  { cmd: '/analyze',    cn: '分析素材',   desc: 'Parse an uploaded image, brief, or CSV',       icon: 'eye',     group: 'Tools' },
-  { cmd: '/palette',    cn: '提取配色',   desc: 'Extract a palette from a reference',            icon: 'palette', group: 'Tools' },
-  { cmd: '/resize',     cn: '换尺寸',     desc: 'Reflow the design into a new ratio',            icon: 'dims',    group: 'Tools' },
-  { cmd: '/copy',       cn: '换文案',     desc: 'Rewrite on-image copy',                         icon: 'type',    group: 'Tools' },
+  { cmd: '/analyze',    cn: '分析素材',   desc: 'Parse an uploaded image, brief, or CSV',       icon: 'eye',     group: 'Tools', available: true },
+  { cmd: '/palette',    cn: '提取配色',   desc: 'Extract a palette from a reference',            icon: 'palette', group: 'Tools', available: false },
+  { cmd: '/resize',     cn: '换尺寸',     desc: 'Reflow the design into a new ratio',            icon: 'dims',    group: 'Tools', available: false },
+  { cmd: '/copy',       cn: '换文案',     desc: 'Rewrite on-image copy',                         icon: 'type',    group: 'Tools', available: false },
 
-  { cmd: '/export-png', cn: '导出PNG',    desc: 'Export selected option as PNG',                 icon: 'download', group: 'Export' },
-  { cmd: '/export-psd', cn: '导出PSD',    desc: 'Export with editable layers',                   icon: 'download', group: 'Export' },
-  { cmd: '/share',      cn: '分享链接',   desc: 'Generate a review link',                        icon: 'share',    group: 'Export' },
+  { cmd: '/export-png', cn: '导出PNG',    desc: 'Export selected option as PNG',                 icon: 'download', group: 'Export', available: true },
+  { cmd: '/export-psd', cn: '导出PSD',    desc: 'Export with editable layers',                   icon: 'download', group: 'Export', available: false },
+  { cmd: '/share',      cn: '分享链接',   desc: 'Generate a review link',                        icon: 'share',    group: 'Export', available: false },
 ];
 
 const SlashMenu = ({ query, onPick, onClose }) => {
@@ -95,6 +95,7 @@ const SlashMenu = ({ query, onPick, onClose }) => {
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                       <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: active ? 'var(--accent-ink)' : 'var(--ink)' }}>{c.cmd}</span>
                       <span style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>{c.cn}</span>
+                      {c.available && <span title="Available" style={{ width: 6, height: 6, borderRadius: 99, background: '#22c55e', flexShrink: 0, marginLeft: 2 }} />}
                     </div>
                     <div style={{ fontSize: 10.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.desc}</div>
                   </div>

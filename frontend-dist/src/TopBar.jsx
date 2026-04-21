@@ -68,7 +68,7 @@ const TopBar = () => {
             <path d="M4 20 V6 M4 6 C10 6, 10 14, 16 14 C22 14, 22 6, 20 6"/>
           </svg>
         </div>
-        <span className="serif" style={{ fontSize: 18, letterSpacing: '-0.01em' }}>Loom</span>
+        <span className="serif" style={{ fontSize: 18, letterSpacing: '-0.01em' }}>Designflow</span>
         <span className="mono" style={{ fontSize: 9, color: 'var(--ink-3)', padding: '2px 5px', borderRadius: 3, background: 'var(--panel-2)', border: '1px solid var(--line)' }}>BETA</span>
       </div>
 

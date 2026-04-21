@@ -573,11 +573,12 @@ const I = {
   chevronRight: (p) => <Icon d="m9 6 6 6-6 6" {...p}/>,
   file: (p) => <Icon d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6ZM14 2v6h6" {...p}/>,
   dot: (p) => <Icon {...p}><circle cx="12" cy="12" r="3" fill="currentColor"/></Icon>,
+  edit: (p) => <Icon d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z" {...p}/>,
+  externalLink: (p) => <Icon d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3" {...p}/>,
 };
 
 window.I = I;
 window.Icon = Icon;
-
 </script>
 <script type="text/babel">
 // Striped / gradient placeholder imagery. No hand-drawn illustrations.
@@ -631,7 +632,6 @@ const Swatch = ({ color, label }) => (
 
 window.Stripe = Stripe;
 window.Swatch = Swatch;
-
 </script>
 <script type="text/babel">
 // Polls /health every 30s and renders a status dot + label
@@ -733,7 +733,6 @@ const TopBar = () => {
 };
 
 window.TopBar = TopBar;
-
 </script>
 <script type="text/babel">
 const CATS = ['All', 'Social', 'E-commerce', 'Brand', 'Print', 'Web', 'Packaging'];
@@ -802,6 +801,7 @@ const TemplateCard = function(_ref) {
       React.createElement(LazyThumb, { t: t }),
       React.createElement('div', { style: { padding: '6px 2px 2px', display: 'flex', alignItems: 'center', gap: 5 } },
         React.createElement('div', { style: { fontSize: 11.5, fontWeight: 500, color: 'var(--ink)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
+        t.frames && t.frames.length > 1 && React.createElement('span', { className: 'mono', style: { fontSize: 8, color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 4px', borderRadius: 3, letterSpacing: '0.04em' } }, t.frames.length + '板'),
         t.pro && React.createElement('span', { className: 'mono', style: { fontSize: 8, color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 4px', borderRadius: 3, letterSpacing: '0.04em' } }, 'PRO')
       ),
       active && React.createElement('div', {
@@ -840,11 +840,46 @@ var TemplatePanel = function(_ref2) {
     setLoadErr(null);
     window.API.fetchTemplates()
       .then(function(data) {
-        var enriched = (data || []).map(function(t) {
+        var raw = (data || []).map(function(t) {
           return Object.assign({}, t, deriveTemplateMeta(t));
         });
-        setTemplates(enriched);
-        window.TEMPLATES = enriched;
+
+        // ── 按 group_name 聚合，同名画板合并为一个模板组 ────────────────────
+        // group_name 由后端 parse_frames 填充：名称含 "/" 取左边，否则等于 name
+        var groupMap = {};
+        var groupOrder = [];
+        raw.forEach(function(t) {
+          var gname = t.group_name || t.name;
+          if (!groupMap[gname]) {
+            groupMap[gname] = {
+              // 代表画板用第一个 frame 的属性（缩略图、id 兼容）
+              id: t.id,
+              name: gname,
+              group_name: gname,
+              page_id: t.page_id,
+              file_id: t.file_id,
+              width: t.width,
+              height: t.height,
+              ratio: t.ratio,
+              tone: t.tone,
+              tag: t.tag,
+              cat: t.cat,
+              slots: t.slots,
+              // frames 数组含该组所有画板，供特殊品合成等多画板场景使用
+              frames: [],
+            };
+            groupOrder.push(gname);
+          }
+          groupMap[gname].frames.push(t);
+          // 累加所有 slots 以便正确计算格数
+          if (t.slots && t.slots.length > groupMap[gname].slots.length) {
+            groupMap[gname].slots = t.slots;
+          }
+        });
+
+        var groups = groupOrder.map(function(gname) { return groupMap[gname]; });
+        setTemplates(groups);
+        window.TEMPLATES = groups;
       })
       .catch(function(err) {
         console.error('[TemplatePanel] fetchTemplates failed:', err);
@@ -942,10 +977,10 @@ var TemplatePanel = function(_ref2) {
         !loading && !loadErr && filtered.length > 0 && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 10px 56px' } },
           React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 } },
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-              colA.map(function(t) { return React.createElement(TemplateCard, { key: t.id, t: t, active: activeId === t.id, onClick: function() { return onSelect(t); } }); })
+              colA.map(function(t) { return React.createElement(TemplateCard, { key: t.group_name || t.id, t: t, active: activeId === (t.group_name || t.id), onClick: function() { return onSelect(t); } }); })
             ),
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-              colB.map(function(t) { return React.createElement(TemplateCard, { key: t.id, t: t, active: activeId === t.id, onClick: function() { return onSelect(t); } }); })
+              colB.map(function(t) { return React.createElement(TemplateCard, { key: t.group_name || t.id, t: t, active: activeId === (t.group_name || t.id), onClick: function() { return onSelect(t); } }); })
             )
           )
         )
@@ -1046,14 +1081,15 @@ var StatusFooter = function(_ref3) {
 
 window.TemplatePanel = TemplatePanel;
 window.TEMPLATES = TEMPLATES;
-
 </script>
 
 <script type="text/babel">
 // Main canvas — now simplified to just show the selected template preview.
 
-const Canvas = ({ template, resultImage }) => {
+const Canvas = ({ template, resultImages }) => {
   const t = template;
+  // resultImages: null | string[] — array of image URLs to display
+  const hasResult = resultImages && resultImages.length > 0;
 
   return (
     <div style={{
@@ -1070,10 +1106,13 @@ const Canvas = ({ template, resultImage }) => {
         background: 'var(--panel)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-          {resultImage ? (
+          {hasResult ? (
             <>
               <span className="mono" style={{ color: 'var(--ok)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Result</span>
               <span style={{ color: 'var(--ink)', fontWeight: 500 }}>生成完成</span>
+              {resultImages.length > 1 && (
+                <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', padding: '2px 6px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line-2)' }}>{resultImages.length}张</span>
+              )}
             </>
           ) : (
             <>
@@ -1099,63 +1138,75 @@ const Canvas = ({ template, resultImage }) => {
 
       {/* Canvas stage */}
       <div style={{
-        flex: 1, minHeight: 0, overflow: 'hidden',
+        flex: 1, minHeight: 0, overflow: hasResult ? 'auto' : 'hidden',
         position: 'relative',
-        background: `
-          radial-gradient(circle at 1px 1px, oklch(0.9 0.005 260) 1px, transparent 0)
-        `,
+        background: `radial-gradient(circle at 1px 1px, oklch(0.9 0.005 260) 1px, transparent 0)`,
         backgroundSize: '20px 20px',
         backgroundColor: 'oklch(0.98 0.003 260)',
       }}>
-        {resultImage ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: 20, position: 'relative' }}>
-            <img src={resultImage} alt="Generated result" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.15)' }}/>
-            {/* Action buttons overlay */}
-            <div style={{
-              position: 'absolute',
-              bottom: 24,
-              left: '50%',
-              transform: 'translateX(-50%)',
-              display: 'flex',
-              gap: 8,
-              padding: '8px 12px',
-              background: 'rgba(255,255,255,0.95)',
-              borderRadius: 8,
-              boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-            }}>
-              {window.resultPenpotUrl && (
-                <button
-                  onClick={() => window.open(window.resultPenpotUrl, '_blank')}
-                  style={{
-                    fontSize: 12,
-                    padding: '6px 14px',
-                    borderRadius: 6,
-                    background: 'var(--accent)',
-                    color: 'white',
-                    border: 'none',
-                    cursor: 'pointer',
-                  }}
-                >
-                  在Penpot中编辑
-                </button>
-              )}
-              <button
-                onClick={() => window.open(resultImage, '_blank')}
-                style={{
-                  fontSize: 12,
-                  padding: '6px 14px',
-                  borderRadius: 6,
-                  background: 'var(--ink)',
-                  color: 'white',
-                  border: 'none',
-                  cursor: 'pointer',
-                }}
-              >
-                下载图片
-              </button>
-            </div>
-          </div>
+        {hasResult ? (
+          <ResultGrid images={resultImages}/>
         ) : t ? <TemplatePreview t={t}/> : <EmptyCanvas/>}
+      </div>
+    </div>
+  );
+};
+
+// 结果展示：多张图横排，底部操作栏
+const ResultGrid = ({ images }) => {
+  const single = images.length === 1;
+  return (
+    <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: single ? 'center' : 'flex-start', padding: 24, gap: 16 }}>
+      {/* 图片区 */}
+      <div style={{
+        display: 'flex', flexDirection: 'row', gap: 16,
+        flexWrap: 'wrap', justifyContent: 'center', alignItems: 'flex-start',
+      }}>
+        {images.map((url, i) => (
+          <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+            <img
+              src={url}
+              alt={'Result ' + (i + 1)}
+              style={{
+                maxWidth: single ? 560 : 280,
+                maxHeight: single ? 560 : 360,
+                width: 'auto', height: 'auto',
+                borderRadius: 8,
+                boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+                display: 'block',
+              }}
+            />
+            {!single && (
+              <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>画板 {i + 1}</span>
+            )}
+          </div>
+        ))}
+      </div>
+      {/* 操作栏 */}
+      <div style={{
+        display: 'flex', gap: 8, padding: '8px 12px',
+        background: 'rgba(255,255,255,0.95)',
+        borderRadius: 8,
+        boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+        flexWrap: 'wrap', justifyContent: 'center',
+      }}>
+        {window.resultPenpotUrl && (
+          <button
+            onClick={() => window.open(window.resultPenpotUrl, '_blank')}
+            style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: 'var(--accent)', color: 'white', border: 'none', cursor: 'pointer' }}
+          >
+            在Penpot中编辑
+          </button>
+        )}
+        {images.map((url, i) => (
+          <button
+            key={i}
+            onClick={() => window.open(url, '_blank')}
+            style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: 'var(--ink)', color: 'white', border: 'none', cursor: 'pointer' }}
+          >
+            {images.length === 1 ? '下载图片' : `下载图${i + 1}`}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -1176,6 +1227,79 @@ const ratioToSize = (ratio, maxW, maxH) => {
   return [Math.round(w), Math.round(h)];
 };
 
+// 从 API base url 推导 Penpot view URL
+const getPenpotViewUrl = (fileId, pageId, frameId) => {
+  // Penpot view-only 路由：/#/view/file-id/page-id?frame-id=xxx
+  const base = (window.API && window.API.BASE) || 'http://localhost:8000';
+  // Penpot 默认跑在 9001，API 跑在 8000，尝试从 hostname 拼出 penpot 地址
+  let penpotOrigin;
+  try {
+    const u = new URL(base);
+    penpotOrigin = u.protocol + '//' + u.hostname + ':9001';
+  } catch(e) {
+    penpotOrigin = 'http://localhost:9001';
+  }
+  return `${penpotOrigin}/#/view/${fileId}/${pageId}?frame-id=${frameId}&section=interactions&index=0`;
+};
+
+// 单个画板的预览卡片（主画布用 iframe 高清预览，缩略图模式用 img）
+const FrameThumb = ({ frame, maxW, maxH, label, hd = false }) => {
+  const ratio = frame.ratio || (frame.width && frame.height ? (frame.width + '/' + frame.height) : '1/1');
+  const [w, h] = ratioToSize(ratio, maxW, maxH);
+
+  // hd 模式：嵌入 Penpot view iframe
+  const [iframeReady, setIframeReady] = React.useState(false);
+  const viewUrl = hd ? getPenpotViewUrl(frame.file_id, frame.page_id, frame.id) : null;
+
+  // 非 hd：用缩略图 img
+  const [src, setSrc] = React.useState(null);
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    if (hd) return;
+    setSrc(null); setFailed(false);
+    setSrc(window.API.getTemplateThumbnailUrl(frame.id, frame.page_id, frame.file_id));
+  }, [frame.id, frame.page_id, frame.file_id, hd]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+      <div style={{
+        position: 'relative', width: w, height: h,
+        background: 'white', borderRadius: 6,
+        boxShadow: '0 30px 60px rgba(20,22,40,0.10), 0 4px 14px rgba(20,22,40,0.06), 0 0 0 1px var(--line)',
+        overflow: 'hidden',
+      }}>
+        {hd ? (
+          <>
+            {!iframeReady && (
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)', fontSize: 11 }}>
+                <div style={{ width: 20, height: 20, borderRadius: 99, border: '2px solid var(--line)', borderTopColor: 'var(--accent)', animation: 'spin 0.8s linear infinite' }}/>
+                <span>加载预览…</span>
+              </div>
+            )}
+            <iframe
+              src={viewUrl}
+              style={{ width: '100%', height: '100%', border: 'none', display: iframeReady ? 'block' : 'none' }}
+              onLoad={() => setIframeReady(true)}
+              title={label || frame.name}
+              sandbox="allow-scripts allow-same-origin"
+            />
+          </>
+        ) : (
+          src && !failed
+            ? React.createElement('img', { src, alt: label, style: { width: '100%', height: '100%', objectFit: 'contain', background: 'white' }, onError: () => setFailed(true) })
+            : React.createElement(Stripe, { ratio: w + '/' + h, tone: 'neutral', seed: frame.id, label: label, tag: ratio.replace('/', ':') })
+        )}
+        {!hd && <Handles/>}
+      </div>
+      {label && (
+        <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          {label}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const TemplatePreview = ({ t }) => {
   const stageRef = React.useRef(null);
   const [box, setBox] = React.useState({ w: 560, h: 480 });
@@ -1190,30 +1314,36 @@ const TemplatePreview = ({ t }) => {
     ro.observe(stageRef.current);
     return () => ro.disconnect();
   }, []);
-  const [w, h] = ratioToSize(t.ratio, box.w, box.h);
+
+  // 多画板：frames 数组；单画板：frames 为空，用 t 本身
+  const frames = (t.frames && t.frames.length > 0) ? t.frames : [t];
+  const isMulti = frames.length > 1;
+
+  // 每个画板的最大尺寸：多画板时按数量缩小
+  const perMaxW = isMulti ? Math.floor((box.w - (frames.length - 1) * 24) / frames.length) : box.w;
+  const perMaxH = isMulti ? box.h - 60 : box.h - 40;
+
   const cat = t.cat;
-  var _React$useState3 = React.useState(null), thumbUrl = _React$useState3[0], setThumbUrl = _React$useState3[1];
-  var _React$useState4 = React.useState(false), thumbFailed = _React$useState4[0], setThumbFailed = _React$useState4[1];
-  React.useEffect(function() {
-    setThumbUrl(null);
-    setThumbFailed(false);
-    var url = window.API.getTemplateThumbnailUrl(t.id, t.page_id, t.file_id);
-    setThumbUrl(url);
-  }, [t.id, t.page_id, t.file_id]);
 
   return (
-    <div ref={stageRef} style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: 24 }}>
+    <div ref={stageRef} style={{ position: 'absolute', inset: 0, overflow: isMulti ? 'auto' : 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-      <div style={{
-        position: 'relative',
-        width: w, height: h,
-        background: 'var(--panel)',
-        borderRadius: 6,
-        boxShadow: '0 30px 60px rgba(20,22,40,0.10), 0 4px 14px rgba(20,22,40,0.06), 0 0 0 1px var(--line)',
-        overflow: 'hidden',
-      }}>
-        {thumbUrl && !thumbFailed ? React.createElement('img', { src: thumbUrl, alt: t.name, style: { width: '100%', height: '100%', objectFit: 'contain' }, onError: function() { setThumbFailed(true); } }) : React.createElement(Stripe, { ratio: w + '/' + h, tone: t.tone, seed: t.id, label: t.name.split(' ')[0], tag: t.tag })}
-        <Handles/>
+      {/* 画板区：单画板居中，多画板横排 */}
+      <div style={{ display: 'flex', flexDirection: 'row', gap: 24, alignItems: 'flex-end', flexWrap: 'wrap', justifyContent: 'center' }}>
+        {frames.map((frame, i) => {
+          const variantLabel = frame.variant || (isMulti ? frame.name : '');
+          return React.createElement(FrameThumb, {
+            key: frame.id,
+            frame: Object.assign({}, frame, {
+              ratio: frame.ratio || (frame.width && frame.height ? (frame.width + '/' + frame.height) : (t.ratio || '1/1')),
+              file_id: frame.file_id || t.file_id,
+            }),
+            maxW: perMaxW,
+            maxH: perMaxH,
+            label: variantLabel,
+            hd: false,
+          });
+        })}
       </div>
 
       {/* Meta strip */}
@@ -1224,10 +1354,15 @@ const TemplatePreview = ({ t }) => {
         border: '1px solid var(--line)',
         boxShadow: 'var(--shadow-1)',
         fontSize: 11,
+        flexWrap: 'wrap', justifyContent: 'center',
       }}>
         <span className="mono" style={{ color: 'var(--ink-3)' }}>{cat}</span>
         <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
-        <span className="mono" style={{ color: 'var(--ink-2)' }}>{t.ratio.replace('/', ':')}</span>
+        <span className="mono" style={{ color: 'var(--ink-2)' }}>{(t.ratio || '').replace('/', ':')}</span>
+        {isMulti && <>
+          <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
+          <span className="mono" style={{ color: 'var(--ink-2)' }}>{frames.length} 个画板</span>
+        </>}
         <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
         <span className="mono" style={{ color: 'var(--ink-2)' }}>{Math.round(t.width)} × {Math.round(t.height)} px</span>
         <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
@@ -1264,7 +1399,6 @@ const EmptyCanvas = () => (
 );
 
 window.Canvas = Canvas;
-
 </script>
 <script type="text/babel">
 // Slash commands, parse table, AI message list — additions to the chat surface.
@@ -1273,7 +1407,7 @@ const SLASH_COMMANDS = [
   { cmd: '/generate',   cn: '开始生图',   desc: 'Generate variations from current parameters', icon: 'zap',     shortcut: '⌘⏎',  group: 'Generation', available: true },
   { cmd: '/regenerate', cn: '重新生成',   desc: 'Re-run the last prompt with a new seed',       icon: 'refresh', group: 'Generation', available: true },
   { cmd: '/upscale',    cn: '放大',       desc: 'Upscale selected option to 2K / 4K',           icon: 'layers',  group: 'Generation', available: true },
-  { cmd: '/variations', cn: '出更多版本', desc: 'Produce 4 more variants of the selected one',  icon: 'grid',    group: 'Generation', available: true },
+  { cmd: '/特殊品',    cn: '特殊品合成', desc: '多画板特殊品合成，格式：/特殊品 SKU，文案，时间', icon: 'grid', group: 'Generation', available: true },
 
   { cmd: '/analyze',    cn: '分析素材',   desc: 'Parse an uploaded image, brief, or CSV',       icon: 'eye',     group: 'Tools', available: true },
   { cmd: '/palette',    cn: '提取配色',   desc: 'Extract a palette from a reference',            icon: 'palette', group: 'Tools', available: false },
@@ -1573,7 +1707,6 @@ window.SLASH_COMMANDS = SLASH_COMMANDS;
 window.ParseTable = ParseTable;
 window.MessageList = MessageList;
 window.CommandEcho = CommandEcho;
-
 </script>
 <script type="text/babel">
 // AI chat column. Three states: empty / generating / returned.
@@ -1790,6 +1923,47 @@ const AnalyzedSubject = () => (
   </div>
 );
 
+// ---------- LogBox（实时滚动日志）----------
+
+const LogBox = ({ logs, running }) => {
+  const bottomRef = React.useRef(null);
+  React.useEffect(() => {
+    if (bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs && logs.length]);
+
+  return (
+    <div style={{ border: '1px solid var(--line)', borderRadius: 8, background: 'var(--panel)', overflow: 'hidden' }}>
+      <div style={{ padding: '7px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 500 }}>进度日志</span>
+        {running && <div style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--accent)', animation: 'pulse 1.2s ease-in-out infinite' }}/>}
+      </div>
+      <div style={{ maxHeight: 140, overflowY: 'auto', padding: '6px 0' }}>
+        {logs.map((log, i) => {
+          const isError = log.includes('失败') || log.includes('Error') || log.includes('error');
+          const isOk = log.includes('完成') || log.includes('就绪') || log.includes('保存');
+          const isPath = log.includes('/') && (log.includes('.png') || log.includes('.py') || log.includes('\\'));
+          const display = isPath ? log.split(/[/\\]/).pop() : log;
+          return (
+            <div key={i} style={{
+              padding: '3px 12px',
+              fontSize: 11.5,
+              fontFamily: 'JetBrains Mono, monospace',
+              color: isError ? 'var(--warn)' : isOk ? 'var(--ok)' : 'var(--ink-2)',
+              display: 'flex', gap: 8, alignItems: 'baseline',
+            }}>
+              <span style={{ color: isError ? 'var(--warn)' : isOk ? 'var(--ok)' : 'var(--accent)', flexShrink: 0 }}>›</span>
+              <span>{display}</span>
+            </div>
+          );
+        })}
+        <div ref={bottomRef}/>
+      </div>
+    </div>
+  );
+};
+
 // ---------- States ----------
 
 const ChatEmpty = () => {
@@ -1992,28 +2166,28 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating }) => {
                   )}
                 </div>
                 {m.logs && m.logs.length > 0 && (
-                  <div style={{ padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--panel)' }}>
-                    <div style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 8, fontWeight: 500 }}>
-                      进度 ({m.logs.length} 步)
-                    </div>
-                    <div style={{ maxHeight: 120, overflowY: 'auto', fontSize: 12, fontFamily: 'JetBrains Mono, monospace' }}>
-                      {m.logs.map((log, i) => {
-                        // Filter out verbose file paths and noisy messages
-                        const isError = log.includes('Error') || log.includes('失败') || log.includes('error');
-                        const isPath = log.includes('/') && (log.includes('.py') || log.includes('.png') || log.includes('\\'));
-                        const cleanLog = isPath ? log.split('/').pop().split('\\').pop() : log;
-                        return (
-                          <div key={i} style={{
-                            padding: '3px 0',
-                            color: isError ? 'var(--warn)' : 'var(--ink)',
-                            borderBottom: '1px solid var(--line-2)',
-                          }}>
-                            <span style={{ color: isError ? 'var(--warn)' : 'var(--accent)', marginRight: 8 }}>›</span>
-                            {cleanLog}
-                          </div>
-                        );
-                      })}
-                    </div>
+                  <LogBox logs={m.logs} running={m.status !== 'done' && m.status !== 'failed'}/>
+                )}
+                {m.status === 'done' && m.specialUrls && m.specialUrls.length > 0 && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
+                    {m.penpotUrl && (
+                      <a href={m.penpotUrl} target="_blank" rel="noreferrer" style={{
+                        fontSize: 11.5, padding: '5px 12px', borderRadius: 6,
+                        background: 'var(--accent)', color: 'white',
+                        textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5,
+                      }}>
+                        <I.edit size={11}/>在Penpot中编辑
+                      </a>
+                    )}
+                    {m.specialUrls.map((url, si) => (
+                      <a key={si} href={url} target="_blank" rel="noreferrer" style={{
+                        fontSize: 11.5, padding: '5px 12px', borderRadius: 6,
+                        background: 'var(--ink)', color: 'white',
+                        textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5,
+                      }}>
+                        <I.download size={11}/>图{si + 1}
+                      </a>
+                    ))}
                   </div>
                 )}
                 {m.status === 'failed' && m.error && (
@@ -2050,15 +2224,32 @@ const Composer = ({ onSend, onParseTable, isLoading }) => {
     { key: 'white2x', label: '白底x2' },
   ];
 
-  // Detect the current /slash token at the start of the input (simple model: line starts with /)
-  const slashQuery = React.useMemo(() => {
-    const m = text.match(/^\/\S*/);
-    return m ? m[0] : null;
+  // menuOpen: 独立控制菜单显示，选完命令后关闭，避免继续匹配 text
+  const [menuOpen, setMenuOpen] = React.useState(false);
+
+  // 当 text 重新以 / 开头且没有空格时自动打开菜单
+  React.useEffect(() => {
+    if (/^\/\S*$/.test(text)) {
+      setMenuOpen(true);
+    } else {
+      setMenuOpen(false);
+    }
   }, [text]);
 
+  // slashQuery 只在菜单打开时有效
+  const slashQuery = menuOpen ? (text.match(/^\/\S*/) || [null])[0] : null;
+
   const pickCommand = (c) => {
-    setText(c.cmd + ' ');
-    setTimeout(() => taRef.current?.focus(), 0);
+    const val = c.cmd + ' ';
+    setText(val);
+    setMenuOpen(false);  // 选完立刻关闭菜单
+    // 等 React 更新 DOM 后，把光标移到末尾
+    setTimeout(() => {
+      const el = taRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(val.length, val.length);
+    }, 0);
   };
 
   const handleSend = () => {
@@ -2106,16 +2297,16 @@ const Composer = ({ onSend, onParseTable, isLoading }) => {
     }}>
       <div style={{
         borderRadius: 12,
-        border: slashQuery ? '1px solid var(--accent)' : '1px solid var(--line)',
+        border: menuOpen ? '1px solid var(--accent)' : '1px solid var(--line)',
         background: 'var(--panel-2)',
         padding: 10,
         display: 'flex', flexDirection: 'column', gap: 8,
-        boxShadow: slashQuery ? '0 0 0 4px var(--accent-soft), var(--shadow-1)' : 'var(--shadow-1)',
+        boxShadow: menuOpen ? '0 0 0 4px var(--accent-soft), var(--shadow-1)' : 'var(--shadow-1)',
         transition: 'box-shadow 150ms, border-color 150ms',
         position: 'relative',
       }}>
-        {slashQuery && (
-          <SlashMenu query={slashQuery} onPick={pickCommand} onClose={() => setText('')}/>
+        {menuOpen && slashQuery && (
+          <SlashMenu query={slashQuery} onPick={pickCommand} onClose={() => { setText(''); setMenuOpen(false); }}/>
         )}
 
         {/* Image type selector */}
@@ -2396,6 +2587,84 @@ const Chat = ({ state, template, onComposeComplete }) => {
 
   const handleSend = React.useCallback(async (text) => {
     if (!text.trim() || isLoading) return;
+
+    // ── 特殊品流程 ────────────────────────────────────────────────────────────
+    if (text.trimStart().startsWith('/特殊品')) {
+      setMessages(msgs => [...msgs, { who: 'user', text }]);
+      setIsLoading(true);
+      // 先插入 generating 消息占位
+      let specialMsgIdx = null;
+      setMessages(msgs => {
+        specialMsgIdx = msgs.length;
+        return [...msgs, {
+          who: 'ai', type: 'generating',
+          logs: ['正在启动特殊品合成…'],
+          status: 'running', meta: 'Loom · 特殊品',
+        }];
+      });
+      try {
+        const args = text.replace(/^\/特殊品\s*/, '').trim();
+        const parts = args.split('，').map(s => s.trim());
+        const sku = parts[0] || '';
+        const fields = { name: parts[1] || '', time: parts[2] || '' };
+        if (!sku) throw new Error('请提供 SKU，格式：/特殊品 SKU，文案，时间文案');
+        if (!template) throw new Error('请先在左侧选择特殊品模板');
+
+        const frameIds = template.frames ? template.frames.map(f => f.id) : [template.id];
+        const fileId = template.file_id || (template.frames && template.frames[0]?.file_id);
+        const pageId = template.page_id || (template.frames && template.frames[0]?.page_id);
+
+        const resp = await fetch('/special-compose', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ file_id: fileId, page_id: pageId, frame_ids: frameIds, sku, fields, export_scale: 2.0 }),
+        });
+        if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || resp.status); }
+        const job = await resp.json();
+
+        // 轮询 + 实时更新日志
+        let done = false;
+        for (let i = 0; i < 120 && !done; i++) {
+          await new Promise(r => setTimeout(r, 1500));
+          const s = await fetch(`/special-compose/${job.id}`).then(r => r.json());
+          setMessages(msgs => msgs.map((m, idx) => {
+            if (idx !== specialMsgIdx) return m;
+            return { ...m, logs: s.progress || [], status: s.status };
+          }));
+          if (s.status === 'done') {
+            // 用副本 file_id 走同一套 thumbnail 端点（与模板预览同路径）
+            // refresh=true 跳过缓存，先试内部缩略图，降级走 export_frame
+            const frameIds = s.result_frame_ids || [];
+            const workFileId = s.penpot_file_id;
+            const workPageId = s.penpot_page_id || s.request?.page_id || job.request?.page_id;
+            const urls = frameIds.length > 0 && workFileId
+              ? frameIds.map(fid => window.API.getTemplateThumbnailUrl(fid, workPageId, workFileId))
+              : (s.result_paths || []).map(p => `/output/${p.split(/[\\/]/).pop()}`);
+            setMessages(msgs => msgs.map((m, idx) => {
+              if (idx !== specialMsgIdx) return m;
+              return { ...m, status: 'done', specialUrls: urls, penpotUrl: s.penpot_edit_url };
+            }));
+            // 把所有结果图渲染到画布
+            if (onComposeComplete && urls.length > 0) {
+              onComposeComplete(null, s.penpot_edit_url, urls);
+            }
+            done = true;
+          } else if (s.status === 'failed') {
+            throw new Error(s.error || '合成失败');
+          }
+        }
+        if (!done) throw new Error('合成超时，请检查后端日志');
+      } catch (e) {
+        setMessages(msgs => msgs.map((m, idx) => {
+          if (idx !== specialMsgIdx) return m;
+          return { ...m, status: 'failed', error: e.message };
+        }));
+      }
+      setIsLoading(false);
+      return;
+    }
+
+    // ── 普通消息 ─────────────────────────────────────────────────────────────
     setIsLoading(true);
     // Add user message
     setMessages(msgs => [...msgs, { who: 'user', text }]);
@@ -2409,7 +2678,7 @@ const Chat = ({ state, template, onComposeComplete }) => {
       setMessages(msgs => [...msgs, { who: 'ai', text: '错误: ' + (e.message || '未知错误'), meta: '错误' }]);
     }
     setIsLoading(false);
-  }, [isLoading]);
+  }, [isLoading, template]);
 
   const handleParseTable = React.useCallback(async (file, filename, imageType) => {
     // Add user message showing file was uploaded
@@ -2548,7 +2817,6 @@ const Chat = ({ state, template, onComposeComplete }) => {
 };
 
 window.Chat = Chat;
-
 </script>
 <script type="text/babel">
 // Tweaks panel — toggle between chat/canvas states
@@ -2617,7 +2885,6 @@ const TweakRow = ({ label, sub, value, options, onChange }) => (
 );
 
 window.Tweaks = Tweaks;
-
 </script>
 <script type="text/babel">
 // App root — wires panels + tweaks + host communication
@@ -2627,7 +2894,7 @@ const App = () => {
   const [tweaks, setTweaks] = React.useState(window.TWEAKS || DEFAULT_TWEAKS);
   const [tweaksVisible, setTweaksVisible] = React.useState(false);
   const [activeTemplate, setActiveTemplate] = React.useState(TEMPLATES[0]);
-  const [resultImage, setResultImage] = React.useState(null);
+  const [resultImages, setResultImages] = React.useState(null); // null=无结果, string=单图, array=多图
 
   const updateTweaks = (partial) => {
     const next = { ...tweaks, ...partial };
@@ -2637,12 +2904,15 @@ const App = () => {
     } catch (e) {}
   };
 
-  const handleComposeComplete = React.useCallback((jobId, penpotEditUrl) => {
-    if (jobId) {
-      setResultImage(window.API.getImageUrl(jobId));
-      if (penpotEditUrl) {
-        window.resultPenpotUrl = penpotEditUrl;
-      }
+  const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls) => {
+    if (directImageUrls) {
+      // 特殊品流程：数组或单个 URL
+      setResultImages(Array.isArray(directImageUrls) ? directImageUrls : [directImageUrls]);
+    } else if (jobId) {
+      setResultImages([window.API.getImageUrl(jobId)]);
+    }
+    if (penpotEditUrl) {
+      window.resultPenpotUrl = penpotEditUrl;
     }
   }, []);
 
@@ -2667,8 +2937,8 @@ const App = () => {
     }}>
       <TopBar/>
       <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '260px 1fr 360px', gridTemplateRows: 'minmax(0, 1fr)', minHeight: 0 }}>
-        <TemplatePanel activeId={activeTemplate?.id} onSelect={setActiveTemplate}/>
-        <Canvas template={activeTemplate} resultImage={resultImage}/>
+        <TemplatePanel activeId={activeTemplate?.group_name || activeTemplate?.id} onSelect={setActiveTemplate}/>
+        <Canvas template={activeTemplate} resultImages={resultImages}/>
         <Chat state={tweaks.chatState} template={activeTemplate} onComposeComplete={handleComposeComplete}/>
       </div>
       <Tweaks
@@ -2682,7 +2952,6 @@ const App = () => {
 };
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
-
 </script>
 
 

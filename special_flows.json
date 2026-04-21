@@ -1,0 +1,19 @@
+{
+  "version": "1.0",
+  "_comment": "特殊品流程配置。slash_command 唤醒前端指令；group_keyword 用于匹配 penpot 中的画板组名。",
+  "flows": {
+    "特殊品": {
+      "slash_command": "/特殊品",
+      "group_keyword": "特殊品",
+      "input_separator": "，",
+      "_comment_fields": "第一个 is_sku=true 的字段用于图库匹配，不写入文字 slot；split_on_space=true 表示按最后一个空格拆成 _1/_2 两段",
+      "fields": [
+        { "key": "sku",  "label": "SKU",    "is_sku": true,  "split_on_space": false },
+        { "key": "name", "label": "文案",    "is_sku": false, "split_on_space": true  },
+        { "key": "time", "label": "时间文案", "is_sku": false, "split_on_space": false }
+      ],
+      "input_hint": "/特殊品 SKU，文案，时间文案",
+      "example": "/特殊品 ARMW001-31，飞电6 ELITE 竞速比赛跑鞋，3月28日 10点"
+    }
+  }
+}

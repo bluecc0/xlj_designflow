@@ -37,10 +37,14 @@ from .models import (
     GridExportRequest,
     ParseResult,
     SlotInfo,
+    SpecialComposeJob,
+    SpecialComposeRequest,
+    TemplateGroup,
     TemplateInfo,
 )
 from .product_library import ProductLibrary
 from .slot_schema import schema as slot_schema
+from .special_compose import parse_special_command, run_special_compose
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -216,6 +220,9 @@ def _extract_templates_from_file(client, fid: str) -> list[TemplateInfo]:
             TemplateInfo(
                 id=f["id"],
                 name=f["name"],
+                page_name=f.get("page_name", ""),
+                group_name=f.get("group_name", f["name"]),
+                variant=f.get("variant", ""),
                 page_id=f["page_id"],
                 file_id=fid,
                 x=f.get("x", 0),
@@ -513,6 +520,89 @@ def list_image_types():
     return {"types": result}
 
 
+@app.get("/template-groups", response_model=list[TemplateGroup])
+def list_template_groups(file_id: Optional[str] = None):
+    """
+    返回按 group_name 聚合后的模板组列表。
+    普通模板（无 "/"）每个画板自成一组；
+    特殊品等多画板模板（名称含 "/"）聚合为一组，前端可一次性选中所有画板。
+    """
+    templates = list_templates(file_id=file_id)
+    groups: dict[str, TemplateGroup] = {}
+    for t in templates:
+        key = f"{t.file_id}:{t.group_name}"
+        if key not in groups:
+            groups[key] = TemplateGroup(group_name=t.group_name, file_id=t.file_id)
+        groups[key].frames.append(t)
+    return list(groups.values())
+
+
+@app.post("/special-compose", response_model=SpecialComposeJob)
+def create_special_compose(
+    request: SpecialComposeRequest, background_tasks: BackgroundTasks
+):
+    """
+    触发特殊品合成任务（多画板），立即返回 job id，后台异步执行。
+    每个 frame_id 对应一个画板，全部导出后 result_paths 包含所有 PNG 路径。
+    """
+    import time
+    job_id = str(uuid.uuid4())
+    job = SpecialComposeJob(id=job_id, request=request, created_at=time.time())
+    with _jobs_lock:
+        _jobs[job_id] = job  # type: ignore[assignment]
+    background_tasks.add_task(run_special_compose, job)
+    return job
+
+
+@app.get("/special-compose/{job_id}", response_model=SpecialComposeJob)
+def get_special_compose(job_id: str):
+    """查询特殊品合成任务状态"""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, f"任务不存在: {job_id}")
+    if not isinstance(job, SpecialComposeJob):
+        raise HTTPException(400, "该任务不是特殊品合成任务")
+    return job
+
+
+@app.get("/special-compose/{job_id}/images")
+def download_special_images(job_id: str):
+    """返回特殊品合成所有输出图片的 URL 列表"""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job or not isinstance(job, SpecialComposeJob):
+        raise HTTPException(404, f"任务不存在: {job_id}")
+    if job.status != ComposeStatus.done:
+        raise HTTPException(400, f"任务尚未完成: {job.status}")
+    urls = []
+    for path_str in job.result_paths:
+        p = Path(path_str)
+        if p.exists():
+            urls.append(f"/output/{p.name}")
+    return {"job_id": job_id, "images": urls}
+
+
+@app.post("/special-compose/parse-command")
+def parse_special_command_endpoint(body: dict):
+    """
+    解析前端传来的 /特殊品 指令文本，返回拆分后的字段。
+    供前端在执行合成前预览解析结果。
+    """
+    text = body.get("text", "")
+    result = parse_special_command(text)
+    if result is None:
+        raise HTTPException(400, "无法识别的特殊品指令格式")
+    return result
+
+
+@app.get("/special-flows")
+def get_special_flows():
+    """返回 special_flows.json 配置内容，供前端获取指令格式和字段定义"""
+    from .special_compose import _flows_config
+    return _flows_config
+
+
 @app.get("/slot-schema")
 def get_slot_schema():
     """返回当前 slot_schema.json 的完整内容，供前端/插件使用"""
@@ -607,9 +697,11 @@ def get_template_thumbnail(
     refresh: bool = False,
 ):
     """
-    导出模板缩略图（scale=0.3 的小图），首次调用耗时约 5 秒，之后命中缓存立即返回。
-    缩略图缓存到 output/thumbnails/{template_id}.png。
-    - refresh=true: 强制重新生成（绕过缓存）
+    获取模板缩略图。
+    优先使用 Penpot 内部缩略图 API（get-file-object-thumbnails + /assets/by-id），
+    与编辑器里显示的完全一致，字体正确。
+    降级方案：如果内部缩略图不存在，才调用 export_frame。
+    缓存 key 包含 file_id 前缀，副本与原模板不会冲突。
     """
     fid = file_id or settings.penpot_file_id
     if not fid:
@@ -617,9 +709,10 @@ def get_template_thumbnail(
 
     thumb_dir = settings.output_path / "thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = thumb_dir / f"{template_id}.png"
+    # file_id 前8位作为前缀，同一 frame_id 在不同文件中不会冲突
+    file_prefix = fid[:8]
+    cache_path = thumb_dir / f"{file_prefix}_{template_id}.png"
 
-    # refresh=true 时删除缓存，强制重新生成
     if refresh and cache_path.exists():
         cache_path.unlink()
 
@@ -627,12 +720,23 @@ def get_template_thumbnail(
         return FileResponse(str(cache_path), media_type="image/png")
 
     client = get_client()
+
+    # ── 优先路径：Penpot 内部缩略图（和编辑器一致，字体正确）────────────────
+    try:
+        png = client.get_internal_thumbnail(fid, page_id, template_id)
+        if png:
+            cache_path.write_bytes(png)
+            return FileResponse(str(cache_path), media_type="image/png")
+    except Exception:
+        pass  # 降级到 export
+
+    # ── 降级路径：export_frame（内部缩略图不存在时，如副本文件）──────────────
     try:
         png = client.export_frame(
             file_id=fid,
             page_id=page_id,
             frame_id=template_id,
-            scale=0.3,
+            scale=2.0,
             name="thumbnail",
         )
         cache_path.write_bytes(png)

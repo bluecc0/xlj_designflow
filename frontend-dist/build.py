@@ -1,94 +1,78 @@
 #!/usr/bin/env python3
 """
-Build script -- inlines all src/*.jsx and src/api.js into index.html.
-Run after editing any .jsx file:
-  python build.py
-Then refresh http://localhost:8000/ui/
+Build script — 原地替换 index.html 中的 9 个 babel script 块。
+
+规则：
+  - 始终以当前 index.html 为基准（保留 window.TWEAKS、CSS、api.js 内联块等一切）
+  - 按顺序把 9 个 <script type="text/babel"> 块内容替换为 src/*.jsx 文件内容
+  - 不增删任何 script 标签，不动标签之外的任何内容
+
+用法：
+  python build.py    (在 frontend-dist/ 目录下)
+  刷新 http://localhost:8000/ui/
 """
-import os, sys
+import os, re, sys
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+BASE     = os.path.dirname(os.path.abspath(__file__))
+HTML     = os.path.join(BASE, 'index.html')
 
-PLAIN_JS = ['src/api.js']
-BABEL_JSX = [
+# 顺序必须与 index.html 中 babel 块的顺序完全一致
+BABEL_FILES = [
     'src/Icons.jsx',
     'src/Placeholders.jsx',
     'src/TopBar.jsx',
     'src/TemplatePanel.jsx',
-    'src/ChatExtras.jsx',
     'src/Canvas.jsx',
+    'src/ChatExtras.jsx',
     'src/Chat.jsx',
     'src/Tweaks.jsx',
     'src/app.jsx',
 ]
 
-TEMPLATE = os.path.join(BASE, 'index.html')
-
 def read(path):
-    with open(os.path.join(BASE, path), 'r', encoding='utf-8') as f:
+    with open(path, 'r', encoding='utf-8', errors='replace') as f:
         return f.read()
 
-def write(path, content):
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(content)
-
 def build():
-    html = read('index.html')
+    html = read(HTML)
+    orig_size = len(html)
 
-    # Cut point: right before vendor scripts
-    # Structure: <styles> ... </style>  <-- cut here
-    #            <body>
-    #            <div id="root"></div>
-    #            <script src="vendor/react.js"> ...
-    #            <script src="vendor/babel.min.js">
-    #            <our inline scripts>
-    #            </body></html>
+    babel_pat = re.compile(
+        r'(<script\s+type="text/babel"\s*>)'
+        r'(.*?)'
+        r'(</script>)',
+        re.DOTALL
+    )
+    matches = list(babel_pat.finditer(html))
 
-    vendor_react = '<script src="vendor/react.js"></script>'
-    vendor_babel = '<script src="vendor/babel.min.js"></script>'
-
-    vendor_react_idx = html.find(vendor_react)
-    vendor_babel_end = html.find(vendor_babel) + len(vendor_babel)
-
-    if vendor_react_idx == -1 or vendor_babel_end == len(vendor_babel) - 1:
-        print('ERROR: vendor script tags not found in index.html')
+    if len(matches) != len(BABEL_FILES):
+        print(f'[ERROR] index.html 有 {len(matches)} 个 babel 块，但配置了 {len(BABEL_FILES)} 个文件')
         sys.exit(1)
 
-    # Keep everything up to and including vendor scripts
-    # But first find where the style section ends (before vendor scripts)
-    style_end = html.rfind('</style>', 0, vendor_react_idx) + len('</style>')
-    if style_end == len('</style>') - 1:
-        style_end = vendor_react_idx  # fallback
+    # 从后往前替换，避免位置偏移
+    replacements = []
+    for i, (m, rel) in enumerate(zip(matches, BABEL_FILES)):
+        src = read(os.path.join(BASE, rel))
+        new_content = f'\n{src}\n'
+        replacements.append((m.start(2), m.end(2), new_content))
 
-    css_section = html[:style_end]
-    vendor_section = html[vendor_react_idx:vendor_babel_end]
+    replacements.sort(key=lambda x: x[0], reverse=True)
+    for start, end, content in replacements:
+        html = html[:start] + content + html[end:]
 
-    # Build inline scripts
-    inline = ''
-    for f in PLAIN_JS:
-        src = read(f)
-        src = src.replace('export async function ', 'async function ')
-        src = src.replace('export function ', 'function ')
-        inline += f'\n<script>\n// -- {f} --\n{src}\n</script>\n'
+    with open(HTML, 'w', encoding='utf-8') as f:
+        f.write(html)
 
-    for f in BABEL_JSX:
-        src = read(f)
-        inline += f'\n<script type="text/babel">\n// -- {f} --\n{src}\n</script>\n'
+    # 验证
+    for rel in BABEL_FILES:
+        src = read(os.path.join(BASE, rel))
+        marker = src.strip()[:40]
+        ok = marker in html
+        print(f'  [{"OK" if ok else "MISS"}] {rel}')
 
-    new_html = (
-        css_section + '\n'
-        '<body>\n'
-        '<div id="root"></div>\n\n'
-        + vendor_section + '\n'
-        + inline
-        + '\n</body></html>'
-    )
-
-    write(TEMPLATE, new_html)
-
-    size_kb = len(new_html.encode('utf-8')) / 1024
-    print(f'[OK] Built index.html ({size_kb:.1f} KB)')
-    print(f'     -> Refresh http://localhost:8000/ui/')
+    print(f'\n[BUILD DONE] {orig_size//1024} KB -> {len(html)//1024} KB')
+    print(f'  window.TWEAKS preserved: {"window.TWEAKS =" in html}')
+    print(f'  -> 刷新 http://localhost:8000/ui/')
 
 if __name__ == '__main__':
     build()

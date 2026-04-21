@@ -31,11 +31,12 @@ class Settings:
     # 图片类型子文件夹映射（类型key → 实际文件夹名）
     # 前端传 image_type="white" → 在 product_library_path/White_Base/ 下查找
     IMAGE_TYPE_FOLDERS: dict[str, str] = {
-        "png":     "PNG",
-        "model":   "Model_Images",
-        "shadow":  "PNG_Shadow",
-        "white":   "White_Base",
-        "white2x": "White_Basex2",
+        "png":      "PNG",
+        "model":    "Model_Images",
+        "shadow":   "PNG_Shadow",
+        "white":    "White_Base",
+        "white2x":  "White_Basex2",
+        "whitex2":  "White_Basex2",   # slot/product_1/image_whitex2 → White_Basex2 文件夹
     }
 
     # 导出结果目录

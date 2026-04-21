@@ -26,6 +26,9 @@ class TemplateInfo(BaseModel):
     """penpot 中一个 frame（画板）对应一个模板"""
     id: str  # frame 的 object id
     name: str
+    page_name: str = ""    # 所在 page 的名称（直接读自 Penpot page.name）
+    group_name: str = ""   # 分组名：优先用 page_name，兼容画板名含 "/" 的旧约定
+    variant: str = ""      # 变体名（画板名，或 "/" 右边部分）
     page_id: str
     file_id: str
     x: float = 0       # frame 在画布上的绝对 x 坐标
@@ -34,6 +37,13 @@ class TemplateInfo(BaseModel):
     height: float
     slots: list[SlotInfo] = Field(default_factory=list)
     thumbnail_url: Optional[str] = None  # 前端展示用
+
+
+class TemplateGroup(BaseModel):
+    """多画板模板组（特殊品等需要同时导出多个画板的场景）"""
+    group_name: str          # 组名，如 "特殊品"
+    file_id: str
+    frames: list[TemplateInfo] = Field(default_factory=list)  # 组内所有画板
 
 
 # ─── 合成任务 ────────────────────────────────────────────────────────────────
@@ -128,3 +138,36 @@ class GridExportRequest(BaseModel):
     job_id: str
     rows: int = 3
     cols: int = 3
+
+
+# ─── 特殊品合成 ──────────────────────────────────────────────────────────────
+
+
+class SpecialComposeRequest(BaseModel):
+    """
+    特殊品合成请求。
+    file_id / page_id 指向 penpot 文件；
+    frame_ids 为该组所有画板的 frame id（可能多个）；
+    sku 用于图库匹配，fields 为文字字段 key→value。
+    """
+    file_id: str
+    page_id: str
+    frame_ids: list[str]          # 所有画板的 frame id
+    sku: str                       # 图片匹配用
+    fields: dict[str, str] = Field(default_factory=dict)  # name/time 等文字字段
+    export_scale: float = 2.0
+
+
+class SpecialComposeJob(BaseModel):
+    """特殊品合成任务状态（可包含多个输出文件）"""
+    id: str
+    status: ComposeStatus = ComposeStatus.pending
+    request: SpecialComposeRequest
+    result_paths: list[str] = Field(default_factory=list)  # 每个画板对应一个输出（export_frame 兜底）
+    result_frame_ids: list[str] = Field(default_factory=list)  # 副本中的 frame id（同原模板）
+    penpot_file_id: Optional[str] = None   # 副本 file id，用于前端取缩略图
+    penpot_page_id: Optional[str] = None   # 副本 page id
+    penpot_edit_url: Optional[str] = None
+    error: Optional[str] = None
+    progress: list[str] = Field(default_factory=list)
+    created_at: Optional[float] = None

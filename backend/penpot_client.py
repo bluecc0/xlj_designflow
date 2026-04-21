@@ -202,12 +202,56 @@ class PenpotClient:
         """获取文件完整结构，含 revn / vern 版本号和所有图层"""
         return self._rpc("get-file", {"id": file_id})
 
+    def get_internal_thumbnail(self, file_id: str, page_id: str, frame_id: str) -> Optional[bytes]:
+        """
+        获取 Penpot 内部缩略图（与编辑器里显示的完全一致，字体正确）。
+
+        原理：
+          1. 调用 get-file-object-thumbnails API，获取 {file/page/frame/frame: media_uuid} 映射
+          2. 用 /assets/by-id/{uuid} 直接下载 PNG
+
+        返回 bytes，若该 frame 没有内部缩略图则返回 None。
+        """
+        import re as _re
+
+        resp = self._session.get(
+            f"{self.base_url}/api/rpc/command/get-file-object-thumbnails",
+            params={"file-id": file_id},
+            timeout=20,
+        )
+        if not resp.ok:
+            return None
+
+        # 响应是 Transit JSON，形如：
+        # ["^ ", "file/page/frame/frame", "~uMEDIA_UUID", ...]
+        raw = resp.text
+        # 构造期望的 key
+        expected_key = f"{file_id}/{page_id}/{frame_id}/frame"
+        # 从 Transit 文本中找 key 后面紧跟的 ~uUUID
+        pattern = _re.escape(expected_key) + r'","~u([0-9a-f-]{36})'
+        m = _re.search(pattern, raw)
+        if not m:
+            return None
+
+        media_id = m.group(1)
+        img_resp = self._session.get(
+            f"{self.base_url}/assets/by-id/{media_id}",
+            timeout=30,
+        )
+        if not img_resp.ok or len(img_resp.content) < 500:
+            return None
+
+        return img_resp.content
+
     def get_file_thumbnail(self, file_id: str, page_id: str, frame_id: str) -> bytes:
         """
         获取某个 frame 的缩略图（PNG 字节）。
-        通过 /api/export 导出单帧小图。
+        优先用内部缩略图，降级到 export。
         """
-        return self.export_frame(file_id, page_id, frame_id, scale=0.3)
+        internal = self.get_internal_thumbnail(file_id, page_id, frame_id)
+        if internal:
+            return internal
+        return self.export_frame(file_id, page_id, frame_id, scale=1.0)
 
     # ── 解析 slot 图层 ────────────────────────────────────────────────────────
 
@@ -217,6 +261,17 @@ class PenpotClient:
         返回列表，每项包含 id / name / type / page_id / frame_id / x / y / width / height。
         文字图层额外包含 text_style 字段（font_size / font_weight / font_family / fill_color / text_align）。
         frame_id 用于将 slot 归属到具体模板 frame，避免同一 page 上的多个模板混用 slot。
+
+        图片 slot 命名约定（特殊品扩展）：
+          slot/product_1/image           → 普通图片 slot，不限类型
+          slot/product_1/image_white     → 明确指定从 white 类型文件夹取图
+          slot/product_1/image_png       → 明确指定从 png 类型文件夹取图
+        解析时将 image_type 字段附加在 slot dict 上，供 compose 层使用。
+
+        文字分段 slot 命名约定：
+          slot/product_1/name_1          → name 字段的第 1 段（按最后空格切割）
+          slot/product_1/name_2          → name 字段的第 2 段
+        解析时附加 split_field / split_index 字段，供 compose 层使用。
         """
         slots: list[dict] = []
         data = file_data.get("data", {})
@@ -248,9 +303,10 @@ class PenpotClient:
                 name: str = obj.get("name", "")
                 if name.replace(" ", "").startswith("slot/"):
                     frame_id = find_frame_ancestor(obj_id)
+                    canonical_name = name.replace(" ", "")
                     slot: dict = {
                         "id": obj_id,
-                        "name": name.replace(" ", ""),
+                        "name": canonical_name,
                         "type": obj.get("type"),
                         "page_id": page_id,
                         "frame_id": frame_id,
@@ -259,6 +315,25 @@ class PenpotClient:
                         "width": obj.get("width", 200),
                         "height": obj.get("height", 200),
                     }
+
+                    # ── 图片 slot：解析 image_type ────────────────────────────
+                    # slot/product_N/image_XXX → image_type = "XXX"
+                    # slot/product_N/image     → image_type = None（不限定）
+                    parts = canonical_name.split("/")  # ['slot', 'product_1', 'image_white']
+                    if len(parts) >= 3:
+                        field_part = parts[2]  # e.g. "image_white" or "image" or "name_1"
+                        if field_part == "image":
+                            slot["image_type"] = None
+                        elif field_part.startswith("image_"):
+                            # 去掉 image_ 前缀，剩余部分作为 image_type key
+                            slot["image_type"] = field_part[len("image_"):]
+                        elif "_" in field_part:
+                            # 检测文字分段：name_1 / name_2 / time_1 等
+                            base, _, idx_str = field_part.rpartition("_")
+                            if idx_str.isdigit() and base:
+                                slot["split_field"] = base
+                                slot["split_index"] = int(idx_str)
+
                     # 文字图层：保存原始 content 结构（用于写入时只替换 text，保留所有样式）
                     if obj.get("type") == "text":
                         slot["text_style"] = self.parse_text_style(obj)
@@ -272,12 +347,17 @@ class PenpotClient:
         penpot 内部键名在 Transit 解码后可能为 camelCase 或 kebab-case，
         两种格式都兼容。
         返回包含以下键的 dict：
-          font_size, font_weight, font_family, fill_color, text_align
+          font_size, font_weight, font_family, font_id, font_variant_id, fill_color, text_align
+
+        注意：font_id 是 Penpot 内部标识（如 "custom-xxxx" 或 "sourcesanspro"），
+              font_family 是显示名（如 "MiSans"）。两者不同，必须分别保留。
         """
         default: dict = {
             "font_size": 14.0,
             "font_weight": "400",
             "font_family": "sourcesanspro",
+            "font_id": "sourcesanspro",         # ← 新增：Penpot 内部 font-id
+            "font_variant_id": "regular",        # ← 新增：variant id
             "fill_color": "#000000",
             "text_align": "center",
         }
@@ -328,6 +408,20 @@ class PenpotClient:
                 style["font_family"] = val
                 break
 
+        # ── font-id（Penpot 内部标识，custom font 与 font-family 不同）──────────
+        for key in ("fontId", "font-id"):
+            val = text_run.get(key) or paragraph.get(key)
+            if val:
+                style["font_id"] = val
+                break
+
+        # ── font-variant-id ────────────────────────────────────────────────────
+        for key in ("fontVariantId", "font-variant-id"):
+            val = text_run.get(key) or paragraph.get(key)
+            if val:
+                style["font_variant_id"] = val
+                break
+
         # ── fill-color（取第一个 fill）─────────────────────────────────────────
         fills = text_run.get("fills") or []
         if isinstance(fills, list) and fills:
@@ -344,22 +438,46 @@ class PenpotClient:
         """
         提取顶层 frame（画板），排除 Root Frame / Component 等系统 frame。
         用于模板列表和导出目标。
+
+        分组约定（特殊品多画板支持）：
+          画板名称含 "/" 时，左边是组名，右边是变体名。
+          例如 "特殊品/白底"、"特殊品/PNG" 属于同一个组 "特殊品"。
+          不含 "/" 的画板（普通模板）group_name = name，不影响原有逻辑。
+
+        每个 frame dict 附加：
+          group_name  —— 所属分组名（用于前端聚合）
+          variant     —— 变体名（如 "白底"，普通模板为空字符串）
         """
         frames: list[dict] = []
         data = file_data.get("data", {})
         pages_index = data.get("pagesIndex") or data.get("pages-index", {})
 
+        _SYSTEM_FRAMES = {"Root Frame", "Component"}
+
         for page_id, page in pages_index.items():
+            page_name: str = page.get("name", "").strip()
             objects = page.get("objects", {})
             for obj_id, obj in objects.items():
-                if obj.get("type") == "frame" and obj.get("name") not in (
-                    "Root Frame",
-                    "Component",
-                ):
+                raw_name: str = obj.get("name", "")
+                if obj.get("type") == "frame" and raw_name not in _SYSTEM_FRAMES:
+                    # 分组逻辑：优先以 page_name 为组名
+                    # 同一个 page 里的所有画板属于同一组，画板名本身作为 variant
+                    # 兼容旧约定：画板名含 "/" 时仍可拆分
+                    if "/" in raw_name:
+                        group_name, variant = raw_name.split("/", 1)
+                        group_name = group_name.strip()
+                        variant = variant.strip()
+                    else:
+                        # page_name 作为组名，画板名作为变体名
+                        group_name = page_name if page_name else raw_name
+                        variant = raw_name if page_name and page_name != raw_name else ""
                     frames.append(
                         {
                             "id": obj_id,
-                            "name": obj.get("name", ""),
+                            "name": raw_name,
+                            "page_name": page_name,
+                            "group_name": group_name,
+                            "variant": variant,
                             "page_id": page_id,
                             "x": obj.get("x", 0),
                             "y": obj.get("y", 0),
@@ -516,17 +634,25 @@ class PenpotClient:
         2. 没有 raw_content 时才用参数手动构建 content。
         3. 清除 position-data（设为 None），让 Penpot 重新渲染时自动重算。
            exporter 走的是 content 路径，不依赖 position-data。
+
+        关键：font-id 是 Penpot 内部字体标识（如 "custom-xxxx"），与 font-family 显示名不同。
+        必须从 raw_content 中提取正确的 font-id，否则 custom font 会 fallback 到默认字体。
         """
         # 从 raw_content 提取样式参数（字体/颜色/对齐），然后用干净结构重建
         # 不直接复用 raw_content 是因为其中携带的 position-data 无法通过 update-file 清除，
         # 导出时 Penpot 会用缓存坐标（x≈-4000）定位文字，造成文字偏移到画布外显示居左
+        font_id = font_family        # 默认 font-id = font-family（系统字体相同）
+        font_variant_id = "regular"
+
         if raw_content is not None:
             style = self.parse_text_style({"content": raw_content})
-            font_size   = style.get("font_size", font_size)
-            font_weight = style.get("font_weight", font_weight)
-            font_family = style.get("font_family", font_family)
-            fill_color  = style.get("fill_color", fill_color)
-            text_align  = style.get("text_align", text_align)
+            font_size       = style.get("font_size", font_size)
+            font_weight     = style.get("font_weight", font_weight)
+            font_family     = style.get("font_family", font_family)
+            font_id         = style.get("font_id", font_family)     # ← 保留原始 font-id
+            font_variant_id = style.get("font_variant_id", "regular")
+            fill_color      = style.get("fill_color", fill_color)
+            text_align      = style.get("text_align", text_align)
 
         # 始终用手动构建的干净 content，不携带任何历史 position-data
         fs = str(int(font_size)) if font_size == int(font_size) else str(font_size)
@@ -535,8 +661,8 @@ class PenpotClient:
         text_run = {
             "text": text,
             "font-family": font_family,
-            "font-id": font_family,
-            "font-variant-id": "regular" if fw == "400" else fw,
+            "font-id": font_id,              # ← 用正确的内部 font-id
+            "font-variant-id": font_variant_id,
             "font-size": fs,
             "font-weight": fw,
             "font-style": "normal",
@@ -552,8 +678,8 @@ class PenpotClient:
             "type": "paragraph",
             "key": str(uuid.uuid4())[:8],
             "font-family": font_family,
-            "font-id": font_family,
-            "font-variant-id": "regular" if fw == "400" else fw,
+            "font-id": font_id,              # ← 用正确的内部 font-id
+            "font-variant-id": font_variant_id,
             "font-size": fs,
             "font-weight": fw,
             "font-style": "normal",
@@ -766,14 +892,18 @@ class PenpotClient:
         frame_id: str,
         scale: float = 2.0,
         name: str = "export",
+        wait_secs: float = 3.0,
     ) -> bytes:
         """
         通过 /api/export 导出指定 frame 为 PNG 字节。
         需要提前调用 login() 获取 session cookie。
+        wait_secs: 调用前等待秒数，让 Penpot backend 完成写入广播。
+                   连续导出多帧时第二帧起可传 0 跳过等待。
         """
         import time
 
-        time.sleep(1)  # 等待写入生效
+        if wait_secs > 0:
+            time.sleep(wait_secs)  # 等待 Penpot backend 写入并广播到 exporter
 
         payload = {
             "cmd": kw("export-shapes"),
