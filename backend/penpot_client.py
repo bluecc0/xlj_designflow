@@ -107,6 +107,7 @@ class PenpotClient:
         self.base_url = base_url.rstrip("/")
         self.access_token = access_token
         self._session = requests.Session()
+        self._session.trust_env = False  # ignore system proxy; Penpot is always local
         self._profile_id: Optional[str] = None
         # 保存登录凭据以便 token 过期时自动刷新
         self._email: Optional[str] = None
@@ -126,6 +127,7 @@ class PenpotClient:
             f"{self.base_url}/api/rpc/command/login-with-password",
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             json={"email": email, "password": password},
+            timeout=15,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -163,15 +165,19 @@ class PenpotClient:
 
         if files:
             resp = self._session.post(
-                url, headers=headers, data=params or {}, files=files
+                url, headers=headers, data=params or {}, files=files, timeout=60
             )
         elif transit:
             headers["Content-Type"] = "application/transit+json"
-            body = json.dumps(to_transit(params or {}))
-            resp = self._session.post(url, headers=headers, data=body)
+            encoded = to_transit(params or {})
+            body = json.dumps(encoded)
+            if command == "update-file":
+                with open("backend/debug_transit.txt", "a", encoding="utf-8") as _f:
+                    _f.write("\n--- CALL ---\n" + body[:3000])
+            resp = self._session.post(url, headers=headers, data=body, timeout=60)
         else:
             headers["Content-Type"] = "application/json"
-            resp = self._session.post(url, headers=headers, json=params or {})
+            resp = self._session.post(url, headers=headers, json=params or {}, timeout=60)
 
         # ── Token 过期自动刷新 ───────────────────────────────────────────────
         if resp.status_code == 401 and _retry and self._email and self._password:
@@ -287,15 +293,30 @@ class PenpotClient:
                 if parent_id:
                     parent_index[obj_id] = parent_id
 
+            # 顶层画板集合（Root Frame 的直接子级），用于区分顶层 frame 和弹性布局子 frame
+            page_root_shapes: Optional[set] = None
+            for obj_id, obj in objects.items():
+                if obj.get("name") == "Root Frame" and obj.get("type") == "frame":
+                    page_root_shapes = set(obj.get("shapes", []))
+                    break
+
             def find_frame_ancestor(obj_id: str) -> str:
-                """向上追溯，返回最近的非 Root frame 祖先 id，找不到返回空串"""
+                """向上追溯，返回所属的顶层画板 id（Root Frame 直接子级），找不到返回空串"""
                 visited = set()
-                cur = obj_id
+                cur = parent_index.get(obj_id, "")
                 while cur and cur not in visited:
                     visited.add(cur)
                     obj = objects.get(cur, {})
-                    if obj.get("type") == "frame" and cur != "00000000-0000-0000-0000-000000000000":
-                        return cur
+                    if obj.get("type") == "frame":
+                        # 如果已知顶层集合，必须是其中成员才算顶层画板
+                        if page_root_shapes is not None:
+                            if cur in page_root_shapes:
+                                return cur
+                            # 否则是弹性布局子 frame，继续向上
+                        else:
+                            # 没有 root_shapes 信息时，返回第一个非 Root frame
+                            if cur != "00000000-0000-0000-0000-000000000000":
+                                return cur
                     cur = parent_index.get(cur, "")
                 return ""
 
@@ -452,39 +473,51 @@ class PenpotClient:
         data = file_data.get("data", {})
         pages_index = data.get("pagesIndex") or data.get("pages-index", {})
 
-        _SYSTEM_FRAMES = {"Root Frame", "Component"}
-
         for page_id, page in pages_index.items():
             page_name: str = page.get("name", "").strip()
             objects = page.get("objects", {})
+
+            # 用 Root Frame 的 shapes 列表（权威直接子级列表）来过滤顶层画板
+            root_shapes: Optional[set] = None
             for obj_id, obj in objects.items():
+                if obj.get("name") == "Root Frame" and obj.get("type") == "frame":
+                    root_shapes = set(obj.get("shapes", []))
+                    break
+
+            for obj_id, obj in objects.items():
+                if obj.get("type") != "frame":
+                    continue
                 raw_name: str = obj.get("name", "")
-                if obj.get("type") == "frame" and raw_name not in _SYSTEM_FRAMES:
-                    # 分组逻辑：优先以 page_name 为组名
-                    # 同一个 page 里的所有画板属于同一组，画板名本身作为 variant
-                    # 兼容旧约定：画板名含 "/" 时仍可拆分
-                    if "/" in raw_name:
-                        group_name, variant = raw_name.split("/", 1)
-                        group_name = group_name.strip()
-                        variant = variant.strip()
-                    else:
-                        # page_name 作为组名，画板名作为变体名
-                        group_name = page_name if page_name else raw_name
-                        variant = raw_name if page_name and page_name != raw_name else ""
-                    frames.append(
-                        {
-                            "id": obj_id,
-                            "name": raw_name,
-                            "page_name": page_name,
-                            "group_name": group_name,
-                            "variant": variant,
-                            "page_id": page_id,
-                            "x": obj.get("x", 0),
-                            "y": obj.get("y", 0),
-                            "width": obj.get("width", 400),
-                            "height": obj.get("height", 400),
-                        }
-                    )
+                if raw_name == "Root Frame":
+                    continue
+
+                # 只取 Root Frame 的直接子级，跳过嵌套在画板内的 frame（弹性布局等）
+                if root_shapes is not None and obj_id not in root_shapes:
+                    continue
+
+                # 分组逻辑：优先以 page_name 为组名
+                if "/" in raw_name:
+                    group_name, variant = raw_name.split("/", 1)
+                    group_name = group_name.strip()
+                    variant = variant.strip()
+                else:
+                    group_name = page_name if page_name else raw_name
+                    variant = raw_name if page_name and page_name != raw_name else ""
+
+                frames.append(
+                    {
+                        "id": obj_id,
+                        "name": raw_name,
+                        "page_name": page_name,
+                        "group_name": group_name,
+                        "variant": variant,
+                        "page_id": page_id,
+                        "x": obj.get("x", 0),
+                        "y": obj.get("y", 0),
+                        "width": obj.get("width", 400),
+                        "height": obj.get("height", 400),
+                    }
+                )
         return frames
 
     # ── 媒体上传 ──────────────────────────────────────────────────────────────
@@ -658,42 +691,44 @@ class PenpotClient:
         fs = str(int(font_size)) if font_size == int(font_size) else str(font_size)
         fw = str(font_weight)
         fill = {"fill-color": fill_color, "fill-opacity": 1}
+        # 注意：Penpot Transit 协议里 type / text-align 等枚举值必须是 Keyword（~:xxx），
+        # 普通字符串会被服务端忽略，导致 update-file 返回 200 但内容实际没变。
         text_run = {
             "text": text,
             "font-family": font_family,
-            "font-id": font_id,              # ← 用正确的内部 font-id
+            "font-id": font_id,
             "font-variant-id": font_variant_id,
             "font-size": fs,
             "font-weight": fw,
-            "font-style": "normal",
-            "text-decoration": "none",
-            "text-transform": "none",
+            "font-style": "normal",       # Penpot schema: string
+            "text-decoration": "none",    # Penpot schema: string
+            "text-transform": "none",     # Penpot schema: string
             "letter-spacing": "0",
             "line-height": "1",
-            "text-direction": "ltr",
-            "text-align": text_align,
+            "text-direction": kw("ltr"),  # Penpot schema: keyword
+            "text-align": kw(text_align), # Penpot schema: keyword
             "fills": [fill],
         }
         paragraph = {
-            "type": "paragraph",
+            "type": "paragraph",          # Penpot schema: string
             "key": str(uuid.uuid4())[:8],
             "font-family": font_family,
-            "font-id": font_id,              # ← 用正确的内部 font-id
+            "font-id": font_id,
             "font-variant-id": font_variant_id,
             "font-size": fs,
             "font-weight": fw,
-            "font-style": "normal",
-            "text-decoration": "none",
-            "text-transform": "none",
+            "font-style": "normal",       # Penpot schema: string
+            "text-decoration": "none",    # Penpot schema: string
+            "text-transform": "none",     # Penpot schema: string
             "letter-spacing": "0",
             "line-height": "1",
-            "text-direction": "ltr",
-            "text-align": text_align,
+            "text-direction": kw("ltr"),  # Penpot schema: keyword
+            "text-align": kw(text_align), # Penpot schema: keyword
             "fills": [fill],
             "children": [text_run],
         }
         new_content = {
-            "type": "root",
+            "type": "root",               # Penpot schema: string
             "children": [{"type": "paragraph-set", "children": [paragraph]}],
         }
 
@@ -705,6 +740,12 @@ class PenpotClient:
                 {"type": kw("set"), "attr": kw("content"), "val": new_content},
                 # 清除 position-data 缓存，让 Penpot 用 content 重新布局
                 {"type": kw("set"), "attr": kw("position-data"), "val": None},
+                # 强制 auto-height：exporter 在 position-data=nil 时做自己的重布局，
+                # 若图层存储的 height 是模板原始固定值，且 grow-type 没有被明确传递，
+                # exporter 会按固定高度裁剪文字（浏览器编辑器里正常，是因为浏览器
+                # 会在打开时重新跑 grow-type 逻辑并更新 position-data）。
+                # 显式写入 auto-height 确保 exporter 按内容撑高，与编辑器一致。
+                {"type": kw("set"), "attr": kw("grow-type"), "val": kw("auto-height")},
             ],
         }]
 
@@ -803,20 +844,22 @@ class PenpotClient:
             pass
         return content
 
-    def hide_layer(self, layer_id: str, page_id: str) -> dict:
-        """构造隐藏图层的 change dict（未提交）"""
+    def set_layer_hidden(self, layer_id: str, page_id: str, hidden: bool) -> dict:
+        """构造设置图层可见性的 change dict（未提交）"""
         return {
             "type": kw("mod-obj"),
             "id": layer_id,
             "page-id": page_id,
             "operations": [
-                {
-                    "type": kw("set"),
-                    "attr": kw("hidden"),
-                    "val": True,
-                }
+                {"type": kw("set"), "attr": kw("hidden"), "val": hidden}
             ],
         }
+
+    def hide_layer(self, layer_id: str, page_id: str) -> dict:
+        return self.set_layer_hidden(layer_id, page_id, True)
+
+    def show_layer(self, layer_id: str, page_id: str) -> dict:
+        return self.set_layer_hidden(layer_id, page_id, False)
 
     # ── 文件管理 ──────────────────────────────────────────────────────────────
 
@@ -890,15 +933,17 @@ class PenpotClient:
         file_id: str,
         page_id: str,
         frame_id: str,
-        scale: float = 2.0,
+        scale: float = 1.0,
         name: str = "export",
         wait_secs: float = 3.0,
+        background: bool = True,
     ) -> bytes:
         """
         通过 /api/export 导出指定 frame 为 PNG 字节。
         需要提前调用 login() 获取 session cookie。
         wait_secs: 调用前等待秒数，让 Penpot backend 完成写入广播。
                    连续导出多帧时第二帧起可传 0 跳过等待。
+        background: 是否包含背景（True=白色背景，False=透明PNG）。
         """
         import time
 
@@ -916,6 +961,7 @@ class PenpotClient:
                     "suffix": "",
                     "scale": scale,
                     "name": name,
+                    "background": background,
                 }
             ],
             "profile-id": self.profile_id,

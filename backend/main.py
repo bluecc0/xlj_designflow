@@ -12,8 +12,11 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
 import uuid
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 from typing import Optional
 
@@ -22,13 +25,14 @@ import pydantic
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from starlette.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .compose import get_client, run_compose
 from .config import settings
-from .job_store import init_db, load_job, load_recent_jobs, save_job
+from .job_store import init_db, load_job, load_recent_jobs, save_job, save_special_job, load_special_jobs
 from .models import (
     ComposeJob,
     ComposeRequest,
@@ -76,6 +80,15 @@ if settings.output_path.exists():
         "/output",
         StaticFiles(directory=str(settings.output_path)),
         name="output",
+    )
+
+# 合成结果图（独立目录，不污染模板缩略图缓存）
+results_path = settings.output_path / "results"
+if results_path.exists():
+    app.mount(
+        "/results",
+        StaticFiles(directory=str(results_path)),
+        name="results",
     )
 
 # 前端静态文件（frontend-dist）
@@ -203,8 +216,13 @@ def _extract_templates_from_file(client, fid: str) -> list[TemplateInfo]:
     """从单个 penpot 文件中提取模板列表（内部辅助函数）"""
     try:
         file_data = client.get_file(fid)
-    except Exception:
+    except Exception as e:
+        logger.warning("get_file(%s) failed: %s", fid, e)
         return []
+
+    file_name = file_data.get("name") or file_data.get("~:name") or ""
+    is_special = "特殊品" in file_name
+
     frames = client.parse_frames(file_data)
     slots = client.parse_slots(file_data)
 
@@ -229,6 +247,7 @@ def _extract_templates_from_file(client, fid: str) -> list[TemplateInfo]:
                 y=f.get("y", 0),
                 width=f["width"],
                 height=f["height"],
+                is_special=is_special,
                 slots=[
                     SlotInfo(
                         id=s["id"],
@@ -266,7 +285,11 @@ def list_templates(file_id: Optional[str] = None):
     if not fid:
         raise HTTPException(400, "需要提供 file_id 或在 .env 中设置 PENPOT_FILE_ID")
 
-    client = get_client()
+    try:
+        client = get_client()
+    except Exception as e:
+        logger.error("get_client() failed: %s", e, exc_info=True)
+        raise HTTPException(503, f"Penpot 连接失败: {e}")
 
     # Step 1: 获取该账号下所有团队（含个人团队）
     TEMPLATE_MARKER = "模板"
@@ -554,6 +577,16 @@ def create_special_compose(
     return job
 
 
+@app.get("/special-compose/history")
+def list_special_composes(limit: int = 20):
+    """
+    列出最近的特殊品合成任务（含状态和结果图 URL）。
+    从 SQLite 持久化存储读取，服务器重启后历史不丢失。
+    注意：此路由必须写在 /{job_id} 前面，避免 "history" 被当作 job_id 匹配。
+    """
+    return load_special_jobs(limit)
+
+
 @app.get("/special-compose/{job_id}", response_model=SpecialComposeJob)
 def get_special_compose(job_id: str):
     """查询特殊品合成任务状态"""
@@ -581,6 +614,71 @@ def download_special_images(job_id: str):
         if p.exists():
             urls.append(f"/output/{p.name}")
     return {"job_id": job_id, "images": urls}
+
+
+@app.get("/special-compose/{job_id}/download-zip")
+def download_special_zip(job_id: str, names: str = ""):
+    """
+    将特殊品合成所有图片打包成 zip 下载。
+    names: 逗号分隔的画板显示名列表，与 result_frame_ids 顺序对应，
+           用于命名文件为 {sku}_{names[i]}.png。
+           若不提供则使用序号。
+    """
+    import zipfile, io
+
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job or not isinstance(job, SpecialComposeJob):
+        raise HTTPException(404, f"任务不存在: {job_id}")
+    if job.status != ComposeStatus.done:
+        raise HTTPException(400, f"任务尚未完成: {job.status}")
+
+    sku = job.request.sku or job_id[:8]
+    name_list = [n.strip() for n in names.split(",")] if names else []
+    # 从独立目录 output/results/{job_id}/ 读取
+    results_dir = settings.output_path / "results" / job_id
+    job_prefix = job.id + "_"
+
+    # 枚举实际存在的所有输出文件（frame_i.png / frame_i_v1.png / frame_i_v2.png 等）
+    import re as _re
+    all_frames = sorted(
+        results_dir.glob("frame_*.png"),
+        key=lambda p: (
+            int(_re.search(r'frame_(\d+)', p.stem).group(1)),
+            p.stem,
+        )
+    )
+
+    # 判断是否有变体：v1/v2/... 后缀
+    variant_keys = sorted({
+        _re.search(r'(_v\d+)$', p.stem).group(1)
+        for p in all_frames
+        if _re.search(r'(_v\d+)$', p.stem)
+    })
+    variant_labels = {k: f"_版本{k[2:]}" for k in variant_keys}  # _v1→_版本1, _v2→_版本2
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in all_frames:
+            m = _re.match(r'frame_(\d+)(_v\d+)?$', p.stem)
+            if not m:
+                continue
+            idx = int(m.group(1))
+            variant_suffix = m.group(2) or ""
+            frame_label = name_list[idx] if idx < len(name_list) else f"画板{idx + 1}"
+            label_suffix = variant_labels.get(variant_suffix, "")
+            zip_name = f"{sku}_{frame_label}{label_suffix}.png"
+            zf.write(str(p), zip_name)
+
+    buffer.seek(0)
+    filename = f"{sku}.zip"
+    import urllib.parse
+    encoded = urllib.parse.quote(filename)
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"},
+    )
 
 
 @app.post("/special-compose/parse-command")

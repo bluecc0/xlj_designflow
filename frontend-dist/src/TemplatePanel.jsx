@@ -128,6 +128,7 @@ var TemplatePanel = function(_ref2) {
               tag: t.tag,
               cat: t.cat,
               slots: t.slots,
+              is_special: t.is_special || false,
               // frames 数组含该组所有画板，供特殊品合成等多画板场景使用
               frames: [],
             };
@@ -155,15 +156,18 @@ var TemplatePanel = function(_ref2) {
     if (tab !== 'history') return;
     console.log('[TemplatePanel] Loading history...');
     setHistoryLoading(true);
-    window.API.listComposes(50)
-      .then(function(data) {
-        console.log('[TemplatePanel] History data:', data);
-        setHistoryJobs(data || []);
-      })
-      .catch(function(err) {
-        console.error('[TemplatePanel] History load failed:', err);
-      })
-      .finally(function() { setHistoryLoading(false); });
+    Promise.all([
+      window.API.listComposes(50).catch(function() { return []; }),
+      window.API.listSpecialComposes(50).catch(function() { return []; }),
+    ]).then(function(results) {
+      var normal = (results[0] || []).map(function(j) { return Object.assign({}, j, { _type: 'normal' }); });
+      var special = (results[1] || []).map(function(j) { return Object.assign({}, j, { _type: 'special' }); });
+      var merged = normal.concat(special).sort(function(a, b) { return (b.created_at || 0) - (a.created_at || 0); });
+      console.log('[TemplatePanel] History merged:', merged.length, 'jobs');
+      setHistoryJobs(merged);
+    }).catch(function(err) {
+      console.error('[TemplatePanel] History load failed:', err);
+    }).finally(function() { setHistoryLoading(false); });
   }, [tab]);
 
   var filtered = templates.filter(function(t) {
@@ -259,9 +263,23 @@ var TemplatePanel = function(_ref2) {
         ),
         !historyLoading && historyJobs.length > 0 && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 10px' } },
           historyJobs.map(function(job, idx) {
+            var isSpecial = job._type === 'special';
             var statusColor = job.status === 'done' ? 'var(--ok)' : job.status === 'failed' ? '#e53' : 'var(--accent)';
             var timeStr = job.created_at ? new Date(job.created_at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-            var imageUrl = job.status === 'done' && job.id ? window.API.getImageUrl(job.id) : null;
+            // 缩略图：特殊品取第一帧 url，普通合成取 getImageUrl
+            var thumbUrl = null;
+            if (job.status === 'done') {
+              if (isSpecial) {
+                var firstFrame = job.frames && job.frames.find(function(f) { return f.url; });
+                var apiBase = window.API_BASE || (window.location.protocol + '//' + window.location.hostname + ':8000');
+                thumbUrl = firstFrame ? apiBase + firstFrame.url : null;
+              } else {
+                thumbUrl = window.API.getImageUrl(job.id);
+              }
+            }
+            var subtitle = isSpecial
+              ? (job.sku ? 'SKU: ' + job.sku : '特殊品') + (job.frames ? '  ' + job.frames.length + ' 张' : '')
+              : (job.request && job.request.slots ? Object.keys(job.request.slots).length + ' 个产品' : '');
             return React.createElement('div', {
               key: job.id || idx,
               style: {
@@ -279,21 +297,21 @@ var TemplatePanel = function(_ref2) {
                 }
               }
             },
-              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: imageUrl ? 8 : 4 } },
-                imageUrl && React.createElement('img', {
-                  src: imageUrl,
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: thumbUrl ? 8 : 0 } },
+                thumbUrl && React.createElement('img', {
+                  src: thumbUrl,
                   style: { width: 48, height: 48, objectFit: 'cover', borderRadius: 6, flexShrink: 0, background: 'var(--panel)' },
                   onError: function(e) { e.target.style.display = 'none'; }
                 }),
                 React.createElement('div', { style: { flex: 1, minWidth: 0 } },
                   React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 } },
                     React.createElement('span', { style: { width: 6, height: 6, borderRadius: 99, background: statusColor, flexShrink: 0 } }),
-                    React.createElement('span', { style: { flex: 1, fontSize: 12, fontWeight: 500, color: 'var(--ink)' } }, job.status === 'done' ? '已完成' : job.status === 'failed' ? '失败' : '生成中'),
+                    React.createElement('span', { style: { flex: 1, fontSize: 12, fontWeight: 500, color: 'var(--ink)' } },
+                      (isSpecial ? '[特殊品] ' : '') + (job.status === 'done' ? '已完成' : job.status === 'failed' ? '失败' : '生成中')
+                    ),
                     React.createElement('span', { style: { fontSize: 10, color: 'var(--ink-3)' } }, timeStr)
                   ),
-                  job.request && job.request.slots && React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', paddingLeft: 14 } },
-                    Object.keys(job.request.slots).length + ' 个产品'
-                  )
+                  subtitle && React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', paddingLeft: 14 } }, subtitle)
                 )
               )
             );

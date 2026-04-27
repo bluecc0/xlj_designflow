@@ -1,9 +1,9 @@
 // Main canvas — now simplified to just show the selected template preview.
 
-const Canvas = ({ template, resultImages }) => {
+const Canvas = ({ template, resultTemplate }) => {
   const t = template;
-  // resultImages: null | string[] — array of image URLs to display
-  const hasResult = resultImages && resultImages.length > 0;
+  // resultTemplate: null | object — template with frames containing resultUrl instead of thumbnail
+  const hasResult = resultTemplate != null;
 
   return (
     <div style={{
@@ -24,8 +24,8 @@ const Canvas = ({ template, resultImages }) => {
             <>
               <span className="mono" style={{ color: 'var(--ok)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Result</span>
               <span style={{ color: 'var(--ink)', fontWeight: 500 }}>生成完成</span>
-              {resultImages.length > 1 && (
-                <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', padding: '2px 6px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line-2)' }}>{resultImages.length}张</span>
+              {(resultTemplate?.frames?.length || 1) > 1 && (
+                <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', padding: '2px 6px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line-2)' }}>{resultTemplate?.frames?.length || 1}张</span>
               )}
             </>
           ) : (
@@ -59,43 +59,60 @@ const Canvas = ({ template, resultImages }) => {
         backgroundColor: 'oklch(0.98 0.003 260)',
       }}>
         {hasResult ? (
-          <ResultGrid images={resultImages}/>
+          <ResultPreview t={resultTemplate}/>
         ) : t ? <TemplatePreview t={t}/> : <EmptyCanvas/>}
       </div>
     </div>
   );
 };
 
-// 结果展示：多张图横排，底部操作栏
-const ResultGrid = ({ images }) => {
-  const single = images.length === 1;
+// 结果展示：用 TemplatePreview 相同的 FrameThumb 布局渲染（结果看起来和模板预览完全一致）
+const ResultPreview = ({ t }) => {
+  const stageRef = React.useRef(null);
+  const [box, setBox] = React.useState({ w: 560, h: 480 });
+  React.useEffect(() => {
+    if (!stageRef.current) return;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const { width, height } = e.contentRect;
+        setBox({ w: Math.max(200, width - 80), h: Math.max(200, height - 120) });
+      }
+    });
+    ro.observe(stageRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  // 多画板：frames 数组；单画板：frames 为空，用 t 本身
+  const frames = (t.frames && t.frames.length > 0) ? t.frames : [t];
+  const isMulti = frames.length > 1;
+  const perMaxW = isMulti ? Math.floor((box.w - (frames.length - 1) * 24) / frames.length) : box.w;
+  const perMaxH = isMulti ? box.h - 60 : box.h - 40;
+  const cat = t.cat;
+
   return (
-    <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: single ? 'center' : 'flex-start', padding: 24, gap: 16 }}>
-      {/* 图片区 */}
-      <div style={{
-        display: 'flex', flexDirection: 'row', gap: 16,
-        flexWrap: 'wrap', justifyContent: 'center', alignItems: 'flex-start',
-      }}>
-        {images.map((url, i) => (
-          <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-            <img
-              src={url}
-              alt={'Result ' + (i + 1)}
-              style={{
-                maxWidth: single ? 560 : 280,
-                maxHeight: single ? 560 : 360,
-                width: 'auto', height: 'auto',
-                borderRadius: 8,
-                boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-                display: 'block',
-              }}
-            />
-            {!single && (
-              <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>画板 {i + 1}</span>
-            )}
-          </div>
-        ))}
+    <div ref={stageRef} style={{ position: 'absolute', inset: 0, overflow: isMulti ? 'auto' : 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+      {/* 画板区：与 TemplatePreview 完全一致的布局 */}
+      <div style={{ display: 'flex', flexDirection: 'row', gap: 24, alignItems: 'flex-end', flexWrap: 'wrap', justifyContent: 'center' }}>
+        {frames.map((frame, i) => {
+          const variantLabel = frame.variant || (isMulti ? frame.name : '');
+          // 用 resultUrl 替代 thumbnail
+          const resultUrl = frame.resultUrl;
+          return React.createElement(FrameThumb, {
+            key: frame.id,
+            frame: Object.assign({}, frame, {
+              ratio: frame.ratio || (frame.width && frame.height ? (frame.width + '/' + frame.height) : (t.ratio || '1/1')),
+              file_id: frame.file_id || t.file_id,
+            }),
+            maxW: perMaxW,
+            maxH: perMaxH,
+            label: variantLabel,
+            hd: false,
+            resultUrl,  // 传给 FrameThumb：直接用结果 URL
+          });
+        })}
       </div>
+
       {/* 操作栏 */}
       <div style={{
         display: 'flex', gap: 8, padding: '8px 12px',
@@ -112,16 +129,30 @@ const ResultGrid = ({ images }) => {
             在Penpot中编辑
           </button>
         )}
-        {images.map((url, i) => (
-          <button
-            key={i}
-            onClick={() => window.open(url, '_blank')}
-            style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: 'var(--ink)', color: 'white', border: 'none', cursor: 'pointer' }}
-          >
-            {images.length === 1 ? '下载图片' : `下载图${i + 1}`}
-          </button>
+        {frames.map((frame, i) => (
+          frame.resultUrl && (
+            <button
+              key={i}
+              onClick={() => window.open(frame.resultUrl, '_blank')}
+              style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: 'var(--ink)', color: 'white', border: 'none', cursor: 'pointer' }}
+            >
+              {frames.length === 1 ? '下载图片' : `下载图${i + 1}`}
+            </button>
+          )
         ))}
+        {frames.length > 1 && window.lastComposeJobId && (
+          <button
+            onClick={() => {
+              const names = (t._frameNames || frames.map(f => f.name || f.variant || '')).join(',');
+              window.open(`/special-compose/${window.lastComposeJobId}/download-zip?names=${encodeURIComponent(names)}`, '_blank');
+            }}
+            style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: 'var(--accent)', color: 'white', border: 'none', cursor: 'pointer' }}
+          >
+            打包下载 ZIP
+          </button>
+        )}
       </div>
+    </div>
     </div>
   );
 };
@@ -157,7 +188,8 @@ const getPenpotViewUrl = (fileId, pageId, frameId) => {
 };
 
 // 单个画板的预览卡片（主画布用 iframe 高清预览，缩略图模式用 img）
-const FrameThumb = ({ frame, maxW, maxH, label, hd = false }) => {
+// resultUrl 存在时直接用该 URL（已缓存的结果图），不再调 API
+const FrameThumb = ({ frame, maxW, maxH, label, hd = false, resultUrl = null }) => {
   const ratio = frame.ratio || (frame.width && frame.height ? (frame.width + '/' + frame.height) : '1/1');
   const [w, h] = ratioToSize(ratio, maxW, maxH);
 
@@ -165,14 +197,18 @@ const FrameThumb = ({ frame, maxW, maxH, label, hd = false }) => {
   const [iframeReady, setIframeReady] = React.useState(false);
   const viewUrl = hd ? getPenpotViewUrl(frame.file_id, frame.page_id, frame.id) : null;
 
-  // 非 hd：用缩略图 img
+  // 非 hd：resultUrl 直接用；否则调 API 取缩略图
   const [src, setSrc] = React.useState(null);
   const [failed, setFailed] = React.useState(false);
   React.useEffect(() => {
     if (hd) return;
     setSrc(null); setFailed(false);
-    setSrc(window.API.getTemplateThumbnailUrl(frame.id, frame.page_id, frame.file_id));
-  }, [frame.id, frame.page_id, frame.file_id, hd]);
+    if (resultUrl) {
+      setSrc(resultUrl);
+    } else {
+      setSrc(window.API.getTemplateThumbnailUrl(frame.id, frame.page_id, frame.file_id));
+    }
+  }, [frame.id, frame.page_id, frame.file_id, hd, resultUrl]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>

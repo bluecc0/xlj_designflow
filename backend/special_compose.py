@@ -37,6 +37,7 @@ from .config import settings
 from .models import ComposeStatus, SpecialComposeJob, SpecialComposeRequest
 from .penpot_client import PenpotClient, PenpotError
 from .product_library import ProductLibrary
+from .job_store import save_special_job
 
 # 复用主流程的客户端单例和串行信号量
 from .compose import get_client, _compose_sem
@@ -92,11 +93,21 @@ def parse_special_command(text: str) -> Optional[dict]:
 
 
 def _split_on_last_space(text: str) -> tuple[str, str]:
-    """按最后一个空格切割文案，返回 (前半段, 后半段)。无空格时前半段=全文，后半段=空"""
-    idx = text.rfind(" ")
-    if idx == -1:
+    """
+    按最后一个空格切割文案，返回 (前半段, 后半段)。
+    支持多种空白字符：普通空格、\xa0（不间断空格）、制表符等。
+    先把 2+ 个连续空白压缩为一个空格，再按最后一个空格拆分。
+    """
+    # 先把多种空白符统一为空格
+    import re as _re
+    normalized = _re.sub(r'[\s\xa0]+', ' ', text.strip())
+    parts = normalized.split(' ')
+    if len(parts) <= 1:
         return text, ""
-    return text[:idx], text[idx + 1:]
+    # 最后一个空格位置 = 倒数第二段末尾
+    name_1 = ' '.join(parts[:-1])
+    name_2 = parts[-1]
+    return name_1, name_2
 
 
 def expand_time_fields(raw_time: str) -> dict[str, str]:
@@ -180,6 +191,7 @@ def run_special_compose(job: SpecialComposeJob) -> None:
 
 def _run_inner(job: SpecialComposeJob) -> None:
     job.status = ComposeStatus.running
+    save_special_job(job)  # 持久化初始状态
     client = get_client()
     req = job.request
     library = ProductLibrary(settings.product_library_path)
@@ -247,6 +259,10 @@ def _run_inner(job: SpecialComposeJob) -> None:
 
         # ── Step 3: 构建要写入的变更（所有画板共享同一批 changes）────────────
         all_changes: list[dict] = []
+        # variant 图层按组收集：{group_part: {field_part: [(layer_id, page_id)]}}
+        variant_by_group: dict[str, dict[str, list[tuple[str, str]]]] = {}
+        # 哪些 frame_id 包含 variant 图层（只有这些画板需要多版本导出）
+        variant_frame_ids: set[str] = set()
 
         for frame_id in req.frame_ids:
             frame = frame_index.get(frame_id)
@@ -264,9 +280,29 @@ def _run_inner(job: SpecialComposeJob) -> None:
             for slot in frame_slots:
                 slot_name: str = slot["name"]  # e.g. slot/product_1/image_white
                 parts = slot_name.split("/")
-                if len(parts) < 3:
+                if len(parts) < 2:
                     continue
-                field_part = parts[2]  # e.g. image_white / name / name_1 / time
+
+                group_part = parts[1]   # e.g. product_1 / variant_a
+                field_part = parts[2] if len(parts) >= 3 else ""
+
+                # ── variant 图层：仅做显隐切换，不写内容 ─────────────────────
+                # slot/variant_X/N → 按 X 分组，按 N 区分导出版本
+                # field_part 为空（如 slot/variant_a/）时跳过，避免产生多余版本
+                if group_part.startswith("variant"):
+                    if field_part:
+                        (
+                            variant_by_group
+                            .setdefault(group_part, {})
+                            .setdefault(field_part, [])
+                            .append((slot["id"], slot["page_id"]))
+                        )
+                        variant_frame_ids.add(frame_id)  # 记录哪个画板含变体
+                    _log(job, f"  检测到变体图层: {slot_name}")
+                    continue  # 变体图层只做显隐
+
+                if not field_part:
+                    continue
 
                 # ── 图片 slot ─────────────────────────────────────────────────
                 if field_part == "image" or field_part.startswith("image_"):
@@ -378,47 +414,103 @@ def _run_inner(job: SpecialComposeJob) -> None:
         else:
             _log(job, "无变更，直接导出")
 
-        # ── Step 5: 预生成所有画板缩略图，缓存到 thumbnails/ ─────────────────
-        # 与模板预览走同一缓存路径：{output}/thumbnails/{file_prefix}_{frame_id}.png
-        # 前端请求时直接命中缓存，无需等待
+        # ── Step 5: 导出所有画板结果图 ─────────────────────────────────────
         valid_frame_ids = [fid for fid in req.frame_ids if fid in frame_index]
         job.penpot_file_id = work_file_id
         job.penpot_page_id = req.page_id
         job.result_frame_ids = valid_frame_ids
 
-        thumb_dir = settings.output_path / "thumbnails"
-        thumb_dir.mkdir(parents=True, exist_ok=True)
-        file_prefix = work_file_id[:8]
+        results_dir = settings.output_path / "results" / job.id
+        results_dir.mkdir(parents=True, exist_ok=True)
 
-        _log(job, "导出画板预览图…")
-        for i, frame_id in enumerate(valid_frame_ids):
+        # ── 确定变体导出维度 ──────────────────────────────────────────────────
+        # 多组（variant_a + variant_b）→ 按 group_part 区分；
+        # 单组（只有 variant_a）且有多个 field → 按 field_part 区分
+        if len(variant_by_group) > 1:
+            # e.g. {variant_a: {time: [...]}, variant_b: {time: [...]}}
+            # → export_versions = {variant_a: [...all ids...], variant_b: [...]}
+            export_versions: dict[str, list[tuple[str, str]]] = {}
+            for gp, field_map in variant_by_group.items():
+                for ids in field_map.values():
+                    export_versions.setdefault(gp, []).extend(ids)
+        elif variant_by_group:
+            # 单组，按 field_part 区分（e.g. "1", "2"）
+            only_group = next(iter(variant_by_group.values()))
+            export_versions = {fp: ids for fp, ids in only_group.items()}
+        else:
+            export_versions = {}
+
+        has_variants = len(export_versions) >= 2
+        all_variant_ids = [(lid, pid) for ids in export_versions.values() for lid, pid in ids]
+        _log(job, f"变体模式: {'是' if has_variants else '否'} ({len(export_versions)} 个版本: {list(export_versions.keys())}，含变体画板: {len(variant_frame_ids)} 个)")
+
+        def _export_one(i: int, frame_id: str, suffix: str, first_wait: float) -> None:
+            """导出单个画板，路径写入 job.result_paths"""
             frame = frame_index[frame_id]
-            cache_path = thumb_dir / f"{file_prefix}_{frame_id}.png"
-            _log(job, f"  导出: {frame['name']}…")
+            label = suffix.strip("_") if suffix else ""
+            fname = f"frame_{i}{suffix}.png"
+            out_path = results_dir / fname
+            _log(job, f"  导出: {frame['name']}{' [' + label + ']' if label else ''}…")
             try:
-                # 先试内部缩略图
-                png_bytes = client.get_internal_thumbnail(work_file_id, req.page_id, frame_id)
-                if not png_bytes:
-                    # 降级 export_frame：第一帧等 3 秒让 Penpot 完成广播，后续帧不等
-                    png_bytes = client.export_frame(
-                        file_id=work_file_id,
-                        page_id=req.page_id,
-                        frame_id=frame_id,
-                        scale=req.export_scale,
-                        name=frame.get("name", "export"),
-                        wait_secs=3.0 if i == 0 else 0.0,
-                    )
-                cache_path.write_bytes(png_bytes)
+                png_bytes = client.export_frame(
+                    file_id=work_file_id,
+                    page_id=req.page_id,
+                    frame_id=frame_id,
+                    scale=1.0,
+                    name=frame.get("name", "export"),
+                    wait_secs=first_wait,
+                    background=False,
+                )
+                out_path.write_bytes(png_bytes)
+                job.result_paths.append(str(out_path))
                 _log(job, f"  ✓ {frame['name']} ({len(png_bytes)//1024} KB)")
             except Exception as e:
                 _log(job, f"  ✗ {frame['name']} 导出失败: {e}")
 
+        if not has_variants:
+            # 无变体：所有画板各导出一次
+            _log(job, "导出画板预览图…")
+            for i, frame_id in enumerate(valid_frame_ids):
+                _export_one(i, frame_id, "", first_wait=3.0 if i == 0 else 0.0)
+        else:
+            # 有变体：
+            #   - 不含变体图层的画板 → 正常导出一次（在首次变体导出前，用同一个 wait）
+            #   - 含变体图层的画板 → 每个版本导出一次
+            _log(job, "导出非变体画板…")
+            first = True
+            for i, frame_id in enumerate(valid_frame_ids):
+                if frame_id in variant_frame_ids:
+                    continue
+                _export_one(i, frame_id, "", first_wait=3.0 if first else 0.0)
+                first = False
+
+            for vi, (vkey, v_ids) in enumerate(sorted(export_versions.items())):
+                vis_changes = []
+                v_id_set = set(v_ids)
+                for lid, pid in all_variant_ids:
+                    if (lid, pid) in v_id_set:
+                        vis_changes.append(client.show_layer(lid, pid))
+                    else:
+                        vis_changes.append(client.hide_layer(lid, pid))
+                client.update_file(work_file_id, vis_changes)
+                suffix = f"_v{vi + 1}"
+                _log(job, f"导出变体版本 {vkey} → {suffix}…")
+                first_v = True
+                for i, frame_id in enumerate(valid_frame_ids):
+                    if frame_id not in variant_frame_ids:
+                        continue
+                    _export_one(i, frame_id, suffix, first_wait=2.0 if first_v else 0.0)
+                    first_v = False
+
         job.status = ComposeStatus.done
-        _log(job, f"合成完成！副本 {work_file_id[:8]}…，共 {len(valid_frame_ids)} 个画板")
+        save_special_job(job)  # 持久化完成状态
+        n_out = len(valid_frame_ids) * (2 if has_variants else 1)
+        _log(job, f"合成完成！副本 {work_file_id[:8]}…，共导出 {n_out} 张图")
 
     except Exception as exc:
         job.status = ComposeStatus.failed
         job.error = str(exc)
+        save_special_job(job)  # 持久化失败状态
         _log(job, f"失败: {exc}")
 
 

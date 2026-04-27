@@ -52,6 +52,25 @@ def init_db() -> None:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
                 pass  # 列已存在，忽略
+
+        # 特殊品任务表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS special_jobs (
+                id               TEXT PRIMARY KEY,
+                status           TEXT NOT NULL,
+                sku              TEXT,
+                request_json     TEXT NOT NULL,
+                result_paths_json TEXT,
+                result_frame_ids_json TEXT,
+                penpot_file_id   TEXT,
+                penpot_page_id   TEXT,
+                penpot_edit_url  TEXT,
+                error            TEXT,
+                progress_json    TEXT NOT NULL DEFAULT '[]',
+                created_at       REAL NOT NULL,
+                updated_at       REAL NOT NULL
+            )
+        """)
         conn.commit()
 
 
@@ -126,3 +145,96 @@ def _row_to_job(row: sqlite3.Row) -> ComposeJob:
         progress=progress,
         created_at=row["created_at"],
     )
+
+
+# ─── 特殊品合成任务 ──────────────────────────────────────────────────────────
+
+def save_special_job(job) -> None:
+    """将特殊品 job 持久化到 SQLite（独立表）"""
+    now = time.time()
+    with _lock, _connect() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS special_jobs (
+                id               TEXT PRIMARY KEY,
+                status           TEXT NOT NULL,
+                sku              TEXT,
+                request_json     TEXT NOT NULL,
+                result_paths_json TEXT,
+                result_frame_ids_json TEXT,
+                penpot_file_id   TEXT,
+                penpot_page_id   TEXT,
+                penpot_edit_url  TEXT,
+                error            TEXT,
+                progress_json    TEXT NOT NULL DEFAULT '[]',
+                created_at       REAL NOT NULL,
+                updated_at       REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO special_jobs
+              (id, status, sku, request_json, result_paths_json, result_frame_ids_json,
+               penpot_file_id, penpot_page_id, penpot_edit_url, error, progress_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                status               = excluded.status,
+                result_paths_json    = excluded.result_paths_json,
+                result_frame_ids_json = excluded.result_frame_ids_json,
+                penpot_file_id      = excluded.penpot_file_id,
+                penpot_page_id      = excluded.penpot_page_id,
+                penpot_edit_url     = excluded.penpot_edit_url,
+                error               = excluded.error,
+                progress_json       = excluded.progress_json,
+                updated_at          = excluded.updated_at
+        """, (
+            job.id,
+            job.status.value if job.status else 'unknown',
+            job.request.sku if job.request else '',
+            job.request.model_dump_json() if job.request else '{}',
+            json.dumps(job.result_paths, ensure_ascii=False),
+            json.dumps(job.result_frame_ids, ensure_ascii=False),
+            job.penpot_file_id,
+            job.penpot_page_id,
+            job.penpot_edit_url,
+            job.error,
+            json.dumps(job.progress, ensure_ascii=False),
+            now,
+            now,
+        ))
+        conn.commit()
+
+
+def load_special_jobs(limit: int = 50) -> list[dict]:
+    """从数据库加载特殊品任务列表（返回 dict 列表供 history API 使用）"""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM special_jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    results = []
+    results_dir = settings.output_path / "results"
+    for row in rows:
+        frame_list = []
+        result_paths = json.loads(row["result_paths_json"] or "[]")
+        if result_paths:
+            # 使用实际生成的文件路径列表
+            for p_str in result_paths:
+                import re as _re
+                m = _re.search(r'results[/\\](.+)$', p_str.replace('\\', '/'))
+                url = f"/results/{m.group(1)}" if m else None
+                frame_list.append({'url': url})
+        else:
+            # 兼容旧数据：从 result_frame_ids 推算
+            result_frame_ids = json.loads(row["result_frame_ids_json"] or "[]")
+            for i, fid in enumerate(result_frame_ids):
+                p = results_dir / row["id"] / f"frame_{i}.png"
+                url = f"/results/{row['id']}/frame_{i}.png" if p.exists() else None
+                frame_list.append({'id': fid, 'url': url})
+        results.append({
+            'id': row["id"],
+            'sku': row["sku"] or '',
+            'status': row["status"],
+            'created_at': row["created_at"],
+            'penpot_edit_url': row["penpot_edit_url"],
+            'frames': frame_list,
+            '_type': 'special',
+        })
+    return results

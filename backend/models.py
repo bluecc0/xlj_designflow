@@ -37,6 +37,7 @@ class TemplateInfo(BaseModel):
     height: float
     slots: list[SlotInfo] = Field(default_factory=list)
     thumbnail_url: Optional[str] = None  # 前端展示用
+    is_special: bool = False  # 来自"特殊品模板"文件，选中时自动激活 /特殊品 流程
 
 
 class TemplateGroup(BaseModel):

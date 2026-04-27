@@ -13,7 +13,7 @@
         { "key": "time", "label": "时间文案", "is_sku": false, "split_on_space": false }
       ],
       "input_hint": "/特殊品 SKU，文案，时间文案",
-      "example": "/特殊品 ARMW001-31，飞电6 ELITE 竞速比赛跑鞋，3月28日 10点"
+      "example": "/特殊品 ARMW001-31，飞电6 ELITE 竞速比赛跑鞋，3月28日 10点发售"
     }
   }
 }

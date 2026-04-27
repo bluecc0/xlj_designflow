@@ -497,12 +497,26 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating }) => {
 
 // ---------- Composer ----------
 
-const Composer = ({ onSend, onParseTable, isLoading }) => {
+const Composer = ({ onSend, onParseTable, isLoading, slashTrigger }) => {
   const [text, setText] = React.useState('');
   const [files, setFiles] = React.useState([]);
   const [imageType, setImageType] = React.useState('png');
   const taRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
+
+  // 外部触发 slash 命令（选中特殊品模板时）
+  React.useEffect(() => {
+    if (!slashTrigger) return;
+    const val = '/' + slashTrigger.cmd + ' ';
+    setText(val);
+    setMenuOpen(false);
+    setTimeout(() => {
+      const el = taRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(val.length, val.length);
+    }, 0);
+  }, [slashTrigger?.key]);
 
   // Image type options
   const IMAGE_TYPES = [
@@ -527,6 +541,9 @@ const Composer = ({ onSend, onParseTable, isLoading }) => {
 
   // slashQuery 只在菜单打开时有效
   const slashQuery = menuOpen ? (text.match(/^\/\S*/) || [null])[0] : null;
+
+  // 特殊品流程不使用图片类型选项
+  const imageTypeDisabled = text.trimStart().startsWith('/特殊品');
 
   const pickCommand = (c) => {
     const val = c.cmd + ' ';
@@ -599,23 +616,24 @@ const Composer = ({ onSend, onParseTable, isLoading }) => {
         )}
 
         {/* Image type selector */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, opacity: imageTypeDisabled ? 0.35 : 1, transition: 'opacity 150ms' }}>
           {IMAGE_TYPES.map(t => (
             <button
               key={t.key}
-              onClick={() => setImageType(t.key)}
+              onClick={() => !imageTypeDisabled && setImageType(t.key)}
+              disabled={imageTypeDisabled}
               style={{
                 fontSize: 11,
                 padding: '3px 0',
                 background: 'transparent',
                 border: 'none',
-                color: imageType === t.key ? 'var(--ink)' : 'var(--ink-3)',
-                cursor: 'pointer',
+                color: imageType === t.key && !imageTypeDisabled ? 'var(--ink)' : 'var(--ink-3)',
+                cursor: imageTypeDisabled ? 'not-allowed' : 'pointer',
                 position: 'relative',
               }}
             >
               {t.label}
-              {imageType === t.key && (
+              {imageType === t.key && !imageTypeDisabled && (
                 <div style={{
                   position: 'absolute',
                   bottom: -2,
@@ -655,7 +673,7 @@ const Composer = ({ onSend, onParseTable, isLoading }) => {
           style={{ display: 'none' }}
         />
 
-        
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <button
             onClick={() => fileInputRef.current?.click()}
@@ -697,164 +715,10 @@ const Composer = ({ onSend, onParseTable, isLoading }) => {
   );
 };
 
-// ---------- History Dropdown ----------
-
-console.log('[History] Component definition starting');
-const HistoryDropdown = () => {
-  console.log('[History] Component rendering');
-  const [open, setOpen] = React.useState(false);
-  const [jobs, setJobs] = React.useState([]);
-  const [loading, setLoading] = React.useState(false);
-  const ref = React.useRef(null);
-
-  React.useEffect(() => {
-    const handler = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) {
-        setOpen(false);
-      }
-    };
-    if (open) {
-      document.addEventListener('mousedown', handler);
-    }
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  // Attach native click listener to button
-  React.useEffect(() => {
-    const btn = ref.current?.querySelector('.history-btn');
-    if (btn) {
-      const nativeHandler = (e) => {
-        console.log('[History] NATIVE CLICK!');
-        setOpen(o => {
-          if (!o) loadHistory();
-          return !o;
-        });
-      };
-      btn.addEventListener('click', nativeHandler);
-      return () => btn.removeEventListener('click', nativeHandler);
-    }
-  }, []);
-
-  const loadHistory = async () => {
-    console.log('[History] loadHistory called');
-    setLoading(true);
-    setJobs([]);
-    try {
-      console.log('[History] Calling listComposes API, window.API:', !!window.API);
-      const data = await window.API.listComposes(20);
-      console.log('[History] Received data:', data);
-      setJobs(data || []);
-    } catch (e) {
-      console.error('[History] Failed to load history:', e);
-    }
-    setLoading(false);
-  };
-
-  const handleClick = (e) => {
-    e.stopPropagation();
-    console.log('[History] handleClick called, open was:', open);
-    try {
-      if (!open) {
-        loadHistory();
-      }
-      setOpen(!open);
-    } catch (err) {
-      console.error('[History] Error in handleClick:', err);
-    }
-  };
-
-  return (
-    <div ref={ref} style={{ position: 'relative' }} onClick={() => console.log('[History] DIV CLICK!')}>
-      <button
-        className="history-btn"
-        type="button"
-        onClick={handleClick}
-        onMouseDown={() => console.log('[History] MOUSE DOWN!')}
-        style={{ padding: '5px 10px', borderRadius: 5, color: 'var(--ink)', background: 'var(--panel-2)', border: '1px solid var(--line)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        title="历史记录"
-      >
-        <span style={{ display: 'flex', fontSize: 12, fontWeight: 600 }}>历史</span>
-      </button>
-      {open && (
-        <div style={{
-          position: 'absolute',
-          top: '100%',
-          right: 0,
-          marginTop: 4,
-          width: 300,
-          maxHeight: 360,
-          overflowY: 'auto',
-          background: 'var(--panel)',
-          border: '1px solid var(--line)',
-          borderRadius: 8,
-          boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
-          zIndex: 1000,
-        }}>
-          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--line)', fontSize: 11, fontWeight: 600, color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span>历史记录</span>
-            <button
-              onClick={(e) => { e.stopPropagation(); loadHistory(); }}
-              style={{ padding: 2, borderRadius: 3, color: 'var(--ink-3)', cursor: 'pointer' }}
-              title="刷新"
-            >
-              <I.refresh size={11}/>
-            </button>
-          </div>
-          {loading && (
-            <div style={{ padding: 16, textAlign: 'center', color: 'var(--ink-3)', fontSize: 11 }}>
-              加载中...
-            </div>
-          )}
-          {!loading && jobs.length === 0 && (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--ink-3)', fontSize: 11 }}>
-              暂无历史记录
-            </div>
-          )}
-          {!loading && jobs.map(job => (
-            <div
-              key={job.id}
-              onClick={() => {
-                if (job.status === 'done') {
-                  const imgUrl = window.API.getImageUrl(job.id);
-                  window.open(imgUrl, '_blank');
-                }
-                setOpen(false);
-              }}
-              style={{
-                padding: '10px 12px',
-                borderBottom: '1px solid var(--line-2)',
-                cursor: job.status === 'done' ? 'pointer' : 'default',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <div style={{
-                  width: 8, height: 8, borderRadius: 99,
-                  background: job.status === 'done' ? 'var(--ok)' : job.status === 'failed' ? 'var(--warn)' : 'var(--accent)',
-                  flexShrink: 0,
-                }}/>
-                <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--ink)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {job.request?.template_frame_id?.slice(0, 24) || '未知模板'}
-                </span>
-                <span style={{ fontSize: 9.5, color: job.status === 'done' ? 'var(--ok)' : job.status === 'failed' ? 'var(--warn)' : 'var(--ink-3)' }}>
-                  {job.status === 'done' ? '完成' : job.status === 'failed' ? '失败' : '进行中'}
-                </span>
-              </div>
-              <div style={{ fontSize: 9.5, color: 'var(--ink-3)', fontFamily: 'monospace' }}>
-                {job.created_at ? new Date(job.created_at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
-                {job.progress && job.progress.length > 0 && <span style={{ marginLeft: 8 }}>· {job.progress.length} 步</span>}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
 // ---------- Main ----------
 
 console.log('[Main] Chat component definition');
-const Chat = ({ state, template, onComposeComplete }) => {
+const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
   const [messages, setMessages] = React.useState([]);
   const [isLoading, setIsLoading] = React.useState(false);
 
@@ -921,21 +785,36 @@ const Chat = ({ state, template, onComposeComplete }) => {
             return { ...m, logs: s.progress || [], status: s.status };
           }));
           if (s.status === 'done') {
-            // 用副本 file_id 走同一套 thumbnail 端点（与模板预览同路径）
-            // refresh=true 跳过缓存，先试内部缩略图，降级走 export_frame
-            const frameIds = s.result_frame_ids || [];
             const workFileId = s.penpot_file_id;
-            const workPageId = s.penpot_page_id || s.request?.page_id || job.request?.page_id;
-            const urls = frameIds.length > 0 && workFileId
-              ? frameIds.map(fid => window.API.getTemplateThumbnailUrl(fid, workPageId, workFileId))
-              : (s.result_paths || []).map(p => `/output/${p.split(/[\\/]/).pop()}`);
+            // 优先用后端记录的 result_paths（支持变体 _v1/_v2 命名），降级到旧模式
+            const buildUrls = () => {
+              if (s.result_paths && s.result_paths.length > 0) {
+                // result_paths 是绝对路径，提取 {job_id}/frame_xxx.png 部分
+                return s.result_paths.map(p => {
+                  const m = p.replace(/\\/g, '/').match(/results\/(.+)$/);
+                  return m ? `/results/${m[1]}` : null;
+                }).filter(Boolean);
+              }
+              // 降级：旧命名 frame_{i}.png
+              const frameIds = s.result_frame_ids || [];
+              return frameIds.map((_, i) => `/results/${job['id']}/frame_${i}.png`);
+            };
+            const urls = buildUrls();
             setMessages(msgs => msgs.map((m, idx) => {
               if (idx !== specialMsgIdx) return m;
               return { ...m, status: 'done', specialUrls: urls, penpotUrl: s.penpot_edit_url };
             }));
-            // 把所有结果图渲染到画布
-            if (onComposeComplete && urls.length > 0) {
-              onComposeComplete(null, s.penpot_edit_url, urls);
+            // 构建 resultTpl 供画布预览
+            if (onComposeComplete && urls.length > 0 && workFileId && template) {
+              const base = structuredClone(template);
+              const baseFrames = base.frames && base.frames.length > 0 ? base.frames : [base];
+              const tplFrames = template.frames && template.frames.length > 0 ? template.frames : [template];
+              const frameNames = tplFrames.map(f => f.name || f.variant || '画板');
+              base.frames = urls.map((url, i) => ({ ...(baseFrames[i % baseFrames.length] || baseFrames[0]), resultUrl: url }));
+              base._frameNames = frameNames;
+              window.lastComposeJobId = job['id'];
+              window.lastComposeFrameNames = frameNames;
+              onComposeComplete(null, s.penpot_edit_url, null, base);
             }
             done = true;
           } else if (s.status === 'failed') {
@@ -1100,7 +979,7 @@ const Chat = ({ state, template, onComposeComplete }) => {
       {state === 'generating' && <ChatGenerating/>}
       {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading}/>}
 
-      <Composer onSend={handleSend} onParseTable={handleParseTable} isLoading={isLoading}/>
+      <Composer onSend={handleSend} onParseTable={handleParseTable} isLoading={isLoading} slashTrigger={slashTrigger}/>
     </div>
   );
 };
