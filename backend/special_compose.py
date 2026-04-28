@@ -30,6 +30,8 @@ import datetime
 import json
 import re
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
@@ -444,8 +446,12 @@ def _run_inner(job: SpecialComposeJob) -> None:
         all_variant_ids = [(lid, pid) for ids in export_versions.values() for lid, pid in ids]
         _log(job, f"变体模式: {'是' if has_variants else '否'} ({len(export_versions)} 个版本: {list(export_versions.keys())}，含变体画板: {len(variant_frame_ids)} 个)")
 
-        def _export_one(i: int, frame_id: str, suffix: str, first_wait: float) -> None:
-            """导出单个画板，路径写入 job.result_paths"""
+        # result_paths 需要按 frame index 有序，并行写入用 dict 暂存
+        _path_buf: dict[str, str] = {}  # key → str(path)，最后排序后写入 job.result_paths
+        _buf_lock = threading.Lock()
+
+        def _export_one_nowait(i: int, frame_id: str, suffix: str) -> None:
+            """导出单个画板（不含等待），结果暂存到 _path_buf"""
             frame = frame_index[frame_id]
             label = suffix.strip("_") if suffix else ""
             fname = f"frame_{i}{suffix}.png"
@@ -458,31 +464,48 @@ def _run_inner(job: SpecialComposeJob) -> None:
                     frame_id=frame_id,
                     scale=1.0,
                     name=frame.get("name", "export"),
-                    wait_secs=first_wait,
+                    wait_secs=0,
                     background=False,
                 )
                 out_path.write_bytes(png_bytes)
-                job.result_paths.append(str(out_path))
+                with _buf_lock:
+                    _path_buf[fname] = str(out_path)
                 _log(job, f"  ✓ {frame['name']} ({len(png_bytes)//1024} KB)")
             except Exception as e:
                 _log(job, f"  ✗ {frame['name']} 导出失败: {e}")
 
+        def _export_batch(tasks: list[tuple[int, str, str]], wait_secs: float) -> None:
+            """等待一次后并行导出一批画板。tasks: [(index, frame_id, suffix)]"""
+            if not tasks:
+                return
+            if wait_secs > 0:
+                _log(job, f"  等待 {wait_secs}s（Penpot 写入广播）…")
+                time.sleep(wait_secs)
+            n = len(tasks)
+            _log(job, f"  并行导出 {n} 个画板…")
+            with ThreadPoolExecutor(max_workers=n) as pool:
+                futs = [pool.submit(_export_one_nowait, i, fid, sfx) for i, fid, sfx in tasks]
+                for fut in as_completed(futs):
+                    exc = fut.exception()
+                    if exc:
+                        _log(job, f"  [并行导出异常] {exc}")
+
         if not has_variants:
-            # 无变体：所有画板各导出一次
-            _log(job, "导出画板预览图…")
-            for i, frame_id in enumerate(valid_frame_ids):
-                _export_one(i, frame_id, "", first_wait=3.0 if i == 0 else 0.0)
+            # 无变体：所有画板并行导出一次
+            _log(job, "并行导出全部画板…")
+            tasks = [(i, fid, "") for i, fid in enumerate(valid_frame_ids)]
+            _export_batch(tasks, wait_secs=3.0)
         else:
             # 有变体：
-            #   - 不含变体图层的画板 → 正常导出一次（在首次变体导出前，用同一个 wait）
-            #   - 含变体图层的画板 → 每个版本导出一次
-            _log(job, "导出非变体画板…")
-            first = True
-            for i, frame_id in enumerate(valid_frame_ids):
-                if frame_id in variant_frame_ids:
-                    continue
-                _export_one(i, frame_id, "", first_wait=3.0 if first else 0.0)
-                first = False
+            #   - 非变体画板 → 并行导出一次
+            #   - 含变体画板 → 每个版本各并行导出一次
+            non_variant_tasks = [
+                (i, fid, "") for i, fid in enumerate(valid_frame_ids)
+                if fid not in variant_frame_ids
+            ]
+            if non_variant_tasks:
+                _log(job, "并行导出非变体画板…")
+                _export_batch(non_variant_tasks, wait_secs=3.0)
 
             for vi, (vkey, v_ids) in enumerate(sorted(export_versions.items())):
                 vis_changes = []
@@ -494,13 +517,20 @@ def _run_inner(job: SpecialComposeJob) -> None:
                         vis_changes.append(client.hide_layer(lid, pid))
                 client.update_file(work_file_id, vis_changes)
                 suffix = f"_v{vi + 1}"
-                _log(job, f"导出变体版本 {vkey} → {suffix}…")
-                first_v = True
-                for i, frame_id in enumerate(valid_frame_ids):
-                    if frame_id not in variant_frame_ids:
-                        continue
-                    _export_one(i, frame_id, suffix, first_wait=2.0 if first_v else 0.0)
-                    first_v = False
+                _log(job, f"并行导出变体版本 {vkey} → {suffix}…")
+                variant_tasks = [
+                    (i, fid, suffix) for i, fid in enumerate(valid_frame_ids)
+                    if fid in variant_frame_ids
+                ]
+                _export_batch(variant_tasks, wait_secs=2.0)
+
+        # 按文件名排序后写入 job.result_paths（保证顺序：frame_0, frame_1, ..., frame_0_v1, ...）
+        job.result_paths = [
+            v for _, v in sorted(_path_buf.items(), key=lambda x: (
+                int(__import__('re').search(r'frame_(\d+)', x[0]).group(1)),
+                x[0],
+            ))
+        ]
 
         job.status = ComposeStatus.done
         save_special_job(job)  # 持久化完成状态

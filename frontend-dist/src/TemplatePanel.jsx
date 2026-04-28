@@ -80,6 +80,25 @@ const TemplateCard = function(_ref) {
   );
 };
 
+// 已用时计时器，每秒刷新，仅在 running 状态使用
+var ElapsedTimer = function(props) {
+  var createdAt = props.createdAt; // unix timestamp (seconds)
+  var _s = React.useState(Math.max(0, Math.floor(Date.now() / 1000 - createdAt)));
+  var elapsed = _s[0], setElapsed = _s[1];
+  React.useEffect(function() {
+    var id = setInterval(function() {
+      setElapsed(Math.max(0, Math.floor(Date.now() / 1000 - createdAt)));
+    }, 1000);
+    return function() { clearInterval(id); };
+  }, [createdAt]);
+  var m = Math.floor(elapsed / 60), s = elapsed % 60;
+  var label = m > 0 ? m + 'm ' + String(s).padStart(2, '0') + 's' : s + 's';
+  return React.createElement('span', {
+    className: 'mono',
+    style: { fontSize: 10, color: 'var(--accent)', fontVariantNumeric: 'tabular-nums' },
+  }, label);
+};
+
 var PANEL_TABS = [
   { id: 'templates', label: '模板' },
   { id: 'history',   label: '历史记录' },
@@ -210,7 +229,26 @@ var TemplatePanel = function(_ref2) {
               placeholder: '搜索模板…',
               style: { flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 12, color: 'var(--ink)' }
             }),
-            React.createElement('kbd', { className: 'mono', style: { fontSize: 9, color: 'var(--ink-3)', padding: '1px 4px', borderRadius: 3, border: '1px solid var(--line)' } }, '⌘K')
+            React.createElement('button', {
+              title: '刷新模板（清除缩略图缓存）',
+              onClick: function() {
+                setLoading(true);
+                setLoadErr(null);
+                window.API.clearTemplateCache().catch(function() {}).finally(function() {
+                  setTab('history');
+                  setTimeout(function() { setTab('templates'); }, 50);
+                });
+              },
+              style: {
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 22, height: 22, borderRadius: 5, flexShrink: 0,
+                border: 'none', background: 'transparent',
+                cursor: 'pointer', color: 'var(--ink-3)',
+                transition: 'color 120ms',
+              },
+              onMouseEnter: function(e) { e.currentTarget.style.color = 'var(--ink)'; },
+              onMouseLeave: function(e) { e.currentTarget.style.color = 'var(--ink-3)'; },
+            }, React.createElement(I.refresh, { size: 13 }))
           )
         ),
         cat !== 'All' && React.createElement('div', { style: { padding: '0 14px 10px', display: 'flex', gap: 4, flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' } },
@@ -305,11 +343,21 @@ var TemplatePanel = function(_ref2) {
                 }),
                 React.createElement('div', { style: { flex: 1, minWidth: 0 } },
                   React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 } },
-                    React.createElement('span', { style: { width: 6, height: 6, borderRadius: 99, background: statusColor, flexShrink: 0 } }),
+                    job.status !== 'done' && job.status !== 'failed'
+                      ? React.createElement('span', { style: {
+                          width: 10, height: 10, borderRadius: 99, flexShrink: 0, boxSizing: 'border-box',
+                          border: '1.5px solid oklch(0.85 0.04 275)',
+                          borderTopColor: 'var(--accent)',
+                          animation: 'spin 0.75s linear infinite',
+                          display: 'inline-block',
+                        } })
+                      : React.createElement('span', { style: { width: 6, height: 6, borderRadius: 99, background: statusColor, flexShrink: 0 } }),
                     React.createElement('span', { style: { flex: 1, fontSize: 12, fontWeight: 500, color: 'var(--ink)' } },
                       (isSpecial ? '[特殊品] ' : '') + (job.status === 'done' ? '已完成' : job.status === 'failed' ? '失败' : '生成中')
                     ),
-                    React.createElement('span', { style: { fontSize: 10, color: 'var(--ink-3)' } }, timeStr)
+                    job.status !== 'done' && job.status !== 'failed' && job.created_at
+                      ? React.createElement(ElapsedTimer, { createdAt: job.created_at })
+                      : React.createElement('span', { style: { fontSize: 10, color: 'var(--ink-3)' } }, timeStr)
                   ),
                   subtitle && React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', paddingLeft: 14 } }, subtitle)
                 )

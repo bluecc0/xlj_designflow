@@ -1,0 +1,1997 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<title>Loom — AI Design Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com">
+<style>/* latin-ext */
+@font-face {
+  font-family: 'Instrument Serif';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/instrument-serif-1.woff2") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Instrument Serif';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/instrument-serif-2.woff2") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/inter-1.woff2") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/inter-2.woff2") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/inter-3.woff2") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/inter-4.woff2") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/inter-5.woff2") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/inter-6.woff2") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/inter-7.woff2") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/inter-1.woff2") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/inter-2.woff2") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/inter-3.woff2") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/inter-4.woff2") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/inter-5.woff2") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/inter-6.woff2") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/inter-7.woff2") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/inter-1.woff2") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/inter-2.woff2") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/inter-3.woff2") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/inter-4.woff2") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/inter-5.woff2") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/inter-6.woff2") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/inter-7.woff2") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/inter-1.woff2") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/inter-2.woff2") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/inter-3.woff2") format('woff2');
+  unicode-range: U+1F00-1FFF;
+}
+/* greek */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/inter-4.woff2") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/inter-5.woff2") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/inter-6.woff2") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/inter-7.woff2") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-1.woff2") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-2.woff2") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-3.woff2") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-4.woff2") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-5.woff2") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-6.woff2") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-1.woff2") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-2.woff2") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-3.woff2") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-4.woff2") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-5.woff2") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-6.woff2") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+</style>
+<script src="vendor/react.js"></script>
+<script src="vendor/react-dom.js"></script>
+<script src="vendor/babel.min.js"></script>
+<style>
+  :root {
+    --bg: oklch(0.985 0.003 260);
+    --panel: #ffffff;
+    --panel-2: oklch(0.975 0.004 260);
+    --line: oklch(0.92 0.005 260);
+    --line-2: oklch(0.95 0.005 260);
+    --ink: oklch(0.18 0.01 260);
+    --ink-2: oklch(0.38 0.01 260);
+    --ink-3: oklch(0.58 0.008 260);
+    --accent: oklch(0.55 0.22 275);
+    --accent-soft: oklch(0.96 0.03 275);
+    --accent-ink: oklch(0.38 0.18 275);
+    --warn: oklch(0.72 0.15 70);
+    --ok: oklch(0.65 0.15 155);
+    --radius: 10px;
+    --radius-sm: 6px;
+    --radius-lg: 14px;
+    --shadow-1: 0 1px 2px rgba(20,22,40,0.04), 0 1px 1px rgba(20,22,40,0.03);
+    --shadow-2: 0 6px 24px rgba(20,22,40,0.06), 0 1px 2px rgba(20,22,40,0.04);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: 'Inter', system-ui, sans-serif; font-size: 13px; letter-spacing: -0.005em; }
+  button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+  input, textarea { font-family: inherit; }
+  ::selection { background: var(--accent-soft); color: var(--accent-ink); }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .serif { font-family: 'Instrument Serif', serif; }
+
+  /* Scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: oklch(0.88 0.005 260); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: oklch(0.80 0.008 260); border: 3px solid transparent; background-clip: padding-box; }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script>
+  // Tweakable defaults — persisted by host
+  window.TWEAKS = /*EDITMODE-BEGIN*/{
+    "chatState": "returned",
+    "canvasState": "candidates",
+    "theme": "light"
+  }/*EDITMODE-END*/;
+</script>
+
+<script type="text/babel">
+// Minimal stroke icon set
+const Icon = ({ d, size = 14, stroke = 1.5, fill = 'none', children, style }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke="currentColor"
+       strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" style={style}>
+    {d ? <path d={d} /> : children}
+  </svg>
+);
+
+const I = {
+  search: (p) => <Icon {...p}><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></Icon>,
+  plus: (p) => <Icon d="M12 5v14M5 12h14" {...p}/>,
+  arrowRight: (p) => <Icon d="M5 12h14m-6-6 6 6-6 6" {...p}/>,
+  arrowUp: (p) => <Icon d="M12 19V5m-7 7 7-7 7 7" {...p}/>,
+  paperclip: (p) => <Icon d="M21 11.5 12.5 20a5.5 5.5 0 0 1-7.8-7.8l9.2-9.2a3.7 3.7 0 0 1 5.2 5.2L9.9 17.4a1.8 1.8 0 0 1-2.6-2.6L15 7" {...p}/>,
+  image: (p) => <Icon {...p}><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="m3 17 5-5 5 5 3-3 5 5"/></Icon>,
+  sparkles: (p) => <Icon {...p}><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></Icon>,
+  wand: (p) => <Icon d="M15 4V2m0 14v-2M8 9h2M20 9h2M17.8 11.8 19 13M17.8 6.2 19 5M3 21l9-9m-1.8-3.8L12 7" {...p}/>,
+  close: (p) => <Icon d="M6 6l12 12M18 6 6 18" {...p}/>,
+  more: (p) => <Icon {...p}><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></Icon>,
+  grid: (p) => <Icon {...p}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></Icon>,
+  layers: (p) => <Icon d="m12 2 10 6-10 6L2 8l10-6Zm-10 10 10 6 10-6M2 16l10 6 10-6" {...p}/>,
+  heart: (p) => <Icon d="M19.5 12.6 12 20l-7.5-7.4a5 5 0 0 1 7-7.2l.5.5.5-.5a5 5 0 0 1 7 7.2Z" {...p}/>,
+  download: (p) => <Icon d="M12 3v12m-5-5 5 5 5-5M4 21h16" {...p}/>,
+  check: (p) => <Icon d="m5 12 5 5L20 7" {...p}/>,
+  refresh: (p) => <Icon d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" {...p}/>,
+  zap: (p) => <Icon d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" {...p}/>,
+  folder: (p) => <Icon d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" {...p}/>,
+  user: (p) => <Icon {...p}><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></Icon>,
+  settings: (p) => <Icon {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></Icon>,
+  bookmark: (p) => <Icon d="M19 21 12 16 5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16Z" {...p}/>,
+  film: (p) => <Icon {...p}><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></Icon>,
+  type: (p) => <Icon d="M4 7V5h16v2M9 20h6M12 5v15" {...p}/>,
+  palette: (p) => <Icon d="M12 3a9 9 0 1 0 9 9c0-1-1-2-2-2h-2a2 2 0 0 1-2-2v-1a2 2 0 0 1 2-2h1a2 2 0 0 0 2-2 9 9 0 0 0-8-2Z" {...p}><circle cx="7.5" cy="10.5" r="1"/><circle cx="8.5" cy="14.5" r="1"/><circle cx="12" cy="7.5" r="1"/></Icon>,
+  dims: (p) => <Icon d="M3 3v18h18M7 17V9m-4 4h4m10 0h4m-4 4V9" {...p}/>,
+  play: (p) => <Icon d="M6 4v16l14-8L6 4Z" fill="currentColor" {...p}/>,
+  stop: (p) => <Icon {...p}><rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor"/></Icon>,
+  bolt: (p) => <Icon d="M11 3 3 14h7l-1 7 9-11h-7l1-7Z" {...p}/>,
+  attach: (p) => <Icon d="M21 12.8 13 21a5 5 0 0 1-7-7l8.5-8.5a3 3 0 1 1 4.2 4.2L10 18a1 1 0 1 1-1.4-1.4L15 10" {...p}/>,
+  eye: (p) => <Icon {...p}><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></Icon>,
+  copy: (p) => <Icon {...p}><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></Icon>,
+  share: (p) => <Icon {...p}><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></Icon>,
+  filter: (p) => <Icon d="M3 5h18M6 12h12M10 19h4" {...p}/>,
+  chevronDown: (p) => <Icon d="m6 9 6 6 6-6" {...p}/>,
+  chevronRight: (p) => <Icon d="m9 6 6 6-6 6" {...p}/>,
+  file: (p) => <Icon d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6ZM14 2v6h6" {...p}/>,
+  dot: (p) => <Icon {...p}><circle cx="12" cy="12" r="3" fill="currentColor"/></Icon>,
+};
+
+window.I = I;
+window.Icon = Icon;
+
+</script>
+<script type="text/babel">
+// Striped / gradient placeholder imagery. No hand-drawn illustrations.
+
+const hashHue = (s) => {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h) % 360;
+};
+
+const Stripe = ({ label, ratio = '4/5', tone = 'neutral', seed = 'x', tag }) => {
+  const hue = tone === 'accent' ? 275 : tone === 'warm' ? 40 : hashHue(seed);
+  const light = tone === 'accent' ? 0.92 : 0.96;
+  const light2 = tone === 'accent' ? 0.88 : 0.93;
+  return (
+    <div style={{
+      aspectRatio: ratio,
+      position: 'relative',
+      borderRadius: 8,
+      overflow: 'hidden',
+      background: `repeating-linear-gradient(135deg, oklch(${light} 0.02 ${hue}) 0 8px, oklch(${light2} 0.025 ${hue}) 8px 16px)`,
+      border: '1px solid var(--line-2)',
+    }}>
+      {label && (
+        <div className="mono" style={{
+          position: 'absolute', left: 8, top: 8,
+          fontSize: 9, letterSpacing: '0.02em',
+          color: `oklch(0.45 0.05 ${hue})`,
+          textTransform: 'uppercase',
+        }}>{label}</div>
+      )}
+      {tag && (
+        <div style={{
+          position: 'absolute', right: 8, bottom: 8,
+          fontSize: 10, color: `oklch(0.35 0.05 ${hue})`,
+          background: 'rgba(255,255,255,0.85)',
+          backdropFilter: 'blur(4px)',
+          padding: '2px 6px', borderRadius: 4,
+        }}>{tag}</div>
+      )}
+    </div>
+  );
+};
+
+const Swatch = ({ color, label }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+    <div style={{ height: 28, borderRadius: 6, background: color, border: '1px solid rgba(0,0,0,0.05)' }}/>
+    <div className="mono" style={{ fontSize: 9, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
+  </div>
+);
+
+window.Stripe = Stripe;
+window.Swatch = Swatch;
+
+</script>
+<script type="text/babel">
+const TopBar = () => {
+  return (
+    <div style={{
+      height: 48, flexShrink: 0,
+      display: 'flex', alignItems: 'center',
+      padding: '0 14px', gap: 16,
+      background: 'var(--panel)',
+      borderBottom: '1px solid var(--line)',
+    }}>
+      {/* Logo */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 180 }}>
+        <div style={{
+          width: 22, height: 22, borderRadius: 6,
+          background: 'linear-gradient(135deg, var(--ink) 0%, oklch(0.28 0.04 275) 100%)',
+          display: 'grid', placeItems: 'center',
+          color: 'white',
+        }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+            <path d="M4 20 V6 M4 6 C10 6, 10 14, 16 14 C22 14, 22 6, 20 6"/>
+          </svg>
+        </div>
+        <span className="serif" style={{ fontSize: 18, letterSpacing: '-0.01em' }}>Loom</span>
+        <span className="mono" style={{ fontSize: 9, color: 'var(--ink-3)', padding: '2px 5px', borderRadius: 3, background: 'var(--panel-2)', border: '1px solid var(--line)' }}>BETA</span>
+      </div>
+
+      {/* Project crumb */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink-2)' }}>
+        <span style={{ color: 'var(--ink-3)' }}>Autumn Campaign</span>
+        <I.chevronRight size={10} stroke={1.8}/>
+        <span style={{ color: 'var(--ink)' }}>Hero visual — Draft 03</span>
+        <button style={{
+          marginLeft: 4, padding: '3px 6px', borderRadius: 4,
+          color: 'var(--ink-3)', fontSize: 10,
+        }}>
+          <I.chevronDown size={10} stroke={2}/>
+        </button>
+      </div>
+
+      <div style={{ flex: 1 }}/>
+
+      {/* Right cluster */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 5,
+          padding: '4px 8px', borderRadius: 6,
+          background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+          fontSize: 11,
+        }}>
+          <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--ok)', flexShrink: 0 }}/>
+          <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>Backend</span>
+          <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>api.loom.ai</span>
+        </div>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 5,
+          padding: '4px 8px', borderRadius: 6,
+          background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+          fontSize: 11,
+        }}>
+          <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--warn)', flexShrink: 0 }}/>
+          <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>Frontend</span>
+          <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>v0.4.2</span>
+        </div>
+        <div style={{ width: 1, height: 18, background: 'var(--line)', margin: '0 4px' }}/>
+        <div style={{ display: 'flex' }}>
+          {['EM','JR','KT'].map((n, i) => (
+            <div key={n} style={{
+              width: 22, height: 22, borderRadius: 99,
+              background: ['oklch(0.85 0.06 40)', 'oklch(0.82 0.07 200)', 'oklch(0.84 0.07 140)'][i],
+              color: 'oklch(0.3 0.05 0)',
+              fontSize: 9, fontWeight: 600,
+              display: 'grid', placeItems: 'center',
+              border: '2px solid var(--panel)',
+              marginLeft: i ? -6 : 0,
+            }}>{n}</div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+window.TopBar = TopBar;
+
+</script>
+<script type="text/babel">
+const TEMPLATE_CATS = ['All', 'Social', 'E-commerce', 'Brand', 'Print', 'Web', 'Packaging'];
+
+const TEMPLATES = [
+  { id: 't1', name: 'Product Hero',      cat: 'E-commerce', ratio: '4/5', tone: 'warm',    tag: '4:5' },
+  { id: 't2', name: 'Xiaohongshu Cover', cat: 'Social',     ratio: '3/4', tone: 'accent',  tag: '3:4', pro: true },
+  { id: 't3', name: 'Minimal Poster',    cat: 'Print',      ratio: '2/3', tone: 'neutral', tag: 'A3' },
+  { id: 't4', name: 'Weibo Banner',      cat: 'Social',     ratio: '16/9',tone: 'neutral', tag: '16:9' },
+  { id: 't5', name: 'Packaging Mockup',  cat: 'Packaging',  ratio: '1/1', tone: 'warm',    tag: '1:1' },
+  { id: 't6', name: 'Editorial Split',   cat: 'Print',      ratio: '3/4', tone: 'neutral', tag: '3:4' },
+  { id: 't7', name: 'Story Vertical',    cat: 'Social',     ratio: '9/16',tone: 'accent',  tag: '9:16' },
+  { id: 't8', name: 'Launch Banner',     cat: 'Web',        ratio: '16/9',tone: 'neutral', tag: '16:9' },
+  { id: 't9', name: 'Catalog Spread',    cat: 'Print',      ratio: '4/3', tone: 'warm',    tag: '4:3' },
+  { id: 't10', name: 'Brand Card',       cat: 'Brand',      ratio: '1/1', tone: 'accent',  tag: '1:1' },
+  { id: 't11', name: 'Detail Page',      cat: 'E-commerce', ratio: '3/4', tone: 'neutral', tag: '3:4', pro: true },
+  { id: 't12', name: 'Label Sticker',    cat: 'Packaging',  ratio: '1/1', tone: 'warm',    tag: '1:1' },
+];
+
+const TemplateCard = ({ t, active, onClick }) => (
+  <button onClick={onClick} style={{
+    display: 'block', textAlign: 'left',
+    padding: 6, borderRadius: 10,
+    border: active ? '1.5px solid var(--accent)' : '1px solid transparent',
+    background: active ? 'var(--accent-soft)' : 'transparent',
+    transition: 'all 120ms ease',
+    position: 'relative',
+  }}
+  onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = 'var(--panel-2)'; }}
+  onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
+    <Stripe label={t.name.split(' ')[0]} ratio={t.ratio} tone={t.tone} seed={t.id} tag={t.tag}/>
+    <div style={{ padding: '6px 2px 2px', display: 'flex', alignItems: 'center', gap: 5 }}>
+      <div style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--ink)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</div>
+      {t.pro && <span className="mono" style={{ fontSize: 8, color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 4px', borderRadius: 3, letterSpacing: '0.04em' }}>PRO</span>}
+    </div>
+    {active && (
+      <div style={{
+        position: 'absolute', top: 10, right: 10,
+        width: 18, height: 18, borderRadius: 99,
+        background: 'var(--accent)', color: 'white',
+        display: 'grid', placeItems: 'center',
+        boxShadow: '0 2px 6px oklch(0.55 0.22 275 / 0.35)',
+      }}>
+        <I.check size={11} stroke={3}/>
+      </div>
+    )}
+  </button>
+);
+
+const TemplatePanel = ({ activeId, onSelect }) => {
+  const [cat, setCat] = React.useState('All');
+  const [q, setQ] = React.useState('');
+
+  const filtered = TEMPLATES.filter(t =>
+    (cat === 'All' || t.cat === cat) &&
+    (!q || t.name.toLowerCase().includes(q.toLowerCase()))
+  );
+
+  // Masonry: two columns, distribute by index
+  const colA = filtered.filter((_, i) => i % 2 === 0);
+  const colB = filtered.filter((_, i) => i % 2 === 1);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--panel)', borderRight: '1px solid var(--line)' }}>
+      {/* Header */}
+      <div style={{ padding: '14px 14px 10px', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>Templates</div>
+
+        </div>
+
+        {/* Search */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 7,
+          padding: '7px 10px', borderRadius: 7,
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line-2)',
+        }}>
+          <I.search size={13} style={{ color: 'var(--ink-3)' }}/>
+          <input
+            value={q} onChange={(e) => setQ(e.target.value)}
+            placeholder="Search templates…"
+            style={{
+              flex: 1, border: 'none', outline: 'none', background: 'transparent',
+              fontSize: 12, color: 'var(--ink)',
+            }}
+          />
+          <kbd className="mono" style={{ fontSize: 9, color: 'var(--ink-3)', padding: '1px 4px', borderRadius: 3, border: '1px solid var(--line)' }}>⌘K</kbd>
+        </div>
+      </div>
+
+      {/* Category chips */}
+      <div style={{
+        padding: '0 14px 10px',
+        display: 'flex', gap: 4, flexShrink: 0,
+        overflowX: 'auto', scrollbarWidth: 'none',
+      }}>
+        {TEMPLATE_CATS.map(c => (
+          <button key={c} onClick={() => setCat(c)} style={{
+            fontSize: 11, padding: '4px 9px', borderRadius: 99,
+            background: cat === c ? 'var(--ink)' : 'transparent',
+            color: cat === c ? 'white' : 'var(--ink-2)',
+            fontWeight: cat === c ? 500 : 400,
+            whiteSpace: 'nowrap',
+            border: cat === c ? 'none' : '1px solid var(--line)',
+            transition: 'all 120ms',
+          }}>{c}</button>
+        ))}
+      </div>
+
+      {/* Masonry grid */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0 10px 14px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {colA.map(t => <TemplateCard key={t.id} t={t} active={activeId === t.id} onClick={() => onSelect(t)}/>)}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {colB.map(t => <TemplateCard key={t.id} t={t} active={activeId === t.id} onClick={() => onSelect(t)}/>)}
+          </div>
+        </div>
+
+        {filtered.length === 0 && (
+          <div style={{ padding: 24, textAlign: 'center', color: 'var(--ink-3)', fontSize: 12 }}>
+            No templates match "{q}"
+          </div>
+        )}
+      </div>
+
+      {/* Status footer */}
+      <StatusFooter count={filtered.length}/>
+    </div>
+  );
+};
+
+const StatusFooter = ({ count }) => {
+  const [progressOpen, setProgressOpen] = React.useState(false);
+
+  return (
+    <div style={{
+      flexShrink: 0,
+      borderTop: '1px solid var(--line)',
+      background: 'var(--panel-2)',
+      position: 'relative',
+    }}>
+      <div style={{
+        padding: '8px 10px',
+        display: 'flex', flexDirection: 'column', gap: 6,
+      }}>
+        <button onClick={() => setProgressOpen(o => !o)} style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '5px 8px', borderRadius: 6,
+          border: '1px solid var(--line)',
+          background: 'var(--panel)',
+          fontSize: 11, color: 'var(--ink-2)',
+        }}>
+          <I.film size={11} style={{ color: 'var(--ink-3)' }}/>
+          <span style={{ flex: 1, textAlign: 'left' }}>Dev progress</span>
+          <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>v0.4.2 · 7/12</span>
+          <I.chevronDown size={10} style={{ transform: progressOpen ? 'rotate(180deg)' : 'none', transition: 'transform 150ms', color: 'var(--ink-3)' }}/>
+        </button>
+
+        {progressOpen && <DevProgressPanel/>}
+      </div>
+    </div>
+  );
+};
+
+const StatusRow = ({ label, sub, state }) => {
+  const stateMap = {
+    ok:   { c: 'var(--ok)',   l: 'Connected',    pulse: false },
+    warn: { c: 'var(--warn)', l: 'Degraded',      pulse: true  },
+    err:  { c: 'oklch(0.6 0.18 25)', l: 'Offline', pulse: true },
+  };
+  const m = stateMap[state];
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8,
+      padding: '4px 8px', borderRadius: 6,
+      background: 'var(--panel)',
+      border: '1px solid var(--line-2)',
+      fontSize: 11,
+    }}>
+      <span style={{ position: 'relative', width: 8, height: 8 }}>
+        <span style={{
+          position: 'absolute', inset: 0, borderRadius: 99,
+          background: m.c,
+        }}/>
+        {m.pulse && (
+          <span style={{
+            position: 'absolute', inset: -2, borderRadius: 99,
+            background: m.c, opacity: 0.3,
+            animation: 'statusPulse 1.6s ease-in-out infinite',
+          }}/>
+        )}
+      </span>
+      <span style={{ fontWeight: 500, color: 'var(--ink)' }}>{label}</span>
+      <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{sub}</span>
+      <div style={{ flex: 1 }}/>
+      <span style={{ fontSize: 10, color: m.c, fontWeight: 500 }}>{m.l}</span>
+      <style>{`@keyframes statusPulse { 0%, 100% { transform: scale(1); opacity: 0.3; } 50% { transform: scale(1.8); opacity: 0; } }`}</style>
+    </div>
+  );
+};
+
+const DevProgressPanel = () => {
+  const milestones = [
+    { k: 'Template ingestion',   pct: 100, done: true  },
+    { k: 'Chat command parser',  pct: 100, done: true  },
+    { k: 'Generation pipeline',  pct: 72,  done: false },
+    { k: 'Export (PNG / PSD)',   pct: 40,  done: false },
+    { k: 'Collaboration',        pct: 0,   done: false },
+  ];
+  return (
+    <div style={{
+      padding: 10, borderRadius: 7,
+      background: 'var(--panel)',
+      border: '1px solid var(--line-2)',
+      display: 'flex', flexDirection: 'column', gap: 7,
+    }}>
+      {milestones.map(m => (
+        <div key={m.k}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+            <span style={{
+              width: 12, height: 12, borderRadius: 99,
+              background: m.done ? 'var(--ok)' : m.pct > 0 ? 'var(--accent)' : 'var(--line)',
+              color: 'white', display: 'grid', placeItems: 'center', flexShrink: 0,
+            }}>
+              {m.done && <I.check size={8} stroke={3.5}/>}
+            </span>
+            <span style={{ flex: 1, fontSize: 11, color: 'var(--ink-2)' }}>{m.k}</span>
+            <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{m.pct}%</span>
+          </div>
+          <div style={{ height: 3, borderRadius: 99, background: 'var(--line-2)', overflow: 'hidden', marginLeft: 18 }}>
+            <div style={{
+              height: '100%', width: `${m.pct}%`,
+              background: m.done ? 'var(--ok)' : 'var(--accent)',
+              borderRadius: 99,
+            }}/>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+window.TemplatePanel = TemplatePanel;
+window.TEMPLATES = TEMPLATES;
+
+</script>
+<script type="text/babel">
+// Main canvas — now simplified to just show the selected template preview.
+
+const Canvas = ({ template }) => {
+  const t = template;
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0,
+      overflow: 'hidden',
+      background: 'var(--panel-2)',
+    }}>
+      {/* Minimal toolbar */}
+      <div style={{
+        height: 44, flexShrink: 0,
+        borderBottom: '1px solid var(--line)',
+        display: 'flex', alignItems: 'center',
+        padding: '0 16px', gap: 10,
+        background: 'var(--panel)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+          <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Template</span>
+          <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{t?.name || 'None selected'}</span>
+          {t && (
+            <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', padding: '2px 6px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line-2)' }}>{t.tag}</span>
+          )}
+        </div>
+
+        <div style={{ flex: 1 }}/>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--ink-3)' }}>
+          <button style={iconBtnStyle} title="Zoom out"><I.close size={12}/></button>
+          <span className="mono">100%</span>
+          <button style={iconBtnStyle} title="Zoom in"><I.plus size={12}/></button>
+          <div style={{ width: 1, height: 16, background: 'var(--line)', margin: '0 4px' }}/>
+          <button style={iconBtnStyle} title="Fit"><I.dims size={12}/></button>
+        </div>
+      </div>
+
+      {/* Canvas stage */}
+      <div style={{
+        flex: 1, minHeight: 0, overflow: 'hidden',
+        position: 'relative',
+        background: `
+          radial-gradient(circle at 1px 1px, oklch(0.9 0.005 260) 1px, transparent 0)
+        `,
+        backgroundSize: '20px 20px',
+        backgroundColor: 'oklch(0.98 0.003 260)',
+      }}>
+        {t ? <TemplatePreview t={t}/> : <EmptyCanvas/>}
+      </div>
+    </div>
+  );
+};
+
+const iconBtnStyle = {
+  width: 24, height: 24, borderRadius: 5,
+  display: 'grid', placeItems: 'center',
+  color: 'var(--ink-2)',
+};
+
+const TemplatePreview = ({ t }) => {
+  const stageRef = React.useRef(null);
+  const [box, setBox] = React.useState({ w: 560, h: 480 });
+  React.useEffect(() => {
+    if (!stageRef.current) return;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const { width, height } = e.contentRect;
+        setBox({ w: Math.max(200, width - 80), h: Math.max(200, height - 120) });
+      }
+    });
+    ro.observe(stageRef.current);
+    return () => ro.disconnect();
+  }, []);
+  const [w, h] = ratioToSize(t.ratio, box.w, box.h);
+  const cat = t.cat;
+
+  return (
+    <div ref={stageRef} style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: 24 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+      <div style={{
+        position: 'relative',
+        width: w, height: h,
+        background: 'var(--panel)',
+        borderRadius: 6,
+        boxShadow: '0 30px 60px rgba(20,22,40,0.10), 0 4px 14px rgba(20,22,40,0.06), 0 0 0 1px var(--line)',
+        overflow: 'hidden',
+      }}>
+        <Stripe ratio={`${w}/${h}`} tone={t.tone} seed={t.id} label={t.name.split(' ')[0]} tag={t.tag}/>
+        {/* ruler handles */}
+        <Handles/>
+      </div>
+
+      {/* Meta strip */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '6px 12px', borderRadius: 99,
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+        boxShadow: 'var(--shadow-1)',
+        fontSize: 11,
+      }}>
+        <span className="mono" style={{ color: 'var(--ink-3)' }}>{cat}</span>
+        <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
+        <span className="mono" style={{ color: 'var(--ink-2)' }}>{t.ratio.replace('/', ':')}</span>
+        <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
+        <span className="mono" style={{ color: 'var(--ink-2)' }}>1280 × 1600 px</span>
+        <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
+        <span style={{ color: 'var(--ink-2)' }}>Ready for chat input →</span>
+      </div>
+    </div>
+    </div>
+  );
+};
+
+const Handles = () => {
+  const corners = [
+    { top: -4, left: -4 }, { top: -4, right: -4 },
+    { bottom: -4, left: -4 }, { bottom: -4, right: -4 },
+  ];
+  return (
+    <>
+      {corners.map((c, i) => (
+        <div key={i} style={{
+          position: 'absolute', ...c,
+          width: 8, height: 8,
+          background: 'white',
+          border: '1.5px solid var(--accent)',
+          borderRadius: 2,
+        }}/>
+      ))}
+    </>
+  );
+};
+
+const EmptyCanvas = () => (
+  <div style={{ textAlign: 'center', color: 'var(--ink-3)', fontSize: 13 }}>
+    Pick a template from the left rail to begin.
+  </div>
+);
+
+// Translate ratio to pixel dimensions that fit nicely in the canvas area
+const ratioToSize = (ratio, maxW = 560, maxH = 480) => {
+  const [a, b] = ratio.split('/').map(Number);
+  let w = maxW, h = (b / a) * maxW;
+  if (h > maxH) { h = maxH; w = (a / b) * maxH; }
+  return [Math.round(w), Math.round(h)];
+};
+
+window.Canvas = Canvas;
+
+</script>
+<script type="text/babel">
+// Slash commands, parse table, AI message list — additions to the chat surface.
+
+const SLASH_COMMANDS = [
+  { cmd: '/generate',   cn: '开始生图',   desc: 'Generate variations from current parameters', icon: 'zap',     shortcut: '⌘⏎',  group: 'Generation' },
+  { cmd: '/regenerate', cn: '重新生成',   desc: 'Re-run the last prompt with a new seed',       icon: 'refresh', group: 'Generation' },
+  { cmd: '/upscale',    cn: '放大',       desc: 'Upscale selected option to 2K / 4K',           icon: 'layers',  group: 'Generation' },
+  { cmd: '/variations', cn: '出更多版本', desc: 'Produce 4 more variants of the selected one',  icon: 'grid',    group: 'Generation' },
+
+  { cmd: '/analyze',    cn: '分析素材',   desc: 'Parse an uploaded image, brief, or CSV',       icon: 'eye',     group: 'Tools' },
+  { cmd: '/palette',    cn: '提取配色',   desc: 'Extract a palette from a reference',            icon: 'palette', group: 'Tools' },
+  { cmd: '/resize',     cn: '换尺寸',     desc: 'Reflow the design into a new ratio',            icon: 'dims',    group: 'Tools' },
+  { cmd: '/copy',       cn: '换文案',     desc: 'Rewrite on-image copy',                         icon: 'type',    group: 'Tools' },
+
+  { cmd: '/export-png', cn: '导出PNG',    desc: 'Export selected option as PNG',                 icon: 'download', group: 'Export' },
+  { cmd: '/export-psd', cn: '导出PSD',    desc: 'Export with editable layers',                   icon: 'download', group: 'Export' },
+  { cmd: '/share',      cn: '分享链接',   desc: 'Generate a review link',                        icon: 'share',    group: 'Export' },
+];
+
+const SlashMenu = ({ query, onPick, onClose }) => {
+  const q = query.toLowerCase().replace(/^\//, '');
+  const filtered = SLASH_COMMANDS.filter(c =>
+    !q || c.cmd.includes(q) || c.cn.includes(query.replace(/^\//, '')) || c.desc.toLowerCase().includes(q)
+  );
+
+  const groups = filtered.reduce((acc, c) => {
+    (acc[c.group] ||= []).push(c); return acc;
+  }, {});
+
+  const [hover, setHover] = React.useState(0);
+  React.useEffect(() => setHover(0), [query]);
+
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') { onClose(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); setHover(h => Math.min(filtered.length - 1, h + 1)); }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); setHover(h => Math.max(0, h - 1)); }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        if (filtered[hover]) { e.preventDefault(); onPick(filtered[hover]); }
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [filtered, hover, onPick, onClose]);
+
+  if (filtered.length === 0) {
+    return (
+      <div style={slashMenuStyle}>
+        <div style={{ padding: 14, fontSize: 12, color: 'var(--ink-3)', textAlign: 'center' }}>
+          No command matches "{query}"
+        </div>
+      </div>
+    );
+  }
+
+  let idx = -1;
+  return (
+    <div style={slashMenuStyle}>
+      <div style={{
+        padding: '8px 12px 6px', fontSize: 10, color: 'var(--ink-3)',
+        display: 'flex', alignItems: 'center', gap: 8,
+        borderBottom: '1px solid var(--line-2)',
+      }} className="mono">
+        <span style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>Commands</span>
+        <div style={{ flex: 1 }}/>
+        <span>↑↓ navigate · ⏎ pick · esc close</span>
+      </div>
+
+      <div style={{ maxHeight: 280, overflowY: 'auto', padding: 4 }}>
+        {Object.entries(groups).map(([g, items]) => (
+          <div key={g}>
+            <div className="mono" style={{ padding: '6px 10px 2px', fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>{g}</div>
+            {items.map(c => {
+              idx++;
+              const active = idx === hover;
+              return (
+                <button
+                  key={c.cmd}
+                  onMouseEnter={((i) => () => setHover(i))(idx)}
+                  onClick={() => onPick(c)}
+                  style={{
+                    width: '100%', textAlign: 'left',
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '7px 10px', borderRadius: 6,
+                    background: active ? 'var(--accent-soft)' : 'transparent',
+                  }}>
+                  <div style={{
+                    width: 22, height: 22, borderRadius: 5,
+                    background: active ? 'var(--accent)' : 'var(--panel-2)',
+                    color: active ? 'white' : 'var(--ink-2)',
+                    display: 'grid', placeItems: 'center', flexShrink: 0,
+                  }}>
+                    {I[c.icon] ? I[c.icon]({ size: 12 }) : <I.bolt size={12}/>}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                      <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: active ? 'var(--accent-ink)' : 'var(--ink)' }}>{c.cmd}</span>
+                      <span style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>{c.cn}</span>
+                    </div>
+                    <div style={{ fontSize: 10.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.desc}</div>
+                  </div>
+                  {c.shortcut && (
+                    <kbd className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', padding: '1px 5px', borderRadius: 3, border: '1px solid var(--line)' }}>{c.shortcut}</kbd>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const slashMenuStyle = {
+  position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, right: 0,
+  background: 'var(--panel)',
+  border: '1px solid var(--line)',
+  borderRadius: 10,
+  boxShadow: '0 8px 32px rgba(20,22,40,0.10), 0 2px 6px rgba(20,22,40,0.04)',
+  overflow: 'hidden',
+  zIndex: 20,
+};
+
+// ---------- Parse table (structured analysis output) ----------
+
+const ParseTable = ({ title, subtitle, rows, source }) => {
+  return (
+    <div style={{
+      width: '100%', borderRadius: 10,
+      background: 'var(--panel)', border: '1px solid var(--line-2)',
+      overflow: 'hidden',
+    }}>
+      <div style={{ padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ width: 20, height: 20, borderRadius: 5, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' }}>
+          <I.file size={11}/>
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 600 }}>{title}</div>
+          {subtitle && <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{subtitle}</div>}
+        </div>
+        {source && (
+          <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', padding: '2px 6px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line-2)' }}>
+            {source}
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '92px 1fr 54px', fontSize: 11 }}>
+        <HeadCell>Field</HeadCell>
+        <HeadCell>Value</HeadCell>
+        <HeadCell right>Conf.</HeadCell>
+
+        {rows.map((r, i) => (
+          <React.Fragment key={i}>
+            <Cell top={i > 0}>
+              <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{r.field}</span>
+            </Cell>
+            <Cell top={i > 0}>
+              {r.editable ? (
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  padding: '2px 6px', borderRadius: 4,
+                  background: 'var(--panel-2)', border: '1px dashed var(--line)',
+                  fontSize: 11, color: 'var(--ink)',
+                }}>
+                  {r.value}
+                  <I.type size={9} style={{ color: 'var(--ink-3)' }}/>
+                </span>
+              ) : (
+                <span style={{ color: 'var(--ink)' }}>{r.value}</span>
+              )}
+              {r.note && <div style={{ fontSize: 10, color: 'var(--ink-3)', marginTop: 2 }}>{r.note}</div>}
+            </Cell>
+            <Cell top={i > 0} right>
+              <ConfBadge conf={r.conf}/>
+            </Cell>
+          </React.Fragment>
+        ))}
+      </div>
+
+      <div style={{
+        padding: '8px 12px', borderTop: '1px solid var(--line-2)',
+        display: 'flex', alignItems: 'center', gap: 6,
+        background: 'var(--panel-2)',
+      }}>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{rows.length} fields parsed</span>
+        <div style={{ flex: 1 }}/>
+        <button style={ghostBtn}>Edit</button>
+        <button style={{ ...ghostBtn, background: 'var(--ink)', color: 'white', border: 'none' }}>
+          Apply to design
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const HeadCell = ({ children, right }) => (
+  <div style={{
+    padding: '6px 12px',
+    fontSize: 9.5, color: 'var(--ink-3)',
+    textTransform: 'uppercase', letterSpacing: '0.06em',
+    fontFamily: 'JetBrains Mono, monospace',
+    borderBottom: '1px solid var(--line-2)',
+    background: 'var(--panel-2)',
+    textAlign: right ? 'right' : 'left',
+  }}>{children}</div>
+);
+
+const Cell = ({ children, right, top }) => (
+  <div style={{
+    padding: '8px 12px',
+    borderTop: top ? '1px solid var(--line-2)' : 'none',
+    textAlign: right ? 'right' : 'left',
+    minWidth: 0,
+  }}>{children}</div>
+);
+
+const ConfBadge = ({ conf }) => {
+  const map = {
+    high:   { l: 'High', c: 'var(--ok)',    bg: 'oklch(0.95 0.04 155)' },
+    med:    { l: 'Med',  c: 'var(--warn)',  bg: 'oklch(0.96 0.04 70)' },
+    low:    { l: 'Low',  c: 'oklch(0.55 0.15 25)', bg: 'oklch(0.95 0.04 25)' },
+  }[conf] || { l: '–', c: 'var(--ink-3)', bg: 'var(--panel-2)' };
+  return (
+    <span style={{
+      display: 'inline-block',
+      fontSize: 9.5, fontWeight: 500,
+      padding: '1px 6px', borderRadius: 99,
+      color: map.c, background: map.bg,
+    }}>{map.l}</span>
+  );
+};
+
+const ghostBtn = {
+  fontSize: 11, padding: '4px 9px', borderRadius: 5,
+  border: '1px solid var(--line)', background: 'var(--panel)',
+  color: 'var(--ink-2)',
+};
+
+// ---------- AI structured message list ----------
+
+const MessageList = ({ title, items }) => (
+  <div style={{
+    width: '100%', borderRadius: 10,
+    background: 'var(--panel)', border: '1px solid var(--line-2)',
+    overflow: 'hidden',
+  }}>
+    <div style={{ padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 7 }}>
+      <I.layers size={12} style={{ color: 'var(--ink-2)' }}/>
+      <span style={{ fontSize: 11.5, fontWeight: 600 }}>{title}</span>
+      <div style={{ flex: 1 }}/>
+      <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{items.length} items</span>
+    </div>
+    <div>
+      {items.map((it, i) => (
+        <div key={i} style={{
+          padding: '9px 12px',
+          borderTop: i > 0 ? '1px solid var(--line-2)' : 'none',
+          display: 'flex', gap: 10, alignItems: 'flex-start',
+        }}>
+          <div style={{
+            width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+            background: it.kind === 'warn' ? 'oklch(0.96 0.04 70)' : it.kind === 'ok' ? 'oklch(0.95 0.04 155)' : 'var(--accent-soft)',
+            color: it.kind === 'warn' ? 'var(--warn)' : it.kind === 'ok' ? 'var(--ok)' : 'var(--accent-ink)',
+            display: 'grid', placeItems: 'center',
+          }}>
+            {it.kind === 'warn' ? <I.bolt size={10}/> : it.kind === 'ok' ? <I.check size={11} stroke={2.4}/> : <I.dot size={10}/>}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--ink)' }}>{it.title}</div>
+            {it.body && <div style={{ fontSize: 11, color: 'var(--ink-2)', marginTop: 2, lineHeight: 1.45 }}>{it.body}</div>}
+            {it.action && (
+              <button style={{
+                marginTop: 6, fontSize: 10.5, padding: '3px 8px', borderRadius: 5,
+                border: '1px solid var(--line)', color: 'var(--ink-2)', background: 'var(--panel-2)',
+              }}>{it.action}</button>
+            )}
+          </div>
+          <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', flexShrink: 0 }}>{String(i + 1).padStart(2, '0')}</span>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+// ---------- Slash command acknowledgement bubble ----------
+
+const CommandEcho = ({ cmd, cn }) => (
+  <div style={{
+    display: 'inline-flex', alignItems: 'center', gap: 6,
+    padding: '4px 9px', borderRadius: 7,
+    background: 'oklch(0.28 0.04 275)', color: 'white',
+    fontSize: 11.5,
+  }}>
+    <I.bolt size={11} style={{ color: 'oklch(0.85 0.15 275)' }}/>
+    <span className="mono" style={{ fontWeight: 500 }}>{cmd}</span>
+    <span style={{ color: 'oklch(0.75 0.04 275)' }}>{cn}</span>
+  </div>
+);
+
+window.SlashMenu = SlashMenu;
+window.SLASH_COMMANDS = SLASH_COMMANDS;
+window.ParseTable = ParseTable;
+window.MessageList = MessageList;
+window.CommandEcho = CommandEcho;
+
+</script>
+<script type="text/babel">
+// AI chat column. Three states: empty / generating / returned.
+// Rich message types: text, option chips, file cards, action buttons, thinking trace, image results.
+
+// ---------- Sub-components ----------
+
+const Avatar = ({ who }) => (
+  who === 'ai' ? (
+    <div style={{
+      width: 24, height: 24, borderRadius: 7, flexShrink: 0,
+      background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
+      color: 'white', display: 'grid', placeItems: 'center',
+    }}>
+      <I.sparkles size={12} stroke={2}/>
+    </div>
+  ) : (
+    <div style={{
+      width: 24, height: 24, borderRadius: 7, flexShrink: 0,
+      background: 'oklch(0.82 0.07 200)', color: 'oklch(0.3 0.05 200)',
+      fontSize: 10, fontWeight: 600,
+      display: 'grid', placeItems: 'center',
+    }}>JR</div>
+  )
+);
+
+const Bubble = ({ who, children, meta }) => (
+  <div style={{
+    display: 'flex', gap: 10, alignItems: 'flex-start',
+    flexDirection: who === 'user' ? 'row-reverse' : 'row',
+  }}>
+    <Avatar who={who}/>
+    <div style={{ maxWidth: 'calc(100% - 38px)', display: 'flex', flexDirection: 'column', gap: 6, alignItems: who === 'user' ? 'flex-end' : 'flex-start' }}>
+      {meta && <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{meta}</div>}
+      {children}
+    </div>
+  </div>
+);
+
+const TextBubble = ({ who, children }) => (
+  <div style={{
+    fontSize: 12.5, lineHeight: 1.55,
+    padding: '9px 12px', borderRadius: 10,
+    background: who === 'user' ? 'var(--ink)' : 'var(--panel)',
+    color: who === 'user' ? 'white' : 'var(--ink)',
+    border: who === 'user' ? 'none' : '1px solid var(--line-2)',
+    maxWidth: '100%',
+  }}>{children}</div>
+);
+
+const FileCard = ({ name, size, type }) => (
+  <div style={{
+    display: 'flex', alignItems: 'center', gap: 10,
+    padding: '8px 12px', borderRadius: 8,
+    background: 'var(--panel)', border: '1px solid var(--line-2)',
+    fontSize: 12, minWidth: 200,
+  }}>
+    <div style={{
+      width: 32, height: 40, borderRadius: 4,
+      background: `repeating-linear-gradient(135deg, oklch(0.95 0.02 40) 0 4px, oklch(0.92 0.03 40) 4px 8px)`,
+      border: '1px solid var(--line-2)',
+      display: 'grid', placeItems: 'center',
+      color: 'oklch(0.5 0.05 40)',
+    }}>
+      <I.image size={14}/>
+    </div>
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+      <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{type} · {size}</div>
+    </div>
+  </div>
+);
+
+const ThinkingTrace = ({ steps, done }) => {
+  const [expanded, setExpanded] = React.useState(false);
+  return (
+    <div style={{
+      borderRadius: 10, border: '1px solid var(--line-2)',
+      background: 'var(--panel-2)',
+      overflow: 'hidden',
+      width: '100%',
+    }}>
+      <button onClick={() => setExpanded(e => !e)} style={{
+        width: '100%', textAlign: 'left',
+        padding: '8px 11px',
+        display: 'flex', alignItems: 'center', gap: 8,
+      }}>
+        <I.chevronRight size={11} style={{ transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 120ms' }}/>
+        <span style={{ fontSize: 11.5, fontWeight: 500 }}>{done ? 'Reasoned for 4 steps' : 'Thinking…'}</span>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{done ? '2.1s' : ''}</span>
+        {!done && <span style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--accent)', animation: 'pulse 1.2s ease-in-out infinite' }}/>}
+      </button>
+      {expanded && (
+        <div style={{ padding: '2px 11px 10px 28px', borderTop: '1px solid var(--line-2)' }}>
+          {steps.map((s, i) => (
+            <div key={i} style={{ fontSize: 11.5, color: 'var(--ink-2)', padding: '5px 0', display: 'flex', gap: 8 }}>
+              <span className="mono" style={{ color: 'var(--ink-3)', minWidth: 14 }}>{i + 1}</span>
+              <span>{s}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const OptionChips = ({ title, options, multi }) => {
+  const [picked, setPicked] = React.useState(multi ? [options[0]] : options[0]);
+  const isPicked = (o) => multi ? picked.includes(o) : picked === o;
+  const toggle = (o) => {
+    if (multi) setPicked(p => p.includes(o) ? p.filter(x => x !== o) : [...p, o]);
+    else setPicked(o);
+  };
+  return (
+    <div style={{
+      borderRadius: 10, padding: 12, width: '100%',
+      background: 'var(--panel)', border: '1px solid var(--line-2)',
+    }}>
+      <div style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--ink)', marginBottom: 8 }}>{title}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+        {options.map(o => (
+          <button key={o} onClick={() => toggle(o)} style={{
+            fontSize: 11.5, padding: '4px 10px', borderRadius: 99,
+            background: isPicked(o) ? 'var(--ink)' : 'var(--panel-2)',
+            color: isPicked(o) ? 'white' : 'var(--ink-2)',
+            border: '1px solid',
+            borderColor: isPicked(o) ? 'var(--ink)' : 'var(--line-2)',
+            transition: 'all 100ms',
+          }}>{o}</button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ColorPalette = ({ palettes }) => {
+  const [picked, setPicked] = React.useState(0);
+  return (
+    <div style={{
+      borderRadius: 10, padding: 12, width: '100%',
+      background: 'var(--panel)', border: '1px solid var(--line-2)',
+    }}>
+      <div style={{ fontSize: 11.5, fontWeight: 500, marginBottom: 8 }}>Pick a palette</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {palettes.map((p, i) => (
+          <button key={i} onClick={() => setPicked(i)} style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: 6, borderRadius: 7,
+            background: picked === i ? 'var(--accent-soft)' : 'transparent',
+            border: picked === i ? '1px solid var(--accent)' : '1px solid transparent',
+            textAlign: 'left',
+          }}>
+            <div style={{ display: 'flex', borderRadius: 5, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.05)' }}>
+              {p.colors.map(c => (
+                <div key={c} style={{ width: 18, height: 22, background: c }}/>
+              ))}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 500 }}>{p.name}</div>
+              <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{p.tag}</div>
+            </div>
+            {picked === i && <I.check size={13} stroke={2.2} style={{ color: 'var(--accent)' }}/>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ActionRow = ({ primary, secondary }) => (
+  <div style={{ display: 'flex', gap: 6, width: '100%' }}>
+    <button style={{
+      flex: 1, fontSize: 12, fontWeight: 500,
+      padding: '9px 12px', borderRadius: 8,
+      background: 'var(--accent)', color: 'white',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+      boxShadow: '0 1px 0 rgba(255,255,255,0.2) inset, 0 2px 8px oklch(0.55 0.22 275 / 0.25)',
+    }}>
+      <I.zap size={13} fill="white" stroke={0}/>
+      {primary}
+    </button>
+    {secondary && (
+      <button style={{
+        fontSize: 12, padding: '9px 12px', borderRadius: 8,
+        background: 'var(--panel)', color: 'var(--ink-2)',
+        border: '1px solid var(--line)',
+      }}>{secondary}</button>
+    )}
+  </div>
+);
+
+const AnalyzedSubject = () => (
+  <div style={{
+    borderRadius: 10, padding: 12, width: '100%',
+    background: 'var(--panel)', border: '1px solid var(--line-2)',
+  }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+      <I.eye size={12} style={{ color: 'var(--accent-ink)' }}/>
+      <span style={{ fontSize: 11.5, fontWeight: 500 }}>I identified</span>
+    </div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 10px', fontSize: 11.5 }}>
+      {[
+        ['Object', 'Ceramic vase, matte glaze'],
+        ['Palette', 'Warm beige, clay, ivory'],
+        ['Lighting', 'Soft side-light, studio'],
+        ['Mood', 'Quiet, editorial, Japandi'],
+      ].map(([k, v]) => (
+        <React.Fragment key={k}>
+          <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', alignSelf: 'center' }}>{k}</span>
+          <span style={{ color: 'var(--ink)' }}>{v}</span>
+        </React.Fragment>
+      ))}
+    </div>
+  </div>
+);
+
+// ---------- States ----------
+
+const ChatEmpty = () => {
+  const prompts = [
+    { icon: <I.image size={13}/>,    text: 'Upload product photos and describe the vibe' },
+    { icon: <I.type size={13}/>,     text: 'Paste brand guidelines from a PDF' },
+    { icon: <I.palette size={13}/>,  text: 'Generate 4 variations in a muted palette' },
+    { icon: <I.dims size={13}/>,     text: 'Resize this to 9:16 for Instagram Stories' },
+  ];
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px' }}>
+      <div style={{
+        padding: '20px 4px 16px', display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center',
+      }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: 11,
+          background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
+          color: 'white', display: 'grid', placeItems: 'center',
+        }}>
+          <I.sparkles size={18} stroke={1.8}/>
+        </div>
+        <div className="serif" style={{ fontSize: 19, letterSpacing: '-0.01em' }}>How can I help design today?</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
+          Upload anything — product shots, references, brand kits — or just start typing.
+        </div>
+      </div>
+
+      <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '12px 4px 6px' }}>Try</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {prompts.map((p, i) => (
+          <button key={i} style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '10px 12px', borderRadius: 8,
+            background: 'var(--panel)', border: '1px solid var(--line-2)',
+            fontSize: 12, color: 'var(--ink-2)', textAlign: 'left',
+          }}>
+            <span style={{ color: 'var(--ink-3)' }}>{p.icon}</span>
+            <span style={{ flex: 1 }}>{p.text}</span>
+            <I.arrowRight size={12} style={{ color: 'var(--ink-3)' }}/>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ChatGenerating = () => (
+  <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <Bubble who="user">
+      <TextBubble who="user">Make 4 studio shots of this vase for a homepage hero, warm and editorial. Add "New in" copy.</TextBubble>
+      <FileCard name="vase-ref-01.jpg" size="2.4 MB" type="JPG"/>
+    </Bubble>
+
+    <Bubble who="ai" meta="Loom · generating">
+      <ThinkingTrace done={false} steps={[
+        'Parsing reference image — detecting subject and lighting',
+        'Matching Japandi aesthetic from brand kit',
+        'Sampling 4 layout variants at 4:5',
+      ]}/>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '10px 12px', borderRadius: 10, width: '100%',
+        background: 'var(--panel)', border: '1px solid var(--line-2)',
+      }}>
+        <div style={{ position: 'relative', width: 24, height: 24 }}>
+          <div style={{ position: 'absolute', inset: 0, borderRadius: 99, border: '2px solid var(--line-2)' }}/>
+          <div style={{ position: 'absolute', inset: 0, borderRadius: 99, border: '2px solid var(--accent)', borderRightColor: 'transparent', borderBottomColor: 'transparent', animation: 'spin 0.8s linear infinite' }}/>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 500 }}>Generating 4 options</div>
+          <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>~18s remaining</div>
+        </div>
+        <button style={{ fontSize: 11, color: 'var(--ink-3)', padding: '4px 8px', borderRadius: 5, border: '1px solid var(--line)' }}>Stop</button>
+      </div>
+    </Bubble>
+    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+  </div>
+);
+
+const ChatReturned = () => (
+  <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+    {/* Session header */}
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 6,
+      padding: '4px 0', fontSize: 10,
+    }}>
+      <span className="mono" style={{ color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Session · Product Hero</span>
+      <div style={{ flex: 1, height: 1, background: 'var(--line-2)' }}/>
+      <span className="mono" style={{ color: 'var(--ink-3)' }}>5 turns</span>
+    </div>
+
+    <Bubble who="user">
+      <FileCard name="autumn-brief.csv" size="3.1 KB" type="CSV"/>
+      <FileCard name="vase-shelf-ref.jpg" size="2.4 MB" type="JPG"/>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+        <CommandEcho cmd="/analyze" cn="分析素材"/>
+      </div>
+    </Bubble>
+
+    <Bubble who="ai" meta="Loom · parsed 2 files">
+      <TextBubble who="ai">
+        I pulled the brief and the reference. Here's what I got — anything with <b>Med</b> or <b>Low</b> confidence is worth a quick look.
+      </TextBubble>
+      <ParseTable
+        title="Brief parsed"
+        subtitle="autumn-brief.csv"
+        source="CSV"
+        rows={[
+          { field: 'Campaign', value: 'Autumn \'26 — ceramic drop',           conf: 'high' },
+          { field: 'Audience', value: 'Japandi home, 28–40, design-forward',  conf: 'high' },
+          { field: 'Channel',  value: 'Homepage hero + social',                conf: 'high' },
+          { field: 'Ratio',    value: '4:5 (primary), 9:16 (story)',           conf: 'high', editable: true },
+          { field: 'Copy',     value: '"New in · Autumn \'26"',                 conf: 'med', editable: true, note: 'CSV listed two variants — picked the shorter one.' },
+          { field: 'Palette',  value: 'Clay, ivory, muted olive',              conf: 'med' },
+          { field: 'Deadline', value: 'Oct 14 (estimated)',                    conf: 'low', note: 'Not explicit in brief — inferred from campaign name.' },
+        ]}
+      />
+      <MessageList
+        title="Before we generate"
+        items={[
+          { kind: 'warn', title: 'Copy length risks overflowing 9:16',  body: '"New in · Autumn \'26" at 48pt will cut on narrow aspect. Shorten to "New in" for stories.', action: 'Auto-shorten for 9:16' },
+          { kind: 'info', title: 'Brand kit not linked yet',             body: 'Without it I\'ll use inferred palette. Link the kit to lock exact tokens.', action: 'Link brand kit' },
+          { kind: 'ok',   title: 'Reference image clean and high-res',   body: '2400 × 3000, no visible compression, subject centered.' },
+        ]}
+      />
+    </Bubble>
+
+    <Bubble who="user">
+      <TextBubble who="user">Looks right. Shorten the copy for 9:16, keep Clay & ivory, and generate.</TextBubble>
+      <CommandEcho cmd="/generate" cn="开始生图"/>
+    </Bubble>
+
+    <Bubble who="ai" meta="Loom · 2.1s">
+      <ThinkingTrace done steps={[
+        'Locked parameters from parse table + user edits',
+        'Shortened copy variant for 9:16 output',
+        'Sampled 4 layout variants within Japandi reference space',
+        'Synthesized at 1280×1600, delivered to canvas',
+      ]}/>
+      <TextBubble who="ai">
+        Here are 4 directions in the canvas. <b>Option B (Minimal)</b> has the cleanest copy hierarchy — that's my pick. Want me to iterate on any of them?
+      </TextBubble>
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {['/upscale', '/variations', '/resize 9:16', '/export-png', 'Compare A vs B'].map(t => (
+          <button key={t} style={{
+            fontSize: 11, padding: '4px 9px', borderRadius: 99,
+            color: t.startsWith('/') ? 'var(--accent-ink)' : 'var(--ink-2)',
+            border: '1px solid',
+            borderColor: t.startsWith('/') ? 'transparent' : 'var(--line)',
+            background: t.startsWith('/') ? 'var(--accent-soft)' : 'var(--panel)',
+            fontFamily: t.startsWith('/') ? 'JetBrains Mono, monospace' : 'inherit',
+          }}>{t}</button>
+        ))}
+      </div>
+    </Bubble>
+  </div>
+);
+
+// ---------- Composer ----------
+
+const Composer = () => {
+  const [text, setText] = React.useState('/');
+  const [files, setFiles] = React.useState([
+    { name: 'moodboard.pdf', size: '1.8 MB', type: 'PDF' },
+  ]);
+  const taRef = React.useRef(null);
+
+  // Detect the current /slash token at the start of the input (simple model: line starts with /)
+  const slashQuery = React.useMemo(() => {
+    const m = text.match(/^\/\S*/);
+    return m ? m[0] : null;
+  }, [text]);
+
+  const pickCommand = (c) => {
+    setText(c.cmd + ' ');
+    setTimeout(() => taRef.current?.focus(), 0);
+  };
+
+  return (
+    <div style={{
+      flexShrink: 0, padding: 12,
+      borderTop: '1px solid var(--line)',
+      background: 'var(--panel)',
+      position: 'relative',
+    }}>
+      <div style={{
+        borderRadius: 12,
+        border: slashQuery ? '1px solid var(--accent)' : '1px solid var(--line)',
+        background: 'var(--panel-2)',
+        padding: 10,
+        display: 'flex', flexDirection: 'column', gap: 8,
+        boxShadow: slashQuery ? '0 0 0 4px var(--accent-soft), var(--shadow-1)' : 'var(--shadow-1)',
+        transition: 'box-shadow 150ms, border-color 150ms',
+        position: 'relative',
+      }}>
+        {slashQuery && (
+          <SlashMenu query={slashQuery} onPick={pickCommand} onClose={() => setText('')}/>
+        )}
+        {files.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {files.map((f, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '4px 6px 4px 8px', borderRadius: 6,
+                background: 'var(--panel)', border: '1px solid var(--line-2)',
+                fontSize: 11,
+              }}>
+                <I.file size={11} style={{ color: 'var(--ink-3)' }}/>
+                <span style={{ fontWeight: 500 }}>{f.name}</span>
+                <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 9.5 }}>{f.size}</span>
+                <button onClick={() => setFiles(fs => fs.filter((_, j) => j !== i))} style={{ padding: 2, color: 'var(--ink-3)' }}>
+                  <I.close size={11}/>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <textarea
+          ref={taRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Ask Loom, or type / for commands…"
+          rows={2}
+          style={{
+            border: 'none', outline: 'none', resize: 'none',
+            background: 'transparent',
+            fontSize: 13, lineHeight: 1.45, color: 'var(--ink)',
+            fontFamily: 'inherit',
+          }}
+        />
+
+        {!slashQuery && (
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: -2 }}>
+            {['/开始生图', '/分析素材', '/导出PNG'].map(s => (
+              <button key={s} onClick={() => { const c = SLASH_COMMANDS.find(x => x.cn === s.slice(1) || x.cmd === s); if (c) pickCommand(c); }} style={{
+                fontSize: 10, padding: '2px 7px', borderRadius: 99,
+                color: 'var(--accent-ink)', background: 'var(--accent-soft)',
+                fontFamily: 'JetBrains Mono, monospace',
+              }}>{s}</button>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button style={{ padding: 6, borderRadius: 6, color: 'var(--ink-2)' }} title="Attach file">
+            <I.paperclip size={14}/>
+          </button>
+          <button style={{ padding: 6, borderRadius: 6, color: 'var(--ink-2)' }} title="Insert image">
+            <I.image size={14}/>
+          </button>
+          <button style={{ padding: 6, borderRadius: 6, color: 'var(--ink-2)' }} title="Style">
+            <I.palette size={14}/>
+          </button>
+
+          <div style={{ flex: 1 }}/>
+
+
+          <button style={{
+            width: 30, height: 30, borderRadius: 8,
+            background: text || files.length ? 'var(--ink)' : 'var(--line)',
+            color: text || files.length ? 'white' : 'var(--ink-3)',
+            display: 'grid', placeItems: 'center',
+          }}>
+            <I.arrowUp size={14} stroke={2.2}/>
+          </button>
+        </div>
+      </div>
+
+
+    </div>
+  );
+};
+
+// ---------- Main ----------
+
+const Chat = ({ state }) => {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', height: '100%',
+      background: 'var(--panel)',
+      borderLeft: '1px solid var(--line)',
+    }}>
+      {/* Header */}
+      <div style={{
+        height: 44, flexShrink: 0,
+        display: 'flex', alignItems: 'center',
+        padding: '0 14px', gap: 8,
+        borderBottom: '1px solid var(--line)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{
+            width: 7, height: 7, borderRadius: 99,
+            background: state === 'generating' ? 'var(--accent)' : 'var(--ok)',
+            animation: state === 'generating' ? 'pulse 1.2s ease-in-out infinite' : 'none',
+          }}/>
+          <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>Loom</span>
+          <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>
+            {state === 'generating' ? 'working…' : state === 'empty' ? 'ready' : 'suggested direction'}
+          </span>
+        </div>
+        <div style={{ flex: 1 }}/>
+        <button style={{ padding: 5, borderRadius: 5, color: 'var(--ink-3)' }} title="History"><I.layers size={13}/></button>
+        <button style={{ padding: 5, borderRadius: 5, color: 'var(--ink-3)' }} title="More"><I.more size={13}/></button>
+      </div>
+
+      {state === 'empty' && <ChatEmpty/>}
+      {state === 'generating' && <ChatGenerating/>}
+      {state === 'returned' && <ChatReturned/>}
+
+      <Composer/>
+    </div>
+  );
+};
+
+window.Chat = Chat;
+
+</script>
+<script type="text/babel">
+// Tweaks panel — toggle between chat/canvas states
+
+const Tweaks = ({ visible, tweaks, onChange, onClose }) => {
+  if (!visible) return null;
+  return (
+    <div style={{
+      position: 'fixed', bottom: 16, right: 16, zIndex: 50,
+      width: 260, borderRadius: 12,
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      boxShadow: '0 10px 40px rgba(20,22,40,0.14), 0 2px 8px rgba(20,22,40,0.05)',
+      overflow: 'hidden',
+    }}>
+      <div style={{
+        padding: '10px 12px',
+        display: 'flex', alignItems: 'center', gap: 8,
+        borderBottom: '1px solid var(--line-2)',
+      }}>
+        <I.settings size={13} style={{ color: 'var(--ink-2)' }}/>
+        <div style={{ flex: 1, fontSize: 12, fontWeight: 600 }}>Tweaks</div>
+        <button onClick={onClose} style={{ padding: 3, color: 'var(--ink-3)', borderRadius: 4 }}>
+          <I.close size={12}/>
+        </button>
+      </div>
+      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <TweakRow
+          label="Chat state"
+          sub="Empty · Generating · Returned"
+          value={tweaks.chatState}
+          options={[
+            { k: 'empty', l: 'Empty' },
+            { k: 'generating', l: 'Generating' },
+            { k: 'returned', l: 'Returned' },
+          ]}
+          onChange={(v) => onChange({ chatState: v })}
+        />
+      </div>
+      <div style={{
+        padding: '8px 12px', borderTop: '1px solid var(--line-2)',
+        fontSize: 10, color: 'var(--ink-3)',
+      }} className="mono">
+        Changes persist via host
+      </div>
+    </div>
+  );
+};
+
+const TweakRow = ({ label, sub, value, options, onChange }) => (
+  <div>
+    <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--ink)', marginBottom: 2 }}>{label}</div>
+    {sub && <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginBottom: 6 }}>{sub}</div>}
+    <div style={{ display: 'flex', background: 'var(--panel-2)', borderRadius: 6, padding: 2, border: '1px solid var(--line-2)' }}>
+      {options.map(o => (
+        <button key={o.k} onClick={() => onChange(o.k)} style={{
+          flex: 1, fontSize: 11, padding: '5px 6px', borderRadius: 4,
+          background: value === o.k ? 'var(--panel)' : 'transparent',
+          color: value === o.k ? 'var(--ink)' : 'var(--ink-3)',
+          fontWeight: value === o.k ? 500 : 400,
+          boxShadow: value === o.k ? 'var(--shadow-1)' : 'none',
+        }}>{o.l}</button>
+      ))}
+    </div>
+  </div>
+);
+
+window.Tweaks = Tweaks;
+
+</script>
+<script type="text/babel">
+// App root — wires panels + tweaks + host communication
+
+const App = () => {
+  const [tweaks, setTweaks] = React.useState(window.TWEAKS);
+  const [tweaksVisible, setTweaksVisible] = React.useState(false);
+  const [activeTemplate, setActiveTemplate] = React.useState(TEMPLATES[0]);
+
+  const updateTweaks = (partial) => {
+    const next = { ...tweaks, ...partial };
+    setTweaks(next);
+    try {
+      window.parent.postMessage({ type: '__edit_mode_set_keys', edits: partial }, '*');
+    } catch (e) {}
+  };
+
+  React.useEffect(() => {
+    const handler = (e) => {
+      const d = e.data;
+      if (!d || typeof d !== 'object') return;
+      if (d.type === '__activate_edit_mode') setTweaksVisible(true);
+      if (d.type === '__deactivate_edit_mode') setTweaksVisible(false);
+    };
+    window.addEventListener('message', handler);
+    try {
+      window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    } catch (e) {}
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  return (
+    <div style={{
+      height: '100vh', display: 'flex', flexDirection: 'column',
+      overflow: 'hidden',
+    }}>
+      <TopBar/>
+      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '260px 1fr 360px', gridTemplateRows: 'minmax(0, 1fr)', minHeight: 0 }}>
+        <TemplatePanel activeId={activeTemplate?.id} onSelect={setActiveTemplate}/>
+        <Canvas template={activeTemplate}/>
+        <Chat state={tweaks.chatState}/>
+      </div>
+      <Tweaks
+        visible={tweaksVisible}
+        tweaks={tweaks}
+        onChange={updateTweaks}
+        onClose={() => setTweaksVisible(false)}
+      />
+    </div>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+
+</script>
+
+
+</body></html>

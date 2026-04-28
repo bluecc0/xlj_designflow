@@ -657,6 +657,13 @@ def download_special_zip(job_id: str, names: str = ""):
     })
     variant_labels = {k: f"_版本{k[2:]}" for k in variant_keys}  # _v1→_版本1, _v2→_版本2
 
+    # 特定画板名 → 自定义文件名前缀规则
+    # key: 画板名, value: 替换 "{sku}_{画板名}" 部分的新前缀（None 表示直接用 sku）
+    FRAME_NAME_OVERRIDES: dict[str, str | None] = {
+        "尖货轮播-PC-1": None,       # → {sku}{变体}.png
+        "尖货轮播-PC-2": "{sku}-1",  # → {sku}-1{变体}.png
+    }
+
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in all_frames:
@@ -667,7 +674,12 @@ def download_special_zip(job_id: str, names: str = ""):
             variant_suffix = m.group(2) or ""
             frame_label = name_list[idx] if idx < len(name_list) else f"画板{idx + 1}"
             label_suffix = variant_labels.get(variant_suffix, "")
-            zip_name = f"{sku}_{frame_label}{label_suffix}.png"
+            if frame_label in FRAME_NAME_OVERRIDES:
+                override = FRAME_NAME_OVERRIDES[frame_label]
+                prefix = override.replace("{sku}", sku) if override else sku
+                zip_name = f"{prefix}{label_suffix}.png"
+            else:
+                zip_name = f"{sku}_{frame_label}{label_suffix}.png"
             zf.write(str(p), zip_name)
 
     buffer.seek(0)
@@ -841,6 +853,18 @@ def get_template_thumbnail(
         return FileResponse(str(cache_path), media_type="image/png")
     except Exception as exc:
         raise HTTPException(500, f"缩略图生成失败: {exc}")
+
+
+@app.delete("/templates/cache")
+def clear_template_cache():
+    """清空所有缩略图缓存文件，下次请求时重新从 Penpot 生成。"""
+    thumb_dir = settings.output_path / "thumbnails"
+    removed = 0
+    if thumb_dir.exists():
+        for p in thumb_dir.glob("*.png"):
+            p.unlink()
+            removed += 1
+    return {"removed": removed, "message": f"已清除 {removed} 个缩略图缓存"}
 
 
 # ─── 九宫格切图 ───────────────────────────────────────────────────────────────

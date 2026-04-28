@@ -3,6 +3,20 @@
 
 // ---------- Sub-components ----------
 
+// 生成耗时计时器，每秒刷新
+const ChatTimer = ({ startedAt }) => {
+  const [elapsed, setElapsed] = React.useState(Math.floor((Date.now() - startedAt) / 1000));
+  React.useEffect(() => {
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  const m = Math.floor(elapsed / 60), s = elapsed % 60;
+  return React.createElement('span', {
+    className: 'mono',
+    style: { fontSize: 11, color: 'var(--ink-3)', fontVariantNumeric: 'tabular-nums' },
+  }, m > 0 ? m + 'm ' + String(s).padStart(2, '0') + 's' : s + 's');
+};
+
 const Avatar = ({ who }) => (
   who === 'ai' ? (
     <div style={{
@@ -437,22 +451,27 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating }) => {
               })() : m.type === 'generating' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  {m.status === 'done' ? (
-                    <>
-                      <div style={{ width: 18, height: 18, borderRadius: 99, background: 'var(--ok)' }}/>
-                      <span style={{ fontSize: 13, color: 'var(--ok)', fontWeight: 600 }}>生成完成</span>
-                    </>
-                  ) : m.status === 'failed' ? (
-                    <>
-                      <div style={{ width: 18, height: 18, borderRadius: 99, background: 'var(--warn)' }}/>
-                      <span style={{ fontSize: 13, color: 'var(--warn)', fontWeight: 600 }}>生成失败</span>
-                    </>
-                  ) : (
-                    <>
-                      <div style={{ width: 18, height: 18, borderRadius: 99, border: '2px solid var(--line)', borderRightColor: 'transparent', animation: 'spin 0.8s linear infinite' }}/>
-                      <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500 }}>生成中...</span>
-                    </>
-                  )}
+                  {(() => {
+                    var fmtSecs = function(s) {
+                      var mm = Math.floor(s / 60), ss = s % 60;
+                      return mm > 0 ? mm + 'm ' + String(ss).padStart(2, '0') + 's' : ss + 's';
+                    };
+                    if (m.status === 'done') return React.createElement(React.Fragment, null,
+                      React.createElement('div', { style: { width: 18, height: 18, borderRadius: 99, background: 'var(--ok)', flexShrink: 0 } }),
+                      React.createElement('span', { style: { fontSize: 13, color: 'var(--ok)', fontWeight: 600 } }, '生成完成'),
+                      m.finalElapsed != null && React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)' } }, fmtSecs(m.finalElapsed))
+                    );
+                    if (m.status === 'failed') return React.createElement(React.Fragment, null,
+                      React.createElement('div', { style: { width: 18, height: 18, borderRadius: 99, background: 'var(--warn)', flexShrink: 0 } }),
+                      React.createElement('span', { style: { fontSize: 13, color: 'var(--warn)', fontWeight: 600 } }, '生成失败'),
+                      m.finalElapsed != null && React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)' } }, fmtSecs(m.finalElapsed))
+                    );
+                    return React.createElement(React.Fragment, null,
+                      React.createElement('div', { style: { width: 18, height: 18, borderRadius: 99, border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', animation: 'spin 0.8s linear infinite', flexShrink: 0 } }),
+                      React.createElement('span', { style: { fontSize: 13, color: 'var(--ink)', fontWeight: 500 } }, '生成中'),
+                      m.startedAt && React.createElement(ChatTimer, { startedAt: m.startedAt })
+                    );
+                  })()}
                 </div>
                 {m.logs && m.logs.length > 0 && (
                   <LogBox logs={m.logs} running={m.status !== 'done' && m.status !== 'failed'}/>
@@ -753,6 +772,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
           who: 'ai', type: 'generating',
           logs: ['正在启动特殊品合成…'],
           status: 'running', meta: 'Loom · 特殊品',
+          startedAt: Date.now(),
         }];
       });
       try {
@@ -782,7 +802,10 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
           const s = await fetch(`/special-compose/${job.id}`).then(r => r.json());
           setMessages(msgs => msgs.map((m, idx) => {
             if (idx !== specialMsgIdx) return m;
-            return { ...m, logs: s.progress || [], status: s.status };
+            const finishing = s.status === 'done' || s.status === 'failed';
+            return { ...m, logs: s.progress || [], status: s.status,
+              ...(finishing && m.startedAt ? { finalElapsed: Math.floor((Date.now() - m.startedAt) / 1000) } : {}),
+            };
           }));
           if (s.status === 'done') {
             const workFileId = s.penpot_file_id;
@@ -894,7 +917,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
         type: 'generating',
         jobId: null,
         logs: ['正在启动合成任务...'],
-        meta: '生成中'
+        meta: '生成中',
+        startedAt: Date.now(),
       }];
     });
     try {
@@ -912,6 +936,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
           // Update logs
           setMessages(msgs => msgs.map((m, i) => {
             if (i !== msgId) return m;
+            const finishing = status.status === 'done' || status.status === 'failed';
             return {
               ...m,
               jobId: job.id,
@@ -919,6 +944,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
               logs: status.progress || [],
               resultPath: status.result_path,
               error: status.error,
+              ...(finishing && m.startedAt ? { finalElapsed: Math.floor((Date.now() - m.startedAt) / 1000) } : {}),
             };
           }));
           // Stop polling if done or failed

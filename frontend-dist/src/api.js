@@ -80,6 +80,9 @@
         return resp.json();
       }).then(function(data) { return data.reply; });
     },
+    clearTemplateCache: function() {
+      return fetch(BASE + '/templates/cache', { method: 'DELETE' }).then(r => r.json());
+    },
     fetchProducts: function() { return request('/products'); },
     fetchImageTypes: function() {
       return request('/image-types').then(function(res) { return res.types; });
