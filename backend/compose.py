@@ -172,6 +172,8 @@ def _run_compose_inner(job: ComposeJob) -> None:
                             fill_color=ts.get("fill_color", "#000000"),
                             text_align=ts.get("text_align", "center"),
                             raw_content=slot.get("raw_content"),  # 传入原始结构，保留对齐/样式
+                            grow_type=slot.get("grow_type", "auto-height"),
+                            vertical_align=slot.get("vertical_align", "top"),
                         )
                     )
                 else:
