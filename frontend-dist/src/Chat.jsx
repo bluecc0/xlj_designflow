@@ -379,7 +379,43 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating }) => {
       ) : (
         messages.map((m, i) => (
           <Bubble key={i} who={m.who} meta={m.meta}>
-            {m.type === 'parse-result' ? (() => {
+            {m.type === 'ai-image-generating' ? (() => {
+            const fmtSecs = s => { const mm = Math.floor(s/60), ss = s%60; return mm > 0 ? mm+'m '+String(ss).padStart(2,'0')+'s' : ss+'s'; };
+            return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                m.status === 'done'
+                  ? React.createElement('div', { style: { width: 8, height: 8, borderRadius: 99, background: 'var(--ok)', flexShrink: 0 } })
+                  : m.status === 'failed'
+                    ? React.createElement('div', { style: { width: 8, height: 8, borderRadius: 99, background: 'var(--warn)', flexShrink: 0 } })
+                    : React.createElement('div', { style: { width: 14, height: 14, borderRadius: 99, border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', animation: 'spin 0.8s linear infinite', flexShrink: 0 } }),
+                React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: 'var(--ink)' } },
+                  m.status === 'done' ? '生图完成' : m.status === 'failed' ? '生图失败' : '生图中…'
+                ),
+                m.finalElapsed != null
+                  ? React.createElement('span', { className: 'mono', style: { fontSize: 10, color: 'var(--ink-3)' } }, fmtSecs(m.finalElapsed))
+                  : m.startedAt && m.status === 'running'
+                    ? React.createElement(ChatTimer, { startedAt: m.startedAt })
+                    : null
+              ),
+              m.status === 'done' && m.imageUrl && React.createElement('div', null,
+                React.createElement('img', {
+                  src: m.imageUrl,
+                  alt: m.prompt,
+                  style: { width: '100%', borderRadius: 10, display: 'block', border: '1px solid var(--line-2)', cursor: 'pointer' },
+                  onClick: () => window.open(m.imageUrl, '_blank'),
+                }),
+                React.createElement('div', { style: { marginTop: 6, display: 'flex', gap: 6 } },
+                  React.createElement('a', {
+                    href: m.imageUrl, download: true,
+                    style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 },
+                  }, React.createElement(I.download, { size: 10 }), '下载')
+                )
+              ),
+              m.status === 'failed' && m.error && React.createElement('div', {
+                style: { padding: '8px 10px', borderRadius: 6, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)' }
+              }, m.error)
+            );
+          })() : m.type === 'parse-result' ? (() => {
                 const matchedCount = m.data.products.filter(p => p.image_path).length;
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -516,26 +552,49 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating }) => {
 
 // ---------- Composer ----------
 
-const Composer = ({ onSend, onParseTable, isLoading, slashTrigger }) => {
+const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage }) => {
   const [text, setText] = React.useState('');
+  const [lockedCommand, setLockedCommand] = React.useState('');
   const [files, setFiles] = React.useState([]);
   const [imageType, setImageType] = React.useState('png');
+  const [aiRatio, setAiRatio] = React.useState('1:1');
+  const [aiQuality, setAiQuality] = React.useState('1K');
+  const [refImages, setRefImages] = React.useState([]); // [{ file, previewUrl }, ...] 最多 4 张
   const taRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
+  const COMMANDS = React.useMemo(() => ['/特殊品（完整）', '/特殊品', '/Nano Banano pro', '/Gpt image 2'], []);
+  const displayValue = lockedCommand ? (text ? (lockedCommand + ' ' + text) : (lockedCommand + ' ')) : text;
+  const lockedPrefixLength = lockedCommand ? (lockedCommand.length + 1) : 0;
 
   // 外部触发 slash 命令（选中特殊品模板时）
   React.useEffect(() => {
     if (!slashTrigger) return;
-    const val = '/' + slashTrigger.cmd + ' ';
-    setText(val);
+    if (slashTrigger.clear) {
+      setLockedCommand(prev => (prev === '/特殊品' || prev === '/特殊品（完整）') ? '' : prev);
+      return;
+    }
+    setLockedCommand('/' + slashTrigger.cmd);
+    setText('');
     setMenuOpen(false);
     setTimeout(() => {
       const el = taRef.current;
       if (!el) return;
       el.focus();
-      el.setSelectionRange(val.length, val.length);
+      el.setSelectionRange(lockedPrefixLength, lockedPrefixLength);
     }, 0);
-  }, [slashTrigger?.key]);
+  }, [slashTrigger?.key, lockedPrefixLength]);
+
+  React.useEffect(() => {
+    if (template && (template.is_special || template.is_special_full)) return;
+    setLockedCommand(prev => (prev === '/特殊品' || prev === '/特殊品（完整）') ? '' : prev);
+  }, [template?.file_id, template?.group_name, template?.id, template?.is_special, template?.is_special_full]);
+
+  React.useEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = '0px';
+    el.style.height = Math.min(el.scrollHeight, 180) + 'px';
+  }, [displayValue]);
 
   // Image type options
   const IMAGE_TYPES = [
@@ -546,72 +605,264 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger }) => {
     { key: 'white2x', label: '白底x2' },
   ];
 
-  // menuOpen: 独立控制菜单显示，选完命令后关闭，避免继续匹配 text
+  // AI 生图比例 × 分辨率映射（均经 API 实测可用）
+  const AI_RATIO_MAP = {
+    '1:1':  { '1K': '1024x1024', '2K': '2048x2048', '4K': '4096x4096' },
+    '3:4':  { '1K': '768x1024',  '2K': '1536x2048', '4K': '2448x3264' },
+    '9:16': { '1K': '1080x1920', '2K': '1152x2048', '4K': '2160x3840' },
+  };
+  const AI_RATIOS = ['1:1', '3:4', '9:16'];
+  const AI_QUALITIES = ['1K', '2K', '4K'];
+  const aiImageSize = (AI_RATIO_MAP[aiRatio] || {})[aiQuality] || '1024x1024';
+
+  // 从文本内容检测当前模式
+  const _t = (lockedCommand || text).trimStart();
+  const activeMode =
+    /^\/(Nano Banano pro|Gpt image 2)/i.test(_t) ? 'ai-image' :
+    _t.startsWith('/特殊品（完整）') ? 'special_full' :
+    _t.startsWith('/特殊品') ? 'special' :
+    'compose';
+  const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
+  const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
+
   const [menuOpen, setMenuOpen] = React.useState(false);
-
-  // 当 text 重新以 / 开头且没有空格时自动打开菜单
   React.useEffect(() => {
-    if (/^\/\S*$/.test(text)) {
-      setMenuOpen(true);
-    } else {
-      setMenuOpen(false);
-    }
-  }, [text]);
+    setMenuOpen(!lockedCommand && /^\/\S*$/.test(text));
+  }, [text, lockedCommand]);
 
-  // slashQuery 只在菜单打开时有效
   const slashQuery = menuOpen ? (text.match(/^\/\S*/) || [null])[0] : null;
 
-  // 特殊品流程不使用图片类型选项
-  const imageTypeDisabled = text.trimStart().startsWith('/特殊品');
-
   const pickCommand = (c) => {
-    const val = c.cmd + ' ';
-    setText(val);
-    setMenuOpen(false);  // 选完立刻关闭菜单
-    // 等 React 更新 DOM 后，把光标移到末尾
+    setLockedCommand(c.cmd);
+    setText('');
+    setMenuOpen(false);
     setTimeout(() => {
       const el = taRef.current;
       if (!el) return;
       el.focus();
-      el.setSelectionRange(val.length, val.length);
+      el.setSelectionRange(c.cmd.length + 1, c.cmd.length + 1);
     }, 0);
   };
 
+  const restoreMessage = React.useCallback((message) => {
+    const raw = String(message || '');
+    const matched = COMMANDS.find(function(cmd) {
+      return raw === cmd || raw.startsWith(cmd + ' ');
+    });
+    if (matched) {
+      setLockedCommand(matched);
+      setText(raw.slice(matched.length).trimStart());
+    } else {
+      setLockedCommand('');
+      setText(raw);
+    }
+    setMenuOpen(false);
+    setTimeout(() => {
+      const el = taRef.current;
+      if (!el) return;
+      el.focus();
+      const len = raw.length;
+      el.setSelectionRange(len, len);
+    }, 0);
+  }, [COMMANDS]);
+
   const handleSend = () => {
-    if (!text.trim() || isLoading) return;
-    const msg = text.trim();
+    const body = text.trim();
+    const message = lockedCommand ? (body ? lockedCommand + ' ' + body : lockedCommand) : body;
+    if (!message || isLoading) return;
+    const imagesToSend = [...refImages];
     setText('');
-    onSend(msg);
+    setLockedCommand('');
+    clearRefImages();
+    onSend(message, imagesToSend, { size: aiImageSize });
   };
 
   const handleKeyDown = (e) => {
+    const el = taRef.current;
+    const start = el ? el.selectionStart : 0;
+    const end = el ? el.selectionEnd : 0;
+    const currentMessage = lockedCommand ? (text ? (lockedCommand + ' ' + text) : lockedCommand) : text.trim();
+    if (
+      e.key === 'ArrowDown' &&
+      files.length === 0 &&
+      refImages.length === 0 &&
+      lastSubmittedMessage &&
+      currentMessage === lastSubmittedMessage
+    ) {
+      e.preventDefault();
+      clearComposer();
+      return;
+    }
+    if (
+      e.key === 'ArrowUp' &&
+      !lockedCommand &&
+      !text.trim() &&
+      files.length === 0 &&
+      refImages.length === 0 &&
+      lastSubmittedMessage
+    ) {
+      e.preventDefault();
+      restoreMessage(lastSubmittedMessage);
+      return;
+    }
+    if (lockedCommand) {
+      const hasSelectionInPrefix = start < lockedPrefixLength || end < lockedPrefixLength;
+      if (
+        e.key === 'ArrowUp' &&
+        !text.trim() &&
+        files.length === 0 &&
+        refImages.length === 0 &&
+        lastSubmittedMessage
+      ) {
+        e.preventDefault();
+        restoreMessage(lastSubmittedMessage);
+        return;
+      }
+      if (e.key === 'Backspace' && !text && start <= lockedPrefixLength && end <= lockedPrefixLength) {
+        e.preventDefault();
+        setLockedCommand('');
+        return;
+      }
+      if (hasSelectionInPrefix) {
+        if (
+          e.key === 'Backspace' || e.key === 'Delete' ||
+          e.key === 'Enter' || e.key === 'Tab' ||
+          (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey)
+        ) {
+          e.preventDefault();
+          requestAnimationFrame(() => {
+            const input = taRef.current;
+            if (input) input.setSelectionRange(lockedPrefixLength, lockedPrefixLength);
+          });
+          return;
+        }
+        if (e.key === 'Home' || e.key === 'ArrowLeft') {
+          e.preventDefault();
+          requestAnimationFrame(() => {
+            const input = taRef.current;
+            if (input) input.setSelectionRange(lockedPrefixLength, lockedPrefixLength);
+          });
+          return;
+        }
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
 
-  const handleFileSelect = (e) => {
-    const fileList = e.target.files;
-    if (!fileList || fileList.length === 0) return;
-    const file = fileList[0];
-    const fileObj = { name: file.name, size: formatFileSize(file.size), file: file, imageType };
-    setFiles(prev => [...prev, fileObj]);
-    // Call onParseTable if provided
-    if (onParseTable) {
-      onParseTable(file, file.name, imageType).catch(err => {
-        console.error('Parse table error:', err);
+  const handleTextChange = (e) => {
+    const next = e.target.value;
+    if (lockedCommand) {
+      if (next.startsWith(lockedCommand + ' ')) {
+        setText(next.slice(lockedPrefixLength));
+        return;
+      }
+      if (next === lockedCommand || next === lockedCommand + '') {
+        setText('');
+        return;
+      }
+      if (next.startsWith(lockedCommand)) {
+        setText(next.slice(lockedCommand.length).replace(/^\s+/, ''));
+        return;
+      }
+      setText(next.slice(Math.min(next.length, lockedPrefixLength)).replace(/^\s+/, ''));
+      return;
+    }
+    if (!lockedCommand) {
+      const matched = COMMANDS.find(function(cmd) {
+        return next.startsWith(cmd + ' ');
+      });
+      if (matched) {
+        setLockedCommand(matched);
+        setText(next.slice(matched.length).trimStart());
+        return;
+      }
+    }
+    setText(next);
+  };
+
+  const clampSelection = () => {
+    if (!lockedCommand) return;
+    const el = taRef.current;
+    if (!el) return;
+    if (el.selectionStart < lockedPrefixLength || el.selectionEnd < lockedPrefixLength) {
+      const pos = Math.max(lockedPrefixLength, el.selectionEnd, el.selectionStart);
+      requestAnimationFrame(() => {
+        const input = taRef.current;
+        if (input) input.setSelectionRange(pos, pos);
       });
     }
-    // Reset input
+  };
+
+  const handleFileSelect = (e) => {
+    const fileList = Array.from(e.target.files || []);
+    if (!fileList.length) return;
+    const images = fileList.filter(f => f.type.startsWith('image/'));
+    const others = fileList.filter(f => !f.type.startsWith('image/'));
+    if (images.length) {
+      setRefImages(prev => {
+        const remaining = 4 - prev.length;
+        const toAdd = images.slice(0, remaining).map(file => ({ file, previewUrl: URL.createObjectURL(file) }));
+        return [...prev, ...toAdd];
+      });
+    }
+    if (others.length) {
+      const file = others[0];
+      const fileObj = { name: file.name, size: formatFileSize(file.size), file, imageType };
+      setFiles(prev => [...prev, fileObj]);
+      if (onParseTable) {
+        onParseTable(file, file.name, imageType).catch(err => console.error('Parse table error:', err));
+      }
+    }
     e.target.value = '';
   };
+
+  const handlePaste = (e) => {
+    const items = Array.from(e.clipboardData?.items || []);
+    const imageItems = items.filter(it => it.kind === 'file' && it.type.startsWith('image/'));
+    if (!imageItems.length) return;
+    e.preventDefault();
+    setRefImages(prev => {
+      const remaining = 4 - prev.length;
+      const toAdd = imageItems.slice(0, remaining).map(it => {
+        const file = it.getAsFile();
+        return { file, previewUrl: URL.createObjectURL(file) };
+      });
+      return [...prev, ...toAdd];
+    });
+  };
+
+  const removeRefImage = (idx) => {
+    setRefImages(prev => {
+      URL.revokeObjectURL(prev[idx]?.previewUrl);
+      return prev.filter((_, i) => i !== idx);
+    });
+  };
+
+  const clearRefImages = () => {
+    setRefImages(prev => { prev.forEach(r => URL.revokeObjectURL(r.previewUrl)); return []; });
+  };
+
+  const clearComposer = React.useCallback(() => {
+    setText('');
+    setLockedCommand('');
+    setFiles([]);
+    clearRefImages();
+    setMenuOpen(false);
+    setTimeout(() => {
+      const el = taRef.current;
+      if (el) el.focus();
+    }, 0);
+  }, []);
 
   const formatFileSize = (bytes) => {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
+  const canSend = Boolean((lockedCommand ? (lockedCommand + ' ' + text.trim()).trim() : text.trim()) || files.length) && !isLoading;
 
   return (
     <div style={{
@@ -634,52 +885,90 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger }) => {
           <SlashMenu query={slashQuery} onPick={pickCommand} onClose={() => { setText(''); setMenuOpen(false); }}/>
         )}
 
-        {/* Image type selector */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, opacity: imageTypeDisabled ? 0.35 : 1, transition: 'opacity 150ms' }}>
-          {IMAGE_TYPES.map(t => (
-            <button
-              key={t.key}
-              onClick={() => !imageTypeDisabled && setImageType(t.key)}
-              disabled={imageTypeDisabled}
-              style={{
-                fontSize: 11,
-                padding: '3px 0',
-                background: 'transparent',
-                border: 'none',
-                color: imageType === t.key && !imageTypeDisabled ? 'var(--ink)' : 'var(--ink-3)',
-                cursor: imageTypeDisabled ? 'not-allowed' : 'pointer',
-                position: 'relative',
-              }}
-            >
-              {t.label}
-              {imageType === t.key && !imageTypeDisabled && (
-                <div style={{
-                  position: 'absolute',
-                  bottom: -2,
-                  left: 0,
-                  right: 0,
-                  height: 2,
-                  background: 'var(--accent)',
-                  borderRadius: 1,
-                }}/>
-              )}
-            </button>
-          ))}
-        </div>
-
+        {/* Contextual toolbar — switches based on active command */}
+        {activeMode !== 'ai-image' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, opacity: isImageTypeLocked ? 0.35 : 1, pointerEvents: isImageTypeLocked ? 'none' : 'auto' }}>
+            {IMAGE_TYPES.map(t => (
+              <button
+                key={t.key}
+                onClick={() => setImageType(t.key)}
+                style={{
+                  fontSize: 11, padding: '3px 0',
+                  background: 'transparent', border: 'none',
+                  color: imageType === t.key ? 'var(--ink)' : 'var(--ink-3)',
+                  cursor: 'pointer', position: 'relative',
+                }}
+              >
+                {t.label}
+                {!isImageTypeLocked && imageType === t.key && (
+                  <div style={{ position: 'absolute', bottom: -2, left: 0, right: 0, height: 2, background: 'var(--accent)', borderRadius: 1 }}/>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+        {activeMode === 'ai-image' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            {AI_RATIOS.map(r => (
+              <button key={r} onClick={() => setAiRatio(r)} style={{
+                fontSize: 11, padding: '3px 0',
+                background: 'transparent', border: 'none',
+                color: aiRatio === r ? 'var(--ink)' : 'var(--ink-3)',
+                cursor: 'pointer', position: 'relative',
+              }}>
+                {r}
+                {aiRatio === r && (
+                  <div style={{ position: 'absolute', bottom: -2, left: 0, right: 0, height: 2, background: 'var(--accent)', borderRadius: 1 }}/>
+                )}
+              </button>
+            ))}
+            <div style={{ width: 1, height: 12, background: 'var(--line)', flexShrink: 0 }}/>
+            {AI_QUALITIES.map(q => (
+              <button key={q} onClick={() => setAiQuality(q)} style={{
+                fontSize: 11, padding: '3px 0',
+                background: 'transparent', border: 'none',
+                color: aiQuality === q ? 'var(--ink)' : 'var(--ink-3)',
+                cursor: 'pointer', position: 'relative',
+              }}>
+                {q}
+                {aiQuality === q && (
+                  <div style={{ position: 'absolute', bottom: -2, left: 0, right: 0, height: 2, background: 'var(--accent)', borderRadius: 1 }}/>
+                )}
+              </button>
+            ))}
+            <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{aiImageSize.replace('x', '×')}</span>
+          </div>
+        )}
         <textarea
           className="composer-textarea"
           ref={taRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
+          value={displayValue}
+          onChange={handleTextChange}
           onKeyDown={handleKeyDown}
-          placeholder="在这里开启对话吧，或者按/唤起指令菜单"
+          onPaste={handlePaste}
+          onClick={clampSelection}
+          onSelect={clampSelection}
+          onFocus={clampSelection}
+          placeholder="在这里开启对话吧，或者按 / 唤起指令菜单"
           rows={2}
           style={{
-            border: 'none', outline: 'none', resize: 'none',
-            background: 'transparent',
-            fontSize: 13, lineHeight: 1.45, color: 'var(--ink)',
+            width: '100%',
+            minHeight: 44,
+            maxHeight: 180,
+            boxSizing: 'border-box',
+            fontSize: 13,
+            lineHeight: 1.45,
             fontFamily: 'inherit',
+            color: 'var(--ink)',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            border: 'none',
+            outline: 'none',
+            resize: 'none',
+            overflowY: 'auto',
+            background: 'transparent',
+            margin: 0,
+            padding: 0,
           }}
         />
         <style>{`.composer-textarea::placeholder { color: var(--ink-3); font-style: italic; font-size: 12px; opacity: 1; }`}</style>
@@ -688,37 +977,56 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger }) => {
           type="file"
           ref={fileInputRef}
           onChange={handleFileSelect}
-          accept=".csv,.xlsx,.xls"
+          accept="image/*,.csv,.xlsx,.xls"
+          multiple
           style={{ display: 'none' }}
         />
 
+        {/* Reference images preview */}
+        {refImages.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            {refImages.map((img, idx) => (
+              <div key={idx} style={{ position: 'relative', display: 'inline-flex' }}>
+                <img
+                  src={img.previewUrl}
+                  alt={`参考图${idx + 1}`}
+                  style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--line)' }}
+                />
+                <button
+                  onClick={() => removeRefImage(idx)}
+                  style={{
+                    position: 'absolute', top: -5, right: -5,
+                    width: 15, height: 15, borderRadius: 99,
+                    background: 'var(--ink-2)', color: 'white',
+                    display: 'grid', placeItems: 'center',
+                    fontSize: 10, lineHeight: 1, cursor: 'pointer',
+                  }}
+                >×</button>
+              </div>
+            ))}
+            <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{refImages.length}/4</span>
+          </div>
+        )}
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <button
             onClick={() => fileInputRef.current?.click()}
-            style={{ padding: 6, borderRadius: 6, color: 'var(--ink-2)', cursor: 'pointer' }}
-            title="Attach file"
+            style={{ padding: 6, borderRadius: 6, color: refImages.length > 0 ? 'var(--accent)' : 'var(--ink-2)', cursor: 'pointer' }}
+            title={refImages.length > 0 ? `已附加 ${refImages.length} 张参考图` : '附加图片或文件'}
           >
             <I.paperclip size={14}/>
           </button>
-          <button style={{ padding: 6, borderRadius: 6, color: 'var(--ink-2)' }} title="Insert image">
-            <I.image size={14}/>
-          </button>
-          <button style={{ padding: 6, borderRadius: 6, color: 'var(--ink-2)' }} title="Style">
-            <I.palette size={14}/>
-          </button>
 
           <div style={{ flex: 1 }}/>
-
 
           <button
             onClick={handleSend}
             style={{
               width: 30, height: 30, borderRadius: 8,
-              background: (text || files.length) && !isLoading ? 'var(--ink)' : 'var(--line)',
-              color: (text || files.length) && !isLoading ? 'white' : 'var(--ink-3)',
+              background: canSend ? 'var(--ink)' : 'var(--line)',
+              color: canSend ? 'white' : 'var(--ink-3)',
               display: 'grid', placeItems: 'center',
-              cursor: (text || files.length) && !isLoading ? 'pointer' : 'default',
+              cursor: canSend ? 'pointer' : 'default',
             }}>
             {isLoading ? (
               <div style={{ width: 14, height: 14, borderRadius: 99, border: '2px solid var(--ink-3)', borderRightColor: 'transparent', animation: 'spin 0.7s linear infinite' }}/>
@@ -740,6 +1048,7 @@ console.log('[Main] Chat component definition');
 const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
   const [messages, setMessages] = React.useState([]);
   const [isLoading, setIsLoading] = React.useState(false);
+  const [lastSubmittedMessage, setLastSubmittedMessage] = React.useState('');
 
   // Extract required fields from template slots (e.g., "slot/product_1/name" -> "name")
   const getTemplateFields = React.useCallback((t) => {
@@ -757,11 +1066,81 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
 
   const templateFields = getTemplateFields(template);
 
-  const handleSend = React.useCallback(async (text) => {
+  const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
     if (!text.trim() || isLoading) return;
+    setLastSubmittedMessage(text);
 
-    // ── 特殊品流程 ────────────────────────────────────────────────────────────
-    if (text.trimStart().startsWith('/特殊品')) {
+    // ── AI 生图流程（前端友好名，后端映射到服务商模型名）────────────────────────
+    const AI_IMAGE_CMDS = [
+      { prefix: '/Nano Banano pro', model: 'nano-banana-pro' },
+      { prefix: '/Gpt image 2',     model: 'gpt-image-2' },
+    ];
+    const trimmed = text.trimStart();
+    const aiCmd = AI_IMAGE_CMDS.find(c => trimmed.toLowerCase().startsWith(c.prefix.toLowerCase()));
+    if (aiCmd) {
+      const prompt = trimmed.slice(aiCmd.prefix.length).trim();
+      if (!prompt) {
+        setMessages(msgs => [...msgs,
+          { who: 'user', text },
+          { who: 'ai', text: `请在 ${aiCmd.prefix} 后输入图片描述，例如：${aiCmd.prefix} 一只在草地上奔跑的柴犬` },
+        ]);
+        return;
+      }
+      setMessages(msgs => [...msgs, { who: 'user', text }]);
+      setIsLoading(true);
+      const startedAt = Date.now();
+      setMessages(msgs => [...msgs, {
+        who: 'ai', type: 'ai-image-generating',
+        model: aiCmd.model, prompt,
+        status: 'running', startedAt,
+        meta: aiCmd.model,
+        hasReference: refImages.length > 0,
+        refCount: refImages.length,
+      }]);
+      try {
+        const apiBase = window.API_BASE || (window.location.protocol + '//' + window.location.hostname + ':8000');
+        const fd = new FormData();
+        fd.append('model', aiCmd.model);
+        fd.append('prompt', prompt);
+        fd.append('size', aiOptions.size || '1024x1024');
+        refImages.forEach(r => fd.append('image', r.file));
+        const res = await fetch(apiBase + '/ai-image', { method: 'POST', body: fd });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
+        setMessages(msgs => msgs.map(m =>
+          m.type === 'ai-image-generating' && m.startedAt === startedAt
+            ? { ...m, status: 'done', imageUrl: apiBase + data.url, finalElapsed }
+            : m
+        ));
+      } catch (e) {
+        const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
+        setMessages(msgs => msgs.map(m =>
+          m.type === 'ai-image-generating' && m.startedAt === startedAt
+            ? { ...m, status: 'failed', error: e.message, finalElapsed }
+            : m
+        ));
+      }
+      setIsLoading(false);
+      return;
+    }
+
+    // ── 特殊品（完整）流程 ────────────────────────────────────────────────────
+    const _isSpecialFull = text.trimStart().startsWith('/特殊品（完整）');
+    const _isSpecial     = !_isSpecialFull && text.trimStart().startsWith('/特殊品');
+    if (_isSpecial || _isSpecialFull) {
+      const _cmdLabel  = _isSpecialFull ? '特殊品（完整）' : '特殊品';
+      const _endpoint  = _isSpecialFull ? '/special-compose-full' : '/special-compose';
+      const _pollBase  = _isSpecialFull ? '/special-compose-full' : '/special-compose';
+      const _argRegex  = _isSpecialFull ? /^\/特殊品（完整）\s*/ : /^\/特殊品\s*/;
+      const _errHint   = _isSpecialFull
+        ? '请提供 SKU，格式：/特殊品（完整） SKU，文案，时间文案'
+        : '请提供 SKU，格式：/特殊品 SKU，文案，时间文案';
+      const _tplHint   = _isSpecialFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板';
+
       setMessages(msgs => [...msgs, { who: 'user', text }]);
       setIsLoading(true);
       // 先插入 generating 消息占位
@@ -770,24 +1149,24 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
         specialMsgIdx = msgs.length;
         return [...msgs, {
           who: 'ai', type: 'generating',
-          logs: ['正在启动特殊品合成…'],
-          status: 'running', meta: 'Loom · 特殊品',
+          logs: [`正在启动${_cmdLabel}合成…`],
+          status: 'running', meta: `Loom · ${_cmdLabel}`,
           startedAt: Date.now(),
         }];
       });
       try {
-        const args = text.replace(/^\/特殊品\s*/, '').trim();
+        const args = text.replace(_argRegex, '').trim();
         const parts = args.split('，').map(s => s.trim());
         const sku = parts[0] || '';
         const fields = { name: parts[1] || '', time: parts[2] || '' };
-        if (!sku) throw new Error('请提供 SKU，格式：/特殊品 SKU，文案，时间文案');
-        if (!template) throw new Error('请先在左侧选择特殊品模板');
+        if (!sku) throw new Error(_errHint);
+        if (!template) throw new Error(_tplHint);
 
         const frameIds = template.frames ? template.frames.map(f => f.id) : [template.id];
         const fileId = template.file_id || (template.frames && template.frames[0]?.file_id);
         const pageId = template.page_id || (template.frames && template.frames[0]?.page_id);
 
-        const resp = await fetch('/special-compose', {
+        const resp = await fetch(_endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ file_id: fileId, page_id: pageId, frame_ids: frameIds, sku, fields, export_scale: 2.0 }),
@@ -799,7 +1178,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
         let done = false;
         for (let i = 0; i < 120 && !done; i++) {
           await new Promise(r => setTimeout(r, 1500));
-          const s = await fetch(`/special-compose/${job.id}`).then(r => r.json());
+          const s = await fetch(`${_pollBase}/${job.id}`).then(r => r.json());
           setMessages(msgs => msgs.map((m, idx) => {
             if (idx !== specialMsgIdx) return m;
             const finishing = s.status === 'done' || s.status === 'failed';
@@ -836,6 +1215,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
               base.frames = urls.map((url, i) => ({ ...(baseFrames[i % baseFrames.length] || baseFrames[0]), resultUrl: url }));
               base._frameNames = frameNames;
               window.lastComposeJobId = job['id'];
+              window.lastComposeEndpoint = _pollBase;
               window.lastComposeFrameNames = frameNames;
               onComposeComplete(null, s.penpot_edit_url, null, base);
             }
@@ -1005,7 +1385,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
       {state === 'generating' && <ChatGenerating/>}
       {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading}/>}
 
-      <Composer onSend={handleSend} onParseTable={handleParseTable} isLoading={isLoading} slashTrigger={slashTrigger}/>
+      <Composer onSend={handleSend} onParseTable={handleParseTable} isLoading={isLoading} slashTrigger={slashTrigger} template={template} lastSubmittedMessage={lastSubmittedMessage}/>
     </div>
   );
 };

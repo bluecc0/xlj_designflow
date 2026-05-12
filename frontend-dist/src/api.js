@@ -5,6 +5,11 @@
   function request(path, init) {
     return fetch(BASE + path, init).then(function(resp) {
       if (!resp.ok) {
+        if (resp.status === 401) {
+          try {
+            window.dispatchEvent(new CustomEvent('designflow-auth-required'));
+          } catch (e) {}
+        }
         return resp.text().then(function(text) {
           throw new Error('HTTP ' + resp.status + ': ' + text.slice(0, 200));
         });
@@ -38,6 +43,22 @@
   }
 
   window.API = {
+    getCurrentUser: function() {
+      return request('/auth/me').then(function(res) { return res.user; });
+    },
+    getLoginUsers: function() {
+      return request('/auth/options').then(function(res) { return res.users || []; });
+    },
+    loginLite: function(username) {
+      return request('/auth/login-lite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username }),
+      }).then(function(res) { return res.user; });
+    },
+    logout: function() {
+      return request('/auth/logout', { method: 'POST' });
+    },
     fetchHealth: function() { return request('/health'); },
     fetchTemplates: function(fileId) {
       var qs = fileId ? '?file_id=' + encodeURIComponent(fileId) : '';
@@ -55,6 +76,7 @@
     getCompose: function(jobId) { return request('/compose/' + jobId); },
     listComposes: function(limit) { return request('/compose?limit=' + (limit || 20)); },
     listSpecialComposes: function(limit) { return request('/special-compose/history?limit=' + (limit || 20)); },
+    listAiImages: function(limit) { return request('/history/ai-images?limit=' + (limit || 20)); },
     getImageUrl: function(jobId) { return BASE + '/compose/' + jobId + '/image'; },
     exportGrid: function(jobId, rows, cols) {
       return request('/export/grid', {

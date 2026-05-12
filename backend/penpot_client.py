@@ -341,6 +341,9 @@ class PenpotClient:
                     # slot/product_N/image_XXX → image_type = "XXX"
                     # slot/product_N/image     → image_type = None（不限定）
                     parts = canonical_name.split("/")  # ['slot', 'product_1', 'image_white']
+                    # 直接命名的场景图类型（不带 image_ 前缀）
+                    _SCENE_IMAGE_TYPES = {"banner", "poster"}
+
                     if len(parts) >= 3:
                         field_part = parts[2]  # e.g. "image_white" or "image" or "name_1"
                         if field_part == "image":
@@ -348,6 +351,9 @@ class PenpotClient:
                         elif field_part.startswith("image_"):
                             # 去掉 image_ 前缀，剩余部分作为 image_type key
                             slot["image_type"] = field_part[len("image_"):]
+                        elif field_part in _SCENE_IMAGE_TYPES:
+                            # slot/product_1/banner → image_type = "banner"
+                            slot["image_type"] = field_part
                         elif "_" in field_part:
                             # 检测文字分段：name_1 / name_2 / time_1 等
                             base, _, idx_str = field_part.rpartition("_")
@@ -359,6 +365,20 @@ class PenpotClient:
                     if obj.get("type") == "text":
                         slot["text_style"] = self.parse_text_style(obj)
                         slot["raw_content"] = obj.get("content")  # 原始 content，含对齐/字体/颜色
+                        # 保留原始 grow-type（fixed / auto-height / auto-width 等）
+                        _gt = obj.get("growType") or obj.get("grow-type") or "auto-height"
+                        if isinstance(_gt, Keyword):
+                            _gt = _gt.name
+                        elif isinstance(_gt, str) and _gt.startswith("~:"):
+                            _gt = _gt[2:]
+                        slot["grow_type"] = _gt
+                        # 保留垂直对齐（top / center / bottom），fixed 框体导出时需要
+                        _va = obj.get("verticalAlign") or obj.get("vertical-align") or "top"
+                        if isinstance(_va, Keyword):
+                            _va = _va.name
+                        elif isinstance(_va, str) and _va.startswith("~:"):
+                            _va = _va[2:]
+                        slot["vertical_align"] = _va
                     slots.append(slot)
         return slots
 
@@ -402,12 +422,18 @@ class PenpotClient:
         for key in ("textAlign", "text-align"):
             val = paragraph.get(key)
             if val:
-                style["text_align"] = val
+                # 规范化：Keyword对象取 .name，"~:center" 去掉前缀，否则直接用
+                if isinstance(val, Keyword):
+                    style["text_align"] = val.name
+                elif isinstance(val, str) and val.startswith("~:"):
+                    style["text_align"] = val[2:]
+                else:
+                    style["text_align"] = str(val)
                 break
 
         # ── font-size ──────────────────────────────────────────────────────────
         for key in ("fontSize", "font-size"):
-            val = text_run.get(key)
+            val = text_run.get(key) or paragraph.get(key)
             if val is not None:
                 try:
                     style["font_size"] = float(val)
@@ -417,14 +443,14 @@ class PenpotClient:
 
         # ── font-weight ────────────────────────────────────────────────────────
         for key in ("fontWeight", "font-weight"):
-            val = text_run.get(key)
+            val = text_run.get(key) or paragraph.get(key)
             if val is not None:
                 style["font_weight"] = str(val)
                 break
 
         # ── font-family ────────────────────────────────────────────────────────
         for key in ("fontFamily", "font-family"):
-            val = text_run.get(key)
+            val = text_run.get(key) or paragraph.get(key)
             if val:
                 style["font_family"] = val
                 break
@@ -657,80 +683,74 @@ class PenpotClient:
         fill_color: str = "#000000",
         text_align: str = "center",
         raw_content: Optional[dict] = None,
+        grow_type: str = "auto-height",
+        vertical_align: str = "top",
     ) -> list[dict]:
         """
         替换文字图层内容，完整保留原始样式（对齐、字体、颜色等）。
 
         策略：
-        1. 优先使用 raw_content（模板图层原始结构）——只替换所有 text-run 的 text 字段，
-           对齐/字体/颜色/旋转等全部保持不变。
-        2. 没有 raw_content 时才用参数手动构建 content。
-        3. 清除 position-data（设为 None），让 Penpot 重新渲染时自动重算。
-           exporter 走的是 content 路径，不依赖 position-data。
-
-        关键：font-id 是 Penpot 内部字体标识（如 "custom-xxxx"），与 font-family 显示名不同。
-        必须从 raw_content 中提取正确的 font-id，否则 custom font 会 fallback 到默认字体。
+        1. 有 raw_content 时：直接在模板原始结构上替换文字字符串，其余所有属性
+           （text-align / font / color / line-height 等）原封不动保留，不重建。
+           再把 from_transit 解码过的纯字符串关键字（"center"）还原为 Transit keyword
+           对象（kw("center")），以便 to_transit 正确序列化为 "~:center"。
+        2. 无 raw_content 时：用参数手动构建 content（兜底路径）。
+        3. 两种路径均通过 mod-obj 操作清除 position-data 并重设 grow-type /
+           vertical-align，确保 Penpot 以新内容重新排版。
         """
-        # 从 raw_content 提取样式参数（字体/颜色/对齐），然后用干净结构重建
-        # 不直接复用 raw_content 是因为其中携带的 position-data 无法通过 update-file 清除，
-        # 导出时 Penpot 会用缓存坐标（x≈-4000）定位文字，造成文字偏移到画布外显示居左
-        font_id = font_family        # 默认 font-id = font-family（系统字体相同）
-        font_variant_id = "regular"
-
         if raw_content is not None:
-            style = self.parse_text_style({"content": raw_content})
-            font_size       = style.get("font_size", font_size)
-            font_weight     = style.get("font_weight", font_weight)
-            font_family     = style.get("font_family", font_family)
-            font_id         = style.get("font_id", font_family)     # ← 保留原始 font-id
-            font_variant_id = style.get("font_variant_id", "regular")
-            fill_color      = style.get("fill_color", fill_color)
-            text_align      = style.get("text_align", text_align)
-
-        # 始终用手动构建的干净 content，不携带任何历史 position-data
-        fs = str(int(font_size)) if font_size == int(font_size) else str(font_size)
-        fw = str(font_weight)
-        fill = {"fill-color": fill_color, "fill-opacity": 1}
-        # 注意：Penpot Transit 协议里 type / text-align 等枚举值必须是 Keyword（~:xxx），
-        # 普通字符串会被服务端忽略，导致 update-file 返回 200 但内容实际没变。
-        text_run = {
-            "text": text,
-            "font-family": font_family,
-            "font-id": font_id,
-            "font-variant-id": font_variant_id,
-            "font-size": fs,
-            "font-weight": fw,
-            "font-style": "normal",       # Penpot schema: string
-            "text-decoration": "none",    # Penpot schema: string
-            "text-transform": "none",     # Penpot schema: string
-            "letter-spacing": "0",
-            "line-height": "1",
-            "text-direction": kw("ltr"),  # Penpot schema: keyword
-            "text-align": kw(text_align), # Penpot schema: keyword
-            "fills": [fill],
-        }
-        paragraph = {
-            "type": "paragraph",          # Penpot schema: string
-            "key": str(uuid.uuid4())[:8],
-            "font-family": font_family,
-            "font-id": font_id,
-            "font-variant-id": font_variant_id,
-            "font-size": fs,
-            "font-weight": fw,
-            "font-style": "normal",       # Penpot schema: string
-            "text-decoration": "none",    # Penpot schema: string
-            "text-transform": "none",     # Penpot schema: string
-            "letter-spacing": "0",
-            "line-height": "1",
-            "text-direction": kw("ltr"),  # Penpot schema: keyword
-            "text-align": kw(text_align), # Penpot schema: keyword
-            "fills": [fill],
-            "children": [text_run],
-        }
-        new_content = {
-            "type": "root",               # Penpot schema: string
-            "children": [{"type": "paragraph-set", "children": [paragraph]}],
-        }
+            # 直接复用模板 content：只换文字，完整保留 text-align / font 等
+            new_content = self._replace_text_in_content(raw_content, text)
+            # _replace_text_in_content 已把 key 转为 kebab-case；
+            # 但 from_transit 把 keyword 值解码为普通字符串（"center"），
+            # 必须转回 Keyword 对象，否则 to_transit 会发送普通字符串，
+            # Penpot 服务端将其当作非法值并静默忽略，导致 text-align 丢失。
+            new_content = self._fix_keyword_values(new_content)
+        else:
+            # 无模板内容时，按参数从零构建（兜底）
+            font_id = font_family
+            font_variant_id = "regular"
+            fs = str(int(font_size)) if font_size == int(font_size) else str(font_size)
+            fw = str(font_weight)
+            fill = {"fill-color": fill_color, "fill-opacity": 1}
+            text_run = {
+                "text": text,
+                "font-family": font_family,
+                "font-id": font_id,
+                "font-variant-id": font_variant_id,
+                "font-size": fs,
+                "font-weight": fw,
+                "font-style": "normal",
+                "text-decoration": "none",
+                "text-transform": "none",
+                "letter-spacing": "0",
+                "line-height": "1",
+                "text-direction": kw("ltr"),
+                "text-align": kw(text_align),
+                "fills": [fill],
+            }
+            paragraph = {
+                "type": "paragraph",
+                "key": str(uuid.uuid4())[:8],
+                "font-family": font_family,
+                "font-id": font_id,
+                "font-variant-id": font_variant_id,
+                "font-size": fs,
+                "font-weight": fw,
+                "font-style": "normal",
+                "text-decoration": "none",
+                "text-transform": "none",
+                "letter-spacing": "0",
+                "line-height": "1",
+                "text-direction": kw("ltr"),
+                "text-align": kw(text_align),
+                "fills": [fill],
+                "children": [text_run],
+            }
+            new_content = {
+                "type": "root",
+                "children": [{"type": "paragraph-set", "children": [paragraph]}],
+            }
 
         return [{
             "type": kw("mod-obj"),
@@ -740,12 +760,10 @@ class PenpotClient:
                 {"type": kw("set"), "attr": kw("content"), "val": new_content},
                 # 清除 position-data 缓存，让 Penpot 用 content 重新布局
                 {"type": kw("set"), "attr": kw("position-data"), "val": None},
-                # 强制 auto-height：exporter 在 position-data=nil 时做自己的重布局，
-                # 若图层存储的 height 是模板原始固定值，且 grow-type 没有被明确传递，
-                # exporter 会按固定高度裁剪文字（浏览器编辑器里正常，是因为浏览器
-                # 会在打开时重新跑 grow-type 逻辑并更新 position-data）。
-                # 显式写入 auto-height 确保 exporter 按内容撑高，与编辑器一致。
-                {"type": kw("set"), "attr": kw("grow-type"), "val": kw("auto-height")},
+                # 保留模板原始 grow-type（fixed / auto-height / auto-width）
+                {"type": kw("set"), "attr": kw("grow-type"), "val": kw(grow_type)},
+                # 保留垂直对齐，fixed 框体导出器需要此属性定位文字
+                {"type": kw("set"), "attr": kw("vertical-align"), "val": kw(vertical_align)},
             ],
         }]
 
@@ -843,6 +861,32 @@ class PenpotClient:
         except (KeyError, IndexError, TypeError):
             pass
         return content
+
+    # Transit 协议中必须序列化为 keyword（~:xxx）的字段
+    _TRANSIT_KEYWORD_FIELDS = {"text-align", "text-direction"}
+
+    def _fix_keyword_values(self, node: Any) -> Any:
+        """
+        递归遍历 content 树，把已知的 Transit keyword 字段的值从普通字符串
+        转回 Keyword 对象，确保 to_transit 能正确序列化为 "~:center" 等形式。
+
+        背景：get-file 响应经 from_transit 解码后，keyword 值（如 "~:center"）
+        变为普通字符串 "center"。若直接将其写回 update-file，to_transit 会把
+        "center" 序列化为普通 JSON 字符串，Penpot 服务端静默丢弃，导致
+        text-align 等属性丢失。
+        """
+        if isinstance(node, dict):
+            result: dict = {}
+            for k, v in node.items():
+                if k in self._TRANSIT_KEYWORD_FIELDS and isinstance(v, str) and v:
+                    # 兼容 "center" 和 "~:center" 两种来源
+                    result[k] = kw(v[2:] if v.startswith("~:") else v)
+                elif k == "children" and isinstance(v, list):
+                    result[k] = [self._fix_keyword_values(c) for c in v]
+                else:
+                    result[k] = v
+            return result
+        return node
 
     def set_layer_hidden(self, layer_id: str, page_id: str, hidden: bool) -> dict:
         """构造设置图层可见性的 change dict（未提交）"""

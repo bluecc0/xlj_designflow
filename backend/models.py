@@ -37,7 +37,8 @@ class TemplateInfo(BaseModel):
     height: float
     slots: list[SlotInfo] = Field(default_factory=list)
     thumbnail_url: Optional[str] = None  # 前端展示用
-    is_special: bool = False  # 来自"特殊品模板"文件，选中时自动激活 /特殊品 流程
+    is_special: bool = False       # 来自"特殊品模板"文件，选中时自动激活 /特殊品 流程
+    is_special_full: bool = False  # 来自"特殊品（完整）模板"文件，激活 /特殊品（完整）流程
 
 
 class TemplateGroup(BaseModel):
@@ -99,6 +100,7 @@ class ComposeStatus(str, Enum):
 class ComposeJob(BaseModel):
     """合成任务状态"""
     id: str
+    user_id: Optional[str] = None
     status: ComposeStatus = ComposeStatus.pending
     request: ComposeRequest
     result_path: Optional[str] = None
@@ -162,12 +164,46 @@ class SpecialComposeRequest(BaseModel):
 class SpecialComposeJob(BaseModel):
     """特殊品合成任务状态（可包含多个输出文件）"""
     id: str
+    user_id: Optional[str] = None
     status: ComposeStatus = ComposeStatus.pending
     request: SpecialComposeRequest
     result_paths: list[str] = Field(default_factory=list)  # 每个画板对应一个输出（export_frame 兜底）
     result_frame_ids: list[str] = Field(default_factory=list)  # 副本中的 frame id（同原模板）
     penpot_file_id: Optional[str] = None   # 副本 file id，用于前端取缩略图
     penpot_page_id: Optional[str] = None   # 副本 page id
+    penpot_edit_url: Optional[str] = None
+    error: Optional[str] = None
+    progress: list[str] = Field(default_factory=list)
+    created_at: Optional[float] = None
+
+
+# ─── 特殊品（完整）合成 ──────────────────────────────────────────────────────────
+
+
+class SpecialFullComposeRequest(BaseModel):
+    """
+    特殊品（完整）合成请求。
+    与 SpecialComposeRequest 相同结构，支持 banner/poster 场景图 slot，
+    并在导出前自动隐藏模板中名称含 hide 的图层。
+    """
+    file_id: str
+    page_id: str
+    frame_ids: list[str]
+    sku: str
+    fields: dict[str, str] = Field(default_factory=dict)
+    export_scale: float = 2.0
+
+
+class SpecialFullComposeJob(BaseModel):
+    """特殊品（完整）合成任务状态"""
+    id: str
+    user_id: Optional[str] = None
+    status: ComposeStatus = ComposeStatus.pending
+    request: SpecialFullComposeRequest
+    result_paths: list[str] = Field(default_factory=list)
+    result_frame_ids: list[str] = Field(default_factory=list)
+    penpot_file_id: Optional[str] = None
+    penpot_page_id: Optional[str] = None
     penpot_edit_url: Optional[str] = None
     error: Optional[str] = None
     progress: list[str] = Field(default_factory=list)

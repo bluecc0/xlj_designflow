@@ -30,23 +30,13 @@ const Canvas = ({ template, resultTemplate }) => {
             </>
           ) : (
             <>
-              <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Template</span>
-              <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{t?.name || 'None selected'}</span>
+              <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>模板</span>
+              <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{t?.name || '请选择模板'}</span>
               {t && (
                 <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', padding: '2px 6px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line-2)' }}>{t.tag}</span>
               )}
             </>
           )}
-        </div>
-
-        <div style={{ flex: 1 }}/>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--ink-3)' }}>
-          <button style={iconBtnStyle} title="Zoom out"><I.close size={12}/></button>
-          <span className="mono">100%</span>
-          <button style={iconBtnStyle} title="Zoom in"><I.plus size={12}/></button>
-          <div style={{ width: 1, height: 16, background: 'var(--line)', margin: '0 4px' }}/>
-          <button style={iconBtnStyle} title="Fit"><I.dims size={12}/></button>
         </div>
       </div>
 
@@ -144,7 +134,8 @@ const ResultPreview = ({ t }) => {
           <button
             onClick={() => {
               const names = (t._frameNames || frames.map(f => f.name || f.variant || '')).join(',');
-              window.open(`/special-compose/${window.lastComposeJobId}/download-zip?names=${encodeURIComponent(names)}`, '_blank');
+              const ep = window.lastComposeEndpoint || '/special-compose';
+              window.open(`${ep}/${window.lastComposeJobId}/download-zip?names=${encodeURIComponent(names)}`, '_blank');
             }}
             style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: 'var(--accent)', color: 'white', border: 'none', cursor: 'pointer' }}
           >
@@ -155,12 +146,6 @@ const ResultPreview = ({ t }) => {
     </div>
     </div>
   );
-};
-
-const iconBtnStyle = {
-  width: 24, height: 24, borderRadius: 5,
-  display: 'grid', placeItems: 'center',
-  color: 'var(--ink-2)',
 };
 
 // Translate ratio to pixel dimensions that fit nicely in the canvas area
@@ -182,7 +167,7 @@ const getPenpotViewUrl = (fileId, pageId, frameId) => {
     const u = new URL(base);
     penpotOrigin = u.protocol + '//' + u.hostname + ':9001';
   } catch(e) {
-    penpotOrigin = 'http://localhost:9001';
+    penpotOrigin = window.location.protocol + '//' + window.location.hostname + ':9001';
   }
   return `${penpotOrigin}/#/view/${fileId}/${pageId}?frame-id=${frameId}&section=interactions&index=0`;
 };

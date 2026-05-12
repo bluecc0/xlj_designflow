@@ -1,34 +1,19 @@
 """
-特殊品合成引擎
+特殊品（完整）合成引擎
 
-处理多画板模板的合成：
-1. 解析 /特殊品 指令，拆出 SKU + 各文字字段
-2. 按画板的 slot 命名自动决定图片类型（image_XXX → 对应素材文件夹）
-3. 文字分段：name_1 / name_2 按最后一个空格切割
-4. 时间字段自动展开：time_month / time_hour / time（格式化全文）
-5. 每个画板独立导出 PNG，全部完成后打包
+在 special_compose.py 基础上新增：
+1. 支持 banner / poster 场景图 slot（横/竖版，通过 IMAGE_TYPE_FOLDERS 配置）
+   slot/product_1/banner  → Banner/ 文件夹
+   slot/product_1/poster  → Poster/ 文件夹
+2. 导出前自动隐藏模板中名称为 "hide"（大小写不敏感）的所有图层
+   设计师可在 Penpot 中保持辅助层可见，导出时自动屏蔽
 
-Slot 字段映射（特殊品版）：
-  slot/product_1/image_white   → White_Base/ 文件夹下的图片
-  slot/product_1/image_whitex2 → whitex2 文件夹下的图片（IMAGE_TYPE_FOLDERS 配置）
-  slot/product_1/image_png     → PNG/ 文件夹
-  slot/product_1/name          → 完整文案（不分段）
-  slot/product_1/name_1        → 文案第一段（最后空格前）
-  slot/product_1/name_2        → 文案第二段（最后空格后）
-  slot/product_1/time          → 格式化全时间：如 "3/28 10:00发售"
-  slot/product_1/time_month    → 仅日期部分：如 "3/28"
-  slot/product_1/time_hour     → 仅时间部分：如 "10点发售"
-
-与主流程的隔离：
-- 入口为 POST /special-compose，独立端点
-- 使用同一套 PenpotClient / ProductLibrary / 信号量（避免并发写冲突）
-- 不修改主 compose.py 的任何逻辑
+其余逻辑（时间展开、文案分段、变体导出）与 special_compose.py 完全相同。
+入口：POST /special-compose-full，独立端点。
 """
 from __future__ import annotations
 
 import datetime
-import json
-import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -36,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import settings
-from .models import ComposeStatus, SpecialComposeJob, SpecialComposeRequest
+from .models import ComposeStatus, SpecialFullComposeJob, SpecialFullComposeRequest
 from .penpot_client import PenpotClient, PenpotError
 from .product_library import ProductLibrary
 from .job_store import save_special_job
@@ -44,203 +29,95 @@ from .job_store import save_special_job
 # 复用主流程的客户端单例和串行信号量
 from .compose import get_client, _compose_sem
 
-# 加载特殊品流程配置
-_FLOWS_PATH = Path(__file__).parent.parent / "special_flows.json"
-_flows_config: dict = {}
-
-def _load_flows() -> dict:
-    global _flows_config
-    try:
-        with open(_FLOWS_PATH, "r", encoding="utf-8") as f:
-            _flows_config = json.load(f).get("flows", {})
-    except Exception:
-        _flows_config = {}
-    return _flows_config
-
-_load_flows()
+# 复用 special_compose 中的纯函数（无状态，可安全复用）
+from .special_compose import (
+    _split_on_last_space,
+    expand_time_fields,
+)
 
 
-# ─── 指令解析 ─────────────────────────────────────────────────────────────────
+# ─── 图层查找工具 ─────────────────────────────────────────────────────────────
 
-def parse_special_command(text: str) -> Optional[dict]:
-    """
-    解析 /特殊品 指令，返回 { flow_name, sku, fields } 或 None。
-
-    格式：/特殊品 SKU，文案，时间文案
-    分隔符：中文逗号 ，
-    """
-    text = text.strip()
-    for flow_name, flow in _flows_config.items():
-        cmd = flow.get("slash_command", "")
-        if not text.startswith(cmd):
+def _find_hide_layer_ids(file_data: dict, page_id: str) -> list[tuple[str, str]]:
+    """找出指定 page 内所有名称为 'hide' 的对象，返回 [(object_id, page_id)]。"""
+    data = file_data.get("data", {})
+    pages_index = data.get("pagesIndex") or data.get("pages-index", {})
+    result = []
+    for pid, page in pages_index.items():
+        if page_id and pid != page_id:
             continue
-
-        # 去掉指令前缀，取参数部分
-        args_str = text[len(cmd):].strip()
-        sep = flow.get("input_separator", "，")
-        parts = [p.strip() for p in args_str.split(sep)]
-
-        field_defs = flow.get("fields", [])
-        result: dict = {"flow_name": flow_name, "sku": "", "fields": {}}
-
-        for i, fdef in enumerate(field_defs):
-            val = parts[i] if i < len(parts) else ""
-            if fdef.get("is_sku"):
-                result["sku"] = val
-            else:
-                result["fields"][fdef["key"]] = val
-
-        return result
-    return None
+        objects = page.get("objects", {})
+        for obj_id, obj in objects.items():
+            name = obj.get("name") or obj.get("~:name") or ""
+            if name.strip().lower() == "hide":
+                result.append((obj_id, pid))
+    return result
 
 
-def _split_on_last_space(text: str) -> tuple[str, str]:
+def _find_variant_group_ids(file_data: dict, page_id: str) -> dict[str, list[tuple[str, str]]]:
     """
-    按最后一个空格切割文案，返回 (前半段, 后半段)。
-    支持多种空白字符：普通空格、\xa0（不间断空格）、制表符等。
-    先把 2+ 个连续空白压缩为一个空格，再按最后一个空格拆分。
+    在指定 page 内查找名称匹配 'variant_*' 的顶层组/图层。
+    返回 {group_name: [(object_id, page_id), ...]}，用于整组显隐切换。
     """
-    # 先把多种空白符统一为空格
-    import re as _re
-    normalized = _re.sub(r'[\s\xa0]+', ' ', text.strip())
-    parts = normalized.split(' ')
-    if len(parts) <= 1:
-        return text, ""
-    # 最后一个空格位置 = 倒数第二段末尾
-    name_1 = ' '.join(parts[:-1])
-    name_2 = parts[-1]
-    return name_1, name_2
-
-
-def expand_time_fields(raw_time: str) -> dict[str, str]:
-    """
-    解析时间文案，展开为多个 slot 可用的字段。
-
-    输入示例：
-      "3月28日 10点发售"   → { time_month:"3/28", time_hour:"10点发售", time:"3/28 10:00发售" }
-      "3月28日10点发售"    → 同上（无空格也支持）
-      "3/28 10:00发售"    → 直接识别 / 格式
-      "28日 10点"         → { time_month:"28日", time_hour:"10点", time:"28日 10点" }
-      "3月28日"           → { time_month:"3/28", time_hour:"", time:"3/28" }
-
-    返回 dict 包含：time / time_month / time_hour
-    所有字段均为 str，缺失时为 ""。
-    """
-    raw = (raw_time or "").strip()
-    result = {"time": raw, "time_month": "", "time_hour": ""}
-
-    # ── 尝试解析 "N月M日" 格式 ──────────────────────────────────────────────
-    month_day_m = re.match(r"(\d{1,2})月(\d{1,2})日\s*", raw)
-    slash_day_m = re.match(r"(\d{1,2})/(\d{1,2})\s*", raw)
-
-    date_part = ""
-    remainder = raw
-
-    if month_day_m:
-        m, d = month_day_m.group(1), month_day_m.group(2)
-        date_part = f"{m}/{d}"
-        remainder = raw[month_day_m.end():]
-    elif slash_day_m:
-        m, d = slash_day_m.group(1), slash_day_m.group(2)
-        date_part = f"{m}/{d}"
-        remainder = raw[slash_day_m.end():]
-    else:
-        # 无法识别日期，尝试只提取时间部分
-        # 格式如 "28日 10点" → time_month=28日，提取后半段
-        day_only_m = re.match(r"(\d{1,2}日)\s*", raw)
-        if day_only_m:
-            date_part = day_only_m.group(1)
-            remainder = raw[day_only_m.end():]
-
-    result["time_month"] = date_part
-
-    # ── 解析时间部分：remainder 如 "10点发售" / "10:00发售" / "10点" ─────────
-    hour_part = remainder.strip()
-
-    # 统一为可读的 time_hour（保留原始文案）
-    result["time_hour"] = hour_part
-
-    # ── 构建 time 全字段 ──────────────────────────────────────────────────────
-    # 尝试把 "N点" 转为 "N:00"，让 time 字段更标准
-    hour_formatted = hour_part
-    hour_num_m = re.match(r"(\d{1,2})点(.*)", hour_part)
-    if hour_num_m:
-        hh = int(hour_num_m.group(1))
-        suffix = hour_num_m.group(2)  # e.g. "发售"
-        hour_formatted = f"{hh:02d}:00{suffix}"
-
-    if date_part and hour_formatted:
-        result["time"] = f"{date_part} {hour_formatted}"
-    elif date_part:
-        result["time"] = date_part
-    else:
-        result["time"] = raw
-
-    # time_c：保留中文日期格式，但把"N点"转为"N:00"
-    # 例："4月29日 10点发售" → "4月29日 10:00发售"
-    if month_day_m:
-        cn_date = f"{month_day_m.group(1)}月{month_day_m.group(2)}日"
-        result["time_c"] = f"{cn_date} {hour_formatted}".strip() if hour_formatted else cn_date
-    elif slash_day_m:
-        cn_date = f"{slash_day_m.group(1)}月{slash_day_m.group(2)}日"
-        result["time_c"] = f"{cn_date} {hour_formatted}".strip() if hour_formatted else cn_date
-    else:
-        result["time_c"] = f"{date_part} {hour_formatted}".strip() if date_part or hour_formatted else raw
-
+    data = file_data.get("data", {})
+    pages_index = data.get("pagesIndex") or data.get("pages-index", {})
+    result: dict[str, list[tuple[str, str]]] = {}
+    for pid, page in pages_index.items():
+        if page_id and pid != page_id:
+            continue
+        objects = page.get("objects", {})
+        for obj_id, obj in objects.items():
+            name = (obj.get("name") or obj.get("~:name") or "").strip().lower()
+            if name.startswith("variant_") or name.startswith("variant "):
+                # 归一化：去空格、转小写
+                key = name.replace(" ", "_")
+                result.setdefault(key, []).append((obj_id, pid))
     return result
 
 
 # ─── 合成主函数 ───────────────────────────────────────────────────────────────
 
-def run_special_compose(job: SpecialComposeJob) -> None:
+def run_special_full_compose(job: SpecialFullComposeJob) -> None:
     """
-    同步执行特殊品合成任务，就地更新 job 状态。
+    同步执行特殊品（完整）合成任务，就地更新 job 状态。
     在后台线程中调用。复用主流程的信号量确保串行。
     """
-    _log(job, "等待合成队列（特殊品）…")
+    _log(job, "等待合成队列（特殊品完整）…")
     with _compose_sem:
         _run_inner(job)
 
 
-def _run_inner(job: SpecialComposeJob) -> None:
+def _run_inner(job: SpecialFullComposeJob) -> None:
     job.status = ComposeStatus.running
-    save_special_job(job)  # 持久化初始状态
+    save_special_job(job)
     client = get_client()
     req = job.request
     library = ProductLibrary(settings.product_library_path)
 
     try:
-        # ── Step 0: 展开时间字段，让 time_month / time_hour / time 均可用 ────
+        # ── Step 0: 展开字段 ──────────────────────────────────────────────────
         raw_time = req.fields.get("time", "")
         time_expanded = expand_time_fields(raw_time)
-        # 合并策略：
-        #   - 先用用户传入的 fields 作为基础
-        #   - 再用 expand_time_fields 的结果填充（setdefault 不覆盖用户已有的值）
-        #   - time_month / time_hour 总是来自展开；time 使用格式化版本，除非用户已传入
         merged_fields: dict[str, str] = dict(req.fields)
-        merged_fields.setdefault("time", time_expanded["time"])       # 格式化 time，用户没传时使用
-        merged_fields["time_month"] = time_expanded["time_month"]     # 始终覆盖（派生字段）
-        merged_fields["time_hour"] = time_expanded["time_hour"]       # 始终覆盖（派生字段）
-        merged_fields["time_c"] = time_expanded["time_c"]             # 完整中文原始时间
-        # 如果 time slot 需要的是格式化版本（如"3/28 10:00发售"），此处覆盖
+        merged_fields.setdefault("time", time_expanded["time"])
+        merged_fields["time_month"] = time_expanded["time_month"]
+        merged_fields["time_hour"] = time_expanded["time_hour"]
+        merged_fields["time_c"] = time_expanded["time_c"]
         if raw_time and time_expanded["time"] != raw_time:
-            # 用户传入了原始时间文案，将格式化版本存到 time，原始文案存到 time_raw
             merged_fields["time"] = time_expanded["time"]
             merged_fields.setdefault("time_raw", raw_time)
-        # 展开 name → name_1 / name_2（如果用户没有单独传）
         raw_name = merged_fields.get("name", "")
         if raw_name:
             n1, n2 = _split_on_last_space(raw_name)
             merged_fields.setdefault("name_1", n1)
             merged_fields.setdefault("name_2", n2)
 
-        # ── Step 1: 复制模板文件（一次，所有画板共享同一副本）────────────────
+        # ── Step 1: 复制模板文件 ──────────────────────────────────────────────
         copy_name = f"{req.sku}_特殊品" if req.sku else f"特殊品-{job.id[:8]}"
         _log(job, f"复制模板文件 → {copy_name}")
         dup = client.duplicate_file(req.file_id, copy_name)
         work_file_id = dup.get("id") or dup.get("~:id") or req.file_id
 
-        # 拼接编辑链接
         project_id = dup.get("projectId") or dup.get("project-id", "")
         team_id = dup.get("teamId") or dup.get("team-id", "")
         if not team_id and project_id:
@@ -263,19 +140,21 @@ def _run_inner(job: SpecialComposeJob) -> None:
         slots = client.parse_slots(file_data)
         frames = client.parse_frames(file_data)
 
-        # frame 索引
         frame_index = {f["id"]: f for f in frames}
-        # slot 按 frame_id 分组
         slot_by_frame: dict[str, list[dict]] = {}
         for s in slots:
             slot_by_frame.setdefault(s.get("frame_id", ""), []).append(s)
 
-        # ── Step 3: 构建要写入的变更（所有画板共享同一批 changes）────────────
+        # ── Step 3: 构建 slot 变更 ────────────────────────────────────────────
         all_changes: list[dict] = []
-        # variant 图层按组收集：{group_part: {field_part: [(layer_id, page_id)]}}
+        # variant_versions: {ver_key: [(id, pid)]}
+        # ver_key 为 "group_part/field_part"，如 "variant_a/1", "variant_a/2"
+        variant_versions: dict[str, list[tuple[str, str]]] = {}
+        # variant_by_group: 带内容填充的 variant slot（field_part 为文字/图片字段名）
         variant_by_group: dict[str, dict[str, list[tuple[str, str]]]] = {}
-        # 哪些 frame_id 包含 variant 图层（只有这些画板需要多版本导出）
         variant_frame_ids: set[str] = set()
+
+        _log(job, f"全部 slots ({len(slots)} 个): {[s['name'] for s in slots]}")
 
         for frame_id in req.frame_ids:
             frame = frame_index.get(frame_id)
@@ -286,45 +165,50 @@ def _run_inner(job: SpecialComposeJob) -> None:
             frame_x = frame["x"]
             frame_w = frame["width"]
             frame_slots = slot_by_frame.get(frame_id, [])
-            slot_index = {s["name"]: s for s in frame_slots}
-
             _log(job, f"处理画板: {frame['name']}（{len(frame_slots)} 个 slot）")
 
             for slot in frame_slots:
-                slot_name: str = slot["name"]  # e.g. slot/product_1/image_white
+                slot_name: str = slot["name"]
                 parts = slot_name.split("/")
                 if len(parts) < 2:
                     continue
 
-                group_part = parts[1]   # e.g. product_1 / variant_a
+                group_part = parts[1]
                 field_part = parts[2] if len(parts) >= 3 else ""
 
-                # ── variant 图层：仅做显隐切换，不写内容 ─────────────────────
-                # slot/variant_X/N → 按 X 分组，按 N 区分导出版本
-                # field_part 为空（如 slot/variant_a/）时跳过，避免产生多余版本
-                if group_part.startswith("variant"):
-                    if field_part:
+                is_variant = group_part.startswith("variant")
+
+                if is_variant:
+                    if not field_part:
+                        # 空 field_part：仅作占位，跳过
+                        continue
+                    elif field_part.isdigit():
+                        # slot/variant_a/1、slot/variant_a/2 → 版本标记图层，只做显隐
+                        ver_key = f"{group_part}/{field_part}"
+                        variant_versions.setdefault(ver_key, []).append((slot["id"], slot["page_id"]))
+                        variant_frame_ids.add(frame_id)
+                        continue  # 不填内容
+                    else:
+                        # slot/variant_a/name → 带内容的 variant slot，记录并填充
                         (
                             variant_by_group
                             .setdefault(group_part, {})
                             .setdefault(field_part, [])
                             .append((slot["id"], slot["page_id"]))
                         )
-                        variant_frame_ids.add(frame_id)  # 记录哪个画板含变体
-                    _log(job, f"  检测到变体图层: {slot_name}")
-                    continue  # 变体图层只做显隐
-
-                if not field_part:
+                        variant_frame_ids.add(frame_id)
+                        # 不 continue — 继续往下填充内容
+                elif not field_part:
                     continue
 
-                # ── 图片 slot ─────────────────────────────────────────────────
-                if field_part == "image" or field_part.startswith("image_"):
-                    image_type_key: Optional[str] = slot.get("image_type")  # None or "white" etc
+                # ── 图片 slot（含 banner / poster）───────────────────────────
+                if field_part == "image" or field_part.startswith("image_") \
+                        or field_part in ("banner", "poster"):
+                    image_type_key: Optional[str] = slot.get("image_type")
                     folder: Optional[str] = None
                     if image_type_key:
                         folder = settings.IMAGE_TYPE_FOLDERS.get(image_type_key)
                         if not folder:
-                            # 尝试大小写不敏感匹配
                             for k, v in settings.IMAGE_TYPE_FOLDERS.items():
                                 if k.lower() == image_type_key.lower():
                                     folder = v
@@ -351,14 +235,10 @@ def _run_inner(job: SpecialComposeJob) -> None:
                         _log(job, f"未找到图片 SKU={req.sku} type={image_type_key}，隐藏图层")
                         all_changes.append(client.hide_layer(slot["id"], slot["page_id"]))
 
-                # ── 文字分段 slot（name_1 / name_2）──────────────────────────
-                # split_field 由 penpot_client 在解析 slot 名时标记（field_part 末尾含数字后缀）
-                # merged_fields 里已经预展开了 name_1/name_2，直接查即可；
-                # 保留原有 split_field 逻辑作为兜底（兼容旧结构）
+                # ── 分段文字 slot（name_1 / name_2）──────────────────────────
                 elif "split_field" in slot:
-                    base_field = slot["split_field"]    # "name"
-                    split_idx = slot["split_index"]     # 1 or 2
-                    # 优先从 merged_fields 取预展开的值（如 name_1, name_2）
+                    base_field = slot["split_field"]
+                    split_idx = slot["split_index"]
                     direct_key = f"{base_field}_{split_idx}"
                     if direct_key in merged_fields:
                         text_to_write = merged_fields[direct_key]
@@ -394,12 +274,12 @@ def _run_inner(job: SpecialComposeJob) -> None:
                         _log(job, f"隐藏空分段图层: {slot_name}")
                         all_changes.append(client.hide_layer(slot["id"], slot["page_id"]))
 
-                # ── 普通文字 slot（含 time_month / time_hour / time / name 等）──
+                # ── 普通文字 slot ─────────────────────────────────────────────
                 elif slot.get("type") == "text":
                     text_to_write = merged_fields.get(field_part, "")
                     ts_style = slot.get("text_style", {})
                     if text_to_write:
-                        _log(job, f"写入文字: 「{text_to_write}」→ {slot_name} [align={ts_style.get('text_align','?')} grow={slot.get('grow_type','?')}]")
+                        _log(job, f"写入文字: 「{text_to_write}」→ {slot_name}")
                         all_changes.extend(
                             client.set_text_content(
                                 layer_id=slot["id"],
@@ -424,53 +304,55 @@ def _run_inner(job: SpecialComposeJob) -> None:
                         _log(job, f"隐藏空图层: {slot_name}")
                         all_changes.append(client.hide_layer(slot["id"], slot["page_id"]))
 
-        # ── Step 4: 提交所有变更 ──────────────────────────────────────────────
+        _log(job, f"variant_by_group keys: {list(variant_by_group.keys())}")
+        _log(job, f"variant_frame_ids count: {len(variant_frame_ids)}")
+
+        # ── Step 4: 隐藏所有 hide 图层（在提交其他变更之前合并）────────────────
+        hide_ids = _find_hide_layer_ids(file_data, req.page_id)
+        if hide_ids:
+            _log(job, f"隐藏 {len(hide_ids)} 个 hide 图层…")
+            for obj_id, pg_id in hide_ids:
+                all_changes.append(client.hide_layer(obj_id, pg_id))
+
+        # ── Step 5: 提交所有变更 ──────────────────────────────────────────────
         if all_changes:
             _log(job, f"提交 {len(all_changes)} 个变更…")
             client.update_file(work_file_id, all_changes)
         else:
             _log(job, "无变更，直接导出")
 
-        # ── Step 5: 导出所有画板结果图 ─────────────────────────────────────
+        # ── Step 6: 导出所有画板 ──────────────────────────────────────────────
         valid_frame_ids = [fid for fid in req.frame_ids if fid in frame_index]
-        job.penpot_file_id = work_file_id
         job.penpot_page_id = req.page_id
         job.result_frame_ids = valid_frame_ids
 
         results_dir = settings.output_path / "results" / job.id
         results_dir.mkdir(parents=True, exist_ok=True)
 
-        # ── 确定变体导出维度 ──────────────────────────────────────────────────
-        # 多组（variant_a + variant_b）→ 按 group_part 区分；
-        # 单组（只有 variant_a）且有多个 field → 按 field_part 区分
-        if len(variant_by_group) > 1:
-            # e.g. {variant_a: {time: [...]}, variant_b: {time: [...]}}
-            # → export_versions = {variant_a: [...all ids...], variant_b: [...]}
-            export_versions: dict[str, list[tuple[str, str]]] = {}
+        # 优先用数字版本标记（slot/variant_a/1、slot/variant_a/2）构建 export_versions
+        # 若没有数字标记，退回到内容 variant_by_group
+        export_versions: dict[str, list[tuple[str, str]]] = {}
+        if variant_versions:
+            export_versions = variant_versions
+            _log(job, f"使用数字版本标记: {list(export_versions.keys())}")
+        else:
             for gp, field_map in variant_by_group.items():
                 for ids in field_map.values():
                     export_versions.setdefault(gp, []).extend(ids)
-        elif variant_by_group:
-            # 单组，按 field_part 区分（e.g. "1", "2"）
-            only_group = next(iter(variant_by_group.values()))
-            export_versions = {fp: ids for fp, ids in only_group.items()}
-        else:
-            export_versions = {}
+                export_versions.setdefault(gp, [])
 
         has_variants = len(export_versions) >= 2
-        all_variant_ids = [(lid, pid) for ids in export_versions.values() for lid, pid in ids]
-        _log(job, f"变体模式: {'是' if has_variants else '否'} ({len(export_versions)} 个版本: {list(export_versions.keys())}，含变体画板: {len(variant_frame_ids)} 个)")
+        all_variant_ids = list({(lid, pid) for ids in export_versions.values() for lid, pid in ids})
+        _log(job, f"变体模式: {'是' if has_variants else '否'} ({list(export_versions.keys())})")
 
-        # result_paths 需要按 frame index 有序，并行写入用 dict 暂存
-        _path_buf: dict[str, str] = {}  # key → str(path)，最后排序后写入 job.result_paths
+        _path_buf: dict[str, str] = {}
         _buf_lock = threading.Lock()
 
         def _export_one_nowait(i: int, frame_id: str, suffix: str) -> None:
-            """导出单个画板（不含等待），结果暂存到 _path_buf"""
             frame = frame_index[frame_id]
-            label = suffix.strip("_") if suffix else ""
             fname = f"frame_{i}{suffix}.png"
             out_path = results_dir / fname
+            label = suffix.strip("_") if suffix else ""
             _log(job, f"  导出: {frame['name']}{' [' + label + ']' if label else ''}…")
             try:
                 png_bytes = client.export_frame(
@@ -490,7 +372,6 @@ def _run_inner(job: SpecialComposeJob) -> None:
                 _log(job, f"  ✗ {frame['name']} 导出失败: {e}")
 
         def _export_batch(tasks: list[tuple[int, str, str]], wait_secs: float) -> None:
-            """等待一次后并行导出一批画板。tasks: [(index, frame_id, suffix)]"""
             if not tasks:
                 return
             if wait_secs > 0:
@@ -506,14 +387,10 @@ def _run_inner(job: SpecialComposeJob) -> None:
                         _log(job, f"  [并行导出异常] {exc}")
 
         if not has_variants:
-            # 无变体：所有画板并行导出一次
             _log(job, "并行导出全部画板…")
             tasks = [(i, fid, "") for i, fid in enumerate(valid_frame_ids)]
             _export_batch(tasks, wait_secs=3.0)
         else:
-            # 有变体：
-            #   - 非变体画板 → 并行导出一次
-            #   - 含变体画板 → 每个版本各并行导出一次
             non_variant_tasks = [
                 (i, fid, "") for i, fid in enumerate(valid_frame_ids)
                 if fid not in variant_frame_ids
@@ -539,7 +416,6 @@ def _run_inner(job: SpecialComposeJob) -> None:
                 ]
                 _export_batch(variant_tasks, wait_secs=2.0)
 
-        # 按文件名排序后写入 job.result_paths（保证顺序：frame_0, frame_1, ..., frame_0_v1, ...）
         job.result_paths = [
             v for _, v in sorted(_path_buf.items(), key=lambda x: (
                 int(__import__('re').search(r'frame_(\d+)', x[0]).group(1)),
@@ -548,16 +424,16 @@ def _run_inner(job: SpecialComposeJob) -> None:
         ]
 
         job.status = ComposeStatus.done
-        save_special_job(job)  # 持久化完成状态
+        save_special_job(job)
         n_out = len(valid_frame_ids) * (2 if has_variants else 1)
         _log(job, f"合成完成！副本 {work_file_id[:8]}…，共导出 {n_out} 张图")
 
     except Exception as exc:
         job.status = ComposeStatus.failed
         job.error = str(exc)
-        save_special_job(job)  # 持久化失败状态
+        save_special_job(job)
         _log(job, f"失败: {exc}")
 
 
-def _log(job: SpecialComposeJob, msg: str) -> None:
+def _log(job: SpecialFullComposeJob, msg: str) -> None:
     job.progress.append(msg)

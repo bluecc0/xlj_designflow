@@ -2,9 +2,10 @@
 
 const SLASH_COMMANDS = [
   { cmd: '/generate',   cn: '开始生图',   desc: 'Generate variations from current parameters', icon: 'zap',     shortcut: '⌘⏎',  group: 'Generation', available: true },
-  { cmd: '/regenerate', cn: '重新生成',   desc: 'Re-run the last prompt with a new seed',       icon: 'refresh', group: 'Generation', available: true },
-  { cmd: '/upscale',    cn: '放大',       desc: 'Upscale selected option to 2K / 4K',           icon: 'layers',  group: 'Generation', available: true },
-  { cmd: '/特殊品',    cn: '特殊品合成', desc: '多画板特殊品合成，格式：/特殊品 SKU，文案，时间', icon: 'grid', group: 'Generation', available: true },
+  { cmd: '/Nano Banano pro', cn: 'AI 生图',  desc: '图生图超强一致性，改图更强',          icon: 'image',   group: 'Generation', available: true },
+  { cmd: '/Gpt image 2',    cn: 'AI 生图',  desc: '文生图，超强中文渲染和语义理解',      icon: 'image',   group: 'Generation', available: true },
+  { cmd: '/特殊品',        cn: '特殊品合成',      desc: '无素材特殊品模板',                   icon: 'grid',   group: 'Generation', available: true },
+  { cmd: '/特殊品（完整）', cn: '特殊品（完整）合成', desc: '支持场景图，发售时间和立即抢购等多版本', icon: 'layers', group: 'Generation', available: true },
 
   { cmd: '/analyze',    cn: '分析素材',   desc: 'Parse an uploaded image, brief, or CSV',       icon: 'eye',     group: 'Tools', available: true },
   { cmd: '/palette',    cn: '提取配色',   desc: 'Extract a palette from a reference',            icon: 'palette', group: 'Tools', available: false },

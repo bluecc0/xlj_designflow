@@ -1,6 +1,16 @@
-// Polls /health every 30s and renders a status dot + label
-const StatusChip = ({ label, fetchUrl, okKey, okText, errText }) => {
+// Polls /health every 30s and renders compact status icons.
+
+const STATUS_COLORS = {
+  loading: 'var(--warn)',
+  ok: 'var(--ok)',
+  err: 'oklch(0.6 0.18 25)',
+};
+
+const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail }) => {
   const [status, setStatus] = React.useState('loading'); // 'loading' | 'ok' | 'err'
+  const [payload, setPayload] = React.useState(null);
+  const [open, setOpen] = React.useState(false);
+  const wrapRef = React.useRef(null);
 
   React.useEffect(() => {
     let alive = true;
@@ -10,44 +20,141 @@ const StatusChip = ({ label, fetchUrl, okKey, okText, errText }) => {
         if (!res.ok) throw new Error();
         const data = await res.json();
         if (!alive) return;
+        setPayload(data);
         if (okKey) {
-          // e.g. okKey='library' → data.library.connected
           setStatus(data[okKey]?.connected ? 'ok' : 'err');
         } else {
-          setStatus(data.status === 'ok' ? 'ok' : 'err');
+          const ok = data.status === 'ok' && data.penpot?.connected;
+          setStatus(ok ? 'ok' : 'err');
         }
       } catch {
-        if (alive) setStatus('err');
+        if (alive) {
+          setPayload(null);
+          setStatus('err');
+        }
       }
     };
     check();
     const iv = setInterval(check, 30000);
-    return () => { alive = false; clearInterval(iv); };
+    return () => {
+      alive = false;
+      clearInterval(iv);
+    };
   }, [fetchUrl, okKey]);
 
-  const color = status === 'loading' ? 'var(--warn)' : status === 'ok' ? 'var(--ok)' : 'oklch(0.6 0.18 25)';
-  const text  = status === 'loading' ? '检测中…'   : status === 'ok' ? okText      : errText;
+  React.useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => {
+      if (!wrapRef.current || wrapRef.current.contains(e.target)) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  const color = STATUS_COLORS[status] || STATUS_COLORS.err;
   const pulse = status === 'loading';
+  const text = status === 'loading' ? '检测中' : status === 'ok' ? '正常' : '异常';
+  const detail = renderDetail ? renderDetail(payload) : null;
+  const clickable = Boolean(detail);
 
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 5,
-      padding: '4px 8px', borderRadius: 6,
-      background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-      fontSize: 11,
-    }}>
-      <span style={{ position: 'relative', width: 7, height: 7, flexShrink: 0 }}>
-        <span style={{ position: 'absolute', inset: 0, borderRadius: 99, background: color, transition: 'background 300ms' }}/>
-        {pulse && <span style={{ position: 'absolute', inset: -2, borderRadius: 99, background: color, opacity: 0.3, animation: 'statusPulse 1.6s ease-in-out infinite' }}/>}
-      </span>
-      <span style={{ fontWeight: 500, color: 'var(--ink-2)' }}>{label}</span>
-      <span className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{text}</span>
-      <style>{`@keyframes statusPulse{0%,100%{transform:scale(1);opacity:.3}50%{transform:scale(1.8);opacity:0}}`}</style>
+    <div
+      ref={wrapRef}
+      style={{
+        position: 'relative',
+        flexShrink: 0,
+      }}
+    >
+      <button
+        title={title + '：' + text}
+        aria-label={title + '：' + text}
+        onClick={clickable ? () => setOpen(v => !v) : undefined}
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: 7,
+          background: open ? 'var(--accent-soft)' : 'var(--panel-2)',
+          border: '1px solid ' + (open ? 'var(--accent)' : 'var(--line-2)'),
+          display: 'grid',
+          placeItems: 'center',
+          position: 'relative',
+          color: 'var(--ink-2)',
+          cursor: clickable ? 'pointer' : 'default',
+        }}
+      >
+        <span
+          style={{ display: 'grid', placeItems: 'center' }}
+        >
+          <Icon size={13} stroke={2}/>
+        </span>
+        <span
+          style={{
+            position: 'absolute',
+            right: 4,
+            bottom: 4,
+            width: 6,
+            height: 6,
+            borderRadius: 99,
+            background: color,
+            boxShadow: '0 0 0 2px ' + (open ? 'var(--accent-soft)' : 'var(--panel-2)'),
+            transition: 'background 300ms',
+          }}
+        />
+        {pulse && (
+          <span
+            style={{
+              position: 'absolute',
+              right: 2,
+              bottom: 2,
+              width: 10,
+              height: 10,
+              borderRadius: 99,
+              background: color,
+              opacity: 0.22,
+              animation: 'statusPulse 1.6s ease-in-out infinite',
+            }}
+          />
+        )}
+      </button>
+      {open && detail && (
+        <div style={{
+          position: 'absolute',
+          top: 'calc(100% + 8px)',
+          right: 0,
+          minWidth: 180,
+          padding: 10,
+          borderRadius: 8,
+          background: 'var(--panel)',
+          border: '1px solid var(--line)',
+          boxShadow: '0 10px 24px rgba(0,0,0,0.12)',
+          zIndex: 30,
+        }}>
+          {detail}
+        </div>
+      )}
+      <style>{`@keyframes statusPulse{0%,100%{transform:scale(1);opacity:.22}50%{transform:scale(1.7);opacity:0}}`}</style>
     </div>
   );
 };
 
-const TopBar = () => {
+const TopBar = ({ user, onSwitchUser }) => {
+  const renderAiProviderDetail = React.useCallback((data) => {
+    const info = data && data.ai_provider;
+    if (!info) return null;
+    const hasBalance = typeof info.remain_balance !== 'undefined';
+    const statusText = info.connected ? '正常' : (info.configured ? '异常' : '未配置');
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' }}>AI 服务商</div>
+        <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>状态：{statusText}</div>
+        {hasBalance && <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>余额：{String(info.remain_balance)}</div>}
+        {!hasBalance && info.connected && info.unlimited_quota && <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>额度：不限额</div>}
+        {info.message && <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>{String(info.message).slice(0, 120)}</div>}
+      </div>
+    );
+  }, []);
+
   return (
     <div style={{
       height: 48, flexShrink: 0,
@@ -56,7 +163,6 @@ const TopBar = () => {
       background: 'var(--panel)',
       borderBottom: '1px solid var(--line)',
     }}>
-      {/* Logo */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 180 }}>
         <div style={{
           width: 22, height: 22, borderRadius: 6,
@@ -72,25 +178,32 @@ const TopBar = () => {
         <span className="mono" style={{ fontSize: 9, color: 'var(--ink-3)', padding: '2px 5px', borderRadius: 3, background: 'var(--panel-2)', border: '1px solid var(--line)' }}>BETA</span>
       </div>
 
-      {/* Project crumb */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink-2)' }}>
-        <span style={{ color: 'var(--ink-3)' }}>Autumn Campaign</span>
-        <I.chevronRight size={10} stroke={1.8}/>
-        <span style={{ color: 'var(--ink)' }}>Hero visual — Draft 03</span>
-        <button style={{
-          marginLeft: 4, padding: '3px 6px', borderRadius: 4,
-          color: 'var(--ink-3)', fontSize: 10,
-        }}>
-          <I.chevronDown size={10} stroke={2}/>
-        </button>
-      </div>
-
       <div style={{ flex: 1 }}/>
 
-      {/* Right cluster — live status chips */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <StatusChip label="后端服务" fetchUrl="/health" okText="已连接" errText="离线"/>
-        <StatusChip label="素材库" fetchUrl="/health" okKey="library" okText="已连接" errText="未连接"/>
+        <StatusIcon title="后端服务" fetchUrl="/health" icon={I.settings}/>
+        <StatusIcon title="素材库" fetchUrl="/health" okKey="library" icon={I.folder}/>
+        <StatusIcon title="AI 服务商" fetchUrl="/health" okKey="ai_provider" icon={I.sparkles} renderDetail={renderAiProviderDetail}/>
+        {user && React.createElement('div', {
+          style: {
+            display: 'flex', alignItems: 'center', gap: 8,
+            marginLeft: 6, padding: '4px 8px', borderRadius: 6,
+            background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+          }
+        },
+          React.createElement(I.user, { size: 12, style: { color: 'var(--ink-3)' } }),
+          React.createElement('span', { style: { fontSize: 11.5, color: 'var(--ink)' } }, user.username),
+          React.createElement('button', {
+            onClick: onSwitchUser,
+            title: '切换身份',
+            style: {
+              width: 22, height: 22, borderRadius: 5,
+              background: 'var(--panel)', border: '1px solid var(--line)',
+              color: 'var(--ink-3)', display: 'grid', placeItems: 'center',
+              cursor: 'pointer',
+            }
+          }, React.createElement(I.refresh, { size: 11 }))
+        )}
       </div>
     </div>
   );

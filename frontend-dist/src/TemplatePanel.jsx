@@ -1,5 +1,14 @@
 const CATS = ['All', 'Social', 'E-commerce', 'Brand', 'Print', 'Web', 'Packaging'];
 
+function formatAiModelName(model) {
+  if (!model) return 'AI 生图';
+  var map = {
+    'gpt-image-2': 'Gpt image 2',
+    'gemini-3-pro-image-preview': 'Nano Banano pro',
+  };
+  return map[model] || model;
+}
+
 // 从后端 TemplateInfo 推导显示用的 cat / ratio / tone / tag
 function deriveTemplateMeta(t) {
   const { width = 400, height = 400, slots = [] } = t;
@@ -126,15 +135,15 @@ var TemplatePanel = function(_ref2) {
           return Object.assign({}, t, deriveTemplateMeta(t));
         });
 
-        // ── 按 group_name 聚合，同名画板合并为一个模板组 ────────────────────
-        // group_name 由后端 parse_frames 填充：名称含 "/" 取左边，否则等于 name
+        // ── 按 file_id + group_name 聚合，跨文件同名 page 不互相干扰 ──────────
         var groupMap = {};
         var groupOrder = [];
         raw.forEach(function(t) {
           var gname = t.group_name || t.name;
-          if (!groupMap[gname]) {
-            groupMap[gname] = {
-              // 代表画板用第一个 frame 的属性（缩略图、id 兼容）
+          // 分组 key 带 file_id，防止不同文件的同名 page 被错误合并
+          var gkey = (t.file_id || '') + ':' + gname;
+          if (!groupMap[gkey]) {
+            groupMap[gkey] = {
               id: t.id,
               name: gname,
               group_name: gname,
@@ -148,19 +157,18 @@ var TemplatePanel = function(_ref2) {
               cat: t.cat,
               slots: t.slots,
               is_special: t.is_special || false,
-              // frames 数组含该组所有画板，供特殊品合成等多画板场景使用
+              is_special_full: t.is_special_full || false,
               frames: [],
             };
-            groupOrder.push(gname);
+            groupOrder.push(gkey);
           }
-          groupMap[gname].frames.push(t);
-          // 累加所有 slots 以便正确计算格数
-          if (t.slots && t.slots.length > groupMap[gname].slots.length) {
-            groupMap[gname].slots = t.slots;
+          groupMap[gkey].frames.push(t);
+          if (t.slots && t.slots.length > groupMap[gkey].slots.length) {
+            groupMap[gkey].slots = t.slots;
           }
         });
 
-        var groups = groupOrder.map(function(gname) { return groupMap[gname]; });
+        var groups = groupOrder.map(function(gkey) { return groupMap[gkey]; });
         setTemplates(groups);
         window.TEMPLATES = groups;
       })
@@ -178,10 +186,12 @@ var TemplatePanel = function(_ref2) {
     Promise.all([
       window.API.listComposes(50).catch(function() { return []; }),
       window.API.listSpecialComposes(50).catch(function() { return []; }),
+      window.API.listAiImages(50).catch(function() { return []; }),
     ]).then(function(results) {
       var normal = (results[0] || []).map(function(j) { return Object.assign({}, j, { _type: 'normal' }); });
       var special = (results[1] || []).map(function(j) { return Object.assign({}, j, { _type: 'special' }); });
-      var merged = normal.concat(special).sort(function(a, b) { return (b.created_at || 0) - (a.created_at || 0); });
+      var aiImages = (results[2] || []).map(function(j) { return Object.assign({}, j, { _type: 'ai-image' }); });
+      var merged = normal.concat(special, aiImages).sort(function(a, b) { return (b.created_at || 0) - (a.created_at || 0); });
       console.log('[TemplatePanel] History merged:', merged.length, 'jobs');
       setHistoryJobs(merged);
     }).catch(function(err) {
@@ -282,10 +292,10 @@ var TemplatePanel = function(_ref2) {
         !loading && !loadErr && filtered.length > 0 && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 10px 56px' } },
           React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 } },
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-              colA.map(function(t) { return React.createElement(TemplateCard, { key: t.group_name || t.id, t: t, active: activeId === (t.group_name || t.id), onClick: function() { return onSelect(t); } }); })
+              colA.map(function(t) { var tkey = (t.file_id||'')+':'+(t.group_name||t.id); return React.createElement(TemplateCard, { key: tkey, t: t, active: activeId === tkey, onClick: function() { return onSelect(t); } }); })
             ),
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-              colB.map(function(t) { return React.createElement(TemplateCard, { key: t.group_name || t.id, t: t, active: activeId === (t.group_name || t.id), onClick: function() { return onSelect(t); } }); })
+              colB.map(function(t) { var tkey = (t.file_id||'')+':'+(t.group_name||t.id); return React.createElement(TemplateCard, { key: tkey, t: t, active: activeId === tkey, onClick: function() { return onSelect(t); } }); })
             )
           )
         )
@@ -302,12 +312,16 @@ var TemplatePanel = function(_ref2) {
         !historyLoading && historyJobs.length > 0 && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 10px' } },
           historyJobs.map(function(job, idx) {
             var isSpecial = job._type === 'special';
+            var isAiImage = job._type === 'ai-image';
             var statusColor = job.status === 'done' ? 'var(--ok)' : job.status === 'failed' ? '#e53' : 'var(--accent)';
             var timeStr = job.created_at ? new Date(job.created_at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
             // 缩略图：特殊品取第一帧 url，普通合成取 getImageUrl
             var thumbUrl = null;
             if (job.status === 'done') {
-              if (isSpecial) {
+              if (isAiImage) {
+                var apiBaseAi = window.API_BASE || (window.location.protocol + '//' + window.location.hostname + ':8000');
+                thumbUrl = job.image_url ? apiBaseAi + job.image_url : null;
+              } else if (isSpecial) {
                 var firstFrame = job.frames && job.frames.find(function(f) { return f.url; });
                 var apiBase = window.API_BASE || (window.location.protocol + '//' + window.location.hostname + ':8000');
                 thumbUrl = firstFrame ? apiBase + firstFrame.url : null;
@@ -315,9 +329,14 @@ var TemplatePanel = function(_ref2) {
                 thumbUrl = window.API.getImageUrl(job.id);
               }
             }
-            var subtitle = isSpecial
+            var subtitle = isAiImage
+              ? ((formatAiModelName(job.model) || 'AI 生图') + (job.has_reference ? '  图生图' : '  文生图') + (job.size ? '  ' + job.size : ''))
+              : isSpecial
               ? (job.sku ? 'SKU: ' + job.sku : '特殊品') + (job.frames ? '  ' + job.frames.length + ' 张' : '')
               : (job.request && job.request.slots ? Object.keys(job.request.slots).length + ' 个产品' : '');
+            var titleText = isAiImage
+              ? ('AI 生图 · ' + (job.status === 'done' ? '已完成' : job.status === 'failed' ? '失败' : '生成中'))
+              : ((job.sku ? job.sku + '_特殊品' : (isSpecial ? '特殊品' : '合成')) + ' · ' + (job.status === 'done' ? '已完成' : job.status === 'failed' ? '失败' : '生成中'));
             return React.createElement('div', {
               key: job.id || idx,
               style: {
@@ -330,7 +349,9 @@ var TemplatePanel = function(_ref2) {
               },
               onClick: function() {
                 console.log('[History] Clicked job:', job.id, 'penpot:', job.penpot_edit_url);
-                if (job.status === 'done' && job.penpot_edit_url) {
+                if (isAiImage && job.status === 'done' && thumbUrl) {
+                  window.open(thumbUrl, '_blank');
+                } else if (job.status === 'done' && job.penpot_edit_url) {
                   window.open(job.penpot_edit_url, '_blank');
                 }
               }
@@ -352,14 +373,23 @@ var TemplatePanel = function(_ref2) {
                           display: 'inline-block',
                         } })
                       : React.createElement('span', { style: { width: 6, height: 6, borderRadius: 99, background: statusColor, flexShrink: 0 } }),
-                    React.createElement('span', { style: { flex: 1, fontSize: 12, fontWeight: 500, color: 'var(--ink)' } },
-                      (isSpecial ? '[特殊品] ' : '') + (job.status === 'done' ? '已完成' : job.status === 'failed' ? '失败' : '生成中')
-                    ),
+                    React.createElement('span', { style: { flex: 1, fontSize: 12, fontWeight: 500, color: 'var(--ink)' } }, titleText),
                     job.status !== 'done' && job.status !== 'failed' && job.created_at
                       ? React.createElement(ElapsedTimer, { createdAt: job.created_at })
                       : React.createElement('span', { style: { fontSize: 10, color: 'var(--ink-3)' } }, timeStr)
                   ),
-                  subtitle && React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', paddingLeft: 14 } }, subtitle)
+                  subtitle && React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', paddingLeft: 14 } }, subtitle),
+                  isAiImage && job.prompt && React.createElement('div', { style: {
+                    fontSize: 10.5,
+                    color: 'var(--ink-3)',
+                    paddingLeft: 14,
+                    marginTop: 4,
+                    lineHeight: 1.45,
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                  } }, job.prompt)
                 )
               )
             );

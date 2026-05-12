@@ -14,25 +14,42 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 
 logger = logging.getLogger(__name__)
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
+import httpx
 import pydantic
 
 from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from starlette.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .ai_image import generate_image, generate_image_with_reference, SLASH_MODEL_MAP
+from .special_compose_full import run_special_full_compose
 from .compose import get_client, run_compose
 from .config import settings
-from .job_store import init_db, load_job, load_recent_jobs, save_job, save_special_job, load_special_jobs
+from .job_store import (
+    create_session,
+    delete_session,
+    get_or_create_user,
+    get_user_by_session,
+    init_db,
+    load_ai_image_jobs,
+    load_job,
+    load_recent_jobs,
+    save_job,
+    save_ai_image_job,
+    save_special_job,
+    load_special_jobs,
+)
 from .models import (
     ComposeJob,
     ComposeRequest,
@@ -43,6 +60,8 @@ from .models import (
     SlotInfo,
     SpecialComposeJob,
     SpecialComposeRequest,
+    SpecialFullComposeJob,
+    SpecialFullComposeRequest,
     TemplateGroup,
     TemplateInfo,
 )
@@ -91,6 +110,15 @@ if results_path.exists():
         name="results",
     )
 
+# AI 生图输出目录
+_ai_images_path = settings.output_path / "ai-images"
+_ai_images_path.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/ai-images",
+    StaticFiles(directory=str(_ai_images_path)),
+    name="ai-images",
+)
+
 # 前端静态文件（frontend-dist）
 _frontend_dist = Path(__file__).parent.parent / "frontend-dist"
 if _frontend_dist.exists():
@@ -103,21 +131,112 @@ if _frontend_dist.exists():
 # ─── 内存任务存储（PoC 阶段，后续换 Redis / DB）────────────────────────────────
 _jobs: dict[str, ComposeJob] = {}
 _jobs_lock = threading.Lock()
+_SESSION_COOKIE = "designflow_session"
+_AUTH_EXEMPT_PREFIXES = (
+    "/auth/login-lite",
+    "/auth/options",
+    "/health",
+    "/ui",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+)
+
+
+class LiteLoginRequest(pydantic.BaseModel):
+    username: str
+
+
+def _get_session_user(request: Request) -> Optional[dict]:
+    return get_user_by_session(request.cookies.get(_SESSION_COOKIE))
+
+
+def _current_user(request: Request) -> dict:
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(401, "请先输入名字进入系统")
+    return user
+
+
+def _is_admin(user: Optional[dict]) -> bool:
+    return bool(user and user.get("role") == "admin")
+
+
+def _assert_job_owner(job_user_id: Optional[str], user: dict) -> None:
+    if _is_admin(user):
+        return
+    if job_user_id and job_user_id != user["id"]:
+        raise HTTPException(403, "无权访问其他人的任务")
+
+
+@app.middleware("http")
+async def attach_user_context(request: Request, call_next):
+    request.state.user = _get_session_user(request)
+    path = request.url.path or "/"
+    if not any(path.startswith(prefix) for prefix in _AUTH_EXEMPT_PREFIXES):
+        if request.state.user is None:
+            return JSONResponse({"detail": "请先输入名字进入系统"}, status_code=401)
+    return await call_next(request)
 
 
 # ─── 路由 ─────────────────────────────────────────────────────────────────────
 
 
 @app.get("/health")
-def health():
+async def health():
     library_path = settings.product_library_path
     library_ok = library_path.exists()
-    # 统计子文件夹情况
     folders_found = []
     if library_ok:
         for key, folder in settings.IMAGE_TYPE_FOLDERS.items():
             if (library_path / folder).exists():
                 folders_found.append(folder)
+
+    # Penpot 连通性探测（3 秒超时，不影响主服务）
+    penpot_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
+            r = await client.get(settings.penpot_base_url)
+            penpot_ok = r.status_code < 500
+    except Exception:
+        penpot_ok = False
+
+    # APIMart 真实状态探测：查询账户余额，不消耗生图额度
+    ai_provider = {
+        "connected": False,
+        "configured": bool(settings.ai_image_api_key),
+        "provider": "APIMart",
+        "url": settings.ai_image_base_url,
+    }
+    if settings.ai_image_api_key:
+        balance_base = settings.ai_image_base_url.rstrip("/")
+        if not balance_base.endswith("/v1"):
+            balance_url = balance_base + "/v1/user/balance"
+        else:
+            balance_url = balance_base + "/user/balance"
+        try:
+            async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
+                r = await client.get(
+                    balance_url,
+                    headers={"Authorization": f"Bearer {settings.ai_image_api_key}"},
+                )
+            ai_provider["status_code"] = r.status_code
+            if r.status_code == 200:
+                payload = r.json()
+                ai_provider["connected"] = bool(payload.get("success"))
+                if "remain_balance" in payload:
+                    ai_provider["remain_balance"] = payload.get("remain_balance")
+                if "used_balance" in payload:
+                    ai_provider["used_balance"] = payload.get("used_balance")
+                if "unlimited_quota" in payload:
+                    ai_provider["unlimited_quota"] = payload.get("unlimited_quota")
+                if payload.get("message"):
+                    ai_provider["message"] = payload.get("message")
+            else:
+                ai_provider["message"] = r.text[:200]
+        except Exception as e:
+            ai_provider["message"] = str(e)
+
     return {
         "status": "ok",
         "version": "team-scan-v2",
@@ -126,7 +245,61 @@ def health():
             "path": str(library_path),
             "folders": folders_found,
         },
+        "penpot": {
+            "connected": penpot_ok,
+            "url": settings.penpot_base_url,
+        },
+        "ai_provider": ai_provider,
     }
+
+
+@app.post("/auth/login-lite")
+def auth_login_lite(body: LiteLoginRequest, response: Response):
+    username = " ".join((body.username or "").strip().split())
+    if not username:
+        raise HTTPException(400, "名字不能为空")
+    if len(username) > 40:
+        raise HTTPException(400, "名字不能超过 40 个字符")
+    try:
+        user = get_or_create_user(username)
+    except ValueError:
+        raise HTTPException(400, "该身份不在可用名单里")
+    session_id = create_session(user["id"])
+    response.set_cookie(
+        _SESSION_COOKIE,
+        session_id,
+        httponly=True,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 30,
+        path="/",
+    )
+    return {"user": user}
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request, response: Response):
+    delete_session(request.cookies.get(_SESSION_COOKIE))
+    response.delete_cookie(_SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
+@app.get("/auth/me")
+def auth_me(request: Request):
+    user = _current_user(request)
+    if not user:
+        raise HTTPException(401, "未登录")
+    return {"user": user}
+
+
+@app.get("/auth/options")
+def auth_options():
+    return {"users": settings.allowed_login_users}
+
+
+@app.get("/history/ai-images")
+def list_ai_images(request: Request, limit: int = 20):
+    user = _current_user(request)
+    return load_ai_image_jobs(limit, None if _is_admin(user) else user["id"])
 
 
 @app.get("/debug/team-scan")
@@ -212,7 +385,7 @@ def debug_text_layer(file_id: Optional[str] = None, shape_id: Optional[str] = No
     return {"summary": summary, "slot_text_layers": results}
 
 
-def _extract_templates_from_file(client, fid: str) -> list[TemplateInfo]:
+def _extract_templates_from_file(client, fid: str, display_name: str = "") -> list[TemplateInfo]:
     """从单个 penpot 文件中提取模板列表（内部辅助函数）"""
     try:
         file_data = client.get_file(fid)
@@ -220,8 +393,13 @@ def _extract_templates_from_file(client, fid: str) -> list[TemplateInfo]:
         logger.warning("get_file(%s) failed: %s", fid, e)
         return []
 
-    file_name = file_data.get("name") or file_data.get("~:name") or ""
-    is_special = "特殊品" in file_name
+    # display_name 由调用方从 project_files 列表传入（编码最干净）
+    # 兜底从 file_data 内取，两者都损坏时用 fid[:8]
+    raw_name = file_data.get("name") or file_data.get("~:name") or ""
+    file_name = display_name or raw_name or fid[:8]
+
+    is_special_full = "特殊品" in file_name and "完整" in file_name
+    is_special = "特殊品" in file_name and not is_special_full
 
     frames = client.parse_frames(file_data)
     slots = client.parse_slots(file_data)
@@ -233,13 +411,19 @@ def _extract_templates_from_file(client, fid: str) -> list[TemplateInfo]:
 
     result: list[TemplateInfo] = []
     for f in frames:
+        page_name = f.get("page_name", "")
+
+        # 所有模板统一用文件名作为 group_name（一个 Penpot 文档 = 一张模板卡片）
+        # 文档内多个 frame 作为该模板的多个画板，不再按 page_name 或 frame "/" 分组
+        effective_group = file_name
+
         page_slots = slot_by_frame.get(f["id"], [])
         result.append(
             TemplateInfo(
                 id=f["id"],
                 name=f["name"],
-                page_name=f.get("page_name", ""),
-                group_name=f.get("group_name", f["name"]),
+                page_name=page_name,
+                group_name=effective_group,
                 variant=f.get("variant", ""),
                 page_id=f["page_id"],
                 file_id=fid,
@@ -248,6 +432,7 @@ def _extract_templates_from_file(client, fid: str) -> list[TemplateInfo]:
                 width=f["width"],
                 height=f["height"],
                 is_special=is_special,
+                is_special_full=is_special_full,
                 slots=[
                     SlotInfo(
                         id=s["id"],
@@ -319,21 +504,21 @@ def list_templates(file_id: Optional[str] = None):
                         # 二级过滤：文件名本身也必须含「模板」才认定为模板文件
                         # 避免合成时 duplicate_file 产生的副本（副本名称不含「模板」）被误识别
                         if pf_id and TEMPLATE_MARKER in pf_name:
-                            template_file_ids.append(pf_id)
+                            template_file_ids.append((pf_id, pf_name))
                 except Exception:
                     continue
         except Exception:
             continue
 
-    # 如果所有团队里都没有模板 project，退回主文件（兜底）
-    if not template_file_ids:
-        template_file_ids = [fid]
+    # 找不到任何模板 project 时，退回 PENPOT_FILE_ID 主文件
+    if not template_file_ids and fid:
+        template_file_ids = [(fid, "")]
 
     # Step 4: 逐文件提取模板 frame，按 (file_id, frame_id) 去重
     templates: list[TemplateInfo] = []
     seen: set[str] = set()
-    for scan_fid in template_file_ids:
-        for t in _extract_templates_from_file(client, scan_fid):
+    for scan_fid, scan_name in template_file_ids:
+        for t in _extract_templates_from_file(client, scan_fid, display_name=scan_name):
             key = f"{scan_fid}:{t.id}"
             if key not in seen:
                 seen.add(key)
@@ -342,14 +527,73 @@ def list_templates(file_id: Optional[str] = None):
     return templates
 
 
+@app.get("/debug-scan")
+def debug_scan():
+    """调试：列出所有被扫描到的模板文件及其 frame 数量"""
+    try:
+        client = get_client()
+    except Exception as e:
+        raise HTTPException(503, f"Penpot 连接失败: {e}")
+
+    TEMPLATE_MARKER = "模板"
+    result = {"teams": [], "template_files": [], "penpot_file_id": settings.penpot_file_id}
+
+    try:
+        all_teams = client._rpc("get-teams")
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+
+    for team in all_teams:
+        tid = team.get("id") or team.get("~:id", "")
+        tname = team.get("name") or team.get("~:name", "")
+        team_entry = {"id": tid, "name": tname, "projects": []}
+        try:
+            team_projects = client.get_team_projects(tid)
+            for p in team_projects:
+                pid = p.get("id") or p.get("~:id", "")
+                pname = p.get("name") or p.get("~:name", "")
+                has_marker = TEMPLATE_MARKER in pname
+                proj_entry = {"id": pid, "name": pname, "has_marker": has_marker, "files": []}
+                try:
+                    proj_files = client.get_project_files(pid)
+                    for pf in proj_files:
+                        pf_id = pf.get("id") or pf.get("~:id", "")
+                        pf_name = pf.get("name") or pf.get("~:name", "")
+                        file_has_marker = TEMPLATE_MARKER in pf_name
+                        proj_entry["files"].append({"id": pf_id, "name": pf_name, "file_has_marker": file_has_marker})
+                        if has_marker and file_has_marker:
+                            fd = client.get_file(pf_id)
+                            frames = client.parse_frames(fd)
+                            fname = fd.get("name") or fd.get("~:name") or ""
+                            result["template_files"].append({
+                                "file_id": pf_id,
+                                "file_name": pf_name,
+                                "penpot_name": fname,
+                                "is_special": "特殊品" in fname and "完整" not in fname,
+                                "is_special_full": "特殊品" in fname and "完整" in fname,
+                                "frame_count": len(frames),
+                                "frame_names": [f["name"] for f in frames[:10]],
+                            })
+                except Exception as e:
+                    proj_entry["error"] = str(e)
+                team_entry["projects"].append(proj_entry)
+        except Exception as e:
+            team_entry["error"] = str(e)
+        result["teams"].append(team_entry)
+
+    return result
+
+
 @app.post("/compose", response_model=ComposeJob)
 def create_compose(
-    request: ComposeRequest, background_tasks: BackgroundTasks
+    request: ComposeRequest, background_tasks: BackgroundTasks, http_request: Request
 ):
     """触发合成任务，立即返回 job id，后台异步执行"""
     import time
     job_id = str(uuid.uuid4())
-    job = ComposeJob(id=job_id, request=request, created_at=time.time())
+    user = _current_user(http_request)
+    job = ComposeJob(id=job_id, user_id=user["id"], request=request, created_at=time.time())
 
     with _jobs_lock:
         _jobs[job_id] = job
@@ -366,32 +610,37 @@ def _run_and_persist(job: ComposeJob) -> None:
 
 
 @app.get("/compose/{job_id}", response_model=ComposeJob)
-def get_compose(job_id: str):
+def get_compose(job_id: str, request: Request):
     """查询合成任务状态和进度（内存优先，内存没有则查 SQLite）"""
+    user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
     if not job:
         job = load_job(job_id)
     if not job:
         raise HTTPException(404, f"任务不存在: {job_id}")
+    _assert_job_owner(job.user_id, user)
     return job
 
 
 @app.get("/compose", response_model=list[ComposeJob])
-def list_composes(limit: int = 20):
+def list_composes(request: Request, limit: int = 20):
     """列出最近的合成任务（含历史，从 SQLite 读取）"""
-    return load_recent_jobs(limit)
+    user = _current_user(request)
+    return load_recent_jobs(limit, None if _is_admin(user) else user["id"])
 
 
 @app.get("/compose/{job_id}/image")
-def download_image(job_id: str):
+def download_image(job_id: str, request: Request):
     """下载合成完成后的 PNG 图片（内存优先，回退 SQLite）"""
+    user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
     if not job:
         job = load_job(job_id)
     if not job:
         raise HTTPException(404, f"任务不存在: {job_id}")
+    _assert_job_owner(job.user_id, user)
     if job.status != ComposeStatus.done or not job.result_path:
         raise HTTPException(400, f"任务尚未完成: {job.status}")
     path = Path(job.result_path)
@@ -562,7 +811,7 @@ def list_template_groups(file_id: Optional[str] = None):
 
 @app.post("/special-compose", response_model=SpecialComposeJob)
 def create_special_compose(
-    request: SpecialComposeRequest, background_tasks: BackgroundTasks
+    request: SpecialComposeRequest, background_tasks: BackgroundTasks, http_request: Request
 ):
     """
     触发特殊品合成任务（多画板），立即返回 job id，后台异步执行。
@@ -570,7 +819,8 @@ def create_special_compose(
     """
     import time
     job_id = str(uuid.uuid4())
-    job = SpecialComposeJob(id=job_id, request=request, created_at=time.time())
+    user = _current_user(http_request)
+    job = SpecialComposeJob(id=job_id, user_id=user["id"], request=request, created_at=time.time())
     with _jobs_lock:
         _jobs[job_id] = job  # type: ignore[assignment]
     background_tasks.add_task(run_special_compose, job)
@@ -578,34 +828,39 @@ def create_special_compose(
 
 
 @app.get("/special-compose/history")
-def list_special_composes(limit: int = 20):
+def list_special_composes(request: Request, limit: int = 20):
     """
     列出最近的特殊品合成任务（含状态和结果图 URL）。
     从 SQLite 持久化存储读取，服务器重启后历史不丢失。
     注意：此路由必须写在 /{job_id} 前面，避免 "history" 被当作 job_id 匹配。
     """
-    return load_special_jobs(limit)
+    user = _current_user(request)
+    return load_special_jobs(limit, None if _is_admin(user) else user["id"])
 
 
 @app.get("/special-compose/{job_id}", response_model=SpecialComposeJob)
-def get_special_compose(job_id: str):
+def get_special_compose(job_id: str, request: Request):
     """查询特殊品合成任务状态"""
+    user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
     if not job:
         raise HTTPException(404, f"任务不存在: {job_id}")
     if not isinstance(job, SpecialComposeJob):
         raise HTTPException(400, "该任务不是特殊品合成任务")
+    _assert_job_owner(job.user_id, user)
     return job
 
 
 @app.get("/special-compose/{job_id}/images")
-def download_special_images(job_id: str):
+def download_special_images(job_id: str, request: Request):
     """返回特殊品合成所有输出图片的 URL 列表"""
+    user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
     if not job or not isinstance(job, SpecialComposeJob):
         raise HTTPException(404, f"任务不存在: {job_id}")
+    _assert_job_owner(job.user_id, user)
     if job.status != ComposeStatus.done:
         raise HTTPException(400, f"任务尚未完成: {job.status}")
     urls = []
@@ -704,6 +959,88 @@ def parse_special_command_endpoint(body: dict):
     if result is None:
         raise HTTPException(400, "无法识别的特殊品指令格式")
     return result
+
+
+# ─── 特殊品（完整）端点 ──────────────────────────────────────────────────────────
+
+@app.post("/special-compose-full", response_model=SpecialFullComposeJob)
+def create_special_full_compose(
+    request: SpecialFullComposeRequest, background_tasks: BackgroundTasks, http_request: Request
+):
+    """触发特殊品（完整）合成任务，支持 banner/poster 场景图及 hide 图层自动隐藏。"""
+    import time
+    job_id = str(uuid.uuid4())
+    user = _current_user(http_request)
+    job = SpecialFullComposeJob(id=job_id, user_id=user["id"], request=request, created_at=time.time())
+    with _jobs_lock:
+        _jobs[job_id] = job  # type: ignore[assignment]
+    background_tasks.add_task(run_special_full_compose, job)
+    return job
+
+
+@app.get("/special-compose-full/{job_id}", response_model=SpecialFullComposeJob)
+def get_special_full_compose(job_id: str, request: Request):
+    """查询特殊品（完整）合成任务状态"""
+    user = _current_user(request)
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, f"任务不存在: {job_id}")
+    if not isinstance(job, SpecialFullComposeJob):
+        raise HTTPException(400, "该任务不是特殊品（完整）合成任务")
+    _assert_job_owner(job.user_id, user)
+    return job
+
+
+@app.get("/special-compose-full/{job_id}/download-zip")
+def download_special_full_zip(job_id: str, names: str = "", request: Request = None):
+    """将特殊品（完整）合成所有图片打包成 zip 下载，命名规则与 /special-compose 一致。"""
+    import zipfile, io, re as _re
+
+    user = _current_user(request)
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job or not isinstance(job, SpecialFullComposeJob):
+        raise HTTPException(404, f"任务不存在: {job_id}")
+    _assert_job_owner(job.user_id, user)
+    if job.status != ComposeStatus.done:
+        raise HTTPException(400, f"任务尚未完成: {job.status}")
+
+    sku = job.request.sku or job_id[:8]
+    name_list = [n.strip() for n in names.split(",")] if names else []
+    results_dir = settings.output_path / "results" / job_id
+    all_frames = sorted(
+        results_dir.glob("frame_*.png"),
+        key=lambda p: (int(_re.search(r'frame_(\d+)', p.stem).group(1)), p.stem),
+    )
+    variant_keys = sorted({
+        _re.search(r'(_v\d+)$', p.stem).group(1)
+        for p in all_frames if _re.search(r'(_v\d+)$', p.stem)
+    })
+    variant_labels = {k: f"_版本{k[2:]}" for k in variant_keys}
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in all_frames:
+            m = _re.match(r'frame_(\d+)(_v\d+)?$', p.stem)
+            if not m:
+                continue
+            idx = int(m.group(1))
+            variant_suffix = m.group(2) or ""
+            frame_label = name_list[idx] if idx < len(name_list) else f"画板{idx + 1}"
+            label_suffix = variant_labels.get(variant_suffix, "")
+            zip_name = f"{sku}_{frame_label}{label_suffix}.png"
+            zf.write(str(p), zip_name)
+
+    buffer.seek(0)
+    filename = f"{sku}_完整.zip"
+    import urllib.parse
+    encoded = urllib.parse.quote(filename)
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"},
+    )
 
 
 @app.get("/special-flows")
@@ -908,6 +1245,81 @@ class ChatContext(pydantic.BaseModel):
 class ChatRequest(pydantic.BaseModel):
     messages: list[ChatMessage]
     context: ChatContext = pydantic.Field(default_factory=ChatContext)
+
+
+@app.post("/ai-image")
+async def ai_image_endpoint(
+    request: Request,
+    model: str = Form(...),
+    prompt: str = Form(...),
+    size: str = Form("1024x1024"),
+    image: List[UploadFile] = File(default=[]),
+):
+    """
+    AI 生图接口。支持文生图（无 image）和图生图（最多 4 张参考图）。
+    返回: { "url": "/ai-images/{filename}.png", "model": ..., "prompt": ... }
+    """
+    prompt = prompt.strip()
+    if not prompt:
+        raise HTTPException(400, "prompt 不能为空")
+
+    resolved = SLASH_MODEL_MAP.get(model.lower(), model)
+    if not resolved:
+        raise HTTPException(400, f"未知模型: {model}")
+    user = _current_user(request)
+    job_id = uuid.uuid4().hex
+
+    # 限制最多 4 张参考图
+    images = image[:4] if image else []
+    created_at = time.time()
+    save_ai_image_job(
+        job_id=job_id,
+        user_id=user["id"],
+        status="running",
+        model=resolved,
+        prompt=prompt,
+        size=size,
+        has_reference=bool(images),
+        created_at=created_at,
+    )
+
+    try:
+        if images:
+            img_data = [(await f.read(), f.filename or f"ref{i}.png") for i, f in enumerate(images)]
+            result = await generate_image_with_reference(
+                model=resolved, prompt=prompt, images=img_data, size=size, user_id=user["id"],
+            )
+        else:
+            result = await generate_image(model=resolved, prompt=prompt, size=size, user_id=user["id"])
+        save_ai_image_job(
+            job_id=job_id,
+            user_id=user["id"],
+            status="done",
+            model=resolved,
+            prompt=prompt,
+            size=size,
+            image_url=result.get("url"),
+            has_reference=bool(images),
+            created_at=created_at,
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("ai_image_endpoint error: model=%s size=%s", resolved, size)
+        save_ai_image_job(
+            job_id=job_id,
+            user_id=user["id"],
+            status="failed",
+            model=resolved,
+            prompt=prompt,
+            size=size,
+            has_reference=bool(images),
+            error=str(e),
+            created_at=created_at,
+        )
+        raise HTTPException(502, f"{type(e).__name__}: {e}")
+
 
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
