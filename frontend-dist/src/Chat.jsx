@@ -1160,6 +1160,13 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
     }
   }, []);
 
+  const startNewAiChat = React.useCallback(() => {
+    if (isLoading) return;
+    setMessages([]);
+    setCurrentAiChatId('');
+    setHistoryOpen(false);
+  }, [isLoading]);
+
   React.useEffect(() => {
     if (!historyOpen) return;
     const handlePointerDown = function(event) {
@@ -1491,7 +1498,22 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
             background: isLoading ? 'var(--accent)' : 'var(--ok)',
             animation: isLoading ? 'pulse 1.2s ease-in-out infinite' : 'none',
           }}/>
-          <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>Ai助手</span>
+          <button
+            onClick={startNewAiChat}
+            title={isLoading ? '生成中暂不可新建对话' : '开启新对话'}
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              letterSpacing: '-0.01em',
+              color: 'var(--ink)',
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              cursor: isLoading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            Ai助手
+          </button>
           <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>
             {isLoading ? 'working…' : messages.length === 0 ? 'ready' : messages.length + ' messages'}
           </span>
