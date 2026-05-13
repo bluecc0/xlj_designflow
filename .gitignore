@@ -17,6 +17,7 @@ output/
 
 # Env
 .env
+login_users.json
 
 # OS / editor
 .DS_Store
