@@ -1,13 +1,3 @@
 [
-  { "id": "admin", "username": "admin", "role": "admin" },
-  { "id": "operator_a", "username": "ccz", "role": "user" },
-  { "id": "operator_b", "username": "whf", "role": "user" },
-  { "id": "designer_c", "username": "pf", "role": "user" },
-  { "id": "operator_d", "username": "zwt", "role": "user" },
-  { "id": "operator_e", "username": "zxc", "role": "user" },
-  { "id": "designer_f", "username": "zyy", "role": "user" },
-  { "id": "operator_g", "username": "nj", "role": "user" },
-  { "id": "operator_h", "username": "sbw", "role": "user" },
-  { "id": "designer_i", "username": "cy", "role": "user" },
-  { "id": "designer_j", "username": "hf", "role": "user" }
+  { "id": "admin", "username": "admin", "role": "admin" }
 ]

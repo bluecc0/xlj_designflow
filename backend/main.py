@@ -37,11 +37,16 @@ from .special_compose_full import run_special_full_compose
 from .compose import get_client, run_compose
 from .config import settings
 from .job_store import (
+    append_ai_chat_message,
+    create_ai_chat_session,
     create_session,
     delete_session,
+    get_ai_chat_session,
     get_or_create_user,
     get_user_by_session,
     init_db,
+    list_ai_chat_sessions,
+    load_ai_chat_messages,
     load_ai_image_jobs,
     load_job,
     load_recent_jobs,
@@ -1247,12 +1252,36 @@ class ChatRequest(pydantic.BaseModel):
     context: ChatContext = pydantic.Field(default_factory=ChatContext)
 
 
+def _build_ai_chat_title(prompt: str) -> str:
+    clean = " ".join((prompt or "").strip().split())
+    return clean[:28] or "未命名对话"
+
+
+@app.get("/history/ai-chats")
+def history_ai_chats(request: Request, limit: int = 30):
+    user = _current_user(request)
+    sessions = list_ai_chat_sessions(limit=max(1, min(limit, 100)), user_id=user["id"])
+    return {"sessions": sessions}
+
+
+@app.get("/history/ai-chats/{session_id}")
+def history_ai_chat_detail(request: Request, session_id: str):
+    user = _current_user(request)
+    session = get_ai_chat_session(session_id, user_id=user["id"])
+    if not session:
+        raise HTTPException(404, "未找到历史对话")
+    messages = load_ai_chat_messages(session_id, user_id=user["id"])
+    return {"session": session, "messages": messages}
+
+
 @app.post("/ai-image")
 async def ai_image_endpoint(
     request: Request,
     model: str = Form(...),
     prompt: str = Form(...),
     size: str = Form("1024x1024"),
+    resolution: str = Form(""),
+    chat_session_id: str = Form(""),
     image: List[UploadFile] = File(default=[]),
 ):
     """
@@ -1268,10 +1297,24 @@ async def ai_image_endpoint(
         raise HTTPException(400, f"未知模型: {model}")
     user = _current_user(request)
     job_id = uuid.uuid4().hex
+    session_id = (chat_session_id or "").strip()
+    session = get_ai_chat_session(session_id, user_id=user["id"]) if session_id else None
+    if not session:
+        session = create_ai_chat_session(user_id=user["id"], title=_build_ai_chat_title(prompt), created_at=time.time())
+        session_id = session["id"]
 
     # 限制最多 4 张参考图
     images = image[:4] if image else []
     created_at = time.time()
+    append_ai_chat_message(
+        session_id=session_id,
+        user_id=user["id"],
+        role="user",
+        type="user_text",
+        text=prompt,
+        meta={"model": resolved, "size": size, "resolution": resolution},
+        created_at=created_at,
+    )
     save_ai_image_job(
         job_id=job_id,
         user_id=user["id"],
@@ -1287,10 +1330,10 @@ async def ai_image_endpoint(
         if images:
             img_data = [(await f.read(), f.filename or f"ref{i}.png") for i, f in enumerate(images)]
             result = await generate_image_with_reference(
-                model=resolved, prompt=prompt, images=img_data, size=size, user_id=user["id"],
+                model=resolved, prompt=prompt, images=img_data, size=size, resolution=resolution, user_id=user["id"],
             )
         else:
-            result = await generate_image(model=resolved, prompt=prompt, size=size, user_id=user["id"])
+            result = await generate_image(model=resolved, prompt=prompt, size=size, resolution=resolution, user_id=user["id"])
         save_ai_image_job(
             job_id=job_id,
             user_id=user["id"],
@@ -1302,7 +1345,25 @@ async def ai_image_endpoint(
             has_reference=bool(images),
             created_at=created_at,
         )
-        return result
+        append_ai_chat_message(
+            session_id=session_id,
+            user_id=user["id"],
+            role="ai",
+            type="ai_image_result",
+            text=prompt,
+            image_url=result.get("url"),
+            meta={
+                "model": resolved,
+                "prompt": prompt,
+                "size": size,
+                "resolution": resolution,
+                "status": "done",
+                "hasReference": bool(images),
+                "refCount": len(images),
+            },
+            created_at=time.time(),
+        )
+        return {**result, "chat_session_id": session_id}
     except HTTPException:
         raise
     except Exception as e:
@@ -1318,7 +1379,24 @@ async def ai_image_endpoint(
             error=str(e),
             created_at=created_at,
         )
-        raise HTTPException(502, f"{type(e).__name__}: {e}")
+        append_ai_chat_message(
+            session_id=session_id,
+            user_id=user["id"],
+            role="ai",
+            type="ai_image_result",
+            text=prompt,
+            image_url=None,
+            meta={
+                "model": resolved,
+                "prompt": prompt,
+                "status": "failed",
+                "error": str(e),
+                "hasReference": bool(images),
+                "refCount": len(images),
+            },
+            created_at=time.time(),
+        )
+        raise HTTPException(502, {"message": f"{type(e).__name__}: {e}", "chat_session_id": session_id})
 
 
 @app.post("/chat")

@@ -77,6 +77,8 @@
     listComposes: function(limit) { return request('/compose?limit=' + (limit || 20)); },
     listSpecialComposes: function(limit) { return request('/special-compose/history?limit=' + (limit || 20)); },
     listAiImages: function(limit) { return request('/history/ai-images?limit=' + (limit || 20)); },
+    listAiChats: function(limit) { return request('/history/ai-chats?limit=' + (limit || 20)).then(function(res) { return res.sessions || []; }); },
+    getAiChat: function(sessionId) { return request('/history/ai-chats/' + encodeURIComponent(sessionId)); },
     getImageUrl: function(jobId) { return BASE + '/compose/' + jobId + '/image'; },
     exportGrid: function(jobId, rows, cols) {
       return request('/export/grid', {

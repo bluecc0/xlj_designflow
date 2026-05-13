@@ -6,6 +6,16 @@ set BACKEND_PORT=8000
 set MCP_PORT=4401
 set PLUGIN_PORT=4400
 set ROOT=%~dp0
+set VENV_DIR=%ROOT%.venv
+set VENV_PYTHON=%VENV_DIR%\Scripts\python.exe
+set VENV_PIP=%VENV_DIR%\Scripts\pip.exe
+
+where py >nul 2>nul
+if %errorlevel%==0 (
+    set PY_BOOTSTRAP=py -3
+) else (
+    set PY_BOOTSTRAP=python
+)
 
 :: Auto detect local IPv4 (skip 127.x.x.x)
 set "LOCAL_IP="
@@ -21,6 +31,27 @@ if not defined LOCAL_IP set LOCAL_IP=localhost
 :: Use local IP for Penpot
 set PENPOT_BASE_URL=http://%LOCAL_IP%:9001
 echo  [+] PENPOT_BASE_URL=%PENPOT_BASE_URL%
+
+echo.
+echo  [0/4] Preparing Python environment...
+if not exist "%VENV_PYTHON%" (
+    echo        Creating virtual environment...
+    %PY_BOOTSTRAP% -m venv "%VENV_DIR%"
+    if errorlevel 1 (
+        echo        Failed to create virtual environment. Please install Python 3 first.
+        pause
+        exit /b 1
+    )
+)
+
+echo        Installing/updating backend dependencies...
+"%VENV_PYTHON%" -m pip install --upgrade pip >nul
+"%VENV_PIP%" install -r "%ROOT%backend\requirements.txt"
+if errorlevel 1 (
+    echo        Failed to install backend dependencies.
+    pause
+    exit /b 1
+)
 
 echo.
 echo  Design Tool - Starting...
@@ -50,13 +81,13 @@ timeout /t 1 /nobreak >nul
 echo  [4/4] Starting services...
 
 echo        Starting MCP server on port %MCP_PORT%...
-start "Penpot MCP :4401" cmd /k "cd /d %ROOT%penpot\mcp\packages\server && node dist/index.js"
+start "Penpot MCP :4401" /D "%ROOT%penpot\mcp\packages\server" cmd /k node dist/index.js
 
 echo        Starting plugin server on port %PLUGIN_PORT%...
-start "Plugin :4400" cmd /k "cd /d %ROOT% && python serve_plugin.py"
+start "Plugin :4400" /D "%ROOT%" "%VENV_PYTHON%" serve_plugin.py
 
 echo        Starting backend on port %BACKEND_PORT%...
-start "Backend :8000" cmd /k "cd /d %ROOT% && uvicorn backend.main:app --host 0.0.0.0 --port %BACKEND_PORT% --reload"
+start "Backend :8000" /D "%ROOT%" "%VENV_PYTHON%" -m uvicorn backend.main:app --host 0.0.0.0 --port %BACKEND_PORT% --reload
 
 echo        Waiting for backend...
 :wait_backend

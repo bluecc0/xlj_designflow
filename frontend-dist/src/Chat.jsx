@@ -557,7 +557,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [lockedCommand, setLockedCommand] = React.useState('');
   const [files, setFiles] = React.useState([]);
   const [imageType, setImageType] = React.useState('png');
-  const [aiRatio, setAiRatio] = React.useState('1:1');
+  const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
   const [refImages, setRefImages] = React.useState([]); // [{ file, previewUrl }, ...] 最多 4 张
   const taRef = React.useRef(null);
@@ -605,18 +605,26 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     { key: 'white2x', label: '白底x2' },
   ];
 
-  // AI 生图比例 × 分辨率映射（均经 API 实测可用）
-  const AI_RATIO_MAP = {
-    '1:1':  { '1K': '1024x1024', '2K': '2048x2048', '4K': '4096x4096' },
-    '3:4':  { '1K': '768x1024',  '2K': '1536x2048', '4K': '2448x3264' },
-    '9:16': { '1K': '1080x1920', '2K': '1152x2048', '4K': '2160x3840' },
-  };
-  const AI_RATIOS = ['1:1', '3:4', '9:16'];
   const AI_QUALITIES = ['1K', '2K', '4K'];
-  const aiImageSize = (AI_RATIO_MAP[aiRatio] || {})[aiQuality] || '1024x1024';
+  const GPT_IMAGE2_OPTIONS = {
+    auto: { label: 'auto', qualities: ['1K', '2K', '4K'], preview: 'auto', px: { '1K': 'auto', '2K': 'auto', '4K': 'auto' } },
+    '1:1': { label: '1:1', qualities: ['1K', '2K'], preview: '1:1', px: { '1K': '1024×1024', '2K': '2048×2048' } },
+    '3:4': { label: '3:4', qualities: ['1K', '2K'], preview: '3:4', px: { '1K': '768×1024', '2K': '1536×2048' } },
+    '5:4': { label: '5:4', qualities: ['1K', '2K'], preview: '5:4', px: { '1K': '1280×1024', '2K': '2560×2048' } },
+    '9:16': { label: '9:16', qualities: ['1K', '2K', '4K'], preview: '9:16', px: { '1K': '1080×1920', '2K': '1152×2048', '4K': '2160×3840' } },
+  };
+  const DEFAULT_AI_OPTIONS = {
+    '1:1':  { label: '1:1', qualities: ['1K', '2K', '4K'], preview: '1024×1024', px: { '1K': '1024×1024', '2K': '2048×2048', '4K': '4096×4096' } },
+    '3:4':  { label: '3:4', qualities: ['1K', '2K', '4K'], preview: '768×1024', px: { '1K': '768×1024', '2K': '1536×2048', '4K': '2448×3264' } },
+    '9:16': { label: '9:16', qualities: ['1K', '2K', '4K'], preview: '1080×1920', px: { '1K': '1080×1920', '2K': '1152×2048', '4K': '2160×3840' } },
+  };
 
   // 从文本内容检测当前模式
   const _t = (lockedCommand || text).trimStart();
+  const activeAiModel =
+    /^\/Gpt image 2/i.test(_t) ? 'gpt-image-2' :
+    /^\/Nano Banano pro/i.test(_t) ? 'nano-banana-pro' :
+    '';
   const activeMode =
     /^\/(Nano Banano pro|Gpt image 2)/i.test(_t) ? 'ai-image' :
     _t.startsWith('/特殊品（完整）') ? 'special_full' :
@@ -624,6 +632,28 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     'compose';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
+  const aiOptionMap = activeAiModel === 'gpt-image-2' ? GPT_IMAGE2_OPTIONS : DEFAULT_AI_OPTIONS;
+  const AI_RATIOS = Object.keys(aiOptionMap);
+  const currentAiRatioMeta = aiOptionMap[aiRatio] || aiOptionMap[AI_RATIOS[0]];
+  const allowedAiQualities = currentAiRatioMeta ? currentAiRatioMeta.qualities : AI_QUALITIES;
+  const currentAiPx = currentAiRatioMeta && currentAiRatioMeta.px ? (currentAiRatioMeta.px[aiQuality] || currentAiRatioMeta.preview) : '';
+  const aiImageSize = aiRatio;
+
+  React.useEffect(() => {
+    if (activeAiModel === 'gpt-image-2') {
+      if (!GPT_IMAGE2_OPTIONS[aiRatio]) {
+        setAiRatio('auto');
+        return;
+      }
+      if (!GPT_IMAGE2_OPTIONS[aiRatio].qualities.includes(aiQuality)) {
+        setAiQuality(GPT_IMAGE2_OPTIONS[aiRatio].qualities[0]);
+      }
+      return;
+    }
+    if (activeAiModel === 'nano-banana-pro' && !DEFAULT_AI_OPTIONS[aiRatio]) {
+      setAiRatio('1:1');
+    }
+  }, [activeAiModel, aiQuality, aiRatio]);
 
   const [menuOpen, setMenuOpen] = React.useState(false);
   React.useEffect(() => {
@@ -674,7 +704,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     setText('');
     setLockedCommand('');
     clearRefImages();
-    onSend(message, imagesToSend, { size: aiImageSize });
+    onSend(message, imagesToSend, { size: aiImageSize, resolution: aiQuality });
   };
 
   const handleKeyDown = (e) => {
@@ -915,28 +945,53 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
                 background: 'transparent', border: 'none',
                 color: aiRatio === r ? 'var(--ink)' : 'var(--ink-3)',
                 cursor: 'pointer', position: 'relative',
-              }}>
-                {r}
+              }} title={aiOptionMap[r] ? Object.entries(aiOptionMap[r].px || {}).map(function(entry) { return entry[1]; }).join(' / ') : ''}>
+                {aiOptionMap[r].label}
                 {aiRatio === r && (
                   <div style={{ position: 'absolute', bottom: -2, left: 0, right: 0, height: 2, background: 'var(--accent)', borderRadius: 1 }}/>
                 )}
               </button>
             ))}
             <div style={{ width: 1, height: 12, background: 'var(--line)', flexShrink: 0 }}/>
-            {AI_QUALITIES.map(q => (
-              <button key={q} onClick={() => setAiQuality(q)} style={{
-                fontSize: 11, padding: '3px 0',
-                background: 'transparent', border: 'none',
-                color: aiQuality === q ? 'var(--ink)' : 'var(--ink-3)',
-                cursor: 'pointer', position: 'relative',
-              }}>
-                {q}
-                {aiQuality === q && (
-                  <div style={{ position: 'absolute', bottom: -2, left: 0, right: 0, height: 2, background: 'var(--accent)', borderRadius: 1 }}/>
-                )}
-              </button>
-            ))}
-            <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{aiImageSize.replace('x', '×')}</span>
+            {AI_QUALITIES.map(q => {
+              const disabled = !allowedAiQualities.includes(q);
+              return (
+                <button key={q} onClick={() => !disabled && setAiQuality(q)} style={{
+                  fontSize: 11, padding: '3px 0',
+                  background: 'transparent', border: 'none',
+                  color: disabled ? 'var(--ink-3)' : aiQuality === q ? 'var(--ink)' : 'var(--ink-3)',
+                  cursor: disabled ? 'not-allowed' : 'pointer', position: 'relative',
+                  opacity: disabled ? 0.75 : 1,
+                  textDecoration: disabled ? 'line-through' : 'none',
+                  textDecorationThickness: disabled ? '1.5px' : 'initial',
+                }}>
+                  {q}
+                  {!disabled && aiQuality === q && (
+                    <div style={{ position: 'absolute', bottom: -2, left: 0, right: 0, height: 2, background: 'var(--accent)', borderRadius: 1 }}/>
+                  )}
+                </button>
+              );
+            })}
+            <div
+              title={currentAiPx || ''}
+              style={{
+                marginLeft: 'auto',
+                minWidth: 34,
+                height: 20,
+                padding: '0 8px',
+                borderRadius: 999,
+                border: '1px solid var(--line-2)',
+                color: 'var(--ink-3)',
+                fontSize: 10,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'var(--panel)',
+                flexShrink: 0,
+              }}
+            >
+              {aiRatio}
+            </div>
           </div>
         )}
         <textarea
@@ -1049,6 +1104,11 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
   const [messages, setMessages] = React.useState([]);
   const [isLoading, setIsLoading] = React.useState(false);
   const [lastSubmittedMessage, setLastSubmittedMessage] = React.useState('');
+  const [currentAiChatId, setCurrentAiChatId] = React.useState('');
+  const [historyOpen, setHistoryOpen] = React.useState(false);
+  const [historyLoading, setHistoryLoading] = React.useState(false);
+  const [historySessions, setHistorySessions] = React.useState([]);
+  const historyWrapRef = React.useRef(null);
 
   // Extract required fields from template slots (e.g., "slot/product_1/name" -> "name")
   const getTemplateFields = React.useCallback((t) => {
@@ -1065,6 +1125,54 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
   }, []);
 
   const templateFields = getTemplateFields(template);
+
+  const loadAiChatHistory = React.useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const sessions = await window.API.listAiChats(50);
+      setHistorySessions(sessions || []);
+    } catch (e) {
+      console.error('load ai chat history failed:', e);
+      setHistorySessions([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  const openHistory = React.useCallback(() => {
+    setHistoryOpen(function(prev) {
+      const next = !prev;
+      if (!prev) loadAiChatHistory();
+      return next;
+    });
+  }, [loadAiChatHistory]);
+
+  const restoreAiChatSession = React.useCallback(async (sessionId) => {
+    try {
+      const data = await window.API.getAiChat(sessionId);
+      setMessages(Array.isArray(data.messages) ? data.messages : []);
+      setCurrentAiChatId(sessionId);
+      setHistoryOpen(false);
+      const lastUser = (data.messages || []).filter(function(m) { return m && m.who === 'user' && m.text; }).slice(-1)[0];
+      setLastSubmittedMessage(lastUser ? lastUser.text : '');
+    } catch (e) {
+      console.error('restore ai chat session failed:', e);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (!historyOpen) return;
+    const handlePointerDown = function(event) {
+      if (!historyWrapRef.current) return;
+      if (!historyWrapRef.current.contains(event.target)) {
+        setHistoryOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return function() {
+      document.removeEventListener('mousedown', handlePointerDown);
+    };
+  }, [historyOpen]);
 
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
     if (!text.trim() || isLoading) return;
@@ -1103,19 +1211,28 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
         fd.append('model', aiCmd.model);
         fd.append('prompt', prompt);
         fd.append('size', aiOptions.size || '1024x1024');
+        fd.append('resolution', aiOptions.resolution || '1K');
+        if (currentAiChatId) fd.append('chat_session_id', currentAiChatId);
         refImages.forEach(r => fd.append('image', r.file));
         const res = await fetch(apiBase + '/ai-image', { method: 'POST', body: fd });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || `HTTP ${res.status}`);
+          if (err.detail && typeof err.detail === 'object' && err.detail.chat_session_id) {
+            setCurrentAiChatId(err.detail.chat_session_id);
+          }
+          throw new Error(
+            (err.detail && typeof err.detail === 'object' ? err.detail.message : err.detail) || `HTTP ${res.status}`
+          );
         }
         const data = await res.json();
+        if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
         const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
         setMessages(msgs => msgs.map(m =>
           m.type === 'ai-image-generating' && m.startedAt === startedAt
             ? { ...m, status: 'done', imageUrl: apiBase + data.url, finalElapsed }
             : m
         ));
+        loadAiChatHistory();
       } catch (e) {
         const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
         setMessages(msgs => msgs.map(m =>
@@ -1123,6 +1240,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
             ? { ...m, status: 'failed', error: e.message, finalElapsed }
             : m
         ));
+        loadAiChatHistory();
       }
       setIsLoading(false);
       return;
@@ -1249,7 +1367,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
       setMessages(msgs => [...msgs, { who: 'ai', text: '错误: ' + (e.message || '未知错误'), meta: '错误' }]);
     }
     setIsLoading(false);
-  }, [isLoading, template]);
+  }, [currentAiChatId, isLoading, loadAiChatHistory, template]);
 
   const handleParseTable = React.useCallback(async (file, filename, imageType) => {
     // Add user message showing file was uploaded
@@ -1358,6 +1476,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
       display: 'flex', flexDirection: 'column', height: '100%',
       background: 'var(--panel)',
       borderLeft: '1px solid var(--line)',
+      position: 'relative',
     }}>
       {/* Header */}
       <div style={{
@@ -1378,6 +1497,82 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
           </span>
         </div>
         <div style={{ flex: 1 }}/>
+        <div ref={historyWrapRef} style={{ position: 'relative' }}>
+          <button
+            onClick={openHistory}
+            title="历史对话"
+            style={{
+              width: 28,
+              height: 28,
+              display: 'grid',
+              placeItems: 'center',
+              padding: 0,
+              borderRadius: 8,
+              background: historyOpen ? 'var(--panel)' : 'transparent',
+              border: '1px solid ' + (historyOpen ? 'var(--line)' : 'transparent'),
+              color: historyOpen ? 'var(--ink)' : 'var(--ink-3)',
+              cursor: 'pointer',
+            }}
+          >
+            <I.file size={12}/>
+          </button>
+
+          {historyOpen && (
+            <div style={{
+              position: 'absolute',
+              top: 34,
+              right: 0,
+              width: 196,
+              maxHeight: 288,
+              overflowY: 'auto',
+              borderRadius: 12,
+              background: 'var(--panel)',
+              border: '1px solid var(--line)',
+              boxShadow: '0 10px 24px rgba(15, 23, 42, 0.08)',
+              zIndex: 20,
+              padding: 6,
+            }}>
+              <div className="mono" style={{
+                padding: '6px 8px 7px',
+                fontSize: 9.5,
+                color: 'var(--ink-3)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.06em',
+              }}>AI chats</div>
+              {historyLoading && (
+                <div style={{ padding: '8px', fontSize: 11, color: 'var(--ink-3)' }}>加载中...</div>
+              )}
+              {!historyLoading && historySessions.length === 0 && (
+                <div style={{ padding: '8px', fontSize: 11, color: 'var(--ink-3)' }}>暂无历史对话</div>
+              )}
+              {!historyLoading && historySessions.map(function(session) {
+                return (
+                  <button
+                    key={session.id}
+                    onClick={() => restoreAiChatSession(session.id)}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '8px 9px',
+                      borderRadius: 8,
+                      background: currentAiChatId === session.id ? 'var(--panel-2)' : 'transparent',
+                      border: '1px solid ' + (currentAiChatId === session.id ? 'var(--line-2)' : 'transparent'),
+                      color: currentAiChatId === session.id ? 'var(--ink)' : 'var(--ink-2)',
+                      fontSize: 11.5,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      cursor: 'pointer',
+                    }}
+                    title={session.title}
+                  >
+                    {session.title}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {state === 'empty' && messages.length === 0 && <ChatEmpty/>}

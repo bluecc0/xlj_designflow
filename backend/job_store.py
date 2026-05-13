@@ -108,6 +108,28 @@ def init_db() -> None:
                 created_at       REAL NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ai_chat_sessions (
+                id               TEXT PRIMARY KEY,
+                user_id          TEXT NOT NULL,
+                title            TEXT NOT NULL,
+                created_at       REAL NOT NULL,
+                updated_at       REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ai_chat_messages (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id       TEXT NOT NULL,
+                user_id          TEXT NOT NULL,
+                role             TEXT NOT NULL,
+                type             TEXT NOT NULL,
+                text             TEXT,
+                image_url        TEXT,
+                meta_json        TEXT NOT NULL DEFAULT '{}',
+                created_at       REAL NOT NULL
+            )
+        """)
         conn.commit()
 
 
@@ -479,3 +501,172 @@ def load_ai_image_jobs(limit: int = 50, user_id: Optional[str] = None) -> list[d
         }
         for row in rows
     ]
+
+
+def create_ai_chat_session(*, user_id: str, title: str, created_at: float | None = None) -> dict:
+    now = created_at or time.time()
+    session_id = uuid.uuid4().hex
+    clean_title = (title or "").strip() or "未命名对话"
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO ai_chat_sessions (id, user_id, title, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (session_id, user_id, clean_title, now, now),
+        )
+        conn.commit()
+    return {
+        "id": session_id,
+        "user_id": user_id,
+        "title": clean_title,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def get_ai_chat_session(session_id: str, user_id: Optional[str] = None) -> Optional[dict]:
+    with _connect() as conn:
+        if user_id:
+            row = conn.execute(
+                "SELECT * FROM ai_chat_sessions WHERE id = ? AND user_id = ?",
+                (session_id, user_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM ai_chat_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "title": row["title"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def touch_ai_chat_session(session_id: str, *, updated_at: float | None = None) -> None:
+    now = updated_at or time.time()
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE ai_chat_sessions SET updated_at = ? WHERE id = ?",
+            (now, session_id),
+        )
+        conn.commit()
+
+
+def append_ai_chat_message(
+    *,
+    session_id: str,
+    user_id: str,
+    role: str,
+    type: str,
+    text: str | None = None,
+    image_url: str | None = None,
+    meta: Optional[dict] = None,
+    created_at: float | None = None,
+) -> int:
+    now = created_at or time.time()
+    with _lock, _connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO ai_chat_messages
+              (session_id, user_id, role, type, text, image_url, meta_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                user_id,
+                role,
+                type,
+                text,
+                image_url,
+                json.dumps(meta or {}, ensure_ascii=False),
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE ai_chat_sessions SET updated_at = ? WHERE id = ?",
+            (now, session_id),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def list_ai_chat_sessions(limit: int = 50, user_id: Optional[str] = None) -> list[dict]:
+    with _connect() as conn:
+        if user_id:
+            rows = conn.execute(
+                "SELECT * FROM ai_chat_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM ai_chat_sessions ORDER BY updated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "user_id": row["user_id"],
+            "title": row["title"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
+def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> list[dict]:
+    with _connect() as conn:
+        if user_id:
+            rows = conn.execute(
+                """
+                SELECT m.*
+                FROM ai_chat_messages m
+                JOIN ai_chat_sessions s ON s.id = m.session_id
+                WHERE m.session_id = ? AND s.user_id = ?
+                ORDER BY m.created_at ASC, m.id ASC
+                """,
+                (session_id, user_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM ai_chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+                (session_id,),
+            ).fetchall()
+    result = []
+    for row in rows:
+        meta = json.loads(row["meta_json"] or "{}")
+        if row["type"] == "user_text":
+            result.append({
+                "who": "user",
+                "text": row["text"] or "",
+                "createdAt": row["created_at"],
+            })
+        elif row["type"] == "ai_image_result":
+            result.append({
+                "who": "ai",
+                "type": "ai-image-generating",
+                "model": meta.get("model"),
+                "prompt": meta.get("prompt") or (row["text"] or ""),
+                "status": meta.get("status") or "done",
+                "imageUrl": row["image_url"],
+                "error": meta.get("error"),
+                "hasReference": bool(meta.get("hasReference")),
+                "refCount": int(meta.get("refCount") or 0),
+                "finalElapsed": meta.get("finalElapsed"),
+                "meta": meta.get("model"),
+                "createdAt": row["created_at"],
+            })
+        elif row["type"] == "ai_text":
+            result.append({
+                "who": "ai",
+                "text": row["text"] or "",
+                "meta": meta.get("meta") or "Loom",
+                "createdAt": row["created_at"],
+            })
+    return result

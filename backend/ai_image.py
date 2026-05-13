@@ -44,12 +44,15 @@ _OUTPUT_DIR = settings.output_path / "ai-images"
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 _SIZE_MAP: dict[str, tuple[str, str]] = {
+    "auto": ("auto", "1K"),
     "1024x1024": ("1:1", "1K"),
     "2048x2048": ("1:1", "2K"),
     "4096x4096": ("1:1", "4K"),
     "768x1024": ("3:4", "1K"),
     "1536x2048": ("3:4", "2K"),
     "2448x3264": ("3:4", "4K"),
+    "1280x1024": ("5:4", "1K"),
+    "2560x2048": ("5:4", "2K"),
     "1080x1920": ("9:16", "1K"),
     "1152x2048": ("9:16", "2K"),
     "2160x3840": ("9:16", "4K"),
@@ -94,12 +97,13 @@ def _normalize_model_name(model: str) -> str:
     return SLASH_MODEL_MAP.get(clean.casefold(), clean)
 
 
-def _normalize_size(size: str) -> tuple[str, str]:
+def _normalize_size(size: str, resolution: str = "") -> tuple[str, str]:
     clean = (size or "").strip()
     if clean in _SIZE_MAP:
         return _SIZE_MAP[clean]
-    if clean in ("1:1", "3:4", "9:16", "16:9", "2:3", "3:2"):
-        return clean, "1K"
+    clean_resolution = (resolution or "").strip().upper() or "1K"
+    if clean in ("auto", "1:1", "3:4", "5:4", "9:16", "16:9", "2:3", "3:2"):
+        return clean, clean_resolution
     return "1:1", "1K"
 
 
@@ -260,9 +264,10 @@ async def _submit_generation_task(
     model: str,
     prompt: str,
     size: str,
+    resolution: str = "",
     reference_urls: list[str] | None = None,
 ) -> str:
-    ratio, resolution = _normalize_size(size)
+    ratio, resolution = _normalize_size(size, resolution)
     payload: dict[str, Any] = {
         "model": _normalize_model_name(model),
         "prompt": prompt,
@@ -367,7 +372,13 @@ async def _download_final_image(
     return f"/ai-images/{out_dir.name}/{filename}"
 
 
-async def generate_image(model: str, prompt: str, size: str = "1024x1024", user_id: str = "anonymous") -> dict:
+async def generate_image(
+    model: str,
+    prompt: str,
+    size: str = "1024x1024",
+    resolution: str = "",
+    user_id: str = "anonymous",
+) -> dict:
     model_name = _normalize_model_name(model)
     base_url, api_key = _model_credentials(model_name)
     headers = {
@@ -382,6 +393,7 @@ async def generate_image(model: str, prompt: str, size: str = "1024x1024", user_
             model=model_name,
             prompt=prompt,
             size=size,
+            resolution=resolution,
         )
         result_url = await _wait_for_task_result(
             client,
@@ -395,6 +407,7 @@ async def generate_image(model: str, prompt: str, size: str = "1024x1024", user_
         "model": model_name,
         "prompt": prompt,
         "size": size,
+        "resolution": resolution,
         "task_id": task_id,
     }
 
@@ -404,6 +417,7 @@ async def generate_image_with_reference(
     prompt: str,
     images: list[tuple[bytes, str]],
     size: str = "1024x1024",
+    resolution: str = "",
     user_id: str = "anonymous",
 ) -> dict:
     model_name = _normalize_model_name(model)
@@ -426,6 +440,7 @@ async def generate_image_with_reference(
             model=model_name,
             prompt=prompt,
             size=size,
+            resolution=resolution,
             reference_urls=reference_urls,
         )
         result_url = await _wait_for_task_result(
@@ -440,6 +455,7 @@ async def generate_image_with_reference(
         "model": model_name,
         "prompt": prompt,
         "size": size,
+        "resolution": resolution,
         "reference": True,
         "task_id": task_id,
     }
