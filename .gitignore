@@ -18,6 +18,7 @@ output/
 # Env
 .env
 login_users.json
+start.bat
 
 # OS / editor
 .DS_Store
