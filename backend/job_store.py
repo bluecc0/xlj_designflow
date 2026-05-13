@@ -620,6 +620,29 @@ def list_ai_chat_sessions(limit: int = 50, user_id: Optional[str] = None) -> lis
     ]
 
 
+def delete_ai_chat_session(session_id: str, user_id: Optional[str] = None) -> bool:
+    with _lock, _connect() as conn:
+        if user_id:
+            row = conn.execute(
+                "SELECT id FROM ai_chat_sessions WHERE id = ? AND user_id = ?",
+                (session_id, user_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id FROM ai_chat_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+        if not row:
+            return False
+        conn.execute("DELETE FROM ai_chat_messages WHERE session_id = ?", (session_id,))
+        if user_id:
+            conn.execute("DELETE FROM ai_chat_sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
+        else:
+            conn.execute("DELETE FROM ai_chat_sessions WHERE id = ?", (session_id,))
+        conn.commit()
+        return True
+
+
 def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> list[dict]:
     with _connect() as conn:
         if user_id:

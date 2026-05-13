@@ -39,6 +39,7 @@ from .config import settings
 from .job_store import (
     append_ai_chat_message,
     create_ai_chat_session,
+    delete_ai_chat_session,
     create_session,
     delete_session,
     get_ai_chat_session,
@@ -1272,6 +1273,15 @@ def history_ai_chat_detail(request: Request, session_id: str):
         raise HTTPException(404, "未找到历史对话")
     messages = load_ai_chat_messages(session_id, user_id=user["id"])
     return {"session": session, "messages": messages}
+
+
+@app.delete("/history/ai-chats/{session_id}")
+def delete_history_ai_chat(request: Request, session_id: str):
+    user = _current_user(request)
+    deleted = delete_ai_chat_session(session_id, user_id=user["id"])
+    if not deleted:
+        raise HTTPException(404, "未找到历史对话")
+    return {"deleted": session_id}
 
 
 @app.post("/ai-image")

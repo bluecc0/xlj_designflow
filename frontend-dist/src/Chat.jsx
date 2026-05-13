@@ -1108,6 +1108,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [historyLoading, setHistoryLoading] = React.useState(false);
   const [historySessions, setHistorySessions] = React.useState([]);
+  const [hoveredHistoryId, setHoveredHistoryId] = React.useState('');
   const historyWrapRef = React.useRef(null);
 
   // Extract required fields from template slots (e.g., "slot/product_1/name" -> "name")
@@ -1129,7 +1130,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
   const loadAiChatHistory = React.useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const sessions = await window.API.listAiChats(50);
+      const sessions = await window.API.listAiChats(20);
       setHistorySessions(sessions || []);
     } catch (e) {
       console.error('load ai chat history failed:', e);
@@ -1159,6 +1160,24 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
       console.error('restore ai chat session failed:', e);
     }
   }, []);
+
+  const deleteAiChatHistory = React.useCallback(async (sessionId) => {
+    if (!sessionId) return;
+    if (!window.confirm('删除这条历史对话？')) return;
+    try {
+      await window.API.deleteAiChat(sessionId);
+      setHistorySessions(function(prev) {
+        return prev.filter(function(session) { return session.id !== sessionId; });
+      });
+      if (currentAiChatId === sessionId) {
+        setMessages([]);
+        setCurrentAiChatId('');
+      }
+    } catch (e) {
+      console.error('delete ai chat history failed:', e);
+      window.alert((e && e.message) ? e.message : '删除失败，请稍后重试');
+    }
+  }, [currentAiChatId]);
 
   const startNewAiChat = React.useCallback(() => {
     if (isLoading) return;
@@ -1569,27 +1588,65 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
               )}
               {!historyLoading && historySessions.map(function(session) {
                 return (
-                  <button
+                  <div
                     key={session.id}
-                    onClick={() => restoreAiChatSession(session.id)}
+                    onMouseEnter={() => setHoveredHistoryId(session.id)}
+                    onMouseLeave={() => setHoveredHistoryId(function(prev) { return prev === session.id ? '' : prev; })}
                     style={{
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '8px 9px',
-                      borderRadius: 8,
-                      background: currentAiChatId === session.id ? 'var(--panel-2)' : 'transparent',
-                      border: '1px solid ' + (currentAiChatId === session.id ? 'var(--line-2)' : 'transparent'),
-                      color: currentAiChatId === session.id ? 'var(--ink)' : 'var(--ink-2)',
-                      fontSize: 11.5,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '2px 0',
                     }}
-                    title={session.title}
                   >
-                    {session.title}
-                  </button>
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        deleteAiChatHistory(session.id);
+                      }}
+                      title="删除"
+                      style={{
+                        width: 18,
+                        height: 18,
+                        flexShrink: 0,
+                        display: 'grid',
+                        placeItems: 'center',
+                        borderRadius: 6,
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--ink-3)',
+                        cursor: 'pointer',
+                        padding: 0,
+                        opacity: hoveredHistoryId === session.id ? 1 : 0,
+                        pointerEvents: hoveredHistoryId === session.id ? 'auto' : 'none',
+                        transition: 'opacity 120ms ease',
+                      }}
+                    >
+                      <I.close size={10}/>
+                    </button>
+                    <button
+                      onClick={() => restoreAiChatSession(session.id)}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        textAlign: 'left',
+                        padding: '8px 9px',
+                        borderRadius: 8,
+                        background: currentAiChatId === session.id ? 'var(--panel-2)' : 'transparent',
+                        border: '1px solid ' + (currentAiChatId === session.id ? 'var(--line-2)' : 'transparent'),
+                        color: currentAiChatId === session.id ? 'var(--ink)' : 'var(--ink-2)',
+                        fontSize: 11.5,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        cursor: 'pointer',
+                      }}
+                      title={session.title}
+                    >
+                      {session.title}
+                    </button>
+                  </div>
                 );
               })}
             </div>
