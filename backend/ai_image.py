@@ -318,7 +318,7 @@ async def _wait_for_task_result(
     base_url: str,
     headers: dict[str, str],
     task_id: str,
-    timeout_seconds: int = 240,
+    timeout_seconds: int = 300,
     poll_interval: float = 2.0,
 ) -> str:
     deadline = time.monotonic() + timeout_seconds
