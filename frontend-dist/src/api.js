@@ -1,9 +1,10 @@
 // API client — non-module version of src/api.js
 (function() {
-  const BASE = window.API_BASE || (window.location.protocol + '//' + window.location.hostname + ':8000');
+  const BASE = window.API_BASE || window.location.origin;
 
   function request(path, init) {
-    return fetch(BASE + path, init).then(function(resp) {
+    var nextInit = Object.assign({ credentials: 'include' }, init || {});
+    return fetch(BASE + path, nextInit).then(function(resp) {
       if (!resp.ok) {
         if (resp.status === 401) {
           try {
@@ -32,7 +33,7 @@
       form.append('required_fields', requiredFields.join(','));
     }
     if (imageType) form.append('image_type', imageType);
-    return fetch(BASE + '/parse-table', { method: 'POST', body: form }).then(function(resp) {
+    return fetch(BASE + '/parse-table', { method: 'POST', body: form, credentials: 'include' }).then(function(resp) {
       if (!resp.ok) {
         return resp.text().then(function(text) {
           throw new Error('解析失败 HTTP ' + resp.status + ': ' + text.slice(0, 200));
@@ -43,6 +44,7 @@
   }
 
   window.API = {
+    BASE: BASE,
     getCurrentUser: function() {
       return request('/auth/me').then(function(res) { return res.user; });
     },
@@ -80,6 +82,18 @@
     listAiChats: function(limit) { return request('/history/ai-chats?limit=' + (limit || 20)).then(function(res) { return res.sessions || []; }); },
     getAiChat: function(sessionId) { return request('/history/ai-chats/' + encodeURIComponent(sessionId)); },
     deleteAiChat: function(sessionId) { return request('/history/ai-chats/' + encodeURIComponent(sessionId), { method: 'DELETE' }); },
+    createLayeredPsd: function(prompt, imageFile, options) {
+      var form = new FormData();
+      form.append('prompt', prompt);
+      form.append('model', (options && options.model) || 'nano-banana-pro');
+      form.append('size', (options && options.size) || 'auto');
+      form.append('resolution', (options && options.resolution) || '');
+      form.append('image', imageFile);
+      return request('/psd/layered', { method: 'POST', body: form });
+    },
+    getLayeredPsd: function(jobId) {
+      return request('/psd/layered/' + encodeURIComponent(jobId));
+    },
     getImageUrl: function(jobId) { return BASE + '/compose/' + jobId + '/image'; },
     exportGrid: function(jobId, rows, cols) {
       return request('/export/grid', {
@@ -94,6 +108,7 @@
     chatWithAI: function(messages, context) {
       return fetch(BASE + '/chat', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: messages, context: context || {} }),
       }).then(function(resp) {
@@ -109,6 +124,13 @@
       return fetch(BASE + '/templates/cache', { method: 'DELETE' }).then(r => r.json());
     },
     fetchProducts: function() { return request('/products'); },
+    resolveProductRefs: function(refs) {
+      return request('/products/resolve-references', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refs: refs || [] }),
+      }).then(function(res) { return res.refs || []; });
+    },
     fetchImageTypes: function() {
       return request('/image-types').then(function(res) { return res.types; });
     },

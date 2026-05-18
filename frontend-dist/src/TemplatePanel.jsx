@@ -1,4 +1,4 @@
-const CATS = ['All', 'Social', 'E-commerce', 'Brand', 'Print', 'Web', 'Packaging'];
+﻿const CATS = ['All', 'Social', 'E-commerce', 'Brand', 'Print', 'Web', 'Packaging'];
 
 function formatAiModelName(model) {
   if (!model) return 'AI 生图';
@@ -319,11 +319,11 @@ var TemplatePanel = function(_ref2) {
             var thumbUrl = null;
             if (job.status === 'done') {
               if (isAiImage) {
-                var apiBaseAi = window.API_BASE || (window.location.protocol + '//' + window.location.hostname + ':8000');
+                var apiBaseAi = window.API_BASE || window.location.origin;
                 thumbUrl = job.image_url ? apiBaseAi + job.image_url : null;
               } else if (isSpecial) {
                 var firstFrame = job.frames && job.frames.find(function(f) { return f.url; });
-                var apiBase = window.API_BASE || (window.location.protocol + '//' + window.location.hostname + ':8000');
+                var apiBase = window.API_BASE || window.location.origin;
                 thumbUrl = firstFrame ? apiBase + firstFrame.url : null;
               } else {
                 thumbUrl = window.API.getImageUrl(job.id);

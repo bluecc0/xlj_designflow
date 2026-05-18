@@ -12,10 +12,13 @@
 """
 from __future__ import annotations
 
+import asyncio
+import base64
 import logging
 import threading
 import time
 import uuid
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 from pathlib import Path
@@ -33,6 +36,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .ai_image import generate_image, generate_image_with_reference, SLASH_MODEL_MAP
+from .psd_layered import create_layered_psd_from_image
 from .special_compose_full import run_special_full_compose
 from .compose import get_client, run_compose
 from .config import settings
@@ -137,11 +141,16 @@ if _frontend_dist.exists():
 # ─── 内存任务存储（PoC 阶段，后续换 Redis / DB）────────────────────────────────
 _jobs: dict[str, ComposeJob] = {}
 _jobs_lock = threading.Lock()
+_psd_jobs: dict[str, dict] = {}
+_psd_jobs_lock = threading.Lock()
 _SESSION_COOKIE = "designflow_session"
 _AUTH_EXEMPT_PREFIXES = (
     "/auth/login-lite",
     "/auth/options",
     "/health",
+    "/product-library",
+    "/products/reference-image",
+    "/products/resolve-references",
     "/ui",
     "/docs",
     "/redoc",
@@ -1142,6 +1151,96 @@ def find_product(name: str):
     }
 
 
+@app.post("/products/resolve-references")
+def resolve_product_references(payload: dict):
+    refs = payload.get("refs") if isinstance(payload, dict) else None
+    if not isinstance(refs, list):
+        raise HTTPException(400, "refs must be a list")
+
+    alias_map = {
+        "": "white",
+        "default": "white",
+        "white": "white",
+        "white_base": "white",
+        "whitebase": "white",
+        "x2": "white2x",
+        "white2x": "white2x",
+        "whitex2": "white2x",
+        "white_basex2": "white2x",
+        "whitebasex2": "white2x",
+        "一双鞋角度": "white2x",
+    }
+
+    library = ProductLibrary(settings.product_library_path)
+    results = []
+    for item in refs:
+        if not isinstance(item, dict):
+            continue
+        raw = str(item.get("raw") or "").strip()
+        sku = str(item.get("sku") or "").strip()
+        asset_type_input = str(item.get("asset_type") or "").strip()
+        normalized_key = alias_map.get(asset_type_input.casefold(), "")
+        if not normalized_key and asset_type_input:
+            normalized_key = alias_map.get(asset_type_input.lower(), "")
+        normalized_key = normalized_key or "white"
+        folder = settings.IMAGE_TYPE_FOLDERS.get(normalized_key)
+        matched_path = library.find_in_folder(sku, folder) if (sku and folder) else None
+
+        full_path = Path(matched_path) if matched_path else None
+        if full_path:
+            url = (
+                "/products/reference-image?"
+                f"sku={quote(sku)}&asset_type={quote(normalized_key)}"
+            )
+            mime_type = "image/png" if full_path.suffix.lower() == ".png" else "image/jpeg"
+            content_base64 = base64.b64encode(full_path.read_bytes()).decode("ascii")
+        else:
+            url = None
+            mime_type = None
+            content_base64 = None
+
+        results.append({
+            "raw": raw,
+            "sku": sku,
+            "asset_type": normalized_key,
+            "folder": folder,
+            "matched": bool(full_path),
+            "path": str(full_path) if full_path else None,
+            "url": url,
+            "filename": full_path.name if full_path else None,
+            "mime_type": mime_type,
+            "content_base64": content_base64,
+        })
+
+    return {"refs": results}
+
+
+@app.get("/products/reference-image")
+def get_product_reference_image(request: Request, sku: str, asset_type: str = "white"):
+    alias_map = {
+        "": "white",
+        "default": "white",
+        "white": "white",
+        "white_base": "white",
+        "whitebase": "white",
+        "x2": "white2x",
+        "white2x": "white2x",
+        "whitex2": "white2x",
+        "white_basex2": "white2x",
+        "whitebasex2": "white2x",
+        "一双鞋角度": "white2x",
+    }
+    normalized_key = alias_map.get((asset_type or "").strip().casefold(), "") or "white"
+    folder = settings.IMAGE_TYPE_FOLDERS.get(normalized_key)
+    library = ProductLibrary(settings.product_library_path)
+    matched_path = library.find_in_folder((sku or "").strip(), folder) if folder else None
+    if not matched_path:
+        raise HTTPException(404, "素材图不存在")
+    path = Path(matched_path)
+    media_type = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+    return FileResponse(str(path), media_type=media_type, filename=path.name)
+
+
 @app.get("/templates/{template_id}/thumbnail")
 def get_template_thumbnail(
     template_id: str,
@@ -1407,6 +1506,107 @@ async def ai_image_endpoint(
             created_at=time.time(),
         )
         raise HTTPException(502, {"message": f"{type(e).__name__}: {e}", "chat_session_id": session_id})
+
+
+@app.post("/psd/layered")
+async def layered_psd_endpoint(
+    request: Request,
+    prompt: str = Form(...),
+    model: str = Form("nano-banana-pro"),
+    size: str = Form("auto"),
+    resolution: str = Form(""),
+    image: UploadFile = File(...),
+):
+    user = _current_user(request)
+    layer_text = (prompt or "").strip()
+    if not layer_text:
+        raise HTTPException(400, "请描述要拆出的图层，例如：背景、产品、文字")
+    if not image.content_type or not image.content_type.startswith("image/"):
+        raise HTTPException(400, "请上传一张参考图片")
+    image_bytes = await image.read()
+    if not image_bytes:
+        raise HTTPException(400, "参考图片为空")
+    job_id = uuid.uuid4().hex
+    with _psd_jobs_lock:
+        _psd_jobs[job_id] = {
+            "id": job_id,
+            "user_id": user["id"],
+            "status": "running",
+            "logs": ["已创建智能分层任务"],
+            "result": None,
+            "error": None,
+            "created_at": time.time(),
+        }
+    asyncio.create_task(_run_layered_psd_job(
+        job_id=job_id,
+        image_bytes=image_bytes,
+        filename=image.filename or "reference.png",
+        layer_text=layer_text,
+        user_id=user["id"],
+        model=model,
+        size=size,
+        resolution=resolution,
+    ))
+    return {"job_id": job_id, "status": "running", "logs": ["已创建智能分层任务"]}
+
+
+async def _run_layered_psd_job(
+    *,
+    job_id: str,
+    image_bytes: bytes,
+    filename: str,
+    layer_text: str,
+    user_id: str,
+    model: str,
+    size: str,
+    resolution: str,
+):
+    def add_log(message: str) -> None:
+        with _psd_jobs_lock:
+            job = _psd_jobs.get(job_id)
+            if job is not None:
+                job.setdefault("logs", []).append(message)
+
+    try:
+        result = await create_layered_psd_from_image(
+            image_bytes=image_bytes,
+            filename=filename,
+            layer_text=layer_text,
+            user_id=user_id,
+            model=model,
+            size=size,
+            resolution=resolution,
+            log=add_log,
+        )
+        with _psd_jobs_lock:
+            if job_id in _psd_jobs:
+                _psd_jobs[job_id]["status"] = "done"
+                _psd_jobs[job_id]["result"] = result
+                _psd_jobs[job_id]["logs"].append("任务完成")
+    except Exception as exc:
+        logger.exception("layered psd job failed: %s", job_id)
+        with _psd_jobs_lock:
+            if job_id in _psd_jobs:
+                _psd_jobs[job_id]["status"] = "failed"
+                _psd_jobs[job_id]["error"] = f"{type(exc).__name__}: {exc}"
+                _psd_jobs[job_id]["logs"].append(f"任务失败：{type(exc).__name__}: {exc}")
+
+
+@app.get("/psd/layered/{job_id}")
+def layered_psd_status(request: Request, job_id: str):
+    user = _current_user(request)
+    with _psd_jobs_lock:
+        job = dict(_psd_jobs.get(job_id) or {})
+    if not job:
+        raise HTTPException(404, "PSD 任务不存在")
+    _assert_job_owner(job.get("user_id"), user)
+    return {
+        "job_id": job_id,
+        "status": job.get("status"),
+        "logs": job.get("logs") or [],
+        "result": job.get("result"),
+        "error": job.get("error"),
+    }
 
 
 @app.post("/chat")

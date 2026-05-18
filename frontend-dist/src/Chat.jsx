@@ -1,4 +1,4 @@
-// AI chat column. Three states: empty / generating / returned.
+﻿// AI chat column. Three states: empty / generating / returned.
 // Rich message types: text, option chips, file cards, action buttons, thinking trace, image results.
 
 // ---------- Sub-components ----------
@@ -1200,6 +1200,71 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
     };
   }, [historyOpen]);
 
+  const parseProductRefs = React.useCallback(function(message) {
+    var refs = [];
+    var text = String(message || '');
+    var pattern = /\[([^\[\]]+)\]/g;
+    var match;
+    while ((match = pattern.exec(text)) !== null) {
+      var rawInner = (match[1] || '').trim();
+      if (!rawInner) continue;
+      var normalized = rawInner.replace(/\s+/g, '');
+      var isAngle = /一双鞋角度$/i.test(normalized);
+      var sku = isAngle ? normalized.replace(/一双鞋角度$/i, '') : normalized;
+      if (!sku) continue;
+      refs.push({
+        raw: match[0],
+        sku: sku,
+        asset_type: isAngle ? 'white2x' : 'white',
+      });
+    }
+    return refs;
+  }, []);
+
+  const loadResolvedRefFiles = React.useCallback(async function(resolvedRefs) {
+    var files = [];
+    for (var i = 0; i < resolvedRefs.length; i++) {
+      var ref = resolvedRefs[i];
+      if (!ref || !ref.matched) continue;
+      var blob = null;
+      if (ref.content_base64) {
+        var binary = atob(ref.content_base64);
+        var bytes = new Uint8Array(binary.length);
+        for (var j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+        blob = new Blob([bytes], { type: ref.mime_type || 'image/png' });
+      } else if (ref.url) {
+        var apiBase = window.API_BASE || window.location.origin;
+        var resp = await fetch(apiBase + ref.url, { credentials: 'include' });
+        if (!resp.ok) throw new Error('素材图下载失败: ' + (ref.sku || 'unknown'));
+        blob = await resp.blob();
+      }
+      if (!blob) throw new Error('素材图下载失败: ' + (ref.sku || 'unknown'));
+      files.push({
+        file: new File([blob], ref.filename || ((ref.sku || 'product') + '.png'), { type: blob.type || ref.mime_type || 'image/png' }),
+        previewUrl: URL.createObjectURL(blob),
+        _resolvedRef: ref,
+      });
+    }
+    return files;
+  }, []);
+
+  const enhancePromptWithProductRefs = React.useCallback(function(prompt, resolvedRefs, hasSceneReference) {
+    var cleanPrompt = String(prompt || '');
+    resolvedRefs.forEach(function(ref, index) {
+      var replacement = resolvedRefs.length > 1 ? ('这个白底产品图' + (index + 1)) : '这个白底产品图';
+      cleanPrompt = cleanPrompt.split(ref.raw).join(replacement);
+    });
+    var instructions = [
+      cleanPrompt,
+      '',
+      hasSceneReference
+        ? '同时参考用户上传的场景图，除非用户另有要求，否则尽量保持原有构图、机位、透视关系、光影和版式。'
+        : '除非用户另有要求，否则尽量保持原有构图、机位、透视关系、光影和版式。',
+      '把白底产品图作为商品外观参考，严格参考它的款式、配色、材质、轮廓和细节，不要自行改动商品外观。'
+    ];
+    return instructions.join('\n').trim();
+  }, []);
+
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
     if (!text.trim() || isLoading) return;
     setLastSubmittedMessage(text);
@@ -1223,6 +1288,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
       setMessages(msgs => [...msgs, { who: 'user', text }]);
       setIsLoading(true);
       const startedAt = Date.now();
+      var finalPrompt = prompt;
+      var finalRefImages = Array.isArray(refImages) ? refImages.slice() : [];
       setMessages(msgs => [...msgs, {
         who: 'ai', type: 'ai-image-generating',
         model: aiCmd.model, prompt,
@@ -1232,15 +1299,28 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
         refCount: refImages.length,
       }]);
       try {
-        const apiBase = window.API_BASE || (window.location.protocol + '//' + window.location.hostname + ':8000');
+        var productRefs = parseProductRefs(prompt);
+        if (productRefs.length > 0) {
+          var resolvedRefs = await window.API.resolveProductRefs(productRefs);
+          var missingRefs = resolvedRefs.filter(function(ref) { return !ref.matched; });
+          if (missingRefs.length > 0) {
+            throw new Error('未找到素材图：' + missingRefs.map(function(ref) {
+              return (ref.sku || '') + (ref.asset_type === 'white2x' ? ' 一双鞋角度' : '');
+            }).join('，'));
+          }
+          var productRefFiles = await loadResolvedRefFiles(resolvedRefs);
+          finalRefImages = finalRefImages.concat(productRefFiles);
+          finalPrompt = enhancePromptWithProductRefs(prompt, resolvedRefs, refImages.length > 0);
+        }
+        const apiBase = window.API_BASE || window.location.origin;
         const fd = new FormData();
         fd.append('model', aiCmd.model);
-        fd.append('prompt', prompt);
+        fd.append('prompt', finalPrompt);
         fd.append('size', aiOptions.size || '1024x1024');
         fd.append('resolution', aiOptions.resolution || '1K');
         if (currentAiChatId) fd.append('chat_session_id', currentAiChatId);
-        refImages.forEach(r => fd.append('image', r.file));
-        const res = await fetch(apiBase + '/ai-image', { method: 'POST', body: fd });
+        finalRefImages.forEach(r => fd.append('image', r.file));
+        const res = await fetch(apiBase + '/ai-image', { method: 'POST', body: fd, credentials: 'include' });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           if (err.detail && typeof err.detail === 'object' && err.detail.chat_session_id) {
@@ -1393,7 +1473,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
       setMessages(msgs => [...msgs, { who: 'ai', text: '错误: ' + (e.message || '未知错误'), meta: '错误' }]);
     }
     setIsLoading(false);
-  }, [currentAiChatId, isLoading, loadAiChatHistory, template]);
+  }, [currentAiChatId, enhancePromptWithProductRefs, isLoading, loadAiChatHistory, loadResolvedRefFiles, parseProductRefs, template]);
 
   const handleParseTable = React.useCallback(async (file, filename, imageType) => {
     // Add user message showing file was uploaded

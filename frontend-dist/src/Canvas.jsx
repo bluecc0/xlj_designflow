@@ -1,4 +1,4 @@
-// Main canvas — now simplified to just show the selected template preview.
+﻿// Main canvas — now simplified to just show the selected template preview.
 
 const Canvas = ({ template, resultTemplate }) => {
   const t = template;
@@ -160,7 +160,7 @@ const ratioToSize = (ratio, maxW, maxH) => {
 // 从 API base url 推导 Penpot view URL
 const getPenpotViewUrl = (fileId, pageId, frameId) => {
   // Penpot view-only 路由：/#/view/file-id/page-id?frame-id=xxx
-  const base = (window.API && window.API.BASE) || 'http://localhost:8000';
+  const base = (window.API && window.API.BASE) || window.location.origin;
   // Penpot 默认跑在 9001，API 跑在 8000，尝试从 hostname 拼出 penpot 地址
   let penpotOrigin;
   try {
@@ -301,7 +301,7 @@ const TemplatePreview = ({ t }) => {
         <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
         <span className="mono" style={{ color: 'var(--ink-2)' }}>{Math.round(t.width)} × {Math.round(t.height)} px</span>
         <span style={{ width: 3, height: 3, borderRadius: 99, background: 'var(--line)' }}/>
-        <span style={{ color: 'var(--ink-2)' }}>Ready for chat input →</span>
+        <span style={{ color: 'var(--ink-2)' }}>Ready for chat input</span>
       </div>
     </div>
     </div>

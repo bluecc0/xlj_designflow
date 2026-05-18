@@ -1,18 +1,19 @@
 // Slash commands, parse table, AI message list — additions to the chat surface.
 
 const SLASH_COMMANDS = [
-  { cmd: '/generate',   cn: '开始生图',   desc: 'Generate variations from current parameters', icon: 'zap',     shortcut: '⌘⏎',  group: 'Generation', available: true },
+  { cmd: '/generate',   cn: '开始生图',   desc: 'Generate variations from current parameters', icon: 'zap',     shortcut: '⌘⏎',  group: 'Generation', available: false },
   { cmd: '/Nano Banano pro', cn: 'AI 生图',  desc: '图生图超强一致性，改图更强',          icon: 'image',   group: 'Generation', available: true },
   { cmd: '/Gpt image 2',    cn: 'AI 生图',  desc: '文生图，超强中文渲染和语义理解',      icon: 'image',   group: 'Generation', available: true },
+  { cmd: '/转PSD',           cn: '图片分层',  desc: '上传图片后按描述重绘透明图层并合成 PSD', icon: 'layers',  group: 'Tools', available: false },
   { cmd: '/特殊品',        cn: '特殊品合成',      desc: '无素材特殊品模板',                   icon: 'grid',   group: 'Generation', available: true },
   { cmd: '/特殊品（完整）', cn: '特殊品（完整）合成', desc: '支持场景图，发售时间和立即抢购等多版本', icon: 'layers', group: 'Generation', available: true },
 
-  { cmd: '/analyze',    cn: '分析素材',   desc: 'Parse an uploaded image, brief, or CSV',       icon: 'eye',     group: 'Tools', available: true },
+  { cmd: '/analyze',    cn: '分析素材',   desc: 'Parse an uploaded image, brief, or CSV',       icon: 'eye',     group: 'Tools', available: false },
   { cmd: '/palette',    cn: '提取配色',   desc: 'Extract a palette from a reference',            icon: 'palette', group: 'Tools', available: false },
   { cmd: '/resize',     cn: '换尺寸',     desc: 'Reflow the design into a new ratio',            icon: 'dims',    group: 'Tools', available: false },
   { cmd: '/copy',       cn: '换文案',     desc: 'Rewrite on-image copy',                         icon: 'type',    group: 'Tools', available: false },
 
-  { cmd: '/export-png', cn: '导出PNG',    desc: 'Export selected option as PNG',                 icon: 'download', group: 'Export', available: true },
+  { cmd: '/export-png', cn: '导出PNG',    desc: 'Export selected option as PNG',                 icon: 'download', group: 'Export', available: false },
   { cmd: '/export-psd', cn: '导出PSD',    desc: 'Export with editable layers',                   icon: 'download', group: 'Export', available: false },
   { cmd: '/share',      cn: '分享链接',   desc: 'Generate a review link',                        icon: 'share',    group: 'Export', available: false },
 ];
@@ -36,7 +37,7 @@ const SlashMenu = ({ query, onPick, onClose }) => {
       if (e.key === 'ArrowDown') { e.preventDefault(); setHover(h => Math.min(filtered.length - 1, h + 1)); }
       if (e.key === 'ArrowUp')   { e.preventDefault(); setHover(h => Math.max(0, h - 1)); }
       if (e.key === 'Enter' || e.key === 'Tab') {
-        if (filtered[hover]) { e.preventDefault(); onPick(filtered[hover]); }
+        if (filtered[hover]?.available) { e.preventDefault(); onPick(filtered[hover]); }
       }
     };
     window.addEventListener('keydown', onKey, true);
@@ -77,12 +78,15 @@ const SlashMenu = ({ query, onPick, onClose }) => {
                 <button
                   key={c.cmd}
                   onMouseEnter={((i) => () => setHover(i))(idx)}
-                  onClick={() => onPick(c)}
+                  disabled={!c.available}
+                  onClick={() => { if (c.available) onPick(c); }}
                   style={{
                     width: '100%', textAlign: 'left',
                     display: 'flex', alignItems: 'center', gap: 10,
                     padding: '7px 10px', borderRadius: 6,
                     background: active ? 'var(--accent-soft)' : 'transparent',
+                    opacity: c.available ? 1 : 0.52,
+                    cursor: c.available ? 'pointer' : 'not-allowed',
                   }}>
                   <div style={{
                     width: 22, height: 22, borderRadius: 5,
@@ -96,7 +100,9 @@ const SlashMenu = ({ query, onPick, onClose }) => {
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                       <span className="mono" style={{ fontSize: 11.5, fontWeight: 500, color: active ? 'var(--accent-ink)' : 'var(--ink)' }}>{c.cmd}</span>
                       <span style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>{c.cn}</span>
-                      {c.available && <span title="Available" style={{ width: 6, height: 6, borderRadius: 99, background: '#22c55e', flexShrink: 0, marginLeft: 2 }} />}
+                      {c.available
+                        ? <span title="Available" style={{ width: 6, height: 6, borderRadius: 99, background: '#22c55e', flexShrink: 0, marginLeft: 2 }} />
+                        : <span className="mono" style={{ fontSize: 9, color: 'var(--ink-3)', marginLeft: 2 }}>Soon</span>}
                     </div>
                     <div style={{ fontSize: 10.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.desc}</div>
                   </div>
