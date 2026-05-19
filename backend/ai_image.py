@@ -35,6 +35,7 @@ _HTTP_ERRORS: dict[int, str] = {
 
 SLASH_MODEL_MAP: dict[str, str] = {
     "nano banano pro": "gemini-3-pro-image-preview",
+    "nano banana pro": "gemini-3-pro-image-preview",
     "nano-banana-pro": "gemini-3-pro-image-preview",
     "gpt image 2": "gpt-image-2",
     "gpt-image-2": "gpt-image-2",

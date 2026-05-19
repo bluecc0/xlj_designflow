@@ -562,7 +562,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [refImages, setRefImages] = React.useState([]); // [{ file, previewUrl }, ...] 最多 4 张
   const taRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
-  const COMMANDS = React.useMemo(() => ['/特殊品（完整）', '/特殊品', '/Nano Banano pro', '/Gpt image 2'], []);
+  const COMMANDS = React.useMemo(() => ['/特殊品（完整）', '/特殊品', '/Nano Banana pro', '/Gpt image 2'], []);
   const displayValue = lockedCommand ? (text ? (lockedCommand + ' ' + text) : (lockedCommand + ' ')) : text;
   const lockedPrefixLength = lockedCommand ? (lockedCommand.length + 1) : 0;
 
@@ -614,6 +614,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     '9:16': { label: '9:16', qualities: ['1K', '2K', '4K'], preview: '9:16', px: { '1K': '1080×1920', '2K': '1152×2048', '4K': '2160×3840' } },
   };
   const DEFAULT_AI_OPTIONS = {
+    auto:   { label: 'auto', qualities: ['1K', '2K', '4K'], preview: 'auto', px: { '1K': 'auto', '2K': 'auto', '4K': 'auto' } },
     '1:1':  { label: '1:1', qualities: ['1K', '2K', '4K'], preview: '1024×1024', px: { '1K': '1024×1024', '2K': '2048×2048', '4K': '4096×4096' } },
     '3:4':  { label: '3:4', qualities: ['1K', '2K', '4K'], preview: '768×1024', px: { '1K': '768×1024', '2K': '1536×2048', '4K': '2448×3264' } },
     '9:16': { label: '9:16', qualities: ['1K', '2K', '4K'], preview: '1080×1920', px: { '1K': '1080×1920', '2K': '1152×2048', '4K': '2160×3840' } },
@@ -623,10 +624,10 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const _t = (lockedCommand || text).trimStart();
   const activeAiModel =
     /^\/Gpt image 2/i.test(_t) ? 'gpt-image-2' :
-    /^\/Nano Banano pro/i.test(_t) ? 'nano-banana-pro' :
+    /^\/Nano Banana pro/i.test(_t) ? 'nano-banana-pro' :
     '';
   const activeMode =
-    /^\/(Nano Banano pro|Gpt image 2)/i.test(_t) ? 'ai-image' :
+    /^\/(Nano Banana pro|Gpt image 2)/i.test(_t) ? 'ai-image' :
     _t.startsWith('/特殊品（完整）') ? 'special_full' :
     _t.startsWith('/特殊品') ? 'special' :
     'compose';
@@ -651,7 +652,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       return;
     }
     if (activeAiModel === 'nano-banana-pro' && !DEFAULT_AI_OPTIONS[aiRatio]) {
-      setAiRatio('1:1');
+      setAiRatio('auto');
     }
   }, [activeAiModel, aiQuality, aiRatio]);
 
@@ -1271,7 +1272,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
 
     // ── AI 生图流程（前端友好名，后端映射到服务商模型名）────────────────────────
     const AI_IMAGE_CMDS = [
-      { prefix: '/Nano Banano pro', model: 'nano-banana-pro' },
+      { prefix: '/Nano Banana pro', model: 'nano-banana-pro' },
       { prefix: '/Gpt image 2',     model: 'gpt-image-2' },
     ];
     const trimmed = text.trimStart();
