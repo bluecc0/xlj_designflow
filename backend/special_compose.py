@@ -38,6 +38,7 @@ from typing import Optional
 from .config import settings
 from .models import ComposeStatus, SpecialComposeJob, SpecialComposeRequest
 from .penpot_client import PenpotClient, PenpotError
+from .penpot_browser_refresh import refresh_penpot_workspace
 from .product_library import ProductLibrary
 from .job_store import save_special_job
 
@@ -157,9 +158,6 @@ def expand_time_fields(raw_time: str) -> dict[str, str]:
     # ── 解析时间部分：remainder 如 "10点发售" / "10:00发售" / "10点" ─────────
     hour_part = remainder.strip()
 
-    # 统一为可读的 time_hour（保留原始文案）
-    result["time_hour"] = hour_part
-
     # ── 构建 time 全字段 ──────────────────────────────────────────────────────
     # 尝试把 "N点" 转为 "N:00"，让 time 字段更标准
     hour_formatted = hour_part
@@ -168,6 +166,9 @@ def expand_time_fields(raw_time: str) -> dict[str, str]:
         hh = int(hour_num_m.group(1))
         suffix = hour_num_m.group(2)  # e.g. "发售"
         hour_formatted = f"{hh:02d}:00{suffix}"
+
+    # time_hour 也统一用格式化后的小时文案，例如 "10:00发售"
+    result["time_hour"] = hour_formatted
 
     if date_part and hour_formatted:
         result["time"] = f"{date_part} {hour_formatted}"
@@ -428,6 +429,8 @@ def _run_inner(job: SpecialComposeJob) -> None:
         if all_changes:
             _log(job, f"提交 {len(all_changes)} 个变更…")
             client.update_file(work_file_id, all_changes)
+            _log(job, "打开 Penpot 工作区刷新布局…")
+            refresh_penpot_workspace(edit_url=edit_url, client=client, log=lambda msg: _log(job, msg))
         else:
             _log(job, "无变更，直接导出")
 

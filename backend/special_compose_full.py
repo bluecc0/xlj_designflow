@@ -23,6 +23,7 @@ from typing import Optional
 from .config import settings
 from .models import ComposeStatus, SpecialFullComposeJob, SpecialFullComposeRequest
 from .penpot_client import PenpotClient, PenpotError
+from .penpot_browser_refresh import refresh_penpot_workspace
 from .product_library import ProductLibrary
 from .job_store import save_special_job
 
@@ -318,6 +319,8 @@ def _run_inner(job: SpecialFullComposeJob) -> None:
         if all_changes:
             _log(job, f"提交 {len(all_changes)} 个变更…")
             client.update_file(work_file_id, all_changes)
+            _log(job, "打开 Penpot 工作区刷新布局…")
+            refresh_penpot_workspace(edit_url=edit_url, client=client, log=lambda msg: _log(job, msg))
         else:
             _log(job, "无变更，直接导出")
 
