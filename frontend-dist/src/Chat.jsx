@@ -201,6 +201,32 @@ const ActionRow = ({ primary, secondary }) => (
   </div>
 );
 
+const actionBtnPrimaryStyle = {
+  fontSize: 11.5,
+  padding: '6px 12px',
+  borderRadius: 6,
+  background: 'var(--ink)',
+  color: 'white',
+  textDecoration: 'none',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  border: '1px solid var(--ink)',
+};
+
+const actionBtnSecondaryStyle = {
+  fontSize: 11.5,
+  padding: '6px 12px',
+  borderRadius: 6,
+  background: 'var(--panel)',
+  color: 'var(--ink)',
+  textDecoration: 'none',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  border: '1px solid var(--line)',
+};
+
 const AnalyzedSubject = () => (
   <div style={{
     borderRadius: 10, padding: 12, width: '100%',
@@ -514,24 +540,16 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating }) => {
                 )}
                 {m.status === 'done' && m.specialUrls && m.specialUrls.length > 0 && (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
+                    {m.zipUrl && (
+                      <a href={m.zipUrl} target="_blank" rel="noreferrer" style={actionBtnPrimaryStyle}>
+                        <I.download size={11}/>打包下载
+                      </a>
+                    )}
                     {m.penpotUrl && (
-                      <a href={m.penpotUrl} target="_blank" rel="noreferrer" style={{
-                        fontSize: 11.5, padding: '5px 12px', borderRadius: 6,
-                        background: 'var(--accent)', color: 'white',
-                        textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5,
-                      }}>
+                      <a href={m.penpotUrl} target="_blank" rel="noreferrer" style={actionBtnSecondaryStyle}>
                         <I.edit size={11}/>在Penpot中编辑
                       </a>
                     )}
-                    {m.specialUrls.map((url, si) => (
-                      <a key={si} href={url} target="_blank" rel="noreferrer" style={{
-                        fontSize: 11.5, padding: '5px 12px', borderRadius: 6,
-                        background: 'var(--ink)', color: 'white',
-                        textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5,
-                      }}>
-                        <I.download size={11}/>图{si + 1}
-                      </a>
-                    ))}
                   </div>
                 )}
                 {m.status === 'failed' && m.error && (
@@ -1427,16 +1445,16 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
               return frameIds.map((_, i) => `/results/${job['id']}/frame_${i}.png`);
             };
             const urls = buildUrls();
+            const frameNames = (template.frames && template.frames.length > 0 ? template.frames : [template]).map(f => f.name || f.variant || '画板');
+            const zipUrl = `${_pollBase}/${job['id']}/download-zip?names=${encodeURIComponent(frameNames.join(','))}`;
             setMessages(msgs => msgs.map((m, idx) => {
               if (idx !== specialMsgIdx) return m;
-              return { ...m, status: 'done', specialUrls: urls, penpotUrl: s.penpot_edit_url };
+              return { ...m, status: 'done', specialUrls: urls, penpotUrl: s.penpot_edit_url, zipUrl };
             }));
             // 构建 resultTpl 供画布预览
             if (onComposeComplete && urls.length > 0 && workFileId && template) {
               const base = structuredClone(template);
               const baseFrames = base.frames && base.frames.length > 0 ? base.frames : [base];
-              const tplFrames = template.frames && template.frames.length > 0 ? template.frames : [template];
-              const frameNames = tplFrames.map(f => f.name || f.variant || '画板');
               base.frames = urls.map((url, i) => ({ ...(baseFrames[i % baseFrames.length] || baseFrames[0]), resultUrl: url }));
               base._frameNames = frameNames;
               window.lastComposeJobId = job['id'];

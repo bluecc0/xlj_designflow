@@ -56,6 +56,26 @@ const Canvas = ({ template, resultTemplate }) => {
   );
 };
 
+const canvasActionPrimaryStyle = {
+  fontSize: 12,
+  padding: '6px 14px',
+  borderRadius: 6,
+  background: 'var(--ink)',
+  color: 'white',
+  border: '1px solid var(--ink)',
+  cursor: 'pointer',
+};
+
+const canvasActionSecondaryStyle = {
+  fontSize: 12,
+  padding: '6px 14px',
+  borderRadius: 6,
+  background: 'var(--panel)',
+  color: 'var(--ink)',
+  border: '1px solid var(--line)',
+  cursor: 'pointer',
+};
+
 // 结果展示：用 TemplatePreview 相同的 FrameThumb 布局渲染（结果看起来和模板预览完全一致）
 const ResultPreview = ({ t }) => {
   const stageRef = React.useRef(null);
@@ -104,42 +124,31 @@ const ResultPreview = ({ t }) => {
       </div>
 
       {/* 操作栏 */}
-      <div style={{
-        display: 'flex', gap: 8, padding: '8px 12px',
-        background: 'rgba(255,255,255,0.95)',
-        borderRadius: 8,
-        boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-        flexWrap: 'wrap', justifyContent: 'center',
-      }}>
-        {window.resultPenpotUrl && (
-          <button
-            onClick={() => window.open(window.resultPenpotUrl, '_blank')}
-            style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: 'var(--accent)', color: 'white', border: 'none', cursor: 'pointer' }}
-          >
-            在Penpot中编辑
-          </button>
-        )}
-        {frames.map((frame, i) => (
-          frame.resultUrl && (
-            <button
-              key={i}
-              onClick={() => window.open(frame.resultUrl, '_blank')}
-              style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: 'var(--ink)', color: 'white', border: 'none', cursor: 'pointer' }}
-            >
-              {frames.length === 1 ? '下载图片' : `下载图${i + 1}`}
-            </button>
-          )
-        ))}
-        {frames.length > 1 && window.lastComposeJobId && (
+        <div style={{
+          display: 'flex', gap: 8, padding: '8px 12px',
+          background: 'rgba(255,255,255,0.95)',
+          borderRadius: 8,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+          flexWrap: 'wrap', justifyContent: 'center',
+        }}>
+        {window.lastComposeJobId && (
           <button
             onClick={() => {
               const names = (t._frameNames || frames.map(f => f.name || f.variant || '')).join(',');
               const ep = window.lastComposeEndpoint || '/special-compose';
               window.open(`${ep}/${window.lastComposeJobId}/download-zip?names=${encodeURIComponent(names)}`, '_blank');
             }}
-            style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: 'var(--accent)', color: 'white', border: 'none', cursor: 'pointer' }}
+            style={canvasActionPrimaryStyle}
           >
-            打包下载 ZIP
+            打包下载
+          </button>
+        )}
+        {window.resultPenpotUrl && (
+          <button
+            onClick={() => window.open(window.resultPenpotUrl, '_blank')}
+            style={canvasActionSecondaryStyle}
+          >
+            在Penpot中编辑
           </button>
         )}
       </div>

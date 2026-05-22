@@ -895,6 +895,7 @@ def download_special_zip(job_id: str, names: str = ""):
            若不提供则使用序号。
     """
     import zipfile, io
+    from PIL import Image
 
     with _jobs_lock:
         job = _jobs.get(job_id)
@@ -932,6 +933,17 @@ def download_special_zip(job_id: str, names: str = ""):
     FRAME_NAME_OVERRIDES: dict[str, str | None] = {
         "尖货轮播-PC-1": None,       # → {sku}{变体}.png
         "尖货轮播-PC-2": "{sku}-1",  # → {sku}-1{变体}.png
+        "sku": None,                # → {sku}{变体}.png
+        "sku-1": "{sku}-1",         # → {sku}-1{变体}.png
+    }
+    FRAME_EXPORT_FORMATS: dict[str, str] = {
+        "分类页": "png",
+        "尖货轮播-PC-1": "png",
+        "尖货轮播-PC-2": "png",
+        "尖货轮播-横版-1": "png",
+        "尖货轮播-横版-2": "png",
+        "sku": "png",
+        "sku-1": "png",
     }
 
     buffer = io.BytesIO()
@@ -944,13 +956,22 @@ def download_special_zip(job_id: str, names: str = ""):
             variant_suffix = m.group(2) or ""
             frame_label = name_list[idx] if idx < len(name_list) else f"画板{idx + 1}"
             label_suffix = variant_labels.get(variant_suffix, "")
+            export_format = FRAME_EXPORT_FORMATS.get(frame_label, "jpg")
             if frame_label in FRAME_NAME_OVERRIDES:
                 override = FRAME_NAME_OVERRIDES[frame_label]
                 prefix = override.replace("{sku}", sku) if override else sku
-                zip_name = f"{prefix}{label_suffix}.png"
+                zip_name = f"{prefix}{label_suffix}.{export_format}"
             else:
-                zip_name = f"{sku}_{frame_label}{label_suffix}.png"
-            zf.write(str(p), zip_name)
+                zip_name = f"{sku}_{frame_label}{label_suffix}.{export_format}"
+            if export_format == "png":
+                zf.write(str(p), zip_name)
+            else:
+                img = Image.open(p).convert("RGBA")
+                rgb = Image.new("RGB", img.size, (255, 255, 255))
+                rgb.paste(img, mask=img.getchannel("A"))
+                out = io.BytesIO()
+                rgb.save(out, format="JPEG", quality=92, optimize=True)
+                zf.writestr(zip_name, out.getvalue())
 
     buffer.seek(0)
     filename = f"{sku}.zip"
@@ -1011,6 +1032,7 @@ def get_special_full_compose(job_id: str, request: Request):
 def download_special_full_zip(job_id: str, names: str = "", request: Request = None):
     """将特殊品（完整）合成所有图片打包成 zip 下载，命名规则与 /special-compose 一致。"""
     import zipfile, io, re as _re
+    from PIL import Image
 
     user = _current_user(request)
     with _jobs_lock:
@@ -1033,6 +1055,21 @@ def download_special_full_zip(job_id: str, names: str = "", request: Request = N
         for p in all_frames if _re.search(r'(_v\d+)$', p.stem)
     })
     variant_labels = {k: f"_版本{k[2:]}" for k in variant_keys}
+    FRAME_NAME_OVERRIDES: dict[str, str | None] = {
+        "尖货轮播-PC-1": None,
+        "尖货轮播-PC-2": "{sku}-1",
+        "sku": None,
+        "sku-1": "{sku}-1",
+    }
+    FRAME_EXPORT_FORMATS: dict[str, str] = {
+        "分类页": "png",
+        "尖货轮播-PC-1": "png",
+        "尖货轮播-PC-2": "png",
+        "尖货轮播-横版-1": "png",
+        "尖货轮播-横版-2": "png",
+        "sku": "png",
+        "sku-1": "png",
+    }
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1044,8 +1081,22 @@ def download_special_full_zip(job_id: str, names: str = "", request: Request = N
             variant_suffix = m.group(2) or ""
             frame_label = name_list[idx] if idx < len(name_list) else f"画板{idx + 1}"
             label_suffix = variant_labels.get(variant_suffix, "")
-            zip_name = f"{sku}_{frame_label}{label_suffix}.png"
-            zf.write(str(p), zip_name)
+            export_format = FRAME_EXPORT_FORMATS.get(frame_label, "jpg")
+            if frame_label in FRAME_NAME_OVERRIDES:
+                override = FRAME_NAME_OVERRIDES[frame_label]
+                prefix = override.replace("{sku}", sku) if override else sku
+                zip_name = f"{prefix}{label_suffix}.{export_format}"
+            else:
+                zip_name = f"{sku}_{frame_label}{label_suffix}.{export_format}"
+            if export_format == "png":
+                zf.write(str(p), zip_name)
+            else:
+                img = Image.open(p).convert("RGBA")
+                rgb = Image.new("RGB", img.size, (255, 255, 255))
+                rgb.paste(img, mask=img.getchannel("A"))
+                out = io.BytesIO()
+                rgb.save(out, format="JPEG", quality=92, optimize=True)
+                zf.writestr(zip_name, out.getvalue())
 
     buffer.seek(0)
     filename = f"{sku}_完整.zip"
