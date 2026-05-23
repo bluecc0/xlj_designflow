@@ -63,7 +63,6 @@ class Settings:
 
     # 产品知识库（注入到 AI 对话 system prompt）
     knowledge_path: Path = Path(os.getenv("KNOWLEDGE_PATH", "./KNOWLEDGE.md"))
-    knowledge_text: str = ""
 
     login_users_path: Path = Path(os.getenv("LOGIN_USERS_PATH", "./login_users.json"))
     allowed_login_users: list[dict[str, str]] = []
@@ -81,7 +80,6 @@ class Settings:
 
         self.output_path.mkdir(parents=True, exist_ok=True)
         self.allowed_login_users = self._load_login_users()
-        self.knowledge_text = self._load_knowledge()
 
     def _load_knowledge(self) -> str:
         if self.knowledge_path.exists():

@@ -1854,7 +1854,7 @@ async def chat_endpoint(req: ChatRequest):
 以下是平台的完整功能文档，请严格基于此文档回答用户关于功能使用、操作方法的问题：
 
 ---
-{settings.knowledge_text or "（暂无知识库文档）"}
+{settings._load_knowledge() or "（暂无知识库文档）"}
 ---
 
 你的角色：

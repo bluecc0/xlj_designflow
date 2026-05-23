@@ -315,6 +315,16 @@ const LogBox = ({ logs, running }) => {
 
 // ---------- States ----------
 
+const GREETINGS = [
+  { title: '今天想设计点什么？', sub: '上传产品图、参考图、品牌素材，或者直接输入描述。' },
+  { title: '想要生成一张海报吗？', sub: '试试输入 /Gpt image 2，描述你想要的画面。' },
+  { title: '需要编辑产品图？', sub: '试试输入 /Nano Banana pro，替换局部或修改细节。' },
+  { title: '来合成特殊品吧', sub: '选中左侧特殊品模板，输入货号和文案即可一键合成。' },
+  { title: '忘了怎么用？', sub: '试试直接在对话框提问，我会帮你找到答案。' },
+];
+
+const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
+
 const ChatEmpty = () => {
   const prompts = [
     { icon: <I.image size={13}/>,    text: '上传产品图，描述想要的风格' },
@@ -322,6 +332,7 @@ const ChatEmpty = () => {
     { icon: <I.copy size={13}/>,     text: '复制当前模板的文案' },
     { icon: <I.dims size={13}/>,     text: '调整尺寸为9:16适配Instagram' },
   ];
+  const greeting = React.useMemo(() => pickGreeting(), []);
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px' }}>
       <div style={{
@@ -334,9 +345,9 @@ const ChatEmpty = () => {
         }}>
           <I.sparkles size={18} stroke={1.8}/>
         </div>
-        <div className="serif" style={{ fontSize: 19, letterSpacing: '-0.01em' }}>今天想设计点什么？</div>
+        <div className="serif" style={{ fontSize: 19, letterSpacing: '-0.01em' }}>{greeting.title}</div>
         <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
-          上传产品图、参考图、品牌素材，或者直接输入描述。
+          {greeting.sub}
         </div>
       </div>
 
@@ -417,10 +428,14 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => 
           }}>
             <I.sparkles size={18} stroke={1.8}/>
           </div>
-          <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)' }}>今天想设计点什么？</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
-            上传产品图、参考图、品牌素材，或者直接输入描述。
-          </div>
+          {(() => { const g = pickGreeting(); return (
+            <>
+              <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)' }}>{g.title}</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
+                {g.sub}
+              </div>
+            </>
+          ); })()}
         </div>
       ) : (
         messages.map((m, i) => (
