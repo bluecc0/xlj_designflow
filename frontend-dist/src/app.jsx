@@ -215,6 +215,7 @@ const App = () => {
             template={activeTemplate}
             onComposeComplete={handleComposeComplete}
             slashTrigger={slashTrigger}
+            user={currentUser}
           />
         </div>
       )}

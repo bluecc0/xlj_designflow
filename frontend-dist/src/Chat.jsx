@@ -17,31 +17,51 @@ const ChatTimer = ({ startedAt }) => {
   }, m > 0 ? m + 'm ' + String(s).padStart(2, '0') + 's' : s + 's');
 };
 
-const Avatar = ({ who }) => (
-  who === 'ai' ? (
-    <div style={{
-      width: 24, height: 24, borderRadius: 7, flexShrink: 0,
-      background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
-      color: 'white', display: 'grid', placeItems: 'center',
-    }}>
-      <I.sparkles size={12} stroke={2}/>
-    </div>
-  ) : (
+const Avatar = ({ who, user }) => {
+  const [imgFailed, setImgFailed] = React.useState(false);
+  const username = user && user.username ? user.username : '';
+  const avatarUrl = username ? (window.API_BASE || window.location.origin) + '/avatars/' + encodeURIComponent(username) + '.png' : '';
+
+  if (who === 'ai') {
+    return (
+      <div style={{
+        width: 24, height: 24, borderRadius: 7, flexShrink: 0,
+        background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
+        color: 'white', display: 'grid', placeItems: 'center',
+      }}>
+        <I.sparkles size={12} stroke={2}/>
+      </div>
+    );
+  }
+
+  return (
     <div style={{
       width: 24, height: 24, borderRadius: 7, flexShrink: 0,
       background: 'oklch(0.82 0.07 200)', color: 'oklch(0.3 0.05 200)',
       fontSize: 10, fontWeight: 600,
       display: 'grid', placeItems: 'center',
-    }}>JR</div>
-  )
-);
+      overflow: 'hidden',
+    }}>
+      {avatarUrl && !imgFailed ? (
+        <img
+          src={avatarUrl}
+          alt={username}
+          onError={() => setImgFailed(true)}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+        />
+      ) : (
+        username ? username[0] : '我'
+      )}
+    </div>
+  );
+};
 
-const Bubble = ({ who, children, meta }) => (
+const Bubble = ({ who, children, meta, user }) => (
   <div style={{
     display: 'flex', gap: 10, alignItems: 'flex-start',
     flexDirection: who === 'user' ? 'row-reverse' : 'row',
   }}>
-    <Avatar who={who}/>
+    <Avatar who={who} user={user}/>
     <div style={{ maxWidth: 'calc(100% - 38px)', display: 'flex', flexDirection: 'column', gap: 6, alignItems: who === 'user' ? 'flex-end' : 'flex-start' }}>
       {meta && <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{meta}</div>}
       {children}
@@ -341,12 +361,12 @@ const ChatEmpty = () => {
 
 const ChatGenerating = () => (
   <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
-    <Bubble who="user">
+    <Bubble who="user" user={user}>
       <TextBubble who="user">Make 4 studio shots of this vase for a homepage hero, warm and editorial. Add "New in" copy.</TextBubble>
       <FileCard name="vase-ref-01.jpg" size="2.4 MB" type="JPG"/>
     </Bubble>
 
-    <Bubble who="ai" meta="Loom · generating">
+    <Bubble who="ai" meta="Loom · generating" user={user}>
       <ThinkingTrace done={false} steps={[
         'Parsing reference image — detecting subject and lighting',
         'Matching Japandi aesthetic from brand kit',
@@ -372,7 +392,7 @@ const ChatGenerating = () => (
   </div>
 );
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating }) => {
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => {
   const userMsgs = messages.filter(m => m.who === 'user').length;
   const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
 
@@ -404,7 +424,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating }) => {
         </div>
       ) : (
         messages.map((m, i) => (
-          <Bubble key={i} who={m.who} meta={m.meta}>
+          <Bubble key={i} who={m.who} meta={m.meta} user={user}>
             {m.type === 'ai-image-generating' ? (() => {
             const fmtSecs = s => { const mm = Math.floor(s/60), ss = s%60; return mm > 0 ? mm+'m '+String(ss).padStart(2,'0')+'s' : ss+'s'; };
             return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
@@ -580,9 +600,42 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [refImages, setRefImages] = React.useState([]); // [{ file, previewUrl }, ...] 最多 4 张
   const taRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
+  const [composerHeight, setComposerHeight] = React.useState(null); // null = 默认自动高度
+  const composerRef = React.useRef(null);
+  const dragRef = React.useRef({ dragging: false, startY: 0, startH: 0 });
   const COMMANDS = React.useMemo(() => ['/特殊品（完整）', '/特殊品', '/Nano Banana pro', '/Gpt image 2'], []);
   const displayValue = lockedCommand ? (text ? (lockedCommand + ' ' + text) : (lockedCommand + ' ')) : text;
   const lockedPrefixLength = lockedCommand ? (lockedCommand.length + 1) : 0;
+
+  // —— Composer 拖拽调整高度 ——
+  const handleDragStart = React.useCallback((e) => {
+    e.preventDefault();
+    const el = composerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    dragRef.current = { dragging: true, startY: e.clientY, startH: rect.height };
+    document.body.style.cursor = 'ns-resize';
+  }, []);
+
+  React.useEffect(() => {
+    const onMove = (e) => {
+      if (!dragRef.current.dragging) return;
+      const dy = dragRef.current.startY - e.clientY; // 向上拖 = 正
+      const newH = Math.max(140, Math.min(500, dragRef.current.startH + dy));
+      setComposerHeight(newH);
+    };
+    const onUp = () => {
+      if (!dragRef.current.dragging) return;
+      dragRef.current.dragging = false;
+      document.body.style.cursor = '';
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+  }, []);
 
   // 外部触发 slash 命令（选中特殊品模板时）
   React.useEffect(() => {
@@ -914,13 +967,42 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const canSend = Boolean((lockedCommand ? (lockedCommand + ' ' + text.trim()).trim() : text.trim()) || files.length) && !isLoading;
 
   return (
-    <div style={{
-      flexShrink: 0, padding: 12,
-      borderTop: '1px solid var(--line)',
-      background: 'var(--panel)',
-      position: 'relative',
-    }}>
+    <div
+      ref={composerRef}
+      style={{
+        flexShrink: 0,
+        borderTop: '1px solid var(--line)',
+        background: 'var(--panel)',
+        position: 'relative',
+        height: composerHeight || 'auto',
+        display: 'flex', flexDirection: 'column',
+      }}
+    >
+      {/* 拖拽手柄 */}
+      <div
+        onMouseDown={handleDragStart}
+        title="上下拖拽调整输入框高度"
+        style={{
+          height: 8,
+          flexShrink: 0,
+          cursor: 'ns-resize',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'transparent',
+          userSelect: 'none',
+        }}
+      >
+        <div style={{
+          width: 28, height: 3, borderRadius: 999,
+          background: 'var(--line)',
+          transition: 'background 150ms',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.background = 'var(--ink-3)'; }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'var(--line)'; }}
+        />
+      </div>
       <div style={{
+        flex: 1,
+        margin: '0 12px 12px 12px',
         borderRadius: 12,
         border: menuOpen ? '1px solid var(--accent)' : '1px solid var(--line)',
         background: 'var(--panel-2)',
@@ -1027,8 +1109,9 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           rows={2}
           style={{
             width: '100%',
+            flex: composerHeight ? 1 : undefined,
             minHeight: 44,
-            maxHeight: 180,
+            maxHeight: composerHeight ? undefined : 180,
             boxSizing: 'border-box',
             fontSize: 13,
             lineHeight: 1.45,
@@ -1119,7 +1202,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
 // ---------- Main ----------
 
 console.log('[Main] Chat component definition');
-const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
+const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
   const [messages, setMessages] = React.useState([]);
   const [isLoading, setIsLoading] = React.useState(false);
   const [lastSubmittedMessage, setLastSubmittedMessage] = React.useState('');
@@ -1368,12 +1451,34 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
     if (!text.trim() || isLoading) return;
     setLastSubmittedMessage(text);
 
+    // ── 设为头像 ──────────────────────────────────────────────────────────────
+    const trimmed = text.trimStart();
+    if ((trimmed === '设为头像' || trimmed === '設置頭像') && refImages.length > 0) {
+      setMessages(msgs => [...msgs, { who: 'user', text }]);
+      setIsLoading(true);
+      try {
+        const apiBase = window.API_BASE || window.location.origin;
+        const fd = new FormData();
+        fd.append('image', refImages[0].file);
+        const res = await fetch(apiBase + '/auth/avatar', { method: 'POST', body: fd, credentials: 'include' });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || '设置头像失败');
+        }
+        const data = await res.json();
+        setMessages(msgs => [...msgs, { who: 'ai', text: '头像设置成功！刷新页面后生效。' }]);
+      } catch (e) {
+        setMessages(msgs => [...msgs, { who: 'ai', text: '设置头像失败: ' + (e.message || '未知错误') }]);
+      }
+      setIsLoading(false);
+      return;
+    }
+
     // ── AI 生图指令匹配 ────────────────────────────────────────────────────────
     const AI_IMAGE_CMDS = [
       { prefix: '/Nano Banana pro', model: 'nano-banana-pro' },
       { prefix: '/Gpt image 2',     model: 'gpt-image-2' },
     ];
-    const trimmed = text.trimStart();
     let aiCmd = AI_IMAGE_CMDS.find(c => trimmed.toLowerCase().startsWith(c.prefix.toLowerCase()));
 
     // 无 / 指令时，复用当前会话的上一个生图模型（支持中途显式切换）
@@ -1782,9 +1887,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
       </div>
 
       {state === 'empty' && messages.length === 0 && <ChatEmpty/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading}/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading}/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user}/>}
 
       <Composer onSend={handleSend} onParseTable={handleParseTable} isLoading={isLoading} slashTrigger={slashTrigger} template={template} lastSubmittedMessage={lastSubmittedMessage}/>
     </div>

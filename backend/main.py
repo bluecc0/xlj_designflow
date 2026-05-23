@@ -129,6 +129,15 @@ app.mount(
     name="ai-images",
 )
 
+# 用户头像目录
+_avatars_path = Path(__file__).parent.parent / "avatars"
+_avatars_path.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/avatars",
+    StaticFiles(directory=str(_avatars_path)),
+    name="avatars",
+)
+
 # 前端静态文件（frontend-dist）
 _frontend_dist = Path(__file__).parent.parent / "frontend-dist"
 if _frontend_dist.exists():
@@ -151,6 +160,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/product-library",
     "/products/reference-image",
     "/products/resolve-references",
+    "/avatars",
     "/ui",
     "/docs",
     "/redoc",
@@ -296,6 +306,36 @@ def auth_logout(request: Request, response: Response):
     delete_session(request.cookies.get(_SESSION_COOKIE))
     response.delete_cookie(_SESSION_COOKIE, path="/")
     return {"ok": True}
+
+
+@app.post("/auth/avatar")
+async def auth_avatar(request: Request, image: UploadFile = File(...)):
+    """上传当前用户头像，保存到 avatars/{username}.png"""
+    user = _current_user(request)
+    if not user:
+        raise HTTPException(401, "请先登录")
+    username = str(user.get("username") or user.get("id", "unknown"))
+    safe_name = "".join(ch for ch in username if ch.isalnum() or ch in "._-") or "unknown"
+    _avatars_path = settings.root_dir / "avatars"
+    _avatars_path.mkdir(parents=True, exist_ok=True)
+    out_path = _avatars_path / f"{safe_name}.png"
+    content = await image.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(400, "头像图片不能超过 5MB")
+    # 简单 resize 到 200x200 以内
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(content))
+        img = img.convert("RGBA")
+        img.thumbnail((200, 200), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        content = buf.getvalue()
+    except Exception:
+        pass  # 非图片或处理失败，保存原文件
+    out_path.write_bytes(content)
+    return {"ok": True, "url": f"/avatars/{safe_name}.png"}
 
 
 @app.get("/auth/me")
