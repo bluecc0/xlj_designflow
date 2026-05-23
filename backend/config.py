@@ -82,12 +82,18 @@ class Settings:
         self.allowed_login_users = self._load_login_users()
 
     def _load_knowledge(self) -> str:
-        if self.knowledge_path.exists():
-            try:
-                return self.knowledge_path.read_text(encoding="utf-8")
-            except Exception:
-                return ""
-        return ""
+        if not self.knowledge_path.exists():
+            return ""
+        try:
+            mtime = self.knowledge_path.stat().st_mtime
+            cached = getattr(self, "_knowledge_cache", None)
+            if cached and cached[0] == mtime:
+                return cached[1]
+            text = self.knowledge_path.read_text(encoding="utf-8")
+            self._knowledge_cache = (mtime, text)
+            return text
+        except Exception:
+            return ""
 
     def _load_login_users(self) -> list[dict[str, str]]:
         default_users = [

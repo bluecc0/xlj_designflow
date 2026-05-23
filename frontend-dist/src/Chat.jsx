@@ -69,16 +69,50 @@ const Bubble = ({ who, children, meta, user }) => (
   </div>
 );
 
-const TextBubble = ({ who, children }) => (
-  <div style={{
-    fontSize: 12.5, lineHeight: 1.55,
-    padding: '9px 12px', borderRadius: 10,
-    background: who === 'user' ? 'var(--ink)' : 'var(--panel)',
-    color: who === 'user' ? 'white' : 'var(--ink)',
-    border: who === 'user' ? 'none' : '1px solid var(--line-2)',
-    maxWidth: '100%',
-  }}>{children}</div>
-);
+// 简易 Markdown → HTML 渲染（支持粗体、斜体、行内代码、列表、标题、链接）
+const renderMarkdown = (text) => {
+  if (!text) return '';
+  let html = text;
+  // 行内代码（优先，避免被后续规则干扰）
+  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--panel-2);padding:1px 5px;border-radius:4px;font-size:11.5px;font-family:monospace;">$1</code>');
+  // 粗体
+  html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  // 斜体
+  html = html.replace(/\*(.+?)\*/g, '<i>$1</i>');
+  // 链接
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent);">$1</a>');
+  // 标题
+  html = html.replace(/^### (.+)$/gm, '<h3 style="font-size:13px;font-weight:600;margin:4px 0 2px;">$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2 style="font-size:14px;font-weight:600;margin:6px 0 2px;">$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1 style="font-size:15px;font-weight:600;margin:6px 0 2px;">$1</h1>');
+  // 无序列表
+  html = html.replace(/^- (.+)$/gm, '<li style="margin-left:16px;">$1</li>');
+  // 有序列表
+  html = html.replace(/^\d+\. (.+)$/gm, '<li style="margin-left:16px;">$1</li>');
+  // 换行
+  html = html.replace(/\n/g, '<br/>');
+  return html;
+};
+
+const TextBubble = ({ who, children, markdown }) => {
+  const content = markdown && who === 'ai' ? renderMarkdown(children) : children;
+  return (
+    <div style={{
+      fontSize: 12.5, lineHeight: 1.55,
+      padding: '9px 12px', borderRadius: 10,
+      background: who === 'user' ? 'var(--ink)' : 'var(--panel)',
+      color: who === 'user' ? 'white' : 'var(--ink)',
+      border: who === 'user' ? 'none' : '1px solid var(--line-2)',
+      maxWidth: '100%',
+    }}>
+      {who === 'ai' && markdown ? (
+        <div dangerouslySetInnerHTML={{ __html: content }}/>
+      ) : (
+        content
+      )}
+    </div>
+  );
+};
 
 const FileCard = ({ name, size, type }) => (
   <div style={{
@@ -406,6 +440,13 @@ const ChatGenerating = () => (
 const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => {
   const userMsgs = messages.filter(m => m.who === 'user').length;
   const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
+  const bottomRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages]);
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -593,12 +634,23 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => 
                   </div>
                 )}
               </div>
+            ) : m.type === 'thinking' ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{
+                  width: 6, height: 6, borderRadius: 99,
+                  background: 'var(--ink-3)',
+                  animation: 'pulse 1.2s ease-in-out infinite',
+                }}/>
+                <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>让我想想...</span>
+              </div>
             ) : (
-              <TextBubble who={m.who}>{m.text}</TextBubble>
+              <TextBubble who={m.who} markdown>{m.text}</TextBubble>
             )}
           </Bubble>
         ))
       )}
+      <style>{`@keyframes pulse { 0%,100% { opacity:0.3; } 50% { opacity:1; } }`}</style>
+      <div ref={bottomRef}/>
     </div>
   );
 };
@@ -1628,16 +1680,26 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
 
     // ── 普通消息 ─────────────────────────────────────────────────────────────
     setIsLoading(true);
-    // Add user message
-    setMessages(msgs => [...msgs, { who: 'user', text }]);
+    let thinkingIdx = null;
+    setMessages(msgs => {
+      thinkingIdx = msgs.length + 1; // +1 跳过用户消息，定位到 thinking 占位
+      return [...msgs,
+        { who: 'user', text },
+        { who: 'ai', type: 'thinking', text: '...' },
+      ];
+    });
     try {
       const reply = await window.API.chatWithAI(
         [{ role: 'user', content: text }],
         {}
       );
-      setMessages(msgs => [...msgs, { who: 'ai', text: reply || '...', meta: 'Loom' }]);
+      setMessages(msgs => msgs.map((m, i) =>
+        i === thinkingIdx ? { who: 'ai', text: reply || '...', meta: 'Loom' } : m
+      ));
     } catch (e) {
-      setMessages(msgs => [...msgs, { who: 'ai', text: '错误: ' + (e.message || '未知错误'), meta: '错误' }]);
+      setMessages(msgs => msgs.map((m, i) =>
+        i === thinkingIdx ? { who: 'ai', text: '错误: ' + (e.message || '未知错误'), meta: '错误' } : m
+      ));
     }
     setIsLoading(false);
   }, [currentAiChatId, enhancePromptWithProductRefs, getLastAiImageModel, isLoading, loadAiChatHistory, loadResolvedRefFiles, parseProductRefs, runAiImageGeneration, template]);

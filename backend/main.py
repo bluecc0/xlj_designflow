@@ -1839,6 +1839,10 @@ async def chat_endpoint(req: ChatRequest):
 
     state_str = "\n".join(state_lines)
 
+    # 仅在会话首条消息注入完整知识库，后续消息使用精简上下文（LLM 已有记忆）
+    is_first_message = not req.messages or len(req.messages) <= 1
+    knowledge_block = (settings._load_knowledge() or "（暂无知识库文档）") if is_first_message else ""
+
     system_prompt = f"""你是 DesignFlow 的 AI 设计助手。DesignFlow 是一个 AI 驱动的电商设计资产平台，核心功能是帮助运营/设计人员快速批量合成产品海报。
 
 平台工作流程：
@@ -1849,13 +1853,18 @@ async def chat_endpoint(req: ChatRequest):
 5. 导出 PNG 或切成九宫格图片用于投放
 
 当前用户工作台状态：
-{state_str}
+{state_str}"""
+
+    if knowledge_block:
+        system_prompt += f"""
 
 以下是平台的完整功能文档，请严格基于此文档回答用户关于功能使用、操作方法的问题：
 
 ---
-{settings._load_knowledge() or "（暂无知识库文档）"}
----
+{knowledge_block}
+---"""
+
+    system_prompt += """
 
 你的角色：
 - 根据用户当前状态，主动给出下一步建议
