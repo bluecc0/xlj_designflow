@@ -1403,6 +1403,76 @@ class ChatRequest(pydantic.BaseModel):
     context: ChatContext = pydantic.Field(default_factory=ChatContext)
 
 
+async def _build_context_aware_prompt(
+    session_id: str,
+    user_id: str,
+    current_prompt: str,
+) -> str:
+    """
+    根据当前 session 的历史对话，用 LLM 将用户的简短修改指令
+    改写为包含上下文的完整生图 prompt。对用户透明。
+    """
+    messages = load_ai_chat_messages(session_id, user_id=user_id)
+    # 至少需要一轮以上对话才有上下文意义
+    text_messages = [m for m in messages if m.get("who") in ("user", "ai")]
+    if len(text_messages) <= 1:
+        return current_prompt
+
+    # 构建简洁的历史摘要
+    history_lines = []
+    for i, m in enumerate(text_messages[-8:]):  # 最多取最近 8 条
+        who = "用户" if m["who"] == "user" else "AI"
+        text = (m.get("text") or m.get("prompt") or "").strip()
+        if text:
+            short = text[:120] + ("…" if len(text) > 120 else "")
+            history_lines.append(f"[{who}] {short}")
+    history_str = "\n".join(history_lines)
+
+    enrichment_prompt = f"""你是一个 prompt 改写助手。用户在跟 AI 生图工具进行多轮对话，你需要把用户当前简短的修改指令改写为完整的生图 prompt。
+
+要求：
+1. 结合对话历史理解用户的修改意图
+2. 保持上一轮已确定的构图、风格、主体不变（除非用户明确要改）
+3. 输出只包含改写后的 prompt 文本，不加任何解释或前缀
+4. 如果用户当前指令已经是完整的生图需求，直接原样输出
+
+[对话历史]
+{history_str}
+
+[用户当前指令]
+{current_prompt}
+
+改写的 prompt："""
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{settings.siliconflow_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.siliconflow_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.siliconflow_model,
+                    "messages": [{"role": "user", "content": enrichment_prompt}],
+                    "max_tokens": 512,
+                    "temperature": 0.3,
+                },
+            )
+        if resp.status_code != 200:
+            logger.warning("Context enrichment LLM error: %s", resp.text[:120])
+            return current_prompt
+        data = resp.json()
+        enriched = data["choices"][0]["message"]["content"].strip()
+        if not enriched or len(enriched) < 3:
+            return current_prompt
+        logger.info("Context enrichment: %s → %s", current_prompt[:60], enriched[:60])
+        return enriched
+    except Exception:
+        logger.exception("Context enrichment failed, falling back to original prompt")
+        return current_prompt
+
+
 def _build_ai_chat_title(prompt: str) -> str:
     clean = " ".join((prompt or "").strip().split())
     return clean[:28] or "未命名对话"
@@ -1446,10 +1516,11 @@ async def ai_image_endpoint(
 ):
     """
     AI 生图接口。支持文生图（无 image）和图生图（最多 4 张参考图）。
+    自动注入对话历史上下文：用 LLM 改写 prompt + 上次结果图作为参考。
     返回: { "url": "/ai-images/{filename}.png", "model": ..., "prompt": ... }
     """
-    prompt = prompt.strip()
-    if not prompt:
+    original_prompt = prompt.strip()
+    if not original_prompt:
         raise HTTPException(400, "prompt 不能为空")
 
     resolved = SLASH_MODEL_MAP.get(model.lower(), model)
@@ -1460,10 +1531,9 @@ async def ai_image_endpoint(
     session_id = (chat_session_id or "").strip()
     session = get_ai_chat_session(session_id, user_id=user["id"]) if session_id else None
     if not session:
-        session = create_ai_chat_session(user_id=user["id"], title=_build_ai_chat_title(prompt), created_at=time.time())
+        session = create_ai_chat_session(user_id=user["id"], title=_build_ai_chat_title(original_prompt), created_at=time.time())
         session_id = session["id"]
 
-    # 限制最多 4 张参考图
     images = image[:4] if image else []
     created_at = time.time()
     append_ai_chat_message(
@@ -1471,7 +1541,7 @@ async def ai_image_endpoint(
         user_id=user["id"],
         role="user",
         type="user_text",
-        text=prompt,
+        text=original_prompt,
         meta={"model": resolved, "size": size, "resolution": resolution},
         created_at=created_at,
     )
@@ -1480,29 +1550,66 @@ async def ai_image_endpoint(
         user_id=user["id"],
         status="running",
         model=resolved,
-        prompt=prompt,
+        prompt=original_prompt,
         size=size,
         has_reference=bool(images),
         created_at=created_at,
     )
 
     try:
-        if images:
-            img_data = [(await f.read(), f.filename or f"ref{i}.png") for i, f in enumerate(images)]
+        # —— 上下文注入（对用户透明）——
+        enriched_prompt = original_prompt
+        context_ref_bytes: list[tuple[bytes, str]] = []
+
+        # 1. LLM 根据历史改写 prompt
+        if session_id and settings.siliconflow_api_key:
+            enriched_prompt = await _build_context_aware_prompt(
+                session_id=session_id,
+                user_id=user["id"],
+                current_prompt=original_prompt,
+            )
+
+        # 2. 取上一张生成的图片作为参考图
+        if session_id:
+            prev_messages = load_ai_chat_messages(session_id, user_id=user["id"])
+            for m in reversed(prev_messages):
+                prev_url = m.get("imageUrl") or ""
+                if prev_url and prev_url.startswith("/ai-images/"):
+                    local_path = settings.output_path / "ai-images" / prev_url[len("/ai-images/"):]
+                    try:
+                        if local_path.exists():
+                            context_ref_bytes.append((local_path.read_bytes(), local_path.name))
+                            logger.info("Using previous image as reference: %s", local_path.name)
+                            break
+                    except Exception:
+                        pass
+
+        # 3. 合并用户上传的参考图与上下文的参考图
+        all_refs: list[tuple[bytes, str]] = context_ref_bytes + [
+            (await f.read(), f.filename or f"ref{i}.png") for i, f in enumerate(images)
+        ]
+        all_refs = all_refs[:4]  # 总共最多 4 张
+
+        if all_refs:
             result = await generate_image_with_reference(
-                model=resolved, prompt=prompt, images=img_data, size=size, resolution=resolution, user_id=user["id"],
+                model=resolved, prompt=enriched_prompt, images=all_refs,
+                size=size, resolution=resolution, user_id=user["id"],
             )
         else:
-            result = await generate_image(model=resolved, prompt=prompt, size=size, resolution=resolution, user_id=user["id"])
+            result = await generate_image(
+                model=resolved, prompt=enriched_prompt,
+                size=size, resolution=resolution, user_id=user["id"],
+            )
+
         save_ai_image_job(
             job_id=job_id,
             user_id=user["id"],
             status="done",
             model=resolved,
-            prompt=prompt,
+            prompt=original_prompt,
             size=size,
             image_url=result.get("url"),
-            has_reference=bool(images),
+            has_reference=bool(images) or bool(context_ref_bytes),
             created_at=created_at,
         )
         append_ai_chat_message(
@@ -1510,16 +1617,16 @@ async def ai_image_endpoint(
             user_id=user["id"],
             role="ai",
             type="ai_image_result",
-            text=prompt,
+            text=original_prompt,
             image_url=result.get("url"),
             meta={
                 "model": resolved,
-                "prompt": prompt,
+                "prompt": original_prompt,
                 "size": size,
                 "resolution": resolution,
                 "status": "done",
-                "hasReference": bool(images),
-                "refCount": len(images),
+                "hasReference": bool(images) or bool(context_ref_bytes),
+                "refCount": len(images) + len(context_ref_bytes),
             },
             created_at=time.time(),
         )
@@ -1533,9 +1640,9 @@ async def ai_image_endpoint(
             user_id=user["id"],
             status="failed",
             model=resolved,
-            prompt=prompt,
+            prompt=original_prompt,
             size=size,
-            has_reference=bool(images),
+            has_reference=bool(images) or bool(context_ref_bytes),
             error=str(e),
             created_at=created_at,
         )
@@ -1544,15 +1651,15 @@ async def ai_image_endpoint(
             user_id=user["id"],
             role="ai",
             type="ai_image_result",
-            text=prompt,
+            text=original_prompt,
             image_url=None,
             meta={
                 "model": resolved,
-                "prompt": prompt,
+                "prompt": original_prompt,
                 "status": "failed",
                 "error": str(e),
-                "hasReference": bool(images),
-                "refCount": len(images),
+                "hasReference": bool(images) or bool(context_ref_bytes),
+                "refCount": len(images) + len(context_ref_bytes),
             },
             created_at=time.time(),
         )

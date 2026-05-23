@@ -1284,90 +1284,118 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
     return instructions.join('\n').trim();
   }, []);
 
+  // 从当前消息列表中找出上一个 AI 生图使用的模型
+  const getLastAiImageModel = React.useCallback(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m && m.type === 'ai-image-generating' && m.model) {
+        // model 可能是友好名也可能是后端名，统一映射
+        const modelMap = { 'nano-banana-pro': 'nano-banana-pro', 'gpt-image-2': 'gpt-image-2' };
+        return modelMap[m.model] || m.model;
+      }
+    }
+    return null;
+  }, [messages]);
+
+  // —— AI 生图核心流程（共享）——
+  const runAiImageGeneration = React.useCallback(async (model, prompt, displayText, refImages, aiOptions) => {
+    setIsLoading(true);
+    const startedAt = Date.now();
+    var finalPrompt = prompt;
+    var finalRefImages = Array.isArray(refImages) ? refImages.slice() : [];
+    setMessages(msgs => [...msgs, {
+      who: 'ai', type: 'ai-image-generating',
+      model, prompt,
+      status: 'running', startedAt,
+      meta: model,
+      hasReference: refImages.length > 0,
+      refCount: refImages.length,
+    }]);
+    try {
+      var productRefs = parseProductRefs(prompt);
+      if (productRefs.length > 0) {
+        var resolvedRefs = await window.API.resolveProductRefs(productRefs);
+        var missingRefs = resolvedRefs.filter(function(ref) { return !ref.matched; });
+        if (missingRefs.length > 0) {
+          throw new Error('未找到素材图：' + missingRefs.map(function(ref) {
+            return (ref.sku || '') + (ref.asset_type === 'white2x' ? ' 一双鞋角度' : '');
+          }).join('，'));
+        }
+        var productRefFiles = await loadResolvedRefFiles(resolvedRefs);
+        finalRefImages = finalRefImages.concat(productRefFiles);
+        finalPrompt = enhancePromptWithProductRefs(prompt, resolvedRefs, refImages.length > 0);
+      }
+      const apiBase = window.API_BASE || window.location.origin;
+      const fd = new FormData();
+      fd.append('model', model);
+      fd.append('prompt', finalPrompt);
+      fd.append('size', aiOptions.size || '1024x1024');
+      fd.append('resolution', aiOptions.resolution || '1K');
+      if (currentAiChatId) fd.append('chat_session_id', currentAiChatId);
+      finalRefImages.forEach(r => fd.append('image', r.file));
+      const res = await fetch(apiBase + '/ai-image', { method: 'POST', body: fd, credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        if (err.detail && typeof err.detail === 'object' && err.detail.chat_session_id) {
+          setCurrentAiChatId(err.detail.chat_session_id);
+        }
+        throw new Error(
+          (err.detail && typeof err.detail === 'object' ? err.detail.message : err.detail) || `HTTP ${res.status}`
+        );
+      }
+      const data = await res.json();
+      if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
+      const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
+      setMessages(msgs => msgs.map(m =>
+        m.type === 'ai-image-generating' && m.startedAt === startedAt
+          ? { ...m, status: 'done', imageUrl: apiBase + data.url, finalElapsed }
+          : m
+      ));
+      loadAiChatHistory();
+    } catch (e) {
+      const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
+      setMessages(msgs => msgs.map(m =>
+        m.type === 'ai-image-generating' && m.startedAt === startedAt
+          ? { ...m, status: 'failed', error: e.message, finalElapsed }
+          : m
+      ));
+      loadAiChatHistory();
+    }
+    setIsLoading(false);
+  }, [currentAiChatId, enhancePromptWithProductRefs, loadAiChatHistory, loadResolvedRefFiles, parseProductRefs]);
+
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
     if (!text.trim() || isLoading) return;
     setLastSubmittedMessage(text);
 
-    // ── AI 生图流程（前端友好名，后端映射到服务商模型名）────────────────────────
+    // ── AI 生图指令匹配 ────────────────────────────────────────────────────────
     const AI_IMAGE_CMDS = [
       { prefix: '/Nano Banana pro', model: 'nano-banana-pro' },
       { prefix: '/Gpt image 2',     model: 'gpt-image-2' },
     ];
     const trimmed = text.trimStart();
-    const aiCmd = AI_IMAGE_CMDS.find(c => trimmed.toLowerCase().startsWith(c.prefix.toLowerCase()));
+    let aiCmd = AI_IMAGE_CMDS.find(c => trimmed.toLowerCase().startsWith(c.prefix.toLowerCase()));
+
+    // 无 / 指令时，复用当前会话的上一个生图模型（支持中途显式切换）
+    if (!aiCmd && !trimmed.startsWith('/')) {
+      const lastModel = getLastAiImageModel();
+      if (lastModel) {
+        aiCmd = { prefix: '', model: lastModel, implicit: true };
+      }
+    }
+
     if (aiCmd) {
-      const prompt = trimmed.slice(aiCmd.prefix.length).trim();
+      const prompt = aiCmd.implicit ? trimmed : trimmed.slice(aiCmd.prefix.length).trim();
       if (!prompt) {
+        const prefixLabel = aiCmd.implicit ? '（复用上次模型）' : aiCmd.prefix;
         setMessages(msgs => [...msgs,
           { who: 'user', text },
-          { who: 'ai', text: `请在 ${aiCmd.prefix} 后输入图片描述，例如：${aiCmd.prefix} 一只在草地上奔跑的柴犬` },
+          { who: 'ai', text: `请在 ${prefixLabel} 后输入图片描述` },
         ]);
         return;
       }
       setMessages(msgs => [...msgs, { who: 'user', text }]);
-      setIsLoading(true);
-      const startedAt = Date.now();
-      var finalPrompt = prompt;
-      var finalRefImages = Array.isArray(refImages) ? refImages.slice() : [];
-      setMessages(msgs => [...msgs, {
-        who: 'ai', type: 'ai-image-generating',
-        model: aiCmd.model, prompt,
-        status: 'running', startedAt,
-        meta: aiCmd.model,
-        hasReference: refImages.length > 0,
-        refCount: refImages.length,
-      }]);
-      try {
-        var productRefs = parseProductRefs(prompt);
-        if (productRefs.length > 0) {
-          var resolvedRefs = await window.API.resolveProductRefs(productRefs);
-          var missingRefs = resolvedRefs.filter(function(ref) { return !ref.matched; });
-          if (missingRefs.length > 0) {
-            throw new Error('未找到素材图：' + missingRefs.map(function(ref) {
-              return (ref.sku || '') + (ref.asset_type === 'white2x' ? ' 一双鞋角度' : '');
-            }).join('，'));
-          }
-          var productRefFiles = await loadResolvedRefFiles(resolvedRefs);
-          finalRefImages = finalRefImages.concat(productRefFiles);
-          finalPrompt = enhancePromptWithProductRefs(prompt, resolvedRefs, refImages.length > 0);
-        }
-        const apiBase = window.API_BASE || window.location.origin;
-        const fd = new FormData();
-        fd.append('model', aiCmd.model);
-        fd.append('prompt', finalPrompt);
-        fd.append('size', aiOptions.size || '1024x1024');
-        fd.append('resolution', aiOptions.resolution || '1K');
-        if (currentAiChatId) fd.append('chat_session_id', currentAiChatId);
-        finalRefImages.forEach(r => fd.append('image', r.file));
-        const res = await fetch(apiBase + '/ai-image', { method: 'POST', body: fd, credentials: 'include' });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          if (err.detail && typeof err.detail === 'object' && err.detail.chat_session_id) {
-            setCurrentAiChatId(err.detail.chat_session_id);
-          }
-          throw new Error(
-            (err.detail && typeof err.detail === 'object' ? err.detail.message : err.detail) || `HTTP ${res.status}`
-          );
-        }
-        const data = await res.json();
-        if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
-        const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
-        setMessages(msgs => msgs.map(m =>
-          m.type === 'ai-image-generating' && m.startedAt === startedAt
-            ? { ...m, status: 'done', imageUrl: apiBase + data.url, finalElapsed }
-            : m
-        ));
-        loadAiChatHistory();
-      } catch (e) {
-        const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
-        setMessages(msgs => msgs.map(m =>
-          m.type === 'ai-image-generating' && m.startedAt === startedAt
-            ? { ...m, status: 'failed', error: e.message, finalElapsed }
-            : m
-        ));
-        loadAiChatHistory();
-      }
-      setIsLoading(false);
+      await runAiImageGeneration(aiCmd.model, prompt, text, refImages, aiOptions);
       return;
     }
 
@@ -1492,7 +1520,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger }) => {
       setMessages(msgs => [...msgs, { who: 'ai', text: '错误: ' + (e.message || '未知错误'), meta: '错误' }]);
     }
     setIsLoading(false);
-  }, [currentAiChatId, enhancePromptWithProductRefs, isLoading, loadAiChatHistory, loadResolvedRefFiles, parseProductRefs, template]);
+  }, [currentAiChatId, enhancePromptWithProductRefs, getLastAiImageModel, isLoading, loadAiChatHistory, loadResolvedRefFiles, parseProductRefs, runAiImageGeneration, template]);
 
   const handleParseTable = React.useCallback(async (file, filename, imageType) => {
     // Add user message showing file was uploaded
