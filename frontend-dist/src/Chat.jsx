@@ -1481,7 +1481,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       fd.append('prompt', finalPrompt);
       fd.append('size', aiOptions.size || '1024x1024');
       fd.append('resolution', aiOptions.resolution || '1K');
-      if (currentAiChatId) fd.append('chat_session_id', currentAiChatId);
+      if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
       finalRefImages.forEach(r => fd.append('image', r.file));
       const res = await fetch(apiBase + '/ai-image', { method: 'POST', body: fd, credentials: 'include' });
       if (!res.ok) {
@@ -1547,6 +1547,17 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       { prefix: '/Gpt image 2',     model: 'gpt-image-2' },
     ];
     let aiCmd = AI_IMAGE_CMDS.find(c => trimmed.toLowerCase().startsWith(c.prefix.toLowerCase()));
+
+    // 检测"重新生成"关键词 → 全新生图，不继承上文上下文
+    const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
+    const isFreshGen = !aiCmd && FRESH_KEYWORDS.some(kw => trimmed.startsWith(kw));
+    if (isFreshGen) {
+      const rest = trimmed.replace(/^(重新生成|重新生图|全新生成)\s*/, '');
+      const freshPrompt = rest || '重新生成'; // 无额外描述时用默认 prompt
+      setMessages(msgs => [...msgs, { who: 'user', text }]);
+      await runAiImageGeneration('gpt-image-2', freshPrompt, text, refImages, { ...aiOptions, skipContext: true });
+      return;
+    }
 
     // 无 / 指令时，复用当前会话的上一个生图模型（支持中途显式切换）
     if (!aiCmd && !trimmed.startsWith('/')) {
