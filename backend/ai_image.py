@@ -22,6 +22,13 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 
+
+class TransientTaskStatusError(RuntimeError):
+    pass
+
+
+_TRANSIENT_TASK_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 523, 524}
+
 _HTTP_ERRORS: dict[int, str] = {
     400: "请求格式错误，可能是参数不合法",
     401: "API Key 验证失败，请检查配置",
@@ -301,13 +308,18 @@ async def _fetch_task_status(
     ]
     last_error: str | None = None
     for endpoint in endpoints:
-        resp = await client.get(endpoint, headers=headers)
+        try:
+            resp = await client.get(endpoint, headers=headers)
+        except httpx.RequestError as exc:
+            raise TransientTaskStatusError(f"查询任务状态网络异常：{exc}") from exc
         if resp.is_success:
             data = resp.json()
             if isinstance(data, dict):
                 return data
             raise RuntimeError(f"任务状态响应格式异常: {str(data)[:200]}")
         last_error = _api_error_msg(resp.status_code, _extract_error_text(resp))
+        if resp.status_code in _TRANSIENT_TASK_STATUS_CODES:
+            raise TransientTaskStatusError(f"查询任务状态临时失败：{last_error}")
         if resp.status_code != 404:
             break
     raise RuntimeError(f"查询任务状态失败：{last_error or 'unknown error'}")
@@ -325,8 +337,20 @@ async def _wait_for_task_result(
     deadline = time.monotonic() + timeout_seconds
     last_status = "queued"
     completed_without_url = 0
+    transient_status_errors = 0
     while time.monotonic() < deadline:
-        data = await _fetch_task_status(client, base_url=base_url, headers=headers, task_id=task_id)
+        try:
+            data = await _fetch_task_status(client, base_url=base_url, headers=headers, task_id=task_id)
+        except TransientTaskStatusError as exc:
+            transient_status_errors += 1
+            logger.warning(
+                "task status transient error: task_id=%s attempt=%s error=%s",
+                task_id,
+                transient_status_errors,
+                exc,
+            )
+            await asyncio_sleep(min(max(poll_interval, 2.0), 8.0))
+            continue
         status = str(_extract_status(data) or "").lower()
         last_status = status or last_status
         if status in {"completed", "succeeded", "success", "done"}:
