@@ -798,18 +798,17 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   ];
 
   const AI_QUALITIES = ['1K', '2K', '4K'];
-  const GPT_IMAGE2_OPTIONS = {
-    auto: { label: 'auto', qualities: ['1K', '2K', '4K'], preview: 'auto', px: { '1K': 'auto', '2K': 'auto', '4K': 'auto' } },
-    '1:1': { label: '1:1', qualities: ['1K', '2K'], preview: '1:1', px: { '1K': '1024×1024', '2K': '2048×2048' } },
-    '3:4': { label: '3:4', qualities: ['1K', '2K'], preview: '3:4', px: { '1K': '768×1024', '2K': '1536×2048' } },
-    '5:4': { label: '5:4', qualities: ['1K', '2K'], preview: '5:4', px: { '1K': '1280×1024', '2K': '2560×2048' } },
-    '9:16': { label: '9:16', qualities: ['1K', '2K', '4K'], preview: '9:16', px: { '1K': '1080×1920', '2K': '1152×2048', '4K': '2160×3840' } },
-  };
-  const DEFAULT_AI_OPTIONS = {
-    auto:   { label: 'auto', qualities: ['1K', '2K', '4K'], preview: 'auto', px: { '1K': 'auto', '2K': 'auto', '4K': 'auto' } },
-    '1:1':  { label: '1:1', qualities: ['1K', '2K', '4K'], preview: '1024×1024', px: { '1K': '1024×1024', '2K': '2048×2048', '4K': '4096×4096' } },
-    '3:4':  { label: '3:4', qualities: ['1K', '2K', '4K'], preview: '768×1024', px: { '1K': '768×1024', '2K': '1536×2048', '4K': '2448×3264' } },
-    '9:16': { label: '9:16', qualities: ['1K', '2K', '4K'], preview: '1080×1920', px: { '1K': '1080×1920', '2K': '1152×2048', '4K': '2160×3840' } },
+  // 统一的尺寸选项，两个模型共用（取交集：二者均支持的比例）
+  const AI_OPTIONS = {
+    auto:  { label: 'auto', qualities: ['1K', '2K', '4K'], preview: 'auto', px: { '1K': 'auto', '2K': 'auto', '4K': 'auto' } },
+    '1:1': { label: '1:1', qualities: ['1K', '2K', '4K'], preview: '1024×1024', px: { '1K': '1024×1024', '2K': '2048×2048', '4K': '2880×2880' } },
+    '3:2': { label: '3:2', qualities: ['1K', '2K', '4K'], preview: '1536×1024', px: { '1K': '1536×1024', '2K': '2048×1360', '4K': '3520×2336' } },
+    '2:3': { label: '2:3', qualities: ['1K', '2K', '4K'], preview: '1024×1536', px: { '1K': '1024×1536', '2K': '1360×2048', '4K': '2336×3520' } },
+    '4:3': { label: '4:3', qualities: ['1K', '2K', '4K'], preview: '1024×768', px: { '1K': '1024×768', '2K': '2048×1536', '4K': '3312×2480' } },
+    '3:4': { label: '3:4', qualities: ['1K', '2K', '4K'], preview: '768×1024', px: { '1K': '768×1024', '2K': '1536×2048', '4K': '2480×3312' } },
+    '5:4': { label: '5:4', qualities: ['1K', '2K', '4K'], preview: '1280×1024', px: { '1K': '1280×1024', '2K': '2560×2048', '4K': '3216×2576' } },
+    '16:9':{ label: '16:9', qualities: ['1K', '2K', '4K'], preview: '1536×864', px: { '1K': '1536×864', '2K': '2048×1152', '4K': '3840×2160' } },
+    '9:16':{ label: '9:16', qualities: ['1K', '2K', '4K'], preview: '864×1536', px: { '1K': '864×1536', '2K': '1152×2048', '4K': '2160×3840' } },
   };
 
   // 从文本内容检测当前模式
@@ -825,7 +824,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     'compose';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
-  const aiOptionMap = activeAiModel === 'gpt-image-2' ? GPT_IMAGE2_OPTIONS : DEFAULT_AI_OPTIONS;
+  const aiOptionMap = AI_OPTIONS;
   const AI_RATIOS = Object.keys(aiOptionMap);
   const currentAiRatioMeta = aiOptionMap[aiRatio] || aiOptionMap[AI_RATIOS[0]];
   const allowedAiQualities = currentAiRatioMeta ? currentAiRatioMeta.qualities : AI_QUALITIES;
@@ -833,18 +832,14 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const aiImageSize = aiRatio;
 
   React.useEffect(() => {
-    if (activeAiModel === 'gpt-image-2') {
-      if (!GPT_IMAGE2_OPTIONS[aiRatio]) {
+    if (activeAiModel) {
+      if (!AI_OPTIONS[aiRatio]) {
         setAiRatio('auto');
         return;
       }
-      if (!GPT_IMAGE2_OPTIONS[aiRatio].qualities.includes(aiQuality)) {
-        setAiQuality(GPT_IMAGE2_OPTIONS[aiRatio].qualities[0]);
+      if (!AI_OPTIONS[aiRatio].qualities.includes(aiQuality)) {
+        setAiQuality(AI_OPTIONS[aiRatio].qualities[0]);
       }
-      return;
-    }
-    if (activeAiModel === 'nano-banana-pro' && !DEFAULT_AI_OPTIONS[aiRatio]) {
-      setAiRatio('auto');
     }
   }, [activeAiModel, aiQuality, aiRatio]);
 
@@ -1160,20 +1155,23 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           </div>
         )}
         {activeMode === 'ai-image' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            {AI_RATIOS.map(r => (
-              <button key={r} onClick={() => setAiRatio(r)} style={{
-                fontSize: 11, padding: '3px 0',
-                background: 'transparent', border: 'none',
-                color: aiRatio === r ? 'var(--ink)' : 'var(--ink-3)',
-                cursor: 'pointer', position: 'relative',
-              }} title={aiOptionMap[r] ? Object.entries(aiOptionMap[r].px || {}).map(function(entry) { return entry[1]; }).join(' / ') : ''}>
-                {aiOptionMap[r].label}
-                {aiRatio === r && (
-                  <div style={{ position: 'absolute', bottom: -2, left: 0, right: 0, height: 2, background: 'var(--accent)', borderRadius: 1 }}/>
-                )}
-              </button>
-            ))}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <select
+              value={aiRatio}
+              onChange={(e) => setAiRatio(e.target.value)}
+              style={{
+                fontSize: 11, padding: '3px 6px',
+                background: 'var(--panel)', color: 'var(--ink)',
+                border: '1px solid var(--line)', borderRadius: 5,
+                cursor: 'pointer', outline: 'none',
+              }}
+            >
+              {AI_RATIOS.map(r => (
+                <option key={r} value={r}>
+                  {aiOptionMap[r].label}{aiOptionMap[r].px[aiQuality] ? ' — ' + aiOptionMap[r].px[aiQuality] : ''}
+                </option>
+              ))}
+            </select>
             <div style={{ width: 1, height: 12, background: 'var(--line)', flexShrink: 0 }}/>
             {AI_QUALITIES.map(q => {
               const disabled = !allowedAiQualities.includes(q);
@@ -1194,26 +1192,6 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
                 </button>
               );
             })}
-            <div
-              title={currentAiPx || ''}
-              style={{
-                marginLeft: 'auto',
-                minWidth: 34,
-                height: 20,
-                padding: '0 8px',
-                borderRadius: 999,
-                border: '1px solid var(--line-2)',
-                color: 'var(--ink-3)',
-                fontSize: 10,
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                background: 'var(--panel)',
-                flexShrink: 0,
-              }}
-            >
-              {aiRatio}
-            </div>
           </div>
         )}
         <textarea

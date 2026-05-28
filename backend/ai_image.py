@@ -111,7 +111,7 @@ def _normalize_size(size: str, resolution: str = "") -> tuple[str, str]:
     if clean in _SIZE_MAP:
         return _SIZE_MAP[clean]
     clean_resolution = (resolution or "").strip().upper() or "1K"
-    if clean in ("auto", "1:1", "3:4", "5:4", "9:16", "16:9", "2:3", "3:2"):
+    if clean in ("auto", "1:1", "3:4", "4:3", "5:4", "4:5", "9:16", "16:9", "2:3", "3:2"):
         return clean, clean_resolution
     return "1:1", "1K"
 
@@ -285,9 +285,13 @@ async def _submit_generation_task(
     resolution: str = "",
     reference_urls: list[str] | None = None,
 ) -> str:
+    model_name = _normalize_model_name(model)
     ratio, resolution = _normalize_size(size, resolution)
+    # GPT Image 2 要求 resolution 小写（1k/2k/4k），Gemini 用大写（1K/2K/4K）
+    if model_name == "gpt-image-2":
+        resolution = resolution.lower()
     payload: dict[str, Any] = {
-        "model": _normalize_model_name(model),
+        "model": model_name,
         "prompt": prompt,
         "size": ratio,
         "resolution": resolution,
