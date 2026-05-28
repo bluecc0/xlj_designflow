@@ -491,11 +491,11 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => 
                     ? React.createElement('div', { style: { width: 8, height: 8, borderRadius: 99, background: 'var(--warn)', flexShrink: 0 } })
                     : React.createElement('div', { style: { width: 14, height: 14, borderRadius: 99, border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', animation: 'spin 0.8s linear infinite', flexShrink: 0 } }),
                 React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: 'var(--ink)' } },
-                  m.status === 'done' ? '生图完成' : m.status === 'failed' ? '生图失败' : '生图中…'
+                  m.status === 'done' ? '生图完成' : m.status === 'failed' ? '生图失败' : m.status === 'queued' ? '排队等待处理…' : '处理中…'
                 ),
                 m.finalElapsed != null
                   ? React.createElement('span', { className: 'mono', style: { fontSize: 10, color: 'var(--ink-3)' } }, fmtSecs(m.finalElapsed))
-                  : m.startedAt && m.status === 'running'
+                  : m.startedAt && m.status !== 'done' && m.status !== 'failed'
                     ? React.createElement(ChatTimer, { startedAt: m.startedAt })
                     : null
               ),
@@ -1511,6 +1511,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       who: 'ai', type: 'ai-image-generating',
       model, prompt,
       status: 'running', startedAt,
+      progress: 0,
       meta: model,
       hasReference: refImages.length > 0,
       refCount: refImages.length,
@@ -1549,17 +1550,47 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       }
       const data = await res.json();
       if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
-      const imageUrl = apiBase + data.url;
-      const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
-      setMessages(msgs => msgs.map(m =>
-        m.type === 'ai-image-generating' && m.startedAt === startedAt
-          ? { ...m, status: 'done', imageUrl, finalElapsed }
-          : m
-      ));
-      if (onComposeComplete) {
-        onComposeComplete(null, null, [imageUrl], null);
-      }
-      loadAiChatHistory();
+      const jobId = data.job_id;
+
+      // 轮询任务状态
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(apiBase + '/ai-image/' + jobId, { credentials: 'include' });
+          if (!statusRes.ok) return;
+          const statusData = await statusRes.json();
+          setMessages(msgs => msgs.map(m =>
+            m.type === 'ai-image-generating' && m.startedAt === startedAt
+              ? { ...m, status: statusData.status, progress: statusData.progress || m.progress }
+              : m
+          ));
+          if (statusData.status === 'done' && statusData.image_url) {
+            clearInterval(pollInterval);
+            const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === startedAt
+                ? { ...m, status: 'done', imageUrl: statusData.image_url, finalElapsed, progress: 100 }
+                : m
+            ));
+            if (onComposeComplete) {
+              onComposeComplete(null, null, [statusData.image_url], null);
+            }
+            loadAiChatHistory();
+            setIsLoading(false);
+          } else if (statusData.status === 'failed') {
+            clearInterval(pollInterval);
+            const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === startedAt
+                ? { ...m, status: 'failed', error: statusData.error || '未知错误', finalElapsed }
+                : m
+            ));
+            loadAiChatHistory();
+            setIsLoading(false);
+          }
+        } catch (e) {
+          // 轮询网络异常，忽略，下次重试
+        }
+      }, 2000);
     } catch (e) {
       const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
       setMessages(msgs => msgs.map(m =>
@@ -1568,8 +1599,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
           : m
       ));
       loadAiChatHistory();
+      setIsLoading(false);
     }
-    setIsLoading(false);
   }, [currentAiChatId, enhancePromptWithProductRefs, loadAiChatHistory, loadResolvedRefFiles, onComposeComplete, parseProductRefs]);
 
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {

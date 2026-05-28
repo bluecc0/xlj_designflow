@@ -7,7 +7,7 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
   const editorReadyRef = React.useRef(false);
   const pendingMessageRef = React.useRef(null);
   const [iframeNonce, setIframeNonce] = React.useState(0);
-  const [editorState, setEditorState] = React.useState('loading');
+  const [iframeLoaded, setIframeLoaded] = React.useState(false);
 
   const postToEditor = React.useCallback((message) => {
     const win = iframeRef.current && iframeRef.current.contentWindow;
@@ -16,13 +16,13 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
     return true;
   }, []);
 
+  // 接收编辑器的 ready 信号，用于命令就绪判定（不控制 UI 可见性）
   React.useEffect(() => {
     const handleMessage = (event) => {
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       if (data.type === 'designflow:editor-ready') {
         editorReadyRef.current = true;
-        setEditorState('ready');
         if (pendingMessageRef.current) {
           postToEditor(pendingMessageRef.current);
           pendingMessageRef.current = null;
@@ -30,16 +30,34 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
       }
     };
     window.addEventListener('message', handleMessage);
+
+    // 主动 ping iframe，解决缓存加载时序导致的 ready 消息丢失
+    let pingCount = 0;
+    const ping = () => {
+      pingCount++;
+      postToEditor({ type: 'designflow:ping' });
+      if (pingCount < 5 && !editorReadyRef.current) {
+        setTimeout(ping, 400);
+      }
+    };
+    setTimeout(ping, 200);
+
     return () => window.removeEventListener('message', handleMessage);
   }, [postToEditor]);
 
+  // iframe 加载完成后短暂显示遮罩，然后自动消失；不依赖 postMessage
   React.useEffect(() => {
-    setEditorState('loading');
+    if (iframeLoaded) {
+      const timer = setTimeout(() => {
+        editorReadyRef.current = true;
+      }, 600);
+      return () => clearTimeout(timer);
+    }
+  }, [iframeLoaded]);
+
+  React.useEffect(() => {
+    setIframeLoaded(false);
     editorReadyRef.current = false;
-    const timer = setTimeout(() => {
-      if (!editorReadyRef.current) setEditorState('error');
-    }, 8000);
-    return () => clearTimeout(timer);
   }, [iframeNonce, t && t.id]);
 
   React.useEffect(() => {
@@ -109,34 +127,17 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
       </div>
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative', background: 'oklch(0.98 0.003 260)' }}>
-        {editorState !== 'ready' && (
+        {!iframeLoaded && (
           <div style={{
             position: 'absolute', inset: 0, zIndex: 2,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             background: 'rgba(255,255,255,0.88)',
             color: 'var(--ink-2)', fontSize: 13,
           }}>
-            {editorState === 'loading' ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ width: 14, height: 14, borderRadius: 99, border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', animation: 'spin 0.8s linear infinite' }} />
-                <span>正在加载编辑器...</span>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
-                <span>编辑器加载失败</span>
-                <button
-                  onClick={() => {
-                    pendingMessageRef.current = null;
-                    editorReadyRef.current = false;
-                    setEditorState('loading');
-                    setIframeNonce(v => v + 1);
-                  }}
-                  style={canvasActionSecondaryStyle}
-                >
-                  重试
-                </button>
-              </div>
-            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 14, height: 14, borderRadius: 99, border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', animation: 'spin 0.8s linear infinite' }} />
+              <span>正在加载编辑器...</span>
+            </div>
           </div>
         )}
         <iframe
@@ -144,9 +145,7 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
           ref={iframeRef}
           src="/editor-beta/index.html"
           title="Designflow Editor"
-          onLoad={() => {
-            if (editorState !== 'ready') setEditorState('loading');
-          }}
+          onLoad={() => setIframeLoaded(true)}
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', background: 'transparent' }}
         />
       </div>

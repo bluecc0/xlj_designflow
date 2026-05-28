@@ -15,7 +15,7 @@ import random
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -225,6 +225,15 @@ def _extract_status(payload: Any) -> str | None:
     return None
 
 
+def _extract_progress(payload: Any) -> int | None:
+    """提取生图进度（0-100），文档：data.progress"""
+    if isinstance(payload, dict):
+        value = payload.get("progress")
+        if isinstance(value, (int, float)):
+            return max(0, min(100, int(value)))
+    return None
+
+
 def _extract_task_error(payload: Any) -> str | None:
     if isinstance(payload, dict):
         for key in ("error", "message", "detail"):
@@ -303,27 +312,24 @@ async def _fetch_task_status(
     headers: dict[str, str],
     task_id: str,
 ) -> dict[str, Any]:
-    endpoints = [
-        f"{base_url}/v1/tasks/{task_id}",
-        f"{base_url}/v1/images/generations/{task_id}",
-    ]
-    last_error: str | None = None
-    for endpoint in endpoints:
-        try:
-            resp = await client.get(endpoint, headers=headers)
-        except httpx.RequestError as exc:
-            raise TransientTaskStatusError(f"查询任务状态网络异常：{exc}") from exc
-        if resp.is_success:
-            data = resp.json()
-            if isinstance(data, dict):
-                return data
-            raise RuntimeError(f"任务状态响应格式异常: {str(data)[:200]}")
-        last_error = _api_error_msg(resp.status_code, _extract_error_text(resp))
-        if resp.status_code in _TRANSIENT_TASK_STATUS_CODES:
-            raise TransientTaskStatusError(f"查询任务状态临时失败：{last_error}")
-        if resp.status_code != 404:
-            break
-    raise RuntimeError(f"查询任务状态失败：{last_error or 'unknown error'}")
+    """查询任务状态。使用官方文档规范的端点 GET /v1/tasks/{task_id}"""
+    endpoint = f"{base_url}/v1/tasks/{task_id}"
+    try:
+        resp = await client.get(endpoint, headers=headers, params={"language": "zh"})
+    except httpx.RequestError as exc:
+        raise TransientTaskStatusError(f"查询任务状态网络异常：{exc}") from exc
+    if resp.is_success:
+        # 文档格式: {"code": 200, "data": {"id": ..., "status": "...", "progress": 50, ...}}
+        body = resp.json()
+        if isinstance(body, dict):
+            if "data" in body and isinstance(body["data"], dict):
+                return body["data"]
+            return body
+        raise RuntimeError(f"任务状态响应格式异常: {str(body)[:200]}")
+    last_error = _api_error_msg(resp.status_code, _extract_error_text(resp))
+    if resp.status_code in _TRANSIENT_TASK_STATUS_CODES:
+        raise TransientTaskStatusError(f"查询任务状态临时失败：{last_error}")
+    raise RuntimeError(f"查询任务状态失败：{last_error}")
 
 
 async def _wait_for_task_result(
@@ -334,15 +340,19 @@ async def _wait_for_task_result(
     task_id: str,
     timeout_seconds: int = 1000,
     poll_interval: float = 2.0,
-) -> str:
+    on_progress: Callable[[int, str], Any] | None = None,
+) -> tuple[str, int]:
+    """轮询等待任务完成，返回 (图片URL, 进度百分比)。on_progress(progress, api_status) 用于实时更新状态。"""
     deadline = time.monotonic() + timeout_seconds
     last_status = "queued"
+    last_progress = 0
     completed_without_url = 0
     transient_status_errors = 0
     max_transient_status_errors = 12
     while time.monotonic() < deadline:
         try:
             data = await _fetch_task_status(client, base_url=base_url, headers=headers, task_id=task_id)
+            transient_status_errors = 0  # 成功获取后重置计数
         except TransientTaskStatusError as exc:
             transient_status_errors += 1
             logger.warning(
@@ -358,10 +368,16 @@ async def _wait_for_task_result(
             continue
         status = str(_extract_status(data) or "").lower()
         last_status = status or last_status
+        last_progress = _extract_progress(data) or last_progress
+        if on_progress:
+            try:
+                on_progress(last_progress, status)
+            except Exception:
+                pass
         if status in {"completed", "succeeded", "success", "done"}:
             url = _extract_result_url(data)
             if url:
-                return url
+                return url, 100
             completed_without_url += 1
             logger.warning(
                 "task completed but no image url yet: task_id=%s attempt=%s payload=%s",
@@ -425,7 +441,7 @@ async def generate_image(
             size=size,
             resolution=resolution,
         )
-        result_url = await _wait_for_task_result(
+        result_url, _ = await _wait_for_task_result(
             client,
             base_url=base_url,
             headers=headers,
@@ -473,11 +489,106 @@ async def generate_image_with_reference(
             resolution=resolution,
             reference_urls=reference_urls,
         )
-        result_url = await _wait_for_task_result(
+        result_url, _ = await _wait_for_task_result(
             client,
             base_url=base_url,
             headers=headers,
             task_id=task_id,
+        )
+        local_url = await _download_final_image(client, image_url=result_url, user_id=user_id)
+    return {
+        "url": local_url,
+        "model": model_name,
+        "prompt": prompt,
+        "size": size,
+        "resolution": resolution,
+        "reference": True,
+        "task_id": task_id,
+    }
+
+
+async def generate_image_async(
+    model: str,
+    prompt: str,
+    size: str = "1024x1024",
+    resolution: str = "",
+    user_id: str = "anonymous",
+    on_progress: Callable[[int, str], Any] | None = None,
+) -> dict:
+    """异步生图：提交任务 → 轮询进度 → 下载结果。on_progress(progress, api_status) 用于持久化进度。"""
+    model_name = _normalize_model_name(model)
+    base_url, api_key = _model_credentials(model_name)
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
+        task_id = await _submit_generation_task(
+            client,
+            base_url=base_url,
+            headers=headers,
+            model=model_name,
+            prompt=prompt,
+            size=size,
+            resolution=resolution,
+        )
+        result_url, _ = await _wait_for_task_result(
+            client,
+            base_url=base_url,
+            headers=headers,
+            task_id=task_id,
+            on_progress=on_progress,
+        )
+        local_url = await _download_final_image(client, image_url=result_url, user_id=user_id)
+    return {
+        "url": local_url,
+        "model": model_name,
+        "prompt": prompt,
+        "size": size,
+        "resolution": resolution,
+        "task_id": task_id,
+    }
+
+
+async def generate_image_with_reference_async(
+    model: str,
+    prompt: str,
+    images: list[tuple[bytes, str]],
+    size: str = "1024x1024",
+    resolution: str = "",
+    user_id: str = "anonymous",
+    on_progress: Callable[[int], Any] | None = None,
+) -> dict:
+    """异步图生图：上传参考图 → 提交任务 → 轮询进度 → 下载结果。"""
+    model_name = _normalize_model_name(model)
+    base_url, api_key = _model_credentials(model_name)
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
+        reference_urls: list[str] = []
+        for index, (image_bytes, filename) in enumerate(images[:4]):
+            safe_name = filename or f"reference_{index}.png"
+            reference_urls.append(
+                await _upload_reference_image(client, base_url, headers, image_bytes, safe_name)
+            )
+        task_id = await _submit_generation_task(
+            client,
+            base_url=base_url,
+            headers=headers,
+            model=model_name,
+            prompt=prompt,
+            size=size,
+            resolution=resolution,
+            reference_urls=reference_urls,
+        )
+        result_url, _ = await _wait_for_task_result(
+            client,
+            base_url=base_url,
+            headers=headers,
+            task_id=task_id,
+            on_progress=on_progress,
         )
         local_url = await _download_final_image(client, image_url=result_url, user_id=user_id)
     return {

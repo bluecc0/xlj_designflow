@@ -8,6 +8,19 @@
   </head>
   <body>
     <div id="app"></div>
+    <script>
+      // 最早时机响应父页面的 ping，不依赖 React 渲染时序
+      const notifyReady = () => {
+        try { window.parent.postMessage({ type: 'designflow:editor-ready' }, '*') } catch (e) {}
+      }
+      window.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'designflow:ping') {
+          notifyReady()
+        }
+      })
+      // 模块脚本加载完成后也主动通知一次
+      window.addEventListener('load', () => setTimeout(notifyReady, 100))
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

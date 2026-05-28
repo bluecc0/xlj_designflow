@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import threading
 import time
@@ -35,7 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .ai_image import generate_image, generate_image_with_reference, SLASH_MODEL_MAP
+from .ai_image import generate_image, generate_image_with_reference, generate_image_async, generate_image_with_reference_async, SLASH_MODEL_MAP
 from .psd_layered import create_layered_psd_from_image
 from .special_compose_full import run_special_full_compose
 from .compose import get_client, run_compose
@@ -52,11 +53,14 @@ from .job_store import (
     init_db,
     list_ai_chat_sessions,
     load_ai_chat_messages,
+    load_ai_image_job,
     load_ai_image_jobs,
     load_job,
     load_recent_jobs,
     save_job,
     save_ai_image_job,
+    save_editor_snapshot,
+    load_editor_snapshot,
     save_special_job,
     load_special_jobs,
 )
@@ -173,6 +177,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/products/reference-image",
     "/products/resolve-references",
     "/avatars",
+    "/editor-beta",
     "/ui",
     "/docs",
     "/redoc",
@@ -1632,6 +1637,131 @@ def delete_history_ai_chat(request: Request, session_id: str):
     return {"deleted": session_id}
 
 
+async def _run_ai_image_background(
+    job_id: str,
+    user_id: str,
+    session_id: str,
+    model: str,
+    prompt: str,
+    size: str,
+    resolution: str,
+    refs: list[tuple[bytes, str]],
+    has_reference: bool,
+    created_at: float,
+):
+    """后台异步生图：轮询进度 → 更新 DB → 下载结果 → 写聊天记录"""
+    def on_progress(pct: int, api_status: str):
+        try:
+            # 将 API 状态映射为用户可读的内部状态
+            db_status = "queued" if api_status == "pending" else "processing"
+            save_ai_image_job(
+                job_id=job_id, user_id=user_id, status=db_status,
+                model=model, prompt=prompt, size=size,
+                progress=pct, has_reference=has_reference, created_at=created_at,
+            )
+        except Exception:
+            pass
+
+    try:
+        if refs:
+            result = await generate_image_with_reference_async(
+                model=model, prompt=prompt, images=refs,
+                size=size, resolution=resolution, user_id=user_id,
+                on_progress=on_progress,
+            )
+        else:
+            result = await generate_image_async(
+                model=model, prompt=prompt,
+                size=size, resolution=resolution, user_id=user_id,
+                on_progress=on_progress,
+            )
+        save_ai_image_job(
+            job_id=job_id, user_id=user_id, status="done",
+            model=model, prompt=prompt, size=size,
+            image_url=result.get("url"), task_id=result.get("task_id"),
+            progress=100, has_reference=has_reference, created_at=created_at,
+        )
+        append_ai_chat_message(
+            session_id=session_id, user_id=user_id,
+            role="ai", type="ai_image_result",
+            text=prompt, image_url=result.get("url"),
+            meta={
+                "model": model, "prompt": prompt,
+                "size": size, "resolution": resolution,
+                "status": "done",
+                "hasReference": has_reference,
+                "refCount": len(refs),
+            },
+            created_at=time.time(),
+        )
+    except Exception as e:
+        logger.exception("ai_image background task failed: job_id=%s", job_id)
+        save_ai_image_job(
+            job_id=job_id, user_id=user_id, status="failed",
+            model=model, prompt=prompt, size=size,
+            has_reference=has_reference, error=str(e), created_at=created_at,
+        )
+        append_ai_chat_message(
+            session_id=session_id, user_id=user_id,
+            role="ai", type="ai_image_result",
+            text=prompt, image_url=None,
+            meta={
+                "model": model, "prompt": prompt,
+                "status": "failed", "error": str(e),
+                "hasReference": has_reference,
+                "refCount": len(refs),
+            },
+            created_at=time.time(),
+        )
+
+
+@app.get("/ai-image/{job_id}")
+def ai_image_status(request: Request, job_id: str):
+    """查询生图任务状态，前端轮询此接口获取进度"""
+    user = _current_user(request)
+    job = load_ai_image_job(job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在")
+    if not _is_admin(user) and job.get("user_id") != user["id"]:
+        raise HTTPException(404, "任务不存在")
+    api_base = str(request.base_url).rstrip("/")
+    image_url = job.get("image_url")
+    return {
+        "job_id": job["id"],
+        "status": job["status"],
+        "progress": job["progress"],
+        "image_url": f"{api_base}{image_url}" if image_url else None,
+        "task_id": job.get("task_id"),
+        "error": job.get("error"),
+    }
+
+
+@app.post("/editor/snapshot")
+async def editor_save_snapshot(request: Request):
+    """保存画布快照"""
+    user = _current_user(request)
+    body = await request.json()
+    snapshot = body.get("snapshot") if isinstance(body, dict) else None
+    if not snapshot:
+        raise HTTPException(400, "snapshot 不能为空")
+    raw = json.dumps(snapshot, ensure_ascii=False) if not isinstance(snapshot, str) else snapshot
+    save_editor_snapshot(user["id"], raw)
+    return {"saved": True}
+
+
+@app.get("/editor/snapshot")
+def editor_load_snapshot(request: Request):
+    """加载画布快照"""
+    user = _current_user(request)
+    raw = load_editor_snapshot(user["id"])
+    if raw is None:
+        return {"snapshot": None}
+    try:
+        return {"snapshot": json.loads(raw)}
+    except Exception:
+        return {"snapshot": None}
+
+
 @app.post("/ai-image")
 async def ai_image_endpoint(
     request: Request,
@@ -1643,9 +1773,10 @@ async def ai_image_endpoint(
     image: List[UploadFile] = File(default=[]),
 ):
     """
-    AI 生图接口。支持文生图（无 image）和图生图（最多 4 张参考图）。
+    AI 生图接口（异步）。支持文生图（无 image）和图生图（最多 4 张参考图）。
     自动注入对话历史上下文：用 LLM 改写 prompt + 上次结果图作为参考。
-    返回: { "url": "/ai-images/{filename}.png", "model": ..., "prompt": ... }
+    提交任务后立即返回 {job_id, chat_session_id, status: "processing"}，
+    前端轮询 GET /ai-image/{job_id} 获取进度与结果。
     """
     original_prompt = prompt.strip()
     if not original_prompt:
@@ -1676,7 +1807,7 @@ async def ai_image_endpoint(
     save_ai_image_job(
         job_id=job_id,
         user_id=user["id"],
-        status="running",
+        status="processing",
         model=resolved,
         prompt=original_prompt,
         size=size,
@@ -1718,47 +1849,16 @@ async def ai_image_endpoint(
         ]
         all_refs = all_refs[:4]  # 总共最多 4 张
 
-        if all_refs:
-            result = await generate_image_with_reference(
-                model=resolved, prompt=enriched_prompt, images=all_refs,
-                size=size, resolution=resolution, user_id=user["id"],
-            )
-        else:
-            result = await generate_image(
+        has_reference = bool(images) or bool(context_ref_bytes)
+        asyncio.create_task(
+            _run_ai_image_background(
+                job_id=job_id, user_id=user["id"], session_id=session_id,
                 model=resolved, prompt=enriched_prompt,
-                size=size, resolution=resolution, user_id=user["id"],
+                size=size, resolution=resolution,
+                refs=all_refs, has_reference=has_reference, created_at=created_at,
             )
-
-        save_ai_image_job(
-            job_id=job_id,
-            user_id=user["id"],
-            status="done",
-            model=resolved,
-            prompt=original_prompt,
-            size=size,
-            image_url=result.get("url"),
-            has_reference=bool(images) or bool(context_ref_bytes),
-            created_at=created_at,
         )
-        append_ai_chat_message(
-            session_id=session_id,
-            user_id=user["id"],
-            role="ai",
-            type="ai_image_result",
-            text=original_prompt,
-            image_url=result.get("url"),
-            meta={
-                "model": resolved,
-                "prompt": original_prompt,
-                "size": size,
-                "resolution": resolution,
-                "status": "done",
-                "hasReference": bool(images) or bool(context_ref_bytes),
-                "refCount": len(images) + len(context_ref_bytes),
-            },
-            created_at=time.time(),
-        )
-        return {**result, "chat_session_id": session_id}
+        return {"job_id": job_id, "chat_session_id": session_id, "status": "processing"}
     except HTTPException:
         raise
     except Exception as e:
@@ -1773,23 +1873,6 @@ async def ai_image_endpoint(
             has_reference=bool(images) or bool(context_ref_bytes),
             error=str(e),
             created_at=created_at,
-        )
-        append_ai_chat_message(
-            session_id=session_id,
-            user_id=user["id"],
-            role="ai",
-            type="ai_image_result",
-            text=original_prompt,
-            image_url=None,
-            meta={
-                "model": resolved,
-                "prompt": original_prompt,
-                "status": "failed",
-                "error": str(e),
-                "hasReference": bool(images) or bool(context_ref_bytes),
-                "refCount": len(images) + len(context_ref_bytes),
-            },
-            created_at=time.time(),
         )
         raise HTTPException(502, {"message": f"{type(e).__name__}: {e}", "chat_session_id": session_id})
 

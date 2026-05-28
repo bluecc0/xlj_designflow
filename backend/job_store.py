@@ -105,7 +105,24 @@ def init_db() -> None:
                 image_url        TEXT,
                 has_reference    INTEGER NOT NULL DEFAULT 0,
                 error            TEXT,
+                task_id          TEXT,
+                progress         INTEGER NOT NULL DEFAULT 0,
                 created_at       REAL NOT NULL
+            )
+        """)
+        # 兼容旧表：添加可能缺失的列
+        for col, col_def in [("task_id", "TEXT"), ("progress", "INTEGER NOT NULL DEFAULT 0")]:
+            try:
+                conn.execute(f"ALTER TABLE ai_image_jobs ADD COLUMN {col} {col_def}")
+            except Exception:
+                pass
+        conn.execute("""
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS editor_snapshots (
+                user_id          TEXT PRIMARY KEY,
+                snapshot_json    TEXT NOT NULL,
+                updated_at       REAL NOT NULL
             )
         """)
         conn.execute("""
@@ -438,6 +455,8 @@ def save_ai_image_job(
     image_url: str | None = None,
     has_reference: bool = False,
     error: str | None = None,
+    task_id: str | None = None,
+    progress: int = 0,
     created_at: float | None = None,
 ) -> None:
     now = created_at or time.time()
@@ -445,8 +464,8 @@ def save_ai_image_job(
         conn.execute(
             """
             INSERT INTO ai_image_jobs
-              (id, user_id, status, model, prompt, size, image_url, has_reference, error, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (id, user_id, status, model, prompt, size, image_url, has_reference, error, task_id, progress, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 user_id = excluded.user_id,
                 status = excluded.status,
@@ -455,7 +474,9 @@ def save_ai_image_job(
                 size = excluded.size,
                 image_url = excluded.image_url,
                 has_reference = excluded.has_reference,
-                error = excluded.error
+                error = excluded.error,
+                task_id = excluded.task_id,
+                progress = excluded.progress
             """,
             (
                 job_id,
@@ -467,6 +488,8 @@ def save_ai_image_job(
                 image_url,
                 1 if has_reference else 0,
                 error,
+                task_id,
+                progress,
                 now,
             ),
         )
@@ -496,11 +519,35 @@ def load_ai_image_jobs(limit: int = 50, user_id: Optional[str] = None) -> list[d
             "image_url": row["image_url"],
             "has_reference": bool(row["has_reference"]),
             "error": row["error"],
+            "task_id": row["task_id"],
+            "progress": row["progress"],
             "created_at": row["created_at"],
             "_type": "ai-image",
         }
         for row in rows
     ]
+
+
+def load_ai_image_job(job_id: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM ai_image_jobs WHERE id = ?", (job_id,)).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "status": row["status"],
+        "model": row["model"],
+        "prompt": row["prompt"],
+        "size": row["size"],
+        "image_url": row["image_url"],
+        "has_reference": bool(row["has_reference"]),
+        "error": row["error"],
+        "task_id": row["task_id"],
+        "progress": row["progress"],
+        "created_at": row["created_at"],
+        "_type": "ai-image",
+    }
 
 
 def create_ai_chat_session(*, user_id: str, title: str, created_at: float | None = None) -> dict:
@@ -693,3 +740,28 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 "createdAt": row["created_at"],
             })
     return result
+
+
+def save_editor_snapshot(user_id: str, snapshot_json: str) -> None:
+    now = time.time()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO editor_snapshots (user_id, snapshot_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                snapshot_json = excluded.snapshot_json,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, snapshot_json, now),
+        )
+        conn.commit()
+
+
+def load_editor_snapshot(user_id: str) -> str | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT snapshot_json FROM editor_snapshots WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    return row["snapshot_json"] if row else None

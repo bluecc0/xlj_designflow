@@ -568,8 +568,19 @@ function TldrawHostBridge() {
       const data = event.data
       if (!data || typeof data !== 'object') return
 
+      if (data.type === 'designflow:ping') {
+        notifyReady()
+        return
+      }
+
       if (data.type === 'designflow:new-canvas') {
-        clearCanvas(data.pageName)
+        const pageName = data.pageName || '画板 1'
+        const existing = editor.getPages().find(p => p.name === pageName)
+        if (existing) {
+          editor.setCurrentPage(existing.id)
+        } else {
+          editor.createPage(pageName)
+        }
         return
       }
 
@@ -601,6 +612,79 @@ function TldrawHostBridge() {
     return () => window.removeEventListener('message', handleMessage)
   }, [clearCanvas, editor, insertImages])
 
+  // —— 画布持久化（自动保存 & 恢复）——
+  React.useEffect(() => {
+    let saveTimer: number | null = null
+    let lastRaw = ''
+
+    const doSave = () => {
+      try {
+        const snapshot = editor.getSnapshot() as any
+        const store = snapshot.store || snapshot.document
+        if (!store || typeof store !== 'object' || Object.keys(store).length === 0) return
+        const raw = JSON.stringify(snapshot)
+        if (raw === lastRaw) return
+        lastRaw = raw
+        fetch('/editor/snapshot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ snapshot }),
+          credentials: 'include',
+        }).catch(() => {})
+      } catch (e) {}
+    }
+
+    const doSaveSync = () => {
+      try {
+        const snapshot = editor.getSnapshot() as any
+        const store = snapshot.store || snapshot.document
+        if (!store || typeof store !== 'object' || Object.keys(store).length === 0) return
+        const raw = JSON.stringify(snapshot)
+        if (raw === lastRaw) return
+        lastRaw = raw
+        fetch('/editor/snapshot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ snapshot }),
+          credentials: 'include',
+          keepalive: true,
+        }).catch(() => {})
+      } catch (e) {}
+    }
+
+    // 加载已保存的快照
+    const loadSnapshot = async () => {
+      try {
+        const res = await fetch('/editor/snapshot', { credentials: 'include' })
+        const data = await res.json()
+        if (data.snapshot) {
+          // 验证快照有效：store 至少有一个 page 记录
+          const store = data.snapshot.store || data.snapshot.document
+          if (store && typeof store === 'object' && Object.keys(store).length > 0) {
+            editor.loadSnapshot(data.snapshot)
+          }
+        }
+      } catch (e) {}
+    }
+
+    loadSnapshot()
+
+    // 监听用户变更，debounce 2 秒后自动保存（source: 'user' 过滤掉 loadSnapshot 触发的变更）
+    const unlisten = editor.store.listen(() => {
+      if (saveTimer) clearTimeout(saveTimer)
+      saveTimer = window.setTimeout(doSave, 2000)
+    }, { source: 'user' })
+
+    // 页面关闭/刷新前立即保存，避免 debounce 未触发的修改丢失
+    window.addEventListener('beforeunload', doSaveSync)
+
+    return () => {
+      unlisten()
+      if (saveTimer) clearTimeout(saveTimer)
+      window.removeEventListener('beforeunload', doSaveSync)
+    }
+  }, [editor])
+
   return null
 }
 
@@ -613,6 +697,11 @@ export default function App() {
       instance.renamePage(page.id, '画板 1')
     }
     instance.zoomToFit({ animation: { duration: 0 } })
+
+    // 尽早通知父窗口编辑器已就绪，不依赖 useEffect 的时序
+    try {
+      window.parent.postMessage({ type: 'designflow:editor-ready' }, '*')
+    } catch (error) {}
   }, [])
 
   const components = React.useMemo<TLComponents>(
