@@ -51,6 +51,10 @@ class RelaySettings:
         return app_settings.proxy_download_request_timeout_seconds
 
     @property
+    def relay_navigation_timeout_ms(self) -> int:
+        return app_settings.proxy_download_navigation_timeout_ms
+
+    @property
     def allowed_hosts(self) -> set[str]:
         return {
             item.strip().lower()

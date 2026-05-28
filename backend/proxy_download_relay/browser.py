@@ -86,7 +86,12 @@ class BrowserRelay:
     async def login_shell(self) -> None:
         context = await self.ensure_started()
         page = await context.new_page()
-        await page.goto(settings.relay_login_url)
+        await self._prepare_page(page)
+        await page.goto(
+            settings.relay_login_url,
+            wait_until="domcontentloaded",
+            timeout=settings.relay_navigation_timeout_ms,
+        )
         print(f"Browser opened at {settings.relay_login_url}")
         print("Log in manually, confirm downloads work, then press Enter here to close.")
         input()
@@ -98,14 +103,14 @@ class BrowserRelay:
         async with self._lock:
             context = await self.ensure_started()
             parsed = urlparse(source_url)
-            if parsed.hostname and parsed.hostname.lower() not in settings.allowed_hosts:
-                raise ValueError(f"Host not allowed: {parsed.hostname}")
+            self._assert_allowed_url(source_url)
 
             if Path(parsed.path).suffix.lower() in DIRECT_FILE_EXTENSIONS:
                 return await self._download_via_http(context, source_url)
 
             page = await context.new_page()
             try:
+                await self._prepare_page(page)
                 return await self._download_from_page(page, source_url, download_format)
             finally:
                 await page.close()
@@ -113,9 +118,8 @@ class BrowserRelay:
     async def inspect(self, source_url: str) -> dict[str, Any]:
         async with self._lock:
             context = await self.ensure_started()
+            self._assert_allowed_url(source_url)
             parsed = urlparse(source_url)
-            if parsed.hostname and parsed.hostname.lower() not in settings.allowed_hosts:
-                raise ValueError(f"Host not allowed: {parsed.hostname}")
 
             suffix = Path(parsed.path).suffix.lower()
             if suffix in DIRECT_FILE_EXTENSIONS:
@@ -128,7 +132,13 @@ class BrowserRelay:
 
             page = await context.new_page()
             try:
-                await page.goto(source_url, wait_until="domcontentloaded")
+                await self._prepare_page(page)
+                await page.goto(
+                    source_url,
+                    wait_until="domcontentloaded",
+                    timeout=settings.relay_navigation_timeout_ms,
+                )
+                self._assert_allowed_url(page.url)
                 await page.wait_for_timeout(1500)
                 title = await page.title()
                 formats = await self._discover_download_formats(page)
@@ -140,10 +150,27 @@ class BrowserRelay:
             finally:
                 await page.close()
 
+    async def _prepare_page(self, page: Page) -> None:
+        async def guard(route):
+            request = route.request
+            try:
+                self._assert_allowed_url(request.url)
+            except ValueError:
+                await route.abort()
+                return
+            await route.continue_()
+
+        await page.route("**/*", guard)
+
     async def _download_from_page(
         self, page: Page, source_url: str, download_format: str | None
     ) -> tuple[Path, dict[str, Any]]:
-        await page.goto(source_url, wait_until="domcontentloaded")
+        await page.goto(
+            source_url,
+            wait_until="domcontentloaded",
+            timeout=settings.relay_navigation_timeout_ms,
+        )
+        self._assert_allowed_url(page.url)
         await page.wait_for_timeout(1500)
 
         download = await self._try_click_download(page, download_format)
@@ -157,6 +184,12 @@ class BrowserRelay:
         if candidate is None:
             raise RuntimeError("No download action found on page.")
         return await self._download_via_http(page.context, candidate, source_url)
+
+    def _assert_allowed_url(self, source_url: str) -> None:
+        parsed = urlparse(source_url)
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        if hostname and hostname not in settings.allowed_hosts:
+            raise ValueError(f"Host not allowed: {hostname}")
 
     async def _try_click_download(
         self, page: Page, download_format: str | None
@@ -369,11 +402,25 @@ class BrowserRelay:
         cookies = await context.cookies()
         cookie_header = "; ".join(f"{item['name']}={item['value']}" for item in cookies)
         headers = {"Cookie": cookie_header, "User-Agent": "Mozilla/5.0 Relay"}
+        self._assert_allowed_url(file_url)
         async with httpx.AsyncClient(
-            follow_redirects=True,
+            follow_redirects=False,
             timeout=settings.relay_request_timeout_seconds,
         ) as client:
-            response = await client.get(file_url, headers=headers)
+            current_url = file_url
+            response = None
+            for _ in range(6):
+                self._assert_allowed_url(current_url)
+                response = await client.get(current_url, headers=headers)
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        break
+                    current_url = urljoin(str(response.url), location)
+                    continue
+                break
+            assert response is not None
+            self._assert_allowed_url(str(response.url))
             response.raise_for_status()
             filename = self._resolve_filename(response, file_url)
             file_path = self._unique_path(filename)

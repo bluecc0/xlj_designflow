@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import time
 import uuid
 from pathlib import Path
@@ -338,6 +339,7 @@ async def _wait_for_task_result(
     last_status = "queued"
     completed_without_url = 0
     transient_status_errors = 0
+    max_transient_status_errors = 12
     while time.monotonic() < deadline:
         try:
             data = await _fetch_task_status(client, base_url=base_url, headers=headers, task_id=task_id)
@@ -349,7 +351,10 @@ async def _wait_for_task_result(
                 transient_status_errors,
                 exc,
             )
-            await asyncio_sleep(min(max(poll_interval, 2.0), 8.0))
+            if transient_status_errors >= max_transient_status_errors:
+                raise RuntimeError(f"查询任务状态连续失败次数过多: {exc}") from exc
+            backoff = min(max(poll_interval, 2.0) * (1.4 ** min(transient_status_errors, 4)), 8.0)
+            await asyncio_sleep(backoff + random.uniform(0, 0.35))
             continue
         status = str(_extract_status(data) or "").lower()
         last_status = status or last_status

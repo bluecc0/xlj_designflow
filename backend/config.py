@@ -64,7 +64,7 @@ class Settings:
     vlm_api_key: str = os.getenv("VLM_API_KEY", "") or ai_image_api_key
 
     # 工作目录（始终指向 design-tool/）
-    # proxy_download relay????????
+    # proxy_download relay
     proxy_download_enabled: bool = os.getenv("PROXY_DOWNLOAD_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
     proxy_download_base_url: str = os.getenv("PROXY_DOWNLOAD_BASE_URL", "http://127.0.0.1:8765")
     proxy_download_token: str = os.getenv("PROXY_DOWNLOAD_TOKEN", "")
@@ -73,6 +73,7 @@ class Settings:
     proxy_download_browser_channel: str = os.getenv("PROXY_DOWNLOAD_BROWSER_CHANNEL", "msedge")
     proxy_download_login_url: str = os.getenv("PROXY_DOWNLOAD_LOGIN_URL", "https://huaban.com/")
     proxy_download_request_timeout_seconds: int = int(os.getenv("PROXY_DOWNLOAD_REQUEST_TIMEOUT_SECONDS", "180"))
+    proxy_download_navigation_timeout_ms: int = int(os.getenv("PROXY_DOWNLOAD_NAVIGATION_TIMEOUT_MS", "30000"))
 
     root_dir: Path = Path(__file__).parent.parent
 

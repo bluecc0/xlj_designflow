@@ -216,13 +216,13 @@ class PenpotClient:
         self.login(self._email, self._password)
 
     def _ensure_export_login(self) -> None:
-        """????????? profile_id ? cookie?"""
+        """确保导出前已有 profile_id 和登录 cookie。"""
         if self._profile_id is not None:
             return
         if self._email and self._password:
             self.login(self._email, self._password)
             return
-        raise PenpotError("????? login() ?? profile_id")
+        raise PenpotError("需要先调用 login() 获取 profile_id")
 
     # ── 文件结构 ──────────────────────────────────────────────────────────────
 

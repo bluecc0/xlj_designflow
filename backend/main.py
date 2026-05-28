@@ -169,7 +169,6 @@ _AUTH_EXEMPT_PREFIXES = (
     "/auth/login-lite",
     "/auth/options",
     "/health",
-    "/editor-beta",
     "/product-library",
     "/products/reference-image",
     "/products/resolve-references",
