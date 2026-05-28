@@ -428,7 +428,7 @@ def _run_inner(job: SpecialFullComposeJob) -> None:
 
         job.status = ComposeStatus.done
         save_special_job(job)
-        n_out = len(valid_frame_ids) * (2 if has_variants else 1)
+        n_out = len(job.result_paths)
         _log(job, f"合成完成！副本 {work_file_id[:8]}…，共导出 {n_out} 张图")
 
     except Exception as exc:

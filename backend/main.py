@@ -78,11 +78,15 @@ from .models import (
 from .product_library import ProductLibrary
 from .slot_schema import schema as slot_schema
 from .special_compose import parse_special_command, run_special_compose
+from .proxy_download_relay import inspect_url as proxy_download_inspect_url, download_url as proxy_download_download_url, stop as proxy_download_stop
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    yield
+    try:
+        yield
+    finally:
+        await proxy_download_stop()
 
 
 app = FastAPI(title="Design Tool API", version="0.1.0", lifespan=lifespan)
@@ -147,6 +151,14 @@ if _frontend_dist.exists():
         name="frontend",
     )
 
+_editor_beta_dist = Path(__file__).parent.parent / "editor-lab-tldraw" / "dist"
+if _editor_beta_dist.exists():
+    app.mount(
+        "/editor-beta",
+        StaticFiles(directory=str(_editor_beta_dist), html=True),
+        name="editor-beta",
+    )
+
 # ─── 内存任务存储（PoC 阶段，后续换 Redis / DB）────────────────────────────────
 _jobs: dict[str, ComposeJob] = {}
 _jobs_lock = threading.Lock()
@@ -157,6 +169,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/auth/login-lite",
     "/auth/options",
     "/health",
+    "/editor-beta",
     "/product-library",
     "/products/reference-image",
     "/products/resolve-references",
@@ -166,6 +179,25 @@ _AUTH_EXEMPT_PREFIXES = (
     "/redoc",
     "/openapi.json",
 )
+
+
+class ProxyDownloadInspectRequest(pydantic.BaseModel):
+    url: str
+
+
+class ProxyDownloadRequest(ProxyDownloadInspectRequest):
+    format: Optional[str] = None
+
+
+def _proxy_download_dir() -> Path:
+    path = settings.output_path / "proxy-downloads"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _safe_download_filename(name: str) -> str:
+    clean = "".join(ch if ch.isalnum() or ch in "._-()[] " else "_" for ch in (name or "download.bin")).strip()
+    return clean or "download.bin"
 
 
 class LiteLoginRequest(pydantic.BaseModel):
@@ -275,6 +307,63 @@ async def health():
             "url": settings.penpot_base_url,
         },
         "ai_provider": ai_provider,
+    }
+
+
+@app.post("/proxy-download/inspect")
+async def proxy_download_inspect(body: ProxyDownloadInspectRequest, request: Request):
+    _current_user(request)
+    if not settings.proxy_download_enabled and not (settings.root_dir / "proxy_download").exists():
+        raise HTTPException(503, "\u82b1\u74e3\u4e0b\u8f7d\u670d\u52a1\u672a\u542f\u7528")
+    try:
+        payload = await proxy_download_inspect_url(body.url)
+    except Exception as exc:
+        raise HTTPException(502, f"\u683c\u5f0f\u68c0\u6d4b\u5931\u8d25: {exc}") from exc
+    return {
+        "source_url": payload.get("source_url") or body.url,
+        "title": payload.get("title"),
+        "formats": payload.get("formats") or [],
+    }
+
+
+@app.post("/proxy-download/download")
+async def proxy_download_download(body: ProxyDownloadRequest, request: Request):
+    user = _current_user(request)
+    if not settings.proxy_download_enabled and not (settings.root_dir / "proxy_download").exists():
+        raise HTTPException(503, "\u82b1\u74e3\u4e0b\u8f7d\u670d\u52a1\u672a\u542f\u7528")
+    try:
+        inspection = await proxy_download_inspect_url(body.url)
+        formats = inspection.get("formats") or []
+        if len(formats) > 1 and not body.format:
+            return {
+                "status": "choose_format",
+                "source_url": body.url,
+                "formats": formats,
+                "message": "\u8be5\u7d20\u6750\u652f\u6301\u591a\u79cd\u683c\u5f0f\uff0c\u8bf7\u5148\u9009\u62e9\u4e00\u79cd\u683c\u5f0f\u3002",
+            }
+        path, meta = await proxy_download_download_url(body.url, body.format)
+    except Exception as exc:
+        raise HTTPException(502, f"\u82b1\u74e3\u4e0b\u8f7d\u5931\u8d25: {exc}") from exc
+
+    filename = _safe_download_filename(str(meta.get("filename") or Path(path).name))
+    file_path = Path(path)
+    if file_path.parent != _proxy_download_dir():
+        stem = Path(filename).stem
+        ext = Path(filename).suffix
+        target_name = f"{uuid.uuid4().hex}_{stem}{ext}"
+        target_path = _proxy_download_dir() / target_name
+        target_path.write_bytes(file_path.read_bytes())
+    else:
+        target_path = file_path
+    return {
+        "status": "done",
+        "source_url": str(meta.get("source_url") or body.url),
+        "filename": filename,
+        "size": target_path.stat().st_size,
+        "format": body.format or "",
+        "file_url": f"/output/proxy-downloads/{quote(target_path.name)}",
+        "download_url": f"/output/proxy-downloads/{quote(target_path.name)}",
+        "user_id": user["id"],
     }
 
 

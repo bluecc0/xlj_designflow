@@ -58,7 +58,22 @@ class Settings:
     nano_banana_base_url: str = os.getenv("NANO_BANANA_BASE_URL", "")
     nano_banana_api_key: str = os.getenv("NANO_BANANA_API_KEY", "")
 
+    # VLM 图像分析配置；留空则复用 APIMart 的 BASE_URL / API_KEY
+    vlm_model: str = os.getenv("VLM_MODEL", "qwen2.5-vl-72b-instruct")
+    vlm_base_url: str = os.getenv("VLM_BASE_URL", "") or ai_image_base_url
+    vlm_api_key: str = os.getenv("VLM_API_KEY", "") or ai_image_api_key
+
     # 工作目录（始终指向 design-tool/）
+    # proxy_download relay????????
+    proxy_download_enabled: bool = os.getenv("PROXY_DOWNLOAD_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    proxy_download_base_url: str = os.getenv("PROXY_DOWNLOAD_BASE_URL", "http://127.0.0.1:8765")
+    proxy_download_token: str = os.getenv("PROXY_DOWNLOAD_TOKEN", "")
+    proxy_download_allowed_hosts: str = os.getenv("PROXY_DOWNLOAD_ALLOWED_HOSTS", "huaban.com,www.huaban.com")
+    proxy_download_headless: bool = os.getenv("PROXY_DOWNLOAD_HEADLESS", "false").strip().lower() in {"1", "true", "yes", "on"}
+    proxy_download_browser_channel: str = os.getenv("PROXY_DOWNLOAD_BROWSER_CHANNEL", "msedge")
+    proxy_download_login_url: str = os.getenv("PROXY_DOWNLOAD_LOGIN_URL", "https://huaban.com/")
+    proxy_download_request_timeout_seconds: int = int(os.getenv("PROXY_DOWNLOAD_REQUEST_TIMEOUT_SECONDS", "180"))
+
     root_dir: Path = Path(__file__).parent.parent
 
     # 产品知识库（注入到 AI 对话 system prompt）

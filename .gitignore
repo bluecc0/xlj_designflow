@@ -9,6 +9,9 @@ venv/
 # Node
 frontend/node_modules/
 frontend/dist/
+editor-lab-tldraw/node_modules/
+editor-lab-tldraw/vite-dev.log
+editor-lab-tldraw/vite-dev.err.log
 
 # Output / runtime
 output/

@@ -72,6 +72,7 @@ const App = () => {
   const [tweaksVisible, setTweaksVisible] = React.useState(false);
   const [activeTemplate, setActiveTemplate] = React.useState(TEMPLATES[0]);
   const [resultTemplate, setResultTemplate] = React.useState(null);
+  const [editorCommand, setEditorCommand] = React.useState(null);
   const [slashTrigger, setSlashTrigger] = React.useState(null);
   const [currentUser, setCurrentUser] = React.useState(null);
   const [authLoading, setAuthLoading] = React.useState(true);
@@ -115,6 +116,16 @@ const App = () => {
       };
       setResultTemplate(tpl);
     }
+    const urls = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : (directImageUrls ? [directImageUrls] : []);
+    if (urls.length > 0) {
+      setEditorCommand({
+        key: Date.now() + Math.random(),
+        type: 'insert-images',
+        mode: 'image',
+        urls,
+        name: (resultTpl && resultTpl.name) || '生成结果',
+      });
+    }
     if (penpotEditUrl) {
       window.resultPenpotUrl = penpotEditUrl;
     }
@@ -122,6 +133,11 @@ const App = () => {
 
   React.useEffect(() => {
     setResultTemplate(null);
+    setEditorCommand({
+      key: Date.now() + Math.random(),
+      type: 'new-canvas',
+      pageName: activeTemplate?.name || '画板 1',
+    });
   }, [activeTemplate]);
 
   React.useEffect(() => {
@@ -208,7 +224,7 @@ const App = () => {
               else setSlashTrigger({ clear: true, key: Date.now() });
             }}
           />
-          <Canvas template={activeTemplate} resultTemplate={resultTemplate}/>
+          <Canvas template={activeTemplate} resultTemplate={resultTemplate} editorCommand={editorCommand}/>
           <Chat
             key={'chat:' + currentUser.id}
             state={tweaks.chatState}

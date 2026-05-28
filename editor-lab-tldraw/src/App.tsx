@@ -1,0 +1,648 @@
+import React from 'react'
+import {
+  DefaultColorStyle,
+  DefaultDashStyle,
+  DefaultFillStyle,
+  DefaultFontStyle,
+  DefaultHorizontalAlignStyle,
+  DefaultSizeStyle,
+  DefaultTextAlignStyle,
+  DefaultVerticalAlignStyle,
+  Tldraw,
+  iconTypes,
+  toRichText,
+  type Editor,
+  type TLComponents,
+  type TLGeoShape,
+  type TLShape,
+  type TLTextShape,
+  useEditor,
+  useValue,
+} from 'tldraw'
+
+const COLOR_OPTIONS = [
+  { value: 'black', label: '黑色' },
+  { value: 'grey', label: '灰色' },
+  { value: 'blue', label: '蓝色' },
+  { value: 'green', label: '绿色' },
+  { value: 'orange', label: '橙色' },
+  { value: 'red', label: '红色' },
+  { value: 'violet', label: '紫色' },
+] as const
+
+const TEXT_SIZE_OPTIONS = [
+  { value: 's', label: '小' },
+  { value: 'm', label: '中' },
+  { value: 'l', label: '大' },
+  { value: 'xl', label: '超大' },
+] as const
+
+const FONT_OPTIONS = [
+  { value: 'sans', label: '无衬线' },
+  { value: 'serif', label: '衬线' },
+  { value: 'mono', label: '等宽' },
+  { value: 'draw', label: '手绘' },
+] as const
+
+const TEXT_ALIGN_OPTIONS = [
+  { value: 'start', label: '左对齐' },
+  { value: 'middle', label: '居中' },
+  { value: 'end', label: '右对齐' },
+] as const
+
+const FILL_OPTIONS = [
+  { value: 'none', label: '无填充' },
+  { value: 'semi', label: '柔和' },
+  { value: 'solid', label: '纯色' },
+] as const
+
+const DASH_OPTIONS = [
+  { value: 'draw', label: '手绘' },
+  { value: 'solid', label: '实线' },
+  { value: 'dashed', label: '虚线' },
+  { value: 'dotted', label: '点线' },
+] as const
+
+const BOX_ALIGN_OPTIONS = [
+  { value: 'start', label: '左对齐' },
+  { value: 'middle', label: '居中' },
+  { value: 'end', label: '右对齐' },
+] as const
+
+const VERTICAL_ALIGN_OPTIONS = [
+  { value: 'start', label: '顶部' },
+  { value: 'middle', label: '居中' },
+  { value: 'end', label: '底部' },
+] as const
+
+function isTextShape(shape: TLShape | null): shape is TLTextShape {
+  return !!shape && shape.type === 'text'
+}
+
+function isGeoShape(shape: TLShape | null): shape is TLGeoShape {
+  return !!shape && shape.type === 'geo'
+}
+
+function PropertySelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: string
+  options: readonly { value: string; label: string }[]
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="lab-field">
+      <span className="lab-field-label">{label}</span>
+      <select className="lab-select" value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function TldrawPropertiesPanel() {
+  const editor = useEditor()
+  const selectedShape = useValue('only-selected-shape', () => editor.getOnlySelectedShape(), [editor])
+  const selectedCount = useValue('selected-shape-count', () => editor.getSelectedShapeIds().length, [editor])
+  const [textValue, setTextValue] = React.useState('')
+  const replaceImageInputRef = React.useRef<HTMLInputElement | null>(null)
+
+  React.useEffect(() => {
+    if (isTextShape(selectedShape)) {
+      setTextValue(editor.getShapeUtil(selectedShape).getText(selectedShape) ?? '')
+      return
+    }
+    if (isGeoShape(selectedShape)) {
+      setTextValue(editor.getShapeUtil(selectedShape).getText(selectedShape) ?? '')
+      return
+    }
+    setTextValue('')
+  }, [editor, selectedShape])
+
+  const applyStyle = React.useCallback(
+    <T,>(style: { id: string }, value: T) => {
+      editor.markHistoryStoppingPoint(`style:${style.id}`)
+      editor.setStyleForSelectedShapes(style as any, value)
+    },
+    [editor]
+  )
+
+  const applyTextContent = React.useCallback(() => {
+    const shape = editor.getOnlySelectedShape()
+    if (!shape || !('richText' in (shape as any).props)) return
+    editor.markHistoryStoppingPoint('update-text-content')
+    editor.updateShapes([
+      {
+        id: shape.id,
+        type: shape.type,
+        props: {
+          richText: toRichText(textValue),
+        },
+      } as any,
+    ])
+  }, [editor, textValue])
+
+  const handleDuplicate = React.useCallback(() => {
+    const ids = editor.getSelectedShapeIds()
+    if (ids.length === 0) return
+    ;(editor as any).duplicateShapes(ids)
+  }, [editor])
+
+  const handleDelete = React.useCallback(() => {
+    const ids = editor.getSelectedShapeIds()
+    if (ids.length === 0) return
+    editor.deleteShapes(ids)
+  }, [editor])
+
+  const handleReplaceImage = React.useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      const shape = editor.getOnlySelectedShape()
+      if (!file || !shape || shape.type !== 'image') return
+      editor.markHistoryStoppingPoint('replace-image')
+      await editor.replaceExternalContent({
+        type: 'file-replace',
+        file,
+        shapeId: shape.id,
+        isImage: true,
+      })
+      if (replaceImageInputRef.current) {
+        replaceImageInputRef.current.value = ''
+      }
+    },
+    [editor]
+  )
+
+  const textShape = isTextShape(selectedShape) ? selectedShape : null
+  const geoShape = isGeoShape(selectedShape) ? selectedShape : null
+  const isImageShape = selectedShape?.type === 'image'
+  const bounds = selectedShape ? editor.getShapePageBounds(selectedShape) : null
+
+  if (selectedCount === 0) {
+    return null
+  }
+
+  const title =
+    selectedCount > 1
+      ? `已选择 ${selectedCount} 个对象`
+      : textShape
+      ? '文字属性'
+      : geoShape
+      ? '形状属性'
+      : isImageShape
+      ? '图片属性'
+      : `${selectedShape?.type ?? '对象'} 属性`
+
+  return (
+    <aside className="lab-sidepanel">
+      <div className="lab-sidepanel-head">
+        <div>
+          <div className="lab-sidepanel-title">{title}</div>
+          <div className="lab-sidepanel-meta">
+            {selectedCount > 1
+              ? '当前是多选状态，建议先做移动、缩放、对齐。'
+              : '这里的修改会直接作用到当前选中的对象。'}
+          </div>
+        </div>
+      </div>
+
+      {selectedCount > 1 && (
+        <div className="lab-sidepanel-empty">
+          <div className="lab-sidepanel-empty-title">多选模式</div>
+          <div className="lab-sidepanel-empty-copy">
+            这版属性栏先专注单对象编辑。多选时建议继续使用画布上的缩放、框选和对齐能力。
+          </div>
+          <div className="lab-sidepanel-actions">
+            <button type="button" className="lab-sidebtn" onClick={handleDuplicate}>
+              复制所选
+            </button>
+            <button type="button" className="lab-sidebtn lab-sidebtn-danger" onClick={handleDelete}>
+              删除所选
+            </button>
+          </div>
+        </div>
+      )}
+
+      {selectedCount === 1 && bounds && (
+        <div className="lab-sidepanel-section">
+          <div className="lab-sidepanel-section-title">对象信息</div>
+          <div className="lab-kv-grid">
+            <div className="lab-kv-item">
+              <span className="lab-kv-label">类型</span>
+              <span className="lab-kv-value">{selectedShape?.type}</span>
+            </div>
+            <div className="lab-kv-item">
+              <span className="lab-kv-label">位置</span>
+              <span className="lab-kv-value">
+                {Math.round(bounds.x)}, {Math.round(bounds.y)}
+              </span>
+            </div>
+            <div className="lab-kv-item">
+              <span className="lab-kv-label">尺寸</span>
+              <span className="lab-kv-value">
+                {Math.round(bounds.w)} × {Math.round(bounds.h)}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(textShape || geoShape) && selectedCount === 1 && (
+        <div className="lab-sidepanel-body">
+          <div className="lab-sidepanel-section">
+            <div className="lab-sidepanel-section-title">文本</div>
+            <label className="lab-field">
+              <span className="lab-field-label">文本内容</span>
+              <textarea
+                className="lab-textarea"
+                rows={4}
+                value={textValue}
+                onChange={(event) => setTextValue(event.target.value)}
+                onBlur={applyTextContent}
+              />
+            </label>
+            <button type="button" className="lab-sidebtn" onClick={applyTextContent}>
+              应用文本
+            </button>
+          </div>
+
+          <div className="lab-sidepanel-section">
+            <div className="lab-sidepanel-section-title">文字样式</div>
+            <PropertySelect
+              label="字体"
+              value={(textShape ?? geoShape)!.props.font}
+              options={FONT_OPTIONS}
+              onChange={(value) => applyStyle(DefaultFontStyle, value)}
+            />
+            <PropertySelect
+              label="字号"
+              value={(textShape ?? geoShape)!.props.size}
+              options={TEXT_SIZE_OPTIONS}
+              onChange={(value) => applyStyle(DefaultSizeStyle, value)}
+            />
+
+            <PropertySelect
+              label={textShape ? '文字颜色' : '描边颜色'}
+              value={(textShape ?? geoShape)!.props.color}
+              options={COLOR_OPTIONS}
+              onChange={(value) => applyStyle(DefaultColorStyle, value)}
+            />
+
+            {textShape && (
+              <PropertySelect
+                label="对齐"
+                value={textShape.props.textAlign}
+                options={TEXT_ALIGN_OPTIONS}
+                onChange={(value) => applyStyle(DefaultTextAlignStyle, value)}
+              />
+            )}
+          </div>
+
+          {geoShape && (
+            <div className="lab-sidepanel-section">
+              <div className="lab-sidepanel-section-title">形状样式</div>
+              <PropertySelect
+                label="填充"
+                value={geoShape.props.fill}
+                options={FILL_OPTIONS}
+                onChange={(value) => applyStyle(DefaultFillStyle, value)}
+              />
+              <PropertySelect
+                label="描边"
+                value={geoShape.props.dash}
+                options={DASH_OPTIONS}
+                onChange={(value) => applyStyle(DefaultDashStyle, value)}
+              />
+              <PropertySelect
+                label="水平对齐"
+                value={geoShape.props.align}
+                options={BOX_ALIGN_OPTIONS}
+                onChange={(value) => applyStyle(DefaultHorizontalAlignStyle, value)}
+              />
+              <PropertySelect
+                label="垂直对齐"
+                value={geoShape.props.verticalAlign}
+                options={VERTICAL_ALIGN_OPTIONS}
+                onChange={(value) => applyStyle(DefaultVerticalAlignStyle, value)}
+              />
+            </div>
+          )}
+
+          <div className="lab-sidepanel-actions">
+            <button type="button" className="lab-sidebtn" onClick={handleDuplicate}>
+              复制对象
+            </button>
+            <button type="button" className="lab-sidebtn lab-sidebtn-danger" onClick={handleDelete}>
+              删除对象
+            </button>
+          </div>
+
+          <div className="lab-sidepanel-note">
+            文本内容支持直接在这里改，也可以双击画布上的对象继续编辑。常用字体、颜色、对齐会实时生效。
+          </div>
+        </div>
+      )}
+
+      {isImageShape && selectedCount === 1 && (
+        <div className="lab-sidepanel-body">
+          <div className="lab-sidepanel-section">
+            <div className="lab-sidepanel-section-title">图片</div>
+            <div className="lab-sidepanel-empty-copy">
+              可以替换图片内容，位置、缩放和旋转继续直接在画布上完成。
+            </div>
+            <div className="lab-sidepanel-actions">
+              <button type="button" className="lab-sidebtn" onClick={() => replaceImageInputRef.current?.click()}>
+                替换图片
+              </button>
+              <button type="button" className="lab-sidebtn" onClick={handleDuplicate}>
+                复制对象
+              </button>
+              <button type="button" className="lab-sidebtn lab-sidebtn-danger" onClick={handleDelete}>
+                删除对象
+              </button>
+            </div>
+            <input ref={replaceImageInputRef} type="file" accept="image/*" hidden onChange={handleReplaceImage} />
+          </div>
+        </div>
+      )}
+
+      {selectedCount === 1 && !textShape && !geoShape && !isImageShape && selectedShape && (
+        <div className="lab-sidepanel-empty">
+          <div className="lab-sidepanel-empty-title">下一步再细化</div>
+          <div className="lab-sidepanel-empty-copy">
+            {selectedShape.type} 目前已经能选中和变换，后续我们可以再为这类对象补更细的检查器。
+          </div>
+        </div>
+      )}
+    </aside>
+  )
+}
+
+function EditorSurface() {
+  return (
+    <>
+      <TldrawHostBridge />
+      <TldrawPropertiesPanel />
+    </>
+  )
+}
+
+async function fetchImageAsFile(url: string, nameHint?: string) {
+  const response = await fetch(url, { credentials: 'include' })
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image: HTTP ${response.status}`)
+  }
+  const blob = await response.blob()
+  const mime = blob.type || 'image/png'
+  const ext = mime.split('/')[1] || 'png'
+  const fileName = (nameHint || `designflow-${Date.now()}.${ext}`).replace(/[\\/:*?"<>|]+/g, '_')
+  return new File([blob], fileName, { type: mime })
+}
+
+function TldrawHostBridge() {
+  const editor = useEditor()
+
+  const clearCanvas = React.useCallback(
+    (pageName?: string) => {
+      const ids = editor.getCurrentPageShapes().map((shape) => shape.id)
+      if (ids.length) {
+        editor.deleteShapes(ids)
+      }
+      editor.selectNone()
+      const page = editor.getCurrentPage()
+      if (page && pageName) {
+        editor.renamePage(page.id, pageName)
+      }
+      editor.zoomToFit({ animation: { duration: 0 } })
+    },
+    [editor]
+  )
+
+  const insertImage = React.useCallback(
+    async ({ url, mode, name }: { url: string; mode?: 'image' | 'background'; name?: string }) => {
+      const file = await fetchImageAsFile(url, name)
+      await editor.putExternalContent({
+        type: 'files',
+        files: [file],
+        point: editor.getViewportPageBounds().center,
+      } as any)
+
+      const insertedIds = editor.getSelectedShapeIds()
+      if (!insertedIds.length) return
+
+      if (mode === 'background') {
+        const shape = editor.getOnlySelectedShape()
+        if (!shape || shape.type !== 'image') return
+        const viewport = editor.getViewportPageBounds()
+        editor.updateShapes([
+          {
+            id: shape.id,
+            type: shape.type,
+            x: viewport.minX,
+            y: viewport.minY,
+            props: {
+              w: viewport.width,
+              h: viewport.height,
+            },
+          } as any,
+        ])
+        editor.sendToBack([shape.id])
+        if (!shape.isLocked) {
+          editor.toggleLock([shape.id])
+        }
+        editor.selectNone()
+      } else {
+        editor.bringToFront(insertedIds)
+      }
+    },
+    [editor]
+  )
+
+  const insertImages = React.useCallback(
+    async ({
+      urls,
+      mode,
+      name,
+    }: {
+      urls: string[]
+      mode?: 'image' | 'background'
+      name?: string
+    }) => {
+      const cleanUrls = urls.filter(Boolean)
+      if (!cleanUrls.length) return
+
+      if (cleanUrls.length === 1 || mode === 'background') {
+        await insertImage({ url: cleanUrls[0], mode, name })
+        return
+      }
+
+      const insertedShapeIds: string[] = []
+      for (let i = 0; i < cleanUrls.length; i++) {
+        await insertImage({
+          url: cleanUrls[i],
+          mode: 'image',
+          name: cleanUrls.length > 1 ? `${name || '生成结果'} ${i + 1}` : name,
+        })
+        const ids = editor.getSelectedShapeIds()
+        if (ids.length) insertedShapeIds.push(ids[0])
+      }
+
+      const shapes = insertedShapeIds
+        .map((id) => editor.getShape(id as any))
+        .filter(Boolean) as TLShape[]
+      if (!shapes.length) return
+
+      const viewport = editor.getViewportPageBounds()
+      const spacing = 32
+      const cols = Math.max(1, Math.min(3, Math.ceil(Math.sqrt(shapes.length))))
+      const rows = Math.ceil(shapes.length / cols)
+
+      const widths = new Array(cols).fill(0)
+      const heights = new Array(rows).fill(0)
+
+      shapes.forEach((shape, index) => {
+        const bounds = editor.getShapePageBounds(shape)
+        if (!bounds) return
+        const col = index % cols
+        const row = Math.floor(index / cols)
+        widths[col] = Math.max(widths[col], bounds.width)
+        heights[row] = Math.max(heights[row], bounds.height)
+      })
+
+      const totalWidth = widths.reduce((sum, w) => sum + w, 0) + spacing * (cols - 1)
+      const totalHeight = heights.reduce((sum, h) => sum + h, 0) + spacing * (rows - 1)
+
+      const startX = viewport.center.x - totalWidth / 2
+      const startY = viewport.center.y - totalHeight / 2
+
+      const updates: any[] = []
+      shapes.forEach((shape, index) => {
+        const bounds = editor.getShapePageBounds(shape)
+        if (!bounds) return
+        const col = index % cols
+        const row = Math.floor(index / cols)
+        const x =
+          startX +
+          widths.slice(0, col).reduce((sum, w) => sum + w, 0) +
+          spacing * col +
+          (widths[col] - bounds.width) / 2
+        const y =
+          startY +
+          heights.slice(0, row).reduce((sum, h) => sum + h, 0) +
+          spacing * row +
+          (heights[row] - bounds.height) / 2
+
+        updates.push({
+          id: shape.id,
+          type: shape.type,
+          x,
+          y,
+        })
+      })
+
+      if (updates.length) {
+        editor.updateShapes(updates)
+        ;(editor as any).setSelectedShapes(insertedShapeIds)
+        editor.zoomToFit({ animation: { duration: 0 } })
+      }
+    },
+    [editor, insertImage]
+  )
+
+  React.useEffect(() => {
+    const notifyReady = () => {
+      try {
+        window.parent.postMessage({ type: 'designflow:editor-ready' }, '*')
+      } catch (error) {}
+    }
+
+    const handleMessage = async (event: MessageEvent) => {
+      const data = event.data
+      if (!data || typeof data !== 'object') return
+
+      if (data.type === 'designflow:new-canvas') {
+        clearCanvas(data.pageName)
+        return
+      }
+
+      if (data.type === 'designflow:set-page-name') {
+        const page = editor.getCurrentPage()
+        if (page && data.pageName) {
+          editor.renamePage(page.id, data.pageName)
+        }
+        return
+      }
+
+      if (data.type === 'designflow:insert-image' && (data.url || (Array.isArray(data.urls) && data.urls.length))) {
+        try {
+          const urls = Array.isArray(data.urls) && data.urls.length ? data.urls : [data.url]
+          await insertImages({
+            urls,
+            mode: data.mode === 'background' ? 'background' : 'image',
+            name: data.name,
+          })
+          window.parent.postMessage({ type: 'designflow:editor-inserted', mode: data.mode || 'image', urls }, '*')
+        } catch (error: any) {
+          window.parent.postMessage({ type: 'designflow:editor-error', message: error?.message || 'insert_failed' }, '*')
+        }
+      }
+    }
+
+    notifyReady()
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [clearCanvas, editor, insertImages])
+
+  return null
+}
+
+export default function App() {
+  const handleMount = React.useCallback((instance: Editor) => {
+    instance.selectNone()
+    instance.setCurrentTool('select')
+    const page = instance.getCurrentPage()
+    if (page && page.name === 'Page 1') {
+      instance.renamePage(page.id, '画板 1')
+    }
+    instance.zoomToFit({ animation: { duration: 0 } })
+  }, [])
+
+  const components = React.useMemo<TLComponents>(
+    () => ({
+      HelperButtons: null,
+      StylePanel: null,
+    }),
+    []
+  )
+
+  const assetUrls = React.useMemo(
+    () => ({
+      icons: Object.fromEntries(iconTypes.map((name) => [name, `./tldraw-assets/0_merged.svg#${name}`])),
+      translations: {
+        en: './tldraw-assets/en.json',
+        'zh-cn': './tldraw-assets/zh-cn.json',
+      },
+    }),
+    []
+  )
+
+  return (
+    <div className="app-shell">
+      <div className="app-frame">
+        <div className="canvas-shell">
+          <Tldraw onMount={handleMount} components={components} locale="zh-cn" assetUrls={assetUrls}>
+            <EditorSurface />
+          </Tldraw>
+        </div>
+      </div>
+    </div>
+  )
+}

@@ -634,6 +634,60 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => 
                   </div>
                 )}
               </div>
+            ) : m.type === 'proxy-download-choice' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ fontSize: 12, color: 'var(--ink)' }}>{m.text || '这个链接支持多种格式，请选择一种下载。'}</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {(m.formats || []).map(function(fmt) {
+                    return React.createElement('button', {
+                      key: fmt,
+                      onClick: function() { m.onChoose && m.onChoose(fmt); },
+                      style: {
+                        fontSize: 11,
+                        padding: '5px 10px',
+                        borderRadius: 6,
+                        border: '1px solid var(--line)',
+                        background: 'white',
+                        color: 'var(--ink)',
+                        cursor: 'pointer',
+                      }
+                    }, fmt);
+                  })}
+                </div>
+              </div>
+            ) : m.type === 'proxy-download-result' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ width: 18, height: 18, borderRadius: 99, background: 'var(--ok)', flexShrink: 0 }}/>
+                  <span style={{ fontSize: 13, color: 'var(--ok)', fontWeight: 600 }}>下载完成</span>
+                </div>
+                <div style={{
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  background: 'var(--panel)',
+                  border: '1px solid var(--line-2)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>{m.filename || '下载文件'}</div>
+                  <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>
+                    {m.format ? (m.format + ' · ') : ''}{m.sizeText || ''}
+                  </div>
+                </div>
+                {m.downloadUrl && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <a
+                      href={m.downloadUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={actionBtnPrimaryStyle}
+                    >
+                      <I.download size={11}/>下载文件
+                    </a>
+                  </div>
+                )}
+              </div>
             ) : m.type === 'thinking' ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <div style={{
@@ -670,7 +724,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [composerHeight, setComposerHeight] = React.useState(null); // null = 默认自动高度
   const composerRef = React.useRef(null);
   const dragRef = React.useRef({ dragging: false, startY: 0, startH: 0 });
-  const COMMANDS = React.useMemo(() => ['/特殊品（完整）', '/特殊品', '/Nano Banana pro', '/Gpt image 2'], []);
+  const COMMANDS = React.useMemo(() => ['/花瓣下载', '/特殊品（完整）', '/特殊品', '/Nano Banana pro', '/Gpt image 2'], []);
   const displayValue = lockedCommand ? (text ? (lockedCommand + ' ' + text) : (lockedCommand + ' ')) : text;
   const lockedPrefixLength = lockedCommand ? (lockedCommand.length + 1) : 0;
 
@@ -1495,12 +1549,16 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       }
       const data = await res.json();
       if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
+      const imageUrl = apiBase + data.url;
       const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
       setMessages(msgs => msgs.map(m =>
         m.type === 'ai-image-generating' && m.startedAt === startedAt
-          ? { ...m, status: 'done', imageUrl: apiBase + data.url, finalElapsed }
+          ? { ...m, status: 'done', imageUrl, finalElapsed }
           : m
       ));
+      if (onComposeComplete) {
+        onComposeComplete(null, null, [imageUrl], null);
+      }
       loadAiChatHistory();
     } catch (e) {
       const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
@@ -1512,7 +1570,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       loadAiChatHistory();
     }
     setIsLoading(false);
-  }, [currentAiChatId, enhancePromptWithProductRefs, loadAiChatHistory, loadResolvedRefFiles, parseProductRefs]);
+  }, [currentAiChatId, enhancePromptWithProductRefs, loadAiChatHistory, loadResolvedRefFiles, onComposeComplete, parseProductRefs]);
 
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
     if (!text.trim() || isLoading) return;
@@ -1538,6 +1596,77 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
         setMessages(msgs => [...msgs, { who: 'ai', text: '设置头像失败: ' + (e.message || '未知错误') }]);
       }
       setIsLoading(false);
+      return;
+    }
+
+    // ── 花瓣下载 ─────────────────────────────────────────────────────────────
+    if (trimmed.startsWith('/花瓣下载')) {
+      const args = trimmed.replace(/^\/花瓣下载\s*/, '').trim();
+      const match = args.match(/^(\S+)(?:\s+([A-Za-z0-9._-]+))?$/);
+      setMessages(msgs => [...msgs, { who: 'user', text }]);
+      if (!match) {
+        setMessages(msgs => [...msgs, { who: 'ai', text: '请使用格式：/花瓣下载 URL 或 /花瓣下载 URL PSD', meta: 'Loom' }]);
+        return;
+      }
+      const normalizeHuabanSource = function(value) {
+        const raw = (value || '').trim();
+        if (!raw) return raw;
+        if (/^https?:\/\//i.test(raw)) return raw;
+        if (/^\d+$/.test(raw)) return 'https://huaban.com/pins/' + raw;
+        return 'https://huaban.com/pins/' + raw.replace(/^\/+|\/+$/g, '');
+      };
+      const sourceUrl = normalizeHuabanSource(match[1]);
+      const selectedFormat = match[2] || '';
+      const fmtBytes = function(bytes) {
+        var n = Number(bytes || 0);
+        if (!n) return '';
+        if (n < 1024) return n + ' B';
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1).replace(/\\.0$/, '') + ' KB';
+        return (n / (1024 * 1024)).toFixed(1).replace(/\\.0$/, '') + ' MB';
+      };
+      const runProxyDownload = async function(url, format, replaceIndex) {
+        setIsLoading(true);
+        let pendingIdx = replaceIndex;
+        if (pendingIdx == null) {
+          setMessages(msgs => {
+            pendingIdx = msgs.length;
+            return [...msgs, { who: 'ai', type: 'thinking', text: '正在检测下载格式…', meta: '花瓣下载' }];
+          });
+        } else {
+          setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx ? { who: 'ai', type: 'thinking', text: '正在下载文件…', meta: '花瓣下载' } : m));
+        }
+        try {
+          const res = await window.API.proxyDownload(url, format || null);
+          if (res.status === 'choose_format') {
+            setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx ? {
+              who: 'ai',
+              type: 'proxy-download-choice',
+              meta: '花瓣下载',
+              text: res.message || '请选择下载格式',
+              formats: res.formats || [],
+              onChoose: function(fmt) { runProxyDownload(url, fmt, pendingIdx); },
+            } : m));
+          } else {
+            setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx ? {
+              who: 'ai',
+              type: 'proxy-download-result',
+              meta: '花瓣下载',
+              filename: res.filename,
+              format: res.format,
+              sizeText: fmtBytes(res.size),
+              downloadUrl: (window.API_BASE || window.location.origin) + res.download_url,
+            } : m));
+          }
+        } catch (e) {
+          setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx ? {
+            who: 'ai',
+            text: '下载失败: ' + (e.message || '未知错误'),
+            meta: '花瓣下载',
+          } : m));
+        }
+        setIsLoading(false);
+      };
+      await runProxyDownload(sourceUrl, selectedFormat, null);
       return;
     }
 
@@ -1671,7 +1800,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
               window.lastComposeJobId = job['id'];
               window.lastComposeEndpoint = _pollBase;
               window.lastComposeFrameNames = frameNames;
-              onComposeComplete(null, s.penpot_edit_url, null, base);
+              onComposeComplete(null, s.penpot_edit_url, urls, base);
             }
             done = true;
           } else if (s.status === 'failed') {

@@ -184,6 +184,19 @@ class PenpotClient:
             self._refresh_token()
             return self._rpc(command, params, files, transit, _retry=False)
 
+        if resp.status_code == 401 and _retry and self._email and self._password:
+            self._refresh_token()
+            return self.export_frame(
+                file_id=file_id,
+                page_id=page_id,
+                frame_id=frame_id,
+                scale=scale,
+                name=name,
+                wait_secs=0,
+                background=background,
+                _retry=False,
+            )
+
         if not resp.ok:
             raise PenpotError(
                 f"{command} HTTP {resp.status_code}: {resp.text}"
@@ -201,6 +214,15 @@ class PenpotClient:
         if not (self._email and self._password):
             raise PenpotError("Token 已过期，且未保存邮密，无法自动刷新")
         self.login(self._email, self._password)
+
+    def _ensure_export_login(self) -> None:
+        """????????? profile_id ? cookie?"""
+        if self._profile_id is not None:
+            return
+        if self._email and self._password:
+            self.login(self._email, self._password)
+            return
+        raise PenpotError("????? login() ?? profile_id")
 
     # ── 文件结构 ──────────────────────────────────────────────────────────────
 
@@ -759,7 +781,11 @@ class PenpotClient:
             "operations": [
                 {"type": kw("set"), "attr": kw("content"), "val": new_content},
                 # 清除 position-data 缓存，让 Penpot 用 content 重新布局
-                {"type": kw("set"), "attr": kw("position-data"), "val": None},
+                {
+                    "type": kw("set"),
+                    "attr": kw("position-data"),
+                    "val": None,
+                },
                 # 保留模板原始 grow-type（fixed / auto-height / auto-width）
                 {"type": kw("set"), "attr": kw("grow-type"), "val": kw(grow_type)},
                 # 保留垂直对齐，fixed 框体导出器需要此属性定位文字
@@ -981,6 +1007,7 @@ class PenpotClient:
         name: str = "export",
         wait_secs: float = 3.0,
         background: bool = True,
+        _retry: bool = True,
     ) -> bytes:
         """
         通过 /api/export 导出指定 frame 为 PNG 字节。
@@ -994,6 +1021,8 @@ class PenpotClient:
         if wait_secs > 0:
             time.sleep(wait_secs)  # 等待 Penpot backend 写入并广播到 exporter
 
+
+        self._ensure_export_login()
         payload = {
             "cmd": kw("export-shapes"),
             "exports": [

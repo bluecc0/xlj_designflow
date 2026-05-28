@@ -131,6 +131,20 @@
         body: JSON.stringify({ refs: refs || [] }),
       }).then(function(res) { return res.refs || []; });
     },
+    proxyDownloadInspect: function(url) {
+      return request('/proxy-download/inspect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url }),
+      });
+    },
+    proxyDownload: function(url, format) {
+      return request('/proxy-download/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url, format: format || null }),
+      });
+    },
     fetchImageTypes: function() {
       return request('/image-types').then(function(res) { return res.types; });
     },

@@ -1,0 +1,423 @@
+from __future__ import annotations
+
+import asyncio
+import mimetypes
+import re
+from pathlib import Path
+from typing import Any
+from urllib.parse import urljoin, urlparse
+
+import httpx
+from playwright.async_api import (
+    BrowserContext,
+    Download,
+    Error as PlaywrightError,
+    Page,
+    async_playwright,
+)
+
+from .config import settings
+
+
+DOWNLOAD_TEXT_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        "\u4e0b\u8f7d",
+        "\u7acb\u5373\u4e0b\u8f7d",
+        "\u539f\u56fe",
+        "\u7d20\u6750",
+        r"download",
+        r"save",
+    ]
+]
+
+DIRECT_FILE_EXTENSIONS = {
+    ".zip",
+    ".rar",
+    ".7z",
+    ".psd",
+    ".ai",
+    ".eps",
+    ".pdf",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".svg",
+    ".webp",
+    ".gif",
+    ".mp4",
+    ".mov",
+}
+
+KNOWN_FORMATS = ("PSD", "PNG", "AI", "EPS", "JPG", "JPEG", "PDF", "SVG")
+
+
+class BrowserRelay:
+    def __init__(self) -> None:
+        self._playwright = None
+        self._context: BrowserContext | None = None
+        self._lock = asyncio.Lock()
+
+    async def start(self) -> None:
+        settings.relay_storage_dir.mkdir(parents=True, exist_ok=True)
+        settings.relay_profile_dir.mkdir(parents=True, exist_ok=True)
+        self._playwright = await async_playwright().start()
+        self._context = await self._playwright.chromium.launch_persistent_context(
+            user_data_dir=str(settings.relay_profile_dir),
+            headless=settings.relay_headless,
+            accept_downloads=True,
+            channel=settings.browser_channel,
+        )
+
+    async def stop(self) -> None:
+        if self._context is not None:
+            await self._context.close()
+            self._context = None
+        if self._playwright is not None:
+            await self._playwright.stop()
+            self._playwright = None
+
+    async def ensure_started(self) -> BrowserContext:
+        if self._context is None:
+            await self.start()
+        assert self._context is not None
+        return self._context
+
+    async def login_shell(self) -> None:
+        context = await self.ensure_started()
+        page = await context.new_page()
+        await page.goto(settings.relay_login_url)
+        print(f"Browser opened at {settings.relay_login_url}")
+        print("Log in manually, confirm downloads work, then press Enter here to close.")
+        input()
+        await page.close()
+
+    async def fetch_with_format(
+        self, source_url: str, download_format: str | None
+    ) -> tuple[Path, dict[str, Any]]:
+        async with self._lock:
+            context = await self.ensure_started()
+            parsed = urlparse(source_url)
+            if parsed.hostname and parsed.hostname.lower() not in settings.allowed_hosts:
+                raise ValueError(f"Host not allowed: {parsed.hostname}")
+
+            if Path(parsed.path).suffix.lower() in DIRECT_FILE_EXTENSIONS:
+                return await self._download_via_http(context, source_url)
+
+            page = await context.new_page()
+            try:
+                return await self._download_from_page(page, source_url, download_format)
+            finally:
+                await page.close()
+
+    async def inspect(self, source_url: str) -> dict[str, Any]:
+        async with self._lock:
+            context = await self.ensure_started()
+            parsed = urlparse(source_url)
+            if parsed.hostname and parsed.hostname.lower() not in settings.allowed_hosts:
+                raise ValueError(f"Host not allowed: {parsed.hostname}")
+
+            suffix = Path(parsed.path).suffix.lower()
+            if suffix in DIRECT_FILE_EXTENSIONS:
+                direct_format = suffix.lstrip(".").upper()
+                return {
+                    "source_url": source_url,
+                    "title": Path(parsed.path).name,
+                    "formats": [direct_format],
+                }
+
+            page = await context.new_page()
+            try:
+                await page.goto(source_url, wait_until="domcontentloaded")
+                await page.wait_for_timeout(1500)
+                title = await page.title()
+                formats = await self._discover_download_formats(page)
+                return {
+                    "source_url": source_url,
+                    "title": title,
+                    "formats": formats,
+                }
+            finally:
+                await page.close()
+
+    async def _download_from_page(
+        self, page: Page, source_url: str, download_format: str | None
+    ) -> tuple[Path, dict[str, Any]]:
+        await page.goto(source_url, wait_until="domcontentloaded")
+        await page.wait_for_timeout(1500)
+
+        download = await self._try_click_download(page, download_format)
+        if download is not None:
+            return await self._save_playwright_download(download, source_url)
+
+        if download_format:
+            raise RuntimeError(f"Unable to download requested format: {download_format}")
+
+        candidate = await self._find_download_candidate(page)
+        if candidate is None:
+            raise RuntimeError("No download action found on page.")
+        return await self._download_via_http(page.context, candidate, source_url)
+
+    async def _try_click_download(
+        self, page: Page, download_format: str | None
+    ) -> Download | None:
+        if download_format:
+            targeted = await self._try_click_specific_format(page, download_format)
+            if targeted is not None:
+                return targeted
+
+        for locator in [page.locator("a, button"), page.locator("[role='button']")]:
+            count = await locator.count()
+            for index in range(min(count, 30)):
+                handle = locator.nth(index)
+                try:
+                    text = (await handle.inner_text(timeout=500)).strip()
+                except PlaywrightError:
+                    continue
+                if not text:
+                    continue
+                if any(pattern.search(text) for pattern in DOWNLOAD_TEXT_PATTERNS):
+                    download = await self._click_download_flow(page, handle)
+                    if download is not None:
+                        return download
+        return None
+
+    async def _try_click_specific_format(
+        self, page: Page, download_format: str
+    ) -> Download | None:
+        normalized = download_format.strip().upper()
+
+        direct_handle = await self._find_clickable_with_text(
+            page,
+            {f"\u4e0b\u8f7d {normalized}", f"\u4e0b\u8f7d{normalized}"},
+            selectors=["button", "a", "[role='button']"],
+        )
+        if direct_handle is not None:
+            download = await self._click_download_flow(page, direct_handle)
+            if download is not None:
+                return download
+
+        trigger = await self._find_clickable_with_text(
+            page,
+            {"\u4e0b\u8f7d PSD", "\u4e0b\u8f7dPNG", "\u4e0b\u8f7d PNG", "\u4e0b\u8f7d AI", "\u4e0b\u8f7d EPS", "\u4e0b\u8f7d JPG", "\u4e0b\u8f7d JPEG"},
+            selectors=["button", "a", "[role='button']"],
+        )
+        if trigger is not None:
+            try:
+                await trigger.click()
+                await page.wait_for_timeout(800)
+            except PlaywrightError:
+                pass
+
+        dropdown_handle = await self._find_clickable_with_text(
+            page,
+            {f"\u4e0b\u8f7d {normalized}", f"\u4e0b\u8f7d{normalized}", normalized},
+            selectors=[".ant-dropdown *", ".ant-modal *", "[role='dialog'] *", "button", "a", "[role='button']"],
+        )
+        if dropdown_handle is not None:
+            return await self._click_download_flow(page, dropdown_handle)
+
+        return None
+
+    async def _click_download_flow(self, page: Page, handle) -> Download | None:
+        try:
+            async with page.expect_download(timeout=5_000) as event:
+                await handle.click()
+            return await event.value
+        except PlaywrightError:
+            pass
+
+        await page.wait_for_timeout(1_000)
+        for label in ("\u786e\u8ba4\u4e0b\u8f7d", "\u518d\u6b21\u4e0b\u8f7d"):
+            confirm = page.locator("button").filter(has_text=label).first
+            try:
+                if await confirm.is_visible():
+                    async with page.expect_download(timeout=20_000) as event:
+                        await confirm.click()
+                    return await event.value
+            except PlaywrightError:
+                continue
+
+        return None
+
+    async def _discover_download_formats(self, page: Page) -> list[str]:
+        formats = self._extract_formats(await self._collect_candidate_texts(page))
+
+        trigger = await self._find_clickable_with_text(
+            page,
+            {
+                "\u4e0b\u8f7d PSD",
+                "\u4e0b\u8f7d PNG",
+                "\u4e0b\u8f7d AI",
+                "\u4e0b\u8f7d EPS",
+                "\u4e0b\u8f7d JPG",
+                "\u4e0b\u8f7d JPEG",
+                "\u4e0b\u8f7d",
+            },
+        )
+        if trigger is not None:
+            try:
+                await trigger.click()
+                await page.wait_for_timeout(800)
+            except PlaywrightError:
+                pass
+
+        merged = formats[:]
+        seen = set(merged)
+        for item in self._extract_formats(await self._collect_candidate_texts(page)):
+            if item not in seen:
+                seen.add(item)
+                merged.append(item)
+        return merged
+
+    async def _collect_candidate_texts(self, page: Page) -> list[str]:
+        texts: list[str] = []
+        selectors = [
+            "button",
+            "a",
+            "[role='button']",
+            ".ant-dropdown *",
+            ".ant-modal *",
+            "[role='dialog'] *",
+        ]
+        for selector in selectors:
+            locator = page.locator(selector)
+            count = await locator.count()
+            for index in range(min(count, 80)):
+                handle = locator.nth(index)
+                try:
+                    text = (await handle.inner_text(timeout=300)).strip()
+                except PlaywrightError:
+                    continue
+                if text:
+                    texts.append(text)
+        return texts
+
+    def _extract_formats(self, texts: list[str]) -> list[str]:
+        formats: list[str] = []
+        seen: set[str] = set()
+        for raw_text in texts:
+            text = " ".join(raw_text.upper().split())
+            for pattern in (
+                r"\u4e0b\u8f7d\s*(PSD|PNG|AI|EPS|JPG|JPEG|PDF|SVG)\b",
+                r"\b(PSD|PNG|AI|EPS|JPG|JPEG|PDF|SVG)\s*\u6587\u4ef6\b",
+            ):
+                for match in re.findall(pattern, text):
+                    if match in KNOWN_FORMATS and match not in seen:
+                        seen.add(match)
+                        formats.append(match)
+        return formats
+
+    async def _find_clickable_with_text(
+        self, page: Page, targets: set[str], selectors: list[str] | None = None
+    ):
+        normalized_targets = {" ".join(item.upper().split()) for item in targets}
+        search_selectors = selectors or [
+            "button",
+            "a",
+            "[role='button']",
+            ".ant-dropdown *",
+            ".ant-modal *",
+            "[role='dialog'] *",
+        ]
+        for selector in search_selectors:
+            locator = page.locator(selector)
+            count = await locator.count()
+            for index in range(min(count, 80)):
+                handle = locator.nth(index)
+                try:
+                    text = (await handle.inner_text(timeout=300)).strip()
+                except PlaywrightError:
+                    continue
+                if not text:
+                    continue
+                normalized = " ".join(text.upper().split())
+                if normalized not in normalized_targets:
+                    continue
+                try:
+                    if await handle.is_visible():
+                        return handle
+                except PlaywrightError:
+                    continue
+        return None
+
+    async def _find_download_candidate(self, page: Page) -> str | None:
+        anchors = page.locator("a[href]")
+        count = await anchors.count()
+        for index in range(min(count, 80)):
+            handle = anchors.nth(index)
+            href = await handle.get_attribute("href")
+            if not href:
+                continue
+            lower_href = href.lower()
+            try:
+                text = (await handle.inner_text(timeout=500) or "").strip()
+            except PlaywrightError:
+                text = ""
+            if any(ext in lower_href for ext in DIRECT_FILE_EXTENSIONS):
+                return page.url.rstrip("/") if href == "#" else urljoin(page.url, href)
+            if any(pattern.search(text) for pattern in DOWNLOAD_TEXT_PATTERNS):
+                return urljoin(page.url, href)
+        return None
+
+    async def _download_via_http(
+        self,
+        context: BrowserContext,
+        file_url: str,
+        source_url: str | None = None,
+    ) -> tuple[Path, dict[str, Any]]:
+        cookies = await context.cookies()
+        cookie_header = "; ".join(f"{item['name']}={item['value']}" for item in cookies)
+        headers = {"Cookie": cookie_header, "User-Agent": "Mozilla/5.0 Relay"}
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=settings.relay_request_timeout_seconds,
+        ) as client:
+            response = await client.get(file_url, headers=headers)
+            response.raise_for_status()
+            filename = self._resolve_filename(response, file_url)
+            file_path = self._unique_path(filename)
+            file_path.write_bytes(response.content)
+            return file_path, {
+                "source_url": source_url or file_url,
+                "filename": file_path.name,
+                "content_type": response.headers.get("content-type"),
+                "size": file_path.stat().st_size,
+            }
+
+    async def _save_playwright_download(
+        self, download: Download, source_url: str
+    ) -> tuple[Path, dict[str, Any]]:
+        suggested = download.suggested_filename
+        file_path = self._unique_path(suggested)
+        await download.save_as(str(file_path))
+        return file_path, {
+            "source_url": source_url,
+            "filename": file_path.name,
+            "content_type": mimetypes.guess_type(suggested)[0],
+            "size": file_path.stat().st_size,
+        }
+
+    def _resolve_filename(self, response: httpx.Response, file_url: str) -> str:
+        disposition = response.headers.get("content-disposition", "")
+        match = re.search(r'filename="?([^";]+)"?', disposition)
+        if match:
+            return match.group(1)
+        parsed = urlparse(file_url)
+        name = Path(parsed.path).name
+        if name:
+            return name
+        return "download.bin"
+
+    def _unique_path(self, filename: str) -> Path:
+        candidate = settings.relay_storage_dir / Path(filename).name
+        stem = candidate.stem
+        suffix = candidate.suffix
+        counter = 1
+        while candidate.exists():
+            candidate = settings.relay_storage_dir / f"{stem}-{counter}{suffix}"
+            counter += 1
+        return candidate
+
+
+relay = BrowserRelay()

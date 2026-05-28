@@ -1,9 +1,55 @@
 ﻿// Main canvas — now simplified to just show the selected template preview.
 
-const Canvas = ({ template, resultTemplate }) => {
+const Canvas = ({ template, resultTemplate, editorCommand }) => {
   const t = template;
-  // resultTemplate: null | object — template with frames containing resultUrl instead of thumbnail
   const hasResult = resultTemplate != null;
+  const iframeRef = React.useRef(null);
+  const editorReadyRef = React.useRef(false);
+  const pendingMessageRef = React.useRef(null);
+
+  const postToEditor = React.useCallback((message) => {
+    const win = iframeRef.current && iframeRef.current.contentWindow;
+    if (!win) return false;
+    win.postMessage(message, '*');
+    return true;
+  }, []);
+
+  React.useEffect(() => {
+    const handleMessage = (event) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'designflow:editor-ready') {
+        editorReadyRef.current = true;
+        if (pendingMessageRef.current) {
+          postToEditor(pendingMessageRef.current);
+          pendingMessageRef.current = null;
+        }
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [postToEditor]);
+
+  React.useEffect(() => {
+    if (!editorCommand) return;
+    const message = editorCommand.type === 'insert-images'
+      ? {
+          type: 'designflow:insert-image',
+          urls: editorCommand.urls || [],
+          mode: editorCommand.mode,
+          name: editorCommand.name,
+        }
+      : {
+          type: 'designflow:new-canvas',
+          pageName: editorCommand.pageName || t?.name || '画板 1',
+        };
+
+    if (editorReadyRef.current) {
+      postToEditor(message);
+    } else {
+      pendingMessageRef.current = message;
+    }
+  }, [editorCommand, postToEditor, t]);
 
   return (
     <div style={{
@@ -11,7 +57,6 @@ const Canvas = ({ template, resultTemplate }) => {
       overflow: 'hidden',
       background: 'var(--panel-2)',
     }}>
-      {/* Minimal toolbar */}
       <div style={{
         height: 44, flexShrink: 0,
         borderBottom: '1px solid var(--line)',
@@ -20,37 +65,44 @@ const Canvas = ({ template, resultTemplate }) => {
         background: 'var(--panel)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-          {hasResult ? (
-            <>
-              <span className="mono" style={{ color: 'var(--ok)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Result</span>
-              <span style={{ color: 'var(--ink)', fontWeight: 500 }}>生成完成</span>
-              {(resultTemplate?.frames?.length || 1) > 1 && (
-                <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', padding: '2px 6px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line-2)' }}>{resultTemplate?.frames?.length || 1}张</span>
-              )}
-            </>
-          ) : (
-            <>
-              <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>模板</span>
-              <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{t?.name || '请选择模板'}</span>
-              {t && (
-                <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', padding: '2px 6px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line-2)' }}>{t.tag}</span>
-              )}
-            </>
+          <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>编辑器</span>
+          <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{t?.name || '空白画布'}</span>
+          {hasResult && (
+            <span className="mono" style={{ fontSize: 10, color: 'var(--ok)', padding: '2px 6px', borderRadius: 4, background: 'rgba(0,128,96,0.08)', border: '1px solid rgba(0,128,96,0.16)' }}>
+              已接收结果图
+            </span>
+          )}
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {window.lastComposeJobId && (
+            <button
+              onClick={() => {
+                const frames = (resultTemplate && resultTemplate._frameNames) || ((resultTemplate?.frames || []).map(f => f.name || f.variant || '画板'));
+                const names = frames.join(',');
+                const ep = window.lastComposeEndpoint || '/special-compose';
+                window.open(`${ep}/${window.lastComposeJobId}/download-zip?names=${encodeURIComponent(names)}`, '_blank');
+              }}
+              style={canvasActionSecondaryStyle}
+            >
+              打包下载
+            </button>
+          )}
+          {window.resultPenpotUrl && (
+            <button onClick={() => window.open(window.resultPenpotUrl, '_blank')} style={canvasActionSecondaryStyle}>
+              Penpot
+            </button>
           )}
         </div>
       </div>
 
-      {/* Canvas stage */}
-      <div style={{
-        flex: 1, minHeight: 0, overflow: hasResult ? 'auto' : 'hidden',
-        position: 'relative',
-        background: `radial-gradient(circle at 1px 1px, oklch(0.9 0.005 260) 1px, transparent 0)`,
-        backgroundSize: '20px 20px',
-        backgroundColor: 'oklch(0.98 0.003 260)',
-      }}>
-        {hasResult ? (
-          <ResultPreview t={resultTemplate}/>
-        ) : t ? <TemplatePreview t={t}/> : <EmptyCanvas/>}
+      <div style={{ flex: 1, minHeight: 0, position: 'relative', background: 'oklch(0.98 0.003 260)' }}>
+        <iframe
+          ref={iframeRef}
+          src="/editor-beta/index.html"
+          title="Designflow Editor"
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', background: 'transparent' }}
+        />
       </div>
     </div>
   );
