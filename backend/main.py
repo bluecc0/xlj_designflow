@@ -1672,6 +1672,7 @@ async def _run_ai_image_background(
     refs: list[tuple[bytes, str]],
     has_reference: bool,
     created_at: float,
+    ref_previews: list[str] | None = None,
 ):
     """后台异步生图：轮询进度 → 更新 DB → 下载结果 → 写聊天记录"""
     def on_progress(pct: int, api_status: str):
@@ -1715,6 +1716,7 @@ async def _run_ai_image_background(
                 "status": "done",
                 "hasReference": has_reference,
                 "refCount": len(refs),
+                "refPreviews": ref_previews or [],
             },
             created_at=time.time(),
         )
@@ -1734,6 +1736,7 @@ async def _run_ai_image_background(
                 "status": "failed", "error": str(e),
                 "hasReference": has_reference,
                 "refCount": len(refs),
+                "refPreviews": ref_previews or [],
             },
             created_at=time.time(),
         )
@@ -1795,6 +1798,7 @@ async def ai_image_endpoint(
     resolution: str = Form(""),
     chat_session_id: str = Form(""),
     image: List[UploadFile] = File(default=[]),
+    ref_previews: str = Form(""),
 ):
     """
     AI 生图接口（异步）。支持文生图（无 image）和图生图（最多 4 张参考图）。
@@ -1803,6 +1807,13 @@ async def ai_image_endpoint(
     前端轮询 GET /ai-image/{job_id} 获取进度与结果。
     """
     original_prompt = prompt.strip()
+    ref_previews_list = []
+    try:
+        ref_previews_list = json.loads(ref_previews or "[]")
+        if not isinstance(ref_previews_list, list):
+            ref_previews_list = []
+    except (json.JSONDecodeError, TypeError):
+        ref_previews_list = []
     if not original_prompt:
         raise HTTPException(400, "prompt 不能为空")
 
@@ -1825,7 +1836,7 @@ async def ai_image_endpoint(
         role="user",
         type="user_text",
         text=original_prompt,
-        meta={"model": resolved, "size": size, "resolution": resolution},
+        meta={"model": resolved, "size": size, "resolution": resolution, "refPreviews": ref_previews_list},
         created_at=created_at,
     )
     save_ai_image_job(
@@ -1880,6 +1891,7 @@ async def ai_image_endpoint(
                 model=resolved, prompt=enriched_prompt,
                 size=size, resolution=resolution,
                 refs=all_refs, has_reference=has_reference, created_at=created_at,
+                ref_previews=ref_previews_list,
             )
         )
         return {"job_id": job_id, "chat_session_id": session_id, "status": "processing"}

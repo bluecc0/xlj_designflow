@@ -728,6 +728,7 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 "error": meta.get("error"),
                 "hasReference": bool(meta.get("hasReference")),
                 "refCount": int(meta.get("refCount") or 0),
+                "refPreviews": meta.get("refPreviews") or [],
                 "finalElapsed": meta.get("finalElapsed"),
                 "meta": meta.get("model"),
                 "createdAt": row["created_at"],

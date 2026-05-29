@@ -499,6 +499,14 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => 
                     ? React.createElement(ChatTimer, { startedAt: m.startedAt })
                     : null
               ),
+              Array.isArray(m.refPreviews) && m.refPreviews.length > 0 && React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                m.refPreviews.map((dataUrl, ri) => React.createElement('img', {
+                  key: ri,
+                  src: dataUrl,
+                  alt: '参考图 ' + (ri + 1),
+                  style: { width: 48, height: 48, borderRadius: 6, objectFit: 'cover', border: '1px solid var(--line-2)' },
+                }))
+              ),
               m.status === 'done' && m.imageUrl && React.createElement('div', null,
                 React.createElement('img', {
                   src: m.imageUrl,
@@ -1491,12 +1499,33 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
     return null;
   }, [messages]);
 
+  // 将 File / Blob 转为 data URL（缩略图，最长边 200px）
+  const fileToThumbDataUrl = (file) => new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const maxSize = 200;
+      let w = img.width, h = img.height;
+      if (w > h && w > maxSize) { h = Math.round(h * maxSize / w); w = maxSize; }
+      else if (h > maxSize) { w = Math.round(w * maxSize / h); h = maxSize; }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', 0.7));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Failed to load image')); };
+    img.src = url;
+  });
+
   // —— AI 生图核心流程（共享）——
   const runAiImageGeneration = React.useCallback(async (model, prompt, displayText, refImages, aiOptions) => {
     setIsLoading(true);
     const startedAt = Date.now();
     var finalPrompt = prompt;
     var finalRefImages = Array.isArray(refImages) ? refImages.slice() : [];
+
+    var refPreviews = [];
     setMessages(msgs => [...msgs, {
       who: 'ai', type: 'ai-image-generating',
       model, prompt,
@@ -1505,6 +1534,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       meta: model,
       hasReference: refImages.length > 0,
       refCount: refImages.length,
+      refPreviews: [],
     }]);
     try {
       var productRefs = parseProductRefs(prompt);
@@ -1520,6 +1550,12 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
         finalRefImages = finalRefImages.concat(productRefFiles);
         finalPrompt = enhancePromptWithProductRefs(prompt, resolvedRefs, refImages.length > 0);
       }
+
+      // 将所有参考图（用户上传 + 产品图）转为缩略图 data URL
+      try {
+        refPreviews = await Promise.all(finalRefImages.map(r => fileToThumbDataUrl(r.file)));
+      } catch (e) { refPreviews = []; }
+
       const apiBase = window.API_BASE || window.location.origin;
       const fd = new FormData();
       fd.append('model', model);
@@ -1527,6 +1563,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       fd.append('size', aiOptions.size || '1024x1024');
       fd.append('resolution', aiOptions.resolution || '1K');
       if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
+      fd.append('ref_previews', JSON.stringify(refPreviews));
       finalRefImages.forEach(r => fd.append('image', r.file));
       const res = await fetch(apiBase + '/ai-image', { method: 'POST', body: fd, credentials: 'include' });
       if (!res.ok) {
@@ -1558,7 +1595,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
             const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
             setMessages(msgs => msgs.map(m =>
               m.type === 'ai-image-generating' && m.startedAt === startedAt
-                ? { ...m, status: 'done', imageUrl: statusData.image_url, finalElapsed, progress: 100 }
+                ? { ...m, status: 'done', imageUrl: statusData.image_url, finalElapsed, progress: 100, refPreviews: refPreviews.length ? refPreviews : m.refPreviews }
                 : m
             ));
             if (onComposeComplete) {
@@ -1571,7 +1608,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
             const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
             setMessages(msgs => msgs.map(m =>
               m.type === 'ai-image-generating' && m.startedAt === startedAt
-                ? { ...m, status: 'failed', error: statusData.error || '未知错误', finalElapsed }
+                ? { ...m, status: 'failed', error: statusData.error || '未知错误', finalElapsed, refPreviews: refPreviews.length ? refPreviews : m.refPreviews }
                 : m
             ));
             loadAiChatHistory();
