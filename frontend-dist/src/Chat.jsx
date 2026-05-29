@@ -1695,24 +1695,30 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
           setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx ? { who: 'ai', type: 'thinking', text: '正在下载文件…', meta: '花瓣下载' } : m));
         }
         // 轮换提示文字，让用户感知进度
-        const startedAt = Date.now();
         const stages = isFirstCall
           ? [{ after: 6000, text: '正在查找下载按钮…' }, { after: 15000, text: '页面加载较慢，请耐心等待…' }]
           : [{ after: 8000, text: '文件较大，仍在下载中…' }, { after: 20000, text: '网络较慢，请耐心等待…' }];
         let stageIdx = 0;
-        const progressTimer = setInterval(() => {
+        let progressTimer = null;
+        const scheduleNext = () => {
           if (stageIdx >= stages.length) return;
-          const elapsed = Date.now() - startedAt;
-          if (elapsed >= stages[stageIdx].after) {
-            setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx
-              ? { ...m, text: stages[stageIdx].text }
-              : m));
+          const delay = stages[stageIdx].after - (Date.now() - startedAt);
+          progressTimer = setTimeout(() => {
+            const s = stages[stageIdx];
+            if (s && typeof pendingIdx === 'number') {
+              setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx
+                ? Object.assign({}, m, { text: s.text })
+                : m));
+            }
             stageIdx++;
-          }
-        }, 1000);
+            scheduleNext();
+          }, Math.max(delay, 500));
+        };
+        const startedAt = Date.now();
+        scheduleNext();
         try {
           const res = await window.API.proxyDownload(url, format || null);
-          clearInterval(progressTimer);
+          clearTimeout(progressTimer);
           if (res.status === 'choose_format') {
             setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx ? {
               who: 'ai',
@@ -1734,7 +1740,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
             } : m));
           }
         } catch (e) {
-          clearInterval(progressTimer);
+          clearTimeout(progressTimer);
           setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx ? {
             who: 'ai',
             text: '下载失败: ' + (e.message || '未知错误'),
