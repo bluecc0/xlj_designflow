@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import mimetypes
 import re
 from pathlib import Path
@@ -17,6 +18,14 @@ from playwright.async_api import (
 )
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
+# Ensure logs are visible in uvicorn output (root logger may not be configured)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s %(message)s", datefmt="%H:%M:%S"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
 
 
 DOWNLOAD_TEXT_PATTERNS = [
@@ -215,13 +224,16 @@ class BrowserRelay:
         self, source_url: str, download_format: str | None
     ) -> tuple[Path, dict[str, Any]]:
         async with self._lock:
+            logger.info("fetch_with_format: start, url=%s format=%s", source_url[:100], download_format)
             context = await self.ensure_started()
             parsed = urlparse(source_url)
             self._assert_allowed_url(source_url)
 
             if Path(parsed.path).suffix.lower() in DIRECT_FILE_EXTENSIONS:
+                logger.info("fetch_with_format: direct file extension, using HTTP download")
                 return await self._download_via_http(context, source_url)
 
+            logger.info("fetch_with_format: opening page...")
             page = await context.new_page()
             try:
                 await self._prepare_page(page)
@@ -273,32 +285,41 @@ class BrowserRelay:
     async def _download_from_page(
         self, page: Page, source_url: str, download_format: str | None
     ) -> tuple[Path, dict[str, Any]]:
+        logger.info("download_from_page: loading %s", source_url[:100])
         await page.goto(
             source_url,
             wait_until="load",
             timeout=settings.relay_navigation_timeout_ms,
         )
         self._assert_allowed_url(page.url)
+        logger.info("download_from_page: page loaded, waiting network idle...")
         try:
             await page.wait_for_load_state("networkidle", timeout=10_000)
+            logger.info("download_from_page: network idle reached")
         except PlaywrightError:
-            pass
+            logger.warning("download_from_page: network idle timeout, continuing")
         await page.wait_for_timeout(2000)
+        logger.info("download_from_page: ready, scanning for download button (format=%s)", download_format)
 
         download = await self._try_click_download(page, download_format)
         if download is not None:
+            logger.info("download_from_page: got playwright download, saving...")
             return await self._save_playwright_download(download, source_url)
 
         if download_format:
+            texts = await self._collect_button_texts(page)
             raise RuntimeError(f"Unable to download requested format: {download_format}")
 
+        logger.info("download_from_page: no direct download, searching for candidate URL...")
         candidate = await self._find_download_candidate(page)
         if candidate is None:
             texts = await self._collect_button_texts(page)
+            logger.error("download_from_page: no candidate found, visible buttons: %s", texts[:30])
             raise RuntimeError(
                 "No download action found on page. Visible buttons: " +
                 (", ".join(texts[:30]) if texts else "(none)")
             )
+        logger.info("download_from_page: downloading via HTTP: %s", candidate[:100])
         return await self._download_via_http(page.context, candidate, source_url)
 
     def _assert_allowed_url(self, source_url: str) -> None:
@@ -326,12 +347,14 @@ class BrowserRelay:
         self, page: Page, download_format: str | None
     ) -> Download | None:
         if download_format:
+            logger.info("try_click: targeting format %s", download_format)
             targeted = await self._try_click_specific_format(page, download_format)
             if targeted is not None:
                 return targeted
 
         for locator in [page.locator("a, button"), page.locator("[role='button']")]:
             count = await locator.count()
+            logger.info("try_click: scanning %d elements with selector...", min(count, 80))
             for index in range(min(count, 80)):
                 handle = locator.nth(index)
                 try:
@@ -341,9 +364,11 @@ class BrowserRelay:
                 if not text:
                     continue
                 if any(pattern.search(text) for pattern in DOWNLOAD_TEXT_PATTERNS):
+                    logger.info("try_click: found download text '%s', clicking...", text[:60])
                     download = await self._click_download_flow(page, handle)
                     if download is not None:
                         return download
+        logger.info("try_click: no matching download button found")
         return None
 
     async def _try_click_specific_format(
@@ -390,6 +415,7 @@ class BrowserRelay:
             tag = await handle.evaluate("el => el.tagName.toLowerCase()")
             if tag == "a":
                 href = await handle.get_attribute("href")
+                logger.info("click_flow: clicked <a> href=%s", href[:100] if href else None)
         except PlaywrightError:
             pass
 
@@ -397,9 +423,10 @@ class BrowserRelay:
         try:
             async with page.expect_download(timeout=8_000) as event:
                 await handle.click()
+            logger.info("click_flow: expect_download succeeded")
             return await event.value
         except PlaywrightError:
-            pass
+            logger.info("click_flow: expect_download failed, checking confirm buttons...")
 
         # \u68c0\u67e5\u786e\u8ba4\u6309\u94ae
         await page.wait_for_timeout(1_000)
@@ -407,12 +434,15 @@ class BrowserRelay:
             confirm = page.locator("button").filter(has_text=label).first
             try:
                 if await confirm.is_visible():
+                    logger.info("click_flow: clicking confirm '%s'", label)
                     async with page.expect_download(timeout=20_000) as event:
                         await confirm.click()
+                    logger.info("click_flow: confirm download succeeded")
                     return await event.value
             except PlaywrightError:
                 continue
 
+        logger.info("click_flow: no download triggered")
         return None
 
     async def _discover_download_formats(self, page: Page) -> list[str]:
@@ -541,6 +571,7 @@ class BrowserRelay:
         file_url: str,
         source_url: str | None = None,
     ) -> tuple[Path, dict[str, Any]]:
+        logger.info("http_download: starting, url=%s", file_url[:100])
         cookies = await context.cookies()
         cookie_header = "; ".join(f"{item['name']}={item['value']}" for item in cookies)
         headers = {"Cookie": cookie_header, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"}
@@ -551,11 +582,13 @@ class BrowserRelay:
         ) as client:
             current_url = file_url
             response = None
-            for _ in range(6):
+            for redirect_round in range(6):
                 self._assert_allowed_url(current_url)
+                logger.info("http_download: request round %d, url=%s", redirect_round, current_url[:100])
                 response = await client.get(current_url, headers=headers)
                 if response.is_redirect:
                     location = response.headers.get("location")
+                    logger.info("http_download: redirect %d -> %s", response.status_code, (location or "")[:100])
                     if not location:
                         break
                     current_url = urljoin(str(response.url), location)
@@ -567,11 +600,13 @@ class BrowserRelay:
             filename = self._resolve_filename(response, file_url)
             file_path = self._unique_path(filename)
             file_path.write_bytes(response.content)
+            size = file_path.stat().st_size
+            logger.info("http_download: saved %s (%d bytes)", file_path.name, size)
             return file_path, {
                 "source_url": source_url or file_url,
                 "filename": file_path.name,
                 "content_type": response.headers.get("content-type"),
-                "size": file_path.stat().st_size,
+                "size": size,
             }
 
     async def _save_playwright_download(
