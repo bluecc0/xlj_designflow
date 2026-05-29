@@ -127,19 +127,6 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
       </div>
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative', background: 'oklch(0.98 0.003 260)' }}>
-        {!iframeLoaded && (
-          <div style={{
-            position: 'absolute', inset: 0, zIndex: 2,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(255,255,255,0.88)',
-            color: 'var(--ink-2)', fontSize: 13,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ width: 14, height: 14, borderRadius: 99, border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', animation: 'spin 0.8s linear infinite' }} />
-              <span>正在加载编辑器...</span>
-            </div>
-          </div>
-        )}
         <iframe
           key={iframeNonce}
           ref={iframeRef}
