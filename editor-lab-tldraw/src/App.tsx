@@ -18,7 +18,6 @@ import {
   type TLTextShape,
   useEditor,
   useValue,
-  Vec,
 } from 'tldraw'
 
 const COLOR_OPTIONS = [
@@ -427,59 +426,87 @@ function TldrawHostBridge() {
     [editor]
   )
 
-  const insertTrackerRef = React.useRef({ col: 0, lastX: 0, lastY: 0, rowHeight: 0 })
+  const insertTrackerRef = React.useRef({ col: 0, lastMaxX: 0, rowTopY: 0, rowMaxH: 0 })
   // 清除画布时重置插入位置
   React.useEffect(() => {
-    insertTrackerRef.current = { col: 0, lastX: 0, lastY: 0, rowHeight: 0 }
+    insertTrackerRef.current = { col: 0, lastMaxX: 0, rowTopY: 0, rowMaxH: 0 }
   }, [clearCanvas])
 
   const insertImage = React.useCallback(
     async ({ url, mode, name }: { url: string; mode?: 'image' | 'background'; name?: string }) => {
-      // 计算插入位置：无限画布，每行 5 张，间距 32px
       const viewport = editor.getViewportPageBounds()
       const spacing = 32
       const MAX_COLS = 5
-      let point = viewport.center
-
-      if (mode !== 'background') {
-        const t = insertTrackerRef.current
-        if (t.lastX === 0 && t.lastY === 0) {
-          // 首张：视口中心偏左，给后续留空间
-          point = new Vec(viewport.center.x, viewport.center.y)
-        } else {
-          const nextCol = t.col + 1
-          if (nextCol >= MAX_COLS) {
-            // 换行
-            point = new Vec(viewport.center.x, t.lastY + t.rowHeight + spacing)
-            insertTrackerRef.current = { col: 0, lastX: 0, lastY: 0, rowHeight: 0 }
-          } else {
-            point = new Vec(t.lastX + spacing, t.lastY)
-          }
-        }
-      }
 
       const file = await fetchImageAsFile(url, name)
       await editor.putExternalContent({
         type: 'files',
         files: [file],
-        point,
+        point: viewport.center,
       } as any)
 
       const insertedIds = editor.getSelectedShapeIds()
       if (!insertedIds.length) return
 
-      // 更新追踪位置（非背景图）
+      // 非背景图：插入后重新定位到网格中，顶部对齐
       if (mode !== 'background') {
         const shape = editor.getShape(insertedIds[0] as any) as TLShape | undefined
         if (shape) {
           const bounds = editor.getShapePageBounds(shape)
           if (bounds) {
             const t = insertTrackerRef.current
-            insertTrackerRef.current = {
-              col: t.col + 1,
-              lastX: bounds.maxX,
-              lastY: bounds.minY,
-              rowHeight: Math.max(t.rowHeight, bounds.height),
+            let targetX: number
+            let targetY: number
+
+            if (t.col === 0) {
+              // 行首：放在视口中心
+              targetX = viewport.center.x
+              targetY = viewport.center.y
+              insertTrackerRef.current = {
+                col: 1,
+                lastMaxX: 0,  // 会在下面更新
+                rowTopY: targetY - bounds.h / 2,
+                rowMaxH: bounds.h,
+              }
+            } else {
+              // 同行后续
+              targetX = t.lastMaxX + spacing + bounds.w / 2
+              targetY = t.rowTopY + bounds.h / 2  // 顶部对齐
+            }
+
+            // 换行判断
+            if (t.col > 0 && t.col < MAX_COLS) {
+              // 继续当前行
+            } else if (t.col >= MAX_COLS) {
+              // 换行
+              targetX = viewport.center.x
+              targetY = t.rowTopY + t.rowMaxH + spacing + bounds.h / 2
+              insertTrackerRef.current = {
+                col: 0,
+                lastMaxX: 0,
+                rowTopY: targetY - bounds.h / 2,
+                rowMaxH: bounds.h,
+              }
+            }
+
+            // 移动 shape 到目标位置
+            editor.updateShapes([{
+              id: shape.id,
+              type: shape.type,
+              x: targetX - bounds.w / 2,
+              y: targetY - bounds.h / 2,
+            } as any])
+
+            // 更新追踪
+            const newBounds = editor.getShapePageBounds(shape)
+            if (newBounds) {
+              const t2 = insertTrackerRef.current
+              insertTrackerRef.current = {
+                col: t2.col + 1,
+                lastMaxX: newBounds.maxX,
+                rowTopY: t2.rowTopY,
+                rowMaxH: Math.max(t2.rowMaxH, newBounds.height),
+              }
             }
           }
         }
