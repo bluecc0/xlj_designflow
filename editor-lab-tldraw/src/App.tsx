@@ -18,6 +18,7 @@ import {
   type TLTextShape,
   useEditor,
   useValue,
+  Vec,
 } from 'tldraw'
 
 const COLOR_OPTIONS = [
@@ -426,17 +427,63 @@ function TldrawHostBridge() {
     [editor]
   )
 
+  const insertTrackerRef = React.useRef({ col: 0, lastX: 0, lastY: 0, rowHeight: 0 })
+  // 清除画布时重置插入位置
+  React.useEffect(() => {
+    insertTrackerRef.current = { col: 0, lastX: 0, lastY: 0, rowHeight: 0 }
+  }, [clearCanvas])
+
   const insertImage = React.useCallback(
     async ({ url, mode, name }: { url: string; mode?: 'image' | 'background'; name?: string }) => {
+      // 计算插入位置：无限画布，每行 5 张，间距 32px
+      const viewport = editor.getViewportPageBounds()
+      const spacing = 32
+      const MAX_COLS = 5
+      let point = viewport.center
+
+      if (mode !== 'background') {
+        const t = insertTrackerRef.current
+        if (t.lastX === 0 && t.lastY === 0) {
+          // 首张：视口中心偏左，给后续留空间
+          point = new Vec(viewport.center.x, viewport.center.y)
+        } else {
+          const nextCol = t.col + 1
+          if (nextCol >= MAX_COLS) {
+            // 换行
+            point = new Vec(viewport.center.x, t.lastY + t.rowHeight + spacing)
+            insertTrackerRef.current = { col: 0, lastX: 0, lastY: 0, rowHeight: 0 }
+          } else {
+            point = new Vec(t.lastX + spacing, t.lastY)
+          }
+        }
+      }
+
       const file = await fetchImageAsFile(url, name)
       await editor.putExternalContent({
         type: 'files',
         files: [file],
-        point: editor.getViewportPageBounds().center,
+        point,
       } as any)
 
       const insertedIds = editor.getSelectedShapeIds()
       if (!insertedIds.length) return
+
+      // 更新追踪位置（非背景图）
+      if (mode !== 'background') {
+        const shape = editor.getShape(insertedIds[0] as any) as TLShape | undefined
+        if (shape) {
+          const bounds = editor.getShapePageBounds(shape)
+          if (bounds) {
+            const t = insertTrackerRef.current
+            insertTrackerRef.current = {
+              col: t.col + 1,
+              lastX: bounds.maxX,
+              lastY: bounds.minY,
+              rowHeight: Math.max(t.rowHeight, bounds.height),
+            }
+          }
+        }
+      }
 
       if (mode === 'background') {
         const shape = editor.getOnlySelectedShape()
