@@ -771,6 +771,8 @@ export default function App() {
       instance.renamePage(page.id, '画板 1')
     }
     instance.zoomToFit({ animation: { duration: 0 } })
+    // 默认开启始终吸附
+    instance.user.updateUserPreferences({ isSnapMode: true })
 
     // 尽早通知父窗口编辑器已就绪，不依赖 useEffect 的时序
     try {
