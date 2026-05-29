@@ -1677,8 +1677,14 @@ async def _run_ai_image_background(
     """后台异步生图：轮询进度 → 更新 DB → 下载结果 → 写聊天记录"""
     def on_progress(pct: int, api_status: str):
         try:
-            # 基于进度判断状态：progress>0 说明 API 已开始处理
-            db_status = "queued" if pct == 0 else "processing"
+            # 基于进度和 API 状态综合判断
+            api_status_lower = (api_status or "").lower()
+            if pct == 0:
+                db_status = "queued"
+            elif api_status_lower in ("completed", "succeeded", "success", "done"):
+                db_status = "done"
+            else:
+                db_status = "processing"
             save_ai_image_job(
                 job_id=job_id, user_id=user_id, status=db_status,
                 model=model, prompt=prompt, size=size,
