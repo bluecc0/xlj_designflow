@@ -83,7 +83,88 @@ class BrowserRelay:
         assert self._context is not None
         return self._context
 
+    async def check_login_status(self) -> dict[str, Any]:
+        """检测花瓣网登录状态"""
+        async with self._lock:
+            context = await self.ensure_started()
+            page = await context.new_page()
+            try:
+                await self._prepare_page(page)
+                await page.goto(
+                    settings.relay_login_url,
+                    wait_until="domcontentloaded",
+                    timeout=settings.relay_navigation_timeout_ms,
+                )
+                await page.wait_for_timeout(2000)
+
+                url = page.url
+                logged_in = False
+                username = ""
+
+                # 检查是否被重定向到登录页
+                if "/login" in url.lower():
+                    logged_in = False
+                else:
+                    # 查找登录状态指示器：用户头像、个人菜单等
+                    selectors = [
+                        ".user-avatar",
+                        ".user-info",
+                        ".user-name",
+                        ".header-user",
+                        ".header .avatar",
+                        "[class*='user']",
+                        "[class*='avatar']",
+                        "a[href*='/user/']",
+                        "a[href*='/profile/']",
+                    ]
+                    for selector in selectors:
+                        try:
+                            el = page.locator(selector).first
+                            if await el.is_visible():
+                                logged_in = True
+                                try:
+                                    username = (await el.inner_text(timeout=500)).strip()[:40]
+                                except PlaywrightError:
+                                    pass
+                                break
+                        except PlaywrightError:
+                            continue
+
+                    # 通过页面文本进一步确认
+                    if not logged_in:
+                        body_text = await page.inner_text("body")
+                        logged_in = not any(
+                            kw in body_text
+                            for kw in ["登录", "注册", "Log in", "Sign in"]
+                        )
+
+                # 收集 cookies 摘要
+                cookies = await context.cookies()
+                cookie_names = [c["name"] for c in cookies if c.get("domain", "").find("huaban") != -1]
+
+                return {
+                    "logged_in": logged_in,
+                    "username": username[:40] if username else "",
+                    "page_url": url,
+                    "has_cookies": len(cookie_names) > 0,
+                }
+            finally:
+                await page.close()
+
+    async def trigger_login(self) -> None:
+        """非阻塞打开登录页面（API 用）"""
+        context = await self.ensure_started()
+        page = await context.new_page()
+        await self._prepare_page(page)
+        await page.goto(
+            settings.relay_login_url,
+            wait_until="domcontentloaded",
+            timeout=settings.relay_navigation_timeout_ms,
+        )
+        print(f"Browser opened at {settings.relay_login_url}")
+
     async def login_shell(self) -> None:
+        """阻塞式登录（CLI 用）"""
         context = await self.ensure_started()
         page = await context.new_page()
         await self._prepare_page(page)

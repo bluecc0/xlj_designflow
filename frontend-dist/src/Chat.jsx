@@ -725,6 +725,18 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const composerRef = React.useRef(null);
   const dragRef = React.useRef({ dragging: false, startY: 0, startH: 0 });
   const COMMANDS = React.useMemo(() => ['/花瓣下载', '/特殊品（完整）', '/特殊品', '/Nano Banana pro', '/Gpt image 2'], []);
+
+  // 检测花瓣登录状态，未登录则禁用 /花瓣下载 指令
+  React.useEffect(() => {
+    const apiBase = window.API_BASE || window.location.origin;
+    fetch(apiBase + '/proxy-download/login-status', { credentials: 'include' })
+      .then(r => r.json())
+      .then(data => {
+        const cmd = SLASH_COMMANDS.find(c => c.cmd === '/花瓣下载');
+        if (cmd) cmd.available = !!data.logged_in;
+      })
+      .catch(() => {});
+  }, []);
   const displayValue = lockedCommand ? (text ? (lockedCommand + ' ' + text) : (lockedCommand + ' ')) : text;
   const lockedPrefixLength = lockedCommand ? (lockedCommand.length + 1) : 0;
 
@@ -1168,7 +1180,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             >
               {AI_RATIOS.map(r => (
                 <option key={r} value={r}>
-                  {aiOptionMap[r].label}{aiOptionMap[r].px[aiQuality] ? ' — ' + aiOptionMap[r].px[aiQuality] : ''}
+                  {aiOptionMap[r].label}
                 </option>
               ))}
             </select>

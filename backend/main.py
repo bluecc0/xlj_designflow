@@ -82,7 +82,7 @@ from .models import (
 from .product_library import ProductLibrary
 from .slot_schema import schema as slot_schema
 from .special_compose import parse_special_command, run_special_compose
-from .proxy_download_relay import inspect_url as proxy_download_inspect_url, download_url as proxy_download_download_url, stop as proxy_download_stop
+from .proxy_download_relay import inspect_url as proxy_download_inspect_url, download_url as proxy_download_download_url, stop as proxy_download_stop, check_login_status as proxy_download_check_login, login_shell as proxy_download_login_shell
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -312,6 +312,30 @@ async def health():
         },
         "ai_provider": ai_provider,
     }
+
+
+@app.get("/proxy-download/login-status")
+async def proxy_download_login_status(request: Request):
+    _current_user(request)
+    if not settings.proxy_download_enabled and not (settings.root_dir / "proxy_download").exists():
+        raise HTTPException(503, "花瓣下载服务未启用")
+    try:
+        status = await proxy_download_check_login()
+    except Exception as exc:
+        raise HTTPException(502, f"登录状态检测失败: {exc}") from exc
+    return status
+
+
+@app.post("/proxy-download/login")
+async def proxy_download_login(request: Request):
+    _current_user(request)
+    if not settings.proxy_download_enabled and not (settings.root_dir / "proxy_download").exists():
+        raise HTTPException(503, "花瓣下载服务未启用")
+    try:
+        await proxy_download_login_shell()
+    except Exception as exc:
+        raise HTTPException(502, f"打开登录页面失败: {exc}") from exc
+    return {"status": "ok", "message": "浏览器已打开，请在浏览器中登录花瓣后再下载"}
 
 
 @app.post("/proxy-download/inspect")

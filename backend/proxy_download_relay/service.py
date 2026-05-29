@@ -122,3 +122,21 @@ async def _download_impl(source_url: str, download_format: str | None) -> tuple[
 
 async def download_url(source_url: str, download_format: str | None = None) -> tuple[Path, dict[str, object]]:
     return await _submit(_download_impl(source_url, download_format))
+
+
+async def _check_login_impl() -> dict[str, object]:
+    relay = _get_relay()
+    return await relay.check_login_status()
+
+
+async def check_login_status() -> dict[str, object]:
+    return await _submit(_check_login_impl())
+
+
+async def _trigger_login_impl() -> None:
+    relay = _get_relay()
+    await relay.trigger_login()
+
+
+async def trigger_login() -> None:
+    await _submit(_trigger_login_impl())
