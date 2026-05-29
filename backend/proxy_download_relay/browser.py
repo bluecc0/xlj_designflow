@@ -253,19 +253,6 @@ class BrowserRelay:
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
         """)
 
-        async def guard(route):
-            request = route.request
-            # 只拦截主框架导航，放行子资源（避免误拦页面渲染所需的 CDN 资源）
-            if request.is_navigation_request():
-                try:
-                    self._assert_allowed_url(request.url)
-                except ValueError:
-                    await route.abort()
-                    return
-            await route.continue_()
-
-        await page.route("**/*", guard)
-
     async def _download_from_page(
         self, page: Page, source_url: str, download_format: str | None
     ) -> tuple[Path, dict[str, Any]]:
