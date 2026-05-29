@@ -1486,14 +1486,12 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
     return instructions.join('\n').trim();
   }, []);
 
-  // 从当前消息列表中找出上一个 AI 生图使用的模型
-  const getLastAiImageModel = React.useCallback(() => {
+  // 从当前消息列表中找出上一个 AI 生图使用的模型、尺寸、分辨率
+  const getLastAiImageOptions = React.useCallback(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
       if (m && m.type === 'ai-image-generating' && m.model) {
-        // model 可能是友好名也可能是后端名，统一映射
-        const modelMap = { 'nano-banana-pro': 'nano-banana-pro', 'gpt-image-2': 'gpt-image-2' };
-        return modelMap[m.model] || m.model;
+        return { model: m.model, size: m.size, resolution: m.resolution };
       }
     }
     return null;
@@ -1526,9 +1524,11 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
     var finalRefImages = Array.isArray(refImages) ? refImages.slice() : [];
 
     var refPreviews = [];
+    var lastSize = aiOptions.size || '1024x1024';
+    var lastResolution = aiOptions.resolution || '1K';
     setMessages(msgs => [...msgs, {
       who: 'ai', type: 'ai-image-generating',
-      model, prompt,
+      model, prompt, size: lastSize, resolution: lastResolution,
       status: 'running', startedAt,
       progress: 0,
       meta: model,
@@ -1742,17 +1742,20 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
     if (freshMatch) {
       const rest = rawPrompt.slice(freshMatch.length).trim();
       const freshPrompt = rest || '重新生成';
-      const model = aiCmd ? aiCmd.model : (getLastAiImageModel() || 'gpt-image-2');
+      const lastOpts = getLastAiImageOptions();
+      const model = aiCmd ? aiCmd.model : (lastOpts?.model || 'gpt-image-2');
+      const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution };
       setMessages(msgs => [...msgs, { who: 'user', text }]);
-      await runAiImageGeneration(model, freshPrompt, text, refImages, { ...aiOptions, skipContext: true });
+      await runAiImageGeneration(model, freshPrompt, text, refImages, { ...opts, skipContext: true });
       return;
     }
 
-    // 无 / 指令时，复用当前会话的上一个生图模型
+    // 无 / 指令时，复用当前会话的上一个生图模型、尺寸、分辨率
     if (!aiCmd && !trimmed.startsWith('/')) {
-      const lastModel = getLastAiImageModel();
-      if (lastModel) {
-        aiCmd = { prefix: '', model: lastModel, implicit: true };
+      const lastOpts = getLastAiImageOptions();
+      if (lastOpts) {
+        aiCmd = { prefix: '', model: lastOpts.model, implicit: true };
+        aiOptions = { ...aiOptions, size: lastOpts.size || aiOptions.size, resolution: lastOpts.resolution || aiOptions.resolution };
       }
     }
 
@@ -1902,7 +1905,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       ));
     }
     setIsLoading(false);
-  }, [currentAiChatId, enhancePromptWithProductRefs, getLastAiImageModel, isLoading, loadAiChatHistory, loadResolvedRefFiles, parseProductRefs, runAiImageGeneration, template]);
+  }, [currentAiChatId, enhancePromptWithProductRefs, getLastAiImageOptions, isLoading, loadAiChatHistory, loadResolvedRefFiles, parseProductRefs, runAiImageGeneration, template]);
 
   const handleParseTable = React.useCallback(async (file, filename, imageType) => {
     // Add user message showing file was uploaded
