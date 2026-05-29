@@ -1684,17 +1684,35 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       };
       const runProxyDownload = async function(url, format, replaceIndex) {
         setIsLoading(true);
+        const isFirstCall = replaceIndex == null;
         let pendingIdx = replaceIndex;
-        if (pendingIdx == null) {
+        if (isFirstCall) {
           setMessages(msgs => {
             pendingIdx = msgs.length;
-            return [...msgs, { who: 'ai', type: 'thinking', text: '正在检测下载格式…', meta: '花瓣下载' }];
+            return [...msgs, { who: 'ai', type: 'thinking', text: '正在打开花瓣页面…', meta: '花瓣下载' }];
           });
         } else {
           setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx ? { who: 'ai', type: 'thinking', text: '正在下载文件…', meta: '花瓣下载' } : m));
         }
+        // 轮换提示文字，让用户感知进度
+        const startedAt = Date.now();
+        const stages = isFirstCall
+          ? [{ after: 6000, text: '正在查找下载按钮…' }, { after: 15000, text: '页面加载较慢，请耐心等待…' }]
+          : [{ after: 8000, text: '文件较大，仍在下载中…' }, { after: 20000, text: '网络较慢，请耐心等待…' }];
+        let stageIdx = 0;
+        const progressTimer = setInterval(() => {
+          if (stageIdx >= stages.length) return;
+          const elapsed = Date.now() - startedAt;
+          if (elapsed >= stages[stageIdx].after) {
+            setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx
+              ? { ...m, text: stages[stageIdx].text }
+              : m));
+            stageIdx++;
+          }
+        }, 1000);
         try {
           const res = await window.API.proxyDownload(url, format || null);
+          clearInterval(progressTimer);
           if (res.status === 'choose_format') {
             setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx ? {
               who: 'ai',
@@ -1716,6 +1734,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
             } : m));
           }
         } catch (e) {
+          clearInterval(progressTimer);
           setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx ? {
             who: 'ai',
             text: '下载失败: ' + (e.message || '未知错误'),
