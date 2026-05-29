@@ -73,6 +73,16 @@ class BrowserRelay:
             headless=settings.relay_headless,
             accept_downloads=True,
             channel=settings.browser_channel,
+            viewport={"width": 1920, "height": 1080},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/130.0.0.0 Safari/537.36"
+            ),
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+            ],
         )
 
     async def stop(self) -> None:
@@ -238,13 +248,20 @@ class BrowserRelay:
                 await page.close()
 
     async def _prepare_page(self, page: Page) -> None:
+        # 隐藏 webdriver 特征
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        """)
+
         async def guard(route):
             request = route.request
-            try:
-                self._assert_allowed_url(request.url)
-            except ValueError:
-                await route.abort()
-                return
+            # 只拦截主框架导航，放行子资源（避免误拦页面渲染所需的 CDN 资源）
+            if request.is_navigation_request():
+                try:
+                    self._assert_allowed_url(request.url)
+                except ValueError:
+                    await route.abort()
+                    return
             await route.continue_()
 
         await page.route("**/*", guard)
