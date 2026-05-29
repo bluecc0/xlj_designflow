@@ -37,21 +37,6 @@ DOWNLOAD_TEXT_PATTERNS = [
     ]
 ]
 
-CLICKABLE_IMAGE_SELECTORS = [
-    ".pin-img",
-    ".pin-image",
-    ".pin-detail-img",
-    ".detail-img",
-    ".main-img",
-    "img.pin",
-    ".board-image img",
-    "[class*='pin'] img",
-    "[class*='detail'] img",
-    "[class*='preview'] img",
-    "img[src*='huaban']",
-    "img[src*='hbimg']",
-]
-
 DIRECT_FILE_EXTENSIONS = {
     ".zip",
     ".rar",
@@ -269,19 +254,16 @@ class BrowserRelay:
     ) -> tuple[Path, dict[str, Any]]:
         await page.goto(
             source_url,
-            wait_until="domcontentloaded",
+            wait_until="load",
             timeout=settings.relay_navigation_timeout_ms,
         )
         self._assert_allowed_url(page.url)
-        await page.wait_for_timeout(3000)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10_000)
+        except PlaywrightError:
+            pass
+        await page.wait_for_timeout(2000)
 
-        download = await self._try_click_download(page, download_format)
-        if download is not None:
-            return await self._save_playwright_download(download, source_url)
-
-        # 尝试点击主图打开详情弹窗（花瓣常见交互）
-        await self._try_click_main_image(page)
-        await page.wait_for_timeout(1000)
         download = await self._try_click_download(page, download_format)
         if download is not None:
             return await self._save_playwright_download(download, source_url)
@@ -303,17 +285,6 @@ class BrowserRelay:
         hostname = (parsed.hostname or "").lower().rstrip(".")
         if hostname and hostname not in settings.allowed_hosts:
             raise ValueError(f"Host not allowed: {hostname}")
-
-    async def _try_click_main_image(self, page: Page) -> None:
-        """尝试点击页面主图，触发详情弹窗（花瓣下载按钮常在其中）"""
-        for selector in CLICKABLE_IMAGE_SELECTORS:
-            try:
-                el = page.locator(selector).first
-                if await el.is_visible():
-                    await el.click()
-                    return
-            except PlaywrightError:
-                continue
 
     async def _collect_button_texts(self, page: Page) -> list[str]:
         """收集页面上所有可见按钮和链接的文本（用于调试）"""
