@@ -491,7 +491,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => 
                     ? React.createElement('div', { style: { width: 8, height: 8, borderRadius: 99, background: 'var(--warn)', flexShrink: 0 } })
                     : React.createElement('div', { style: { width: 14, height: 14, borderRadius: 99, border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', animation: 'spin 0.8s linear infinite', flexShrink: 0 } }),
                 React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: 'var(--ink)' } },
-                  m.status === 'done' ? '生图完成' : m.status === 'failed' ? '生图失败' : (m.progress > 0) ? '处理中…' : '排队等待处理…'
+                  m.status === 'done' ? '生图完成' : m.status === 'failed' ? '生图失败' : m.status === 'queued' ? '排队等待处理…' : '处理中…'
                 ),
                 m.finalElapsed != null
                   ? React.createElement('span', { className: 'mono', style: { fontSize: 10, color: 'var(--ink-3)' } }, fmtSecs(m.finalElapsed))
