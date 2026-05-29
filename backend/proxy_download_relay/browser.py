@@ -380,13 +380,24 @@ class BrowserRelay:
         return None
 
     async def _click_download_flow(self, page: Page, handle) -> Download | None:
+        # \u63d0\u53d6 href \u5907\u7528
+        href = None
         try:
-            async with page.expect_download(timeout=5_000) as event:
+            tag = await handle.evaluate("el => el.tagName.toLowerCase()")
+            if tag == "a":
+                href = await handle.get_attribute("href")
+        except PlaywrightError:
+            pass
+
+        # \u5148\u5c1d\u8bd5 expect_download
+        try:
+            async with page.expect_download(timeout=8_000) as event:
                 await handle.click()
             return await event.value
         except PlaywrightError:
             pass
 
+        # \u68c0\u67e5\u786e\u8ba4\u6309\u94ae
         await page.wait_for_timeout(1_000)
         for label in ("\u786e\u8ba4\u4e0b\u8f7d", "\u518d\u6b21\u4e0b\u8f7d"):
             confirm = page.locator("button").filter(has_text=label).first
@@ -528,7 +539,7 @@ class BrowserRelay:
     ) -> tuple[Path, dict[str, Any]]:
         cookies = await context.cookies()
         cookie_header = "; ".join(f"{item['name']}={item['value']}" for item in cookies)
-        headers = {"Cookie": cookie_header, "User-Agent": "Mozilla/5.0 Relay"}
+        headers = {"Cookie": cookie_header, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"}
         self._assert_allowed_url(file_url)
         async with httpx.AsyncClient(
             follow_redirects=False,
