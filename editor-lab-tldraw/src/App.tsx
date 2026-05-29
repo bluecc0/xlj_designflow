@@ -111,7 +111,11 @@ function PropertySelect({
 function TldrawPropertiesPanel() {
   const editor = useEditor()
   const selectedShape = useValue('only-selected-shape', () => editor.getOnlySelectedShape(), [editor])
-  const selectedCount = useValue('selected-shape-count', () => editor.getSelectedShapeIds().length, [editor])
+  const selectedIds = useValue('selected-shape-ids', () => editor.getSelectedShapeIds(), [editor])
+  const selectedCount = selectedIds.length
+  const selectedImageCount = useValue('selected-image-count', () => {
+    return editor.getSelectedShapeIds().filter((id) => editor.getShape(id)?.type === 'image').length
+  }, [editor])
   const [textValue, setTextValue] = React.useState('')
   const replaceImageInputRef = React.useRef<HTMLInputElement | null>(null)
 
@@ -160,6 +164,25 @@ function TldrawPropertiesPanel() {
     const ids = editor.getSelectedShapeIds()
     if (ids.length === 0) return
     editor.deleteShapes(ids)
+  }, [editor])
+
+  const handleDownloadImages = React.useCallback(() => {
+    const ids = editor.getSelectedShapeIds()
+    const imageIds = ids.filter((id) => editor.getShape(id)?.type === 'image')
+    if (!imageIds.length) return
+    imageIds.forEach((id) => {
+      const shape = editor.getShape(id)
+      if (!shape) return
+      const asset = editor.getAsset((shape.props as any).assetId)
+      if (!asset) return
+      const src = (asset.props as any).src
+      if (!src) return
+      const a = document.createElement('a')
+      a.href = src
+      a.download = (asset.props as any).name || 'image.png'
+      a.target = '_blank'
+      a.click()
+    })
   }, [editor])
 
   const handleReplaceImage = React.useCallback(
@@ -218,12 +241,18 @@ function TldrawPropertiesPanel() {
         <div className="lab-sidepanel-empty">
           <div className="lab-sidepanel-empty-title">多选模式</div>
           <div className="lab-sidepanel-empty-copy">
-            这版属性栏先专注单对象编辑。多选时建议继续使用画布上的缩放、框选和对齐能力。
+            已选择 {selectedCount} 个对象
+            {selectedImageCount > 0 ? `（含 ${selectedImageCount} 张图片）` : ''}
           </div>
           <div className="lab-sidepanel-actions">
             <button type="button" className="lab-sidebtn" onClick={handleDuplicate}>
               复制所选
             </button>
+            {selectedImageCount > 0 && (
+              <button type="button" className="lab-sidebtn" onClick={handleDownloadImages}>
+                下载图片 ({selectedImageCount})
+              </button>
+            )}
             <button type="button" className="lab-sidebtn lab-sidebtn-danger" onClick={handleDelete}>
               删除所选
             </button>
@@ -364,6 +393,9 @@ function TldrawPropertiesPanel() {
               </button>
               <button type="button" className="lab-sidebtn" onClick={handleDuplicate}>
                 复制对象
+              </button>
+              <button type="button" className="lab-sidebtn" onClick={handleDownloadImages}>
+                下载图片
               </button>
               <button type="button" className="lab-sidebtn lab-sidebtn-danger" onClick={handleDelete}>
                 删除对象
