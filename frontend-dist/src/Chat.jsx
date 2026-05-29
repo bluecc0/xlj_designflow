@@ -1733,20 +1733,22 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       { prefix: '/Nano Banana pro', model: 'nano-banana-pro' },
       { prefix: '/Gpt image 2',     model: 'gpt-image-2' },
     ];
+    const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
     let aiCmd = AI_IMAGE_CMDS.find(c => trimmed.toLowerCase().startsWith(c.prefix.toLowerCase()));
 
-    // 检测"重新生成"关键词 → 全新生图，不继承上文上下文
-    const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
-    const isFreshGen = !aiCmd && FRESH_KEYWORDS.some(kw => trimmed.startsWith(kw));
-    if (isFreshGen) {
-      const rest = trimmed.replace(/^(重新生成|重新生图|全新生成)\s*/, '');
-      const freshPrompt = rest || '重新生成'; // 无额外描述时用默认 prompt
+    // 检测"重新生成"关键词（可能跟在模型前缀后面，也可能单独出现）
+    const rawPrompt = aiCmd ? trimmed.slice(aiCmd.prefix.length).trim() : trimmed;
+    const freshMatch = FRESH_KEYWORDS.find(kw => rawPrompt.startsWith(kw));
+    if (freshMatch) {
+      const rest = rawPrompt.slice(freshMatch.length).trim();
+      const freshPrompt = rest || '重新生成';
+      const model = aiCmd ? aiCmd.model : (getLastAiImageModel() || 'gpt-image-2');
       setMessages(msgs => [...msgs, { who: 'user', text }]);
-      await runAiImageGeneration('gpt-image-2', freshPrompt, text, refImages, { ...aiOptions, skipContext: true });
+      await runAiImageGeneration(model, freshPrompt, text, refImages, { ...aiOptions, skipContext: true });
       return;
     }
 
-    // 无 / 指令时，复用当前会话的上一个生图模型（支持中途显式切换）
+    // 无 / 指令时，复用当前会话的上一个生图模型
     if (!aiCmd && !trimmed.startsWith('/')) {
       const lastModel = getLastAiImageModel();
       if (lastModel) {
