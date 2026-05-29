@@ -64,13 +64,15 @@ class BrowserRelay:
         self._context: BrowserContext | None = None
         self._lock = asyncio.Lock()
 
-    async def start(self) -> None:
+    async def start(self, headless: bool | None = None) -> None:
+        if headless is None:
+            headless = settings.relay_headless
         settings.relay_storage_dir.mkdir(parents=True, exist_ok=True)
         settings.relay_profile_dir.mkdir(parents=True, exist_ok=True)
         self._playwright = await async_playwright().start()
         self._context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(settings.relay_profile_dir),
-            headless=settings.relay_headless,
+            headless=headless,
             accept_downloads=True,
             channel=settings.browser_channel,
             viewport={"width": 1920, "height": 1080},
@@ -168,31 +170,46 @@ class BrowserRelay:
                 await page.close()
 
     async def trigger_login(self) -> None:
-        """非阻塞打开登录页面（API 用）"""
-        context = await self.ensure_started()
-        page = await context.new_page()
-        await self._prepare_page(page)
-        await page.goto(
-            settings.relay_login_url,
-            wait_until="domcontentloaded",
-            timeout=settings.relay_navigation_timeout_ms,
-        )
-        print(f"Browser opened at {settings.relay_login_url}")
+        """非阻塞打开登录页面（API 用），临时切换到有头模式"""
+        async with self._lock:
+            if self._context is not None:
+                await self._context.close()
+                self._context = None
+            await self.start(headless=False)
+            context = self._context
+            page = await context.new_page()
+            await self._prepare_page(page)
+            await page.goto(
+                settings.relay_login_url,
+                wait_until="domcontentloaded",
+                timeout=settings.relay_navigation_timeout_ms,
+            )
+            print(f"Browser opened at {settings.relay_login_url}")
 
     async def login_shell(self) -> None:
-        """阻塞式登录（CLI 用）"""
-        context = await self.ensure_started()
-        page = await context.new_page()
-        await self._prepare_page(page)
-        await page.goto(
-            settings.relay_login_url,
-            wait_until="domcontentloaded",
-            timeout=settings.relay_navigation_timeout_ms,
-        )
-        print(f"Browser opened at {settings.relay_login_url}")
-        print("Log in manually, confirm downloads work, then press Enter here to close.")
-        input()
-        await page.close()
+        """阻塞式登录（CLI 用），临时切换到有头模式，完成后恢复无头"""
+        async with self._lock:
+            if self._context is not None:
+                await self._context.close()
+                self._context = None
+            await self.start(headless=False)
+            context = self._context
+            page = await context.new_page()
+            await self._prepare_page(page)
+            await page.goto(
+                settings.relay_login_url,
+                wait_until="domcontentloaded",
+                timeout=settings.relay_navigation_timeout_ms,
+            )
+            print(f"Browser opened at {settings.relay_login_url}")
+            print("Log in manually, confirm downloads work, then press Enter here to close.")
+            input()
+            await page.close()
+            # 登录完成后切换回无头模式
+            await self._context.close()
+            self._context = None
+            await self.start(headless=True)
+            print("Switched back to headless mode.")
 
     async def fetch_with_format(
         self, source_url: str, download_format: str | None
