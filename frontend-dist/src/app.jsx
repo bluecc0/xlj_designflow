@@ -85,6 +85,34 @@ const App = () => {
     }
   });
 
+  // —— 可拖拽列宽 ——
+  const [leftWidth, setLeftWidth] = React.useState(260);
+  const [rightWidth, setRightWidth] = React.useState(360);
+  const leftRef = React.useRef(260);
+  const rightRef = React.useRef(360);
+
+  const makeHandleDown = (widthRef, setWidth, minW, maxW, sign) => (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = widthRef.current;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev) => {
+      const delta = sign * (ev.clientX - startX);
+      const w = Math.min(maxW, Math.max(minW, startW + delta));
+      widthRef.current = w;
+      setWidth(w);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
   const updateTweaks = (partial) => {
     const next = { ...tweaks, ...partial };
     setTweaks(next);
@@ -213,7 +241,7 @@ const App = () => {
     }}>
       <TopBar user={currentUser} onSwitchUser={handleSwitchUser}/>
       {currentUser && (
-        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '260px minmax(0, 1fr) 360px', gridTemplateRows: 'minmax(0, 1fr)', minHeight: 0 }}>
+        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `${leftWidth}px 5px minmax(0, 1fr) 5px ${rightWidth}px`, gridTemplateRows: 'minmax(0, 1fr)', minHeight: 0 }}>
           <TemplatePanel
             key={'templates:' + currentUser.id}
             activeId={activeTemplate ? (activeTemplate.file_id || '') + ':' + (activeTemplate.group_name || activeTemplate.id) : null}
@@ -224,7 +252,19 @@ const App = () => {
               else setSlashTrigger({ clear: true, key: Date.now() });
             }}
           />
+          <div
+            onMouseDown={makeHandleDown(leftRef, setLeftWidth, 180, 500, 1)}
+            style={{ cursor: 'col-resize', background: 'transparent', transition: 'background 150ms' }}
+            onMouseEnter={(e) => e.target.style.background = 'var(--line)'}
+            onMouseLeave={(e) => e.target.style.background = 'transparent'}
+          />
           <Canvas template={activeTemplate} resultTemplate={resultTemplate} editorCommand={editorCommand}/>
+          <div
+            onMouseDown={makeHandleDown(rightRef, setRightWidth, 280, 600, -1)}
+            style={{ cursor: 'col-resize', background: 'transparent', transition: 'background 150ms' }}
+            onMouseEnter={(e) => e.target.style.background = 'var(--line)'}
+            onMouseLeave={(e) => e.target.style.background = 'transparent'}
+          />
           <Chat
             key={'chat:' + currentUser.id}
             state={tweaks.chatState}
