@@ -1858,7 +1858,6 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
             };
           }));
           if (s.status === 'done') {
-            const workFileId = s.penpot_file_id;
             // 优先用后端记录的 result_paths（支持变体 _v1/_v2 命名），降级到旧模式
             const buildUrls = () => {
               if (s.result_paths && s.result_paths.length > 0) {
@@ -1880,7 +1879,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
               return { ...m, status: 'done', specialUrls: urls, penpotUrl: s.penpot_edit_url, zipUrl };
             }));
             // 构建 resultTpl 供画布预览
-            if (onComposeComplete && urls.length > 0 && workFileId && template) {
+            if (onComposeComplete && urls.length > 0 && template) {
               const base = structuredClone(template);
               const baseFrames = base.frames && base.frames.length > 0 ? base.frames : [base];
               base.frames = urls.map((url, i) => ({ ...(baseFrames[i % baseFrames.length] || baseFrames[0]), resultUrl: url }));

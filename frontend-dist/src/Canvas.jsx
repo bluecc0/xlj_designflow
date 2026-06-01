@@ -7,7 +7,6 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
   const editorReadyRef = React.useRef(false);
   const pendingMessageRef = React.useRef(null);
   const [iframeNonce, setIframeNonce] = React.useState(0);
-  const [iframeLoaded, setIframeLoaded] = React.useState(false);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
 
   const postToEditor = React.useCallback((message) => {
@@ -17,17 +16,21 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
     return true;
   }, []);
 
+  const markEditorReady = React.useCallback(() => {
+    editorReadyRef.current = true;
+    if (pendingMessageRef.current) {
+      postToEditor(pendingMessageRef.current);
+      pendingMessageRef.current = null;
+    }
+  }, [postToEditor]);
+
   // 接收编辑器的 ready 信号，用于命令就绪判定（不控制 UI 可见性）
   React.useEffect(() => {
     const handleMessage = (event) => {
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       if (data.type === 'designflow:editor-ready') {
-        editorReadyRef.current = true;
-        if (pendingMessageRef.current) {
-          postToEditor(pendingMessageRef.current);
-          pendingMessageRef.current = null;
-        }
+        markEditorReady();
       } else if (data.type === 'designflow:editor-inserted') {
         setEditorInsertState({ status: 'done', message: '已放入画布' });
       } else if (data.type === 'designflow:editor-error') {
@@ -41,27 +44,16 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
     const ping = () => {
       pingCount++;
       postToEditor({ type: 'designflow:ping' });
-      if (pingCount < 5 && !editorReadyRef.current) {
+      if (pingCount < 30 && !editorReadyRef.current) {
         setTimeout(ping, 400);
       }
     };
     setTimeout(ping, 200);
 
     return () => window.removeEventListener('message', handleMessage);
-  }, [postToEditor]);
-
-  // iframe 加载完成后短暂显示遮罩，然后自动消失；不依赖 postMessage
-  React.useEffect(() => {
-    if (iframeLoaded) {
-      const timer = setTimeout(() => {
-        editorReadyRef.current = true;
-      }, 600);
-      return () => clearTimeout(timer);
-    }
-  }, [iframeLoaded]);
+  }, [markEditorReady, postToEditor]);
 
   React.useEffect(() => {
-    setIframeLoaded(false);
     editorReadyRef.current = false;
   }, [iframeNonce, t && t.id]);
 
@@ -87,6 +79,17 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
       postToEditor(message);
     } else {
       pendingMessageRef.current = message;
+      postToEditor({ type: 'designflow:ping' });
+    }
+
+    if (editorCommand.type === 'insert-images') {
+      const timer = setTimeout(() => {
+        setEditorInsertState((prev) => {
+          if (!prev || prev.status !== 'running') return prev;
+          return { status: 'failed', message: '放入画布超时，请刷新后重试' };
+        });
+      }, 60000);
+      return () => clearTimeout(timer);
     }
   }, [editorCommand, postToEditor, t]);
 
@@ -157,7 +160,6 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
           ref={iframeRef}
           src="/editor-beta/index.html"
           title="Designflow Editor"
-          onLoad={() => setIframeLoaded(true)}
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', background: 'transparent' }}
         />
       </div>

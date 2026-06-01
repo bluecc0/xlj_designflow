@@ -8,12 +8,16 @@ import {
   DefaultSizeStyle,
   DefaultTextAlignStyle,
   DefaultVerticalAlignStyle,
+  AssetRecordType,
   Tldraw,
+  createShapeId,
   iconTypes,
   toRichText,
   type Editor,
   type TLComponents,
   type TLGeoShape,
+  type TLImageAsset,
+  type TLImageShape,
   type TLShape,
   type TLTextShape,
   useEditor,
@@ -428,15 +432,31 @@ function EditorSurface() {
 }
 
 async function fetchImageAsFile(url: string, nameHint?: string) {
-  const response = await fetch(url, { credentials: 'include' })
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), 30000)
+  let response: Response
+  try {
+    response = await fetch(url, { credentials: 'include', signal: controller.signal })
+  } finally {
+    window.clearTimeout(timer)
+  }
   if (!response.ok) {
-    throw new Error(`Failed to fetch image: HTTP ${response.status}`)
+    throw new Error(`图片读取失败: HTTP ${response.status}`)
   }
   const blob = await response.blob()
   const mime = blob.type || 'image/png'
   const ext = mime.split('/')[1] || 'png'
   const fileName = (nameHint || `designflow-${Date.now()}.${ext}`).replace(/[\\/:*?"<>|]+/g, '_')
   return new File([blob], fileName, { type: mime })
+}
+
+function getImageSize(src: string) {
+  return new Promise<{ w: number; h: number }>((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve({ w: img.naturalWidth || img.width || 1, h: img.naturalHeight || img.height || 1 })
+    img.onerror = () => reject(new Error('image_decode_failed'))
+    img.src = src
+  })
 }
 
 function TldrawHostBridge() {
@@ -471,18 +491,48 @@ function TldrawHostBridge() {
       const MAX_COLS = 5
 
       const file = await fetchImageAsFile(url, name)
-      await editor.putExternalContent({
-        type: 'files',
-        files: [file],
-        point: viewport.center,
-      } as any)
-
-      const insertedIds = editor.getSelectedShapeIds()
-      if (!insertedIds.length) return
+      const previewUrl = window.URL.createObjectURL(file)
+      let size: { w: number; h: number }
+      try {
+        size = await getImageSize(previewUrl)
+      } finally {
+        window.URL.revokeObjectURL(previewUrl)
+      }
+      const assetId = AssetRecordType.createId()
+      const shapeId = createShapeId() as TLImageShape['id']
+      const asset: TLImageAsset = {
+        id: assetId,
+        typeName: 'asset',
+        type: 'image',
+        props: {
+          w: size.w,
+          h: size.h,
+          name: file.name,
+          isAnimated: false,
+          mimeType: file.type || 'image/png',
+          src: url,
+          fileSize: file.size,
+        },
+        meta: {},
+      }
+      editor.createAssets([asset])
+      editor.createShape({
+        id: shapeId,
+        type: 'image',
+        x: viewport.center.x - size.w / 2,
+        y: viewport.center.y - size.h / 2,
+        props: {
+          w: size.w,
+          h: size.h,
+          assetId,
+        },
+      })
+      editor.setSelectedShapes([shapeId])
+      const insertedIds = [shapeId]
 
       // 非背景图：插入后重新定位到网格中，顶部对齐
       if (mode !== 'background') {
-        const shape = editor.getShape(insertedIds[0] as any) as TLShape | undefined
+        const shape = editor.getShape(shapeId) as TLShape | undefined
         if (shape) {
           const bounds = editor.getShapePageBounds(shape)
           if (bounds) {

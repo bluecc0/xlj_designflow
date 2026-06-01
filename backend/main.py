@@ -1039,7 +1039,10 @@ def download_special_images(job_id: str, request: Request):
     for path_str in job.result_paths:
         p = Path(path_str)
         if p.exists():
-            urls.append(f"/output/{p.name}")
+            normalized = str(p).replace("\\", "/")
+            marker = "/results/"
+            idx = normalized.rfind(marker)
+            urls.append(f"/results/{normalized[idx + len(marker):]}" if idx >= 0 else f"/output/{p.name}")
     return {"job_id": job_id, "images": urls}
 
 
