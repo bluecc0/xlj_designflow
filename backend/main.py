@@ -121,12 +121,12 @@ if settings.output_path.exists():
 
 # 合成结果图（独立目录，不污染模板缩略图缓存）
 results_path = settings.output_path / "results"
-if results_path.exists():
-    app.mount(
-        "/results",
-        StaticFiles(directory=str(results_path)),
-        name="results",
-    )
+results_path.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/results",
+    StaticFiles(directory=str(results_path)),
+    name="results",
+)
 
 # AI 生图输出目录
 _ai_images_path = settings.output_path / "ai-images"

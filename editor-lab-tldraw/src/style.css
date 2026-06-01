@@ -287,6 +287,7 @@ input {
 }
 
 .lab-sidepanel {
+  display: none !important;
   position: absolute;
   top: 78px;
   right: 16px;

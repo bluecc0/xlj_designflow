@@ -8,6 +8,7 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
   const pendingMessageRef = React.useRef(null);
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [iframeLoaded, setIframeLoaded] = React.useState(false);
+  const [editorInsertState, setEditorInsertState] = React.useState(null);
 
   const postToEditor = React.useCallback((message) => {
     const win = iframeRef.current && iframeRef.current.contentWindow;
@@ -27,6 +28,10 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
           postToEditor(pendingMessageRef.current);
           pendingMessageRef.current = null;
         }
+      } else if (data.type === 'designflow:editor-inserted') {
+        setEditorInsertState({ status: 'done', message: '已放入画布' });
+      } else if (data.type === 'designflow:editor-error') {
+        setEditorInsertState({ status: 'failed', message: data.message || '放入画布失败' });
       }
     };
     window.addEventListener('message', handleMessage);
@@ -74,6 +79,10 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
           pageName: editorCommand.pageName || t?.name || '画板 1',
         };
 
+    if (editorCommand.type === 'insert-images') {
+      setEditorInsertState({ status: 'running', message: '正在放入画布' });
+    }
+
     if (editorReadyRef.current) {
       postToEditor(message);
     } else {
@@ -100,6 +109,22 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
           {hasResult && (
             <span className="mono" style={{ fontSize: 10, color: 'var(--ok)', padding: '2px 6px', borderRadius: 4, background: 'rgba(0,128,96,0.08)', border: '1px solid rgba(0,128,96,0.16)' }}>
               已接收结果图
+            </span>
+          )}
+          {editorInsertState && (
+            <span
+              className="mono"
+              title={editorInsertState.message}
+              style={{
+                fontSize: 10,
+                color: editorInsertState.status === 'failed' ? 'var(--warn)' : (editorInsertState.status === 'done' ? 'var(--ok)' : 'var(--ink-3)'),
+                padding: '2px 6px',
+                borderRadius: 4,
+                background: editorInsertState.status === 'failed' ? 'rgba(180,35,24,0.08)' : 'rgba(0,128,96,0.08)',
+                border: editorInsertState.status === 'failed' ? '1px solid rgba(180,35,24,0.16)' : '1px solid rgba(0,128,96,0.16)',
+              }}
+            >
+              {editorInsertState.message}
             </span>
           )}
         </div>
