@@ -1,16 +1,18 @@
 """
-AI image adapter for APIMart.
+AI image adapters.
 
 Flow:
-1. Optionally upload reference images to APIMart.
+1. Optionally upload reference images to the provider.
 2. Submit an async image generation task.
 3. Poll task status until completed.
 4. Download the final image into output/ai-images/{user_id}/.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import re
 import random
 import time
 import uuid
@@ -48,6 +50,9 @@ SLASH_MODEL_MAP: dict[str, str] = {
     "gpt image 2": "gpt-image-2",
     "gpt-image-2": "gpt-image-2",
 }
+
+PROVIDER_APIMART = "apimart"
+PROVIDER_OPENROUTER = "openrouter"
 
 _OUTPUT_DIR = settings.output_path / "ai-images"
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -97,6 +102,38 @@ def _model_credentials(model: str) -> tuple[str, str]:
     if base_url.endswith("/v1"):
         base_url = base_url[:-3]
     return base_url, api_key
+
+
+def normalize_provider(provider: str | None = None) -> str:
+    clean = (provider or settings.ai_image_provider or PROVIDER_APIMART).strip().casefold()
+    if clean in ("apimart", "api-mart", "api_mart"):
+        return PROVIDER_APIMART
+    if clean in ("openrouter", "open-router", "open_router"):
+        return PROVIDER_OPENROUTER
+    raise ValueError(f"未知生图线路: {provider}")
+
+
+def _openrouter_model_name(model: str) -> str:
+    model_name = _normalize_model_name(model)
+    if model_name == "gpt-image-2":
+        return settings.openrouter_gpt_image_model
+    if model_name == "gemini-3-pro-image-preview":
+        return settings.openrouter_nano_banana_model
+    return model_name
+
+
+def _openrouter_headers() -> dict[str, str]:
+    if not settings.openrouter_api_key:
+        raise ValueError("OPENROUTER_API_KEY 未配置，请在 .env 中填写")
+    headers = {
+        "Authorization": f"Bearer {settings.openrouter_api_key}",
+        "Content-Type": "application/json",
+    }
+    if settings.openrouter_site_url:
+        headers["HTTP-Referer"] = settings.openrouter_site_url
+    if settings.openrouter_app_name:
+        headers["X-Title"] = settings.openrouter_app_name
+    return headers
 
 
 def _normalize_model_name(model: str) -> str:
@@ -185,6 +222,78 @@ def _extract_result_url(payload: Any) -> str | None:
             if url:
                 return url
     return None
+
+
+def _extract_openrouter_image_url(payload: Any) -> str | None:
+    if isinstance(payload, dict):
+        choices = payload.get("choices")
+        if isinstance(choices, list):
+            for choice in choices:
+                message = choice.get("message") if isinstance(choice, dict) else None
+                if isinstance(message, dict):
+                    images = message.get("images")
+                    if isinstance(images, list):
+                        for item in images:
+                            if isinstance(item, dict):
+                                for key in ("image_url", "imageUrl"):
+                                    value = item.get(key)
+                                    if isinstance(value, dict) and isinstance(value.get("url"), str):
+                                        return value["url"]
+                                    if isinstance(value, str):
+                                        return value
+                            url = _extract_result_url(item)
+                            if url:
+                                return url
+                    url = _extract_result_url(message.get("image_url"))
+                    if url:
+                        return url
+        return _extract_result_url(payload)
+    return _extract_result_url(payload)
+
+
+def _extension_from_mime(mime_type: str) -> str:
+    clean = (mime_type or "").split(";")[0].strip().lower()
+    if clean == "image/jpeg":
+        return ".jpg"
+    if clean == "image/webp":
+        return ".webp"
+    return ".png"
+
+
+def _mime_from_filename(filename: str) -> str:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix in (".jpg", ".jpeg"):
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    if suffix == ".gif":
+        return "image/gif"
+    return "image/png"
+
+
+def _image_bytes_to_data_url(image_bytes: bytes, filename: str) -> str:
+    if not image_bytes:
+        raise RuntimeError(f"参考图为空: {filename or 'unknown'}")
+    mime_type = _mime_from_filename(filename)
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "openrouter") -> str:
+    match = re.match(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$", data_url or "", re.DOTALL)
+    if not match:
+        raise RuntimeError("OpenRouter 返回了无法识别的图片 data URL")
+    mime_type, raw_b64 = match.groups()
+    try:
+        content = base64.b64decode(raw_b64, validate=True)
+    except Exception as exc:
+        raise RuntimeError("OpenRouter 返回的图片 base64 解码失败") from exc
+    if not content:
+        raise RuntimeError("OpenRouter 返回的图片内容为空")
+    out_dir = _ensure_user_output_dir(user_id)
+    filename = f"{prefix}_{uuid.uuid4().hex}{_extension_from_mime(mime_type)}"
+    (out_dir / filename).write_bytes(content)
+    return f"/ai-images/{out_dir.name}/{filename}"
 
 
 def _extract_task_id(payload: Any) -> str | None:
@@ -420,6 +529,71 @@ async def _download_final_image(
     out_path = out_dir / filename
     out_path.write_bytes(resp.content)
     return f"/ai-images/{out_dir.name}/{filename}"
+
+
+async def generate_image_openrouter_async(
+    model: str,
+    prompt: str,
+    images: list[tuple[bytes, str]] | None = None,
+    size: str = "1024x1024",
+    resolution: str = "",
+    user_id: str = "anonymous",
+) -> dict:
+    model_name = _openrouter_model_name(model)
+    base_url = settings.openrouter_base_url.rstrip("/")
+    headers = _openrouter_headers()
+    ratio, normalized_resolution = _normalize_size(size, resolution)
+    image_config: dict[str, str] = {}
+    if ratio and ratio != "auto":
+        image_config["aspect_ratio"] = ratio
+    if model_name.startswith("google/") and normalized_resolution:
+        image_config["image_size"] = normalized_resolution.upper()
+
+    refs = images or []
+    content: str | list[dict[str, Any]]
+    if refs:
+        content = [{"type": "text", "text": prompt}]
+        for image_bytes, filename in refs[:4]:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": _image_bytes_to_data_url(image_bytes, filename)},
+            })
+    else:
+        content = prompt
+
+    payload: dict[str, Any] = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": content}],
+        "modalities": ["image", "text"],
+        "stream": False,
+    }
+    if image_config:
+        payload["image_config"] = image_config
+
+    endpoint = f"{base_url}/chat/completions"
+    async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
+        resp = await client.post(endpoint, json=payload, headers=headers)
+        if not resp.is_success:
+            raise RuntimeError(f"OpenRouter 生图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
+        data = resp.json()
+        image_url = _extract_openrouter_image_url(data)
+        if not image_url:
+            raise RuntimeError(f"OpenRouter 响应中没有图片: {str(data)[:240]}")
+        if image_url.startswith("data:image/"):
+            local_url = _save_data_url_image(image_url, user_id=user_id)
+        else:
+            local_url = await _download_final_image(client, image_url=image_url, user_id=user_id)
+
+    return {
+        "url": local_url,
+        "model": model_name,
+        "prompt": prompt,
+        "size": size,
+        "resolution": resolution,
+        "provider": PROVIDER_OPENROUTER,
+        "reference": bool(refs),
+        "task_id": f"openrouter:{uuid.uuid4().hex}",
+    }
 
 
 async def generate_image(

@@ -36,7 +36,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .ai_image import generate_image, generate_image_with_reference, generate_image_async, generate_image_with_reference_async, SLASH_MODEL_MAP
+from .ai_image import (
+    PROVIDER_OPENROUTER,
+    generate_image,
+    generate_image_with_reference,
+    generate_image_async,
+    generate_image_openrouter_async,
+    generate_image_with_reference_async,
+    normalize_provider,
+    SLASH_MODEL_MAP,
+)
 from .psd_layered import create_layered_psd_from_image
 from .special_compose_full import run_special_full_compose
 from .compose import get_client, run_compose
@@ -1668,6 +1677,7 @@ async def _run_ai_image_background(
     job_id: str,
     user_id: str,
     session_id: str,
+    provider: str,
     model: str,
     prompt: str,
     size: str,
@@ -1697,7 +1707,13 @@ async def _run_ai_image_background(
             pass
 
     try:
-        if refs:
+        if provider == PROVIDER_OPENROUTER:
+            result = await generate_image_openrouter_async(
+                model=model, prompt=prompt,
+                images=refs,
+                size=size, resolution=resolution, user_id=user_id,
+            )
+        elif refs:
             result = await generate_image_with_reference_async(
                 model=model, prompt=prompt, images=refs,
                 size=size, resolution=resolution, user_id=user_id,
@@ -1721,6 +1737,7 @@ async def _run_ai_image_background(
             text=prompt, image_url=result.get("url"),
             meta={
                 "model": model, "prompt": prompt,
+                "provider": provider,
                 "size": size, "resolution": resolution,
                 "status": "done",
                 "hasReference": has_reference,
@@ -1742,6 +1759,7 @@ async def _run_ai_image_background(
             text=prompt, image_url=None,
             meta={
                 "model": model, "prompt": prompt,
+                "provider": provider,
                 "status": "failed", "error": str(e),
                 "hasReference": has_reference,
                 "refCount": len(refs),
@@ -1802,6 +1820,7 @@ def editor_load_snapshot(request: Request):
 async def ai_image_endpoint(
     request: Request,
     model: str = Form(...),
+    provider: str = Form(""),
     prompt: str = Form(...),
     size: str = Form("1024x1024"),
     resolution: str = Form(""),
@@ -1829,6 +1848,10 @@ async def ai_image_endpoint(
     resolved = SLASH_MODEL_MAP.get(model.lower(), model)
     if not resolved:
         raise HTTPException(400, f"未知模型: {model}")
+    try:
+        resolved_provider = normalize_provider(provider)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     user = _current_user(request)
     job_id = uuid.uuid4().hex
     session_id = (chat_session_id or "").strip()
@@ -1897,6 +1920,7 @@ async def ai_image_endpoint(
         asyncio.create_task(
             _run_ai_image_background(
                 job_id=job_id, user_id=user["id"], session_id=session_id,
+                provider=resolved_provider,
                 model=resolved, prompt=enriched_prompt,
                 size=size, resolution=resolution,
                 refs=all_refs, has_reference=has_reference, created_at=created_at,

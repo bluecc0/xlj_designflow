@@ -51,8 +51,17 @@ class Settings:
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
 
     # AI 生图 API（APIMart）
+    ai_image_provider: str = os.getenv("AI_IMAGE_PROVIDER", "apimart")
     ai_image_base_url: str = os.getenv("AI_IMAGE_BASE_URL", "https://api.apimart.ai")
     ai_image_api_key: str = os.getenv("AI_IMAGE_API_KEY", "")
+
+    # AI 生图 API（OpenRouter，多模型备用线路；API key 留空则禁用）
+    openrouter_base_url: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
+    openrouter_gpt_image_model: str = os.getenv("OPENROUTER_GPT_IMAGE_MODEL", "openai/gpt-5-image")
+    openrouter_nano_banana_model: str = os.getenv("OPENROUTER_NANO_BANANA_MODEL", "google/gemini-3-pro-image-preview")
+    openrouter_site_url: str = os.getenv("OPENROUTER_SITE_URL", "")
+    openrouter_app_name: str = os.getenv("OPENROUTER_APP_NAME", "DesignFlow")
 
     # AI 生图 API（可选的单独图生图配置；留空则复用上面的 APIMart 配置）
     nano_banana_base_url: str = os.getenv("NANO_BANANA_BASE_URL", "")
