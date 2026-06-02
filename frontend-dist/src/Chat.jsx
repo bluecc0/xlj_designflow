@@ -1200,8 +1200,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
                 cursor: 'pointer', outline: 'none',
               }}
             >
-              <option value="apimart">APIMart</option>
-              <option value="zenmux">ZenMux</option>
+              <option value="apimart">默认</option>
+              <option value="zenmux">官方</option>
             </select>
             <div style={{ width: 1, height: 12, background: 'var(--line)', flexShrink: 0 }}/>
             <select
