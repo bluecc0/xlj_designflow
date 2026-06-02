@@ -7,7 +7,7 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        entryFileNames: 'assets/index-DUt_foXO.js',
+        entryFileNames: 'assets/index-CjBiBHkT.js',
         chunkFileNames: 'assets/[name].js',
         assetFileNames: (assetInfo) => {
           const name = assetInfo.names?.[0] || assetInfo.name || ''

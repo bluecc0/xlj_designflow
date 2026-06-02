@@ -459,6 +459,26 @@ function getImageSize(src: string) {
   })
 }
 
+function normalizeImageShapesInSnapshot(snapshot: any) {
+  const store = snapshot?.store || snapshot?.document
+  if (!store || typeof store !== 'object') return snapshot
+
+  Object.values(store).forEach((record: any) => {
+    if (!record || record.typeName !== 'shape' || record.type !== 'image') return
+    const props = record.props || {}
+    record.props = {
+      ...props,
+      playing: typeof props.playing === 'boolean' ? props.playing : true,
+      url: typeof props.url === 'string' ? props.url : '',
+      crop: props.crop === undefined ? null : props.crop,
+      flipX: typeof props.flipX === 'boolean' ? props.flipX : false,
+      flipY: typeof props.flipY === 'boolean' ? props.flipY : false,
+      altText: typeof props.altText === 'string' ? props.altText : '',
+    }
+  })
+  return snapshot
+}
+
 function TldrawHostBridge() {
   const editor = useEditor()
 
@@ -525,6 +545,12 @@ function TldrawHostBridge() {
           w: size.w,
           h: size.h,
           assetId,
+          playing: true,
+          url: '',
+          crop: null,
+          flipX: false,
+          flipY: false,
+          altText: file.name,
         },
       })
       editor.setSelectedShapes([shapeId])
@@ -817,7 +843,7 @@ function TldrawHostBridge() {
           // 验证快照有效：store 至少有一个 page 记录
           const store = data.snapshot.store || data.snapshot.document
           if (store && typeof store === 'object' && Object.keys(store).length > 0) {
-            editor.loadSnapshot(data.snapshot)
+            editor.loadSnapshot(normalizeImageShapesInSnapshot(data.snapshot))
           }
         }
       } catch (e) {}
