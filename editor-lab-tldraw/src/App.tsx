@@ -761,7 +761,7 @@ function TldrawHostBridge() {
         if (existing) {
           editor.setCurrentPage(existing.id)
         } else {
-          editor.createPage(pageName)
+          editor.createPage({ name: pageName })
         }
         return
       }
