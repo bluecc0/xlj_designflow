@@ -728,7 +728,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [aiQuality, setAiQuality] = React.useState('1K');
   const [aiProvider, setAiProvider] = React.useState(() => {
     try {
-      return localStorage.getItem('designflow_ai_provider') || 'apimart';
+      const saved = localStorage.getItem('designflow_ai_provider') || 'apimart';
+      return ['apimart', 'zenmux'].includes(saved) ? saved : 'zenmux';
     } catch (e) {
       return 'apimart';
     }
@@ -1200,7 +1201,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
               }}
             >
               <option value="apimart">APIMart</option>
-              <option value="openrouter">OpenRouter</option>
+              <option value="zenmux">ZenMux</option>
             </select>
             <div style={{ width: 1, height: 12, background: 'var(--line)', flexShrink: 0 }}/>
             <select

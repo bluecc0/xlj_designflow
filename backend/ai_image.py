@@ -52,7 +52,7 @@ SLASH_MODEL_MAP: dict[str, str] = {
 }
 
 PROVIDER_APIMART = "apimart"
-PROVIDER_OPENROUTER = "openrouter"
+PROVIDER_ZENMUX = "zenmux"
 
 _OUTPUT_DIR = settings.output_path / "ai-images"
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -108,32 +108,27 @@ def normalize_provider(provider: str | None = None) -> str:
     clean = (provider or settings.ai_image_provider or PROVIDER_APIMART).strip().casefold()
     if clean in ("apimart", "api-mart", "api_mart"):
         return PROVIDER_APIMART
-    if clean in ("openrouter", "open-router", "open_router"):
-        return PROVIDER_OPENROUTER
+    if clean in ("zenmux", "zen-mux", "zen_mux"):
+        return PROVIDER_ZENMUX
     raise ValueError(f"未知生图线路: {provider}")
 
 
-def _openrouter_model_name(model: str) -> str:
+def _zenmux_model_name(model: str) -> str:
     model_name = _normalize_model_name(model)
     if model_name == "gpt-image-2":
-        return settings.openrouter_gpt_image_model
+        return settings.zenmux_gpt_image_model
     if model_name == "gemini-3-pro-image-preview":
-        return settings.openrouter_nano_banana_model
+        return settings.zenmux_nano_banana_model
     return model_name
 
 
-def _openrouter_headers() -> dict[str, str]:
-    if not settings.openrouter_api_key:
-        raise ValueError("OPENROUTER_API_KEY 未配置，请在 .env 中填写")
-    headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
+def _zenmux_headers() -> dict[str, str]:
+    if not settings.zenmux_api_key:
+        raise ValueError("ZENMUX_API_KEY 未配置，请在 .env 中填写")
+    return {
+        "Authorization": f"Bearer {settings.zenmux_api_key}",
         "Content-Type": "application/json",
     }
-    if settings.openrouter_site_url:
-        headers["HTTP-Referer"] = settings.openrouter_site_url
-    if settings.openrouter_app_name:
-        headers["X-Title"] = settings.openrouter_app_name
-    return headers
 
 
 def _normalize_model_name(model: str) -> str:
@@ -224,27 +219,22 @@ def _extract_result_url(payload: Any) -> str | None:
     return None
 
 
-def _extract_openrouter_image_url(payload: Any) -> str | None:
+def _extract_zenmux_image_url(payload: Any) -> str | None:
     if isinstance(payload, dict):
-        choices = payload.get("choices")
-        if isinstance(choices, list):
-            for choice in choices:
-                message = choice.get("message") if isinstance(choice, dict) else None
-                if isinstance(message, dict):
-                    images = message.get("images")
-                    if isinstance(images, list):
-                        for item in images:
-                            if isinstance(item, dict):
-                                for key in ("image_url", "imageUrl"):
-                                    value = item.get(key)
-                                    if isinstance(value, dict) and isinstance(value.get("url"), str):
-                                        return value["url"]
-                                    if isinstance(value, str):
-                                        return value
-                            url = _extract_result_url(item)
-                            if url:
-                                return url
-                    url = _extract_result_url(message.get("image_url"))
+        data = payload.get("data")
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    b64_json = item.get("b64_json")
+                    if isinstance(b64_json, str) and b64_json.strip():
+                        output_format = str(payload.get("output_format") or "png").strip().lower()
+                        mime_type = {
+                            "jpeg": "image/jpeg",
+                            "jpg": "image/jpeg",
+                            "webp": "image/webp",
+                        }.get(output_format, "image/png")
+                        return f"data:{mime_type};base64,{b64_json.strip()}"
+                    url = _extract_result_url(item.get("url") or item.get("image_url"))
                     if url:
                         return url
         return _extract_result_url(payload)
@@ -279,17 +269,17 @@ def _image_bytes_to_data_url(image_bytes: bytes, filename: str) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
-def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "openrouter") -> str:
+def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "zenmux") -> str:
     match = re.match(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$", data_url or "", re.DOTALL)
     if not match:
-        raise RuntimeError("OpenRouter 返回了无法识别的图片 data URL")
+        raise RuntimeError("ZenMux 返回了无法识别的图片 data URL")
     mime_type, raw_b64 = match.groups()
     try:
         content = base64.b64decode(raw_b64, validate=True)
     except Exception as exc:
-        raise RuntimeError("OpenRouter 返回的图片 base64 解码失败") from exc
+        raise RuntimeError("ZenMux 返回的图片 base64 解码失败") from exc
     if not content:
-        raise RuntimeError("OpenRouter 返回的图片内容为空")
+        raise RuntimeError("ZenMux 返回的图片内容为空")
     out_dir = _ensure_user_output_dir(user_id)
     filename = f"{prefix}_{uuid.uuid4().hex}{_extension_from_mime(mime_type)}"
     (out_dir / filename).write_bytes(content)
@@ -531,7 +521,7 @@ async def _download_final_image(
     return f"/ai-images/{out_dir.name}/{filename}"
 
 
-async def generate_image_openrouter_async(
+async def generate_image_zenmux_async(
     model: str,
     prompt: str,
     images: list[tuple[bytes, str]] | None = None,
@@ -539,46 +529,41 @@ async def generate_image_openrouter_async(
     resolution: str = "",
     user_id: str = "anonymous",
 ) -> dict:
-    model_name = _openrouter_model_name(model)
-    base_url = settings.openrouter_base_url.rstrip("/")
-    headers = _openrouter_headers()
-    ratio, normalized_resolution = _normalize_size(size, resolution)
-    image_config: dict[str, str] = {}
-    if ratio and ratio != "auto":
-        image_config["aspect_ratio"] = ratio
-    if model_name.startswith("google/") and normalized_resolution:
-        image_config["image_size"] = normalized_resolution.upper()
-
+    model_name = _zenmux_model_name(model)
+    base_url = settings.zenmux_base_url.rstrip("/")
+    headers = _zenmux_headers()
     refs = images or []
-    content: str | list[dict[str, Any]]
-    if refs:
-        content = [{"type": "text", "text": prompt}]
-        for image_bytes, filename in refs[:4]:
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": _image_bytes_to_data_url(image_bytes, filename)},
-            })
-    else:
-        content = prompt
-
     payload: dict[str, Any] = {
         "model": model_name,
-        "messages": [{"role": "user", "content": content}],
-        "modalities": ["image", "text"],
-        "stream": False,
+        "prompt": prompt,
+        "n": 1,
+        "size": size or "1024x1024",
     }
-    if image_config:
-        payload["image_config"] = image_config
 
-    endpoint = f"{base_url}/chat/completions"
+    if refs:
+        endpoint = f"{base_url}/images/edits"
+        form_data = {key: str(value) for key, value in payload.items()}
+        files = [
+            ("image[]", (filename or f"ref{i}.png", image_bytes, _mime_from_filename(filename)))
+            for i, (image_bytes, filename) in enumerate(refs[:4])
+        ]
+    else:
+        endpoint = f"{base_url}/images/generations"
+        form_data = {}
+        files = []
+
     async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
-        resp = await client.post(endpoint, json=payload, headers=headers)
+        if files:
+            multipart_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+            resp = await client.post(endpoint, data=form_data, files=files, headers=multipart_headers)
+        else:
+            resp = await client.post(endpoint, json=payload, headers=headers)
         if not resp.is_success:
-            raise RuntimeError(f"OpenRouter 生图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
+            raise RuntimeError(f"ZenMux 生图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
         data = resp.json()
-        image_url = _extract_openrouter_image_url(data)
+        image_url = _extract_zenmux_image_url(data)
         if not image_url:
-            raise RuntimeError(f"OpenRouter 响应中没有图片: {str(data)[:240]}")
+            raise RuntimeError(f"ZenMux 响应中没有图片: {str(data)[:240]}")
         if image_url.startswith("data:image/"):
             local_url = _save_data_url_image(image_url, user_id=user_id)
         else:
@@ -590,9 +575,9 @@ async def generate_image_openrouter_async(
         "prompt": prompt,
         "size": size,
         "resolution": resolution,
-        "provider": PROVIDER_OPENROUTER,
+        "provider": PROVIDER_ZENMUX,
         "reference": bool(refs),
-        "task_id": f"openrouter:{uuid.uuid4().hex}",
+        "task_id": f"zenmux:{uuid.uuid4().hex}",
     }
 
 

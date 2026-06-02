@@ -37,11 +37,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .ai_image import (
-    PROVIDER_OPENROUTER,
+    PROVIDER_ZENMUX,
     generate_image,
     generate_image_with_reference,
     generate_image_async,
-    generate_image_openrouter_async,
+    generate_image_zenmux_async,
     generate_image_with_reference_async,
     normalize_provider,
     SLASH_MODEL_MAP,
@@ -306,6 +306,40 @@ async def health():
                 ai_provider["message"] = r.text[:200]
         except Exception as e:
             ai_provider["message"] = str(e)
+
+    zenmux_status = {
+        "connected": False,
+        "configured": bool(settings.zenmux_management_api_key),
+        "provider": "ZenMux",
+        "url": settings.zenmux_base_url,
+    }
+    if settings.zenmux_management_api_key:
+        try:
+            async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
+                r = await client.get(
+                    "https://zenmux.ai/api/v1/management/subscription/detail",
+                    headers={"Authorization": f"Bearer {settings.zenmux_management_api_key}"},
+                )
+            zenmux_status["status_code"] = r.status_code
+            if r.status_code == 200:
+                payload = r.json()
+                data = payload.get("data") if isinstance(payload, dict) else {}
+                data = data if isinstance(data, dict) else {}
+                plan = data.get("plan") if isinstance(data.get("plan"), dict) else {}
+                quota_5_hour = data.get("quota_5_hour") if isinstance(data.get("quota_5_hour"), dict) else {}
+                quota_7_day = data.get("quota_7_day") if isinstance(data.get("quota_7_day"), dict) else {}
+                zenmux_status["connected"] = bool(payload.get("success"))
+                zenmux_status["account_status"] = data.get("account_status")
+                zenmux_status["tier"] = plan.get("tier")
+                zenmux_status["quota_5_hour_remaining"] = quota_5_hour.get("remaining_flows")
+                zenmux_status["quota_7_day_remaining"] = quota_7_day.get("remaining_flows")
+            else:
+                zenmux_status["message"] = r.text[:200]
+        except Exception as e:
+            zenmux_status["message"] = str(e)
+    ai_provider["zenmux"] = zenmux_status
+    ai_provider["connected"] = bool(ai_provider.get("connected") or zenmux_status.get("connected"))
+    ai_provider["configured"] = bool(ai_provider.get("configured") or zenmux_status.get("configured"))
 
     return {
         "status": "ok",
@@ -1707,8 +1741,8 @@ async def _run_ai_image_background(
             pass
 
     try:
-        if provider == PROVIDER_OPENROUTER:
-            result = await generate_image_openrouter_async(
+        if provider == PROVIDER_ZENMUX:
+            result = await generate_image_zenmux_async(
                 model=model, prompt=prompt,
                 images=refs,
                 size=size, resolution=resolution, user_id=user_id,
