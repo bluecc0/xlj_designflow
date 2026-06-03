@@ -72,6 +72,18 @@ _SIZE_MAP: dict[str, tuple[str, str]] = {
     "2160x3840": ("9:16", "4K"),
 }
 
+_ZENMUX_SIZE_MAP: dict[str, dict[str, str]] = {
+    "1:1": {"1K": "1024x1024", "2K": "1536x1536", "4K": "2048x2048"},
+    "3:4": {"1K": "1024x1536", "2K": "1536x2048", "4K": "1536x2048"},
+    "4:3": {"1K": "1536x1024", "2K": "2048x1536", "4K": "2048x1536"},
+    "5:4": {"1K": "1280x1024", "2K": "2560x2048", "4K": "2560x2048"},
+    "4:5": {"1K": "1024x1280", "2K": "2048x2560", "4K": "2048x2560"},
+    "16:9": {"1K": "1536x864", "2K": "2048x1152", "4K": "3840x2160"},
+    "9:16": {"1K": "864x1536", "2K": "1152x2048", "4K": "2160x3840"},
+    "2:3": {"1K": "1024x1536", "2K": "1360x2048", "4K": "1360x2048"},
+    "3:2": {"1K": "1536x1024", "2K": "2048x1360", "4K": "2048x1360"},
+}
+
 
 def _api_error_msg(status: int, raw: str) -> str:
     hint = _HTTP_ERRORS.get(status, "")
@@ -146,6 +158,21 @@ def _normalize_size(size: str, resolution: str = "") -> tuple[str, str]:
     if clean in ("auto", "1:1", "3:4", "4:3", "5:4", "4:5", "9:16", "16:9", "2:3", "3:2"):
         return clean, clean_resolution
     return "1:1", "1K"
+
+
+def _normalize_zenmux_size(size: str, resolution: str = "") -> str:
+    clean = (size or "").strip()
+    clean_resolution = (resolution or "").strip().upper() or "1K"
+    if clean == "auto":
+        return "auto"
+    if re.fullmatch(r"\d+x\d+", clean):
+        return clean
+    if clean in _SIZE_MAP:
+        ratio, mapped_resolution = _SIZE_MAP[clean]
+        clean = ratio
+        clean_resolution = clean_resolution or mapped_resolution
+    ratio_map = _ZENMUX_SIZE_MAP.get(clean or "1:1") or _ZENMUX_SIZE_MAP["1:1"]
+    return ratio_map.get(clean_resolution) or ratio_map.get("1K") or "1024x1024"
 
 
 def _extract_error_text(resp: httpx.Response) -> str:
@@ -533,11 +560,12 @@ async def generate_image_zenmux_async(
     base_url = settings.zenmux_base_url.rstrip("/")
     headers = _zenmux_headers()
     refs = images or []
+    zenmux_size = _normalize_zenmux_size(size, resolution)
     payload: dict[str, Any] = {
         "model": model_name,
         "prompt": prompt,
         "n": 1,
-        "size": size or "1024x1024",
+        "size": zenmux_size,
     }
 
     if refs:
@@ -573,7 +601,7 @@ async def generate_image_zenmux_async(
         "url": local_url,
         "model": model_name,
         "prompt": prompt,
-        "size": size,
+        "size": zenmux_size,
         "resolution": resolution,
         "provider": PROVIDER_ZENMUX,
         "reference": bool(refs),
