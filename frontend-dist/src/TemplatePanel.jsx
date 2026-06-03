@@ -200,6 +200,8 @@ var TemplatePanel = function(_ref2) {
   }, [tab]);
 
   var filtered = templates.filter(function(t) {
+    // 特殊品筛选：is_special 或 is_special_full
+    if (cat === '特殊品') return (t.is_special || t.is_special_full) && (!q || t.name.toLowerCase().includes(q.toLowerCase()));
     return (cat === 'All' || t.cat === cat) &&
       (!q || t.name.toLowerCase().includes(q.toLowerCase()));
   });
@@ -261,17 +263,18 @@ var TemplatePanel = function(_ref2) {
             }, React.createElement(I.refresh, { size: 13 }))
           )
         ),
-        cat !== 'All' && React.createElement('div', { style: { padding: '0 14px 10px', display: 'flex', gap: 4, flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' } },
-          ['All', 'E-commerce'].map(function(c) {
+        React.createElement('div', { style: { padding: '0 14px 10px', display: 'flex', gap: 4, flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' } },
+          ['全部', '特殊品'].map(function(c) {
+            var catKey = c === '全部' ? 'All' : c;
             return React.createElement('button', {
-              key: c, onClick: function() { setCat(c); },
+              key: c, onClick: function() { setCat(catKey); },
               style: {
                 fontSize: 11, padding: '4px 9px', borderRadius: 99,
-                background: cat === c ? 'var(--ink)' : 'transparent',
-                color: cat === c ? 'white' : 'var(--ink-2)',
-                fontWeight: cat === c ? 500 : 400,
+                background: cat === catKey ? 'var(--ink)' : 'transparent',
+                color: cat === catKey ? 'white' : 'var(--ink-2)',
+                fontWeight: cat === catKey ? 500 : 400,
                 whiteSpace: 'nowrap',
-                border: cat === c ? 'none' : '1px solid var(--line)',
+                border: cat === catKey ? 'none' : '1px solid var(--line)',
                 transition: 'all 120ms',
               }
             }, c);
