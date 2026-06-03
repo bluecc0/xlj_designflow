@@ -1560,7 +1560,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       model, provider, prompt, size: lastSize, resolution: lastResolution,
       status: 'running', startedAt,
       progress: 0,
-      meta: provider + ' · ' + model,
+      meta: 'Loom',
       hasReference: refImages.length > 0,
       refCount: refImages.length,
       refPreviews: [],
