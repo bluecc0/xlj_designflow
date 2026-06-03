@@ -117,7 +117,7 @@ var PANEL_TABS = [
 var TemplatePanel = function(_ref2) {
   var activeId = _ref2.activeId, onSelect = _ref2.onSelect;
   var _useState = React.useState('templates'), tab = _useState[0], setTab = _useState[1];
-  var _useState2 = React.useState({}), collapsedSections = _useState2[0], setCollapsedSections = _useState2[1];
+  var _useState2 = React.useState({ special: true }), collapsedSections = _useState2[0], setCollapsedSections = _useState2[1];
   var _useState3 = React.useState(''), q = _useState3[0], setQ = _useState3[1];
   var _useState4 = React.useState([]), templates = _useState4[0], setTemplates = _useState4[1];
   var _useState5 = React.useState(true), loading = _useState5[0], setLoading = _useState5[1];
