@@ -209,7 +209,7 @@ var TemplatePanel = function(_ref2) {
   var filteredSections = sections.map(function(s) {
     if (!q) return s;
     return { key: s.key, label: s.label, items: s.items.filter(function(t) { return t.name.toLowerCase().includes(q.toLowerCase()); }) };
-  }).filter(function(s) { return s.items.length > 0; });
+  });
 
   var toggleSection = function(key) {
     setCollapsedSections(function(prev) {
@@ -282,11 +282,7 @@ var TemplatePanel = function(_ref2) {
           React.createElement('div', null, '加载失败'),
           React.createElement('div', { style: { color: 'var(--ink-3)', fontSize: 10 } }, String(loadErr))
         ),
-        !loading && !loadErr && templates.length === 0 && React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)', fontSize: 12 } },
-          React.createElement(I.layers, { size: 24, style: { opacity: 0.3 } }),
-          React.createElement('div', null, '暂没有可用模板')
-        ),
-        !loading && !loadErr && templates.length > 0 && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 10px 56px' } },
+        !loading && !loadErr && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 10px 56px' } },
           filteredSections.map(function(section) {
             var colA = section.items.filter(function(_, i) { return i % 2 === 0; });
             var colB = section.items.filter(function(_, i) { return i % 2 === 1; });
@@ -312,19 +308,19 @@ var TemplatePanel = function(_ref2) {
                 section.label,
                 React.createElement('span', { style: { fontSize: 10, color: 'var(--ink-3)', fontWeight: 400 } }, section.items.length)
               ),
-              !collapsed && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 } },
-                React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-                  colA.map(function(t) { var tkey = (t.file_id||'')+':'+(t.group_name||t.id); return React.createElement(TemplateCard, { key: tkey, t: t, active: activeId === tkey, onClick: function() { return onSelect(t); } }); })
-                ),
-                React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-                  colB.map(function(t) { var tkey = (t.file_id||'')+':'+(t.group_name||t.id); return React.createElement(TemplateCard, { key: tkey, t: t, active: activeId === tkey, onClick: function() { return onSelect(t); } }); })
-                )
+              !collapsed && (section.items.length > 0
+                ? React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 } },
+                    React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+                      colA.map(function(t) { var tkey = (t.file_id||'')+':'+(t.group_name||t.id); return React.createElement(TemplateCard, { key: tkey, t: t, active: activeId === tkey, onClick: function() { return onSelect(t); } }); })
+                    ),
+                    React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+                      colB.map(function(t) { var tkey = (t.file_id||'')+':'+(t.group_name||t.id); return React.createElement(TemplateCard, { key: tkey, t: t, active: activeId === tkey, onClick: function() { return onSelect(t); } }); })
+                    )
+                  )
+                : React.createElement('div', { style: { padding: '8px 12px', fontSize: 11, color: 'var(--ink-3)' } }, '暂无模板')
               )
             );
-          }),
-          filteredSections.length === 0 && React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)', fontSize: 12, padding: 16 } },
-            React.createElement('div', null, q ? '没有匹配的模板「' + q + '」' : '暂没有可用模板')
-          )
+          })
         )
       ),
       tab === 'history' && React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' } },
