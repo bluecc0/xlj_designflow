@@ -155,8 +155,8 @@ app.mount(
     name="avatars",
 )
 
-# 前端静态文件（frontend-dist）
-_frontend_dist = Path(__file__).parent.parent / "frontend-dist"
+# 前端静态文件
+_frontend_dist = Path(__file__).parent.parent / "frontend"
 if _frontend_dist.exists():
     app.mount(
         "/ui",
