@@ -117,7 +117,7 @@ var PANEL_TABS = [
 var TemplatePanel = function(_ref2) {
   var activeId = _ref2.activeId, onSelect = _ref2.onSelect;
   var _useState = React.useState('templates'), tab = _useState[0], setTab = _useState[1];
-  var _useState2 = React.useState('All'), cat = _useState2[0], setCat = _useState2[1];
+  var _useState2 = React.useState({}), collapsedSections = _useState2[0], setCollapsedSections = _useState2[1];
   var _useState3 = React.useState(''), q = _useState3[0], setQ = _useState3[1];
   var _useState4 = React.useState([]), templates = _useState4[0], setTemplates = _useState4[1];
   var _useState5 = React.useState(true), loading = _useState5[0], setLoading = _useState5[1];
@@ -199,15 +199,26 @@ var TemplatePanel = function(_ref2) {
     }).finally(function() { setHistoryLoading(false); });
   }, [tab]);
 
-  var filtered = templates.filter(function(t) {
-    // 特殊品筛选：is_special 或 is_special_full
-    if (cat === '特殊品') return (t.is_special || t.is_special_full) && (!q || t.name.toLowerCase().includes(q.toLowerCase()));
-    return (cat === 'All' || t.cat === cat) &&
-      (!q || t.name.toLowerCase().includes(q.toLowerCase()));
-  });
+  // 分组为文件夹
+  var sections = [
+    { key: 'general', label: '通用模板', items: templates.filter(function(t) { return !t.is_special && !t.is_special_full; }) },
+    { key: 'special', label: '特殊品', items: templates.filter(function(t) { return t.is_special || t.is_special_full; }) },
+  ];
 
-  var colA = filtered.filter(function(_, i) { return i % 2 === 0; });
-  var colB = filtered.filter(function(_, i) { return i % 2 === 1; });
+  // 搜索过滤
+  var filteredSections = sections.map(function(s) {
+    if (!q) return s;
+    return { key: s.key, label: s.label, items: s.items.filter(function(t) { return t.name.toLowerCase().includes(q.toLowerCase()); }) };
+  }).filter(function(s) { return s.items.length > 0; });
+
+  var toggleSection = function(key) {
+    setCollapsedSections(function(prev) {
+      var next = Object.assign({}, prev);
+      next[key] = !prev[key];
+      return next;
+    });
+  };
+  var isCollapsed = function(key) { return !!collapsedSections[key]; };
 
   return (
     React.createElement('div', { style: { position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--panel)', borderRight: '1px solid var(--line)' } },
@@ -263,21 +274,6 @@ var TemplatePanel = function(_ref2) {
             }, React.createElement(I.refresh, { size: 13 }))
           )
         ),
-        React.createElement('div', { style: { padding: '0 14px 10px', flexShrink: 0 } },
-          React.createElement('select', {
-            value: cat,
-            onChange: function(e) { setCat(e.target.value); },
-            style: {
-              fontSize: 11, padding: '4px 7px', borderRadius: 5,
-              background: 'var(--panel-2)', color: 'var(--ink)',
-              border: '1px solid var(--line)', outline: 'none',
-              cursor: 'pointer', width: '100%',
-            },
-          },
-            React.createElement('option', { value: 'All' }, '全部模板'),
-            React.createElement('option', { value: '特殊品' }, '特殊品'),
-          )
-        ),
         loading && React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)', fontSize: 12 } },
           React.createElement('span', { style: { animation: 'spin 1s linear infinite', display: 'inline-block' } }, '⟳'),
           '加载模板…'
@@ -286,18 +282,48 @@ var TemplatePanel = function(_ref2) {
           React.createElement('div', null, '加载失败'),
           React.createElement('div', { style: { color: 'var(--ink-3)', fontSize: 10 } }, String(loadErr))
         ),
-        !loading && !loadErr && filtered.length === 0 && React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)', fontSize: 12 } },
+        !loading && !loadErr && templates.length === 0 && React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)', fontSize: 12 } },
           React.createElement(I.layers, { size: 24, style: { opacity: 0.3 } }),
-          React.createElement('div', null, q ? '没有匹配的模板「' + q + '」' : '暂没有可用模板')
+          React.createElement('div', null, '暂没有可用模板')
         ),
-        !loading && !loadErr && filtered.length > 0 && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 10px 56px' } },
-          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 } },
-            React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-              colA.map(function(t) { var tkey = (t.file_id||'')+':'+(t.group_name||t.id); return React.createElement(TemplateCard, { key: tkey, t: t, active: activeId === tkey, onClick: function() { return onSelect(t); } }); })
-            ),
-            React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-              colB.map(function(t) { var tkey = (t.file_id||'')+':'+(t.group_name||t.id); return React.createElement(TemplateCard, { key: tkey, t: t, active: activeId === tkey, onClick: function() { return onSelect(t); } }); })
-            )
+        !loading && !loadErr && templates.length > 0 && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 10px 56px' } },
+          filteredSections.map(function(section) {
+            var colA = section.items.filter(function(_, i) { return i % 2 === 0; });
+            var colB = section.items.filter(function(_, i) { return i % 2 === 1; });
+            var collapsed = isCollapsed(section.key);
+            return React.createElement('div', { key: section.key, style: { marginBottom: 4 } },
+              React.createElement('div', {
+                onClick: function() { toggleSection(section.key); },
+                style: {
+                  padding: '8px 12px',
+                  fontSize: 12, fontWeight: 600,
+                  color: 'var(--ink-2)',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  cursor: 'pointer', userSelect: 'none',
+                  borderRadius: 6,
+                  transition: 'background 120ms',
+                },
+                onMouseEnter: function(e) { e.currentTarget.style.background = 'var(--panel-2)'; },
+                onMouseLeave: function(e) { e.currentTarget.style.background = 'transparent'; },
+              },
+                React.createElement('span', {
+                  style: { fontSize: 10, transition: 'transform 150ms', display: 'inline-block', transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }
+                }, '▼'),
+                section.label,
+                React.createElement('span', { style: { fontSize: 10, color: 'var(--ink-3)', fontWeight: 400 } }, section.items.length)
+              ),
+              !collapsed && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 } },
+                React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+                  colA.map(function(t) { var tkey = (t.file_id||'')+':'+(t.group_name||t.id); return React.createElement(TemplateCard, { key: tkey, t: t, active: activeId === tkey, onClick: function() { return onSelect(t); } }); })
+                ),
+                React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+                  colB.map(function(t) { var tkey = (t.file_id||'')+':'+(t.group_name||t.id); return React.createElement(TemplateCard, { key: tkey, t: t, active: activeId === tkey, onClick: function() { return onSelect(t); } }); })
+                )
+              )
+            );
+          }),
+          filteredSections.length === 0 && React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)', fontSize: 12, padding: 16 } },
+            React.createElement('div', null, q ? '没有匹配的模板「' + q + '」' : '暂没有可用模板')
           )
         )
       ),
@@ -397,7 +423,7 @@ var TemplatePanel = function(_ref2) {
           })
         )
       ),
-      React.createElement(StatusFooter, { count: filtered.length })
+      React.createElement(StatusFooter, { count: templates.length })
     )
   );
 };
