@@ -263,22 +263,20 @@ var TemplatePanel = function(_ref2) {
             }, React.createElement(I.refresh, { size: 13 }))
           )
         ),
-        React.createElement('div', { style: { padding: '0 14px 10px', display: 'flex', gap: 4, flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' } },
-          ['全部', '特殊品'].map(function(c) {
-            var catKey = c === '全部' ? 'All' : c;
-            return React.createElement('button', {
-              key: c, onClick: function() { setCat(catKey); },
-              style: {
-                fontSize: 11, padding: '4px 9px', borderRadius: 99,
-                background: cat === catKey ? 'var(--ink)' : 'transparent',
-                color: cat === catKey ? 'white' : 'var(--ink-2)',
-                fontWeight: cat === catKey ? 500 : 400,
-                whiteSpace: 'nowrap',
-                border: cat === catKey ? 'none' : '1px solid var(--line)',
-                transition: 'all 120ms',
-              }
-            }, c);
-          })
+        React.createElement('div', { style: { padding: '0 14px 10px', flexShrink: 0 } },
+          React.createElement('select', {
+            value: cat,
+            onChange: function(e) { setCat(e.target.value); },
+            style: {
+              fontSize: 11, padding: '4px 7px', borderRadius: 5,
+              background: 'var(--panel-2)', color: 'var(--ink)',
+              border: '1px solid var(--line)', outline: 'none',
+              cursor: 'pointer', width: '100%',
+            },
+          },
+            React.createElement('option', { value: 'All' }, '全部模板'),
+            React.createElement('option', { value: '特殊品' }, '特殊品'),
+          )
         ),
         loading && React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)', fontSize: 12 } },
           React.createElement('span', { style: { animation: 'spin 1s linear infinite', display: 'inline-block' } }, '⟳'),
