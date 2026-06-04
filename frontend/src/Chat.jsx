@@ -787,6 +787,14 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [imageType, setImageType] = React.useState('png');
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
+  const [aiProvider, setAiProvider] = React.useState(() => {
+    try {
+      const saved = localStorage.getItem('designflow_ai_provider') || 'apimart';
+      return ['apimart', 'zenmux'].includes(saved) ? saved : 'zenmux';
+    } catch (e) {
+      return 'apimart';
+    }
+  });
   const [refImages, setRefImages] = React.useState([]); // [{ file, previewUrl }, ...] 最多 4 张
   const taRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
@@ -808,6 +816,12 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   }, []);
   const displayValue = lockedCommand ? (text ? (lockedCommand + ' ' + text) : (lockedCommand + ' ')) : text;
   const lockedPrefixLength = lockedCommand ? (lockedCommand.length + 1) : 0;
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('designflow_ai_provider', aiProvider);
+    } catch (e) {}
+  }, [aiProvider]);
 
   // —— Composer 拖拽调整高度 ——
   const handleDragStart = React.useCallback((e) => {
@@ -986,7 +1000,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     setText('');
     setLockedCommand('');
     clearRefImages();
-    onSend(message, imagesToSend, { size: aiImageSize, resolution: aiQuality });
+    onSend(message, imagesToSend, { size: aiImageSize, resolution: aiQuality, provider: aiProvider });
   };
 
   const handleKeyDown = (e) => {
@@ -1267,6 +1281,20 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         )}
         {!agentEnabled && activeMode === 'ai-image' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <select
+              value={aiProvider}
+              onChange={(e) => setAiProvider(e.target.value)}
+              style={{
+                fontSize: 11, padding: '3px 6px',
+                background: 'var(--panel)', color: 'var(--ink)',
+                border: '1px solid var(--line)', borderRadius: 5,
+                cursor: 'pointer', outline: 'none',
+              }}
+            >
+              <option value="apimart">默认</option>
+              <option value="zenmux">官方</option>
+            </select>
+            <div style={{ width: 1, height: 12, background: 'var(--line)', flexShrink: 0 }}/>
             <select
               value={aiRatio}
               onChange={(e) => setAiRatio(e.target.value)}
@@ -1772,7 +1800,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
       if (m && m.type === 'ai-image-generating' && m.model) {
-        return { model: m.model, size: m.size, resolution: m.resolution };
+        return { model: m.model, size: m.size, resolution: m.resolution, provider: m.provider };
       }
     }
     return null;
@@ -1807,12 +1835,13 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
     var refPreviews = [];
     var lastSize = aiOptions.size || '1024x1024';
     var lastResolution = aiOptions.resolution || '1K';
+    var provider = aiOptions.provider || 'apimart';
     setMessages(msgs => [...msgs, {
       who: 'ai', type: 'ai-image-generating',
-      model, prompt, size: lastSize, resolution: lastResolution,
+      model, provider, prompt, size: lastSize, resolution: lastResolution,
       status: 'running', startedAt,
       progress: 0,
-      meta: model,
+      meta: 'Loom',
       hasReference: refImages.length > 0,
       refCount: refImages.length,
       refPreviews: [],
@@ -1840,6 +1869,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       const apiBase = window.API_BASE || window.location.origin;
       const fd = new FormData();
       fd.append('model', model);
+      fd.append('provider', provider);
       fd.append('prompt', finalPrompt);
       fd.append('size', aiOptions.size || '1024x1024');
       fd.append('resolution', aiOptions.resolution || '1K');
@@ -2179,7 +2209,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       const freshPrompt = rest || '重新生成';
       const lastOpts = getLastAiImageOptions();
       const model = aiCmd ? aiCmd.model : (lastOpts?.model || 'gpt-image-2');
-      const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution };
+      const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, provider: lastOpts?.provider || aiOptions.provider };
       setMessages(msgs => [...msgs, { who: 'user', text }]);
       await runAiImageGeneration(model, freshPrompt, text, refImages, { ...opts, skipContext: true });
       return;
@@ -2190,7 +2220,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       const lastOpts = getLastAiImageOptions();
       if (lastOpts) {
         aiCmd = { prefix: '', model: lastOpts.model, implicit: true };
-        aiOptions = { ...aiOptions, size: lastOpts.size || aiOptions.size, resolution: lastOpts.resolution || aiOptions.resolution };
+        aiOptions = { ...aiOptions, size: lastOpts.size || aiOptions.size, resolution: lastOpts.resolution || aiOptions.resolution, provider: lastOpts.provider || aiOptions.provider };
       }
     }
 

@@ -51,8 +51,16 @@ class Settings:
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
 
     # AI 生图 API（APIMart）
+    ai_image_provider: str = os.getenv("AI_IMAGE_PROVIDER", "apimart")
     ai_image_base_url: str = os.getenv("AI_IMAGE_BASE_URL", "https://api.apimart.ai")
     ai_image_api_key: str = os.getenv("AI_IMAGE_API_KEY", "")
+
+    # AI 生图 API（ZenMux，多模型备用线路；API key 留空则禁用）
+    zenmux_base_url: str = os.getenv("ZENMUX_BASE_URL", "https://zenmux.ai/api/v1")
+    zenmux_api_key: str = os.getenv("ZENMUX_API_KEY", "")
+    zenmux_management_api_key: str = os.getenv("ZENMUX_MANAGEMENT_API_KEY", "")
+    zenmux_gpt_image_model: str = os.getenv("ZENMUX_GPT_IMAGE_MODEL", "openai/gpt-image-2")
+    zenmux_nano_banana_model: str = os.getenv("ZENMUX_NANO_BANANA_MODEL", "google/gemini-3-pro-image-preview")
 
     # AI 生图 API（可选的单独图生图配置；留空则复用上面的 APIMart 配置）
     nano_banana_base_url: str = os.getenv("NANO_BANANA_BASE_URL", "")

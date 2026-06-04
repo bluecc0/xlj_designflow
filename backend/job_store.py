@@ -778,7 +778,7 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 "refCount": int(meta.get("refCount") or 0),
                 "refPreviews": meta.get("refPreviews") or [],
                 "finalElapsed": meta.get("finalElapsed"),
-                "meta": meta.get("model"),
+                "meta": "Loom",
                 "createdAt": row["created_at"],
             })
         elif row["type"] == "ai_text":

@@ -1,16 +1,18 @@
 """
-AI image adapter for APIMart.
+AI image adapters.
 
 Flow:
-1. Optionally upload reference images to APIMart.
+1. Optionally upload reference images to the provider.
 2. Submit an async image generation task.
 3. Poll task status until completed.
 4. Download the final image into output/ai-images/{user_id}/.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import re
 import random
 import time
 import uuid
@@ -49,6 +51,9 @@ SLASH_MODEL_MAP: dict[str, str] = {
     "gpt-image-2": "gpt-image-2",
 }
 
+PROVIDER_APIMART = "apimart"
+PROVIDER_ZENMUX = "zenmux"
+
 _OUTPUT_DIR = settings.output_path / "ai-images"
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -65,6 +70,18 @@ _SIZE_MAP: dict[str, tuple[str, str]] = {
     "1080x1920": ("9:16", "1K"),
     "1152x2048": ("9:16", "2K"),
     "2160x3840": ("9:16", "4K"),
+}
+
+_ZENMUX_SIZE_MAP: dict[str, dict[str, str]] = {
+    "1:1": {"1K": "1024x1024", "2K": "1536x1536", "4K": "2048x2048"},
+    "3:4": {"1K": "1024x1536", "2K": "1536x2048", "4K": "1536x2048"},
+    "4:3": {"1K": "1536x1024", "2K": "2048x1536", "4K": "2048x1536"},
+    "5:4": {"1K": "1280x1024", "2K": "2560x2048", "4K": "2560x2048"},
+    "4:5": {"1K": "1024x1280", "2K": "2048x2560", "4K": "2048x2560"},
+    "16:9": {"1K": "1536x864", "2K": "2048x1152", "4K": "3840x2160"},
+    "9:16": {"1K": "864x1536", "2K": "1152x2048", "4K": "2160x3840"},
+    "2:3": {"1K": "1024x1536", "2K": "1360x2048", "4K": "1360x2048"},
+    "3:2": {"1K": "1536x1024", "2K": "2048x1360", "4K": "2048x1360"},
 }
 
 
@@ -99,6 +116,33 @@ def _model_credentials(model: str) -> tuple[str, str]:
     return base_url, api_key
 
 
+def normalize_provider(provider: str | None = None) -> str:
+    clean = (provider or settings.ai_image_provider or PROVIDER_APIMART).strip().casefold()
+    if clean in ("apimart", "api-mart", "api_mart"):
+        return PROVIDER_APIMART
+    if clean in ("zenmux", "zen-mux", "zen_mux"):
+        return PROVIDER_ZENMUX
+    raise ValueError(f"未知生图线路: {provider}")
+
+
+def _zenmux_model_name(model: str) -> str:
+    model_name = _normalize_model_name(model)
+    if model_name == "gpt-image-2":
+        return settings.zenmux_gpt_image_model
+    if model_name == "gemini-3-pro-image-preview":
+        return settings.zenmux_nano_banana_model
+    return model_name
+
+
+def _zenmux_headers() -> dict[str, str]:
+    if not settings.zenmux_api_key:
+        raise ValueError("ZENMUX_API_KEY 未配置，请在 .env 中填写")
+    return {
+        "Authorization": f"Bearer {settings.zenmux_api_key}",
+        "Content-Type": "application/json",
+    }
+
+
 def _normalize_model_name(model: str) -> str:
     clean = (model or "").strip()
     if not clean:
@@ -114,6 +158,21 @@ def _normalize_size(size: str, resolution: str = "") -> tuple[str, str]:
     if clean in ("auto", "1:1", "3:4", "4:3", "5:4", "4:5", "9:16", "16:9", "2:3", "3:2"):
         return clean, clean_resolution
     return "1:1", "1K"
+
+
+def _normalize_zenmux_size(size: str, resolution: str = "") -> str:
+    clean = (size or "").strip()
+    clean_resolution = (resolution or "").strip().upper() or "1K"
+    if clean == "auto":
+        return "auto"
+    if re.fullmatch(r"\d+x\d+", clean):
+        return clean
+    if clean in _SIZE_MAP:
+        ratio, mapped_resolution = _SIZE_MAP[clean]
+        clean = ratio
+        clean_resolution = clean_resolution or mapped_resolution
+    ratio_map = _ZENMUX_SIZE_MAP.get(clean or "1:1") or _ZENMUX_SIZE_MAP["1:1"]
+    return ratio_map.get(clean_resolution) or ratio_map.get("1K") or "1024x1024"
 
 
 def _extract_error_text(resp: httpx.Response) -> str:
@@ -185,6 +244,73 @@ def _extract_result_url(payload: Any) -> str | None:
             if url:
                 return url
     return None
+
+
+def _extract_zenmux_image_url(payload: Any) -> str | None:
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    b64_json = item.get("b64_json")
+                    if isinstance(b64_json, str) and b64_json.strip():
+                        output_format = str(payload.get("output_format") or "png").strip().lower()
+                        mime_type = {
+                            "jpeg": "image/jpeg",
+                            "jpg": "image/jpeg",
+                            "webp": "image/webp",
+                        }.get(output_format, "image/png")
+                        return f"data:{mime_type};base64,{b64_json.strip()}"
+                    url = _extract_result_url(item.get("url") or item.get("image_url"))
+                    if url:
+                        return url
+        return _extract_result_url(payload)
+    return _extract_result_url(payload)
+
+
+def _extension_from_mime(mime_type: str) -> str:
+    clean = (mime_type or "").split(";")[0].strip().lower()
+    if clean == "image/jpeg":
+        return ".jpg"
+    if clean == "image/webp":
+        return ".webp"
+    return ".png"
+
+
+def _mime_from_filename(filename: str) -> str:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix in (".jpg", ".jpeg"):
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    if suffix == ".gif":
+        return "image/gif"
+    return "image/png"
+
+
+def _image_bytes_to_data_url(image_bytes: bytes, filename: str) -> str:
+    if not image_bytes:
+        raise RuntimeError(f"参考图为空: {filename or 'unknown'}")
+    mime_type = _mime_from_filename(filename)
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "zenmux") -> str:
+    match = re.match(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$", data_url or "", re.DOTALL)
+    if not match:
+        raise RuntimeError("ZenMux 返回了无法识别的图片 data URL")
+    mime_type, raw_b64 = match.groups()
+    try:
+        content = base64.b64decode(raw_b64, validate=True)
+    except Exception as exc:
+        raise RuntimeError("ZenMux 返回的图片 base64 解码失败") from exc
+    if not content:
+        raise RuntimeError("ZenMux 返回的图片内容为空")
+    out_dir = _ensure_user_output_dir(user_id)
+    filename = f"{prefix}_{uuid.uuid4().hex}{_extension_from_mime(mime_type)}"
+    (out_dir / filename).write_bytes(content)
+    return f"/ai-images/{out_dir.name}/{filename}"
 
 
 def _extract_task_id(payload: Any) -> str | None:
@@ -420,6 +546,67 @@ async def _download_final_image(
     out_path = out_dir / filename
     out_path.write_bytes(resp.content)
     return f"/ai-images/{out_dir.name}/{filename}"
+
+
+async def generate_image_zenmux_async(
+    model: str,
+    prompt: str,
+    images: list[tuple[bytes, str]] | None = None,
+    size: str = "1024x1024",
+    resolution: str = "",
+    user_id: str = "anonymous",
+) -> dict:
+    model_name = _zenmux_model_name(model)
+    base_url = settings.zenmux_base_url.rstrip("/")
+    headers = _zenmux_headers()
+    refs = images or []
+    zenmux_size = _normalize_zenmux_size(size, resolution)
+    payload: dict[str, Any] = {
+        "model": model_name,
+        "prompt": prompt,
+        "n": 1,
+        "size": zenmux_size,
+    }
+
+    if refs:
+        endpoint = f"{base_url}/images/edits"
+        form_data = {key: str(value) for key, value in payload.items()}
+        files = [
+            ("image[]", (filename or f"ref{i}.png", image_bytes, _mime_from_filename(filename)))
+            for i, (image_bytes, filename) in enumerate(refs[:4])
+        ]
+    else:
+        endpoint = f"{base_url}/images/generations"
+        form_data = {}
+        files = []
+
+    async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
+        if files:
+            multipart_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+            resp = await client.post(endpoint, data=form_data, files=files, headers=multipart_headers)
+        else:
+            resp = await client.post(endpoint, json=payload, headers=headers)
+        if not resp.is_success:
+            raise RuntimeError(f"ZenMux 生图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
+        data = resp.json()
+        image_url = _extract_zenmux_image_url(data)
+        if not image_url:
+            raise RuntimeError(f"ZenMux 响应中没有图片: {str(data)[:240]}")
+        if image_url.startswith("data:image/"):
+            local_url = _save_data_url_image(image_url, user_id=user_id)
+        else:
+            local_url = await _download_final_image(client, image_url=image_url, user_id=user_id)
+
+    return {
+        "url": local_url,
+        "model": model_name,
+        "prompt": prompt,
+        "size": zenmux_size,
+        "resolution": resolution,
+        "provider": PROVIDER_ZENMUX,
+        "reference": bool(refs),
+        "task_id": f"zenmux:{uuid.uuid4().hex}",
+    }
 
 
 async def generate_image(

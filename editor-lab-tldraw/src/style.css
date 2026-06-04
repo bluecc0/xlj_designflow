@@ -3,7 +3,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('../../frontend-dist/fonts/inter-7.woff2') format('woff2');
+  src: url('../../frontend/fonts/inter-7.woff2') format('woff2');
 }
 
 @font-face {
@@ -11,7 +11,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('../../frontend-dist/fonts/instrument-serif-2.woff2') format('woff2');
+  src: url('../../frontend/fonts/instrument-serif-2.woff2') format('woff2');
 }
 
 @font-face {
@@ -19,7 +19,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('../../frontend-dist/fonts/jetbrains-mono-6.woff2') format('woff2');
+  src: url('../../frontend/fonts/jetbrains-mono-6.woff2') format('woff2');
 }
 
 @font-face {
@@ -27,7 +27,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('../../frontend-dist/fonts/inter-7.woff2') format('woff2');
+  src: url('../../frontend/fonts/inter-7.woff2') format('woff2');
 }
 
 @font-face {
@@ -35,7 +35,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('../../frontend-dist/fonts/instrument-serif-2.woff2') format('woff2');
+  src: url('../../frontend/fonts/instrument-serif-2.woff2') format('woff2');
 }
 
 @font-face {
@@ -43,7 +43,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('../../frontend-dist/fonts/jetbrains-mono-6.woff2') format('woff2');
+  src: url('../../frontend/fonts/jetbrains-mono-6.woff2') format('woff2');
 }
 
 :root {
