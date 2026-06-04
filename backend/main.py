@@ -236,6 +236,57 @@ def _proxy_download_dir() -> Path:
     return path
 
 
+def _agent_reference_dir(project_id: str) -> Path:
+    path = settings.output_path / "agent-references" / str(project_id or "").strip()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _store_agent_reference_images(project_id: str, reference_images: list[tuple[bytes, str]]) -> list[dict]:
+    stored: list[dict] = []
+    if not project_id or not reference_images:
+        return stored
+    for index, (content, filename) in enumerate(reference_images, start=1):
+        if not content:
+            continue
+        safe_name = Path(filename or f"reference-{index}.png").name or f"reference-{index}.png"
+        rel_path = Path("agent-references") / str(project_id) / f"{uuid.uuid4().hex}_{safe_name}"
+        abs_path = settings.output_path / rel_path
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+        abs_path.write_bytes(content)
+        stored.append({
+            "name": safe_name,
+            "size": len(content),
+            "path": rel_path.as_posix(),
+            "url": "/output/" + quote(rel_path.as_posix(), safe="/"),
+        })
+    return stored
+
+
+def _load_cached_agent_reference_images(metadata: dict | None) -> list[tuple[bytes, str]]:
+    cached = ((metadata or {}).get("referenceContext") or {}).get("storedFiles") or []
+    if not isinstance(cached, list):
+        return []
+    loaded: list[tuple[bytes, str]] = []
+    output_root = settings.output_path.resolve()
+    for item in cached:
+        rel_path = str((item or {}).get("path") or "").strip().replace("\\", "/")
+        if not rel_path:
+            continue
+        try:
+            abs_path = (settings.output_path / rel_path).resolve()
+            abs_path.relative_to(output_root)
+        except Exception:
+            continue
+        if not abs_path.exists() or not abs_path.is_file():
+            continue
+        try:
+            loaded.append((abs_path.read_bytes(), str((item or {}).get("name") or abs_path.name)))
+        except Exception:
+            continue
+    return loaded
+
+
 def _safe_download_filename(name: str) -> str:
     clean = "".join(ch if ch.isalnum() or ch in "._-()[] " else "_" for ch in (name or "download.bin")).strip()
     return clean or "download.bin"
@@ -1760,9 +1811,10 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 if joined:
                     reference_context_parts.append(f"参考图关键元素：{joined}")
             if reference_images:
+                stored_reference_files = _store_agent_reference_images(project_id, reference_images)
                 user_payload["reference_images"] = [
-                    {"name": filename, "size": len(content or b"")}
-                    for content, filename in reference_images
+                    {"name": item["name"], "size": item["size"], "url": item["url"]}
+                    for item in stored_reference_files
                 ]
                 reference_context_parts = [
                     f"用户已经上传了 {len(reference_images)} 张参考图，请直接基于这些参考图讨论主体、风格、构图、色彩和氛围，不要再要求用户重复上传参考图。"
@@ -1771,6 +1823,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 cached_reference = {
                     "count": len(reference_images),
                     "files": user_payload["reference_images"],
+                    "storedFiles": stored_reference_files,
                 }
                 if analysis:
                     if analysis.summary:
@@ -1848,12 +1901,13 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
 
             generated_image = None
             prompt_payload = decision.get("prompt") or state.get("currentPrompt") or {}
+            effective_reference_images = reference_images or _load_cached_agent_reference_images(state.get("metadata"))
             async for event_name, payload in stream_generation_events(
                 state=state,
                 user_id=user["id"],
                 prompt_payload=prompt_payload,
                 current_image=project.get("current_image"),
-                reference_images=reference_images,
+                reference_images=effective_reference_images,
             ):
                 yield make_sse(event_name, payload)
                 if event_name == "generation_completed":

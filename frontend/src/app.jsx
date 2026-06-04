@@ -104,6 +104,19 @@ const App = () => {
   }, []);
 
   const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl) => {
+    const explicitClear = !jobId && !resultTpl && Array.isArray(directImageUrls) && directImageUrls.length === 0;
+    if (explicitClear) {
+      setResultTemplate(null);
+      setEditorCommand({
+        key: Date.now() + Math.random(),
+        type: 'new-canvas',
+        pageName: activeTemplate?.name || '画板 1',
+      });
+      if (penpotEditUrl) {
+        window.resultPenpotUrl = penpotEditUrl;
+      }
+      return;
+    }
     if (resultTpl) {
       setResultTemplate(resultTpl);
     } else if (jobId && directImageUrls) {
@@ -129,7 +142,7 @@ const App = () => {
     if (penpotEditUrl) {
       window.resultPenpotUrl = penpotEditUrl;
     }
-  }, []);
+  }, [activeTemplate]);
 
   React.useEffect(() => {
     setResultTemplate(null);

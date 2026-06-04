@@ -1505,6 +1505,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
   const [historySessions, setHistorySessions] = React.useState([]);
   const [hoveredHistoryId, setHoveredHistoryId] = React.useState('');
   const historyWrapRef = React.useRef(null);
+  const creatingAgentProjectRef = React.useRef(null);
 
   // Extract required fields from template slots (e.g., "slot/product_1/name" -> "name")
   const getTemplateFields = React.useCallback((t) => {
@@ -1531,18 +1532,25 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
     setAgentProjectId(projectId);
     setAgentMessages(mapped);
     if (agentEnabled) setMessages(mapped);
-    if (onComposeComplete && data && data.currentImageUrl) {
-      onComposeComplete(null, null, [data.currentImageUrl], null);
+    if (onComposeComplete && data) {
+      onComposeComplete(null, null, data.currentImageUrl ? [data.currentImageUrl] : [], null);
     }
     return data;
   }, [agentEnabled, onComposeComplete]);
 
   const ensureAgentProject = React.useCallback(async function() {
     if (agentProjectId) return agentProjectId;
-    const created = await window.API.createAgentProject();
-    setAgentProject(created);
-    setAgentProjectId(created.id);
-    return created.id;
+    if (creatingAgentProjectRef.current) return creatingAgentProjectRef.current;
+    creatingAgentProjectRef.current = window.API.createAgentProject()
+      .then(function(created) {
+        setAgentProject(created);
+        setAgentProjectId(created.id);
+        return created.id;
+      })
+      .finally(function() {
+        creatingAgentProjectRef.current = null;
+      });
+    return creatingAgentProjectRef.current;
   }, [agentProjectId]);
 
   React.useEffect(() => {
@@ -1683,12 +1691,13 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
         setAgentProject(null);
         setAgentMessages([]);
         setMessages([]);
+        if (onComposeComplete) onComposeComplete(null, null, [], null);
       }
     } catch (e) {
       console.error('delete agent project failed:', e);
       window.alert((e && e.message) ? e.message : '删除失败，请稍后重试');
     }
-  }, [agentProjectId]);
+  }, [agentProjectId, onComposeComplete]);
 
   const startNewAiChat = React.useCallback(() => {
     if (isLoading) return;
@@ -1702,6 +1711,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
           setAgentMessages([]);
           setMessages([]);
           setHistoryOpen(false);
+          if (onComposeComplete) onComposeComplete(null, null, [], null);
         } catch (e) {
           setMessages([{ who: 'ai', text: '新建 Agent 对话失败：' + ((e && e.message) || '未知错误'), meta: 'Agent' }]);
         } finally {
@@ -1714,7 +1724,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
     setDefaultMessages([]);
     setCurrentAiChatId('');
     setHistoryOpen(false);
-  }, [agentEnabled, isLoading]);
+  }, [agentEnabled, isLoading, onComposeComplete]);
 
   React.useEffect(() => {
     if (!historyOpen) return;
