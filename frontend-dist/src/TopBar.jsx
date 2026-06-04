@@ -139,6 +139,7 @@ const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail }) => {
 };
 
 const TopBar = ({ user, onSwitchUser }) => {
+  const isAgentPage = typeof window !== 'undefined' && /\/ui\/agent\.html(?:$|\?)/.test(window.location.href);
   const renderAiProviderDetail = React.useCallback((data) => {
     const info = data && data.ai_provider;
     if (!info) return null;
@@ -181,6 +182,28 @@ const TopBar = ({ user, onSwitchUser }) => {
       <div style={{ flex: 1 }}/>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {isAgentPage && (
+          <a
+            href="/ui/"
+            style={{
+              height: 28,
+              padding: '0 10px',
+              borderRadius: 7,
+              background: 'var(--panel-2)',
+              border: '1px solid var(--line-2)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              color: 'var(--ink-2)',
+              textDecoration: 'none',
+              fontSize: 11.5,
+              flexShrink: 0,
+            }}
+          >
+            <I.sparkles size={12}/>
+            <span>主工作台</span>
+          </a>
+        )}
         <StatusIcon title="后端服务" fetchUrl="/health" icon={I.settings}/>
         <StatusIcon title="素材库" fetchUrl="/health" okKey="library" icon={I.folder}/>
         <StatusIcon title="AI 服务商" fetchUrl="/health" okKey="ai_provider" icon={I.sparkles} renderDetail={renderAiProviderDetail}/>

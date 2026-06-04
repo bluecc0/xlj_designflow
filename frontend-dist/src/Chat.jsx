@@ -137,6 +137,29 @@ const FileCard = ({ name, size, type }) => (
   </div>
 );
 
+const InlineRefStrip = ({ items, compact }) => {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+      {items.map((src, idx) => (
+        <img
+          key={idx}
+          src={src}
+          alt={'参考图 ' + (idx + 1)}
+          style={{
+            width: compact ? 44 : 48,
+            height: compact ? 44 : 48,
+            borderRadius: 6,
+            objectFit: 'cover',
+            border: '1px solid var(--line-2)',
+            background: 'white',
+          }}
+        />
+      ))}
+    </div>
+  );
+};
+
 const ThinkingTrace = ({ steps, done }) => {
   const [expanded, setExpanded] = React.useState(false);
   return (
@@ -499,14 +522,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => 
                     ? React.createElement(ChatTimer, { startedAt: m.startedAt })
                     : null
               ),
-              Array.isArray(m.refPreviews) && m.refPreviews.length > 0 && React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
-                m.refPreviews.map((dataUrl, ri) => React.createElement('img', {
-                  key: ri,
-                  src: dataUrl,
-                  alt: '参考图 ' + (ri + 1),
-                  style: { width: 48, height: 48, borderRadius: 6, objectFit: 'cover', border: '1px solid var(--line-2)' },
-                }))
-              ),
+              React.createElement(InlineRefStrip, { items: m.refPreviews }),
               m.status === 'done' && m.imageUrl && React.createElement('div', null,
                 React.createElement('img', {
                   src: m.imageUrl,
@@ -706,7 +722,52 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => 
                 <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>让我想想...</span>
               </div>
             ) : (
-              <TextBubble who={m.who} markdown>{m.text}</TextBubble>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <TextBubble who={m.who} markdown>{m.text}</TextBubble>
+                {m.who === 'user' && Array.isArray(m.refPreviews) && m.refPreviews.length > 0 ? (
+                  <div style={{
+                    alignSelf: 'stretch',
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    background: 'var(--panel)',
+                    border: '1px solid var(--line-2)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 7,
+                  }}>
+                    <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      参考图 {m.refPreviews.length} 张
+                    </div>
+                    <InlineRefStrip items={m.refPreviews} compact/>
+                  </div>
+                ) : null}
+                {m.who === 'user' && (!Array.isArray(m.refPreviews) || m.refPreviews.length === 0) && Array.isArray(m.refMeta) && m.refMeta.length > 0 ? (
+                  <div style={{
+                    alignSelf: 'stretch',
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    background: 'var(--panel)',
+                    border: '1px solid var(--line-2)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6,
+                  }}>
+                    <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      参考图 {m.refMeta.length} 张
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {m.refMeta.map(function(file, idx) {
+                        return (
+                          <div key={idx} style={{ fontSize: 11.5, color: 'var(--ink-2)', display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <I.image size={12}/>
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name || ('参考图 ' + (idx + 1))}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             )}
           </Bubble>
         ))
@@ -719,7 +780,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => 
 
 // ---------- Composer ----------
 
-const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage }) => {
+const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent }) => {
   const [text, setText] = React.useState('');
   const [lockedCommand, setLockedCommand] = React.useState('');
   const [files, setFiles] = React.useState([]);
@@ -780,6 +841,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
 
   // 外部触发 slash 命令（选中特殊品模板时）
   React.useEffect(() => {
+    if (agentEnabled) return;
     if (!slashTrigger) return;
     if (slashTrigger.clear) {
       setLockedCommand(prev => (prev === '/特殊品' || prev === '/特殊品（完整）') ? '' : prev);
@@ -794,7 +856,14 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       el.focus();
       el.setSelectionRange(lockedPrefixLength, lockedPrefixLength);
     }, 0);
-  }, [slashTrigger?.key, lockedPrefixLength]);
+  }, [agentEnabled, slashTrigger?.key, lockedPrefixLength]);
+
+  React.useEffect(() => {
+    if (agentEnabled) {
+      setLockedCommand('');
+      setMenuOpen(false);
+    }
+  }, [agentEnabled]);
 
   React.useEffect(() => {
     if (template && (template.is_special || template.is_special_full)) return;
@@ -865,12 +934,17 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
 
   const [menuOpen, setMenuOpen] = React.useState(false);
   React.useEffect(() => {
+    if (agentEnabled) {
+      setMenuOpen(false);
+      return;
+    }
     setMenuOpen(!lockedCommand && /^\/\S*$/.test(text));
-  }, [text, lockedCommand]);
+  }, [agentEnabled, text, lockedCommand]);
 
   const slashQuery = menuOpen ? (text.match(/^\/\S*/) || [null])[0] : null;
 
   const pickCommand = (c) => {
+    if (agentEnabled) return;
     setLockedCommand(c.cmd);
     setText('');
     setMenuOpen(false);
@@ -992,6 +1066,10 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
 
   const handleTextChange = (e) => {
     const next = e.target.value;
+    if (agentEnabled) {
+      setText(next);
+      return;
+    }
     if (lockedCommand) {
       if (next.startsWith(lockedCommand + ' ')) {
         setText(next.slice(lockedPrefixLength));
@@ -1046,7 +1124,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         return [...prev, ...toAdd];
       });
     }
-    if (others.length) {
+    if (others.length && !agentEnabled) {
       const file = others[0];
       const fileObj = { name: file.name, size: formatFileSize(file.size), file, imageType };
       setFiles(prev => [...prev, fileObj]);
@@ -1101,6 +1179,19 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
   const canSend = Boolean((lockedCommand ? (lockedCommand + ' ' + text.trim()).trim() : text.trim()) || files.length) && !isLoading;
+  const agentPillStyle = {
+    height: 26,
+    padding: '0 10px',
+    borderRadius: 999,
+    border: '1px solid ' + (agentEnabled ? 'var(--accent)' : 'var(--line)'),
+    background: agentEnabled ? 'var(--accent-soft)' : 'var(--panel)',
+    color: agentEnabled ? 'var(--accent-ink)' : 'var(--ink-3)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    fontSize: 11.5,
+    flexShrink: 0,
+  };
 
   return (
     <div
@@ -1148,12 +1239,12 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         transition: 'box-shadow 150ms, border-color 150ms',
         position: 'relative',
       }}>
-        {menuOpen && slashQuery && (
+        {menuOpen && slashQuery && !agentEnabled && (
           <SlashMenu query={slashQuery} onPick={pickCommand} onClose={() => { setText(''); setMenuOpen(false); }}/>
         )}
 
         {/* Contextual toolbar — switches based on active command */}
-        {activeMode !== 'ai-image' && (
+        {!agentEnabled && activeMode !== 'ai-image' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, opacity: isImageTypeLocked ? 0.35 : 1, pointerEvents: isImageTypeLocked ? 'none' : 'auto' }}>
             {IMAGE_TYPES.map(t => (
               <button
@@ -1174,7 +1265,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             ))}
           </div>
         )}
-        {activeMode === 'ai-image' && (
+        {!agentEnabled && activeMode === 'ai-image' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <select
               value={aiRatio}
@@ -1224,7 +1315,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           onClick={clampSelection}
           onSelect={clampSelection}
           onFocus={clampSelection}
-          placeholder="在这里开启对话吧，或者按 / 唤起指令菜单"
+          placeholder={agentEnabled ? 'Agent 模式已开启，直接描述你的想法，它会先帮你梳理方向再决定是否生成' : '在这里开启对话吧，或者按 / 唤起指令菜单'}
           rows={2}
           style={{
             width: '100%',
@@ -1286,9 +1377,17 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <button
+            onClick={onToggleAgent}
+            title={agentEnabled ? '关闭 Agent 模式' : '开启 Agent 模式'}
+            style={agentPillStyle}
+          >
+            <I.sparkles size={12}/>
+            <span>{agentEnabled ? 'Agent 已开' : 'Agent'}</span>
+          </button>
+          <button
             onClick={() => fileInputRef.current?.click()}
             style={{ padding: 6, borderRadius: 6, color: refImages.length > 0 ? 'var(--accent)' : 'var(--ink-2)', cursor: 'pointer' }}
-            title={refImages.length > 0 ? `已附加 ${refImages.length} 张参考图` : '附加图片或文件'}
+            title={refImages.length > 0 ? `已附加 ${refImages.length} 张参考图` : (agentEnabled ? '附加参考图给 Agent' : '附加图片或文件')}
           >
             <I.paperclip size={14}/>
           </button>
@@ -1320,12 +1419,59 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
 
 // ---------- Main ----------
 
+const AGENT_MODE_KEY = 'designflow_agent_mode_enabled';
+const AGENT_PROJECT_ID_KEY = 'designflow_agent_project_id';
+const mapAgentProjectMessages = function(project, images) {
+  const base = Array.isArray(project && project.messages) ? project.messages.map(function(item) {
+    var payload = item && item.payload ? item.payload : {};
+    var refMeta = Array.isArray(payload.reference_images) ? payload.reference_images : [];
+    return {
+      who: item && item.role === 'user' ? 'user' : 'ai',
+      text: (item && item.text) || '',
+      meta: item && item.role === 'assistant' ? 'Agent' : undefined,
+      refMeta: refMeta,
+    };
+  }) : [];
+  const items = Array.isArray(images) ? images : [];
+  if (!items.length) return base;
+  return base.concat(items.map(function(image) {
+    return {
+      who: 'ai',
+      type: 'ai-image-generating',
+      model: (image && image.model) || 'agent',
+      prompt: image && image.prompt ? (image.prompt.positive || '') : '',
+      status: 'done',
+      imageUrl: image && image.image_url ? ((window.API_BASE || window.location.origin) + image.image_url) : '',
+      finalElapsed: null,
+      progress: 100,
+      meta: 'Agent',
+    };
+  }));
+};
+
 console.log('[Main] Chat component definition');
 const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
   const [messages, setMessages] = React.useState([]);
+  const [defaultMessages, setDefaultMessages] = React.useState([]);
+  const [agentMessages, setAgentMessages] = React.useState([]);
   const [isLoading, setIsLoading] = React.useState(false);
   const [lastSubmittedMessage, setLastSubmittedMessage] = React.useState('');
   const [currentAiChatId, setCurrentAiChatId] = React.useState('');
+  const [agentEnabled, setAgentEnabled] = React.useState(function() {
+    try {
+      return localStorage.getItem(AGENT_MODE_KEY) === '1';
+    } catch (e) {
+      return false;
+    }
+  });
+  const [agentProjectId, setAgentProjectId] = React.useState(function() {
+    try {
+      return localStorage.getItem(AGENT_PROJECT_ID_KEY) || '';
+    } catch (e) {
+      return '';
+    }
+  });
+  const [agentProject, setAgentProject] = React.useState(null);
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [historyLoading, setHistoryLoading] = React.useState(false);
   const [historySessions, setHistorySessions] = React.useState([]);
@@ -1348,6 +1494,76 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
 
   const templateFields = getTemplateFields(template);
 
+  const loadAgentProject = React.useCallback(async function(projectId) {
+    if (!projectId) return null;
+    const data = await window.API.getAgentProject(projectId);
+    const imgs = await window.API.listAgentProjectImages(projectId);
+    const mapped = mapAgentProjectMessages(data, imgs);
+    setAgentProject(data);
+    setAgentProjectId(projectId);
+    setAgentMessages(mapped);
+    if (agentEnabled) setMessages(mapped);
+    if (onComposeComplete && data && data.currentImageUrl) {
+      onComposeComplete(null, null, [data.currentImageUrl], null);
+    }
+    return data;
+  }, [agentEnabled, onComposeComplete]);
+
+  const ensureAgentProject = React.useCallback(async function() {
+    if (agentProjectId) return agentProjectId;
+    const created = await window.API.createAgentProject();
+    setAgentProject(created);
+    setAgentProjectId(created.id);
+    return created.id;
+  }, [agentProjectId]);
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(AGENT_MODE_KEY, agentEnabled ? '1' : '0');
+    } catch (e) {}
+  }, [agentEnabled]);
+
+  React.useEffect(() => {
+    try {
+      if (agentProjectId) localStorage.setItem(AGENT_PROJECT_ID_KEY, agentProjectId);
+      else localStorage.removeItem(AGENT_PROJECT_ID_KEY);
+    } catch (e) {}
+  }, [agentProjectId]);
+
+  React.useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async function() {
+      if (!agentEnabled) {
+        setMessages(defaultMessages);
+        return;
+      }
+      try {
+        const projectId = await ensureAgentProject();
+        if (cancelled) return;
+        const data = await window.API.getAgentProject(projectId);
+        const imgs = await window.API.listAgentProjectImages(projectId);
+        if (cancelled) return;
+        const mapped = mapAgentProjectMessages(data, imgs);
+        setAgentProject(data);
+        setAgentProjectId(projectId);
+        setAgentMessages(mapped);
+        setMessages(mapped);
+      } catch (e) {
+        if (!cancelled) {
+          setAgentMessages([{ who: 'ai', text: 'Agent 初始化失败：' + ((e && e.message) || '未知错误'), meta: 'Agent' }]);
+          setMessages([{ who: 'ai', text: 'Agent 初始化失败：' + ((e && e.message) || '未知错误'), meta: 'Agent' }]);
+        }
+      }
+    })();
+    return function() { cancelled = true; };
+  }, [agentEnabled, ensureAgentProject, user]);
+
+  React.useEffect(() => {
+    if (agentEnabled) setAgentMessages(messages);
+    else setDefaultMessages(messages);
+  }, [agentEnabled, messages]);
+
   const loadAiChatHistory = React.useCallback(async () => {
     setHistoryLoading(true);
     try {
@@ -1361,13 +1577,29 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
     }
   }, []);
 
+  const loadAgentProjectHistory = React.useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await window.API.listAgentProjects(1, 20);
+      setHistorySessions((res && res.data) || []);
+    } catch (e) {
+      console.error('load agent project history failed:', e);
+      setHistorySessions([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
   const openHistory = React.useCallback(() => {
     setHistoryOpen(function(prev) {
       const next = !prev;
-      if (!prev) loadAiChatHistory();
+      if (!prev) {
+        if (agentEnabled) loadAgentProjectHistory();
+        else loadAiChatHistory();
+      }
       return next;
     });
-  }, [loadAiChatHistory]);
+  }, [agentEnabled, loadAgentProjectHistory, loadAiChatHistory]);
 
   const restoreAiChatSession = React.useCallback(async (sessionId) => {
     try {
@@ -1381,6 +1613,16 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       console.error('restore ai chat session failed:', e);
     }
   }, []);
+
+  const restoreAgentProjectSession = React.useCallback(async (projectId) => {
+    try {
+      await loadAgentProject(projectId);
+      setHistoryOpen(false);
+    } catch (e) {
+      console.error('restore agent project failed:', e);
+      window.alert((e && e.message) ? e.message : '恢复 Agent 对话失败');
+    }
+  }, [loadAgentProject]);
 
   const deleteAiChatHistory = React.useCallback(async (sessionId) => {
     if (!sessionId) return;
@@ -1400,12 +1642,51 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
     }
   }, [currentAiChatId]);
 
+  const deleteAgentProjectHistory = React.useCallback(async (projectId) => {
+    if (!projectId) return;
+    if (!window.confirm('删除这条 Agent 对话？')) return;
+    try {
+      await window.API.deleteAgentProject(projectId);
+      setHistorySessions(function(prev) {
+        return prev.filter(function(project) { return project.id !== projectId; });
+      });
+      if (agentProjectId === projectId) {
+        setAgentProjectId('');
+        setAgentProject(null);
+        setAgentMessages([]);
+        setMessages([]);
+      }
+    } catch (e) {
+      console.error('delete agent project failed:', e);
+      window.alert((e && e.message) ? e.message : '删除失败，请稍后重试');
+    }
+  }, [agentProjectId]);
+
   const startNewAiChat = React.useCallback(() => {
     if (isLoading) return;
+    if (agentEnabled) {
+      (async function() {
+        setIsLoading(true);
+        try {
+          const created = await window.API.createAgentProject();
+          setAgentProject(created);
+          setAgentProjectId(created.id);
+          setAgentMessages([]);
+          setMessages([]);
+          setHistoryOpen(false);
+        } catch (e) {
+          setMessages([{ who: 'ai', text: '新建 Agent 对话失败：' + ((e && e.message) || '未知错误'), meta: 'Agent' }]);
+        } finally {
+          setIsLoading(false);
+        }
+      })();
+      return;
+    }
     setMessages([]);
+    setDefaultMessages([]);
     setCurrentAiChatId('');
     setHistoryOpen(false);
-  }, [isLoading]);
+  }, [agentEnabled, isLoading]);
 
   React.useEffect(() => {
     if (!historyOpen) return;
@@ -1633,6 +1914,135 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
     if (!text.trim() || isLoading) return;
     setLastSubmittedMessage(text);
+
+    if (agentEnabled) {
+      var agentRefPreviews = [];
+      if (refImages.length > 0) {
+        try {
+          agentRefPreviews = await Promise.all(refImages.map(function(item) {
+            return fileToThumbDataUrl(item.file);
+          }));
+        } catch (e) {
+          agentRefPreviews = [];
+        }
+      }
+      setIsLoading(true);
+      var projectId = '';
+      var assistantIdx = null;
+      var imageIdx = null;
+      setMessages(function(msgs) {
+        assistantIdx = msgs.length + 1;
+        return msgs.concat([
+          { who: 'user', text: text, refPreviews: agentRefPreviews },
+          { who: 'ai', type: 'thinking', text: '...', meta: 'Agent' },
+        ]);
+      });
+      try {
+        projectId = await ensureAgentProject();
+        await window.API.streamAgentChat(projectId, text, {
+          onEvent: function(eventName, payload) {
+            if (eventName === 'agent_text') {
+              setMessages(function(msgs) {
+                return msgs.map(function(m, i) {
+                  if (i !== assistantIdx) return m;
+                  return { who: 'ai', text: (m.text || '') + (payload.delta || ''), meta: 'Agent' };
+                });
+              });
+              return;
+            }
+            if (eventName === 'decision') {
+              if (payload && (payload.type === 'GENERATE' || payload.type === 'REFINE')) {
+                setMessages(function(msgs) {
+                  if (imageIdx == null) imageIdx = msgs.length;
+                  return msgs.concat([{
+                    who: 'ai',
+                    type: 'ai-image-generating',
+                    model: 'agent',
+                    prompt: payload.prompt && payload.prompt.positive ? payload.prompt.positive : text,
+                    size: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.size : 'auto',
+                    resolution: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.resolution : '1K',
+                    status: 'running',
+                    startedAt: Date.now(),
+                    progress: 0,
+                    meta: 'Agent',
+                    refPreviews: agentRefPreviews,
+                  }]);
+                });
+              }
+              return;
+            }
+            if (eventName === 'generation_progress') {
+              setMessages(function(msgs) {
+                return msgs.map(function(m, i) {
+                  if (i !== imageIdx) return m;
+                  return { ...m, status: 'running', progress: payload.progress || m.progress || 0 };
+                });
+              });
+              return;
+            }
+            if (eventName === 'error') {
+              setMessages(function(msgs) {
+                return msgs.map(function(m, i) {
+                  if (i !== assistantIdx) return m;
+                  return { who: 'ai', text: (payload && payload.message) || 'Agent 执行失败', meta: 'Agent' };
+                });
+              });
+            }
+          },
+          onDone: async function(payload) {
+            if (payload && payload.project) setAgentProject(payload.project);
+            if (payload && payload.image) {
+              var imageUrl = (window.API_BASE || window.location.origin) + payload.image.image_url;
+              setMessages(function(msgs) {
+                return msgs.map(function(m, i) {
+                  if (i !== imageIdx) return m;
+                  return {
+                    ...m,
+                    status: 'done',
+                    imageUrl: imageUrl,
+                    progress: 100,
+                    finalElapsed: m.startedAt ? Math.floor((Date.now() - m.startedAt) / 1000) : null,
+                  };
+                });
+              });
+              if (onComposeComplete) {
+                onComposeComplete(null, null, [payload.image.image_url], null);
+              }
+            }
+            if (projectId) {
+              const latest = await window.API.getAgentProject(projectId);
+              const imgs = await window.API.listAgentProjectImages(projectId);
+              const mapped = mapAgentProjectMessages(latest, imgs);
+              setAgentProject(latest);
+              setAgentMessages(mapped);
+              setMessages(mapped);
+            }
+            setIsLoading(false);
+          },
+          onError: function(payload) {
+            setMessages(function(msgs) {
+              return msgs.map(function(m, i) {
+                if (i !== assistantIdx) return m;
+                return { who: 'ai', text: (payload && payload.message) || 'Agent 执行失败', meta: 'Agent' };
+              });
+            });
+            setIsLoading(false);
+          },
+          onClose: function() {
+            setIsLoading(false);
+          },
+        }, refImages);
+      } catch (e) {
+        setMessages(function(msgs) {
+          return msgs.map(function(m, i) {
+            if (i !== assistantIdx) return m;
+            return { who: 'ai', text: 'Agent 执行失败：' + ((e && e.message) || '未知错误'), meta: 'Agent' };
+          });
+        });
+        setIsLoading(false);
+      }
+      return;
+    }
 
     // ── 设为头像 ──────────────────────────────────────────────────────────────
     const trimmed = text.trimStart();
@@ -1929,7 +2339,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       ));
     }
     setIsLoading(false);
-  }, [currentAiChatId, enhancePromptWithProductRefs, getLastAiImageOptions, isLoading, loadAiChatHistory, loadResolvedRefFiles, parseProductRefs, runAiImageGeneration, template]);
+  }, [agentEnabled, currentAiChatId, ensureAgentProject, enhancePromptWithProductRefs, getLastAiImageOptions, isLoading, loadAiChatHistory, loadResolvedRefFiles, onComposeComplete, parseProductRefs, runAiImageGeneration, template]);
 
   const handleParseTable = React.useCallback(async (file, filename, imageType) => {
     // Add user message showing file was uploaded
@@ -2055,7 +2465,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
           }}/>
           <button
             onClick={startNewAiChat}
-            title={isLoading ? '生成中暂不可新建对话' : '开启新对话'}
+            title={isLoading ? '生成中暂不可新建对话' : (agentEnabled ? '开启新的 Agent 对话' : '开启新对话')}
             style={{
               fontSize: 13,
               fontWeight: 600,
@@ -2067,8 +2477,21 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
               cursor: isLoading ? 'not-allowed' : 'pointer',
             }}
           >
-            Ai助手
+            {agentEnabled ? 'Agent助手' : 'Ai助手'}
           </button>
+          {agentEnabled && (
+            <span style={{
+              fontSize: 10.5,
+              color: 'var(--accent-ink)',
+              background: 'var(--accent-soft)',
+              border: '1px solid transparent',
+              borderRadius: 999,
+              padding: '2px 6px',
+              lineHeight: 1,
+            }}>
+              Agent
+            </span>
+          )}
           <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>
             {isLoading ? 'working…' : messages.length === 0 ? 'ready' : messages.length + ' messages'}
           </span>
@@ -2077,7 +2500,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
         <div ref={historyWrapRef} style={{ position: 'relative' }}>
           <button
             onClick={openHistory}
-            title="历史对话"
+            title={agentEnabled ? 'Agent 对话历史' : '历史对话'}
             style={{
               width: 28,
               height: 28,
@@ -2115,7 +2538,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
                 color: 'var(--ink-3)',
                 textTransform: 'uppercase',
                 letterSpacing: '0.06em',
-              }}>AI chats</div>
+              }}>{agentEnabled ? 'Agent chats' : 'AI chats'}</div>
               {historyLoading && (
                 <div style={{ padding: '8px', fontSize: 11, color: 'var(--ink-3)' }}>加载中...</div>
               )}
@@ -2123,6 +2546,11 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
                 <div style={{ padding: '8px', fontSize: 11, color: 'var(--ink-3)' }}>暂无历史对话</div>
               )}
               {!historyLoading && historySessions.map(function(session) {
+                var activeId = agentEnabled ? agentProjectId : currentAiChatId;
+                var title = session.title || '未命名对话';
+                var metaLine = agentEnabled
+                  ? ((session.totalGenerations || 0) > 0 ? ('已生成 ' + session.totalGenerations + ' 张') : '仅对话')
+                  : '';
                 return (
                   <div
                     key={session.id}
@@ -2139,7 +2567,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        deleteAiChatHistory(session.id);
+                        if (agentEnabled) deleteAgentProjectHistory(session.id);
+                        else deleteAiChatHistory(session.id);
                       }}
                       title="删除"
                       style={{
@@ -2162,25 +2591,30 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
                       <I.close size={10}/>
                     </button>
                     <button
-                      onClick={() => restoreAiChatSession(session.id)}
+                      onClick={() => {
+                        if (agentEnabled) restoreAgentProjectSession(session.id);
+                        else restoreAiChatSession(session.id);
+                      }}
                       style={{
                         flex: 1,
                         minWidth: 0,
                         textAlign: 'left',
                         padding: '8px 9px',
                         borderRadius: 8,
-                        background: currentAiChatId === session.id ? 'var(--panel-2)' : 'transparent',
-                        border: '1px solid ' + (currentAiChatId === session.id ? 'var(--line-2)' : 'transparent'),
-                        color: currentAiChatId === session.id ? 'var(--ink)' : 'var(--ink-2)',
+                        background: activeId === session.id ? 'var(--panel-2)' : 'transparent',
+                        border: '1px solid ' + (activeId === session.id ? 'var(--line-2)' : 'transparent'),
+                        color: activeId === session.id ? 'var(--ink)' : 'var(--ink-2)',
                         fontSize: 11.5,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
                         cursor: 'pointer',
                       }}
-                      title={session.title}
+                      title={title}
                     >
-                      {session.title}
+                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
+                      {metaLine && (
+                        <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginTop: 3 }}>
+                          {metaLine}
+                        </div>
+                      )}
                     </button>
                   </div>
                 );
@@ -2195,7 +2629,25 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       {state === 'generating' && <ChatGenerating/>}
       {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user}/>}
 
-      <Composer onSend={handleSend} onParseTable={handleParseTable} isLoading={isLoading} slashTrigger={slashTrigger} template={template} lastSubmittedMessage={lastSubmittedMessage}/>
+      <Composer
+        onSend={handleSend}
+        onParseTable={handleParseTable}
+        isLoading={isLoading}
+        slashTrigger={slashTrigger}
+        template={template}
+        lastSubmittedMessage={lastSubmittedMessage}
+        agentEnabled={agentEnabled}
+        onToggleAgent={function() {
+          if (isLoading) return;
+          setHistoryOpen(false);
+          setAgentEnabled(function(prev) {
+            if (prev) {
+              setMessages(defaultMessages);
+            }
+            return !prev;
+          });
+        }}
+      />
     </div>
   );
 };

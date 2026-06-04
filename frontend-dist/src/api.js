@@ -46,7 +46,7 @@
   window.API = {
     BASE: BASE,
     getCurrentUser: function() {
-      return request('/auth/me').then(function(res) { return res.user; });
+      return request('/auth/session').then(function(res) { return res.user || null; });
     },
     getLoginUsers: function() {
       return request('/auth/options').then(function(res) { return res.users || []; });
@@ -143,6 +143,89 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url, format: format || null }),
+      });
+    },
+    createAgentProject: function() {
+      return request('/api/projects', { method: 'POST' }).then(function(res) { return res.data; });
+    },
+    listAgentProjects: function(page, limit, status) {
+      var qs = '?page=' + encodeURIComponent(page || 1) + '&limit=' + encodeURIComponent(limit || 20);
+      if (status) qs += '&status=' + encodeURIComponent(status);
+      return request('/api/projects' + qs);
+    },
+    getAgentProject: function(projectId) {
+      return request('/api/projects/' + encodeURIComponent(projectId)).then(function(res) { return res.data; });
+    },
+    deleteAgentProject: function(projectId) {
+      return request('/api/projects/' + encodeURIComponent(projectId), { method: 'DELETE' }).then(function(res) { return res.data; });
+    },
+    listAgentProjectImages: function(projectId) {
+      return request('/api/projects/' + encodeURIComponent(projectId) + '/images').then(function(res) { return res.data || []; });
+    },
+    streamAgentChat: function(projectId, message, handlers, refImages) {
+      handlers = handlers || {};
+      var hasRefs = Array.isArray(refImages) && refImages.length > 0;
+      var init = {
+        method: 'POST',
+        credentials: 'include',
+      };
+      if (hasRefs) {
+        var form = new FormData();
+        form.append('message', message);
+        refImages.forEach(function(item) {
+          if (item && item.file) form.append('image', item.file);
+        });
+        init.body = form;
+      } else {
+        init.headers = { 'Content-Type': 'application/json' };
+        init.body = JSON.stringify({ message: message });
+      }
+      return fetch(BASE + '/api/projects/' + encodeURIComponent(projectId) + '/chat', init).then(function(resp) {
+        if (!resp.ok) {
+          return resp.text().then(function(text) {
+            throw new Error('HTTP ' + resp.status + ': ' + text.slice(0, 200));
+          });
+        }
+        if (!resp.body) {
+          throw new Error('SSE body not available');
+        }
+        var reader = resp.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = '';
+
+        function dispatchBlock(block) {
+          var eventName = 'message';
+          var dataLines = [];
+          block.split('\n').forEach(function(line) {
+            if (!line) return;
+            if (line.indexOf('event:') === 0) eventName = line.slice(6).trim();
+            if (line.indexOf('data:') === 0) dataLines.push(line.slice(5).trim());
+          });
+          if (!dataLines.length) return;
+          var payloadText = dataLines.join('\n');
+          var payload = null;
+          try { payload = JSON.parse(payloadText); } catch (e) { payload = { raw: payloadText }; }
+          if (handlers.onEvent) handlers.onEvent(eventName, payload);
+          if (eventName === 'done' && handlers.onDone) handlers.onDone(payload);
+          if (eventName === 'error' && handlers.onError) handlers.onError(payload);
+        }
+
+        function pump() {
+          return reader.read().then(function(result) {
+            if (result.done) {
+              if (buffer.trim()) dispatchBlock(buffer.trim());
+              if (handlers.onClose) handlers.onClose();
+              return;
+            }
+            buffer += decoder.decode(result.value, { stream: true });
+            var parts = buffer.split('\n\n');
+            buffer = parts.pop() || '';
+            parts.forEach(function(part) { dispatchBlock(part.trim()); });
+            return pump();
+          });
+        }
+
+        return pump();
       });
     },
     fetchImageTypes: function() {

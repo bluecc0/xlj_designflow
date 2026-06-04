@@ -147,6 +147,54 @@ def init_db() -> None:
                 created_at       REAL NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_projects (
+                id                  TEXT PRIMARY KEY,
+                user_id             TEXT NOT NULL,
+                title               TEXT NOT NULL,
+                status              TEXT NOT NULL,
+                phase_json          TEXT NOT NULL,
+                intent_json         TEXT NOT NULL,
+                brief_json          TEXT,
+                current_prompt_json TEXT,
+                current_image_json  TEXT,
+                conversation_summary TEXT,
+                metadata_json       TEXT NOT NULL DEFAULT '{}',
+                created_at          REAL NOT NULL,
+                updated_at          REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_messages (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id          TEXT NOT NULL,
+                user_id             TEXT NOT NULL,
+                role                TEXT NOT NULL,
+                type                TEXT NOT NULL,
+                text                TEXT,
+                payload_json        TEXT NOT NULL DEFAULT '{}',
+                decision_action     TEXT,
+                created_at          REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_images (
+                id                  TEXT PRIMARY KEY,
+                project_id          TEXT NOT NULL,
+                user_id             TEXT NOT NULL,
+                parent_image_id     TEXT,
+                iteration_number    INTEGER NOT NULL DEFAULT 1,
+                provider            TEXT NOT NULL,
+                model               TEXT NOT NULL,
+                prompt_json         TEXT NOT NULL,
+                image_url           TEXT NOT NULL,
+                vlm_analysis_json   TEXT NOT NULL DEFAULT '{}',
+                user_feedback       TEXT,
+                is_favorite         INTEGER NOT NULL DEFAULT 0,
+                user_rating         INTEGER,
+                created_at          REAL NOT NULL
+            )
+        """)
         conn.commit()
 
 
@@ -766,3 +814,332 @@ def load_editor_snapshot(user_id: str) -> str | None:
             (user_id,),
         ).fetchone()
     return row["snapshot_json"] if row else None
+
+
+def create_agent_project(
+    *,
+    user_id: str,
+    title: str,
+    status: str,
+    phase: dict,
+    intent: dict,
+    brief: Optional[dict] = None,
+    current_prompt: Optional[dict] = None,
+    current_image: Optional[dict] = None,
+    conversation_summary: str = "",
+    metadata: Optional[dict] = None,
+    created_at: float | None = None,
+) -> dict:
+    now = created_at or time.time()
+    project_id = uuid.uuid4().hex
+    clean_title = (title or "").strip() or "新项目"
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_projects
+              (id, user_id, title, status, phase_json, intent_json, brief_json, current_prompt_json, current_image_json, conversation_summary, metadata_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                project_id,
+                user_id,
+                clean_title,
+                status,
+                json.dumps(phase or {}, ensure_ascii=False),
+                json.dumps(intent or {}, ensure_ascii=False),
+                json.dumps(brief, ensure_ascii=False) if brief is not None else None,
+                json.dumps(current_prompt, ensure_ascii=False) if current_prompt is not None else None,
+                json.dumps(current_image, ensure_ascii=False) if current_image is not None else None,
+                conversation_summary or "",
+                json.dumps(metadata or {}, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    return get_agent_project(project_id, user_id=user_id) or {}
+
+
+def get_agent_project(project_id: str, user_id: Optional[str] = None) -> Optional[dict]:
+    with _connect() as conn:
+        if user_id:
+            row = conn.execute(
+                "SELECT * FROM agent_projects WHERE id = ? AND user_id = ?",
+                (project_id, user_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM agent_projects WHERE id = ?",
+                (project_id,),
+            ).fetchone()
+    if not row:
+        return None
+    return _row_to_agent_project(row)
+
+
+def update_agent_project(
+    project_id: str,
+    *,
+    title: Optional[str] = None,
+    status: Optional[str] = None,
+    phase: Optional[dict] = None,
+    intent: Optional[dict] = None,
+    brief: Optional[dict] = None,
+    current_prompt: Optional[dict] = None,
+    current_image: Optional[dict] = None,
+    conversation_summary: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    updated_at: float | None = None,
+) -> Optional[dict]:
+    existing = get_agent_project(project_id)
+    if not existing:
+        return None
+    now = updated_at or time.time()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE agent_projects
+            SET title = ?, status = ?, phase_json = ?, intent_json = ?, brief_json = ?, current_prompt_json = ?, current_image_json = ?, conversation_summary = ?, metadata_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                (title if title is not None else existing["title"]),
+                (status if status is not None else existing["status"]),
+                json.dumps(phase if phase is not None else existing["phase"], ensure_ascii=False),
+                json.dumps(intent if intent is not None else existing["intent"], ensure_ascii=False),
+                json.dumps(brief if brief is not None else existing["brief"], ensure_ascii=False) if (brief if brief is not None else existing["brief"]) is not None else None,
+                json.dumps(current_prompt if current_prompt is not None else existing["current_prompt"], ensure_ascii=False) if (current_prompt if current_prompt is not None else existing["current_prompt"]) is not None else None,
+                json.dumps(current_image if current_image is not None else existing["current_image"], ensure_ascii=False) if (current_image if current_image is not None else existing["current_image"]) is not None else None,
+                conversation_summary if conversation_summary is not None else (existing["conversation_summary"] or ""),
+                json.dumps(metadata if metadata is not None else existing["metadata"], ensure_ascii=False),
+                now,
+                project_id,
+            ),
+        )
+        conn.commit()
+    return get_agent_project(project_id)
+
+
+def list_agent_projects(limit: int = 20, user_id: Optional[str] = None, status: Optional[str] = None) -> list[dict]:
+    query = "SELECT * FROM agent_projects"
+    params: list = []
+    clauses = []
+    if user_id:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY updated_at DESC LIMIT ?"
+    params.append(limit)
+    with _connect() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [_row_to_agent_project(row) for row in rows]
+
+
+def delete_agent_project(project_id: str, user_id: Optional[str] = None) -> bool:
+    with _lock, _connect() as conn:
+        if user_id:
+            row = conn.execute(
+                "SELECT id FROM agent_projects WHERE id = ? AND user_id = ?",
+                (project_id, user_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id FROM agent_projects WHERE id = ?",
+                (project_id,),
+            ).fetchone()
+        if not row:
+            return False
+        conn.execute("DELETE FROM agent_messages WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM agent_images WHERE project_id = ?", (project_id,))
+        if user_id:
+            conn.execute("DELETE FROM agent_projects WHERE id = ? AND user_id = ?", (project_id, user_id))
+        else:
+            conn.execute("DELETE FROM agent_projects WHERE id = ?", (project_id,))
+        conn.commit()
+        return True
+
+
+def append_agent_message(
+    *,
+    project_id: str,
+    user_id: str,
+    role: str,
+    type: str,
+    text: str | None = None,
+    payload: Optional[dict] = None,
+    decision_action: str | None = None,
+    created_at: float | None = None,
+) -> int:
+    now = created_at or time.time()
+    with _lock, _connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO agent_messages
+              (project_id, user_id, role, type, text, payload_json, decision_action, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                project_id,
+                user_id,
+                role,
+                type,
+                text,
+                json.dumps(payload or {}, ensure_ascii=False),
+                decision_action,
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE agent_projects SET updated_at = ? WHERE id = ?",
+            (now, project_id),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def load_agent_messages(project_id: str, user_id: Optional[str] = None, limit: Optional[int] = None) -> list[dict]:
+    with _connect() as conn:
+        if user_id:
+            query = """
+                SELECT m.*
+                FROM agent_messages m
+                JOIN agent_projects p ON p.id = m.project_id
+                WHERE m.project_id = ? AND p.user_id = ?
+                ORDER BY m.created_at ASC, m.id ASC
+            """
+            params = [project_id, user_id]
+        else:
+            query = "SELECT * FROM agent_messages WHERE project_id = ? ORDER BY created_at ASC, id ASC"
+            params = [project_id]
+        rows = conn.execute(query, tuple(params)).fetchall()
+    items = [
+        {
+            "id": row["id"],
+            "project_id": row["project_id"],
+            "user_id": row["user_id"],
+            "role": row["role"],
+            "type": row["type"],
+            "text": row["text"] or "",
+            "payload": json.loads(row["payload_json"] or "{}"),
+            "decision_action": row["decision_action"],
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
+    if limit is not None and limit > 0:
+        return items[-limit:]
+    return items
+
+
+def create_agent_image(
+    *,
+    project_id: str,
+    user_id: str,
+    provider: str,
+    model: str,
+    prompt: dict,
+    image_url: str,
+    vlm_analysis: Optional[dict] = None,
+    parent_image_id: Optional[str] = None,
+    iteration_number: int = 1,
+    created_at: float | None = None,
+) -> dict:
+    now = created_at or time.time()
+    image_id = uuid.uuid4().hex
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_images
+              (id, project_id, user_id, parent_image_id, iteration_number, provider, model, prompt_json, image_url, vlm_analysis_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                image_id,
+                project_id,
+                user_id,
+                parent_image_id,
+                iteration_number,
+                provider,
+                model,
+                json.dumps(prompt or {}, ensure_ascii=False),
+                image_url,
+                json.dumps(vlm_analysis or {}, ensure_ascii=False),
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE agent_projects SET updated_at = ? WHERE id = ?",
+            (now, project_id),
+        )
+        conn.commit()
+    return get_agent_image(image_id) or {}
+
+
+def get_agent_image(image_id: str) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM agent_images WHERE id = ?", (image_id,)).fetchone()
+    if not row:
+        return None
+    return _row_to_agent_image(row)
+
+
+def list_agent_images(project_id: str, user_id: Optional[str] = None) -> list[dict]:
+    with _connect() as conn:
+        if user_id:
+            rows = conn.execute(
+                """
+                SELECT i.*
+                FROM agent_images i
+                JOIN agent_projects p ON p.id = i.project_id
+                WHERE i.project_id = ? AND p.user_id = ?
+                ORDER BY i.created_at ASC
+                """,
+                (project_id, user_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM agent_images WHERE project_id = ? ORDER BY created_at ASC",
+                (project_id,),
+            ).fetchall()
+    return [_row_to_agent_image(row) for row in rows]
+
+
+def _row_to_agent_project(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "title": row["title"],
+        "status": row["status"],
+        "phase": json.loads(row["phase_json"] or "{}"),
+        "intent": json.loads(row["intent_json"] or "{}"),
+        "brief": json.loads(row["brief_json"]) if row["brief_json"] else None,
+        "current_prompt": json.loads(row["current_prompt_json"]) if row["current_prompt_json"] else None,
+        "current_image": json.loads(row["current_image_json"]) if row["current_image_json"] else None,
+        "conversation_summary": row["conversation_summary"] or "",
+        "metadata": json.loads(row["metadata_json"] or "{}"),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _row_to_agent_image(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "user_id": row["user_id"],
+        "parent_image_id": row["parent_image_id"],
+        "iteration_number": row["iteration_number"],
+        "provider": row["provider"],
+        "model": row["model"],
+        "prompt": json.loads(row["prompt_json"] or "{}"),
+        "image_url": row["image_url"],
+        "vlm_analysis": json.loads(row["vlm_analysis_json"] or "{}"),
+        "user_feedback": row["user_feedback"],
+        "is_favorite": bool(row["is_favorite"]),
+        "user_rating": row["user_rating"],
+        "created_at": row["created_at"],
+    }

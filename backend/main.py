@@ -37,6 +37,24 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .ai_image import generate_image, generate_image_with_reference, generate_image_async, generate_image_with_reference_async, SLASH_MODEL_MAP
+from .agent_mode import (
+    AgentChatRequest,
+    analyze_reference_images,
+    apply_decision_to_state,
+    build_brief,
+    call_agent_llm,
+    _coarse_subject_from_message,
+    decide_next_action,
+    default_project_state,
+    detect_confirm,
+    has_meaningful_intent_update,
+    make_sse,
+    merge_intent,
+    normalize_project_state,
+    run_vlm_critic,
+    stream_generation_events,
+    summarize_project_title,
+)
 from .psd_layered import create_layered_psd_from_image
 from .special_compose_full import run_special_full_compose
 from .compose import get_client, run_compose
@@ -44,25 +62,34 @@ from .config import settings
 from .job_store import (
     append_ai_chat_message,
     create_ai_chat_session,
+    create_agent_image,
+    create_agent_project,
+    delete_agent_project,
     delete_ai_chat_session,
     create_session,
     delete_session,
+    get_agent_project,
     get_ai_chat_session,
     get_or_create_user,
     get_user_by_session,
     init_db,
+    list_agent_images,
+    list_agent_projects,
     list_ai_chat_sessions,
     load_ai_chat_messages,
+    load_agent_messages,
     load_ai_image_job,
     load_ai_image_jobs,
     load_job,
     load_recent_jobs,
+    append_agent_message,
     save_job,
     save_ai_image_job,
     save_editor_snapshot,
     load_editor_snapshot,
     save_special_job,
     load_special_jobs,
+    update_agent_project,
 )
 from .models import (
     ComposeJob,
@@ -170,6 +197,7 @@ _psd_jobs: dict[str, dict] = {}
 _psd_jobs_lock = threading.Lock()
 _SESSION_COOKIE = "designflow_session"
 _AUTH_EXEMPT_PREFIXES = (
+    "/auth/session",
     "/auth/login-lite",
     "/auth/options",
     "/health",
@@ -206,6 +234,24 @@ def _safe_download_filename(name: str) -> str:
 
 class LiteLoginRequest(pydantic.BaseModel):
     username: str
+
+
+def _public_agent_project(project: dict, *, messages: Optional[list[dict]] = None, images: Optional[list[dict]] = None) -> dict:
+    return {
+        "id": project["id"],
+        "title": project["title"],
+        "status": project["status"],
+        "phase": project["phase"],
+        "intent": project["intent"],
+        "brief": project["brief"],
+        "currentImageUrl": (project.get("current_image") or {}).get("imageUrl"),
+        "currentPrompt": project.get("current_prompt"),
+        "conversationSummary": project.get("conversation_summary") or "",
+        "messages": messages if messages is not None else None,
+        "iterations": images if images is not None else None,
+        "createdAt": project["created_at"],
+        "updatedAt": project["updated_at"],
+    }
 
 
 def _get_session_user(request: Request) -> Optional[dict]:
@@ -269,6 +315,8 @@ async def health():
         "provider": "APIMart",
         "url": settings.ai_image_base_url,
     }
+
+
     if settings.ai_image_api_key:
         balance_base = settings.ai_image_base_url.rstrip("/")
         if not balance_base.endswith("/v1"):
@@ -312,6 +360,12 @@ async def health():
         },
         "ai_provider": ai_provider,
     }
+
+
+@app.get("/auth/session")
+def auth_session(request: Request):
+    user = getattr(request.state, "user", None)
+    return {"user": user}
 
 
 @app.get("/proxy-download/login-status")
@@ -1546,6 +1600,278 @@ def _slice_grid(src: Path, rows: int, cols: int, job_id: str) -> list[str]:
 
 
 # ─── AI 对话 ──────────────────────────────────────────────────────────────────
+
+@app.post("/api/projects")
+def create_agent_project_endpoint(request: Request):
+    user = _current_user(request)
+    state = default_project_state()
+    project = create_agent_project(
+        user_id=user["id"],
+        title="新项目",
+        status=state["status"],
+        phase=state["phase"],
+        intent=state["intent"],
+        brief=state["brief"],
+        current_prompt=state["currentPrompt"],
+        current_image=state["currentImage"],
+        conversation_summary=state["conversationSummary"],
+        metadata=state["metadata"],
+        created_at=time.time(),
+    )
+    return {"success": True, "data": _public_agent_project(project)}
+
+
+@app.get("/api/projects")
+def list_agent_projects_endpoint(request: Request, page: int = 1, limit: int = 20, status: str = ""):
+    user = _current_user(request)
+    safe_limit = max(1, min(limit, 50))
+    safe_page = max(1, page)
+    rows = list_agent_projects(limit=safe_page * safe_limit, user_id=user["id"], status=(status or None))
+    start = (safe_page - 1) * safe_limit
+    slice_rows = rows[start:start + safe_limit]
+    data = []
+    for project in slice_rows:
+        images = list_agent_images(project["id"], user_id=user["id"])
+        data.append({
+            "id": project["id"],
+            "title": project["title"],
+            "currentImageUrl": (project.get("current_image") or {}).get("imageUrl"),
+            "phase": project["phase"],
+            "totalGenerations": len(images),
+            "updatedAt": project["updated_at"],
+        })
+    return {"success": True, "data": data, "meta": {"total": len(rows), "page": safe_page}}
+
+
+@app.get("/api/projects/{project_id}")
+def get_agent_project_endpoint(request: Request, project_id: str):
+    user = _current_user(request)
+    project = get_agent_project(project_id, user_id=user["id"])
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    messages = load_agent_messages(project_id, user_id=user["id"], limit=20)
+    images = list_agent_images(project_id, user_id=user["id"])
+    return {"success": True, "data": _public_agent_project(project, messages=messages, images=images)}
+
+
+@app.get("/api/projects/{project_id}/images")
+def list_agent_project_images_endpoint(request: Request, project_id: str):
+    user = _current_user(request)
+    project = get_agent_project(project_id, user_id=user["id"])
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    return {"success": True, "data": list_agent_images(project_id, user_id=user["id"])}
+
+
+@app.delete("/api/projects/{project_id}")
+def delete_agent_project_endpoint(request: Request, project_id: str):
+    user = _current_user(request)
+    deleted = delete_agent_project(project_id, user_id=user["id"])
+    if not deleted:
+        raise HTTPException(404, "项目不存在")
+    return {"success": True, "data": {"id": project_id, "deleted": True}}
+
+
+@app.post("/api/projects/{project_id}/chat")
+async def agent_project_chat_endpoint(request: Request, project_id: str):
+    user = _current_user(request)
+    project = get_agent_project(project_id, user_id=user["id"])
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    message = ""
+    reference_images: list[tuple[bytes, str]] = []
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        message = str(form.get("message") or "").strip()
+        for item in form.getlist("image"):
+            if not hasattr(item, "read"):
+                continue
+            content = await item.read()
+            if not content:
+                continue
+            reference_images.append((content, getattr(item, "filename", "") or "reference.png"))
+    else:
+        payload = AgentChatRequest(**(await request.json()))
+        message = (payload.message or "").strip()
+    if not message:
+        raise HTTPException(400, "message 不能为空")
+
+    async def event_stream():
+        try:
+            state = normalize_project_state(project)
+            recent_messages = load_agent_messages(project_id, user_id=user["id"], limit=12)
+            user_payload = {}
+            metadata = dict(state.get("metadata") or {})
+            state["metadata"] = metadata
+            cached_reference = dict(metadata.get("referenceContext") or {})
+            reference_context_parts = []
+            if cached_reference.get("count"):
+                reference_context_parts.append(
+                    f"用户此前已经上传过 {int(cached_reference['count'])} 张参考图，请延续这些参考图对应的视觉方向，不要要求用户重复上传。"
+                )
+            if cached_reference.get("summary"):
+                reference_context_parts.append(f"已保存的参考图摘要：{cached_reference['summary']}")
+            if cached_reference.get("notableElements"):
+                joined = "、".join([str(item).strip() for item in cached_reference.get("notableElements") or [] if str(item).strip()])
+                if joined:
+                    reference_context_parts.append(f"参考图关键元素：{joined}")
+            if reference_images:
+                user_payload["reference_images"] = [
+                    {"name": filename, "size": len(content or b"")}
+                    for content, filename in reference_images
+                ]
+                reference_context_parts = [
+                    f"用户已经上传了 {len(reference_images)} 张参考图，请直接基于这些参考图讨论主体、风格、构图、色彩和氛围，不要再要求用户重复上传参考图。"
+                ]
+                analysis = await analyze_reference_images(reference_images, message, state)
+                cached_reference = {
+                    "count": len(reference_images),
+                    "files": user_payload["reference_images"],
+                }
+                if analysis:
+                    if analysis.summary:
+                        reference_context_parts.append(f"参考图初步分析：{analysis.summary}")
+                        user_payload["reference_summary"] = analysis.summary
+                        cached_reference["summary"] = analysis.summary
+                    if analysis.notable_elements:
+                        user_payload["reference_elements"] = analysis.notable_elements
+                        cached_reference["notableElements"] = analysis.notable_elements
+                    if analysis.extracted_info:
+                        state["intent"] = merge_intent(state.get("intent") or {}, analysis.extracted_info)
+                        cached_reference["extractedInfo"] = analysis.extracted_info
+                metadata["referenceContext"] = cached_reference
+            reference_context = "\n".join(reference_context_parts)
+            append_agent_message(
+                project_id=project_id,
+                user_id=user["id"],
+                role="user",
+                type="user_text",
+                text=message,
+                payload=user_payload,
+                created_at=time.time(),
+            )
+            yield make_sse("agent_thinking", {"phase": "understanding_intent"})
+
+            agent_reply, action_intent = await call_agent_llm(message, state, recent_messages, reference_context)
+            extracted = dict(action_intent.extracted_info or {})
+            if has_meaningful_intent_update(extracted):
+                state["intent"] = merge_intent(state.get("intent") or {}, extracted)
+            elif not (state.get("intent") or {}).get("subject"):
+                guessed_subject = _coarse_subject_from_message(message)
+                if guessed_subject:
+                    state["intent"] = merge_intent(state.get("intent") or {}, {"subject": guessed_subject})
+            if state["brief"] and detect_confirm(message):
+                state["brief"] = dict(state["brief"])
+                state["brief"]["confirmedByUser"] = True
+
+            decision = decide_next_action(state, action_intent, message)
+            state = apply_decision_to_state(state, decision, message)
+            title = summarize_project_title(state, project.get("title") or message)
+
+            updated = update_agent_project(
+                project_id,
+                title=title,
+                status=state["status"],
+                phase=state["phase"],
+                intent=state["intent"],
+                brief=state.get("brief"),
+                current_prompt=state.get("currentPrompt"),
+                current_image=state.get("currentImage"),
+                conversation_summary=state.get("conversationSummary") or "",
+                metadata=state.get("metadata"),
+                updated_at=time.time(),
+            )
+
+            if agent_reply:
+                for chunk in [agent_reply[i:i + 36] for i in range(0, len(agent_reply), 36)]:
+                    yield make_sse("agent_text", {"delta": chunk})
+            append_agent_message(
+                project_id=project_id,
+                user_id=user["id"],
+                role="assistant",
+                type="agent_text",
+                text=agent_reply,
+                payload={"action_intent": action_intent.model_dump(), "decision": decision},
+                decision_action=decision.get("type"),
+                created_at=time.time(),
+            )
+            yield make_sse("decision", decision)
+
+            if decision.get("type") not in {"GENERATE", "REFINE"}:
+                final_project = updated or get_agent_project(project_id, user_id=user["id"])
+                yield make_sse("done", {"project": _public_agent_project(final_project or project)})
+                return
+
+            generated_image = None
+            prompt_payload = decision.get("prompt") or state.get("currentPrompt") or {}
+            async for event_name, payload in stream_generation_events(
+                state=state,
+                user_id=user["id"],
+                prompt_payload=prompt_payload,
+                current_image=project.get("current_image"),
+                reference_images=reference_images,
+            ):
+                yield make_sse(event_name, payload)
+                if event_name == "generation_completed":
+                    generated_image = payload.get("image")
+
+            if not generated_image or not generated_image.get("url"):
+                yield make_sse("error", {"message": "生成完成但未拿到图片地址"})
+                return
+
+            vlm_analysis = await run_vlm_critic(generated_image["url"], state)
+            images = list_agent_images(project_id, user_id=user["id"])
+            parent_image = project.get("current_image") or {}
+            image_record = create_agent_image(
+                project_id=project_id,
+                user_id=user["id"],
+                provider="apimart",
+                model=str(prompt_payload.get("model") or ""),
+                prompt=prompt_payload,
+                image_url=generated_image["url"],
+                vlm_analysis=vlm_analysis,
+                parent_image_id=parent_image.get("id"),
+                iteration_number=len(images) + 1,
+                created_at=time.time(),
+            )
+            state["currentImage"] = {
+                "id": image_record["id"],
+                "imageUrl": image_record["image_url"],
+                "iterationNumber": image_record["iteration_number"],
+            }
+            state["phase"] = {"stage": "refining", "turnsInStage": 0}
+            updated = update_agent_project(
+                project_id,
+                title=summarize_project_title(state, title),
+                status=state["status"],
+                phase=state["phase"],
+                intent=state["intent"],
+                brief=state.get("brief"),
+                current_prompt=prompt_payload,
+                current_image=state["currentImage"],
+                conversation_summary=state.get("conversationSummary") or "",
+                metadata=state.get("metadata"),
+                updated_at=time.time(),
+            )
+            append_agent_message(
+                project_id=project_id,
+                user_id=user["id"],
+                role="assistant",
+                type="generation_result",
+                text=vlm_analysis.get("userFacingSummary") or "图已经生成好了，我们可以继续细修。",
+                payload={"image": image_record, "vlmAnalysis": vlm_analysis},
+                decision_action=decision.get("type"),
+                created_at=time.time(),
+            )
+            yield make_sse("agent_text", {"delta": vlm_analysis.get("userFacingSummary") or "图已经生成好了，我们可以继续细修。"})
+            yield make_sse("done", {"project": _public_agent_project(updated or project), "image": image_record, "vlmAnalysis": vlm_analysis})
+        except Exception as exc:
+            logger.exception("agent project chat failed: %s", project_id)
+            yield make_sse("error", {"message": f"{type(exc).__name__}: {exc}"})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
 
 class ChatMessage(pydantic.BaseModel):
     role: str

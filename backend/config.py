@@ -63,6 +63,21 @@ class Settings:
     vlm_base_url: str = os.getenv("VLM_BASE_URL", "") or ai_image_base_url
     vlm_api_key: str = os.getenv("VLM_API_KEY", "") or ai_image_api_key
 
+    # agent mode
+    agent_llm_model: str = os.getenv("AGENT_LLM_MODEL", "") or siliconflow_model
+    agent_llm_base_url: str = os.getenv("AGENT_LLM_BASE_URL", "") or siliconflow_base_url
+    agent_llm_api_key: str = os.getenv("AGENT_LLM_API_KEY", "") or siliconflow_api_key
+    agent_llm_timeout_seconds: int = int(os.getenv("AGENT_LLM_TIMEOUT_SECONDS", "60"))
+
+    agent_image_model: str = os.getenv("AGENT_IMAGE_MODEL", "nano banana pro")
+    agent_image_size: str = os.getenv("AGENT_IMAGE_SIZE", "auto")
+    agent_image_resolution: str = os.getenv("AGENT_IMAGE_RESOLUTION", "")
+
+    agent_vlm_model: str = os.getenv("AGENT_VLM_MODEL", "") or vlm_model
+    agent_vlm_base_url: str = os.getenv("AGENT_VLM_BASE_URL", "") or vlm_base_url
+    agent_vlm_api_key: str = os.getenv("AGENT_VLM_API_KEY", "") or vlm_api_key
+    agent_vlm_timeout_seconds: int = int(os.getenv("AGENT_VLM_TIMEOUT_SECONDS", "60"))
+
     # 工作目录（始终指向 design-tool/）
     # proxy_download relay
     proxy_download_enabled: bool = os.getenv("PROXY_DOWNLOAD_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
