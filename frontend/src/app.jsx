@@ -219,6 +219,22 @@ const App = () => {
     setAuthError('');
   }, []);
 
+  const selectTemplate = React.useCallback((t) => {
+    if (!t) return;
+    setActiveTemplate(t);
+    if (t.is_special_full) setSlashTrigger({ cmd: '特殊品（完整）', key: Date.now() });
+    else if (t.is_special) setSlashTrigger({ cmd: '特殊品', key: Date.now() });
+    else setSlashTrigger({ clear: true, key: Date.now() });
+  }, []);
+
+  const handleRequestSpecialTemplate = React.useCallback((kind) => {
+    const templates = Array.isArray(window.TEMPLATES) ? window.TEMPLATES : [];
+    const target = templates.find(function(t) {
+      return kind === 'full' ? t.is_special_full : (t.is_special && !t.is_special_full);
+    });
+    if (target) selectTemplate(target);
+  }, [selectTemplate]);
+
   return (
     <div style={{
       height: '100vh', display: 'flex', flexDirection: 'column',
@@ -230,12 +246,7 @@ const App = () => {
           <TemplatePanel
             key={'templates:' + currentUser.id}
             activeId={activeTemplate ? (activeTemplate.file_id || '') + ':' + (activeTemplate.group_name || activeTemplate.id) : null}
-            onSelect={(t) => {
-              setActiveTemplate(t);
-              if (t.is_special_full) setSlashTrigger({ cmd: '特殊品（完整）', key: Date.now() });
-              else if (t.is_special) setSlashTrigger({ cmd: '特殊品', key: Date.now() });
-              else setSlashTrigger({ clear: true, key: Date.now() });
-            }}
+            onSelect={selectTemplate}
           />
           <Canvas template={activeTemplate} resultTemplate={resultTemplate} editorCommand={editorCommand}/>
           <Chat
@@ -245,6 +256,7 @@ const App = () => {
             onComposeComplete={handleComposeComplete}
             slashTrigger={slashTrigger}
             user={currentUser}
+            onRequestSpecialTemplate={handleRequestSpecialTemplate}
           />
         </div>
       )}

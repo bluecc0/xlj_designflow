@@ -33,7 +33,6 @@ const Avatar = ({ who, user }) => {
       </div>
     );
   }
-
   return (
     <div style={{
       width: 24, height: 24, borderRadius: 7, flexShrink: 0,
@@ -382,14 +381,14 @@ const GREETINGS = [
 
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 
-const ChatEmpty = () => {
+const ChatEmpty = ({ greetingKey }) => {
   const prompts = [
     { icon: <I.image size={13}/>,    text: '上传产品图，描述想要的风格' },
     { icon: <I.palette size={13}/>,  text: '生成4张哑光色调的变体图' },
     { icon: <I.copy size={13}/>,     text: '复制当前模板的文案' },
     { icon: <I.dims size={13}/>,     text: '调整尺寸为9:16适配Instagram' },
   ];
-  const greeting = React.useMemo(() => pickGreeting(), []);
+  const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px' }}>
       <div style={{
@@ -460,10 +459,11 @@ const ChatGenerating = () => (
   </div>
 );
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => {
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey }) => {
   const userMsgs = messages.filter(m => m.who === 'user').length;
   const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
   const bottomRef = React.useRef(null);
+  const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
 
   React.useEffect(() => {
     if (bottomRef.current) {
@@ -481,6 +481,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => 
         <span className="mono" style={{ color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>对话</span>
         <div style={{ flex: 1, height: 1, background: 'var(--line-2)' }}/>
         <span className="mono" style={{ color: 'var(--ink-3)' }}>{turnCount}</span>
+        {historyControl}
       </div>
 
       {messages.length === 0 ? (
@@ -492,14 +493,12 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => 
           }}>
             <I.sparkles size={18} stroke={1.8}/>
           </div>
-          {(() => { const g = pickGreeting(); return (
-            <>
-              <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)' }}>{g.title}</div>
+          <>
+              <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)' }}>{greeting.title}</div>
               <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
-                {g.sub}
+                {greeting.sub}
               </div>
             </>
-          ); })()}
         </div>
       ) : (
         messages.map((m, i) => (
@@ -780,7 +779,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user }) => 
 
 // ---------- Composer ----------
 
-const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent }) => {
+const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate }) => {
   const [text, setText] = React.useState('');
   const [lockedCommand, setLockedCommand] = React.useState('');
   const [files, setFiles] = React.useState([]);
@@ -796,6 +795,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     }
   });
   const [refImages, setRefImages] = React.useState([]); // [{ file, previewUrl }, ...] 最多 4 张
+  const [prototypePanel, setPrototypePanel] = React.useState('');
+  const [selectedWorkflow, setSelectedWorkflow] = React.useState('chat');
   const taRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
   const [composerHeight, setComposerHeight] = React.useState(null); // null = 默认自动高度
@@ -814,14 +815,25 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       })
       .catch(() => {});
   }, []);
-  const displayValue = lockedCommand ? (text ? (lockedCommand + ' ' + text) : (lockedCommand + ' ')) : text;
-  const lockedPrefixLength = lockedCommand ? (lockedCommand.length + 1) : 0;
+  const displayValue = text;
+  const lockedPrefixLength = 0;
 
   React.useEffect(() => {
     try {
       localStorage.setItem('designflow_ai_provider', aiProvider);
     } catch (e) {}
   }, [aiProvider]);
+
+  React.useEffect(() => {
+    if (!resetKey) return;
+    setText('');
+    setLockedCommand('');
+    setSelectedWorkflow('chat');
+    setFiles([]);
+    clearRefImages();
+    setPrototypePanel('');
+    setMenuOpen(false);
+  }, [resetKey]);
 
   // —— Composer 拖拽调整高度 ——
   const handleDragStart = React.useCallback((e) => {
@@ -853,24 +865,41 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     };
   }, []);
 
+  React.useEffect(() => {
+    if (!prototypePanel) return;
+    const onPointerDown = function(e) {
+      if (!composerRef.current) return;
+      if (!composerRef.current.contains(e.target)) {
+        setPrototypePanel('');
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return function() {
+      document.removeEventListener('mousedown', onPointerDown);
+    };
+  }, [prototypePanel]);
+
   // 外部触发 slash 命令（选中特殊品模板时）
   React.useEffect(() => {
     if (agentEnabled) return;
     if (!slashTrigger) return;
     if (slashTrigger.clear) {
       setLockedCommand(prev => (prev === '/特殊品' || prev === '/特殊品（完整）') ? '' : prev);
+      setSelectedWorkflow('chat');
       return;
     }
     setLockedCommand('/' + slashTrigger.cmd);
+    setSelectedWorkflow(slashTrigger.cmd && slashTrigger.cmd.includes('特殊品') ? 'special' : 'chat');
+    setPrototypePanel('');
     setText('');
     setMenuOpen(false);
     setTimeout(() => {
       const el = taRef.current;
       if (!el) return;
       el.focus();
-      el.setSelectionRange(lockedPrefixLength, lockedPrefixLength);
+      el.setSelectionRange(0, 0);
     }, 0);
-  }, [agentEnabled, slashTrigger?.key, lockedPrefixLength]);
+  }, [agentEnabled, slashTrigger?.key]);
 
   React.useEffect(() => {
     if (agentEnabled) {
@@ -924,7 +953,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     /^\/(Nano Banana pro|Gpt image 2)/i.test(_t) ? 'ai-image' :
     _t.startsWith('/特殊品（完整）') ? 'special_full' :
     _t.startsWith('/特殊品') ? 'special' :
-    'compose';
+    selectedWorkflow === 'compose' ? 'compose' : 'chat';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
   const aiOptionMap = AI_OPTIONS;
@@ -946,6 +975,36 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     }
   }, [activeAiModel, aiQuality, aiRatio]);
 
+  const selectWorkflow = React.useCallback(function(next) {
+    if (agentEnabled) return;
+    const cmd = next && next.cmd ? next.cmd : '';
+    if (cmd) {
+      setLockedCommand(cmd);
+      setSelectedWorkflow(
+        cmd === '/Gpt image 2' || cmd === '/Nano Banana pro' ? 'ai-image' :
+          cmd === '/特殊品' || cmd === '/特殊品（完整）' ? 'special' :
+            cmd === '/花瓣下载' ? 'download' : 'chat'
+      );
+      setMenuOpen(false);
+      setPrototypePanel('');
+      setTimeout(() => {
+        const el = taRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(0, 0);
+      }, 0);
+      return;
+    }
+    setLockedCommand('');
+    setSelectedWorkflow(next && next.workflow ? next.workflow : 'chat');
+    setMenuOpen(false);
+    setPrototypePanel('');
+    setTimeout(() => {
+      const el = taRef.current;
+      if (el) el.focus();
+    }, 0);
+  }, [agentEnabled]);
+
   const [menuOpen, setMenuOpen] = React.useState(false);
   React.useEffect(() => {
     if (agentEnabled) {
@@ -960,13 +1019,18 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const pickCommand = (c) => {
     if (agentEnabled) return;
     setLockedCommand(c.cmd);
+    setSelectedWorkflow(
+      c.cmd === '/Gpt image 2' || c.cmd === '/Nano Banana pro' ? 'ai-image' :
+        c.cmd === '/特殊品' || c.cmd === '/特殊品（完整）' ? 'special' :
+          c.cmd === '/花瓣下载' ? 'download' : 'chat'
+    );
     setText('');
     setMenuOpen(false);
     setTimeout(() => {
       const el = taRef.current;
       if (!el) return;
       el.focus();
-      el.setSelectionRange(c.cmd.length + 1, c.cmd.length + 1);
+      el.setSelectionRange(0, 0);
     }, 0);
   };
 
@@ -977,9 +1041,15 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     });
     if (matched) {
       setLockedCommand(matched);
+      setSelectedWorkflow(
+        matched === '/Gpt image 2' || matched === '/Nano Banana pro' ? 'ai-image' :
+          matched === '/特殊品' || matched === '/特殊品（完整）' ? 'special' :
+            matched === '/花瓣下载' ? 'download' : 'chat'
+      );
       setText(raw.slice(matched.length).trimStart());
     } else {
       setLockedCommand('');
+      setSelectedWorkflow('chat');
       setText(raw);
     }
     setMenuOpen(false);
@@ -987,7 +1057,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       const el = taRef.current;
       if (!el) return;
       el.focus();
-      const len = raw.length;
+      const len = el.value.length;
       el.setSelectionRange(len, len);
     }, 0);
   }, [COMMANDS]);
@@ -999,6 +1069,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     const imagesToSend = [...refImages];
     setText('');
     setLockedCommand('');
+    setSelectedWorkflow('chat');
     clearRefImages();
     onSend(message, imagesToSend, { size: aiImageSize, resolution: aiQuality, provider: aiProvider });
   };
@@ -1086,7 +1157,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     }
     if (lockedCommand) {
       if (next.startsWith(lockedCommand + ' ')) {
-        setText(next.slice(lockedPrefixLength));
+        setText(next.slice(lockedCommand.length).trimStart());
         return;
       }
       if (next === lockedCommand || next === lockedCommand + '') {
@@ -1097,7 +1168,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         setText(next.slice(lockedCommand.length).replace(/^\s+/, ''));
         return;
       }
-      setText(next.slice(Math.min(next.length, lockedPrefixLength)).replace(/^\s+/, ''));
+      setText(next);
       return;
     }
     if (!lockedCommand) {
@@ -1114,16 +1185,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   };
 
   const clampSelection = () => {
-    if (!lockedCommand) return;
-    const el = taRef.current;
-    if (!el) return;
-    if (el.selectionStart < lockedPrefixLength || el.selectionEnd < lockedPrefixLength) {
-      const pos = Math.max(lockedPrefixLength, el.selectionEnd, el.selectionStart);
-      requestAnimationFrame(() => {
-        const input = taRef.current;
-        if (input) input.setSelectionRange(pos, pos);
-      });
-    }
+    return;
   };
 
   const handleFileSelect = (e) => {
@@ -1178,6 +1240,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const clearComposer = React.useCallback(() => {
     setText('');
     setLockedCommand('');
+    setSelectedWorkflow('chat');
     setFiles([]);
     clearRefImages();
     setMenuOpen(false);
@@ -1193,18 +1256,359 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
   const canSend = Boolean((lockedCommand ? (lockedCommand + ' ' + text.trim()).trim() : text.trim()) || files.length) && !isLoading;
-  const agentPillStyle = {
-    height: 26,
-    padding: '0 10px',
-    borderRadius: 999,
-    border: '1px solid ' + (agentEnabled ? 'var(--accent)' : 'var(--line)'),
-    background: agentEnabled ? 'var(--accent-soft)' : 'var(--panel)',
-    color: agentEnabled ? 'var(--accent-ink)' : 'var(--ink-3)',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    fontSize: 11.5,
-    flexShrink: 0,
+  const getTaskDefinitions = React.useCallback(function() {
+    return [
+      { id: 'chat', label: '问答', desc: '询问流程、模板、素材规则', iconKey: 'eye', workflow: 'chat' },
+      { id: 'gpt-image', label: 'GPT Image 2', desc: '文生图，中文语义和文字更强', iconKey: 'image', cmd: '/Gpt image 2' },
+      { id: 'nano-banana', label: 'Nano Banana', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', cmd: '/Nano Banana pro' },
+      { id: 'compose', label: '模板合成', desc: '上传表格并匹配本地图库', iconKey: 'grid', workflow: 'compose' },
+      { id: 'special', label: '特殊品', desc: '使用特殊品模板合成结果', iconKey: 'layers', cmd: template && template.is_special_full ? '/特殊品（完整）' : '/特殊品' },
+      { id: 'download', label: '花瓣下载', desc: '下载花瓣素材或指定格式', iconKey: 'download', cmd: '/花瓣下载' },
+    ];
+  }, [template && template.is_special_full]);
+  const getTaskIcon = React.useCallback(function(iconKey) {
+    return I[iconKey] || I.sparkles;
+  }, []);
+  const activeTaskLabel = activeMode === 'ai-image'
+    ? (activeAiModel === 'nano-banana-pro' ? 'Nano Banana' : 'GPT Image')
+    : activeMode === 'special_full'
+      ? '完整特殊品'
+      : activeMode === 'special'
+        ? '特殊品'
+        : selectedWorkflow === 'compose'
+          ? '模板合成'
+          : selectedWorkflow === 'download'
+            ? '花瓣下载'
+            : '问答';
+  const activeTaskIconKey = activeMode === 'ai-image'
+    ? 'image'
+    : activeMode === 'special' || activeMode === 'special_full'
+      ? 'layers'
+      : selectedWorkflow === 'compose'
+        ? 'grid'
+        : selectedWorkflow === 'download'
+          ? 'download'
+          : 'eye';
+  const activeTaskIcon = getTaskIcon(activeTaskIconKey);
+  const providerLabel = aiProvider === 'zenmux' ? '官方' : '默认';
+  const modeParamLabel = activeMode === 'ai-image'
+    ? (aiRatio + ' · ' + aiQuality)
+    : activeMode === 'special_full'
+      ? '线路 完整'
+      : activeMode === 'special'
+        ? '线路 普通'
+        : selectedWorkflow === 'compose'
+          ? (imageType ? ('素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType)) : '')
+          : '';
+  const selectedSettingBits = [
+    agentEnabled ? 'Agent' : activeTaskLabel,
+    agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? providerLabel : ''),
+    agentEnabled ? '' : modeParamLabel,
+    refImages.length > 0 ? ('参考图 ' + refImages.length + '/4') : '',
+    files.length > 0 ? ('文件 ' + files.length) : '',
+  ].filter(Boolean);
+  const composerPlaceholder = agentEnabled
+    ? '描述你的创作目标，Agent 会先帮你梳理方向'
+    : activeMode === 'ai-image'
+      ? (activeAiModel === 'nano-banana-pro'
+        ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景'
+        : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感')
+      : activeMode === 'special_full'
+        ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售'
+        : activeMode === 'special'
+          ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售'
+          : selectedWorkflow === 'compose'
+            ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁'
+            : selectedWorkflow === 'download'
+              ? '输入花瓣项目 ID 或下载要求'
+              : '忘了怎么用？试试直接提问吧';
+  const statusBarVisible = Boolean(
+    text.trim() ||
+    lockedCommand ||
+    refImages.length > 0 ||
+    files.length > 0 ||
+    (!agentEnabled && prototypePanel) ||
+    (!agentEnabled && menuOpen)
+  );
+  const prototypeToolButton = function(panel, title, icon, label, options) {
+    const open = prototypePanel === panel;
+    return React.createElement('button', Object.assign({
+      type: 'button',
+      onClick: function() { setPrototypePanel(open ? '' : panel); },
+      title: title,
+      style: Object.assign({
+        height: 36,
+        minWidth: label ? 74 : 36,
+        padding: label ? '0 12px' : 0,
+        borderRadius: 10,
+        border: '1px solid ' + (open ? 'var(--ink-3)' : 'var(--line-2)'),
+        background: open ? 'var(--panel-2)' : 'transparent',
+        color: open ? 'var(--ink)' : 'var(--ink-2)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 7,
+        cursor: 'pointer',
+        boxShadow: 'none',
+        transition: 'background 140ms, border-color 140ms, transform 140ms, box-shadow 140ms',
+        flexShrink: 0,
+      }, options || {})
+    }), icon, label ? React.createElement('span', { style: { fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' } }, label) : null);
+  };
+  const protoChipStyle = function(active) {
+    return {
+      border: '1px solid ' + (active ? 'var(--ink)' : 'var(--line-2)'),
+      background: active ? 'var(--ink)' : 'var(--panel)',
+      color: active ? 'var(--panel)' : 'var(--ink-2)',
+      borderRadius: 999,
+      padding: '7px 10px',
+      fontSize: 11.5,
+      fontWeight: 600,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      cursor: 'default',
+      minHeight: 30,
+    };
+  };
+  const protoPanelShell = function(children, width) {
+    const fluid = width === 'fluid';
+    return React.createElement('div', {
+      style: {
+        position: 'absolute',
+        left: fluid ? 8 : 0,
+        right: fluid ? 8 : 'auto',
+        bottom: 58,
+        width: fluid ? 'auto' : (width || 360),
+        maxWidth: fluid ? 'none' : 'calc(100vw - 36px)',
+        borderRadius: 14,
+        border: '1px solid var(--line)',
+        background: 'var(--panel)',
+        boxShadow: '0 12px 28px rgba(25,24,20,0.08)',
+        padding: 14,
+        zIndex: 20,
+        overflow: 'hidden',
+      }
+    }, children);
+  };
+  const protoSectionLabel = function(text) {
+    return React.createElement('div', {
+      className: 'mono',
+      style: {
+        fontSize: 9.5,
+        color: 'var(--ink-3)',
+        textTransform: 'uppercase',
+        letterSpacing: '0.08em',
+        margin: '12px 0 7px',
+      }
+    }, text);
+  };
+  const renderPrototypePanel = function() {
+    if (!prototypePanel) return null;
+    if (prototypePanel === 'task') {
+      const tasks = getTaskDefinitions();
+      return protoPanelShell(React.createElement(React.Fragment, null,
+        React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 } },
+          React.createElement('div', { style: { fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--ink)' } }, '选择功能'),
+          React.createElement('div', { className: 'mono', style: { fontSize: 10, color: 'var(--ink-3)' } }, 'live')
+        ),
+        React.createElement('div', { style: { marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 } },
+          tasks.map(function(item) {
+            const active = item.cmd
+              ? lockedCommand === item.cmd
+              : (!lockedCommand && selectedWorkflow === item.workflow);
+            const IconComp = getTaskIcon(item.iconKey);
+            return React.createElement('button', {
+              key: item.label,
+              type: 'button',
+              onClick: function() { selectWorkflow(item); },
+              style: {
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 11,
+                padding: '10px 11px',
+                borderRadius: 13,
+                background: active ? 'var(--panel-2)' : 'transparent',
+                border: '1px solid ' + (active ? 'var(--line)' : 'transparent'),
+                textAlign: 'left',
+                cursor: 'pointer',
+              }
+            },
+              React.createElement('div', {
+                style: {
+                  width: 30,
+                  height: 30,
+                  borderRadius: 999,
+                  background: active ? 'var(--ink)' : 'var(--panel-2)',
+                  color: active ? 'var(--panel)' : 'var(--ink-3)',
+                  display: 'grid',
+                  placeItems: 'center',
+                }
+              }, React.createElement(IconComp, { size: 14 })),
+              React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: 'var(--ink)' } }, item.label),
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-3)', marginTop: 2 } }, item.desc)
+              )
+            );
+          })
+        )
+      ), 344);
+    }
+    if (prototypePanel === 'params') {
+      const sizeItems = [
+        ['auto', 'auto'],
+        ['1:1', '1:1'],
+        ['3:2', '3:2'],
+        ['2:3', '2:3'],
+        ['5:4', '5:4'],
+        ['16:9', '16:9'],
+        ['9:16', '9:16'],
+      ];
+      const isImageParams = activeMode === 'ai-image';
+      const isSpecialParams = activeMode === 'special' || activeMode === 'special_full';
+      const isComposeParams = activeMode === 'compose';
+      const paramsTitle = isImageParams ? '生图参数' : isSpecialParams ? '特殊品参数' : isComposeParams ? '合成参数' : '问答参数';
+      return protoPanelShell(React.createElement(React.Fragment, null,
+        React.createElement('div', { style: { fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--ink)' } }, paramsTitle),
+        isImageParams && React.createElement(React.Fragment, null,
+          protoSectionLabel('尺寸'),
+          React.createElement('div', {
+            style: {
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+              gap: 7,
+              padding: 9,
+              borderRadius: 15,
+              background: 'var(--panel-2)',
+            }
+          },
+            sizeItems.map(function(item) {
+              const active = aiRatio === item[0];
+              return React.createElement('button', {
+                key: item[0],
+                type: 'button',
+                onClick: function() { setAiRatio(item[0]); },
+                style: {
+                  width: '100%',
+                  minHeight: 58,
+                  borderRadius: 12,
+                  background: active ? 'white' : 'transparent',
+                  border: '1px solid ' + (active ? 'var(--line)' : 'transparent'),
+                  boxShadow: 'none',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 5,
+                  cursor: 'pointer',
+                }
+              },
+                React.createElement('div', {
+                  style: {
+                    width: item[0] === '16:9' ? 22 : item[0] === '9:16' ? 10 : 16,
+                    height: item[0] === '9:16' ? 22 : item[0] === '16:9' ? 10 : 16,
+                    border: '2px dashed ' + (active ? 'var(--ink)' : 'var(--ink-3)'),
+                    borderRadius: 4,
+                  }
+                }),
+                React.createElement('div', { style: { fontSize: 11.5, color: active ? 'var(--ink)' : 'var(--ink-3)', fontWeight: active ? 700 : 500 } }, item[1])
+              );
+            })
+          ),
+          protoSectionLabel('清晰度 / 渠道'),
+          React.createElement('div', { style: { display: 'flex', gap: 7, flexWrap: 'wrap' } },
+            ['1K', '2K', '4K'].map(function(q) {
+              const disabled = !allowedAiQualities.includes(q);
+              return React.createElement('button', {
+                key: q,
+                type: 'button',
+                disabled: disabled,
+                onClick: function() { if (!disabled) setAiQuality(q); },
+                style: Object.assign({}, protoChipStyle(aiQuality === q), {
+                  cursor: disabled ? 'not-allowed' : 'pointer',
+                  opacity: disabled ? 0.45 : 1,
+                })
+              }, q);
+            }),
+            React.createElement('div', { style: { width: 1, height: 30, background: 'var(--line)', margin: '0 1px' } }),
+            React.createElement('button', {
+              type: 'button',
+              onClick: function() { setAiProvider('apimart'); },
+              style: Object.assign({}, protoChipStyle(aiProvider === 'apimart'), { cursor: 'pointer' })
+            }, '默认'),
+            React.createElement('button', {
+              type: 'button',
+              onClick: function() { setAiProvider('zenmux'); },
+              style: Object.assign({}, protoChipStyle(aiProvider === 'zenmux'), { cursor: 'pointer' })
+            }, '官方')
+          )
+        ),
+        activeMode === 'chat' && React.createElement('div', {
+          style: {
+            marginTop: 12,
+            padding: '12px',
+            borderRadius: 12,
+            background: 'var(--panel-2)',
+            color: 'var(--ink-3)',
+            fontSize: 12,
+            lineHeight: 1.5,
+          }
+        }, '问答模式暂无额外参数，直接输入问题即可。'),
+        isSpecialParams && React.createElement(React.Fragment, null,
+          protoSectionLabel('模板线路'),
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 } },
+            [
+              { cmd: '/特殊品', label: '普通' },
+              { cmd: '/特殊品（完整）', label: '完整' },
+            ].map(function(item) {
+              const active = lockedCommand === item.cmd;
+              return React.createElement('button', {
+                key: item.cmd,
+                type: 'button',
+                onClick: function() {
+                  setLockedCommand(item.cmd);
+                  setSelectedWorkflow('special');
+                  if (onRequestSpecialTemplate) {
+                    onRequestSpecialTemplate(item.cmd === '/特殊品（完整）' ? 'full' : 'normal');
+                  }
+                  setPrototypePanel('');
+                  setTimeout(function() {
+                    const el = taRef.current;
+                    if (el) el.focus();
+                  }, 0);
+                },
+                style: Object.assign({}, protoChipStyle(active), {
+                  cursor: 'pointer',
+                  borderRadius: 10,
+                  minHeight: 36,
+                })
+              }, item.label);
+            })
+          )
+        ),
+        !isImageParams && !isSpecialParams && activeMode !== 'chat' && React.createElement(React.Fragment, null,
+          protoSectionLabel(isSpecialParams ? '特殊品输入' : '素材类型'),
+          React.createElement('div', { style: { display: 'flex', gap: 7, flexWrap: 'wrap' } },
+            IMAGE_TYPES.map(function(t) {
+              return React.createElement('button', {
+                key: t.key,
+                type: 'button',
+                onClick: function() { setImageType(t.key); },
+                style: Object.assign({}, protoChipStyle(imageType === t.key), { cursor: 'pointer' })
+              }, t.label);
+            })
+          ),
+          protoSectionLabel('执行方式'),
+          React.createElement('div', { style: { display: 'flex', gap: 7, flexWrap: 'wrap' } },
+            React.createElement('div', { style: protoChipStyle(true) }, '当前模板'),
+            React.createElement('div', { style: protoChipStyle(false) }, '自动匹配素材')
+          )
+        )
+      ), 'fluid');
+    }
+    return null;
   };
 
   return (
@@ -1212,7 +1616,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       ref={composerRef}
       style={{
         flexShrink: 0,
-        borderTop: '1px solid var(--line)',
+        borderTop: 'none',
         background: 'var(--panel)',
         position: 'relative',
         height: composerHeight || 'auto',
@@ -1242,97 +1646,76 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         />
       </div>
       <div style={{
+        margin: statusBarVisible ? '4px 31px -1px' : '0 31px 0',
+        minHeight: statusBarVisible ? 36 : 0,
+        maxHeight: statusBarVisible ? 36 : 0,
+        borderRadius: '14px 14px 0 0',
+        border: '1px solid ' + (statusBarVisible ? 'var(--line)' : 'transparent'),
+        borderBottomColor: statusBarVisible ? 'var(--line)' : 'transparent',
+        background: 'var(--panel)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '0 12px',
+        flexShrink: 0,
+        position: 'relative',
+        zIndex: 2,
+        opacity: statusBarVisible ? 1 : 0,
+        overflow: 'hidden',
+        pointerEvents: statusBarVisible ? 'auto' : 'none',
+        transform: statusBarVisible ? 'translateY(0)' : 'translateY(6px)',
+        transition: 'opacity 160ms ease, max-height 160ms ease, min-height 160ms ease, margin 160ms ease, transform 160ms ease, border-color 160ms ease',
+      }}>
+        <div style={{
+          width: 6,
+          height: 6,
+          borderRadius: 999,
+          background: agentEnabled ? 'var(--ink)' : 'var(--accent)',
+          flexShrink: 0,
+        }}/>
+        <div style={{
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          minWidth: 0,
+          flex: 1,
+          overflow: 'hidden',
+        }}>
+          {selectedSettingBits.map(function(bit, idx) {
+            return (
+              <span key={idx} style={{
+                fontSize: 12,
+                fontWeight: idx === 0 ? 600 : 400,
+                color: idx === 0 ? 'var(--ink)' : 'var(--ink-3)',
+                whiteSpace: 'nowrap',
+              }}>
+                {bit}
+              </span>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{
         flex: 1,
-        margin: '0 12px 12px 12px',
-        borderRadius: 12,
+        margin: '0 12px 12px',
+        borderRadius: 18,
         border: menuOpen ? '1px solid var(--accent)' : '1px solid var(--line)',
-        background: 'var(--panel-2)',
-        padding: 10,
-        display: 'flex', flexDirection: 'column', gap: 8,
-        boxShadow: menuOpen ? '0 0 0 4px var(--accent-soft), var(--shadow-1)' : 'var(--shadow-1)',
-        transition: 'box-shadow 150ms, border-color 150ms',
+        background: 'var(--panel)',
+        padding: statusBarVisible ? '18px 10px 10px' : '10px',
+        display: 'flex', flexDirection: 'column', gap: 10,
+        boxShadow: menuOpen
+          ? '0 0 0 3px var(--accent-soft)'
+          : 'none',
+        transition: 'box-shadow 150ms, border-color 150ms, transform 150ms',
         position: 'relative',
       }}>
         {menuOpen && slashQuery && !agentEnabled && (
           <SlashMenu query={slashQuery} onPick={pickCommand} onClose={() => { setText(''); setMenuOpen(false); }}/>
         )}
 
-        {/* Contextual toolbar — switches based on active command */}
-        {!agentEnabled && activeMode !== 'ai-image' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, opacity: isImageTypeLocked ? 0.35 : 1, pointerEvents: isImageTypeLocked ? 'none' : 'auto' }}>
-            {IMAGE_TYPES.map(t => (
-              <button
-                key={t.key}
-                onClick={() => setImageType(t.key)}
-                style={{
-                  fontSize: 11, padding: '3px 0',
-                  background: 'transparent', border: 'none',
-                  color: imageType === t.key ? 'var(--ink)' : 'var(--ink-3)',
-                  cursor: 'pointer', position: 'relative',
-                }}
-              >
-                {t.label}
-                {!isImageTypeLocked && imageType === t.key && (
-                  <div style={{ position: 'absolute', bottom: -2, left: 0, right: 0, height: 2, background: 'var(--accent)', borderRadius: 1 }}/>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
-        {!agentEnabled && activeMode === 'ai-image' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <select
-              value={aiProvider}
-              onChange={(e) => setAiProvider(e.target.value)}
-              style={{
-                fontSize: 11, padding: '3px 6px',
-                background: 'var(--panel)', color: 'var(--ink)',
-                border: '1px solid var(--line)', borderRadius: 5,
-                cursor: 'pointer', outline: 'none',
-              }}
-            >
-              <option value="apimart">默认</option>
-              <option value="zenmux">官方</option>
-            </select>
-            <div style={{ width: 1, height: 12, background: 'var(--line)', flexShrink: 0 }}/>
-            <select
-              value={aiRatio}
-              onChange={(e) => setAiRatio(e.target.value)}
-              style={{
-                fontSize: 11, padding: '3px 6px',
-                background: 'var(--panel)', color: 'var(--ink)',
-                border: '1px solid var(--line)', borderRadius: 5,
-                cursor: 'pointer', outline: 'none',
-              }}
-            >
-              {AI_RATIOS.map(r => (
-                <option key={r} value={r}>
-                  {aiOptionMap[r].label}
-                </option>
-              ))}
-            </select>
-            <div style={{ width: 1, height: 12, background: 'var(--line)', flexShrink: 0 }}/>
-            {AI_QUALITIES.map(q => {
-              const disabled = !allowedAiQualities.includes(q);
-              return (
-                <button key={q} onClick={() => !disabled && setAiQuality(q)} style={{
-                  fontSize: 11, padding: '3px 0',
-                  background: 'transparent', border: 'none',
-                  color: disabled ? 'var(--ink-3)' : aiQuality === q ? 'var(--ink)' : 'var(--ink-3)',
-                  cursor: disabled ? 'not-allowed' : 'pointer', position: 'relative',
-                  opacity: disabled ? 0.75 : 1,
-                  textDecoration: disabled ? 'line-through' : 'none',
-                  textDecorationThickness: disabled ? '1.5px' : 'initial',
-                }}>
-                  {q}
-                  {!disabled && aiQuality === q && (
-                    <div style={{ position: 'absolute', bottom: -2, left: 0, right: 0, height: 2, background: 'var(--accent)', borderRadius: 1 }}/>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        )}
+        {renderPrototypePanel()}
+
         <textarea
           className="composer-textarea"
           ref={taRef}
@@ -1343,12 +1726,12 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           onClick={clampSelection}
           onSelect={clampSelection}
           onFocus={clampSelection}
-          placeholder={agentEnabled ? 'Agent 模式已开启，直接描述你的想法，它会先帮你梳理方向再决定是否生成' : '在这里开启对话吧，或者按 / 唤起指令菜单'}
+          placeholder={composerPlaceholder}
           rows={2}
           style={{
             width: '100%',
             flex: composerHeight ? 1 : undefined,
-            minHeight: 44,
+            minHeight: 92,
             maxHeight: composerHeight ? undefined : 180,
             boxSizing: 'border-box',
             fontSize: 13,
@@ -1363,10 +1746,17 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             overflowY: 'auto',
             background: 'transparent',
             margin: 0,
-            padding: 0,
+            padding: '2px 2px 0',
           }}
         />
-        <style>{`.composer-textarea::placeholder { color: var(--ink-3); font-style: italic; font-size: 12px; opacity: 1; }`}</style>
+        <style>{`
+          .composer-textarea::placeholder {
+            color: oklch(0.62 0.02 80);
+            font-style: normal;
+            font-size: 13px;
+            opacity: 1;
+          }
+        `}</style>
 
         <input
           type="file"
@@ -1403,33 +1793,52 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           </div>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <button
-            onClick={onToggleAgent}
-            title={agentEnabled ? '关闭 Agent 模式' : '开启 Agent 模式'}
-            style={agentPillStyle}
-          >
-            <I.sparkles size={12}/>
-            <span>{agentEnabled ? 'Agent 已开' : 'Agent'}</span>
-          </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
+          {!agentEnabled && prototypeToolButton('task', '功能/模型选择：' + activeTaskLabel, React.createElement(activeTaskIcon, { size: 14 }), null, {
+            width: 34,
+            minWidth: 34,
+            height: 34,
+            background: prototypePanel === 'task' || activeTaskLabel !== '问答' ? 'var(--panel-2)' : 'transparent',
+            color: activeTaskLabel !== '问答' ? 'var(--ink)' : undefined,
+            borderColor: prototypePanel === 'task' || activeTaskLabel !== '问答' ? 'var(--line)' : undefined,
+          })}
+          {!agentEnabled && prototypeToolButton('params', '参数设置', React.createElement(I.settings, { size: 14 }), null, {
+            width: 34,
+            minWidth: 34,
+            height: 34,
+          })}
           <button
             onClick={() => fileInputRef.current?.click()}
-            style={{ padding: 6, borderRadius: 6, color: refImages.length > 0 ? 'var(--accent)' : 'var(--ink-2)', cursor: 'pointer' }}
+            style={{
+              height: 34,
+              width: 34,
+              minWidth: 34,
+              padding: 0,
+              borderRadius: 10,
+              border: '1px solid var(--line-2)',
+              background: 'transparent',
+              color: refImages.length > 0 ? 'var(--ink)' : 'var(--ink-2)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 7,
+              flexShrink: 0,
+            }}
             title={refImages.length > 0 ? `已附加 ${refImages.length} 张参考图` : (agentEnabled ? '附加参考图给 Agent' : '附加图片或文件')}
           >
             <I.paperclip size={14}/>
           </button>
-
           <div style={{ flex: 1 }}/>
-
           <button
             onClick={handleSend}
             style={{
-              width: 30, height: 30, borderRadius: 8,
+              width: 34, height: 34, borderRadius: 10,
               background: canSend ? 'var(--ink)' : 'var(--line)',
               color: canSend ? 'white' : 'var(--ink-3)',
               display: 'grid', placeItems: 'center',
               cursor: canSend ? 'pointer' : 'default',
+              boxShadow: 'none',
             }}>
             {isLoading ? (
               <div style={{ width: 14, height: 14, borderRadius: 99, border: '2px solid var(--ink-3)', borderRightColor: 'transparent', animation: 'spin 0.7s linear infinite' }}/>
@@ -1478,13 +1887,15 @@ const mapAgentProjectMessages = function(project, images) {
 };
 
 console.log('[Main] Chat component definition');
-const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
+const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onRequestSpecialTemplate }) => {
   const [messages, setMessages] = React.useState([]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
   const [agentMessages, setAgentMessages] = React.useState([]);
   const [isLoading, setIsLoading] = React.useState(false);
   const [lastSubmittedMessage, setLastSubmittedMessage] = React.useState('');
   const [currentAiChatId, setCurrentAiChatId] = React.useState('');
+  const [composerResetKey, setComposerResetKey] = React.useState(0);
+  const [greetingResetKey, setGreetingResetKey] = React.useState(0);
   const [agentEnabled, setAgentEnabled] = React.useState(function() {
     try {
       return localStorage.getItem(AGENT_MODE_KEY) === '1';
@@ -1671,6 +2082,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
       if (currentAiChatId === sessionId) {
         setMessages([]);
         setCurrentAiChatId('');
+        setComposerResetKey(function(prev) { return prev + 1; });
       }
     } catch (e) {
       console.error('delete ai chat history failed:', e);
@@ -1691,6 +2103,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
         setAgentProject(null);
         setAgentMessages([]);
         setMessages([]);
+        setComposerResetKey(function(prev) { return prev + 1; });
         if (onComposeComplete) onComposeComplete(null, null, [], null);
       }
     } catch (e) {
@@ -1711,6 +2124,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
           setAgentMessages([]);
           setMessages([]);
           setHistoryOpen(false);
+          setComposerResetKey(function(prev) { return prev + 1; });
+          setGreetingResetKey(function(prev) { return prev + 1; });
           if (onComposeComplete) onComposeComplete(null, null, [], null);
         } catch (e) {
           setMessages([{ who: 'ai', text: '新建 Agent 对话失败：' + ((e && e.message) || '未知错误'), meta: 'Agent' }]);
@@ -1724,6 +2139,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
     setDefaultMessages([]);
     setCurrentAiChatId('');
     setHistoryOpen(false);
+    setComposerResetKey(function(prev) { return prev + 1; });
+    setGreetingResetKey(function(prev) { return prev + 1; });
   }, [agentEnabled, isLoading, onComposeComplete]);
 
   React.useEffect(() => {
@@ -2483,6 +2900,147 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
     }
   }, [templateFields]);
 
+  const toggleAgentMode = React.useCallback(function() {
+    if (isLoading) return;
+    setHistoryOpen(false);
+    setAgentEnabled(function(prev) {
+      if (prev) {
+        setMessages(defaultMessages);
+      }
+      return !prev;
+    });
+  }, [defaultMessages, isLoading]);
+
+  const historyControl = (
+    <div ref={historyWrapRef} style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        onClick={openHistory}
+        title={agentEnabled ? 'Agent 对话历史' : '历史对话'}
+        style={{
+          height: 24,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          padding: '0 7px',
+          borderRadius: 7,
+          background: historyOpen ? 'var(--panel-2)' : 'transparent',
+          border: '1px solid ' + (historyOpen ? 'var(--line)' : 'transparent'),
+          color: historyOpen ? 'var(--ink)' : 'var(--ink-3)',
+          cursor: 'pointer',
+          fontSize: 10.5,
+        }}
+      >
+        <I.file size={11}/>
+        <span>历史</span>
+      </button>
+
+      {historyOpen && (
+        <div style={{
+          position: 'absolute',
+          top: 30,
+          right: 0,
+          width: 196,
+          maxHeight: 288,
+          overflowY: 'auto',
+          borderRadius: 12,
+          background: 'var(--panel)',
+          border: '1px solid var(--line)',
+          boxShadow: '0 10px 24px rgba(15, 23, 42, 0.08)',
+          zIndex: 30,
+          padding: 6,
+        }}>
+          <div className="mono" style={{
+            padding: '6px 8px 7px',
+            fontSize: 9.5,
+            color: 'var(--ink-3)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+          }}>{agentEnabled ? 'Agent chats' : 'AI chats'}</div>
+          {historyLoading && (
+            <div style={{ padding: '8px', fontSize: 11, color: 'var(--ink-3)' }}>加载中...</div>
+          )}
+          {!historyLoading && historySessions.length === 0 && (
+            <div style={{ padding: '8px', fontSize: 11, color: 'var(--ink-3)' }}>暂无历史对话</div>
+          )}
+          {!historyLoading && historySessions.map(function(session) {
+            var activeId = agentEnabled ? agentProjectId : currentAiChatId;
+            var title = session.title || '未命名对话';
+            var metaLine = agentEnabled
+              ? ((session.totalGenerations || 0) > 0 ? ('已生成 ' + session.totalGenerations + ' 张') : '仅对话')
+              : '';
+            return (
+              <div
+                key={session.id}
+                onMouseEnter={() => setHoveredHistoryId(session.id)}
+                onMouseLeave={() => setHoveredHistoryId(function(prev) { return prev === session.id ? '' : prev; })}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '2px 0',
+                }}
+              >
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (agentEnabled) deleteAgentProjectHistory(session.id);
+                    else deleteAiChatHistory(session.id);
+                  }}
+                  title="删除"
+                  style={{
+                    width: 18,
+                    height: 18,
+                    flexShrink: 0,
+                    display: 'grid',
+                    placeItems: 'center',
+                    borderRadius: 6,
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--ink-3)',
+                    cursor: 'pointer',
+                    padding: 0,
+                    opacity: hoveredHistoryId === session.id ? 1 : 0,
+                    pointerEvents: hoveredHistoryId === session.id ? 'auto' : 'none',
+                    transition: 'opacity 120ms ease',
+                  }}
+                >
+                  <I.close size={10}/>
+                </button>
+                <button
+                  onClick={() => {
+                    if (agentEnabled) restoreAgentProjectSession(session.id);
+                    else restoreAiChatSession(session.id);
+                  }}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    textAlign: 'left',
+                    padding: '8px 9px',
+                    borderRadius: 8,
+                    background: activeId === session.id ? 'var(--panel-2)' : 'transparent',
+                    border: '1px solid ' + (activeId === session.id ? 'var(--line-2)' : 'transparent'),
+                    color: activeId === session.id ? 'var(--ink)' : 'var(--ink-2)',
+                    fontSize: 11.5,
+                    cursor: 'pointer',
+                  }}
+                  title={title}
+                >
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
+                  {metaLine && (
+                    <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginTop: 3 }}>
+                      {metaLine}
+                    </div>
+                  )}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', height: '100%',
@@ -2537,137 +3095,57 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
           </span>
         </div>
         <div style={{ flex: 1 }}/>
-        <div ref={historyWrapRef} style={{ position: 'relative' }}>
+        <div style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 2,
+          padding: 2,
+          borderRadius: 8,
+          background: 'var(--panel-2)',
+        }}>
           <button
-            onClick={openHistory}
-            title={agentEnabled ? 'Agent 对话历史' : '历史对话'}
+            type="button"
+            onClick={() => { if (agentEnabled) toggleAgentMode(); }}
             style={{
-              width: 28,
-              height: 28,
-              display: 'grid',
-              placeItems: 'center',
-              padding: 0,
-              borderRadius: 8,
-              background: historyOpen ? 'var(--panel)' : 'transparent',
-              border: '1px solid ' + (historyOpen ? 'var(--line)' : 'transparent'),
-              color: historyOpen ? 'var(--ink)' : 'var(--ink-3)',
-              cursor: 'pointer',
+              height: 26,
+              padding: '0 10px',
+              borderRadius: 6,
+              border: 'none',
+              background: agentEnabled ? 'transparent' : 'var(--panel)',
+              color: agentEnabled ? 'var(--ink-3)' : 'var(--ink)',
+              fontSize: 12,
+              fontWeight: agentEnabled ? 500 : 700,
+              cursor: agentEnabled ? 'pointer' : 'default',
+              boxShadow: agentEnabled ? 'none' : '0 0 0 1px var(--line)',
             }}
           >
-            <I.file size={12}/>
+            Chat
           </button>
-
-          {historyOpen && (
-            <div style={{
-              position: 'absolute',
-              top: 34,
-              right: 0,
-              width: 196,
-              maxHeight: 288,
-              overflowY: 'auto',
-              borderRadius: 12,
-              background: 'var(--panel)',
-              border: '1px solid var(--line)',
-              boxShadow: '0 10px 24px rgba(15, 23, 42, 0.08)',
-              zIndex: 20,
-              padding: 6,
-            }}>
-              <div className="mono" style={{
-                padding: '6px 8px 7px',
-                fontSize: 9.5,
-                color: 'var(--ink-3)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.06em',
-              }}>{agentEnabled ? 'Agent chats' : 'AI chats'}</div>
-              {historyLoading && (
-                <div style={{ padding: '8px', fontSize: 11, color: 'var(--ink-3)' }}>加载中...</div>
-              )}
-              {!historyLoading && historySessions.length === 0 && (
-                <div style={{ padding: '8px', fontSize: 11, color: 'var(--ink-3)' }}>暂无历史对话</div>
-              )}
-              {!historyLoading && historySessions.map(function(session) {
-                var activeId = agentEnabled ? agentProjectId : currentAiChatId;
-                var title = session.title || '未命名对话';
-                var metaLine = agentEnabled
-                  ? ((session.totalGenerations || 0) > 0 ? ('已生成 ' + session.totalGenerations + ' 张') : '仅对话')
-                  : '';
-                return (
-                  <div
-                    key={session.id}
-                    onMouseEnter={() => setHoveredHistoryId(session.id)}
-                    onMouseLeave={() => setHoveredHistoryId(function(prev) { return prev === session.id ? '' : prev; })}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      padding: '2px 0',
-                    }}
-                  >
-                    <button
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (agentEnabled) deleteAgentProjectHistory(session.id);
-                        else deleteAiChatHistory(session.id);
-                      }}
-                      title="删除"
-                      style={{
-                        width: 18,
-                        height: 18,
-                        flexShrink: 0,
-                        display: 'grid',
-                        placeItems: 'center',
-                        borderRadius: 6,
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'var(--ink-3)',
-                        cursor: 'pointer',
-                        padding: 0,
-                        opacity: hoveredHistoryId === session.id ? 1 : 0,
-                        pointerEvents: hoveredHistoryId === session.id ? 'auto' : 'none',
-                        transition: 'opacity 120ms ease',
-                      }}
-                    >
-                      <I.close size={10}/>
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (agentEnabled) restoreAgentProjectSession(session.id);
-                        else restoreAiChatSession(session.id);
-                      }}
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        textAlign: 'left',
-                        padding: '8px 9px',
-                        borderRadius: 8,
-                        background: activeId === session.id ? 'var(--panel-2)' : 'transparent',
-                        border: '1px solid ' + (activeId === session.id ? 'var(--line-2)' : 'transparent'),
-                        color: activeId === session.id ? 'var(--ink)' : 'var(--ink-2)',
-                        fontSize: 11.5,
-                        cursor: 'pointer',
-                      }}
-                      title={title}
-                    >
-                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
-                      {metaLine && (
-                        <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginTop: 3 }}>
-                          {metaLine}
-                        </div>
-                      )}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => { if (!agentEnabled) toggleAgentMode(); }}
+            style={{
+              height: 26,
+              padding: '0 10px',
+              borderRadius: 6,
+              border: 'none',
+              background: agentEnabled ? 'var(--panel)' : 'transparent',
+              color: agentEnabled ? 'var(--ink)' : 'var(--ink-3)',
+              fontSize: 12,
+              fontWeight: agentEnabled ? 700 : 500,
+              cursor: agentEnabled ? 'default' : 'pointer',
+              boxShadow: agentEnabled ? '0 0 0 1px var(--line)' : 'none',
+            }}
+          >
+            Agent
+          </button>
         </div>
       </div>
 
-      {state === 'empty' && messages.length === 0 && <ChatEmpty/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user}/>}
+      {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user}/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey}/>}
 
       <Composer
         onSend={handleSend}
@@ -2677,16 +3155,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user }) => {
         template={template}
         lastSubmittedMessage={lastSubmittedMessage}
         agentEnabled={agentEnabled}
-        onToggleAgent={function() {
-          if (isLoading) return;
-          setHistoryOpen(false);
-          setAgentEnabled(function(prev) {
-            if (prev) {
-              setMessages(defaultMessages);
-            }
-            return !prev;
-          });
-        }}
+        onToggleAgent={toggleAgentMode}
+        resetKey={composerResetKey}
+        onRequestSpecialTemplate={onRequestSpecialTemplate}
       />
     </div>
   );
