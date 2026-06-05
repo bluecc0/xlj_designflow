@@ -432,23 +432,20 @@ async def health():
         except Exception as e:
             zenmux_status["message"] = str(e)
 
-    # 补充订阅信息（Management API，用于展示额度）
+    # 查询 PAYG 余额（Management API）
     if settings.zenmux_management_api_key:
         try:
             async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
                 r = await client.get(
-                    "https://zenmux.ai/api/v1/management/subscription/detail",
+                    "https://zenmux.ai/api/v1/management/payg/balance",
                     headers={"Authorization": f"Bearer {settings.zenmux_management_api_key}"},
                 )
             if r.status_code == 200:
                 payload = r.json()
                 data = payload.get("data") if isinstance(payload, dict) else {}
-                data = data if isinstance(data, dict) else {}
-                plan = data.get("plan") if isinstance(data.get("plan"), dict) else {}
-                quota_5_hour = data.get("quota_5_hour") if isinstance(data.get("quota_5_hour"), dict) else {}
-                zenmux_status["account_status"] = data.get("account_status")
-                zenmux_status["tier"] = plan.get("tier")
-                zenmux_status["quota_5_hour_remaining"] = quota_5_hour.get("remaining_flows")
+                zenmux_status["total_credits"] = data.get("total_credits")
+                zenmux_status["top_up_credits"] = data.get("top_up_credits")
+                zenmux_status["bonus_credits"] = data.get("bonus_credits")
         except Exception:
             pass
     ai_provider["zenmux"] = zenmux_status

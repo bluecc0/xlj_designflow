@@ -155,9 +155,7 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate }) => {
         {zenmux && (
           <div style={{ fontSize: 10.5, color: 'var(--ink-2)', lineHeight: 1.45 }}>
             ZenMux：{zenmux.connected ? '正常' : (zenmux.configured ? '异常' : '未配置')}
-            {zenmux.tier ? ` · ${zenmux.tier}` : ''}
-            {zenmux.account_status && zenmux.account_status !== 'healthy' ? ` · ${zenmux.account_status}` : ''}
-            {typeof zenmux.quota_5_hour_remaining === 'number' ? ` · 剩余 ${zenmux.quota_5_hour_remaining} flows` : ''}
+            {typeof zenmux.total_credits === 'number' ? ` · 余额 $${zenmux.total_credits}` : ''}
           </div>
         )}
         {info.message && <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>{String(info.message).slice(0, 120)}</div>}
