@@ -92,6 +92,7 @@ from .job_store import (
     load_ai_image_job,
     load_ai_image_jobs,
     load_job,
+    count_operation_logs,
     load_operation_logs,
     load_recent_jobs,
     log_operation,
@@ -2684,10 +2685,13 @@ def admin_operations(
         action=action or None,
         user_id=user_id or None,
     )
-    stats = load_admin_stats()
+    total = count_operation_logs(
+        action=action or None,
+        user_id=user_id or None,
+    )
     return {
         "operations": ops,
-        "total": stats["operations_logged"],
+        "total": total,
         "limit": limit,
         "offset": offset,
     }

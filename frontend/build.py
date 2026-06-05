@@ -19,7 +19,7 @@ HTML     = os.path.join(BASE, 'index.html')
 # 顺序必须与 index.html 中 babel 块的顺序完全一致
 BABEL_FILES = [
     'src/Icons.jsx',
-    'src/Placeholders.jsx',
+    'src/Utils.jsx',
     'src/TopBar.jsx',
     'src/TemplatePanel.jsx',
     'src/Canvas.jsx',

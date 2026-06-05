@@ -1195,6 +1195,28 @@ def load_operation_logs(
     return [dict(r) for r in rows]
 
 
+def count_operation_logs(
+    action: str | None = None,
+    user_id: str | None = None,
+) -> int:
+    """统计操作日志数量（支持与 load_operation_logs 相同的筛选条件）"""
+    clauses: list[str] = []
+    params: list = []
+    if action:
+        clauses.append("action = ?")
+        params.append(action)
+    if user_id:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS c FROM operation_logs{where}",
+            tuple(params),
+        ).fetchone()
+    return int(row["c"]) if row else 0
+
+
 def load_admin_stats() -> dict:
     """聚合统计信息"""
     with _connect() as conn:
