@@ -1287,8 +1287,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const getTaskDefinitions = React.useCallback(function() {
     return [
       { id: 'chat', label: '问答', desc: '询问流程、模板、素材规则', iconKey: 'eye', workflow: 'chat' },
-      { id: 'gpt-image', label: 'GPT Image 2', desc: '文生图，中文语义和文字更强', iconKey: 'image', cmd: '/Gpt image 2' },
-      { id: 'nano-banana', label: 'Nano Banana', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', cmd: '/Nano Banana pro' },
+      { id: 'gpt-image', label: 'GPT Image 2', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', cmd: '/Gpt image 2' },
+      { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro' },
       { id: 'compose', label: '模板合成', desc: '上传表格并匹配本地图库', iconKey: 'grid', workflow: 'compose' },
       { id: 'special', label: '特殊品', desc: '使用特殊品模板合成结果', iconKey: 'layers', cmd: template && template.is_special_full ? '/特殊品（完整）' : '/特殊品' },
       { id: 'download', label: '花瓣下载', desc: '下载花瓣素材或指定格式', iconKey: 'download', cmd: '/花瓣下载' },
@@ -1298,7 +1298,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     return I[iconKey] || I.sparkles;
   }, []);
   const activeTaskLabel = activeMode === 'ai-image'
-    ? (activeAiModel === 'nano-banana-pro' ? 'Nano Banana' : 'GPT Image')
+    ? (activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : 'GPT Image 2')
     : activeMode === 'special_full'
       ? '完整特殊品'
       : activeMode === 'special'
@@ -1318,6 +1318,9 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           ? 'download'
           : 'eye';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
+  const activeTaskIconSrc = activeMode === 'ai-image'
+    ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
+    : null;
   const providerLabel = aiProvider === 'zenmux' ? '官方' : '默认';
   const modeParamLabel = activeMode === 'ai-image'
     ? (aiRatio + ' · ' + aiQuality)
@@ -1464,17 +1467,19 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
                 cursor: 'pointer',
               }
             },
-              React.createElement('div', {
-                style: {
-                  width: 30,
-                  height: 30,
-                  borderRadius: 999,
-                  background: active ? 'var(--ink)' : 'var(--panel-2)',
-                  color: active ? 'var(--panel)' : 'var(--ink-3)',
-                  display: 'grid',
-                  placeItems: 'center',
-                }
-              }, React.createElement(IconComp, { size: 14 })),
+              item.iconSrc
+                ? React.createElement('img', { src: item.iconSrc, alt: item.label, style: { width: 30, height: 30, borderRadius: 999, objectFit: 'cover' } })
+                : React.createElement('div', {
+                    style: {
+                      width: 30,
+                      height: 30,
+                      borderRadius: 999,
+                      background: active ? 'var(--ink)' : 'var(--panel-2)',
+                      color: active ? 'var(--panel)' : 'var(--ink-3)',
+                      display: 'grid',
+                      placeItems: 'center',
+                    }
+                  }, React.createElement(IconComp, { size: 14 })),
               React.createElement('div', { style: { flex: 1, minWidth: 0 } },
                 React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: 'var(--ink)' } }, item.label),
                 React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-3)', marginTop: 2 } }, item.desc)
@@ -1821,8 +1826,12 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           </div>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
-          {!agentEnabled && prototypeToolButton('task', '功能/模型选择：' + activeTaskLabel, React.createElement(activeTaskIcon, { size: 14 }), null, {
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative', marginBottom: 4 }}>
+          {!agentEnabled && prototypeToolButton('task', '功能/模型选择：' + activeTaskLabel,
+            activeTaskIconSrc
+              ? React.createElement('img', { src: activeTaskIconSrc, alt: '', style: { width: 16, height: 16, borderRadius: 3, objectFit: 'contain' } })
+              : React.createElement(activeTaskIcon, { size: 14 }),
+            null, {
             width: 34,
             minWidth: 34,
             height: 34,
