@@ -144,16 +144,16 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate }) => {
     const info = data && data.ai_provider;
     if (!info) return null;
     const hasBalance = typeof info.remain_balance !== 'undefined';
-    const statusText = info.connected ? '正常' : (info.configured ? '异常' : '未配置');
     const zenmux = info.zenmux;
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' }}>AI 服务商</div>
-        <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>状态：{statusText}</div>
-        {hasBalance && <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>余额：{String(info.remain_balance)}</div>}
-        {!hasBalance && info.connected && info.unlimited_quota && <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>额度：不限额</div>}
+        <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
+          APIMart：{info.connected ? '正常' : (info.configured ? '异常' : '未配置')}
+          {hasBalance ? ` · 余额 ${info.remain_balance}` : ''}
+        </div>
         {zenmux && (
-          <div style={{ fontSize: 10.5, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+          <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
             ZenMux：{zenmux.connected ? '正常' : (zenmux.configured ? '异常' : '未配置')}
             {typeof zenmux.total_credits === 'number' ? ` · 余额 $${zenmux.total_credits}` : ''}
           </div>
