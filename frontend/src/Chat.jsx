@@ -373,8 +373,8 @@ const LogBox = ({ logs, running }) => {
 
 const GREETINGS = [
   { title: '今天想设计点什么？', sub: '上传产品图、参考图、品牌素材，或者直接输入描述。' },
-  { title: '想要生成一张海报吗？', sub: '试试输入 /Gpt image 2，描述你想要的画面。' },
-  { title: '需要编辑产品图？', sub: '试试输入 /Nano Banana pro，替换局部或修改细节。' },
+  { title: '想要生成一张海报吗？', sub: '使用 Gpt-image 2 模型，直接描述你想要的画面。' },
+  { title: '需要编辑图像？', sub: '使用 Nano Banana Pro，上传图片后描述修改需求。' },
   { title: '来合成特殊品吧', sub: '选中左侧特殊品模板，输入货号和文案即可一键合成。' },
   { title: '忘了怎么用？', sub: '试试直接在对话框提问，我会帮你找到答案。' },
 ];
@@ -1093,11 +1093,12 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     const message = lockedCommand ? (body ? lockedCommand + ' ' + body : lockedCommand) : body;
     if (!message || isLoading) return;
     const imagesToSend = [...refImages];
+    // 先发消息再清空输入，避免 isLoading=true 时消息丢失
+    onSend(message, imagesToSend, { size: aiImageSize, resolution: aiQuality, provider: aiProvider });
     setText('');
     setLockedCommand('');
     setSelectedWorkflow('chat');
     clearRefImages();
-    onSend(message, imagesToSend, { size: aiImageSize, resolution: aiQuality, provider: aiProvider });
   };
 
   const handleKeyDown = (e) => {
@@ -1405,23 +1406,34 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   };
   const protoPanelShell = function(children, width) {
     const fluid = width === 'fluid';
-    return React.createElement('div', {
-      style: {
-        position: 'absolute',
-        left: fluid ? 8 : 0,
-        right: fluid ? 8 : 'auto',
-        bottom: 58,
-        width: fluid ? 'auto' : (width || 360),
-        maxWidth: fluid ? 'none' : 'calc(100vw - 36px)',
-        borderRadius: 14,
-        border: '1px solid var(--line)',
-        background: 'var(--panel)',
-        boxShadow: '0 12px 28px rgba(25,24,20,0.08)',
-        padding: 14,
-        zIndex: 20,
-        overflow: 'hidden',
-      }
-    }, children);
+    return React.createElement(React.Fragment, null,
+      // 透明 backdrop：点击面板外任意位置自动关闭提交
+      React.createElement('div', {
+        key: 'backdrop',
+        onClick: function() { setPrototypePanel(''); },
+        style: {
+          position: 'fixed', inset: 0, zIndex: 19,
+        }
+      }),
+      React.createElement('div', {
+        key: 'panel',
+        style: {
+          position: 'absolute',
+          left: fluid ? 8 : 0,
+          right: fluid ? 8 : 'auto',
+          bottom: 58,
+          width: fluid ? 'auto' : (width || 360),
+          maxWidth: fluid ? 'none' : 'calc(100vw - 36px)',
+          borderRadius: 14,
+          border: '1px solid var(--line)',
+          background: 'var(--panel)',
+          boxShadow: '0 12px 28px rgba(25,24,20,0.08)',
+          padding: 14,
+          zIndex: 20,
+          overflow: 'hidden',
+        }
+      }, children)
+    );
   };
   const protoSectionLabel = function(text) {
     return React.createElement('div', {
@@ -2538,11 +2550,6 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       return;
     }
 
-    // ── 快捷回复：点击选项按钮触发 ──────────────────────────────────────────────
-    const handleQuickReply = React.useCallback(function(value) {
-      handleSend(value, [], {});
-    }, [handleSend]);
-
     // ── 设为头像 ──────────────────────────────────────────────────────────────
     const trimmed = text.trimStart();
     if ((trimmed === '设为头像' || trimmed === '設置頭像') && refImages.length > 0) {
@@ -2839,6 +2846,11 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
     setIsLoading(false);
   }, [agentEnabled, currentAiChatId, ensureAgentProject, enhancePromptWithProductRefs, getLastAiImageOptions, isLoading, loadAiChatHistory, loadResolvedRefFiles, onComposeComplete, parseProductRefs, runAiImageGeneration, template]);
+
+  // ── 快捷回复：点击选项按钮触发 ──────────────────────────────────────────────
+  const handleQuickReply = React.useCallback(function(value) {
+    handleSend(value, [], {});
+  }, [handleSend]);
 
   const handleParseTable = React.useCallback(async (file, filename, imageType) => {
     // Add user message showing file was uploaded
