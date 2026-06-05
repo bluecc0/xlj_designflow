@@ -820,6 +820,10 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [composerHeight, setComposerHeight] = React.useState(null); // null = 默认自动高度
   const composerRef = React.useRef(null);
   const dragRef = React.useRef({ dragging: false, startY: 0, startH: 0 });
+  const COLLAPSED_COMPOSER_HEIGHT = 176;
+  const STATUS_COMPOSER_HEIGHT = 208;
+  const MAX_COMPOSER_HEIGHT = 500;
+  const minComposerHeightRef = React.useRef(COLLAPSED_COMPOSER_HEIGHT);
   const COMMANDS = React.useMemo(() => ['/花瓣下载', '/特殊品（完整）', '/特殊品', '/Nano Banana pro', '/Gpt image 2'], []);
   const cmdToWorkflow = React.useCallback(function(cmd) {
     const clean = String(cmd || '').trim();
@@ -829,6 +833,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     return 'chat';
   }, []);
 
+  const [taskDefsKey, setTaskDefsKey] = React.useState(0);
+
   // 检测花瓣登录状态，未登录则禁用 /花瓣下载 指令
   React.useEffect(() => {
     const apiBase = window.API_BASE || window.location.origin;
@@ -837,6 +843,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       .then(data => {
         const cmd = SLASH_COMMANDS.find(c => c.cmd === '/花瓣下载');
         if (cmd) cmd.available = !!data.logged_in;
+        setTaskDefsKey(function(k) { return k + 1; });
       })
       .catch(() => {});
   }, []);
@@ -866,7 +873,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     const el = composerRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    dragRef.current = { dragging: true, startY: e.clientY, startH: rect.height };
+    dragRef.current = { dragging: true, startY: e.clientY, startH: rect.height, minH: minComposerHeightRef.current };
     document.body.style.cursor = 'ns-resize';
   }, []);
 
@@ -874,7 +881,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     const onMove = (e) => {
       if (!dragRef.current.dragging) return;
       const dy = dragRef.current.startY - e.clientY; // 向上拖 = 正
-      const newH = Math.max(140, Math.min(500, dragRef.current.startH + dy));
+      const minH = dragRef.current.minH || COLLAPSED_COMPOSER_HEIGHT;
+      const newH = Math.max(minH, Math.min(MAX_COMPOSER_HEIGHT, dragRef.current.startH + dy));
       setComposerHeight(newH);
     };
     const onUp = () => {
@@ -1286,15 +1294,24 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   };
   const canSend = Boolean((lockedCommand ? (lockedCommand + ' ' + text.trim()).trim() : text.trim()) || files.length) && !isLoading;
   const getTaskDefinitions = React.useCallback(function() {
+    var slashMap = {};
+    try {
+      var cmds = window.SLASH_COMMANDS || [];
+      cmds.forEach(function(c) { slashMap[c.cmd] = c.available !== false; });
+    } catch (e) {}
+    function available(cmd) {
+      if (!cmd) return true; // 无 cmd 的卡片始终可用
+      return slashMap[cmd] !== false;
+    }
     return [
       { id: 'chat', label: '问答', desc: '询问流程、模板、素材规则', iconKey: 'eye', workflow: 'chat' },
-      { id: 'gpt-image', label: 'GPT Image 2', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', cmd: '/Gpt image 2' },
-      { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro' },
+      { id: 'gpt-image', label: 'GPT Image 2', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', cmd: '/Gpt image 2', available: available('/Gpt image 2') },
+      { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro', available: available('/Nano Banana pro') },
       { id: 'compose', label: '模板合成', desc: '上传表格并匹配本地图库', iconKey: 'grid', workflow: 'compose' },
-      { id: 'special', label: '特殊品', desc: '使用特殊品模板合成结果', iconKey: 'layers', cmd: template && template.is_special_full ? '/特殊品（完整）' : '/特殊品' },
-      { id: 'download', label: '花瓣下载', desc: '下载花瓣素材或指定格式', iconKey: 'download', cmd: '/花瓣下载' },
+      { id: 'special', label: '特殊品', desc: '使用特殊品模板合成结果', iconKey: 'layers', cmd: template && template.is_special_full ? '/特殊品（完整）' : '/特殊品', available: available(template && template.is_special_full ? '/特殊品（完整）' : '/特殊品') },
+      { id: 'download', label: '花瓣下载', desc: '下载花瓣素材或指定格式', iconKey: 'download', cmd: '/花瓣下载', available: available('/花瓣下载') },
     ];
-  }, [template && template.is_special_full]);
+  }, [template && template.is_special_full, taskDefsKey]);
   const getTaskIcon = React.useCallback(function(iconKey) {
     return I[iconKey] || I.sparkles;
   }, []);
@@ -1362,6 +1379,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     (!agentEnabled && prototypePanel) ||
     (!agentEnabled && menuOpen)
   );
+  const minComposerHeight = statusBarVisible ? STATUS_COMPOSER_HEIGHT : COLLAPSED_COMPOSER_HEIGHT;
+  minComposerHeightRef.current = minComposerHeight;
   const prototypeToolButton = function(panel, title, icon, label, options) {
     const open = prototypePanel === panel;
     return React.createElement('button', Object.assign({
@@ -1458,6 +1477,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         ),
         React.createElement('div', { style: { marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 } },
           tasks.map(function(item) {
+            const isAvailable = item.available !== false;
             const active = item.cmd
               ? lockedCommand === item.cmd
               : (!lockedCommand && selectedWorkflow === item.workflow);
@@ -1465,7 +1485,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             return React.createElement('button', {
               key: item.label,
               type: 'button',
-              onClick: function() { selectWorkflow(item); },
+              disabled: !isAvailable,
+              onClick: function() { if (isAvailable) selectWorkflow(item); },
               style: {
                 width: '100%',
                 display: 'flex',
@@ -1476,11 +1497,12 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
                 background: active ? 'var(--panel-2)' : 'transparent',
                 border: '1px solid ' + (active ? 'var(--line)' : 'transparent'),
                 textAlign: 'left',
-                cursor: 'pointer',
+                cursor: isAvailable ? 'pointer' : 'not-allowed',
+                opacity: isAvailable ? 1 : 0.4,
               }
             },
               item.iconSrc
-                ? React.createElement('img', { src: item.iconSrc, alt: item.label, style: { width: 30, height: 30, borderRadius: 999, objectFit: 'cover' } })
+                ? React.createElement('img', { src: item.iconSrc, alt: item.label, style: { width: 30, height: 30, borderRadius: 999, objectFit: 'cover', opacity: isAvailable ? 1 : 0.5 } })
                 : React.createElement('div', {
                     style: {
                       width: 30,
@@ -1665,6 +1687,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         background: 'var(--panel)',
         position: 'relative',
         height: composerHeight || 'auto',
+        minHeight: composerHeight ? minComposerHeight : undefined,
         display: 'flex', flexDirection: 'column',
       }}
     >
@@ -1776,7 +1799,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           style={{
             width: '100%',
             flex: composerHeight ? 1 : undefined,
-            minHeight: 92,
+            minHeight: composerHeight ? 56 : 92,
             maxHeight: composerHeight ? undefined : 180,
             boxSizing: 'border-box',
             fontSize: 13,
@@ -1838,7 +1861,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           </div>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative', marginBottom: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative', marginBottom: 4, flexShrink: 0 }}>
           {!agentEnabled && prototypeToolButton('task', '功能/模型选择：' + activeTaskLabel,
             activeTaskIconSrc
               ? React.createElement('img', { src: activeTaskIconSrc, alt: '', style: { width: 16, height: 16, borderRadius: 3, objectFit: 'contain' } })
