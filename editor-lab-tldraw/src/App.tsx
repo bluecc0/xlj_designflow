@@ -499,6 +499,7 @@ function TldrawHostBridge() {
   )
 
   const insertTrackerRef = React.useRef({ col: 0, lastMaxX: 0, rowTopY: 0, rowMaxH: 0 })
+  const recentInsertsRef = React.useRef<Record<string, number>>({})
   // 清除画布时重置插入位置
   React.useEffect(() => {
     insertTrackerRef.current = { col: 0, lastMaxX: 0, rowTopY: 0, rowMaxH: 0 }
@@ -777,12 +778,23 @@ function TldrawHostBridge() {
       if (data.type === 'designflow:insert-image' && (data.url || (Array.isArray(data.urls) && data.urls.length))) {
         try {
           const urls = Array.isArray(data.urls) && data.urls.length ? data.urls : [data.url]
+          // 1 秒内相同 URL 的去重，防止重复消息导致多张相同图片
+          var now = Date.now()
+          var deduped = urls.filter(function(u: string) {
+            var last = recentInsertsRef.current[u]
+            if (last && now - last < 1000) return false
+            recentInsertsRef.current[u] = now
+            return true
+          })
+          // 清理超过 5 秒的旧记录
+          Object.keys(recentInsertsRef.current).forEach(function(k) { if (now - recentInsertsRef.current[k] > 5000) delete recentInsertsRef.current[k] })
+          if (deduped.length === 0) return
           await insertImages({
-            urls,
+            urls: deduped,
             mode: data.mode === 'background' ? 'background' : 'image',
             name: data.name,
           })
-          window.parent.postMessage({ type: 'designflow:editor-inserted', mode: data.mode || 'image', urls }, '*')
+          window.parent.postMessage({ type: 'designflow:editor-inserted', mode: data.mode || 'image', urls: deduped }, '*')
         } catch (error: any) {
           window.parent.postMessage({ type: 'designflow:editor-error', message: error?.message || 'insert_failed' }, '*')
         }
