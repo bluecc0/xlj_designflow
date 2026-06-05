@@ -138,7 +138,7 @@ const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail }) => {
   );
 };
 
-const TopBar = ({ user, onSwitchUser }) => {
+const TopBar = ({ user, onSwitchUser, currentView, onNavigate }) => {
   const isAgentPage = typeof window !== 'undefined' && /\/ui\/agent\.html(?:$|\?)/.test(window.location.href);
   const renderAiProviderDetail = React.useCallback((data) => {
     const info = data && data.ai_provider;
@@ -154,9 +154,19 @@ const TopBar = ({ user, onSwitchUser }) => {
         {!hasBalance && info.connected && info.unlimited_quota && <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>额度：不限额</div>}
         {zenmux && (
           <div style={{ fontSize: 10.5, color: 'var(--ink-2)', lineHeight: 1.45 }}>
-            ZenMux：{zenmux.connected ? '正常' : (zenmux.configured ? '异常' : '未配置')}
-            {zenmux.tier ? ` · ${zenmux.tier}` : ''}
-            {typeof zenmux.quota_5_hour_remaining !== 'undefined' ? ` · 5h ${zenmux.quota_5_hour_remaining}` : ''}
+            <div>ZenMux：{zenmux.connected ? '正常' : (zenmux.configured ? '异常' : '未配置')}
+              {zenmux.tier ? ` · ${zenmux.tier}` : ''}
+              {zenmux.account_status ? ` · ${zenmux.account_status}` : ''}
+            </div>
+            {zenmux.quota_5_hour && typeof zenmux.quota_5_hour.remaining !== 'undefined' ? (
+              <div>5h 窗口：{zenmux.quota_5_hour.remaining}/{zenmux.quota_5_hour.max} (已用 {zenmux.quota_5_hour.usage_pct}%)</div>
+            ) : null}
+            {zenmux.quota_7_day && typeof zenmux.quota_7_day.remaining !== 'undefined' ? (
+              <div>7d 窗口：{zenmux.quota_7_day.remaining}/{zenmux.quota_7_day.max} (已用 {zenmux.quota_7_day.usage_pct}%)</div>
+            ) : null}
+            {zenmux.quota_monthly && zenmux.quota_monthly.max ? (
+              <div>月度额度：{zenmux.quota_monthly.max} flows</div>
+            ) : null}
           </div>
         )}
         {info.message && <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>{String(info.message).slice(0, 120)}</div>}
@@ -215,6 +225,24 @@ const TopBar = ({ user, onSwitchUser }) => {
         <StatusIcon title="后端服务" fetchUrl="/health" icon={I.settings}/>
         <StatusIcon title="素材库" fetchUrl="/health" okKey="library" icon={I.folder}/>
         <StatusIcon title="AI 服务商" fetchUrl="/health" okKey="ai_provider" icon={I.sparkles} renderDetail={renderAiProviderDetail}/>
+        {user && user.role === 'admin' && onNavigate && (
+          <button
+            onClick={() => onNavigate('#/admin')}
+            title="管理后台"
+            style={{
+              height: 28, padding: '0 10px', borderRadius: 7,
+              background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+              color: 'var(--ink-2)', fontSize: 11.5, cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              flexShrink: 0,
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            <span>管理</span>
+          </button>
+        )}
         {user && React.createElement('div', {
           style: {
             display: 'flex', alignItems: 'center', gap: 8,

@@ -77,6 +77,12 @@ const App = () => {
   const [currentUser, setCurrentUser] = React.useState(null);
   const [authLoading, setAuthLoading] = React.useState(true);
   const [authError, setAuthError] = React.useState('');
+
+  const getViewFromHash = () => (window.location.hash === '#/admin' ? 'admin' : 'workbench');
+  const [currentView, setCurrentView] = React.useState(getViewFromHash);
+  const navigateTo = React.useCallback(function(hash) {
+    window.location.hash = hash;
+  }, []);
   const [lastUsername, setLastUsername] = React.useState(() => {
     try {
       return localStorage.getItem(LAST_USERNAME_KEY) || '';
@@ -179,6 +185,12 @@ const App = () => {
   }, []);
 
   React.useEffect(() => {
+    const onHashChange = () => setCurrentView(getViewFromHash());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  React.useEffect(() => {
     let alive = true;
     window.API.getCurrentUser()
       .then(function(user) {
@@ -235,37 +247,13 @@ const App = () => {
     if (target) selectTemplate(target);
   }, [selectTemplate]);
 
+  const showAdmin = currentView === 'admin' && currentUser && currentUser.role === 'admin';
+
   return (
     <div style={{
       height: '100vh', display: 'flex', flexDirection: 'column',
       overflow: 'hidden',
     }}>
-      <TopBar user={currentUser} onSwitchUser={handleSwitchUser}/>
-      {currentUser && (
-        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '260px minmax(0, 1fr) 360px', gridTemplateRows: 'minmax(0, 1fr)', minHeight: 0 }}>
-          <TemplatePanel
-            key={'templates:' + currentUser.id}
-            activeId={activeTemplate ? (activeTemplate.file_id || '') + ':' + (activeTemplate.group_name || activeTemplate.id) : null}
-            onSelect={selectTemplate}
-          />
-          <Canvas template={activeTemplate} resultTemplate={resultTemplate} editorCommand={editorCommand}/>
-          <Chat
-            key={'chat:' + currentUser.id}
-            state={tweaks.chatState}
-            template={activeTemplate}
-            onComposeComplete={handleComposeComplete}
-            slashTrigger={slashTrigger}
-            user={currentUser}
-            onRequestSpecialTemplate={handleRequestSpecialTemplate}
-          />
-        </div>
-      )}
-      <Tweaks
-        visible={tweaksVisible}
-        tweaks={tweaks}
-        onChange={updateTweaks}
-        onClose={() => setTweaksVisible(false)}
-      />
       {!currentUser && (
         <LiteLoginGate
           onLogin={handleLogin}
@@ -273,6 +261,37 @@ const App = () => {
           error={authError}
           initialName={lastUsername}
         />
+      )}
+      {currentUser && showAdmin && (
+        <AdminPage user={currentUser} onBack={() => navigateTo('')} />
+      )}
+      {currentUser && !showAdmin && (
+        <>
+          <TopBar user={currentUser} onSwitchUser={handleSwitchUser} currentView="workbench" onNavigate={navigateTo} />
+          <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '260px minmax(0, 1fr) 360px', gridTemplateRows: 'minmax(0, 1fr)', minHeight: 0 }}>
+            <TemplatePanel
+              key={'templates:' + currentUser.id}
+              activeId={activeTemplate ? (activeTemplate.file_id || '') + ':' + (activeTemplate.group_name || activeTemplate.id) : null}
+              onSelect={selectTemplate}
+            />
+            <Canvas template={activeTemplate} resultTemplate={resultTemplate} editorCommand={editorCommand}/>
+            <Chat
+              key={'chat:' + currentUser.id}
+              state={tweaks.chatState}
+              template={activeTemplate}
+              onComposeComplete={handleComposeComplete}
+              slashTrigger={slashTrigger}
+              user={currentUser}
+              onRequestSpecialTemplate={handleRequestSpecialTemplate}
+            />
+          </div>
+          <Tweaks
+            visible={tweaksVisible}
+            tweaks={tweaks}
+            onChange={updateTweaks}
+            onClose={() => setTweaksVisible(false)}
+          />
+        </>
       )}
     </div>
   );
