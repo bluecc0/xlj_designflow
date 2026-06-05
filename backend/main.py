@@ -85,12 +85,16 @@ from .job_store import (
     list_agent_images,
     list_agent_projects,
     list_ai_chat_sessions,
+    load_admin_stats,
+    load_admin_users,
     load_ai_chat_messages,
     load_agent_messages,
     load_ai_image_job,
     load_ai_image_jobs,
     load_job,
+    load_operation_logs,
     load_recent_jobs,
+    log_operation,
     append_agent_message,
     save_job,
     save_ai_image_job,
@@ -427,11 +431,25 @@ async def health():
                 plan = data.get("plan") if isinstance(data.get("plan"), dict) else {}
                 quota_5_hour = data.get("quota_5_hour") if isinstance(data.get("quota_5_hour"), dict) else {}
                 quota_7_day = data.get("quota_7_day") if isinstance(data.get("quota_7_day"), dict) else {}
+                quota_monthly = data.get("quota_monthly") if isinstance(data.get("quota_monthly"), dict) else {}
                 zenmux_status["connected"] = bool(payload.get("success"))
                 zenmux_status["account_status"] = data.get("account_status")
                 zenmux_status["tier"] = plan.get("tier")
-                zenmux_status["quota_5_hour_remaining"] = quota_5_hour.get("remaining_flows")
-                zenmux_status["quota_7_day_remaining"] = quota_7_day.get("remaining_flows")
+                zenmux_status["quota_5_hour"] = {
+                    "remaining": quota_5_hour.get("remaining_flows"),
+                    "used": quota_5_hour.get("used_flows"),
+                    "max": quota_5_hour.get("max_flows"),
+                    "usage_pct": round(quota_5_hour.get("usage_percentage", 0) * 100, 1),
+                }
+                zenmux_status["quota_7_day"] = {
+                    "remaining": quota_7_day.get("remaining_flows"),
+                    "used": quota_7_day.get("used_flows"),
+                    "max": quota_7_day.get("max_flows"),
+                    "usage_pct": round(quota_7_day.get("usage_percentage", 0) * 100, 1),
+                }
+                zenmux_status["quota_monthly"] = {
+                    "max": quota_monthly.get("max_flows"),
+                }
             else:
                 zenmux_status["message"] = r.text[:200]
         except Exception as e:
@@ -555,6 +573,7 @@ def auth_login_lite(body: LiteLoginRequest, response: Response):
     except ValueError:
         raise HTTPException(400, "该身份不在可用名单里")
     session_id = create_session(user["id"])
+    log_operation(user_id=user["id"], username=user["username"], action="login")
     response.set_cookie(
         _SESSION_COOKIE,
         session_id,
@@ -918,6 +937,11 @@ def create_compose(
     with _jobs_lock:
         _jobs[job_id] = job
     save_job(job)  # 持久化初始状态
+    log_operation(
+        user_id=user["id"], username=user["username"],
+        action="compose",
+        detail=f"template={request.template_frame_id[:8] if request.template_frame_id else '?'}",
+    )
 
     background_tasks.add_task(_run_and_persist, job)
     return job
@@ -1144,6 +1168,11 @@ def create_special_compose(
     with _jobs_lock:
         _jobs[job_id] = job  # type: ignore[assignment]
     background_tasks.add_task(run_special_compose, job)
+    log_operation(
+        user_id=user["id"], username=user["username"],
+        action="special_compose",
+        detail=f"sku={getattr(request, 'sku', '?')}",
+    )
     return job
 
 
@@ -1847,6 +1876,11 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 payload=user_payload,
                 created_at=time.time(),
             )
+            log_operation(
+                user_id=user["id"], username=user["username"],
+                action="agent_chat",
+                detail=f"project={project_id[:8]}",
+            )
             yield make_sse("agent_thinking", {"phase": "understanding_intent"})
 
             # ── 真流式：LLM 逐 token 回调 → 入队 → SSE yield ──
@@ -2116,6 +2150,7 @@ def delete_history_ai_chat(request: Request, session_id: str):
 async def _run_ai_image_background(
     job_id: str,
     user_id: str,
+    username: str,
     session_id: str,
     provider: str,
     model: str,
@@ -2152,6 +2187,7 @@ async def _run_ai_image_background(
                 model=model, prompt=prompt,
                 images=refs,
                 size=size, resolution=resolution, user_id=user_id,
+                on_progress=on_progress,
             )
         elif refs:
             result = await generate_image_with_reference_async(
@@ -2170,6 +2206,17 @@ async def _run_ai_image_background(
             model=model, prompt=prompt, size=size,
             image_url=result.get("url"), task_id=result.get("task_id"),
             progress=100, has_reference=has_reference, created_at=created_at,
+        )
+        cost_str = f" cost={result.get('cost')}" if result.get('cost') is not None else ""
+        time_str = f" {result.get('actual_time') or result.get('estimated_time') or ''}s" if (result.get('actual_time') or result.get('estimated_time')) else ""
+        usage = result.get("usage")
+        usage_str = ""
+        if isinstance(usage, dict):
+            usage_str = f" tokens={usage.get('total_tokens') or usage.get('input_tokens',0)+usage.get('output_tokens',0)}"
+        log_operation(
+            user_id=user_id, username=username,
+            action="ai_image",
+            detail=f"job={job_id[:8]} model={model} size={size} result=done{cost_str}{time_str}{usage_str} image={result.get('url', '?')[:60]}",
         )
         append_ai_chat_message(
             session_id=session_id, user_id=user_id,
@@ -2192,6 +2239,11 @@ async def _run_ai_image_background(
             job_id=job_id, user_id=user_id, status="failed",
             model=model, prompt=prompt, size=size,
             has_reference=has_reference, error=str(e), created_at=created_at,
+        )
+        log_operation(
+            user_id=user_id, username=username,
+            action="ai_image",
+            detail=f"job={job_id[:8]} model={model} size={size} result=failed error={str(e)[:80]}",
         )
         append_ai_chat_message(
             session_id=session_id, user_id=user_id,
@@ -2321,6 +2373,11 @@ async def ai_image_endpoint(
         has_reference=bool(images),
         created_at=created_at,
     )
+    log_operation(
+        user_id=user["id"], username=user["username"],
+        action="ai_image",
+        detail=f"job={job_id[:8]} model={resolved} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(images)}",
+    )
 
     try:
         # —— 上下文注入（对用户透明）——
@@ -2359,7 +2416,8 @@ async def ai_image_endpoint(
         has_reference = bool(images) or bool(context_ref_bytes)
         asyncio.create_task(
             _run_ai_image_background(
-                job_id=job_id, user_id=user["id"], session_id=session_id,
+                job_id=job_id, user_id=user["id"], username=user["username"],
+                session_id=session_id,
                 provider=resolved_provider,
                 model=resolved, prompt=enriched_prompt,
                 size=size, resolution=resolution,
@@ -2586,3 +2644,50 @@ async def chat_endpoint(req: ChatRequest):
         reply = "抱歉，AI 暂时没有生成有效回复，请重试或换个问题。"
 
     return {"reply": reply}
+
+
+# ─── 管理后台 ──────────────────────────────────────────────────────────────────
+
+@app.get("/admin/stats")
+def admin_stats(request: Request):
+    """聚合统计（仅管理员）"""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    return load_admin_stats()
+
+
+@app.get("/admin/users")
+def admin_users(request: Request):
+    """用户列表 + 活动统计（仅管理员）"""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    return {"users": load_admin_users()}
+
+
+@app.get("/admin/operations")
+def admin_operations(
+    request: Request,
+    limit: int = 50,
+    offset: int = 0,
+    action: str = "",
+    user_id: str = "",
+):
+    """操作日志（仅管理员）"""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    ops = load_operation_logs(
+        limit=min(limit, 200),
+        offset=offset,
+        action=action or None,
+        user_id=user_id or None,
+    )
+    stats = load_admin_stats()
+    return {
+        "operations": ops,
+        "total": stats["operations_logged"],
+        "limit": limit,
+        "offset": offset,
+    }

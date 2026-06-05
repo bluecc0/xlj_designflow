@@ -195,6 +195,19 @@ def init_db() -> None:
                 created_at          REAL NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS operation_logs (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT NOT NULL,
+                username    TEXT NOT NULL,
+                action      TEXT NOT NULL,
+                detail      TEXT NOT NULL DEFAULT '',
+                created_at  REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_oplogs_ts ON operation_logs(created_at)
+        """)
         conn.commit()
 
 
@@ -1143,3 +1156,95 @@ def _row_to_agent_image(row: sqlite3.Row) -> dict:
         "user_rating": row["user_rating"],
         "created_at": row["created_at"],
     }
+
+
+# ─── 操作日志 ──────────────────────────────────────────────────────────────────
+
+def log_operation(*, user_id: str, username: str, action: str, detail: str = "") -> None:
+    """记录用户操作（供管理后台查询）"""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO operation_logs (user_id, username, action, detail, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, username, action, detail, time.time()),
+        )
+        conn.commit()
+
+
+def load_operation_logs(
+    limit: int = 50,
+    offset: int = 0,
+    action: str | None = None,
+    user_id: str | None = None,
+) -> list[dict]:
+    """分页查询操作日志"""
+    clauses: list[str] = []
+    params: list = []
+    if action:
+        clauses.append("action = ?")
+        params.append(action)
+    if user_id:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.extend([limit, offset])
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM operation_logs{where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            tuple(params),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def load_admin_stats() -> dict:
+    """聚合统计信息"""
+    with _connect() as conn:
+        user_count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+        job_total = conn.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()["c"]
+        job_done = conn.execute("SELECT COUNT(*) AS c FROM jobs WHERE status = 'done'").fetchone()["c"]
+        job_failed = conn.execute("SELECT COUNT(*) AS c FROM jobs WHERE status = 'failed'").fetchone()["c"]
+        ai_total = conn.execute("SELECT COUNT(*) AS c FROM ai_image_jobs").fetchone()["c"]
+        ai_done = conn.execute("SELECT COUNT(*) AS c FROM ai_image_jobs WHERE status = 'done'").fetchone()["c"]
+        special_total = conn.execute("SELECT COUNT(*) AS c FROM special_jobs").fetchone()["c"]
+        agent_total = conn.execute("SELECT COUNT(*) AS c FROM agent_projects").fetchone()["c"]
+        chat_total = conn.execute("SELECT COUNT(*) AS c FROM ai_chat_sessions").fetchone()["c"]
+        active_sessions = conn.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()["c"]
+        op_total = conn.execute("SELECT COUNT(*) AS c FROM operation_logs").fetchone()["c"]
+    return {
+        "users": user_count,
+        "jobs": {"total": job_total, "done": job_done, "failed": job_failed},
+        "ai_images": {"total": ai_total, "done": ai_done},
+        "special_jobs": special_total,
+        "agent_projects": agent_total,
+        "ai_chat_sessions": chat_total,
+        "active_sessions": active_sessions,
+        "operations_logged": op_total,
+    }
+
+
+def load_admin_users() -> list[dict]:
+    """用户列表 + 每人活动统计"""
+    with _connect() as conn:
+        rows = conn.execute("SELECT id, username, created_at FROM users ORDER BY created_at DESC").fetchall()
+    users: list[dict] = []
+    for row in rows:
+        uid = row["id"]
+        with _connect() as conn:
+            job_c = conn.execute("SELECT COUNT(*) AS c FROM jobs WHERE user_id = ?", (uid,)).fetchone()["c"]
+            ai_c = conn.execute("SELECT COUNT(*) AS c FROM ai_image_jobs WHERE user_id = ?", (uid,)).fetchone()["c"]
+            proj_c = conn.execute("SELECT COUNT(*) AS c FROM agent_projects WHERE user_id = ?", (uid,)).fetchone()["c"]
+            op_c = conn.execute("SELECT COUNT(*) AS c FROM operation_logs WHERE user_id = ?", (uid,)).fetchone()["c"]
+            last_op = conn.execute(
+                "SELECT action, created_at FROM operation_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+                (uid,),
+            ).fetchone()
+        users.append({
+            "id": row["id"],
+            "username": row["username"],
+            "created_at": row["created_at"],
+            "total_jobs": job_c,
+            "total_ai_images": ai_c,
+            "total_agent_projects": proj_c,
+            "total_operations": op_c,
+            "last_action": dict(last_op) if last_op else None,
+        })
+    return users

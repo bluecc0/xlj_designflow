@@ -360,13 +360,48 @@ def _extract_progress(payload: Any) -> int | None:
     return None
 
 
-def _extract_task_error(payload: Any) -> str | None:
+def _extract_task_cost(payload: Any) -> float | None:
+    """从任务状态响应中提取费用（APIMart data.cost）"""
     if isinstance(payload, dict):
+        cost = payload.get("cost")
+        if isinstance(cost, (int, float)):
+            return float(cost)
+        data = payload.get("data")
+        if isinstance(data, dict):
+            cost = data.get("cost")
+            if isinstance(cost, (int, float)):
+                return float(cost)
+    return None
+
+
+def _extract_task_detail(payload: Any) -> dict:
+    """从任务状态响应中提取任务详情（status, cost, estimated_time, actual_time）"""
+    detail: dict = {}
+    if isinstance(payload, dict):
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        if isinstance(data, dict):
+            for key in ("status", "progress", "cost", "estimated_time", "actual_time"):
+                val = data.get(key)
+                if val is not None:
+                    detail[key] = val
+    return detail
+
+
+def _extract_task_error(payload: Any) -> str | None:
+    """从 API 响应中提取错误详情，优先返回完整结构化信息（code + message + type）"""
+    if isinstance(payload, dict):
+        # APIMart 格式: {"data": {"error": {"code": "...", "message": "...", "type": "..."}}}
         for key in ("error", "message", "detail"):
             value = payload.get(key)
             if isinstance(value, str) and value:
                 return value
             if isinstance(value, dict):
+                code = value.get("code", "")
+                msg = value.get("message", "")
+                etype = value.get("type", "")
+                parts = [p for p in [code, msg, etype] if p]
+                if parts:
+                    return " | ".join(parts)
                 nested = _extract_task_error(value)
                 if nested:
                     return nested
@@ -471,8 +506,8 @@ async def _wait_for_task_result(
     timeout_seconds: int = 1000,
     poll_interval: float = 2.0,
     on_progress: Callable[[int, str], Any] | None = None,
-) -> tuple[str, int]:
-    """轮询等待任务完成，返回 (图片URL, 进度百分比)。on_progress(progress, api_status) 用于实时更新状态。"""
+) -> tuple[str, int, dict | None]:
+    """轮询等待任务完成，返回 (图片URL, 进度百分比, 任务详情{status,cost,estimated_time,actual_time})。"""
     deadline = time.monotonic() + timeout_seconds
     last_status = "queued"
     last_progress = 0
@@ -507,7 +542,8 @@ async def _wait_for_task_result(
         if status in {"completed", "succeeded", "success", "done"}:
             url = _extract_result_url(data)
             if url:
-                return url, 100
+                detail = _extract_task_detail(data)
+                return url, 100, detail if detail else None
             completed_without_url += 1
             logger.warning(
                 "task completed but no image url yet: task_id=%s attempt=%s payload=%s",
@@ -555,7 +591,9 @@ async def generate_image_zenmux_async(
     size: str = "1024x1024",
     resolution: str = "",
     user_id: str = "anonymous",
+    on_progress: Callable[[int, str], Any] | None = None,
 ) -> dict:
+    """ZenMux 生图：无参考图时使用 SSE 流式获取进度 + token 用量；有参考图时使用非流式"""
     model_name = _zenmux_model_name(model)
     base_url = settings.zenmux_base_url.rstrip("/")
     headers = _zenmux_headers()
@@ -569,35 +607,96 @@ async def generate_image_zenmux_async(
     }
 
     if refs:
+        # 有参考图：multipart/form-data 不支持流式，保持原有逻辑
         endpoint = f"{base_url}/images/edits"
         form_data = {key: str(value) for key, value in payload.items()}
         files = [
             ("image[]", (filename or f"ref{i}.png", image_bytes, _mime_from_filename(filename)))
             for i, (image_bytes, filename) in enumerate(refs[:4])
         ]
-    else:
-        endpoint = f"{base_url}/images/generations"
-        form_data = {}
-        files = []
-
-    async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
-        if files:
+        if on_progress:
+            on_progress(10, "processing")
+        async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
             multipart_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
             resp = await client.post(endpoint, data=form_data, files=files, headers=multipart_headers)
-        else:
-            resp = await client.post(endpoint, json=payload, headers=headers)
-        if not resp.is_success:
-            raise RuntimeError(f"ZenMux 生图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
-        data = resp.json()
-        image_url = _extract_zenmux_image_url(data)
-        if not image_url:
-            raise RuntimeError(f"ZenMux 响应中没有图片: {str(data)[:240]}")
-        if image_url.startswith("data:image/"):
-            local_url = _save_data_url_image(image_url, user_id=user_id)
-        else:
-            local_url = await _download_final_image(client, image_url=image_url, user_id=user_id)
+            if not resp.is_success:
+                raise RuntimeError(f"ZenMux 生图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
+            data = resp.json()
+            if on_progress:
+                on_progress(90, "processing")
+            image_url = _extract_zenmux_image_url(data)
+            if not image_url:
+                raise RuntimeError(f"ZenMux 响应中没有图片: {str(data)[:240]}")
+            if image_url.startswith("data:image/"):
+                local_url = _save_data_url_image(image_url, user_id=user_id)
+            else:
+                local_url = await _download_final_image(client, image_url=image_url, user_id=user_id)
+            if on_progress:
+                on_progress(100, "completed")
+        task_id = f"zenmux:{uuid.uuid4().hex}"
+        usage = None
+    else:
+        # 无参考图：SSE 流式，获取进度事件 + token 用量
+        endpoint = f"{base_url}/images/generations"
+        payload["stream"] = True
+        last_b64 = None
+        usage: dict | None = None
+        output_format = "png"
+        partial_count = 0
 
-    return {
+        async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
+            async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
+                if not resp.is_success:
+                    body = ""
+                    try:
+                        async for chunk in resp.aiter_bytes():
+                            body += chunk.decode(errors="replace")
+                            if len(body) > 500:
+                                break
+                    except Exception:
+                        pass
+                    raise RuntimeError(f"ZenMux 生图失败：{_api_error_msg(resp.status_code, body[:200])}")
+
+                current_event = ""
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if line.startswith("event: "):
+                        current_event = line[7:].strip()
+                    elif line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            event = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        etype = event.get("type") or current_event
+                        if etype == "image_generation.partial_image":
+                            partial_count += 1
+                            last_b64 = event.get("b64_json")
+                            output_format = event.get("output_format", "png")
+                            progress = min(partial_count * 15, 85)
+                            if on_progress:
+                                on_progress(progress, "processing")
+                        elif etype == "image_generation.completed":
+                            last_b64 = event.get("b64_json")
+                            output_format = event.get("output_format", "png")
+                            usage = event.get("usage")
+                            if on_progress:
+                                on_progress(100, "completed")
+                        elif etype in ("error", "image_generation.error"):
+                            err_msg = event.get("message") or event.get("error") or str(event)[:200]
+                            raise RuntimeError(f"ZenMux 生图错误: {err_msg}")
+
+        if not last_b64:
+            raise RuntimeError("ZenMux 流式响应中没有图片数据")
+
+        mime = "image/" + output_format
+        data_url = f"data:{mime};base64,{last_b64}"
+        local_url = _save_data_url_image(data_url, user_id=user_id, prefix="zenmux")
+        task_id = f"zenmux:{uuid.uuid4().hex}"
+
+    result: dict = {
         "url": local_url,
         "model": model_name,
         "prompt": prompt,
@@ -605,8 +704,11 @@ async def generate_image_zenmux_async(
         "resolution": resolution,
         "provider": PROVIDER_ZENMUX,
         "reference": bool(refs),
-        "task_id": f"zenmux:{uuid.uuid4().hex}",
+        "task_id": task_id,
     }
+    if usage:
+        result["usage"] = usage
+    return result
 
 
 async def generate_image(
@@ -632,7 +734,7 @@ async def generate_image(
             size=size,
             resolution=resolution,
         )
-        result_url, _ = await _wait_for_task_result(
+        result_url, _, _task_detail = await _wait_for_task_result(
             client,
             base_url=base_url,
             headers=headers,
@@ -646,6 +748,9 @@ async def generate_image(
         "size": size,
         "resolution": resolution,
         "task_id": task_id,
+        "cost": _task_detail.get("cost") if _task_detail else None,
+        "estimated_time": _task_detail.get("estimated_time") if _task_detail else None,
+        "actual_time": _task_detail.get("actual_time") if _task_detail else None,
     }
 
 
@@ -680,7 +785,7 @@ async def generate_image_with_reference(
             resolution=resolution,
             reference_urls=reference_urls,
         )
-        result_url, _ = await _wait_for_task_result(
+        result_url, _, _task_detail = await _wait_for_task_result(
             client,
             base_url=base_url,
             headers=headers,
@@ -695,6 +800,9 @@ async def generate_image_with_reference(
         "resolution": resolution,
         "reference": True,
         "task_id": task_id,
+        "cost": _task_detail.get("cost") if _task_detail else None,
+        "estimated_time": _task_detail.get("estimated_time") if _task_detail else None,
+        "actual_time": _task_detail.get("actual_time") if _task_detail else None,
     }
 
 
@@ -723,7 +831,7 @@ async def generate_image_async(
             size=size,
             resolution=resolution,
         )
-        result_url, _ = await _wait_for_task_result(
+        result_url, _, _task_detail = await _wait_for_task_result(
             client,
             base_url=base_url,
             headers=headers,
@@ -738,6 +846,9 @@ async def generate_image_async(
         "size": size,
         "resolution": resolution,
         "task_id": task_id,
+        "cost": _task_detail.get("cost") if _task_detail else None,
+        "estimated_time": _task_detail.get("estimated_time") if _task_detail else None,
+        "actual_time": _task_detail.get("actual_time") if _task_detail else None,
     }
 
 
@@ -774,7 +885,7 @@ async def generate_image_with_reference_async(
             resolution=resolution,
             reference_urls=reference_urls,
         )
-        result_url, _ = await _wait_for_task_result(
+        result_url, _, _task_detail = await _wait_for_task_result(
             client,
             base_url=base_url,
             headers=headers,
@@ -790,4 +901,7 @@ async def generate_image_with_reference_async(
         "resolution": resolution,
         "reference": True,
         "task_id": task_id,
+        "cost": _task_detail.get("cost") if _task_detail else None,
+        "estimated_time": _task_detail.get("estimated_time") if _task_detail else None,
+        "actual_time": _task_detail.get("actual_time") if _task_detail else None,
     }
