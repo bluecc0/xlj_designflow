@@ -140,6 +140,10 @@ const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail }) => {
 
 const TopBar = ({ user, onSwitchUser, currentView, onNavigate }) => {
   const isAgentPage = typeof window !== 'undefined' && /\/ui\/agent\.html(?:$|\?)/.test(window.location.href);
+  const fmtBalance = (n) => {
+    if (typeof n !== 'number') return '';
+    return Math.min(n, 99.99).toFixed(2);
+  };
   const renderAiProviderDetail = React.useCallback((data) => {
     const info = data && data.ai_provider;
     if (!info) return null;
@@ -149,12 +153,12 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate }) => {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
           APIMart {info.connected ? '正常' : (info.configured ? '异常' : '未配置')}
-          {hasBalance ? ` · 余额 ${info.remain_balance}` : ''}
+          {hasBalance ? ` · 余额 ${fmtBalance(info.remain_balance)}` : ''}
         </div>
         {zenmux && (
           <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
             ZenMux {zenmux.connected ? '正常' : (zenmux.configured ? '异常' : '未配置')}
-            {typeof zenmux.total_credits === 'number' ? ` · 余额 $${zenmux.total_credits}` : ''}
+            {typeof zenmux.total_credits === 'number' ? ` · 余额 $${fmtBalance(zenmux.total_credits)}` : ''}
           </div>
         )}
         {info.message && <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>{String(info.message).slice(0, 120)}</div>}
