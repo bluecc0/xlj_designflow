@@ -789,7 +789,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [aiProvider, setAiProvider] = React.useState(() => {
     try {
       const saved = localStorage.getItem('designflow_ai_provider') || 'apimart';
-      return ['apimart', 'zenmux'].includes(saved) ? saved : 'zenmux';
+      return ['apimart', 'zenmux'].includes(saved) ? saved : 'apimart';
     } catch (e) {
       return 'apimart';
     }
@@ -803,6 +803,13 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const composerRef = React.useRef(null);
   const dragRef = React.useRef({ dragging: false, startY: 0, startH: 0 });
   const COMMANDS = React.useMemo(() => ['/花瓣下载', '/特殊品（完整）', '/特殊品', '/Nano Banana pro', '/Gpt image 2'], []);
+  const cmdToWorkflow = React.useCallback(function(cmd) {
+    const clean = String(cmd || '').trim();
+    if (clean === '/Gpt image 2' || clean === '/Nano Banana pro') return 'ai-image';
+    if (clean === '/特殊品' || clean === '/特殊品（完整）') return 'special';
+    if (clean === '/花瓣下载') return 'download';
+    return 'chat';
+  }, []);
 
   // 检测花瓣登录状态，未登录则禁用 /花瓣下载 指令
   React.useEffect(() => {
@@ -884,12 +891,18 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     if (agentEnabled) return;
     if (!slashTrigger) return;
     if (slashTrigger.clear) {
-      setLockedCommand(prev => (prev === '/特殊品' || prev === '/特殊品（完整）') ? '' : prev);
-      setSelectedWorkflow('chat');
+      setLockedCommand(function(prev) {
+        if (cmdToWorkflow(prev) === 'special') {
+          setSelectedWorkflow('chat');
+          return '';
+        }
+        return prev;
+      });
       return;
     }
-    setLockedCommand('/' + slashTrigger.cmd);
-    setSelectedWorkflow(slashTrigger.cmd && slashTrigger.cmd.includes('特殊品') ? 'special' : 'chat');
+    const nextCmd = '/' + slashTrigger.cmd;
+    setLockedCommand(nextCmd);
+    setSelectedWorkflow(cmdToWorkflow(nextCmd));
     setPrototypePanel('');
     setText('');
     setMenuOpen(false);
@@ -899,19 +912,26 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       el.focus();
       el.setSelectionRange(0, 0);
     }, 0);
-  }, [agentEnabled, slashTrigger?.key]);
+  }, [agentEnabled, slashTrigger?.key, cmdToWorkflow]);
 
   React.useEffect(() => {
     if (agentEnabled) {
       setLockedCommand('');
+      setSelectedWorkflow('chat');
       setMenuOpen(false);
     }
   }, [agentEnabled]);
 
   React.useEffect(() => {
     if (template && (template.is_special || template.is_special_full)) return;
-    setLockedCommand(prev => (prev === '/特殊品' || prev === '/特殊品（完整）') ? '' : prev);
-  }, [template?.file_id, template?.group_name, template?.id, template?.is_special, template?.is_special_full]);
+    setLockedCommand(function(prev) {
+      if (cmdToWorkflow(prev) === 'special') {
+        setSelectedWorkflow('chat');
+        return '';
+      }
+      return prev;
+    });
+  }, [template?.file_id, template?.group_name, template?.id, template?.is_special, template?.is_special_full, cmdToWorkflow]);
 
   React.useEffect(() => {
     const el = taRef.current;
@@ -980,11 +1000,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     const cmd = next && next.cmd ? next.cmd : '';
     if (cmd) {
       setLockedCommand(cmd);
-      setSelectedWorkflow(
-        cmd === '/Gpt image 2' || cmd === '/Nano Banana pro' ? 'ai-image' :
-          cmd === '/特殊品' || cmd === '/特殊品（完整）' ? 'special' :
-            cmd === '/花瓣下载' ? 'download' : 'chat'
-      );
+      setSelectedWorkflow(cmdToWorkflow(cmd));
       setMenuOpen(false);
       setPrototypePanel('');
       setTimeout(() => {
@@ -1003,7 +1019,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       const el = taRef.current;
       if (el) el.focus();
     }, 0);
-  }, [agentEnabled]);
+  }, [agentEnabled, cmdToWorkflow]);
 
   const [menuOpen, setMenuOpen] = React.useState(false);
   React.useEffect(() => {
@@ -1019,11 +1035,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const pickCommand = (c) => {
     if (agentEnabled) return;
     setLockedCommand(c.cmd);
-    setSelectedWorkflow(
-      c.cmd === '/Gpt image 2' || c.cmd === '/Nano Banana pro' ? 'ai-image' :
-        c.cmd === '/特殊品' || c.cmd === '/特殊品（完整）' ? 'special' :
-          c.cmd === '/花瓣下载' ? 'download' : 'chat'
-    );
+    setSelectedWorkflow(cmdToWorkflow(c.cmd));
     setText('');
     setMenuOpen(false);
     setTimeout(() => {
@@ -1041,11 +1053,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     });
     if (matched) {
       setLockedCommand(matched);
-      setSelectedWorkflow(
-        matched === '/Gpt image 2' || matched === '/Nano Banana pro' ? 'ai-image' :
-          matched === '/特殊品' || matched === '/特殊品（完整）' ? 'special' :
-            matched === '/花瓣下载' ? 'download' : 'chat'
-      );
+      setSelectedWorkflow(cmdToWorkflow(matched));
       setText(raw.slice(matched.length).trimStart());
     } else {
       setLockedCommand('');
@@ -1060,7 +1068,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       const len = el.value.length;
       el.setSelectionRange(len, len);
     }, 0);
-  }, [COMMANDS]);
+  }, [COMMANDS, cmdToWorkflow]);
 
   const handleSend = () => {
     const body = text.trim();
@@ -1118,6 +1126,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       if (e.key === 'Backspace' && !text && start <= lockedPrefixLength && end <= lockedPrefixLength) {
         e.preventDefault();
         setLockedCommand('');
+        setSelectedWorkflow('chat');
         return;
       }
       if (hasSelectionInPrefix) {
@@ -1177,6 +1186,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       });
       if (matched) {
         setLockedCommand(matched);
+        setSelectedWorkflow(cmdToWorkflow(matched));
         setText(next.slice(matched.length).trimStart());
         return;
       }
@@ -1569,7 +1579,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
                 type: 'button',
                 onClick: function() {
                   setLockedCommand(item.cmd);
-                  setSelectedWorkflow('special');
+                  setSelectedWorkflow(cmdToWorkflow(item.cmd));
                   if (onRequestSpecialTemplate) {
                     onRequestSpecialTemplate(item.cmd === '/特殊品（完整）' ? 'full' : 'normal');
                   }
