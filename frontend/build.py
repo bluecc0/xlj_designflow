@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build script — 原地替换 index.html 中的 9 个 babel script 块。
+Build script — 原地替换 index.html 中的 10 个 babel script 块。
 
 规则：
   - 始终以当前 index.html 为基准（保留 window.TWEAKS、CSS、api.js 内联块等一切）
@@ -19,13 +19,14 @@ HTML     = os.path.join(BASE, 'index.html')
 # 顺序必须与 index.html 中 babel 块的顺序完全一致
 BABEL_FILES = [
     'src/Icons.jsx',
-    'src/Placeholders.jsx',
+    'src/Utils.jsx',
     'src/TopBar.jsx',
     'src/TemplatePanel.jsx',
     'src/Canvas.jsx',
     'src/ChatExtras.jsx',
     'src/Chat.jsx',
     'src/Tweaks.jsx',
+    'src/AdminPage.jsx',
     'src/app.jsx',
 ]
 
@@ -38,7 +39,7 @@ def build():
     orig_size = len(html)
 
     babel_pat = re.compile(
-        r'(<script\s+type="text/babel"\s*>)'
+        r'(<script\s+type="text/babel"[^>]*>)'
         r'(.*?)'
         r'(</script>)',
         re.DOTALL

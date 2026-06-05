@@ -231,5 +231,17 @@
     fetchImageTypes: function() {
       return request('/image-types').then(function(res) { return res.types; });
     },
+    getAdminStats: function() {
+      return request('/admin/stats');
+    },
+    getAdminUsers: function() {
+      return request('/admin/users');
+    },
+    getAdminOperations: function(limit, offset, action, userId) {
+      var qs = '?limit=' + (limit || 50) + '&offset=' + (offset || 0);
+      if (action) qs += '&action=' + encodeURIComponent(action);
+      if (userId) qs += '&user_id=' + encodeURIComponent(userId);
+      return request('/admin/operations' + qs);
+    },
   };
 })();
