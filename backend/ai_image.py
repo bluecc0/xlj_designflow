@@ -35,6 +35,7 @@ _TRANSIENT_TASK_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522
 _HTTP_ERRORS: dict[int, str] = {
     400: "请求格式错误，可能是参数不合法",
     401: "API Key 验证失败，请检查配置",
+    402: "账户余额不足或需要充值，请检查 ZenMux/APIMart 账户",
     403: "账号无权限或余额不足",
     404: "接口路径不存在或模型不可用",
     413: "上传的参考图过大",
@@ -90,8 +91,19 @@ def _api_error_msg(status: int, raw: str) -> str:
     base = f"HTTP {status}"
     if hint:
         base += f" - {hint}"
+    detail = raw
     if raw:
-        base += f" ({raw[:160]})"
+        try:
+            import json as _json
+            body = _json.loads(raw)
+            err = body.get("error") if isinstance(body, dict) else None
+            if isinstance(err, dict):
+                detail = err.get("message") or err.get("code") or raw
+            elif isinstance(err, str):
+                detail = err
+        except Exception:
+            pass
+        base += f" ({detail[:200]})"
     return base
 
 

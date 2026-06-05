@@ -154,19 +154,10 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate }) => {
         {!hasBalance && info.connected && info.unlimited_quota && <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>额度：不限额</div>}
         {zenmux && (
           <div style={{ fontSize: 10.5, color: 'var(--ink-2)', lineHeight: 1.45 }}>
-            <div>ZenMux：{zenmux.connected ? '正常' : (zenmux.configured ? '异常' : '未配置')}
-              {zenmux.tier ? ` · ${zenmux.tier}` : ''}
-              {zenmux.account_status ? ` · ${zenmux.account_status}` : ''}
-            </div>
-            {zenmux.quota_5_hour && typeof zenmux.quota_5_hour.remaining !== 'undefined' ? (
-              <div>5h 窗口：{zenmux.quota_5_hour.remaining}/{zenmux.quota_5_hour.max} (已用 {zenmux.quota_5_hour.usage_pct}%)</div>
-            ) : null}
-            {zenmux.quota_7_day && typeof zenmux.quota_7_day.remaining !== 'undefined' ? (
-              <div>7d 窗口：{zenmux.quota_7_day.remaining}/{zenmux.quota_7_day.max} (已用 {zenmux.quota_7_day.usage_pct}%)</div>
-            ) : null}
-            {zenmux.quota_monthly && zenmux.quota_monthly.max ? (
-              <div>月度额度：{zenmux.quota_monthly.max} flows</div>
-            ) : null}
+            ZenMux：{zenmux.connected ? '正常' : (zenmux.configured ? '异常' : '未配置')}
+            {zenmux.tier ? ` · ${zenmux.tier}` : ''}
+            {zenmux.account_status && zenmux.account_status !== 'healthy' ? ` · ${zenmux.account_status}` : ''}
+            {typeof zenmux.quota_5_hour_remaining === 'number' ? ` · 剩余 ${zenmux.quota_5_hour_remaining} flows` : ''}
           </div>
         )}
         {info.message && <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>{String(info.message).slice(0, 120)}</div>}

@@ -498,7 +498,7 @@ function TldrawHostBridge() {
     [editor]
   )
 
-  const insertTrackerRef = React.useRef({ col: 0, lastMaxX: 0, rowTopY: 0, rowMaxH: 0 })
+  const insertTrackerRef = React.useRef<{ col: number; lastMaxX: number; rowTopY: number; rowMaxH: number; rowStartX?: number }>({ col: 0, lastMaxX: 0, rowTopY: 0, rowMaxH: 0 })
   const recentInsertsRef = React.useRef<Record<string, number>>({})
   // 清除画布时重置插入位置
   React.useEffect(() => {
@@ -568,34 +568,59 @@ function TldrawHostBridge() {
             let targetY: number
 
             if (t.col === 0) {
-              // 行首：放在视口中心
-              targetX = viewport.center.x
-              targetY = viewport.center.y
+              // 行首：沿用上一行的起始 X，第一行则放在视口中心
+              if (t.rowStartX !== undefined) {
+                targetX = t.rowStartX + bounds.w / 2
+                targetY = t.rowTopY + t.rowMaxH + spacing + bounds.h / 2
+              } else {
+                targetX = viewport.center.x
+                targetY = viewport.center.y
+              }
               insertTrackerRef.current = {
                 col: 1,
-                lastMaxX: 0,  // 会在下面更新
+                lastMaxX: targetX + bounds.w / 2,
                 rowTopY: targetY - bounds.h / 2,
                 rowMaxH: bounds.h,
+                rowStartX: t.rowStartX !== undefined ? t.rowStartX : (targetX - bounds.w / 2),
               }
             } else {
-              // 同行后续
+              // 同行后续：放在上一张图片右侧
               targetX = t.lastMaxX + spacing + bounds.w / 2
-              targetY = t.rowTopY + bounds.h / 2  // 顶部对齐
+              targetY = t.rowTopY + bounds.h / 2
             }
 
             // 换行判断
             if (t.col > 0 && t.col < MAX_COLS) {
               // 继续当前行
             } else if (t.col >= MAX_COLS) {
-              // 换行
-              targetX = viewport.center.x
+              // 换行：重置 col，保留 rowStartX 用于新行对齐
+              targetX = t.rowStartX !== undefined ? t.rowStartX + bounds.w / 2 : viewport.center.x
               targetY = t.rowTopY + t.rowMaxH + spacing + bounds.h / 2
               insertTrackerRef.current = {
-                col: 0,
-                lastMaxX: 0,
+                col: 1,
+                lastMaxX: targetX + bounds.w / 2,
                 rowTopY: targetY - bounds.h / 2,
                 rowMaxH: bounds.h,
+                rowStartX: t.rowStartX,
               }
+              // 跳过下面的 col+1 更新
+              const nb = editor.getShapePageBounds(shape)
+              if (nb) {
+                const t3 = insertTrackerRef.current
+                insertTrackerRef.current = {
+                  ...t3,
+                  lastMaxX: nb.maxX,
+                  rowMaxH: Math.max(t3.rowMaxH, nb.height),
+                }
+              }
+              // 移动 shape 到目标位置
+              editor.updateShapes([{
+                id: shape.id,
+                type: shape.type,
+                x: targetX - bounds.w / 2,
+                y: targetY - bounds.h / 2,
+              } as any])
+              return
             }
 
             // 移动 shape 到目标位置
@@ -611,9 +636,9 @@ function TldrawHostBridge() {
             if (newBounds) {
               const t2 = insertTrackerRef.current
               insertTrackerRef.current = {
+                ...t2,
                 col: t2.col + 1,
                 lastMaxX: newBounds.maxX,
-                rowTopY: t2.rowTopY,
                 rowMaxH: Math.max(t2.rowMaxH, newBounds.height),
               }
             }
@@ -678,61 +703,8 @@ function TldrawHostBridge() {
         if (ids.length) insertedShapeIds.push(ids[0])
       }
 
-      const shapes = insertedShapeIds
-        .map((id) => editor.getShape(id as any))
-        .filter(Boolean) as TLShape[]
-      if (!shapes.length) return
-
-      const viewport = editor.getViewportPageBounds()
-      const spacing = 32
-      const cols = Math.max(1, Math.min(3, Math.ceil(Math.sqrt(shapes.length))))
-      const rows = Math.ceil(shapes.length / cols)
-
-      const widths = new Array(cols).fill(0)
-      const heights = new Array(rows).fill(0)
-
-      shapes.forEach((shape, index) => {
-        const bounds = editor.getShapePageBounds(shape)
-        if (!bounds) return
-        const col = index % cols
-        const row = Math.floor(index / cols)
-        widths[col] = Math.max(widths[col], bounds.width)
-        heights[row] = Math.max(heights[row], bounds.height)
-      })
-
-      const totalWidth = widths.reduce((sum, w) => sum + w, 0) + spacing * (cols - 1)
-      const totalHeight = heights.reduce((sum, h) => sum + h, 0) + spacing * (rows - 1)
-
-      const startX = viewport.center.x - totalWidth / 2
-      const startY = viewport.center.y - totalHeight / 2
-
-      const updates: any[] = []
-      shapes.forEach((shape, index) => {
-        const bounds = editor.getShapePageBounds(shape)
-        if (!bounds) return
-        const col = index % cols
-        const row = Math.floor(index / cols)
-        const x =
-          startX +
-          widths.slice(0, col).reduce((sum, w) => sum + w, 0) +
-          spacing * col +
-          (widths[col] - bounds.width) / 2
-        const y =
-          startY +
-          heights.slice(0, row).reduce((sum, h) => sum + h, 0) +
-          spacing * row +
-          (heights[row] - bounds.height) / 2
-
-        updates.push({
-          id: shape.id,
-          type: shape.type,
-          x,
-          y,
-        })
-      })
-
-      if (updates.length) {
-        editor.updateShapes(updates)
+      // 第一轮 insertImage 已按 insertTrackerRef 向右依次排列，zoomToFit 即可
+      if (insertedShapeIds.length) {
         ;(editor as any).setSelectedShapes(insertedShapeIds)
         editor.zoomToFit({ animation: { duration: 0 } })
       }
