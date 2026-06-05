@@ -12,7 +12,8 @@
       "Bash(python debug_templates.py)",
       "Bash(python -c \"from dotenv import load_dotenv; load_dotenv\\('.env'\\); import os; print\\(os.environ.get\\('PENPOT_BASE_URL', 'NOT FOUND'\\)\\)\")",
       "Bash(netstat -ano)",
-      "Bash(tasklist *)"
+      "Bash(tasklist *)",
+      "Read(//Users/xuduo/**)"
     ]
   }
 }

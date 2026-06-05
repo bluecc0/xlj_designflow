@@ -413,10 +413,26 @@ async def health():
 
     zenmux_status = {
         "connected": False,
-        "configured": bool(settings.zenmux_management_api_key),
+        "configured": bool(settings.zenmux_api_key),
         "provider": "ZenMux",
         "url": settings.zenmux_base_url,
     }
+    # 用生图 API Key 测试实际接口连通性（GET /models，不消耗额度）
+    if settings.zenmux_api_key:
+        try:
+            async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
+                r = await client.get(
+                    f"{settings.zenmux_base_url}/models",
+                    headers={"Authorization": f"Bearer {settings.zenmux_api_key}"},
+                )
+            zenmux_status["status_code"] = r.status_code
+            zenmux_status["connected"] = r.status_code < 500
+            if r.status_code >= 500:
+                zenmux_status["message"] = r.text[:200]
+        except Exception as e:
+            zenmux_status["message"] = str(e)
+
+    # 补充订阅信息（Management API，用于展示额度）
     if settings.zenmux_management_api_key:
         try:
             async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
@@ -424,37 +440,17 @@ async def health():
                     "https://zenmux.ai/api/v1/management/subscription/detail",
                     headers={"Authorization": f"Bearer {settings.zenmux_management_api_key}"},
                 )
-            zenmux_status["status_code"] = r.status_code
             if r.status_code == 200:
                 payload = r.json()
                 data = payload.get("data") if isinstance(payload, dict) else {}
                 data = data if isinstance(data, dict) else {}
                 plan = data.get("plan") if isinstance(data.get("plan"), dict) else {}
                 quota_5_hour = data.get("quota_5_hour") if isinstance(data.get("quota_5_hour"), dict) else {}
-                quota_7_day = data.get("quota_7_day") if isinstance(data.get("quota_7_day"), dict) else {}
-                quota_monthly = data.get("quota_monthly") if isinstance(data.get("quota_monthly"), dict) else {}
-                zenmux_status["connected"] = bool(payload.get("success"))
                 zenmux_status["account_status"] = data.get("account_status")
                 zenmux_status["tier"] = plan.get("tier")
-                zenmux_status["quota_5_hour"] = {
-                    "remaining": quota_5_hour.get("remaining_flows"),
-                    "used": quota_5_hour.get("used_flows"),
-                    "max": quota_5_hour.get("max_flows"),
-                    "usage_pct": round(quota_5_hour.get("usage_percentage", 0) * 100, 1),
-                }
-                zenmux_status["quota_7_day"] = {
-                    "remaining": quota_7_day.get("remaining_flows"),
-                    "used": quota_7_day.get("used_flows"),
-                    "max": quota_7_day.get("max_flows"),
-                    "usage_pct": round(quota_7_day.get("usage_percentage", 0) * 100, 1),
-                }
-                zenmux_status["quota_monthly"] = {
-                    "max": quota_monthly.get("max_flows"),
-                }
-            else:
-                zenmux_status["message"] = r.text[:200]
-        except Exception as e:
-            zenmux_status["message"] = str(e)
+                zenmux_status["quota_5_hour_remaining"] = quota_5_hour.get("remaining_flows")
+        except Exception:
+            pass
     ai_provider["zenmux"] = zenmux_status
     ai_provider["connected"] = bool(ai_provider.get("connected") or zenmux_status.get("connected"))
     ai_provider["configured"] = bool(ai_provider.get("configured") or zenmux_status.get("configured"))
@@ -2341,6 +2337,11 @@ async def ai_image_endpoint(
     resolved = SLASH_MODEL_MAP.get(model.lower(), model)
     if not resolved:
         raise HTTPException(400, f"未知模型: {model}")
+    # 去掉用户 prompt 中的 /指令 前缀，只保留实际描述内容
+    for cmd in SLASH_MODEL_MAP:
+        if original_prompt.lower().startswith(cmd):
+            original_prompt = original_prompt[len(cmd):].strip()
+            break
     try:
         resolved_provider = normalize_provider(provider)
     except ValueError as exc:

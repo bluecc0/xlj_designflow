@@ -1098,7 +1098,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
 
   const handleSend = () => {
     const body = text.trim();
-    const message = lockedCommand ? (body ? lockedCommand + ' ' + body : lockedCommand) : body;
+    const message = lockedCommand ? (body || lockedCommand) : body;
     if (!message || isLoading) return;
     const imagesToSend = [...refImages];
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
@@ -1113,7 +1113,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     const el = taRef.current;
     const start = el ? el.selectionStart : 0;
     const end = el ? el.selectionEnd : 0;
-    const currentMessage = lockedCommand ? (text ? (lockedCommand + ' ' + text) : lockedCommand) : text.trim();
+    const currentMessage = lockedCommand ? (text.trim() || lockedCommand) : text.trim();
     if (
       e.key === 'ArrowDown' &&
       files.length === 0 &&
