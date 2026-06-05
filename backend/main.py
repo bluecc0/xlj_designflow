@@ -1849,7 +1849,36 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
             )
             yield make_sse("agent_thinking", {"phase": "understanding_intent"})
 
-            agent_reply, action_intent = await call_agent_llm(message, state, recent_messages, reference_context)
+            # ── 真流式：LLM 逐 token 回调 → 入队 → SSE yield ──
+            agent_reply = ""
+            action_intent = None
+            text_queue: asyncio.Queue = asyncio.Queue()
+
+            def _on_llm_chunk(chunk: str) -> None:
+                try:
+                    text_queue.put_nowait(chunk)
+                except Exception:
+                    pass
+
+            async def _run_llm():
+                nonlocal agent_reply, action_intent
+                agent_reply, action_intent = await call_agent_llm(
+                    message, state, recent_messages, reference_context,
+                    on_chunk=_on_llm_chunk,
+                )
+                text_queue.put_nowait(None)  # sentinel: LLM 完成
+
+            llm_task = asyncio.create_task(_run_llm())
+
+            # 边收边推送 SSE
+            while True:
+                chunk = await text_queue.get()
+                if chunk is None:  # sentinel
+                    break
+                yield make_sse("agent_text", {"delta": chunk})
+
+            await llm_task  # 确保拿到 agent_reply / action_intent
+
             extracted = dict(action_intent.extracted_info or {})
             if has_meaningful_intent_update(extracted):
                 state["intent"] = merge_intent(state.get("intent") or {}, extracted)
@@ -1879,9 +1908,6 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 updated_at=time.time(),
             )
 
-            if agent_reply:
-                for chunk in [agent_reply[i:i + 36] for i in range(0, len(agent_reply), 36)]:
-                    yield make_sse("agent_text", {"delta": chunk})
             append_agent_message(
                 project_id=project_id,
                 user_id=user["id"],

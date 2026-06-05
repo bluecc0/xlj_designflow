@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent 模式 - DesignFlow 智能创作助手</title>
+<style>
+  :root {
+    --bg: #f8f9fa;
+    --card: #fff;
+    --ink: #1a1a2e;
+    --ink-2: #555;
+    --ink-3: #888;
+    --accent: #4f46e5;
+    --accent-soft: #eef2ff;
+    --line: #e5e7eb;
+    --ok: #10b981;
+    --warn: #f59e0b;
+    --radius: 12px;
+    --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.7;
+    padding: 40px 20px 80px;
+  }
+  .container { max-width: 880px; margin: 0 auto; }
+
+  h1 {
+    font-size: 36px; font-weight: 700; letter-spacing: -.02em;
+    margin-bottom: 8px;
+  }
+  .subtitle { font-size: 16px; color: var(--ink-2); margin-bottom: 40px; }
+  .badge {
+    display: inline-block; font-size: 12px; font-weight: 600;
+    padding: 3px 10px; border-radius: 99px;
+    background: var(--accent-soft); color: var(--accent);
+    margin-left: 8px; vertical-align: middle;
+  }
+
+  h2 {
+    font-size: 22px; font-weight: 650; margin: 48px 0 16px;
+    padding-bottom: 10px; border-bottom: 2px solid var(--line);
+  }
+  h3 {
+    font-size: 17px; font-weight: 600; margin: 24px 0 10px;
+  }
+
+  p { margin-bottom: 14px; color: var(--ink-2); }
+  p strong { color: var(--ink); }
+
+  .card {
+    background: var(--card); border-radius: var(--radius);
+    padding: 24px 28px; margin-bottom: 20px;
+    box-shadow: var(--shadow); border: 1px solid var(--line);
+  }
+
+  /* Flow Diagram */
+  .flow {
+    display: flex; align-items: center; justify-content: center;
+    flex-wrap: wrap; gap: 12px; margin: 24px 0;
+    font-size: 13px;
+  }
+  .flow-node {
+    background: var(--card); border: 1.5px solid var(--line);
+    border-radius: 10px; padding: 14px 18px; text-align: center;
+    min-width: 90px; box-shadow: var(--shadow);
+  }
+  .flow-node.core { border-color: var(--accent); background: var(--accent-soft); }
+  .flow-node.gen { border-color: var(--ok); background: #ecfdf5; }
+  .flow-arrow {
+    font-size: 18px; color: var(--ink-3); font-weight: 700;
+  }
+
+  /* Comparison Table */
+  table {
+    width: 100%; border-collapse: collapse; margin: 16px 0;
+    font-size: 14px;
+  }
+  th {
+    text-align: left; padding: 10px 14px;
+    background: var(--accent-soft); font-weight: 600;
+    border-bottom: 2px solid var(--line);
+  }
+  td {
+    padding: 10px 14px; border-bottom: 1px solid var(--line);
+    color: var(--ink-2);
+  }
+  td:first-child { font-weight: 500; color: var(--ink); width: 28%; }
+  tr:last-child td { border-bottom: none; }
+
+  /* Conversation */
+  .conv {
+    display: flex; flex-direction: column; gap: 12px; margin: 16px 0;
+  }
+  .msg {
+    display: flex; gap: 12px; align-items: flex-start;
+  }
+  .msg.user { flex-direction: row-reverse; }
+  .msg-avatar {
+    width: 30px; height: 30px; border-radius: 99px;
+    display: grid; place-items: center; font-size: 12px; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .msg.user .msg-avatar { background: var(--ink); color: #fff; }
+  .msg.ai .msg-avatar { background: var(--accent-soft); color: var(--accent); }
+  .msg-body {
+    max-width: 70%; padding: 10px 14px; border-radius: 10px;
+    font-size: 13.5px; line-height: 1.6;
+  }
+  .msg.user .msg-body { background: var(--ink); color: #fff; }
+  .msg.ai .msg-body { background: var(--card); border: 1px solid var(--line); }
+
+  .choices-row {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+  }
+  .choice-pill {
+    font-size: 12px; padding: 6px 12px; border-radius: 99px;
+    border: 1px solid var(--line); background: var(--bg);
+    color: var(--ink); cursor: default;
+  }
+  .choice-pill.primary {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+
+  .note {
+    font-size: 13px; color: var(--ink-3); padding: 12px 16px;
+    background: #fffbeb; border-radius: 8px; border-left: 3px solid var(--warn);
+    margin: 16px 0;
+  }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
+
+  .step-num {
+    display: inline-flex; width: 22px; height: 22px; border-radius: 99px;
+    background: var(--accent); color: #fff; font-size: 12px; font-weight: 700;
+    align-items: center; justify-content: center; margin-right: 8px;
+    flex-shrink: 0;
+  }
+
+  code {
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 12px; background: var(--bg); padding: 2px 6px;
+    border-radius: 4px; border: 1px solid var(--line);
+  }
+
+  footer {
+    text-align: center; font-size: 12px; color: var(--ink-3);
+    margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--line);
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Agent 模式 <span class="badge">Beta</span></h1>
+<p class="subtitle">
+  DesignFlow 新增的智能创作模式 — 像设计师同事一样和你聊需求，聊清楚再出图。
+</p>
+
+<!-- ─── 问题 ─── -->
+<h2>为什么需要 Agent 模式</h2>
+
+<div class="cols">
+  <div class="card">
+    <h3>Chat 模式的问题</h3>
+    <p>
+      用户需要自己写完整 prompt，带上 <code>/Gpt image 2</code> 或
+      <code>/Nano Banana pro</code> 指令。对不熟悉 prompt 工程的运营同事来说，门槛高、出图效果不稳定。
+    </p>
+    <p style="margin-top:8px">
+      后续修改也只能靠用户自己组织语言，系统不会主动给建议。
+    </p>
+  </div>
+  <div class="card">
+    <h3>Agent 模式的解法</h3>
+    <p>
+      用户用<strong>自然语言</strong>描述目标，Agent 会主动补全缺失的信息
+      （风格、构图、用途等），像设计师同事一样聊清楚再出图。
+    </p>
+    <p style="margin-top:8px">
+      不够清楚时<strong>弹出选项</strong>让用户点选，不用打字。方案确认后一键生成。
+    </p>
+  </div>
+</div>
+
+<!-- ─── 工作原理 ─── -->
+<h2>工作原理</h2>
+
+<div class="flow">
+  <div class="flow-node"><strong>用户输入</strong><br>自然语言描述</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-node core"><strong>Muse 对话</strong><br>理解意图 + 补全信息<br>流式回复</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-node core"><strong>Decision Engine</strong><br>评估信息完整度<br>决定下一步动作</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-node gen"><strong>生图</strong><br>自动匹配场景<br>构建专业 prompt</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-node"><strong>VLM 质检</strong><br>视觉分析 + 反馈<br>支持迭代优化</div>
+</div>
+
+<div class="card" style="margin-top:20px">
+  <h3>5 种决策动作</h3>
+  <table>
+    <tr><th>动作</th><th>触发条件</th><th>用户看到什么</th></tr>
+    <tr>
+      <td>ASK</td>
+      <td>缺关键信息（如主体、用途）</td>
+      <td>Agent 问一个问题 + <strong>可点击的选项按钮</strong></td>
+    </tr>
+    <tr>
+      <td>CONFIRM</td>
+      <td>信息足够，生成前确认</td>
+      <td>方案摘要 + <strong>确认 / 换方向 按钮</strong></td>
+    </tr>
+    <tr>
+      <td>GENERATE</td>
+      <td>方案确认，开始出图</td>
+      <td>进入生图流程，显示进度</td>
+    </tr>
+    <tr>
+      <td>REFINE</td>
+      <td>已有图，用户给反馈</td>
+      <td>保留主体一致性，按反馈调整后重新出图</td>
+    </tr>
+    <tr>
+      <td>EXPLORE</td>
+      <td>同阶段停留过长（≥3轮）</td>
+      <td>Agent 主动提案，打破僵局</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ─── 对话示例 ─── -->
+<h2>对话示例</h2>
+
+<h3>示例 1 — 信息充分，零追问直接生成</h3>
+<div class="conv">
+  <div class="msg user">
+    <div class="msg-avatar">我</div>
+    <div class="msg-body">画一张酷炫的篮球鞋电商海报，高级感路线</div>
+  </div>
+  <div class="msg ai">
+    <div class="msg-avatar">M</div>
+    <div class="msg-body">
+      好的！一张酷炫风格的篮球鞋电商海报，走高级感路线。我来整理一下方向：<br><br>
+      主体「篮球鞋」+ 风格「酷炫潮流」+ 构图「产品居中 hero shot」，用戏剧化布光突出质感。<br><br>
+      没问题的话我就出图了。
+      <div class="choices-row">
+        <span class="choice-pill primary">确认，开始生成</span>
+        <span class="choice-pill">试试更简约高级</span>
+        <span class="choice-pill">试试更炫酷潮流</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h3 style="margin-top:32px">示例 2 — 信息模糊，一问一答再生成</h3>
+<div class="conv">
+  <div class="msg user">
+    <div class="msg-avatar">我</div>
+    <div class="msg-body">帮我做张产品图</div>
+  </div>
+  <div class="msg ai">
+    <div class="msg-avatar">M</div>
+    <div class="msg-body">
+      没问题！先确认一下，这张图主要用在哪里？
+      <div class="choices-row">
+        <span class="choice-pill">电商海报</span>
+        <span class="choice-pill">社媒配图</span>
+        <span class="choice-pill">白底产品图</span>
+        <span class="choice-pill">场景图</span>
+        <span class="choice-pill">你来决定</span>
+      </div>
+    </div>
+  </div>
+  <div class="msg user">
+    <div class="msg-avatar">我</div>
+    <div class="msg-body">白底产品图</div>
+  </div>
+  <div class="msg ai">
+    <div class="msg-avatar">M</div>
+    <div class="msg-body">
+      白底产品图，干净利落。那你最想表现的主体是什么？
+      <br><br>
+      <em style="color:var(--ink-3)">（主体太开放，这里需要手动输入描述）</em>
+    </div>
+  </div>
+  <div class="msg user">
+    <div class="msg-avatar">我</div>
+    <div class="msg-body">一双白色的篮球鞋</div>
+  </div>
+  <div class="msg ai">
+    <div class="msg-avatar">M</div>
+    <div class="msg-body">
+      清楚了：白色篮球鞋 + 白底产品图。我帮你用 studio lighting 干净出图。
+      <div class="choices-row">
+        <span class="choice-pill primary">确认，开始生成</span>
+        <span class="choice-pill">试试电影感光影</span>
+        <span class="choice-pill">试试自然场景风</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── 关键设计 ─── -->
+<h2>关键设计决策</h2>
+
+<div class="card">
+  <h3><span class="step-num">1</span> 动态信息评估，不做固定轮次追问</h3>
+  <p>
+    7 个维度加权评分（主体 30 / 风格 20 / 情绪 15 / 构图 10 / 色彩 10 / 光线 10 / 用途 5）。
+    用户描述充分 → 0 次追问直接生成；描述模糊 → 只问最关键的 1 个问题。
+    阈值 60 分即可生成，不会陷入无限追问。
+  </p>
+</div>
+
+<div class="card">
+  <h3><span class="step-num">2</span> 选项式交互，能不打字就不打字</h3>
+  <p>
+    ASK 阶段提供结构化选项按钮（如"电商海报 / 社媒配图 / 白底产品图"），
+    点击即发送，系统自动提取为结构化信息。CONFIRM 阶段提供快捷操作
+    （确认生成 / 换方向）。<strong>输入框始终可用</strong>，用户随时可以手动打字补充。
+  </p>
+</div>
+
+<div class="card">
+  <h3><span class="step-num">3</span> LLM 负责对话，Engine 负责决策</h3>
+  <p>
+    Muse（LLM Agent）只负责理解用户、创意协作、生成回复。它不直接触发生图，
+    只通过 <code>[[ACTION_INTENT]]</code> JSON 块表达意图。最终是否生成、问什么问题，
+    由 <strong>Decision Engine</strong>（规则引擎）决定。两者解耦，Engine 可以 override LLM 的判断。
+  </p>
+</div>
+
+<div class="card">
+  <h3><span class="step-num">4</span> 生图场景模板，贴合实际业务</h3>
+  <p>
+    5 个内置场景（白底产品图 / 产品场景图 / 电商海报 / 社媒配图 / 时尚画册），
+    根据用户意图自动匹配。每个场景有专属的摄影要素 prompt 和负向词，
+    确保出图风格符合实际业务需求，不会跑偏成艺术创作。
+  </p>
+</div>
+
+<div class="card">
+  <h3><span class="step-num">5</span> 真流式输出 + VLM 真传图质检</h3>
+  <p>
+    LLM 回复使用 SSE 逐 token 流式输出，用户看到打字机效果，不等待。
+    生成完成后 VLM 真正「看到」图片做视觉质检，返回质量评分和匹配度。
+  </p>
+</div>
+
+<!-- ─── 对比 ─── -->
+<h2>Chat 模式 vs Agent 模式</h2>
+
+<table>
+  <tr>
+    <th></th><th>Chat 模式</th><th>Agent 模式</th>
+  </tr>
+  <tr>
+    <td>交互方式</td>
+    <td>用户输入 <code>/指令 + prompt</code>，手动控制生图参数</td>
+    <td>自然语言描述目标，Agent 引导补充信息，点击选项确认</td>
+  </tr>
+  <tr>
+    <td>适用场景</td>
+    <td>熟悉 prompt 的高级用户、模板合成、批量生产</td>
+    <td>不熟悉 prompt 的运营同事、从想法到成图的探索式创作</td>
+  </tr>
+  <tr>
+    <td>追问机制</td>
+    <td>无追问，用户需自行组织完整 prompt</td>
+    <td>动态评估信息完整度，最多 1-2 次追问，可选按钮快速回答</td>
+  </tr>
+  <tr>
+    <td>Prompt 构建</td>
+    <td>用户手写，固定质量词追加</td>
+    <td>自动匹配场景模板，注入专业摄影要素和风格词</td>
+  </tr>
+  <tr>
+    <td>迭代能力</td>
+    <td>手动修改 prompt 重新生成</td>
+    <td>自然语言反馈 → 自动构建 refine prompt → 保留主体一致性迭代</td>
+  </tr>
+  <tr>
+    <td>质量反馈</td>
+    <td>无</td>
+    <td>VLM 视觉质检，返回质量分和匹配度</td>
+  </tr>
+  <tr>
+    <td>默认状态</td>
+    <td colspan="2" style="text-align:center;color:var(--ink-3)">每次打开页面默认进入 Chat 模式，Agent 模式需手动切换</td>
+  </tr>
+</table>
+
+<div class="note">
+  <strong>当前状态：</strong>Agent 模式后端已完成，前端基础交互可用（对话流式 + 选项按钮 + 生图 + 质检）。
+  前端 UI 后续迭代计划：Creative Brief 卡片、迭代版本对比、参考图拖拽上传。
+</div>
+
+<footer>
+  DesignFlow Agent Mode · 内部文档
+</footer>
+
+</div>
+</body>
+</html>

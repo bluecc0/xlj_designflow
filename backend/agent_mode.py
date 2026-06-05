@@ -8,7 +8,8 @@ import math
 import mimetypes
 import re
 import time
-from typing import Any, AsyncIterator, Optional
+from pathlib import Path
+from typing import Any, AsyncIterator, Callable, Optional
 
 import httpx
 import pydantic
@@ -17,6 +18,126 @@ from .ai_image import SLASH_MODEL_MAP, generate_image_async, generate_image_with
 from .config import settings
 
 logger = logging.getLogger(__name__)
+
+
+# ── 生图场景模板 ──────────────────────────────────────────────────────────────
+# 每个场景定义了适合该业务用途的正向 prompt 要素和负向词。
+# Agent 根据用户描述的用途/主体自动匹配最合适的场景模板。
+
+PROMPT_SCENES: dict[str, dict[str, Any]] = {
+    "product_white_bg": {
+        "name": "白底产品图",
+        "match": "白底 产品图 干净背景 商品展示 单品 纯色背景",
+        "positive_elements": [
+            "commercial product photography",
+            "clean white background",
+            "studio lighting",
+            "sharp focus on product",
+            "professional e-commerce photography",
+            "product centered, isolated",
+        ],
+        "negative": (
+            "cluttered background, busy scene, text overlay, watermark, "
+            "harsh shadows, dark background, multiple products, lifestyle setting"
+        ),
+    },
+    "product_scene": {
+        "name": "产品场景图",
+        "match": "场景图 模特 穿搭 上身 户外 室内场景 生活场景 lifestyle",
+        "positive_elements": [
+            "professional lifestyle photography",
+            "natural lighting",
+            "shallow depth of field",
+            "product prominently featured",
+            "clean composition",
+        ],
+        "negative": (
+            "studio background, white background, cluttered composition, "
+            "distracting elements, text, watermark, low quality"
+        ),
+    },
+    "ecommerce_poster": {
+        "name": "电商海报",
+        "match": "海报 电商 banner 促销 活动 主图 封面 大促",
+        "positive_elements": [
+            "professional e-commerce poster",
+            "dramatic studio lighting",
+            "product hero shot",
+            "clean composition with copy space",
+            "commercial advertising photography",
+            "high-end retouching",
+        ],
+        "negative": (
+            "cluttered, amateur, casual snapshot, messy background, "
+            "low contrast, text, watermark, cropped product"
+        ),
+    },
+    "social_media": {
+        "name": "社媒配图",
+        "match": "社媒 小红书 朋友圈 公众号 推文 封面 封面图 头像 种草",
+        "positive_elements": [
+            "social media content",
+            "trending aesthetic",
+            "clean and modern composition",
+            "natural and inviting lighting",
+            "brand-friendly visual",
+        ],
+        "negative": (
+            "corporate stock photo style, cluttered, outdated, "
+            "low effort, amateur, text heavy, watermark"
+        ),
+    },
+    "fashion_lookbook": {
+        "name": "时尚画册",
+        "match": "球鞋 服饰 穿搭 时尚 潮流 街头 运动鞋",
+        "positive_elements": [
+            "fashion editorial photography",
+            "dramatic directional lighting",
+            "product as hero subject",
+            "high-end fashion retouching",
+            "atmospheric and premium feel",
+        ],
+        "negative": (
+            "casual snapshot, flat lighting, busy background, "
+            "low quality, distorted product, text, watermark"
+        ),
+    },
+}
+
+# 未匹配到任何场景时的通用高质量电商 prompt
+FALLBACK_POSITIVE = (
+    "professional commercial photography, clean composition, "
+    "studio lighting, product focused, high quality, sharp details"
+)
+FALLBACK_NEGATIVE = (
+    "low quality, blurry, distorted, amateur, cluttered, "
+    "text, watermark, ugly, deformed"
+)
+
+# 所有场景统一追加的质量后缀
+QUALITY_SUFFIX = "masterpiece, best quality, highly detailed"
+
+
+def _match_prompt_scene(intent: dict[str, Any]) -> dict[str, Any] | None:
+    """根据用户意图匹配最合适的生图场景模板（命中关键词最多者优先）。"""
+    search_text = " ".join([
+        str(intent.get("subject") or ""),
+        str(intent.get("style") or ""),
+        str(intent.get("useCase") or ""),
+        str(intent.get("mood") or ""),
+    ]).lower()
+    if not search_text.strip():
+        return None
+
+    best_scene = None
+    best_hits = 0
+    for key, scene in PROMPT_SCENES.items():
+        match_keywords = scene["match"].lower().split()
+        hits = sum(1 for kw in match_keywords if kw in search_text)
+        if hits > best_hits:
+            best_hits = hits
+            best_scene = scene
+    return best_scene
 
 
 INTENT_KEYS = (
@@ -269,18 +390,57 @@ def calculate_completeness(state: dict[str, Any]) -> AgentCompletenessResult:
     )
 
 
-def pick_question(gaps: list[str]) -> str:
-    templates = {
-        "subject": "我先帮你收一下核心信息，这张图最想表现的主体是什么？比如人物、产品、场景，或者某个具体物件。",
-        "useCase": "这张图更偏什么用途？海报、封面、电商主图，还是社媒配图？",
-        "style": "风格上你更想靠近哪一类？比如高级感、电影感、赛博朋克、极简，或者你也可以让我来定。",
-        "mood": "你希望画面的情绪更偏哪边？克制、浪漫、神秘、热烈，都可以。",
-        "composition": "构图上有没有明确偏好？比如近景特写、居中主体，或者更有纵深的大场景。",
+def pick_question(gaps: list[str]) -> dict[str, Any]:
+    """根据缺失维度生成问题 + 结构化选项。"""
+    templates: dict[str, dict[str, Any]] = {
+        "subject": {
+            "question": "我先帮你收一下核心信息，这张图最想表现的主体是什么？比如人物、产品、场景，或者某个具体物件。",
+            "choices": [],  # 主体太开放，不适合选项
+        },
+        "useCase": {
+            "question": "这张图主要用在哪里？",
+            "choices": [
+                {"label": "电商海报", "value": "电商海报"},
+                {"label": "社媒配图", "value": "社媒配图"},
+                {"label": "白底产品图", "value": "白底产品图"},
+                {"label": "场景图", "value": "场景图"},
+                {"label": "你来决定", "value": "你来决定"},
+            ],
+        },
+        "style": {
+            "question": "风格上你更偏好哪一种？",
+            "choices": [
+                {"label": "高级简约", "value": "高级简约风格"},
+                {"label": "酷炫潮流", "value": "酷炫潮流风格"},
+                {"label": "自然温暖", "value": "自然温暖风格"},
+                {"label": "电影感大片", "value": "电影感大片风格"},
+                {"label": "你来决定", "value": "你来决定"},
+            ],
+        },
+        "mood": {
+            "question": "你希望画面的情绪更偏哪边？",
+            "choices": [
+                {"label": "克制专业", "value": "克制专业"},
+                {"label": "热烈活力", "value": "热烈活力"},
+                {"label": "高级冷淡", "value": "高级冷淡"},
+                {"label": "温暖亲切", "value": "温暖亲切"},
+                {"label": "你来决定", "value": "你来决定"},
+            ],
+        },
+        "composition": {
+            "question": "构图上有没有明确偏好？",
+            "choices": [
+                {"label": "产品居中特写", "value": "产品居中特写"},
+                {"label": "场景纵深感", "value": "场景纵深构图"},
+                {"label": "留白设计感", "value": "留白设计感构图"},
+                {"label": "你来决定", "value": "你来决定"},
+            ],
+        },
     }
     for key in ("subject", "useCase", "style", "mood", "composition"):
         if key in gaps:
-            return templates.get(key, "我再补一个关键点，这张图里你最在意的视觉信息是什么？")
-    return "我再补一个关键点，这张图里你最在意的视觉信息是什么？"
+            return templates.get(key, {"question": "我再补一个关键点，这张图里你最在意的视觉信息是什么？", "choices": []})
+    return {"question": "我再补一个关键点，这张图里你最在意的视觉信息是什么？", "choices": []}
 
 
 def infer_defaults(intent: dict[str, Any], gaps: list[str]) -> dict[str, str]:
@@ -321,42 +481,85 @@ def build_brief(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_generation_prompt(state: dict[str, Any]) -> dict[str, Any]:
+    """将当前意图构建为生图 prompt。优先保留用户原始描述，场景模板仅做补充。"""
     intent = state.get("intent") or {}
-    prompt_bits = [
-        intent.get("subject"),
-        intent.get("composition"),
-        intent.get("style"),
-        intent.get("mood"),
-        intent.get("lighting"),
-        intent.get("colorPalette"),
-        intent.get("useCase"),
-        "masterpiece, best quality, highly detailed",
-    ]
-    positive = ", ".join([bit.strip() for bit in prompt_bits if isinstance(bit, str) and bit.strip()])
+    scene = _match_prompt_scene(intent)
+
+    positive_parts: list[str] = []
+
+    # 1. 用户描述的主体和构图永远排在最前面
+    for key in ("subject", "composition"):
+        value = intent.get(key)
+        if isinstance(value, str) and value.strip():
+            positive_parts.append(value.strip())
+
+    # 2. 用户明确表达的 style / mood / lighting / colorPalette
+    for key in ("style", "mood", "lighting", "colorPalette"):
+        value = intent.get(key)
+        if isinstance(value, str) and value.strip():
+            positive_parts.append(value.strip())
+
+    # 3. 场景模板注入（作为补充，不覆盖用户描述）
+    if scene:
+        for elem in scene["positive_elements"]:
+            if elem.lower() not in " ".join(positive_parts).lower():
+                positive_parts.append(elem)
+        scene_name = scene["name"]
+    else:
+        # 未匹配场景时注入通用电商摄影要素
+        if FALLBACK_POSITIVE.lower() not in " ".join(positive_parts).lower():
+            positive_parts.append(FALLBACK_POSITIVE)
+        scene_name = "通用电商"
+
+    # 4. useCase 放最后
+    use_case = intent.get("useCase")
+    if isinstance(use_case, str) and use_case.strip():
+        positive_parts.append(use_case.strip())
+
+    # 5. 质量后缀
+    positive_parts.append(QUALITY_SUFFIX)
+
+    positive = ", ".join(positive_parts)
+
+    # 负向 prompt
+    negative = scene["negative"] if scene else FALLBACK_NEGATIVE
+
     return {
         "positive": positive,
-        "negative": "low quality, blurry, distorted anatomy, extra fingers, malformed text, watermark",
+        "negative": negative,
         "model": settings.agent_image_model,
         "parameters": {
             "size": settings.agent_image_size,
             "resolution": settings.agent_image_resolution,
         },
-        "promptReasoning": "基于当前确认的主体、风格、情绪和构图信息生成。",
+        "promptReasoning": f"匹配到「{scene_name}」场景模板，已注入对应摄影要素和负向词。",
     }
 
 
 def build_refine_prompt(state: dict[str, Any], user_message: str) -> dict[str, Any]:
+    """迭代优化 prompt：保留当前 prompt 核心，按用户反馈微调。"""
     current = state.get("currentPrompt") or {}
+    intent = state.get("intent") or {}
+    scene = _match_prompt_scene(intent)
+
     positive = current.get("positive") or ""
     if user_message.strip():
-        positive = f"{positive}, keep overall composition and subject consistency, refine with: {user_message.strip()}"
+        keep_marker = "keep overall composition and subject consistency"
+        if keep_marker not in positive:
+            positive = f"{positive}, {keep_marker}"
+        positive = f"{positive}, refine with: {user_message.strip()}"
+
+    negative = current.get("negative") or FALLBACK_NEGATIVE
+    if scene and scene["negative"] not in negative:
+        negative = f"{negative}, {scene['negative']}"
+
     return {
         "positive": positive,
-        "negative": current.get("negative") or "low quality, blurry, distorted anatomy, malformed text, watermark",
-        "model": settings.agent_image_model,
+        "negative": negative,
+        "model": current.get("model") or settings.agent_image_model,
         "parameters": {
-            "size": settings.agent_image_size,
-            "resolution": settings.agent_image_resolution,
+            "size": (current.get("parameters") or {}).get("size") or settings.agent_image_size,
+            "resolution": (current.get("parameters") or {}).get("resolution") or settings.agent_image_resolution,
         },
         "promptReasoning": "在保留现有画面核心主体的基础上按用户反馈迭代。",
     }
@@ -513,7 +716,14 @@ async def call_agent_llm(
     state: dict[str, Any],
     recent_messages: list[dict[str, Any]],
     reference_context: str = "",
+    *,
+    on_chunk: Callable[[str], None] | None = None,
 ) -> tuple[str, AgentActionIntent]:
+    """调用 Agent LLM，返回 (展示用文本, 结构化意图)。
+
+    当 on_chunk 不为 None 时，使用 stream=True 逐 token 回调，
+    回调收到的文本已过滤掉 [[ACTION_INTENT]] 块，用户看不到 JSON。
+    """
     if not settings.agent_llm_api_key:
         raise RuntimeError("AGENT_LLM_API_KEY 未配置")
     history_lines = []
@@ -529,7 +739,7 @@ async def call_agent_llm(
 要求：
 1. 回复用中文，2到4句，自然、像设计师同事，不要列表。
 2. 如果信息已经足够，不要继续追问，可以先帮用户总结方向。
-3. 如果用户说“你来定/自由发挥/随便”，把 userAuthorizedFreedom 设为 true。
+3. 如果用户说"你来定/自由发挥/随便"，把 userAuthorizedFreedom 设为 true。
 4. JSON 中只保留你本轮新提取的信息，没有就留空对象。
 5. 如果参考图分析里明确写了用户已经上传参考图，不要再要求用户重复上传参考图，而是基于已有参考图继续聊视觉方向。
 
@@ -547,6 +757,9 @@ async def call_agent_llm(
 
 输出示例：
 [[ACTION_INTENT]]{{"type":"CONTINUE_CHAT","confidence":0.72,"extractedInfo":{{"subject":"...","style":"..."}},"openQuestions":["..."],"creativeSuggestion":"..."}}"""
+
+    use_stream = on_chunk is not None
+
     async with httpx.AsyncClient(timeout=settings.agent_llm_timeout_seconds, trust_env=False) as client:
         resp = await client.post(
             _chat_completions_endpoint(settings.agent_llm_base_url),
@@ -559,14 +772,51 @@ async def call_agent_llm(
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 1200,
                 "temperature": 0.8,
-                "stream": False,
+                "stream": use_stream,
             },
         )
-    if resp.status_code != 200:
-        raise RuntimeError(f"Agent LLM error: {resp.text[:240]}")
-    data = resp.json()
-    content = (((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-    parsed = _extract_json_block(content) or {}
+
+    if use_stream:
+        # ── 流式路径：逐 token 回调，自动过滤 [[ACTION_INTENT]] ──
+        accumulated = ""
+        safe_len = 0  # 已回调给调用方的安全字符数
+
+        async for line in resp.aiter_lines():
+            if not line or not line.startswith("data: "):
+                continue
+            data_str = line[6:]
+            if data_str.strip() == "[DONE]":
+                break
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+            delta = ((((data or {}).get("choices") or [{}])[0].get("delta") or {}).get("content") or "")
+            if not delta:
+                continue
+
+            accumulated += delta
+
+            # 检测 [[ACTION_INTENT]] 边界：一旦发现，之后的内容不再推送给用户
+            action_idx = accumulated.find("[[ACTION_INTENT]]")
+            if action_idx >= 0:
+                if action_idx > safe_len:
+                    # 把标记之前的剩余安全文本推出去
+                    on_chunk(accumulated[safe_len:action_idx])
+                safe_len = len(accumulated)  # 标记之后不再推送
+            elif safe_len < len(accumulated):
+                new_text = accumulated[safe_len:]
+                on_chunk(new_text)
+                safe_len = len(accumulated)
+    else:
+        # ── 非流式路径（兼容旧调用）──
+        if resp.status_code != 200:
+            raise RuntimeError(f"Agent LLM error: {resp.text[:240]}")
+        data = resp.json()
+        accumulated = (((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+
+    # 提取 ActionIntent
+    parsed = _extract_json_block(accumulated) or {}
     action = AgentActionIntent(
         type=str(parsed.get("type") or "CONTINUE_CHAT"),
         confidence=max(0.0, min(1.0, float(parsed.get("confidence") or 0.5))),
@@ -574,7 +824,7 @@ async def call_agent_llm(
         open_questions=parsed.get("openQuestions") or [],
         creative_suggestion=str(parsed.get("creativeSuggestion") or ""),
     )
-    return strip_action_block(content), action
+    return strip_action_block(accumulated), action
 
 
 def decide_next_action(state: dict[str, Any], action_intent: AgentActionIntent, user_message: str) -> dict[str, Any]:
@@ -598,19 +848,43 @@ def decide_next_action(state: dict[str, Any], action_intent: AgentActionIntent, 
         }
 
     if completeness.critical_gaps:
+        q = pick_question(completeness.critical_gaps)
         return {
             "type": "ASK",
-            "question": pick_question(completeness.critical_gaps),
+            "question": q["question"],
             "dimension": completeness.critical_gaps[0],
+            "choices": q.get("choices", []),
             "completeness": completeness.model_dump(),
         }
 
     if completeness.can_generate:
         brief = state.get("brief")
         if not brief or not brief.get("confirmedByUser"):
-            if action_intent.type == "PRESENT_BRIEF":
-                return {"type": "CONFIRM", "brief": build_brief(state), "completeness": completeness.model_dump()}
-            return {"type": "CONFIRM", "brief": build_brief(state), "completeness": completeness.model_dump()}
+            scene = _match_prompt_scene(state.get("intent") or {})
+            scene_name = scene["name"] if scene else ""
+            quick_actions = [
+                {"label": "确认，开始生成", "value": "确认，开始生成"},
+            ]
+            # 根据场景提供替代方向
+            if scene_name == "白底产品图":
+                quick_actions.append({"label": "试试电影感光影", "value": "换个方向，试试电影感光影效果"})
+                quick_actions.append({"label": "试试自然场景风", "value": "换个方向，把产品放到自然场景里"})
+            elif scene_name == "电商海报":
+                quick_actions.append({"label": "试试更简约高级", "value": "换个方向，试试更简约高级的风格"})
+                quick_actions.append({"label": "试试更炫酷潮流", "value": "换个方向，试试更炫酷潮流的风格"})
+            elif scene_name == "产品场景图":
+                quick_actions.append({"label": "试试白底干净风", "value": "换个方向，试试白底干净风格"})
+                quick_actions.append({"label": "试试高级冷淡风", "value": "换个方向，试试高级冷淡风格"})
+            elif scene_name == "时尚画册":
+                quick_actions.append({"label": "试试电影感大片", "value": "换个方向，试试电影感大片风格"})
+                quick_actions.append({"label": "试试极简留白", "value": "换个方向，试试极简留白风格"})
+            elif scene_name == "社媒配图":
+                quick_actions.append({"label": "试试品牌高级感", "value": "换个方向，试试品牌高级感"})
+                quick_actions.append({"label": "试试温暖生活感", "value": "换个方向，试试温暖生活感"})
+            else:
+                quick_actions.append({"label": "换个方向试试", "value": "换个方向试试"})
+            # 始终保留手动输入能力（用户直接打字即可）
+            return {"type": "CONFIRM", "brief": build_brief(state), "completeness": completeness.model_dump(), "quickActions": quick_actions}
         return {
             "type": "GENERATE",
             "prompt": build_generation_prompt(state),
@@ -659,6 +933,7 @@ def apply_decision_to_state(state: dict[str, Any], decision: dict[str, Any], use
 
 
 async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any]:
+    """VLM 质检：真正读取图片并传给 VLM 做视觉分析。"""
     summary = "图片已生成，当前先使用基础分析结果。"
     result = {
         "qualityScore": 78,
@@ -671,16 +946,28 @@ async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any
     }
     if not settings.agent_vlm_api_key:
         return result
-    try:
-        prompt = f"""你是图片质检助手。请根据当前创意意图，返回 JSON：
-{{"qualityScore":0-100,"intentMatch":0-100,"userFacingSummary":"一句中文总结"}}
+
+    # 将图片转为 base64 data URL
+    image_data_url = await _resolve_image_data_url(image_url)
+    if not image_data_url:
+        logger.warning("vlm_critic: unable to resolve image for %s", image_url)
+        return result
+
+    content: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": f"""你是图片质检助手。请根据当前创意意图，分析图片质量并返回 JSON。
 
 当前创意：
 {json.dumps(state.get("brief") or state.get("intent") or {}, ensure_ascii=False)}
 
-图片地址：
-{image_url}
-"""
+请返回 JSON：
+{{"qualityScore":0-100,"intentMatch":0-100,"userFacingSummary":"一句中文总结图片质量和匹配度"}}""",
+        },
+        {"type": "image_url", "image_url": {"url": image_data_url}},
+    ]
+
+    try:
         async with httpx.AsyncClient(timeout=settings.agent_vlm_timeout_seconds, trust_env=False) as client:
             resp = await client.post(
                 _chat_completions_endpoint(settings.agent_vlm_base_url),
@@ -690,7 +977,7 @@ async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any
                 },
                 json={
                     "model": settings.agent_vlm_model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": [{"role": "user", "content": content}],
                     "max_tokens": 300,
                     "temperature": 0.2,
                     "stream": False,
@@ -698,8 +985,8 @@ async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any
             )
         if resp.status_code == 200:
             data = resp.json()
-            content = (((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-            match = re.search(r"(\{.*\})", content, flags=re.S)
+            content_text = (((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            match = re.search(r"(\{.*\})", content_text, flags=re.S)
             if match:
                 parsed = json.loads(match.group(1))
                 result["qualityScore"] = int(parsed.get("qualityScore") or result["qualityScore"])
@@ -708,6 +995,45 @@ async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any
     except Exception:
         logger.exception("vlm critic failed")
     return result
+
+
+async def _resolve_image_data_url(image_url: str) -> str:
+    """将图片 URL（本地路径或远程 URL）解析为 base64 data URL。"""
+    if not image_url:
+        return ""
+
+    # 已经是 data URL
+    if image_url.startswith("data:image/"):
+        return image_url
+
+    image_bytes: bytes | None = None
+    mime_type = "image/png"
+
+    # 本地路径：/ai-images/{user_id}/{filename}.png
+    if image_url.startswith("/ai-images/") or image_url.startswith("/results/"):
+        local_path = settings.output_path / image_url.lstrip("/")
+        if local_path.exists():
+            image_bytes = local_path.read_bytes()
+            mime_type = mimetypes.guess_type(str(local_path))[0] or "image/png"
+
+    # 远程 URL
+    if image_bytes is None and image_url.startswith(("http://", "https://")):
+        try:
+            async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+                fetch_resp = await client.get(image_url)
+                if fetch_resp.status_code == 200:
+                    image_bytes = fetch_resp.content
+                    content_type = fetch_resp.headers.get("content-type", "")
+                    if content_type and content_type.startswith("image/"):
+                        mime_type = content_type.split(";")[0].strip()
+        except Exception:
+            logger.warning("vlm_critic: failed to fetch remote image %s", image_url[:120])
+
+    if not image_bytes:
+        return ""
+
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
 
 
 async def stream_generation_events(

@@ -723,6 +723,24 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <TextBubble who={m.who} markdown>{m.text}</TextBubble>
+                {/* 快捷选项按钮：ASK 的 choices 或 CONFIRM 的 quickActions */}
+                {(Array.isArray(m.choices) && m.choices.length > 0) || (Array.isArray(m.quickActions) && m.quickActions.length > 0) ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {(m.choices || m.quickActions || []).map(function(opt, oi) {
+                      return React.createElement('button', {
+                        key: oi,
+                        onClick: function() { handleQuickReply(opt.value); },
+                        disabled: isLoading,
+                        style: {
+                          fontSize: 12, padding: '7px 14px', borderRadius: 18,
+                          border: '1px solid var(--line-2)', background: 'var(--panel)',
+                          color: 'var(--ink)', cursor: isLoading ? 'default' : 'pointer',
+                          opacity: isLoading ? 0.5 : 1,
+                        },
+                      }, opt.label);
+                    })}
+                  </div>
+                ) : null}
                 {m.who === 'user' && Array.isArray(m.refPreviews) && m.refPreviews.length > 0 ? (
                   <div style={{
                     alignSelf: 'stretch',
@@ -1906,13 +1924,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
   const [currentAiChatId, setCurrentAiChatId] = React.useState('');
   const [composerResetKey, setComposerResetKey] = React.useState(0);
   const [greetingResetKey, setGreetingResetKey] = React.useState(0);
-  const [agentEnabled, setAgentEnabled] = React.useState(function() {
-    try {
-      return localStorage.getItem(AGENT_MODE_KEY) === '1';
-    } catch (e) {
-      return false;
-    }
-  });
+  const [agentEnabled, setAgentEnabled] = React.useState(false);
   const [agentProjectId, setAgentProjectId] = React.useState(function() {
     try {
       return localStorage.getItem(AGENT_PROJECT_ID_KEY) || '';
@@ -1973,12 +1985,6 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       });
     return creatingAgentProjectRef.current;
   }, [agentProjectId]);
-
-  React.useEffect(() => {
-    try {
-      localStorage.setItem(AGENT_MODE_KEY, agentEnabled ? '1' : '0');
-    } catch (e) {}
-  }, [agentEnabled]);
 
   React.useEffect(() => {
     try {
@@ -2418,6 +2424,18 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
               return;
             }
             if (eventName === 'decision') {
+              if (payload && (payload.type === 'ASK' || payload.type === 'CONFIRM')) {
+                var opts = payload.type === 'ASK' ? payload.choices : payload.quickActions;
+                if (Array.isArray(opts) && opts.length > 0) {
+                  setMessages(function(msgs) {
+                    return msgs.map(function(m, i) {
+                      if (i !== assistantIdx) return m;
+                      var key = payload.type === 'ASK' ? 'choices' : 'quickActions';
+                      return Object.assign({}, m, {}, { [key]: opts });
+                    });
+                  });
+                }
+              }
               if (payload && (payload.type === 'GENERATE' || payload.type === 'REFINE')) {
                 setMessages(function(msgs) {
                   if (imageIdx == null) imageIdx = msgs.length;
@@ -2510,6 +2528,11 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       }
       return;
     }
+
+    // ── 快捷回复：点击选项按钮触发 ──────────────────────────────────────────────
+    const handleQuickReply = React.useCallback(function(value) {
+      handleSend(value, [], {});
+    }, [handleSend]);
 
     // ── 设为头像 ──────────────────────────────────────────────────────────────
     const trimmed = text.trimStart();
