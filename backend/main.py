@@ -384,6 +384,8 @@ async def health():
 
     if settings.ai_image_api_key:
         balance_base = settings.ai_image_base_url.rstrip("/")
+        if not balance_base.startswith("http"):
+            balance_base = "https://" + balance_base
         if not balance_base.endswith("/v1"):
             balance_url = balance_base + "/v1/user/balance"
         else:
