@@ -328,6 +328,70 @@ const AnalyzedSubject = () => (
   </div>
 );
 
+// ---------- BriefCard（Agent 模式 CONFIRM 阶段的创意方案卡片）----------
+
+const BriefCard = ({ brief, completeness }) => {
+  if (!brief) return null;
+  const rows = [];
+  if (brief.concept) rows.push(['核心方案', brief.concept]);
+  if (Array.isArray(brief.visualElements) && brief.visualElements.length > 0) {
+    rows.push(['视觉要素', brief.visualElements.join(' · ')]);
+  }
+  if (brief.style) rows.push(['风格', brief.style]);
+  if (brief.mood) rows.push(['氛围', brief.mood]);
+  if (brief.colorDirection) rows.push(['色彩方向', brief.colorDirection]);
+
+  const score = completeness && typeof completeness.score === 'number' ? completeness.score : null;
+  const isConfirmed = brief.confirmedByUser;
+
+  return (
+    <div style={{
+      borderRadius: 10, padding: 12, width: '100%',
+      background: isConfirmed ? 'var(--accent-soft)' : 'var(--panel)',
+      border: '1px solid ' + (isConfirmed ? 'var(--accent)' : 'var(--line-2)'),
+      transition: 'background 200ms, border-color 200ms',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <I.sparkles size={12} style={{ color: 'var(--accent)' }}/>
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' }}>
+            创意方案 Brief
+          </span>
+          {isConfirmed && (
+            <span style={{
+              fontSize: 10, padding: '1px 6px', borderRadius: 99,
+              background: 'var(--accent)', color: '#fff', fontWeight: 500,
+            }}>已确认</span>
+          )}
+        </div>
+        {score !== null && (
+          <span className="mono" style={{
+            fontSize: 10, color: 'var(--ink-3)',
+            padding: '2px 6px', borderRadius: 4, background: 'var(--panel-2)',
+          }}>
+            完整度 {score}/100
+          </span>
+        )}
+      </div>
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'auto 1fr',
+        gap: '6px 12px', fontSize: 11.5,
+      }}>
+        {rows.map(([k, v]) => (
+          <React.Fragment key={k}>
+            <span className="mono" style={{
+              color: 'var(--ink-3)', fontSize: 10,
+              textTransform: 'uppercase', letterSpacing: '0.05em',
+              alignSelf: 'flex-start', paddingTop: 2, whiteSpace: 'nowrap',
+            }}>{k}</span>
+            <span style={{ color: 'var(--ink)', lineHeight: 1.5 }}>{v}</span>
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 // ---------- LogBox（实时滚动日志）----------
 
 const LogBox = ({ logs, running }) => {
@@ -723,6 +787,10 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <TextBubble who={m.who} markdown>{m.text}</TextBubble>
+                {/* Agent CONFIRM 阶段的创意方案卡片 */}
+                {m.brief ? (
+                  <BriefCard brief={m.brief} completeness={m.completeness}/>
+                ) : null}
                 {/* 快捷选项按钮：ASK 的 choices 或 CONFIRM 的 quickActions */}
                 {(Array.isArray(m.choices) && m.choices.length > 0) || (Array.isArray(m.quickActions) && m.quickActions.length > 0) ? (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -1934,12 +2002,28 @@ const mapAgentProjectMessages = function(project, images) {
   const base = Array.isArray(project && project.messages) ? project.messages.map(function(item) {
     var payload = item && item.payload ? item.payload : {};
     var refMeta = Array.isArray(payload.reference_images) ? payload.reference_images : [];
-    return {
+    var decision = (payload && payload.decision) || {};
+    var msg = {
       who: item && item.role === 'user' ? 'user' : 'ai',
       text: (item && item.text) || '',
       meta: item && item.role === 'assistant' ? 'Agent' : undefined,
       refMeta: refMeta,
     };
+    // 恢复 CONFIRM 的 Brief 卡片 + 快捷按钮
+    if (decision && decision.type === 'CONFIRM') {
+      if (decision.brief) msg.brief = decision.brief;
+      if (decision.completeness) msg.completeness = decision.completeness;
+      if (Array.isArray(decision.quickActions) && decision.quickActions.length > 0) {
+        msg.quickActions = decision.quickActions;
+      }
+      msg.decisionType = 'CONFIRM';
+    } else if (decision && decision.type === 'ASK') {
+      if (Array.isArray(decision.choices) && decision.choices.length > 0) {
+        msg.choices = decision.choices;
+      }
+      msg.decisionType = 'ASK';
+    }
+    return msg;
   }) : [];
   const items = Array.isArray(images) ? images : [];
   if (!items.length) return base;
@@ -2470,15 +2554,24 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
             if (eventName === 'decision') {
               if (payload && (payload.type === 'ASK' || payload.type === 'CONFIRM')) {
                 var opts = payload.type === 'ASK' ? payload.choices : payload.quickActions;
-                if (Array.isArray(opts) && opts.length > 0) {
-                  setMessages(function(msgs) {
-                    return msgs.map(function(m, i) {
-                      if (i !== assistantIdx) return m;
-                      var key = payload.type === 'ASK' ? 'choices' : 'quickActions';
-                      return Object.assign({}, m, {}, { [key]: opts });
-                    });
+                setMessages(function(msgs) {
+                  return msgs.map(function(m, i) {
+                    if (i !== assistantIdx) return m;
+                    var patch = {};
+                    if (Array.isArray(opts) && opts.length > 0) {
+                      patch[payload.type === 'ASK' ? 'choices' : 'quickActions'] = opts;
+                    }
+                    // CONFIRM 阶段附带 Creative Brief 卡片数据
+                    if (payload.type === 'CONFIRM' && payload.brief) {
+                      patch.brief = payload.brief;
+                    }
+                    if (payload.completeness) {
+                      patch.completeness = payload.completeness;
+                    }
+                    patch.decisionType = payload.type;
+                    return Object.assign({}, m, patch);
                   });
-                }
+                });
               }
               if (payload && (payload.type === 'GENERATE' || payload.type === 'REFINE')) {
                 setMessages(function(msgs) {
