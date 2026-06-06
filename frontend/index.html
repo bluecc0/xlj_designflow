@@ -2394,6 +2394,8 @@ const BriefCard = ({ brief, completeness }) => {
   if (Array.isArray(brief.visualElements) && brief.visualElements.length > 0) {
     rows.push(['视觉要素', brief.visualElements.join(' · ')]);
   }
+  if (brief.copyText) rows.push(['画面文案', brief.copyText]);
+  if (brief.aspectRatio) rows.push(['画幅比例', brief.aspectRatio]);
   if (brief.style) rows.push(['风格', brief.style]);
   if (brief.mood) rows.push(['氛围', brief.mood]);
   if (brief.colorDirection) rows.push(['色彩方向', brief.colorDirection]);
@@ -2481,6 +2483,10 @@ const ThinkingBlock = ({ text }) => {
       )}
     </div>
   );
+};
+
+const getThinkingPreview = (message) => {
+  return String(message || '').trim() || '正在连接 Agent...';
 };
 
 // ---------- LogBox（实时滚动日志）----------
@@ -2660,6 +2666,10 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
           <Bubble key={i} who={m.who} meta={m.meta} user={user}>
             {m.type === 'ai-image-generating' ? (() => {
             const fmtSecs = s => { const mm = Math.floor(s/60), ss = s%60; return mm > 0 ? mm+'m '+String(ss).padStart(2,'0')+'s' : ss+'s'; };
+            const promptPayload = m.promptPayload || null;
+            const promptPositive = promptPayload && promptPayload.positive ? promptPayload.positive : m.prompt;
+            const promptNegative = promptPayload && promptPayload.negative ? promptPayload.negative : '';
+            const promptParams = promptPayload && promptPayload.parameters ? promptPayload.parameters : null;
             return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
               React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
                 m.status === 'done'
@@ -2682,6 +2692,32 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
                     : null
               ),
               React.createElement(InlineRefStrip, { items: m.refPreviews }),
+              promptPositive && React.createElement('div', {
+                style: {
+                  padding: '9px 10px',
+                  borderRadius: 8,
+                  background: 'var(--panel)',
+                  border: '1px solid var(--line-2)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 5,
+                }
+              },
+                React.createElement('div', {
+                  className: 'mono',
+                  style: { fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }
+                }, 'Prompt 标准'),
+                React.createElement('div', { style: { fontSize: 11.2, color: 'var(--ink-2)', lineHeight: 1.45 } },
+                  String(promptPositive).slice(0, 360),
+                  String(promptPositive).length > 360 ? '...' : ''
+                ),
+                promptNegative ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.4 } },
+                  '避免：', String(promptNegative).slice(0, 220), String(promptNegative).length > 220 ? '...' : ''
+                ) : null,
+                promptParams ? React.createElement('div', { className: 'mono', style: { fontSize: 10, color: 'var(--ink-3)' } },
+                  'size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认'
+                ) : null
+              ),
               m.status === 'done' && m.imageUrl && React.createElement('div', null,
                 React.createElement('img', {
                   src: m.imageUrl,
@@ -2872,18 +2908,19 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
                 )}
               </div>
             ) : m.type === 'thinking' ? (
-              m.thinking ? (
-                <ThinkingBlock text={m.thinking}/>
-              ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <div style={{
                     width: 6, height: 6, borderRadius: 99,
                     background: 'var(--ink-3)',
                     animation: 'pulse 1.2s ease-in-out infinite',
                   }}/>
-                  <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>让我想想...</span>
+                  <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+                    {getThinkingPreview(m.thinkingStatus || m.text)}
+                  </span>
                 </div>
-              )
+                {m.thinking ? <ThinkingBlock text={m.thinking}/> : null}
+              </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {/* Agent 思考过程（可折叠） */}
@@ -4195,6 +4232,7 @@ const mapAgentProjectMessages = function(project, images) {
       type: 'ai-image-generating',
       model: (image && image.model) || 'agent',
       prompt: image && image.prompt ? (image.prompt.positive || '') : '',
+      promptPayload: image && image.prompt ? image.prompt : null,
       status: 'done',
       imageUrl: image && image.image_url ? ((window.API_BASE || window.location.origin) + image.image_url) : '',
       finalElapsed: null,
@@ -4215,13 +4253,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
   const [composerResetKey, setComposerResetKey] = React.useState(0);
   const [greetingResetKey, setGreetingResetKey] = React.useState(0);
   const [agentEnabled, setAgentEnabled] = React.useState(false);
-  const [agentProjectId, setAgentProjectId] = React.useState(function() {
-    try {
-      return localStorage.getItem(AGENT_PROJECT_ID_KEY) || '';
-    } catch (e) {
-      return '';
-    }
-  });
+  const [agentProjectId, setAgentProjectId] = React.useState('');
   const [agentProject, setAgentProject] = React.useState(null);
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [historyLoading, setHistoryLoading] = React.useState(false);
@@ -4284,13 +4316,6 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         creatingAgentProjectRef.current = null;
       });
     return creatingAgentProjectRef.current;
-  }, [agentProjectId]);
-
-  React.useEffect(() => {
-    try {
-      if (agentProjectId) localStorage.setItem(AGENT_PROJECT_ID_KEY, agentProjectId);
-      else localStorage.removeItem(AGENT_PROJECT_ID_KEY);
-    } catch (e) {}
   }, [agentProjectId]);
 
   React.useEffect(() => {
@@ -4704,11 +4729,32 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       var assistantIdx = null;
       var imageIdx = null;
       var thinkingText = '';
+      var thinkingStatus = '正在连接 Agent...';
+      var thinkingPhaseLabels = {
+        analyzing_reference: '正在分析参考图，提取主体、风格和构图线索...',
+        understanding_intent: '正在理解需求，并整理可以确认的创意方向...',
+        llm_waiting: '正在组织回复，先把需求拆成可执行的视觉要点...',
+      };
+      var applyThinkingEvent = function(payload) {
+        var delta = payload && payload.delta ? String(payload.delta) : '';
+        var message = payload && payload.message ? String(payload.message) : '';
+        var phaseMessage = payload && payload.phase ? thinkingPhaseLabels[payload.phase] : '';
+        if (delta) {
+          thinkingText += delta;
+          thinkingStatus = '正在输出思考过程...';
+          return { thinking: thinkingText, thinkingStatus: thinkingStatus };
+        }
+        var nextStatus = message || phaseMessage || '正在处理...';
+        if (nextStatus) {
+          thinkingStatus = nextStatus;
+        }
+        return { thinking: thinkingText, thinkingStatus: thinkingStatus };
+      };
       setMessages(function(msgs) {
         assistantIdx = msgs.length + 1;
         return msgs.concat([
           { who: 'user', text: text, refPreviews: agentRefPreviews },
-          { who: 'ai', type: 'thinking', text: '...', meta: 'Agent' },
+          { who: 'ai', type: 'thinking', text: '正在连接 Agent...', thinkingStatus: thinkingStatus, meta: 'Agent' },
         ]);
       });
       try {
@@ -4716,11 +4762,15 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         await window.API.streamAgentChat(projectId, text, {
           onEvent: function(eventName, payload) {
             if (eventName === 'agent_thinking') {
-              thinkingText += payload.delta || '';
+              var thinkingPatch = applyThinkingEvent(payload || {});
               setMessages(function(msgs) {
                 return msgs.map(function(m, i) {
                   if (i !== assistantIdx) return m;
-                  return Object.assign({}, m, { thinking: thinkingText });
+                  var patch = { thinkingStatus: thinkingPatch.thinkingStatus };
+                  if (thinkingPatch.thinking) {
+                    patch.thinking = thinkingPatch.thinking;
+                  }
+                  return Object.assign({}, m, patch);
                 });
               });
               return;
@@ -4729,7 +4779,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
               setMessages(function(msgs) {
                 return msgs.map(function(m, i) {
                   if (i !== assistantIdx) return m;
-                  return { who: 'ai', text: (m.text || '') + (payload.delta || ''), meta: 'Agent', thinking: m.thinking };
+                  return { who: 'ai', text: (m.text || '') + (payload.delta || ''), meta: 'Agent', thinking: m.thinking, thinkingStatus: m.thinkingStatus };
                 });
               });
               return;
@@ -4767,6 +4817,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                     type: 'ai-image-generating',
                     model: modelLabel,
                     prompt: payload.prompt && payload.prompt.positive ? payload.prompt.positive : text,
+                    promptPayload: payload.prompt || null,
                     size: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.size : 'auto',
                     resolution: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.resolution : '1K',
                     status: 'running',
@@ -4821,11 +4872,13 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
               const latest = await window.API.getAgentProject(projectId);
               const imgs = await window.API.listAgentProjectImages(projectId);
               const mapped = mapAgentProjectMessages(latest, imgs);
-              // 保留流式过程中累积的 thinking 字段（服务端不存储）
+              // 保留流式过程中累积的 thinking/status 字段（服务端不存储）
               setMessages(function(msgs) {
                 return mapped.map(function(mm, i) {
                   var cm = msgs[i];
-                  if (cm && cm.thinking) return Object.assign({}, mm, { thinking: cm.thinking });
+                  if (cm && (cm.thinking || cm.thinkingStatus)) {
+                    return Object.assign({}, mm, { thinking: cm.thinking, thinkingStatus: cm.thinkingStatus });
+                  }
                   return mm;
                 });
               });
