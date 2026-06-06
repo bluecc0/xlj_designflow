@@ -1264,6 +1264,7 @@ def load_admin_users() -> list[dict]:
         uid = row["id"]
         with _connect() as conn:
             job_c = conn.execute("SELECT COUNT(*) AS c FROM jobs WHERE user_id = ?", (uid,)).fetchone()["c"]
+            special_c = conn.execute("SELECT COUNT(*) AS c FROM special_jobs WHERE user_id = ?", (uid,)).fetchone()["c"]
             ai_c = conn.execute("SELECT COUNT(*) AS c FROM ai_image_jobs WHERE user_id = ?", (uid,)).fetchone()["c"]
             proj_c = conn.execute("SELECT COUNT(*) AS c FROM agent_projects WHERE user_id = ?", (uid,)).fetchone()["c"]
             op_c = conn.execute("SELECT COUNT(*) AS c FROM operation_logs WHERE user_id = ?", (uid,)).fetchone()["c"]
@@ -1275,7 +1276,8 @@ def load_admin_users() -> list[dict]:
             "id": row["id"],
             "username": row["username"],
             "created_at": row["created_at"],
-            "total_jobs": job_c,
+            "total_jobs": job_c + special_c,
+            "total_special_jobs": special_c,
             "total_ai_images": ai_c,
             "total_agent_projects": proj_c,
             "total_operations": op_c,

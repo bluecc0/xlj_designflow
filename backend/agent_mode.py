@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import math
@@ -25,6 +26,24 @@ logger = logging.getLogger(__name__)
 # Agent 根据用户描述的用途/主体自动匹配最合适的场景模板。
 
 PROMPT_SCENES: dict[str, dict[str, Any]] = {
+    "portrait_cover": {
+        "name": "人物封面海报",
+        "match": "人物 人像 女性 封面 竖版 小红书 力量 未来 portrait cover",
+        "positive_elements": [
+            "premium editorial portrait poster",
+            "confident woman as the sole hero subject",
+            "vertical cover composition",
+            "minimal high-end layout",
+            "clean background with intentional copy space",
+            "no product placement",
+        ],
+        "negative": (
+            "product advertisement, cosmetics jar, skincare bottle, product packaging, "
+            "perfume bottle, skincare ad, cosmetics ad, commercial product packshot, "
+            "brand logo, luxury brand name, Chanel, Dior, product placement, "
+            "cluttered, amateur, casual snapshot, messy background, low quality, watermark"
+        ),
+    },
     "product_white_bg": {
         "name": "白底产品图",
         "match": "白底 产品图 干净背景 商品展示 单品 纯色背景",
@@ -125,9 +144,19 @@ def _match_prompt_scene(intent: dict[str, Any]) -> dict[str, Any] | None:
         str(intent.get("style") or ""),
         str(intent.get("useCase") or ""),
         str(intent.get("mood") or ""),
+        str(intent.get("composition") or ""),
+        str(intent.get("copyText") or ""),
+        str(intent.get("aspectRatio") or ""),
+        str(intent.get("mustInclude") or ""),
     ]).lower()
     if not search_text.strip():
         return None
+
+    # 人物封面是强业务语义，不能被“海报/封面”误归到电商海报，否则会注入 product hero shot。
+    has_person = any(token in search_text for token in ("人物", "人像", "女性", "portrait"))
+    has_cover_context = any(token in search_text for token in ("封面", "小红书", "竖版", "cover", "3:4", "4:5", "9:16"))
+    if has_person and has_cover_context:
+        return PROMPT_SCENES["portrait_cover"]
 
     best_scene = None
     best_hits = 0
@@ -148,6 +177,19 @@ INTENT_KEYS = (
     "colorPalette",
     "lighting",
     "useCase",
+    "copyText",
+    "aspectRatio",
+    "mustInclude",
+    "avoid",
+)
+
+SUBJECT_BOUND_KEYS = (
+    "subject",
+    "useCase",
+    "composition",
+    "copyText",
+    "mustInclude",
+    "avoid",
 )
 
 DIMENSIONS = (
@@ -191,9 +233,6 @@ CONFIRM_PATTERNS = (
     "go ahead",
     "looks good",
     "do it",
-    "start over",
-    "new image",
-    "new scene",
 )
 REFINE_PATTERNS = (
     "改一下",
@@ -208,6 +247,25 @@ REFINE_PATTERNS = (
     "adjust",
     "change it",
     "iterate",
+)
+
+NEW_TOPIC_PATTERNS = (
+    "新话题",
+    "新会话",
+    "新的对话",
+    "开启新话题",
+    "开启新会话",
+    "重新开始",
+    "从头开始",
+    "全新开始",
+    "清空上下文",
+    "不要参考之前",
+    "不要延续之前",
+    "忘掉之前",
+    "start fresh",
+    "new topic",
+    "new conversation",
+    "forget previous",
 )
 
 
@@ -269,6 +327,9 @@ def normalize_project_state(project: dict[str, Any]) -> dict[str, Any]:
         "conversationSummary": project.get("conversation_summary") or "",
         "metadata": _deep_copy_json(project.get("metadata")),
     })
+    # brief 仅作为参考展示，确认态不持久化：每次加载项目时强制重置
+    if state.get("brief") and isinstance(state["brief"], dict):
+        state["brief"]["confirmedByUser"] = False
     phase = project.get("phase") or {}
     state["phase"] = {
         "stage": phase.get("stage") or "exploring",
@@ -310,15 +371,18 @@ def detect_regenerate(message: str) -> bool:
     return any(pattern.lower() in text for pattern in ("start over", "new image", "new scene", "重新来", "重新生成", "换一个场景"))
 
 
+def detect_new_topic_request(message: str) -> bool:
+    text = (message or "").strip().lower()
+    return any(pattern.lower() in text for pattern in NEW_TOPIC_PATTERNS)
+
+
 def detect_refine(message: str, state: dict[str, Any]) -> bool:
     if not state.get("currentImage"):
         return False
     text = (message or "").lower()
     if any(pattern.lower() in text for pattern in REFINE_PATTERNS):
         return True
-    if detect_regenerate(message):
-        return False
-    return True
+    return False
 
 
 def merge_intent(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
@@ -336,6 +400,30 @@ def merge_intent(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, An
     if incoming.get("userAuthorizedFreedom"):
         merged["userAuthorizedFreedom"] = True
     return merged
+
+
+def _is_distinct_subject(old_subject: str, new_subject: str) -> bool:
+    old_clean = re.sub(r"\s+", "", old_subject or "").lower()
+    new_clean = re.sub(r"\s+", "", new_subject or "").lower()
+    if not old_clean or not new_clean:
+        return False
+    return old_clean not in new_clean and new_clean not in old_clean
+
+
+def merge_current_turn_intent(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """合并当前轮意图。
+
+    当前轮如果显式给了新的主视觉对象，就认为这是新任务锚点：
+    保留风格/氛围/色彩/光线等可复用偏好，但清掉上一任务的主体相关字段。
+    """
+    incoming_subject = str((incoming or {}).get("subject") or "").strip()
+    base_subject = str((base or {}).get("subject") or "").strip()
+    if incoming_subject and _is_distinct_subject(base_subject, incoming_subject):
+        trimmed = dict(base or {})
+        for key in SUBJECT_BOUND_KEYS:
+            trimmed[key] = ""
+        return merge_intent(trimmed, incoming)
+    return merge_intent(base, incoming)
 
 
 def has_meaningful_intent_update(incoming: dict[str, Any]) -> bool:
@@ -362,6 +450,61 @@ def _coarse_subject_from_message(message: str) -> str:
     if len(text) < 4:
         return ""
     return text[:160]
+
+
+def extract_message_constraints(message: str) -> dict[str, Any]:
+    """从用户原话里兜底提取硬约束，避免 LLM JSON 漏掉标题/比例/用途。"""
+    text = (message or "").strip()
+    if not text:
+        return {}
+    extracted: dict[str, Any] = {}
+
+    copy_match = re.search(r"(?:文案|标题|文字|slogan|Slogan)\s*[:：]?\s*[“\"「『](.*?)[”\"」』]", text)
+    if copy_match and copy_match.group(1).strip():
+        extracted["copyText"] = copy_match.group(1).strip()
+
+    ratio_match = re.search(r"(\d{1,2})\s*[:：]\s*(\d{1,2})", text)
+    if ratio_match:
+        extracted["aspectRatio"] = f"{ratio_match.group(1)}:{ratio_match.group(2)}"
+
+    use_case_parts: list[str] = []
+    if "小红书" in text:
+        use_case_parts.append("小红书")
+    if "封面" in text:
+        use_case_parts.append("封面")
+    if "海报" in text:
+        use_case_parts.append("海报")
+    if use_case_parts:
+        extracted["useCase"] = "".join(use_case_parts)
+
+    subject_parts: list[str] = []
+    if "女性" in text:
+        subject_parts.append("女性主题")
+    if "人物" in text or "人像" in text:
+        subject_parts.append("人物封面")
+    if subject_parts:
+        extracted["subject"] = "，".join(dict.fromkeys(subject_parts))
+
+    composition_parts: list[str] = []
+    if "竖版" in text:
+        composition_parts.append("竖版构图")
+    if "人物封面" in text or "人像封面" in text:
+        composition_parts.append("人物封面构图")
+    if ratio_match:
+        composition_parts.append(f"{ratio_match.group(1)}:{ratio_match.group(2)} 画幅")
+    if composition_parts:
+        extracted["composition"] = "，".join(dict.fromkeys(composition_parts))
+
+    if "简约高级" in text or "高级简约" in text:
+        extracted["style"] = "简约高级"
+
+    avoid_parts: list[str] = []
+    if "人物" in text or "女性" in text:
+        avoid_parts.extend(["产品广告", "护肤品广告", "化妆品罐子", "商品包装"])
+    if avoid_parts:
+        extracted["avoid"] = "，".join(dict.fromkeys(avoid_parts))
+
+    return extracted
 
 
 def calculate_completeness(state: dict[str, Any]) -> AgentCompletenessResult:
@@ -472,7 +615,7 @@ def build_brief(state: dict[str, Any]) -> dict[str, Any]:
     concept_parts = [intent.get("subject"), intent.get("style"), intent.get("mood")]
     concept = "，".join([part for part in concept_parts if isinstance(part, str) and part.strip()]) or "待补充视觉方案"
     visual_elements = []
-    for key in ("subject", "composition", "lighting", "colorPalette"):
+    for key in ("subject", "composition", "copyText", "aspectRatio", "lighting", "colorPalette"):
         value = intent.get(key)
         if isinstance(value, str) and value.strip():
             visual_elements.append(value.strip())
@@ -482,8 +625,23 @@ def build_brief(state: dict[str, Any]) -> dict[str, Any]:
         "style": intent.get("style") or "",
         "mood": intent.get("mood") or "",
         "colorDirection": intent.get("colorPalette") or "",
+        "copyText": intent.get("copyText") or "",
+        "aspectRatio": intent.get("aspectRatio") or "",
         "confirmedByUser": False,
     }
+
+
+def _intent_size(intent: dict[str, Any]) -> str:
+    ratio = str(intent.get("aspectRatio") or "").strip().replace("：", ":")
+    if ratio in {"1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5", "16:9", "9:16"}:
+        return ratio
+    composition = str(intent.get("composition") or "")
+    match = re.search(r"(\d{1,2})\s*[:：]\s*(\d{1,2})", composition)
+    if match:
+        ratio = f"{match.group(1)}:{match.group(2)}"
+        if ratio in {"1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5", "16:9", "9:16"}:
+            return ratio
+    return settings.agent_image_size
 
 
 def build_generation_prompt(state: dict[str, Any]) -> dict[str, Any]:
@@ -493,14 +651,18 @@ def build_generation_prompt(state: dict[str, Any]) -> dict[str, Any]:
 
     positive_parts: list[str] = []
 
-    # 1. 用户描述的主体和构图永远排在最前面
-    for key in ("subject", "composition"):
+    # 1. 用户描述的硬约束永远排在最前面
+    for key in ("subject", "useCase", "composition", "aspectRatio"):
         value = intent.get(key)
         if isinstance(value, str) and value.strip():
             positive_parts.append(value.strip())
 
+    copy_text = str(intent.get("copyText") or "").strip()
+    if copy_text:
+        positive_parts.append(f'include exact Chinese title text "{copy_text}" as prominent cover typography')
+
     # 2. 用户明确表达的 style / mood / lighting / colorPalette
-    for key in ("style", "mood", "lighting", "colorPalette"):
+    for key in ("style", "mood", "lighting", "colorPalette", "mustInclude"):
         value = intent.get(key)
         if isinstance(value, str) and value.strip():
             positive_parts.append(value.strip())
@@ -517,25 +679,25 @@ def build_generation_prompt(state: dict[str, Any]) -> dict[str, Any]:
             positive_parts.append(FALLBACK_POSITIVE)
         scene_name = "通用电商"
 
-    # 4. useCase 放最后
-    use_case = intent.get("useCase")
-    if isinstance(use_case, str) and use_case.strip():
-        positive_parts.append(use_case.strip())
-
-    # 5. 质量后缀
+    # 4. 质量后缀
     positive_parts.append(QUALITY_SUFFIX)
 
     positive = ", ".join(positive_parts)
 
     # 负向 prompt
     negative = scene["negative"] if scene else FALLBACK_NEGATIVE
+    avoid = str(intent.get("avoid") or "").strip()
+    if avoid:
+        negative = f"{negative}, {avoid}"
+    if copy_text:
+        negative = negative.replace("text overlay, ", "").replace("text heavy, ", "").replace("text, ", "").replace(", text", "")
 
     return {
         "positive": positive,
         "negative": negative,
         "model": settings.agent_image_model,
         "parameters": {
-            "size": settings.agent_image_size,
+            "size": _intent_size(intent),
             "resolution": settings.agent_image_resolution,
         },
         "promptReasoning": f"使用 {settings.agent_image_model} 文生图，匹配到「{scene_name}」场景模板。",
@@ -754,6 +916,11 @@ async def call_agent_llm(
 4. JSON 中只保留你本轮新提取的信息，没有就留空对象。
 5. 如果参考图分析里明确写了用户已经上传参考图，不要再要求用户重复上传参考图。
 6. 如果本轮用户明确确认了方向，extractedInfo 里 creativeDirectionConfirmed 设为 true。
+7. 如果用户给了文案/标题/画幅/比例/禁忌，请务必写入 extractedInfo：
+   - copyText：用户要求出现在画面里的精确文字
+   - aspectRatio：例如 "3:4"、"9:16"
+   - mustInclude：必须出现的元素
+   - avoid：必须避免的元素
 
 当前项目状态：
 {json.dumps(state, ensure_ascii=False)}
@@ -768,9 +935,23 @@ async def call_agent_llm(
 {user_message}
 
 输出示例：
-[[ACTION_INTENT]]{{"type":"CONTINUE_CHAT","confidence":0.72,"extractedInfo":{{"subject":"...","style":"..."}},"openQuestions":["..."],"creativeSuggestion":"..."}}"""
+[[ACTION_INTENT]]{{"type":"CONTINUE_CHAT","confidence":0.72,"extractedInfo":{{"subject":"...","style":"...","copyText":"...","aspectRatio":"3:4","avoid":"..."}},"openQuestions":["..."],"creativeSuggestion":"..."}}"""
 
     use_stream = on_chunk is not None
+
+    # R1/QwQ 原生 reasoning，不需要 enable_thinking；V3.2/Qwen3 等需要
+    model_lower = (settings.agent_llm_model or "").lower()
+    needs_thinking_param = not any(k in model_lower for k in ("r1", "qwq", "reasoning"))
+
+    payload: dict[str, Any] = {
+        "model": settings.agent_llm_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 2048,
+        "temperature": 0.8,
+        "stream": use_stream,
+    }
+    if needs_thinking_param:
+        payload["enable_thinking"] = True
 
     async with httpx.AsyncClient(timeout=settings.agent_llm_timeout_seconds, trust_env=False) as client:
         resp = await client.post(
@@ -779,14 +960,7 @@ async def call_agent_llm(
                 "Authorization": f"Bearer {settings.agent_llm_api_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": settings.agent_llm_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 2048,
-                "temperature": 0.8,
-                "stream": use_stream,
-                "enable_thinking": True,
-            },
+            json=payload,
         )
 
     if use_stream:
@@ -855,6 +1029,15 @@ def decide_next_action(state: dict[str, Any], action_intent: AgentActionIntent, 
     if detect_free_play(user_message):
         state.setdefault("intent", {})["userAuthorizedFreedom"] = True
 
+    if detect_regenerate(user_message) and (state.get("brief") or state.get("currentPrompt")):
+        completeness = calculate_completeness(state)
+        return {
+            "type": "GENERATE",
+            "prompt": build_generation_prompt(state),
+            "brief": build_brief(state),
+            "completeness": completeness.model_dump(),
+        }
+
     # REFINE：仅当用户明确说"改一下"时才触发，LLM 的推断不能绕过确认
     if detect_refine(user_message, state):
         return {"type": "REFINE", "prompt": build_refine_prompt(state, user_message)}
@@ -883,13 +1066,13 @@ def decide_next_action(state: dict[str, Any], action_intent: AgentActionIntent, 
 
     # LLM 主动想生成，但用户没有明确确认 → 转 CONFIRM，让用户点按钮
     if action_intent.type == "REQUEST_GENERATE":
-        return _build_confirm_action(state, completeness)
+        return _build_confirm_action(state, completeness, action_intent)
 
     # 分数达标 + 至少 2 个明确维度 → CONFIRM
     if completeness.can_generate:
         brief = state.get("brief")
         if not brief or not brief.get("confirmedByUser"):
-            return _build_confirm_action(state, completeness)
+            return _build_confirm_action(state, completeness, action_intent)
         return {
             "type": "GENERATE",
             "prompt": build_generation_prompt(state),
@@ -927,30 +1110,107 @@ def decide_next_action(state: dict[str, Any], action_intent: AgentActionIntent, 
     return {"type": "CONFIRM", "brief": build_brief(state), "completeness": completeness.model_dump()}
 
 
-def _build_confirm_action(state: dict[str, Any], completeness: AgentCompletenessResult) -> dict[str, Any]:
-    """构造 CONFIRM 动作，含场景化快捷按钮。"""
-    scene = _match_prompt_scene(state.get("intent") or {})
-    scene_name = scene["name"] if scene else ""
-    quick_actions = [
-        {"label": "确认，开始生成", "value": "确认，开始生成"},
-    ]
-    if scene_name == "白底产品图":
-        quick_actions.append({"label": "试试电影感光影", "value": "换个方向，试试电影感光影效果"})
-        quick_actions.append({"label": "试试自然场景风", "value": "换个方向，把产品放到自然场景里"})
+def _brief_fragment(intent: dict[str, Any]) -> str:
+    parts = []
+    for key in ("subject", "useCase", "aspectRatio", "copyText"):
+        value = str(intent.get(key) or "").strip()
+        if value:
+            parts.append(value)
+    return "，".join(parts) or "当前创意方向"
+
+
+def _build_creative_quick_actions(
+    state: dict[str, Any],
+    action_intent: AgentActionIntent | None = None,
+) -> list[dict[str, str]]:
+    """基于当前 brief 生成拓展方向，避免全局固定三连按钮。"""
+    intent = state.get("intent") or {}
+    scene = _match_prompt_scene(intent)
+    scene_name = scene["name"] if scene else "通用设计"
+    base = _brief_fragment(intent)
+    style_text = str(intent.get("style") or "")
+    mood_text = str(intent.get("mood") or "")
+    color_text = str(intent.get("colorPalette") or "")
+    copy_text = str(intent.get("copyText") or "").strip()
+
+    candidates: list[tuple[str, str]] = []
+    if scene_name == "人物封面海报":
+        candidates.extend([
+            ("黑白杂志封面", f"换个方向：保留{base}，改成黑白高反差杂志封面，人物更有力量感，标题留白更克制"),
+            ("未来冷光封面", f"换个方向：保留{base}，加入冷色未来光效和更锋利的竖版构图，避免商品广告感"),
+            ("极简留白封面", f"换个方向：保留{base}，做极简留白人物封面，减少装饰，把情绪和标题作为视觉核心"),
+            ("更强眼神张力", f"换个方向：保留{base}，强化人物眼神、面部轮廓和封面压迫感，整体更有态度"),
+        ])
+    elif scene_name == "白底产品图":
+        candidates.extend([
+            ("更干净白底", f"换个方向：保留{base}，做更干净的白底商业产品图，突出轮廓、材质和阴影层次"),
+            ("轻奢棚拍", f"换个方向：保留{base}，改成轻奢棚拍质感，用柔和高光突出产品高级感"),
+            ("结构更利落", f"换个方向：保留{base}，减少干扰元素，强化产品正面结构和电商主图识别度"),
+        ])
     elif scene_name == "电商海报":
-        quick_actions.append({"label": "试试更简约高级", "value": "换个方向，试试更简约高级的风格"})
-        quick_actions.append({"label": "试试更炫酷潮流", "value": "换个方向，试试更炫酷潮流的风格"})
+        candidates.extend([
+            ("强化卖点层级", f"换个方向：保留{base}，加强商品卖点层级、主视觉冲击和活动氛围"),
+            ("高级商业大片", f"换个方向：保留{base}，做成高级商业摄影海报，光影更戏剧化，画面更像品牌大片"),
+            ("更强购买欲", f"换个方向：保留{base}，增强促销节奏和视觉焦点，让用户第一眼看到核心卖点"),
+        ])
     elif scene_name == "产品场景图":
-        quick_actions.append({"label": "试试白底干净风", "value": "换个方向，试试白底干净风格"})
-        quick_actions.append({"label": "试试高级冷淡风", "value": "换个方向，试试高级冷淡风格"})
+        candidates.extend([
+            ("自然生活场景", f"换个方向：保留{base}，放进自然生活场景，光线更真实，产品存在感不要丢"),
+            ("高级空间场景", f"换个方向：保留{base}，改成高级室内空间场景，用环境衬托产品质感"),
+            ("户外氛围感", f"换个方向：保留{base}，尝试户外自然光氛围，构图更松弛但产品仍是核心"),
+        ])
     elif scene_name == "时尚画册":
-        quick_actions.append({"label": "试试电影感大片", "value": "换个方向，试试电影感大片风格"})
-        quick_actions.append({"label": "试试极简留白", "value": "换个方向，试试极简留白风格"})
+        candidates.extend([
+            ("街头画册感", f"换个方向：保留{base}，改成街头时尚画册风，姿态、光影和背景更有潮流感"),
+            ("运动机能风", f"换个方向：保留{base}，强化运动机能和速度感，画面更有能量"),
+            ("高级大片风", f"换个方向：保留{base}，做成高级时尚大片，减少电商感，提升摄影质感"),
+        ])
     elif scene_name == "社媒配图":
-        quick_actions.append({"label": "试试品牌高级感", "value": "换个方向，试试品牌高级感"})
-        quick_actions.append({"label": "试试温暖生活感", "value": "换个方向，试试温暖生活感"})
+        candidates.extend([
+            ("小红书停留率", f"换个方向：保留{base}，强化小红书封面停留率，主体更醒目，信息更聚焦"),
+            ("轻盈种草感", f"换个方向：保留{base}，做得更自然轻盈，像真实可发布的社媒种草图"),
+            ("更强封面感", f"换个方向：保留{base}，强化封面视觉锚点和标题区域，让缩略图更好读"),
+        ])
     else:
-        quick_actions.append({"label": "换个方向试试", "value": "换个方向试试"})
+        candidates.extend([
+            ("更高级克制", f"换个方向：保留{base}，整体做得更高级、更克制，减少廉价装饰"),
+            ("更强视觉冲击", f"换个方向：保留{base}，强化构图张力、光影对比和第一眼记忆点"),
+            ("更商业可用", f"换个方向：保留{base}，提升商业落地感，让画面更适合直接投放和复用"),
+        ])
+
+    if copy_text:
+        candidates.append(("强化文案张力", f"换个方向：保留文案“{copy_text}”，让文字成为画面核心视觉之一，排版更有封面张力"))
+    if "黑白" in color_text or "黑白" in style_text:
+        candidates.append(("黑白更极致", f"换个方向：保留{base}，把黑白对比做得更极致，提升明暗层次和高级感"))
+    if "未来" in mood_text or "未来" in style_text:
+        candidates.append(("未来感更明确", f"换个方向：保留{base}，强化未来感材质、冷光和空间纵深，但不要偏科幻杂乱"))
+    if action_intent and action_intent.creative_suggestion:
+        suggestion = action_intent.creative_suggestion.strip()
+        if 6 <= len(suggestion) <= 120:
+            candidates.append(("采用 Agent 方案", suggestion))
+
+    seen: set[str] = set()
+    unique = []
+    for label, value in candidates:
+        if label in seen:
+            continue
+        seen.add(label)
+        unique.append({"label": label, "value": value})
+
+    logs = (((state.get("metadata") or {}).get("decisionLogs")) or [])
+    signature = json.dumps(intent, ensure_ascii=False, sort_keys=True) + str(len(logs))
+    offset = int(hashlib.sha1(signature.encode("utf-8")).hexdigest()[:6], 16) % max(1, len(unique))
+    rotated = unique[offset:] + unique[:offset]
+    return [{"label": "确认，开始生成", "value": "确认，开始生成"}] + rotated[:2]
+
+
+def _build_confirm_action(
+    state: dict[str, Any],
+    completeness: AgentCompletenessResult,
+    action_intent: AgentActionIntent | None = None,
+) -> dict[str, Any]:
+    """构造 CONFIRM 动作，给出基于当前 brief 的少量拓展方向。"""
+    quick_actions = _build_creative_quick_actions(state, action_intent)
     return {"type": "CONFIRM", "brief": build_brief(state), "completeness": completeness.model_dump(), "quickActions": quick_actions}
 
 
@@ -970,8 +1230,7 @@ def apply_decision_to_state(state: dict[str, Any], decision: dict[str, Any], use
         updated["currentPrompt"] = decision.get("prompt")
     if kind == "CONFIRM" and decision.get("brief"):
         updated["brief"] = decision["brief"]
-    if updated.get("brief") and detect_confirm(user_message):
-        updated["brief"]["confirmedByUser"] = True
+        # confirmedByUser 不持久化，状态由 normalize_project_state 每次重置
     logs = (((updated.get("metadata") or {}).get("decisionLogs")) or [])
     logs.append({"type": kind, "at": math.floor(time.time()), "userMessage": user_message[:200]})
     updated.setdefault("metadata", {})["decisionLogs"] = logs[-20:]
@@ -980,15 +1239,16 @@ def apply_decision_to_state(state: dict[str, Any], decision: dict[str, Any], use
 
 async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any]:
     """VLM 质检：真正读取图片并传给 VLM 做视觉分析。"""
-    summary = "图片已生成，当前先使用基础分析结果。"
+    summary = "图片已生成，但视觉质检暂未完成。"
     result = {
-        "qualityScore": 78,
-        "intentMatch": 76,
+        "qualityScore": 0,
+        "intentMatch": 0,
         "autoRetry": False,
-        "satisfiedElements": ["已完成一次可用出图"],
-        "problemElements": [],
+        "satisfiedElements": [],
+        "problemElements": ["VLM 质检未完成，不能判断是否符合 brief"],
         "iterationDiff": {"keep": [], "adjust": [], "promptDelta": {"add": [], "remove": [], "modify": {}}},
         "userFacingSummary": summary,
+        "status": "not_checked",
     }
     if not settings.agent_vlm_api_key:
         return result
@@ -999,16 +1259,25 @@ async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any
         logger.warning("vlm_critic: unable to resolve image for %s", image_url)
         return result
 
+    prompt_payload = state.get("currentPrompt") or {}
     content: list[dict[str, Any]] = [
         {
             "type": "text",
-            "text": f"""你是图片质检助手。请根据当前创意意图，分析图片质量并返回 JSON。
+            "text": f"""你是图片质检助手。请以“实际生图 Prompt”为主要验收标准，结合用户确认过的 Brief，分析图片质量并返回 JSON。
 
-当前创意：
+用户确认 Brief：
 {json.dumps(state.get("brief") or state.get("intent") or {}, ensure_ascii=False)}
 
+实际生图 Prompt：
+{json.dumps(prompt_payload, ensure_ascii=False)}
+
+判断要求：
+1. 检查图片是否满足 positive prompt 的主体、用途、构图、文案、比例和风格。
+2. 检查图片是否违反 negative prompt，例如出现了明确要求避免的产品、包装、文字错误等。
+3. 如果 prompt 里要求精确中文文案，请重点检查画面文字是否存在、是否正确。
+
 请返回 JSON：
-{{"qualityScore":0-100,"intentMatch":0-100,"userFacingSummary":"一句中文总结图片质量和匹配度"}}""",
+{{"qualityScore":0-100,"intentMatch":0-100,"satisfiedElements":["..."],"problemElements":["..."],"userFacingSummary":"一句中文总结图片质量和匹配度"}}""",
         },
         {"type": "image_url", "image_url": {"url": image_data_url}},
     ]
@@ -1037,7 +1306,12 @@ async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any
                 parsed = json.loads(match.group(1))
                 result["qualityScore"] = int(parsed.get("qualityScore") or result["qualityScore"])
                 result["intentMatch"] = int(parsed.get("intentMatch") or result["intentMatch"])
+                if isinstance(parsed.get("satisfiedElements"), list):
+                    result["satisfiedElements"] = parsed.get("satisfiedElements")
+                if isinstance(parsed.get("problemElements"), list):
+                    result["problemElements"] = parsed.get("problemElements")
                 result["userFacingSummary"] = str(parsed.get("userFacingSummary") or result["userFacingSummary"])
+                result["status"] = "checked"
     except Exception:
         logger.exception("vlm critic failed")
     return result
