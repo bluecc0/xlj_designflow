@@ -1298,13 +1298,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     if (!fileList.length) return;
     const images = fileList.filter(f => f.type.startsWith('image/'));
     const others = fileList.filter(f => !f.type.startsWith('image/'));
-    if (images.length) {
-      setRefImages(prev => {
-        const remaining = 4 - prev.length;
-        const toAdd = images.slice(0, remaining).map(file => ({ file, previewUrl: URL.createObjectURL(file) }));
-        return [...prev, ...toAdd];
-      });
-    }
+    if (images.length) addImageFiles(images);
     if (others.length && !agentEnabled) {
       const file = others[0];
       const fileObj = { name: file.name, size: formatFileSize(file.size), file, imageType };
@@ -1321,14 +1315,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     const imageItems = items.filter(it => it.kind === 'file' && it.type.startsWith('image/'));
     if (!imageItems.length) return;
     e.preventDefault();
-    setRefImages(prev => {
-      const remaining = 4 - prev.length;
-      const toAdd = imageItems.slice(0, remaining).map(it => {
-        const file = it.getAsFile();
-        return { file, previewUrl: URL.createObjectURL(file) };
-      });
-      return [...prev, ...toAdd];
-    });
+    const files = imageItems.map(it => it.getAsFile()).filter(Boolean);
+    addImageFiles(files);
   };
 
   const removeRefImage = (idx) => {
@@ -1340,6 +1328,52 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
 
   const clearRefImages = () => {
     setRefImages(prev => { prev.forEach(r => URL.revokeObjectURL(r.previewUrl)); return []; });
+  };
+
+  // ---------- 拖拽上传图片 ----------
+  const [isDraggingOver, setIsDraggingOver] = React.useState(false);
+  const dragCounterRef = React.useRef(0);
+
+  // 提取通用的添加图片函数，被拖拽/粘贴/文件选择共用
+  const addImageFiles = React.useCallback((files) => {
+    const images = Array.from(files || []).filter(f => f && f.type && f.type.startsWith('image/'));
+    if (!images.length) return 0;
+    setRefImages(prev => {
+      const remaining = 4 - prev.length;
+      if (remaining <= 0) return prev;
+      const toAdd = images.slice(0, remaining).map(file => ({ file, previewUrl: URL.createObjectURL(file) }));
+      return [...prev, ...toAdd];
+    });
+    return Math.min(images.length, 4 - refImages.length);
+  }, [refImages.length]);
+
+  const handleDragEnter = (e) => {
+    if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    dragCounterRef.current += 1;
+    setIsDraggingOver(true);
+  };
+
+  const handleDragOver = (e) => {
+    if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleDragLeave = (e) => {
+    if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) setIsDraggingOver(false);
+  };
+
+  const handleDrop = (e) => {
+    if (!e.dataTransfer) return;
+    e.preventDefault();
+    dragCounterRef.current = 0;
+    setIsDraggingOver(false);
+    const files = e.dataTransfer.files;
+    if (files && files.length) addImageFiles(files);
   };
 
   const clearComposer = React.useCallback(() => {
@@ -1749,6 +1783,10 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   return (
     <div
       ref={composerRef}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       style={{
         flexShrink: 0,
         borderTop: 'none',
@@ -1759,6 +1797,26 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         display: 'flex', flexDirection: 'column',
       }}
     >
+      {/* 拖拽上传遮罩 */}
+      {isDraggingOver && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 50,
+          background: 'rgba(79, 70, 229, 0.08)',
+          border: '2px dashed var(--accent)',
+          borderRadius: 12,
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          gap: 8, pointerEvents: 'none',
+        }}>
+          <I.image size={28} style={{ color: 'var(--accent)' }}/>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent)' }}>
+            松手添加图片
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+            最多 4 张参考图（当前 {refImages.length}/4）
+          </div>
+        </div>
+      )}
       {/* 拖拽手柄 */}
       <div
         onMouseDown={handleDragStart}
