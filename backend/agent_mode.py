@@ -724,11 +724,12 @@ async def call_agent_llm(
     reference_context: str = "",
     *,
     on_chunk: Callable[[str], None] | None = None,
+    on_think: Callable[[str], None] | None = None,
 ) -> tuple[str, AgentActionIntent]:
     """调用 Agent LLM，返回 (展示用文本, 结构化意图)。
 
-    当 on_chunk 不为 None 时，使用 stream=True 逐 token 回调，
-    回调收到的文本已过滤掉 [[ACTION_INTENT]] 块，用户看不到 JSON。
+    当 on_chunk 不为 None 时，使用 stream=True 逐 token 回调；
+    当 on_think 不为 None 时，实时回调模型的 reasoning_content（思考过程）。
     """
     if not settings.agent_llm_api_key:
         raise RuntimeError("AGENT_LLM_API_KEY 未配置")
@@ -797,11 +798,22 @@ async def call_agent_llm(
                 data = json.loads(data_str)
             except json.JSONDecodeError:
                 continue
-            delta = ((((data or {}).get("choices") or [{}])[0].get("delta") or {}).get("content") or "")
-            if not delta:
+            delta_content = ""
+            delta_reasoning = ""
+            try:
+                choice_delta = ((((data or {}).get("choices") or [{}])[0].get("delta") or {}))
+                delta_content = choice_delta.get("content") or ""
+                delta_reasoning = choice_delta.get("reasoning_content") or ""
+            except Exception:
+                pass
+
+            if delta_reasoning and on_think:
+                on_think(delta_reasoning)
+
+            if not delta_content:
                 continue
 
-            accumulated += delta
+            accumulated += delta_content
 
             # 检测 [[ACTION_INTENT]] 边界：一旦发现，之后的内容不再推送给用户
             action_idx = accumulated.find("[[ACTION_INTENT]]")

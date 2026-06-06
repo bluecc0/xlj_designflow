@@ -1886,7 +1886,13 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
 
             def _on_llm_chunk(chunk: str) -> None:
                 try:
-                    text_queue.put_nowait(chunk)
+                    text_queue.put_nowait(("text", chunk))
+                except Exception:
+                    pass
+
+            def _on_llm_think(think: str) -> None:
+                try:
+                    text_queue.put_nowait(("think", think))
                 except Exception:
                     pass
 
@@ -1895,17 +1901,22 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 agent_reply, action_intent = await call_agent_llm(
                     message, state, recent_messages, reference_context,
                     on_chunk=_on_llm_chunk,
+                    on_think=_on_llm_think,
                 )
-                text_queue.put_nowait(None)  # sentinel: LLM 完成
+                text_queue.put_nowait((None, None))  # sentinel: LLM 完成
 
             llm_task = asyncio.create_task(_run_llm())
 
             # 边收边推送 SSE
             while True:
-                chunk = await text_queue.get()
-                if chunk is None:  # sentinel
+                item = await text_queue.get()
+                kind, content = item
+                if kind is None:  # sentinel
                     break
-                yield make_sse("agent_text", {"delta": chunk})
+                if kind == "think":
+                    yield make_sse("agent_thinking", {"delta": content})
+                else:
+                    yield make_sse("agent_text", {"delta": content})
 
             await llm_task  # 确保拿到 agent_reply / action_intent
 
