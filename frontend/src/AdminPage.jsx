@@ -108,6 +108,9 @@ var AdminPage = function(props) {
   var _fAction = _useState('');
   var filterAction = _fAction[0]; var setFilterAction = _fAction[1];
 
+  var _exp = _useState({});
+  var expandedPayloads = _exp[0]; var setExpandedPayloads = _exp[1];
+
   // 加载统计 + 用户列表（不依赖筛选）
   var loadStatsAndUsers = _useCallback(function() {
     Promise.all([
@@ -321,32 +324,56 @@ React.createElement('th', { style: Object.assign({}, thStyle, { width: 60, textA
                   React.createElement('td', {
                     style: Object.assign({}, tdStyle, { color: 'var(--ink-2)', maxWidth: 350, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })
                   }, op.detail || '-'),
-React.createElement('td', {
-  style: Object.assign({}, tdStyle, { textAlign: 'center' })
-},
-  (op.payload && op.payload.trim())
-    ? React.createElement('button', {
+(function() {
+  var hasPayload = op.payload && op.payload.trim();
+  var isExpanded = !!expandedPayloads[op.id];
+  if (!hasPayload) {
+    return React.createElement('td', {
+      style: Object.assign({}, tdStyle, { textAlign: 'center' })
+    }, React.createElement('span', { style: { color: 'var(--ink-3)', fontSize: 10 } }, '-'));
+  }
+  return React.createElement(React.Fragment, { key: op.id + '-payload' },
+    React.createElement('td', {
+      style: Object.assign({}, tdStyle, { textAlign: 'center' })
+    },
+      React.createElement('button', {
         onClick: function(e) {
           e.stopPropagation();
-          var tr = e.currentTarget.parentElement.parentElement;
-          var next = tr.nextElementSibling;
-          if (next && next.dataset && next.dataset.payloadRow === op.id) {
-            next.remove();
-            return;
-          }
-          var newRow = document.createElement('tr');
-          newRow.dataset.payloadRow = op.id;
-          newRow.innerHTML = '<td colspan="5" style="padding:8px 14px;background:#f8f9fb;border-bottom:1px solid var(--line)"><pre style="margin:0;font-size:10.5px;line-height:1.5;color:var(--ink-2);white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;font-family:SF Mono,Fira Code,monospace">' + (function() { try { return JSON.stringify(JSON.parse(op.payload), null, 2); } catch(e) { return op.payload; } })() + '</pre></td>';
-          tr.parentElement.insertBefore(newRow, tr.nextElementSibling);
+          setExpandedPayloads(function(prev) {
+            var next = Object.assign({}, prev);
+            if (next[op.id]) { delete next[op.id]; }
+            else { next[op.id] = true; }
+            return next;
+          });
         },
         style: {
           padding: '2px 8px', borderRadius: 4, border: '1px solid var(--line-2)',
-          background: 'var(--panel)', color: 'var(--ink-3)', fontSize: 10,
+          background: isExpanded ? 'var(--accent-soft)' : 'var(--panel)',
+          color: isExpanded ? 'var(--accent)' : 'var(--ink-3)', fontSize: 10,
           cursor: 'pointer', fontFamily: 'monospace',
         }
-      }, '{...}')
-    : React.createElement('span', { style: { color: 'var(--ink-3)', fontSize: 10 } }, '-')
-),
+      }, isExpanded ? '收起' : '{...}')
+    ),
+    isExpanded ? React.createElement('tr', {
+      key: op.id + '-payload-row',
+      style: { borderBottom: '1px solid var(--line)' }
+    },
+      React.createElement('td', {
+        colSpan: 5,
+        style: { padding: '8px 14px', background: '#f8f9fb' }
+      },
+        React.createElement('pre', {
+          style: {
+            margin: 0, fontSize: 10.5, lineHeight: 1.5,
+            color: 'var(--ink-2)', whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all', maxHeight: 300, overflowY: 'auto',
+            fontFamily: 'SF Mono, Fira Code, monospace',
+          }
+        }, (function() { try { return JSON.stringify(JSON.parse(op.payload), null, 2); } catch(e) { return op.payload; } })())
+      )
+    ) : null
+  );
+})(),
                 );
               })
             )
