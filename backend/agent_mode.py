@@ -777,9 +777,10 @@ async def call_agent_llm(
             json={
                 "model": settings.agent_llm_model,
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 1200,
+                "max_tokens": 2048,
                 "temperature": 0.8,
                 "stream": use_stream,
+                "enable_thinking": True,
             },
         )
 
