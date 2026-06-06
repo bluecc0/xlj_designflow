@@ -1459,7 +1459,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     files.length > 0 ? ('文件 ' + files.length) : '',
   ].filter(Boolean);
   const composerPlaceholder = agentEnabled
-    ? '描述你的创作目标，Agent 会先帮你梳理方向'
+    ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）'
     : activeMode === 'ai-image'
       ? (activeAiModel === 'nano-banana-pro'
         ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景'
