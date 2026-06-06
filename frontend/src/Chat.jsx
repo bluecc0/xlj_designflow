@@ -523,7 +523,7 @@ const ChatGenerating = () => (
   </div>
 );
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey }) => {
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey, onQuickReply }) => {
   const userMsgs = messages.filter(m => m.who === 'user').length;
   const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
   const bottomRef = React.useRef(null);
@@ -797,13 +797,13 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
                     {(m.choices || m.quickActions || []).map(function(opt, oi) {
                       return React.createElement('button', {
                         key: oi,
-                        onClick: function() { handleQuickReply(opt.value); },
-                        disabled: isLoading,
+                        onClick: function() { onQuickReply(opt.value); },
+                        disabled: isGenerating,
                         style: {
                           fontSize: 12, padding: '7px 14px', borderRadius: 18,
                           border: '1px solid var(--line-2)', background: 'var(--panel)',
-                          color: 'var(--ink)', cursor: isLoading ? 'default' : 'pointer',
-                          opacity: isLoading ? 0.5 : 1,
+                          color: 'var(--ink)', cursor: isGenerating ? 'default' : 'pointer',
+                          opacity: isGenerating ? 0.5 : 1,
                         },
                       }, opt.label);
                     })}
@@ -3381,9 +3381,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       </div>
 
       {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey}/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey}/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply}/>}
 
       <Composer
         onSend={handleSend}
