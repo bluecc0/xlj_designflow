@@ -1224,24 +1224,29 @@ def count_operation_logs(
 
 
 def load_admin_stats() -> dict:
-    """聚合统计信息"""
+    """聚合统计信息（合成任务 = 普通合成 + 特殊品合成）"""
     with _connect() as conn:
         user_count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
         job_total = conn.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()["c"]
         job_done = conn.execute("SELECT COUNT(*) AS c FROM jobs WHERE status = 'done'").fetchone()["c"]
         job_failed = conn.execute("SELECT COUNT(*) AS c FROM jobs WHERE status = 'failed'").fetchone()["c"]
+        special_total = conn.execute("SELECT COUNT(*) AS c FROM special_jobs").fetchone()["c"]
+        special_done = conn.execute("SELECT COUNT(*) AS c FROM special_jobs WHERE status = 'done'").fetchone()["c"]
+        special_failed = conn.execute("SELECT COUNT(*) AS c FROM special_jobs WHERE status = 'failed'").fetchone()["c"]
         ai_total = conn.execute("SELECT COUNT(*) AS c FROM ai_image_jobs").fetchone()["c"]
         ai_done = conn.execute("SELECT COUNT(*) AS c FROM ai_image_jobs WHERE status = 'done'").fetchone()["c"]
-        special_total = conn.execute("SELECT COUNT(*) AS c FROM special_jobs").fetchone()["c"]
         agent_total = conn.execute("SELECT COUNT(*) AS c FROM agent_projects").fetchone()["c"]
         chat_total = conn.execute("SELECT COUNT(*) AS c FROM ai_chat_sessions").fetchone()["c"]
         active_sessions = conn.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()["c"]
         op_total = conn.execute("SELECT COUNT(*) AS c FROM operation_logs").fetchone()["c"]
     return {
         "users": user_count,
-        "jobs": {"total": job_total, "done": job_done, "failed": job_failed},
+        "jobs": {
+            "total": job_total + special_total,
+            "done": job_done + special_done,
+            "failed": job_failed + special_failed,
+        },
         "ai_images": {"total": ai_total, "done": ai_done},
-        "special_jobs": special_total,
         "agent_projects": agent_total,
         "ai_chat_sessions": chat_total,
         "active_sessions": active_sessions,
