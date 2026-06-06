@@ -4215,7 +4215,17 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
   }, [agentEnabled, onComposeComplete]);
 
   const ensureAgentProject = React.useCallback(async function() {
-    if (agentProjectId) return agentProjectId;
+    // 如果有保存的 ID，先尝试加载；加载失败则重新创建
+    if (agentProjectId) {
+      try {
+        const data = await window.API.getAgentProject(agentProjectId);
+        if (data && data.id) return agentProjectId;
+      } catch (e) {
+        // 项目已不存在（404），清除旧 ID，继续创建新项目
+        setAgentProjectId('');
+        try { localStorage.removeItem(AGENT_PROJECT_ID_KEY); } catch (ex) {}
+      }
+    }
     if (creatingAgentProjectRef.current) return creatingAgentProjectRef.current;
     creatingAgentProjectRef.current = window.API.createAgentProject()
       .then(function(created) {
