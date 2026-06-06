@@ -1173,8 +1173,8 @@ def create_special_compose(
     background_tasks.add_task(run_special_compose, job)
     log_operation(
         user_id=user["id"], username=user["username"],
-        action="special_compose",
-        detail=f"sku={getattr(request, 'sku', '?')}",
+        action="compose",
+        detail=f"kind=special sku={getattr(request, 'sku', '?')}",
         payload=request.model_dump_json() if hasattr(request, 'model_dump_json') else json.dumps({"sku": getattr(request, 'sku', '?')}, ensure_ascii=False),
     )
     return job
