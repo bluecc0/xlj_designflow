@@ -202,9 +202,15 @@ def init_db() -> None:
                 username    TEXT NOT NULL,
                 action      TEXT NOT NULL,
                 detail      TEXT NOT NULL DEFAULT '',
+                payload     TEXT NOT NULL DEFAULT '',
                 created_at  REAL NOT NULL
             )
         """)
+        # 兼容旧表：添加 payload 列
+        try:
+            conn.execute("ALTER TABLE operation_logs ADD COLUMN payload TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_oplogs_ts ON operation_logs(created_at)
         """)
@@ -1160,12 +1166,12 @@ def _row_to_agent_image(row: sqlite3.Row) -> dict:
 
 # ─── 操作日志 ──────────────────────────────────────────────────────────────────
 
-def log_operation(*, user_id: str, username: str, action: str, detail: str = "") -> None:
-    """记录用户操作（供管理后台查询）"""
+def log_operation(*, user_id: str, username: str, action: str, detail: str = "", payload: str = "") -> None:
+    """记录用户操作（供管理后台查询），payload 为完整请求 JSON"""
     with _lock, _connect() as conn:
         conn.execute(
-            "INSERT INTO operation_logs (user_id, username, action, detail, created_at) VALUES (?, ?, ?, ?, ?)",
-            (user_id, username, action, detail, time.time()),
+            "INSERT INTO operation_logs (user_id, username, action, detail, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, username, action, detail, payload, time.time()),
         )
         conn.commit()
 
