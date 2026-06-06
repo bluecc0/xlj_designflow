@@ -740,7 +740,11 @@ async def call_agent_llm(
         if text:
             history_lines.append(f"[{role}] {text[:200]}")
     history_block = "\n".join(history_lines) or "（暂无）"
-    prompt = f"""你是 Muse，一个会和用户一起把创意聊清楚的视觉创意搭档。请先自然回复用户，再在最后单独输出一段 JSON，格式必须是：
+    prompt = f"""你是 Muse，一个会和用户一起把创意聊清楚的视觉创意搭档。
+
+⚠️ 重要：系统会自动从你的回复末尾提取 JSON，用户看不到它。绝对不要在对话文字中提及 [[ACTION_INTENT]]、JSON、格式、字段名等技术细节。只把 JSON 块放在最后一行，前面完全是自然对话。
+
+先自然回复用户，再在最后一行的 [[ACTION_INTENT]] 块中输出 JSON：
 [[ACTION_INTENT]]{{...}}
 
 要求：
@@ -748,7 +752,8 @@ async def call_agent_llm(
 2. 你的首要任务是确认和用户对创意方向达成了共识。如果你在某个维度上是在猜测，请告诉用户你的猜测，让对方确认或纠正。
 3. 如果用户说"你来定/自由发挥/随便"，把 userAuthorizedFreedom 设为 true。
 4. JSON 中只保留你本轮新提取的信息，没有就留空对象。
-5. 如果参考图分析里明确写了用户已经上传参考图，不要再要求用户重复上传参考图，而是基于已有参考图继续聊视觉方向。
+5. 如果参考图分析里明确写了用户已经上传参考图，不要再要求用户重复上传参考图。
+6. 如果本轮用户明确确认了方向，extractedInfo 里 creativeDirectionConfirmed 设为 true。
 
 当前项目状态：
 {json.dumps(state, ensure_ascii=False)}
