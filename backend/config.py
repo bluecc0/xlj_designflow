@@ -120,6 +120,12 @@ class Settings:
         self.output_path.mkdir(parents=True, exist_ok=True)
         self.allowed_login_users = self._load_login_users()
 
+        # 统一补协议前缀，避免 ai_image_base_url 等配置没有 http://
+        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "zenmux_base_url"):
+            _val = getattr(self, _key, "")
+            if _val and not _val.startswith("http"):
+                setattr(self, _key, "https://" + _val)
+
     def _load_knowledge(self) -> str:
         if not self.knowledge_path.exists():
             return ""
