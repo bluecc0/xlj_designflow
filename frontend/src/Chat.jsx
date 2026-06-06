@@ -2764,9 +2764,16 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
               const latest = await window.API.getAgentProject(projectId);
               const imgs = await window.API.listAgentProjectImages(projectId);
               const mapped = mapAgentProjectMessages(latest, imgs);
+              // 保留流式过程中累积的 thinking 字段（服务端不存储）
+              setMessages(function(msgs) {
+                return mapped.map(function(mm, i) {
+                  var cm = msgs[i];
+                  if (cm && cm.thinking) return Object.assign({}, mm, { thinking: cm.thinking });
+                  return mm;
+                });
+              });
               setAgentProject(latest);
               setAgentMessages(mapped);
-              setMessages(mapped);
             }
             setIsLoading(false);
           },
