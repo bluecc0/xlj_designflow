@@ -47,17 +47,22 @@ from .ai_image import (
     SLASH_MODEL_MAP,
 )
 from .agent_mode import (
+    AgentActionIntent,
     AgentChatRequest,
     analyze_reference_images,
     apply_decision_to_state,
     build_brief,
     call_agent_llm,
     _coarse_subject_from_message,
+    _deep_copy_json,
     decide_next_action,
     default_project_state,
     detect_confirm,
+    detect_new_topic_request,
+    extract_message_constraints,
     has_meaningful_intent_update,
     make_sse,
+    merge_current_turn_intent,
     merge_intent,
     normalize_project_state,
     run_vlm_critic,
@@ -569,7 +574,8 @@ def auth_login_lite(body: LiteLoginRequest, response: Response):
     except ValueError:
         raise HTTPException(400, "该身份不在可用名单里")
     session_id = create_session(user["id"])
-    log_operation(user_id=user["id"], username=user["username"], action="login")
+    log_operation(user_id=user["id"], username=user["username"], action="login",
+                  payload=json.dumps({"username": user["username"]}, ensure_ascii=False))
     response.set_cookie(
         _SESSION_COOKIE,
         session_id,
@@ -937,6 +943,7 @@ def create_compose(
         user_id=user["id"], username=user["username"],
         action="compose",
         detail=f"template={request.template_frame_id[:8] if request.template_frame_id else '?'}",
+        payload=request.model_dump_json() if hasattr(request, 'model_dump_json') else json.dumps({"template_frame_id": request.template_frame_id}, ensure_ascii=False),
     )
 
     background_tasks.add_task(_run_and_persist, job)
@@ -1168,6 +1175,7 @@ def create_special_compose(
         user_id=user["id"], username=user["username"],
         action="special_compose",
         detail=f"sku={getattr(request, 'sku', '?')}",
+        payload=request.model_dump_json() if hasattr(request, 'model_dump_json') else json.dumps({"sku": getattr(request, 'sku', '?')}, ensure_ascii=False),
     )
     return job
 
@@ -1821,6 +1829,10 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
             state = normalize_project_state(project)
             recent_messages = load_agent_messages(project_id, user_id=user["id"], limit=12)
             user_payload = {}
+            if detect_new_topic_request(message):
+                state = default_project_state()
+                recent_messages = []
+                user_payload["reset_context"] = True
             metadata = dict(state.get("metadata") or {})
             state["metadata"] = metadata
             cached_reference = dict(metadata.get("referenceContext") or {})
@@ -1836,6 +1848,10 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 if joined:
                     reference_context_parts.append(f"参考图关键元素：{joined}")
             if reference_images:
+                yield make_sse("agent_thinking", {
+                    "phase": "analyzing_reference",
+                    "message": "正在分析参考图，提取主体、风格和构图线索...",
+                })
                 stored_reference_files = _store_agent_reference_images(project_id, reference_images)
                 user_payload["reference_images"] = [
                     {"name": item["name"], "size": item["size"], "url": item["url"]}
@@ -1876,12 +1892,22 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 user_id=user["id"], username=user["username"],
                 action="agent_chat",
                 detail=f"project={project_id[:8]}",
+                payload=json.dumps({"message": message, "project_id": project_id[:8], "state_intent": (state.get("intent") or {})}, ensure_ascii=False),
             )
-            yield make_sse("agent_thinking", {"phase": "understanding_intent"})
+            yield make_sse("agent_thinking", {
+                "phase": "understanding_intent",
+                "message": "正在理解需求，并整理可以确认的创意方向...",
+            })
 
             # ── 真流式：LLM 逐 token 回调 → 入队 → SSE yield ──
             agent_reply = ""
             action_intent = None
+            hard_constraints = extract_message_constraints(message)
+            should_direct_generate = bool(
+                detect_confirm(message)
+                and state.get("brief")
+                and not has_meaningful_intent_update(hard_constraints)
+            )
             text_queue: asyncio.Queue = asyncio.Queue()
 
             def _on_llm_chunk(chunk: str) -> None:
@@ -1905,26 +1931,62 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 )
                 text_queue.put_nowait((None, None))  # sentinel: LLM 完成
 
-            llm_task = asyncio.create_task(_run_llm())
+            if should_direct_generate:
+                agent_reply = "收到，开始生成。"
+                action_intent = AgentActionIntent(
+                    type="REQUEST_GENERATE",
+                    confidence=1.0,
+                    extracted_info={},
+                    open_questions=[],
+                    creative_suggestion="",
+                )
+                yield make_sse("agent_text", {"delta": agent_reply})
+            else:
+                llm_task = asyncio.create_task(_run_llm())
 
-            # 边收边推送 SSE
-            while True:
-                item = await text_queue.get()
-                kind, content = item
-                if kind is None:  # sentinel
-                    break
-                if kind == "think":
-                    yield make_sse("agent_thinking", {"delta": content})
-                else:
-                    yield make_sse("agent_text", {"delta": content})
+                # 边收边推送 SSE
+                heartbeat_messages = [
+                    "正在组织回复，先把需求拆成可执行的视觉要点...",
+                    "正在校对方向，避免把主题跑偏...",
+                    "还在处理，马上给出下一步可确认的方案...",
+                ]
+                heartbeat_index = 0
+                while True:
+                    try:
+                        item = await asyncio.wait_for(text_queue.get(), timeout=2.5)
+                    except asyncio.TimeoutError:
+                        message_index = min(heartbeat_index, len(heartbeat_messages) - 1)
+                        yield make_sse("agent_thinking", {
+                            "phase": "llm_waiting",
+                            "message": heartbeat_messages[message_index],
+                        })
+                        heartbeat_index += 1
+                        continue
+                    kind, content = item
+                    if kind is None:  # sentinel
+                        break
+                    if kind == "think":
+                        yield make_sse("agent_thinking", {"delta": content})
+                    else:
+                        yield make_sse("agent_text", {"delta": content})
 
-            await llm_task  # 确保拿到 agent_reply / action_intent
+                await llm_task  # 确保拿到 agent_reply / action_intent
 
             extracted = dict(action_intent.extracted_info or {})
+            if hard_constraints:
+                extracted = merge_intent(extracted, hard_constraints)
+            guessed_subject = _coarse_subject_from_message(message)
+            if (
+                guessed_subject
+                and not extracted.get("subject")
+                and not should_direct_generate
+                and message.strip().lower() not in {"确认", "确定", "ok", "okay", "go ahead"}
+            ):
+                extracted["subject"] = guessed_subject
             if has_meaningful_intent_update(extracted):
-                state["intent"] = merge_intent(state.get("intent") or {}, extracted)
+                state["intent"] = merge_current_turn_intent(state.get("intent") or {}, extracted)
+                state.setdefault("metadata", {})["lastTurnIntent"] = extracted
             elif not (state.get("intent") or {}).get("subject"):
-                guessed_subject = _coarse_subject_from_message(message)
                 if guessed_subject:
                     state["intent"] = merge_intent(state.get("intent") or {}, {"subject": guessed_subject})
             if state["brief"] and detect_confirm(message):
@@ -1967,13 +2029,20 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 return
 
             generated_image = None
-            prompt_payload = decision.get("prompt") or state.get("currentPrompt") or {}
+            prompt_payload = dict(decision.get("prompt") or state.get("currentPrompt") or {})
+            prompt_payload["_snapshot"] = {
+                "intent": _deep_copy_json(state.get("intent") or {}),
+                "brief": _deep_copy_json(state.get("brief") or {}),
+                "decisionType": decision.get("type"),
+                "createdAt": time.time(),
+            }
+            state["currentPrompt"] = prompt_payload
             effective_reference_images = reference_images or _load_cached_agent_reference_images(state.get("metadata"))
             async for event_name, payload in stream_generation_events(
                 state=state,
                 user_id=user["id"],
                 prompt_payload=prompt_payload,
-                current_image=project.get("current_image"),
+                current_image=project.get("current_image") if decision.get("type") == "REFINE" else None,
                 reference_images=effective_reference_images,
             ):
                 yield make_sse(event_name, payload)
@@ -2224,6 +2293,7 @@ async def _run_ai_image_background(
             user_id=user_id, username=username,
             action="ai_image",
             detail=f"job={job_id[:8]} model={model} size={size} result=done{cost_str}{time_str}{usage_str} image={result.get('url', '?')[:60]}",
+            payload=json.dumps({"job_id": job_id, "model": model, "size": size, "result": "done", "image_url": result.get("url", ""), "cost": result.get("cost"), "usage": usage}, ensure_ascii=False),
         )
         append_ai_chat_message(
             session_id=session_id, user_id=user_id,
@@ -2251,6 +2321,7 @@ async def _run_ai_image_background(
             user_id=user_id, username=username,
             action="ai_image",
             detail=f"job={job_id[:8]} model={model} size={size} result=failed error={str(e)[:80]}",
+            payload=json.dumps({"job_id": job_id, "model": model, "size": size, "result": "failed", "error": str(e)[:200]}, ensure_ascii=False),
         )
         append_ai_chat_message(
             session_id=session_id, user_id=user_id,
@@ -2389,6 +2460,7 @@ async def ai_image_endpoint(
         user_id=user["id"], username=user["username"],
         action="ai_image",
         detail=f"job={job_id[:8]} model={resolved} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(images)}",
+        payload=json.dumps({"job_id": job_id, "model": resolved, "size": size, "prompt": original_prompt[:200], "refs": len(images), "provider": resolved_provider}, ensure_ascii=False),
     )
 
     try:

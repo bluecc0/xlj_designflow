@@ -300,6 +300,8 @@ var AdminPage = function(props) {
                 React.createElement('th', { style: thStyle }, '用户'),
                 React.createElement('th', { style: thStyle }, '操作'),
                 React.createElement('th', { style: thStyle }, '详情'),
+React.createElement('th', { style: Object.assign({}, thStyle, { width: 50, textAlign: 'center' }) }, 'JSON'),
+React.createElement('th', { style: Object.assign({}, thStyle, { width: 60, textAlign: 'center' }) }, '数据'),
               )
             ),
             React.createElement('tbody', null,
@@ -319,6 +321,32 @@ var AdminPage = function(props) {
                   React.createElement('td', {
                     style: Object.assign({}, tdStyle, { color: 'var(--ink-2)', maxWidth: 350, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })
                   }, op.detail || '-'),
+React.createElement('td', {
+  style: Object.assign({}, tdStyle, { textAlign: 'center' })
+},
+  (op.payload && op.payload.trim())
+    ? React.createElement('button', {
+        onClick: function(e) {
+          e.stopPropagation();
+          var tr = e.currentTarget.parentElement.parentElement;
+          var next = tr.nextElementSibling;
+          if (next && next.dataset && next.dataset.payloadRow === op.id) {
+            next.remove();
+            return;
+          }
+          var newRow = document.createElement('tr');
+          newRow.dataset.payloadRow = op.id;
+          newRow.innerHTML = '<td colspan="5" style="padding:8px 14px;background:#f8f9fb;border-bottom:1px solid var(--line)"><pre style="margin:0;font-size:10.5px;line-height:1.5;color:var(--ink-2);white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;font-family:SF Mono,Fira Code,monospace">' + (function() { try { return JSON.stringify(JSON.parse(op.payload), null, 2); } catch(e) { return op.payload; } })() + '</pre></td>';
+          tr.parentElement.insertBefore(newRow, tr.nextElementSibling);
+        },
+        style: {
+          padding: '2px 8px', borderRadius: 4, border: '1px solid var(--line-2)',
+          background: 'var(--panel)', color: 'var(--ink-3)', fontSize: 10,
+          cursor: 'pointer', fontFamily: 'monospace',
+        }
+      }, '{...}')
+    : React.createElement('span', { style: { color: 'var(--ink-3)', fontSize: 10 } }, '-')
+),
                 );
               })
             )
