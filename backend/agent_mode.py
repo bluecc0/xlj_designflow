@@ -160,7 +160,8 @@ DIMENSIONS = (
     {"key": "useCase", "weight": 5, "required": False, "inferrable": True},
 )
 
-GENERATE_THRESHOLD = 60
+GENERATE_THRESHOLD = 50
+MIN_EXPLICIT_DIMS_FOR_GENERATE = 2  # 至少用户明确提供了 2 个维度才能生成
 MAX_TURNS_PER_STAGE = 3
 FREE_PLAY_PATTERNS = (
     "你来决定",
@@ -367,26 +368,31 @@ def calculate_completeness(state: dict[str, Any]) -> AgentCompletenessResult:
     score = 0.0
     critical_gaps: list[str] = []
     inferrable_gaps: list[str] = []
+    explicit_count = 0
     intent = state.get("intent") or {}
     for dim in DIMENSIONS:
         value = intent.get(dim["key"])
         has_value = isinstance(value, str) and value.strip()
         if has_value:
             score += dim["weight"]
+            explicit_count += 1
             continue
         if dim["required"] and not dim["inferrable"]:
             critical_gaps.append(dim["key"])
         elif dim["inferrable"]:
             inferrable_gaps.append(dim["key"])
-            score += dim["weight"] * 0.5
+            # 推断维度只给 20% 分数，避免"猜的"凑够 GENERATE 门槛
+            score += dim["weight"] * 0.2
     if intent.get("userAuthorizedFreedom"):
         score = max(score, 85)
     score = min(score, 100)
+    # 两个条件同时满足才能生成：1. 分数达标  2. 用户至少明确了 2 个维度
+    can_generate = bool(not critical_gaps and score >= GENERATE_THRESHOLD and explicit_count >= MIN_EXPLICIT_DIMS_FOR_GENERATE)
     return AgentCompletenessResult(
         score=score,
         critical_gaps=critical_gaps,
         inferrable_gaps=inferrable_gaps,
-        can_generate=not critical_gaps and score >= GENERATE_THRESHOLD,
+        can_generate=can_generate,
     )
 
 
@@ -532,7 +538,7 @@ def build_generation_prompt(state: dict[str, Any]) -> dict[str, Any]:
             "size": settings.agent_image_size,
             "resolution": settings.agent_image_resolution,
         },
-        "promptReasoning": f"匹配到「{scene_name}」场景模板，已注入对应摄影要素和负向词。",
+        "promptReasoning": f"使用 {settings.agent_image_model} 文生图，匹配到「{scene_name}」场景模板。",
     }
 
 
@@ -556,12 +562,12 @@ def build_refine_prompt(state: dict[str, Any], user_message: str) -> dict[str, A
     return {
         "positive": positive,
         "negative": negative,
-        "model": current.get("model") or settings.agent_image_model,
+        "model": settings.agent_refine_model,
         "parameters": {
             "size": (current.get("parameters") or {}).get("size") or settings.agent_image_size,
             "resolution": (current.get("parameters") or {}).get("resolution") or settings.agent_image_resolution,
         },
-        "promptReasoning": "在保留现有画面核心主体的基础上按用户反馈迭代。",
+        "promptReasoning": f"使用 {settings.agent_refine_model} 在保留现有画面核心主体的基础上按用户反馈迭代。",
     }
 
 
@@ -738,7 +744,7 @@ async def call_agent_llm(
 
 要求：
 1. 回复用中文，2到4句，自然、像设计师同事，不要列表。
-2. 如果信息已经足够，不要继续追问，可以先帮用户总结方向。
+2. 你的首要任务是确认和用户对创意方向达成了共识。如果你在某个维度上是在猜测，请告诉用户你的猜测，让对方确认或纠正。
 3. 如果用户说"你来定/自由发挥/随便"，把 userAuthorizedFreedom 设为 true。
 4. JSON 中只保留你本轮新提取的信息，没有就留空对象。
 5. 如果参考图分析里明确写了用户已经上传参考图，不要再要求用户重复上传参考图，而是基于已有参考图继续聊视觉方向。
@@ -831,15 +837,14 @@ def decide_next_action(state: dict[str, Any], action_intent: AgentActionIntent, 
     if detect_free_play(user_message):
         state.setdefault("intent", {})["userAuthorizedFreedom"] = True
 
-    if detect_refine(user_message, state) or (
-        state.get("currentImage")
-        and action_intent.type in {"REQUEST_REFINE", "REQUEST_GENERATE"}
-        and not detect_regenerate(user_message)
-    ):
+    # REFINE：仅当用户明确说"改一下"时才触发，LLM 的推断不能绕过确认
+    if detect_refine(user_message, state):
         return {"type": "REFINE", "prompt": build_refine_prompt(state, user_message)}
 
     completeness = calculate_completeness(state)
-    if detect_confirm(user_message) or action_intent.type == "REQUEST_GENERATE":
+
+    # GENERATE：仅当用户明确说"确认/生成/出图"时才触发，LLM 的 REQUEST_GENERATE 不能直接生图
+    if detect_confirm(user_message):
         return {
             "type": "GENERATE",
             "prompt": build_generation_prompt(state),
@@ -847,6 +852,7 @@ def decide_next_action(state: dict[str, Any], action_intent: AgentActionIntent, 
             "completeness": completeness.model_dump(),
         }
 
+    # 信息严重不足 → ASK 最重要的缺失维度
     if completeness.critical_gaps:
         q = pick_question(completeness.critical_gaps)
         return {
@@ -857,34 +863,15 @@ def decide_next_action(state: dict[str, Any], action_intent: AgentActionIntent, 
             "completeness": completeness.model_dump(),
         }
 
+    # LLM 主动想生成，但用户没有明确确认 → 转 CONFIRM，让用户点按钮
+    if action_intent.type == "REQUEST_GENERATE":
+        return _build_confirm_action(state, completeness)
+
+    # 分数达标 + 至少 2 个明确维度 → CONFIRM
     if completeness.can_generate:
         brief = state.get("brief")
         if not brief or not brief.get("confirmedByUser"):
-            scene = _match_prompt_scene(state.get("intent") or {})
-            scene_name = scene["name"] if scene else ""
-            quick_actions = [
-                {"label": "确认，开始生成", "value": "确认，开始生成"},
-            ]
-            # 根据场景提供替代方向
-            if scene_name == "白底产品图":
-                quick_actions.append({"label": "试试电影感光影", "value": "换个方向，试试电影感光影效果"})
-                quick_actions.append({"label": "试试自然场景风", "value": "换个方向，把产品放到自然场景里"})
-            elif scene_name == "电商海报":
-                quick_actions.append({"label": "试试更简约高级", "value": "换个方向，试试更简约高级的风格"})
-                quick_actions.append({"label": "试试更炫酷潮流", "value": "换个方向，试试更炫酷潮流的风格"})
-            elif scene_name == "产品场景图":
-                quick_actions.append({"label": "试试白底干净风", "value": "换个方向，试试白底干净风格"})
-                quick_actions.append({"label": "试试高级冷淡风", "value": "换个方向，试试高级冷淡风格"})
-            elif scene_name == "时尚画册":
-                quick_actions.append({"label": "试试电影感大片", "value": "换个方向，试试电影感大片风格"})
-                quick_actions.append({"label": "试试极简留白", "value": "换个方向，试试极简留白风格"})
-            elif scene_name == "社媒配图":
-                quick_actions.append({"label": "试试品牌高级感", "value": "换个方向，试试品牌高级感"})
-                quick_actions.append({"label": "试试温暖生活感", "value": "换个方向，试试温暖生活感"})
-            else:
-                quick_actions.append({"label": "换个方向试试", "value": "换个方向试试"})
-            # 始终保留手动输入能力（用户直接打字即可）
-            return {"type": "CONFIRM", "brief": build_brief(state), "completeness": completeness.model_dump(), "quickActions": quick_actions}
+            return _build_confirm_action(state, completeness)
         return {
             "type": "GENERATE",
             "prompt": build_generation_prompt(state),
@@ -892,20 +879,61 @@ def decide_next_action(state: dict[str, Any], action_intent: AgentActionIntent, 
             "completeness": completeness.model_dump(),
         }
 
+    # 同阶段停留过久 → EXPLORE
     if int((state.get("phase") or {}).get("turnsInStage") or 0) >= MAX_TURNS_PER_STAGE:
         return {
             "type": "EXPLORE",
-            "suggestion": action_intent.creative_suggestion or "我可以先给你定一个方向：用更明确的主体和情绪来收束这张图，然后我们直接出一版看感觉。",
+            "suggestion": action_intent.creative_suggestion or "我先帮你定一个方向试试，如果不对可以随时告诉我调整。",
             "completeness": completeness.model_dump(),
         }
 
+    # 信息不够但可推断 → 优先 ASK 高权重缺失维度，低权重的自动推断
     if completeness.inferrable_gaps:
+        # 取权重最高的缺失维度来询问用户（style=20, mood=15 优先）
+        high_weight_gaps = [g for g in completeness.inferrable_gaps if g in ("style", "mood", "useCase")]
+        if high_weight_gaps:
+            q = pick_question([high_weight_gaps[0]])
+            return {
+                "type": "ASK",
+                "question": q["question"],
+                "dimension": high_weight_gaps[0],
+                "choices": q.get("choices", []),
+                "completeness": completeness.model_dump(),
+            }
+        # 低权重维度（composition/colorPalette/lighting）自动推断
         defaults = infer_defaults(state.get("intent") or {}, completeness.inferrable_gaps)
         state["intent"] = merge_intent(state.get("intent") or {}, defaults)
         brief = build_brief(state)
         return {"type": "CONFIRM", "brief": brief, "completeness": completeness.model_dump()}
 
     return {"type": "CONFIRM", "brief": build_brief(state), "completeness": completeness.model_dump()}
+
+
+def _build_confirm_action(state: dict[str, Any], completeness: AgentCompletenessResult) -> dict[str, Any]:
+    """构造 CONFIRM 动作，含场景化快捷按钮。"""
+    scene = _match_prompt_scene(state.get("intent") or {})
+    scene_name = scene["name"] if scene else ""
+    quick_actions = [
+        {"label": "确认，开始生成", "value": "确认，开始生成"},
+    ]
+    if scene_name == "白底产品图":
+        quick_actions.append({"label": "试试电影感光影", "value": "换个方向，试试电影感光影效果"})
+        quick_actions.append({"label": "试试自然场景风", "value": "换个方向，把产品放到自然场景里"})
+    elif scene_name == "电商海报":
+        quick_actions.append({"label": "试试更简约高级", "value": "换个方向，试试更简约高级的风格"})
+        quick_actions.append({"label": "试试更炫酷潮流", "value": "换个方向，试试更炫酷潮流的风格"})
+    elif scene_name == "产品场景图":
+        quick_actions.append({"label": "试试白底干净风", "value": "换个方向，试试白底干净风格"})
+        quick_actions.append({"label": "试试高级冷淡风", "value": "换个方向，试试高级冷淡风格"})
+    elif scene_name == "时尚画册":
+        quick_actions.append({"label": "试试电影感大片", "value": "换个方向，试试电影感大片风格"})
+        quick_actions.append({"label": "试试极简留白", "value": "换个方向，试试极简留白风格"})
+    elif scene_name == "社媒配图":
+        quick_actions.append({"label": "试试品牌高级感", "value": "换个方向，试试品牌高级感"})
+        quick_actions.append({"label": "试试温暖生活感", "value": "换个方向，试试温暖生活感"})
+    else:
+        quick_actions.append({"label": "换个方向试试", "value": "换个方向试试"})
+    return {"type": "CONFIRM", "brief": build_brief(state), "completeness": completeness.model_dump(), "quickActions": quick_actions}
 
 
 def apply_decision_to_state(state: dict[str, Any], decision: dict[str, Any], user_message: str) -> dict[str, Any]:

@@ -4699,19 +4699,22 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                 });
               }
               if (payload && (payload.type === 'GENERATE' || payload.type === 'REFINE')) {
+                var promptModel = payload.prompt && payload.prompt.model ? payload.prompt.model : 'agent';
+                var modelLabel = promptModel === 'nano banana pro' ? 'Nano Banana' : (promptModel === 'gpt image 2' ? 'GPT Image 2' : promptModel);
+                var actionLabel = payload.type === 'REFINE' ? '修改' : '生成';
                 setMessages(function(msgs) {
                   if (imageIdx == null) imageIdx = msgs.length;
                   return msgs.concat([{
                     who: 'ai',
                     type: 'ai-image-generating',
-                    model: 'agent',
+                    model: modelLabel,
                     prompt: payload.prompt && payload.prompt.positive ? payload.prompt.positive : text,
                     size: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.size : 'auto',
                     resolution: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.resolution : '1K',
                     status: 'running',
                     startedAt: Date.now(),
                     progress: 0,
-                    meta: 'Agent',
+                    meta: 'Agent · ' + actionLabel,
                     refPreviews: agentRefPreviews,
                   }]);
                 });
