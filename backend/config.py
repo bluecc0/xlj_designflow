@@ -77,7 +77,8 @@ class Settings:
     agent_llm_api_key: str = os.getenv("AGENT_LLM_API_KEY", "") or siliconflow_api_key
     agent_llm_timeout_seconds: int = int(os.getenv("AGENT_LLM_TIMEOUT_SECONDS", "60"))
 
-    agent_image_model: str = os.getenv("AGENT_IMAGE_MODEL", "nano banana pro")
+    agent_image_model: str = os.getenv("AGENT_IMAGE_MODEL", "gpt image 2")
+    agent_refine_model: str = os.getenv("AGENT_REFINE_MODEL", "nano banana pro")
     agent_image_size: str = os.getenv("AGENT_IMAGE_SIZE", "auto")
     agent_image_resolution: str = os.getenv("AGENT_IMAGE_RESOLUTION", "")
 
