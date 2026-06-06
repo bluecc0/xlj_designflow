@@ -1246,6 +1246,7 @@ def load_admin_stats() -> dict:
             "done": job_done + special_done,
             "failed": job_failed + special_failed,
         },
+        "special_jobs": special_total,
         "ai_images": {"total": ai_total, "done": ai_done},
         "agent_projects": agent_total,
         "ai_chat_sessions": chat_total,
