@@ -304,12 +304,14 @@ var AdminPage = function(props) {
                 React.createElement('th', { style: thStyle }, '操作'),
                 React.createElement('th', { style: thStyle }, '详情'),
 React.createElement('th', { style: Object.assign({}, thStyle, { width: 50, textAlign: 'center' }) }, 'JSON'),
-React.createElement('th', { style: Object.assign({}, thStyle, { width: 60, textAlign: 'center' }) }, '数据'),
+
               )
             ),
             React.createElement('tbody', null,
               operations.map(function(op) {
-                return React.createElement('tr', { key: op.id, style: { borderBottom: '1px solid var(--line)' } },
+                var hasPayload = op.payload && op.payload.trim();
+                var isExpanded = !!expandedPayloads[op.id];
+                var mainRow = React.createElement('tr', { key: op.id, style: { borderBottom: (isExpanded && hasPayload) ? 'none' : '1px solid var(--line)' } },
                   React.createElement('td', { style: Object.assign({}, tdStyle, { whiteSpace: 'nowrap' }) }, formatTime(op.created_at)),
                   React.createElement('td', { style: tdStyle }, op.username),
                   React.createElement('td', { style: tdStyle },
@@ -324,57 +326,24 @@ React.createElement('th', { style: Object.assign({}, thStyle, { width: 60, textA
                   React.createElement('td', {
                     style: Object.assign({}, tdStyle, { color: 'var(--ink-2)', maxWidth: 350, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })
                   }, op.detail || '-'),
-(function() {
-  var hasPayload = op.payload && op.payload.trim();
-  var isExpanded = !!expandedPayloads[op.id];
-  if (!hasPayload) {
-    return React.createElement('td', {
-      style: Object.assign({}, tdStyle, { textAlign: 'center' })
-    }, React.createElement('span', { style: { color: 'var(--ink-3)', fontSize: 10 } }, '-'));
-  }
-  return React.createElement(React.Fragment, { key: op.id + '-payload' },
-    React.createElement('td', {
-      style: Object.assign({}, tdStyle, { textAlign: 'center' })
-    },
-      React.createElement('button', {
-        onClick: function(e) {
-          e.stopPropagation();
-          setExpandedPayloads(function(prev) {
-            var next = Object.assign({}, prev);
-            if (next[op.id]) { delete next[op.id]; }
-            else { next[op.id] = true; }
-            return next;
-          });
-        },
-        style: {
-          padding: '2px 8px', borderRadius: 4, border: '1px solid var(--line-2)',
-          background: isExpanded ? 'var(--accent-soft)' : 'var(--panel)',
-          color: isExpanded ? 'var(--accent)' : 'var(--ink-3)', fontSize: 10,
-          cursor: 'pointer', fontFamily: 'monospace',
-        }
-      }, isExpanded ? '收起' : '{...}')
-    ),
-    isExpanded ? React.createElement('tr', {
-      key: op.id + '-payload-row',
-      style: { borderBottom: '1px solid var(--line)' }
-    },
-      React.createElement('td', {
-        colSpan: 5,
-        style: { padding: '8px 14px', background: '#f8f9fb' }
-      },
-        React.createElement('pre', {
-          style: {
-            margin: 0, fontSize: 10.5, lineHeight: 1.5,
-            color: 'var(--ink-2)', whiteSpace: 'pre-wrap',
-            wordBreak: 'break-all', maxHeight: 300, overflowY: 'auto',
-            fontFamily: 'SF Mono, Fira Code, monospace',
-          }
-        }, (function() { try { return JSON.stringify(JSON.parse(op.payload), null, 2); } catch(e) { return op.payload; } })())
-      )
-    ) : null
-  );
-})(),
-                );
+  (hasPayload
+    ? React.createElement('td', { style: Object.assign({}, tdStyle, { textAlign: 'center' }) },
+        React.createElement('button', {
+          onClick: function(e) { e.stopPropagation(); setExpandedPayloads(function(prev) { var n = Object.assign({}, prev); if (n[op.id]) delete n[op.id]; else n[op.id] = true; return n; }); },
+          style: { padding: '2px 8px', borderRadius: 4, border: '1px solid var(--line-2)', background: isExpanded ? 'var(--accent-soft)' : 'var(--panel)', color: isExpanded ? 'var(--accent)' : 'var(--ink-3)', fontSize: 10, cursor: 'pointer', fontFamily: 'monospace' }
+        }, isExpanded ? '收起' : '{...}'))
+    : React.createElement('td', { style: Object.assign({}, tdStyle, { textAlign: 'center' }) }, React.createElement('span', { style: { color: 'var(--ink-3)', fontSize: 10 } }, '-'))
+  )
+);
+var payloadRow = (hasPayload && isExpanded) ? React.createElement('tr', { key: op.id + '-p', style: { borderBottom: '1px solid var(--line)' } },
+  React.createElement('td', { colSpan: 6, style: { padding: '8px 14px', background: '#f8f9fb' } },
+    React.createElement('pre', { style: { margin: 0, fontSize: 10.5, lineHeight: 1.5, color: 'var(--ink-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 300, overflowY: 'auto', fontFamily: 'SF Mono, Fira Code, monospace' } },
+      (function() { try { return JSON.stringify(JSON.parse(op.payload), null, 2); } catch(e) { return op.payload; } })()
+    )
+  )
+) : null;
+return (hasPayload && isExpanded) ? React.createElement(React.Fragment, { key: op.id + '-g' }, mainRow, payloadRow) : mainRow;
+}),
               })
             )
           )
