@@ -1356,6 +1356,72 @@ async def _resolve_image_data_url(image_url: str) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
+def _log_agent_image_action(
+    *,
+    user_id: str,
+    username: str,
+    resolved_model: str,
+    size: str,
+    reference_images: Optional[list[tuple[bytes, str]]],
+    success: bool,
+    error: Optional[BaseException] = None,
+    result: Optional[dict[str, Any]] = None,
+) -> None:
+    """记录 Agent 触发的生图操作到 operation_logs。
+
+    失败/成功都记，方便 Admin 在管理后台看到。
+    username 兜底按 user_id 反查 users 表，避免伪造 "agent" 字符串。
+    """
+    try:
+        from .job_store import log_operation as _log_op
+        # username 反查
+        resolved_username = username
+        if not resolved_username:
+            try:
+                from .job_store import _connect as _job_connect
+                with _job_connect() as _conn:
+                    _row = _conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+                    if _row:
+                        resolved_username = _row["username"]
+            except Exception:
+                logger.exception("agent: failed to look up username for user_id=%s", user_id)
+
+        ref_count = len(reference_images or [])
+        if success and result:
+            image_url = result.get("url", "")
+            _log_op(
+                user_id=user_id,
+                username=resolved_username or "",
+                action="ai_image",
+                detail=f"agent_gen job={str(result.get('task_id') or '?')[:8]} model={resolved_model} size={size} refs={ref_count} image={image_url[:60]}",
+                payload=json.dumps({
+                    "source": "agent",
+                    "model": resolved_model,
+                    "size": size,
+                    "image_url": image_url,
+                    "usage": result.get("usage"),
+                    "cost": result.get("cost"),
+                    "ref_count": ref_count,
+                }, ensure_ascii=False),
+            )
+        else:
+            _log_op(
+                user_id=user_id,
+                username=resolved_username or "",
+                action="ai_image",
+                detail=f"agent_gen model={resolved_model} size={size} refs={ref_count} result=failed error={str(error or '')[:80]}",
+                payload=json.dumps({
+                    "source": "agent",
+                    "model": resolved_model,
+                    "size": size,
+                    "ref_count": ref_count,
+                    "error": str(error or "")[:500],
+                }, ensure_ascii=False),
+            )
+    except Exception:
+        logger.exception("agent: failed to log image gen operation")
+
+
 async def stream_generation_events(
     *,
     state: dict[str, Any],
@@ -1417,30 +1483,21 @@ async def stream_generation_events(
         except asyncio.TimeoutError:
             continue
 
-    result = await task
+    try:
+        result = await task
+    except Exception as exc:
+        _log_agent_image_action(
+            user_id=user_id, username=username, resolved_model=resolved_model, size=size,
+            reference_images=reference_images, success=False, error=exc, result=result if False else None,
+        )
+        raise
+
     image_url = result.get("url", "")
     # 记录到操作日志：让管理后台能看到 Agent 触发的生图请求
-    try:
-        from .job_store import log_operation as _log_op
-        _log_op(
-            user_id=user_id,
-            username=username or "agent",
-            action="ai_image",
-            detail=f"agent_gen job={str(result.get('task_id') or '?')[:8]} model={resolved_model} size={size} refs={len(reference_images or [])} image={image_url[:60]}",
-            payload=json.dumps({
-                "source": "agent",
-                "model": resolved_model,
-                "size": size,
-                "resolution": resolution,
-                "image_url": image_url,
-                "usage": result.get("usage"),
-                "cost": result.get("cost"),
-                "ref_count": len(reference_images or []),
-                "current_image_id": (current_image or {}).get("id"),
-            }, ensure_ascii=False),
-        )
-    except Exception:
-        logger.exception("agent: failed to log operation for image gen")
+    _log_agent_image_action(
+        user_id=user_id, username=username, resolved_model=resolved_model, size=size,
+        reference_images=reference_images, success=True, error=None, result=result,
+    )
     yield "generation_completed", {
         "jobId": result.get("task_id"),
         "image": {
