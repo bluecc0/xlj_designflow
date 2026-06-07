@@ -486,6 +486,7 @@ const GREETINGS = [
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 
 const ChatEmpty = ({ greetingKey, agentEnabled }) => {
+  if (typeof console !== 'undefined' && console.log) console.log('[ChatEmpty] render, agentEnabled=', agentEnabled);
   const prompts = [
     { icon: <I.image size={13}/>,    text: '上传产品图，描述想要的风格' },
     { icon: <I.palette size={13}/>,  text: '生成4张哑光色调的变体图' },
