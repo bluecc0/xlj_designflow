@@ -699,6 +699,22 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
                   }, React.createElement(I.download, { size: 10 }), '下载')
                 )
               ),
+              // VLM 质检反馈
+              m.status === 'done' && m.vlm && m.vlm.status === 'checked' && React.createElement('div', {
+                style: { marginTop: 8, padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--line-2)' }
+              },
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 } },
+                  React.createElement(I.eye, { size: 11, style: { color: 'var(--accent)' } }),
+                  React.createElement('span', { style: { fontSize: 11, fontWeight: 500, color: 'var(--ink)' } }, 'VLM 质检')
+                ),
+                React.createElement('div', { style: { display: 'flex', gap: 12, fontSize: 11, color: 'var(--ink-2)', marginBottom: 6 } },
+                  React.createElement('span', null, '质量 ', React.createElement('span', { style: { color: m.vlm.qualityScore >= 80 ? 'var(--ok)' : (m.vlm.qualityScore >= 50 ? 'var(--warn)' : '#dc2626'), fontWeight: 500 } }, m.vlm.qualityScore)),
+                  React.createElement('span', null, '匹配度 ', React.createElement('span', { style: { color: m.vlm.intentMatch >= 80 ? 'var(--ok)' : (m.vlm.intentMatch >= 50 ? 'var(--warn)' : '#dc2626'), fontWeight: 500 } }, m.vlm.intentMatch))
+                ),
+                m.vlm.userFacingSummary && React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', lineHeight: 1.5 } }, m.vlm.userFacingSummary),
+                m.vlm.problemElements && m.vlm.problemElements.length > 0 && React.createElement('div', { style: { fontSize: 10.5, color: '#dc2626', marginTop: 4, lineHeight: 1.5 } }, '问题: ' + m.vlm.problemElements.join('; ')),
+                m.vlm.nextStepSuggestion && React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ok)', marginTop: 4, lineHeight: 1.5 } }, '建议: ' + m.vlm.nextStepSuggestion)
+              ),
               m.status === 'failed' && m.error && React.createElement('div', {
                 style: { padding: '8px 10px', borderRadius: 6, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)' }
               }, m.error)
@@ -2823,6 +2839,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
             if (payload && payload.project) setAgentProject(payload.project);
             if (payload && payload.image) {
               var imageUrl = (window.API_BASE || window.location.origin) + payload.image.image_url;
+              var vlm = payload.vlmAnalysis || null;
               setMessages(function(msgs) {
                 return msgs.map(function(m, i) {
                   if (i !== imageIdx) return m;
@@ -2832,6 +2849,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                     imageUrl: imageUrl,
                     progress: 100,
                     finalElapsed: m.startedAt ? Math.floor((Date.now() - m.startedAt) / 1000) : null,
+                    vlm: vlm,
                   };
                 });
               });
