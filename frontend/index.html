@@ -2542,7 +2542,7 @@ const GREETINGS = [
 
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 
-const ChatEmpty = ({ greetingKey }) => {
+const ChatEmpty = ({ greetingKey, agentEnabled }) => {
   const prompts = [
     { icon: <I.image size={13}/>,    text: '上传产品图，描述想要的风格' },
     { icon: <I.palette size={13}/>,  text: '生成4张哑光色调的变体图' },
@@ -2550,6 +2550,10 @@ const ChatEmpty = ({ greetingKey }) => {
     { icon: <I.dims size={13}/>,     text: '调整尺寸为9:16适配Instagram' },
   ];
   const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
+  // Agent 模式不展示随机欢迎语，调用 AgentWelcome
+  if (agentEnabled) {
+    return <AgentWelcome />;
+  }
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px' }}>
       <div style={{
@@ -2582,6 +2586,80 @@ const ChatEmpty = ({ greetingKey }) => {
             <I.arrowRight size={12} style={{ color: 'var(--ink-3)' }}/>
           </button>
         ))}
+      </div>
+    </div>
+  );
+};
+
+const AgentWelcome = () => {
+  // Agent 模式专属欢迎页（不是随机轮播）—— 强调"先理解意图、再达成一致、最后生成"
+  const capabilities = [
+    { icon: <I.sparkles size={13}/>, title: '我会先确认方向', desc: '在生成之前，把你的需求拆成主体、风格、用途等维度，一项一项和你确认' },
+    { icon: <I.eye size={13}/>,     title: 'VLM 真传图质检',   desc: '生成后我会拿实际图片对比你确认的 Brief，给出逐项评分和问题列表' },
+    { icon: <I.refresh size={13}/>, title: '可逐版微调',         desc: '保留主体一致性，按你的反馈在每张图上微调，不用从头再来' },
+  ];
+  const quickStart = [
+    '「帮我设计一个运动鞋海报」',
+    '「把这张产品图改成夜景场景」',
+    '「你来定，今天我懒」',
+  ];
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '24px 16px 16px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center', textAlign: 'center', marginBottom: 24 }}>
+        <div style={{
+          width: 44, height: 44, borderRadius: 12,
+          background: 'linear-gradient(135deg, var(--accent) 0%, oklch(0.45 0.15 295) 100%)',
+          color: 'white', display: 'grid', placeItems: 'center',
+        }}>
+          <I.sparkles size={20} stroke={1.8}/>
+        </div>
+        <div className="serif" style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.01em' }}>
+          我是 Muse，你的视觉创作搭档
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-3)', maxWidth: 320, lineHeight: 1.6 }}>
+          我不会急着出图。先听清你的需求，再把方案拆成可确认的视觉要点；
+          你点过「确认，开始生成」之后，才会调用模型生图并逐项核验。
+        </div>
+      </div>
+
+      <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+        我会做
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+        {capabilities.map(function(c, i) {
+          return (
+            <div key={i} style={{
+              display: 'flex', gap: 12, padding: '12px 14px',
+              borderRadius: 10, background: 'var(--panel)',
+              border: '1px solid var(--line-2)',
+            }}>
+              <div style={{
+                width: 28, height: 28, flexShrink: 0, borderRadius: 7,
+                background: 'var(--accent-soft)', color: 'var(--accent)',
+                display: 'grid', placeItems: 'center',
+              }}>{c.icon}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--ink)', marginBottom: 2 }}>{c.title}</div>
+                <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>{c.desc}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+        试试这样开口
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {quickStart.map(function(q, i) {
+          return (
+            <div key={i} style={{
+              padding: '10px 14px', borderRadius: 8,
+              background: 'var(--panel)', border: '1px solid var(--line-2)',
+              fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5,
+            }}>{q}</div>
+          );
+        })}
       </div>
     </div>
   );
@@ -4459,6 +4537,10 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       (async function() {
         setIsLoading(true);
         try {
+          creatingAgentProjectRef.current = null;
+          setAgentProject(null);
+          setAgentProjectId('');
+          try { localStorage.removeItem(AGENT_PROJECT_ID_KEY); } catch (ex) {}
           const created = await window.API.createAgentProject();
           setAgentProject(created);
           setAgentProjectId(created.id);
@@ -5558,7 +5640,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         </div>
       </div>
 
-      {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
+      {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey} agentEnabled={agentEnabled}/>}
       {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply}/>}
       {state === 'generating' && <ChatGenerating/>}
       {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply}/>}
