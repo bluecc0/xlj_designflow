@@ -2027,6 +2027,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
             async for event_name, payload in stream_generation_events(
                 state=state,
                 user_id=user["id"],
+                username=user.get("username") or "",
                 prompt_payload=prompt_payload,
                 current_image=project.get("current_image") if decision.get("type") == "REFINE" else None,
                 reference_images=effective_reference_images,
