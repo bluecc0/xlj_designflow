@@ -2590,7 +2590,7 @@ const ChatEmpty = ({ greetingKey }) => {
 const AgentWelcome = () => {
   // Agent 模式专属欢迎页（不随机轮播）—— 简约版
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px' }}>
+    <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ padding: '20px 4px 16px', display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
         <div style={{
           width: 40, height: 40, borderRadius: 11,
