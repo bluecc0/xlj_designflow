@@ -2542,8 +2542,7 @@ const GREETINGS = [
 
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 
-const ChatEmpty = ({ greetingKey, agentEnabled }) => {
-  if (typeof console !== 'undefined' && console.log) console.log('[ChatEmpty] render, agentEnabled=', agentEnabled);
+const ChatEmpty = ({ greetingKey }) => {
   const prompts = [
     { icon: <I.image size={13}/>,    text: '上传产品图，描述想要的风格' },
     { icon: <I.palette size={13}/>,  text: '生成4张哑光色调的变体图' },
@@ -2551,10 +2550,6 @@ const ChatEmpty = ({ greetingKey, agentEnabled }) => {
     { icon: <I.dims size={13}/>,     text: '调整尺寸为9:16适配Instagram' },
   ];
   const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
-  // Agent 模式不展示随机欢迎语，调用 AgentWelcome
-  if (agentEnabled) {
-    return <AgentWelcome />;
-  }
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px' }}>
       <div style={{
@@ -2641,7 +2636,7 @@ const ChatGenerating = () => (
   </div>
 );
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey, onQuickReply }) => {
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey, onQuickReply, agentEnabled }) => {
   const userMsgs = messages.filter(m => m.who === 'user').length;
   const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
   const bottomRef = React.useRef(null);
@@ -2667,21 +2662,22 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
       </div>
 
       {messages.length === 0 ? (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-          <div style={{
-            width: 40, height: 40, borderRadius: 11,
-            background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
-            color: 'white', display: 'grid', placeItems: 'center',
-          }}>
-            <I.sparkles size={18} stroke={1.8}/>
+        // Agent 模式用专属欢迎页，否则随机轮播
+        agentEnabled ? <AgentWelcome /> : (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+            <div style={{
+              width: 40, height: 40, borderRadius: 11,
+              background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
+              color: 'white', display: 'grid', placeItems: 'center',
+            }}>
+              <I.sparkles size={18} stroke={1.8}/>
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)' }}>{greeting.title}</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
+              {greeting.sub}
+            </div>
           </div>
-          <>
-              <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)' }}>{greeting.title}</div>
-              <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
-                {greeting.sub}
-              </div>
-            </>
-        </div>
+        )
       ) : (
         messages.map((m, i) => (
           <Bubble key={i} who={m.who} meta={m.meta} user={user}>
@@ -5583,10 +5579,10 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         </div>
       </div>
 
-      {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey} agentEnabled={agentEnabled}/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply}/>}
+      {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply}/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled}/>}
 
       <Composer
         onSend={handleSend}
