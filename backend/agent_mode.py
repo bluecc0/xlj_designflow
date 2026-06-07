@@ -183,15 +183,6 @@ INTENT_KEYS = (
     "avoid",
 )
 
-SUBJECT_BOUND_KEYS = (
-    "subject",
-    "useCase",
-    "composition",
-    "copyText",
-    "mustInclude",
-    "avoid",
-)
-
 DIMENSIONS = (
     {"key": "subject", "weight": 30, "required": True, "inferrable": False},
     {"key": "style", "weight": 20, "required": False, "inferrable": True},
@@ -247,25 +238,6 @@ REFINE_PATTERNS = (
     "adjust",
     "change it",
     "iterate",
-)
-
-NEW_TOPIC_PATTERNS = (
-    "新话题",
-    "新会话",
-    "新的对话",
-    "开启新话题",
-    "开启新会话",
-    "重新开始",
-    "从头开始",
-    "全新开始",
-    "清空上下文",
-    "不要参考之前",
-    "不要延续之前",
-    "忘掉之前",
-    "start fresh",
-    "new topic",
-    "new conversation",
-    "forget previous",
 )
 
 
@@ -371,11 +343,6 @@ def detect_regenerate(message: str) -> bool:
     return any(pattern.lower() in text for pattern in ("start over", "new image", "new scene", "重新来", "重新生成", "换一个场景"))
 
 
-def detect_new_topic_request(message: str) -> bool:
-    text = (message or "").strip().lower()
-    return any(pattern.lower() in text for pattern in NEW_TOPIC_PATTERNS)
-
-
 def detect_refine(message: str, state: dict[str, Any]) -> bool:
     if not state.get("currentImage"):
         return False
@@ -400,30 +367,6 @@ def merge_intent(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, An
     if incoming.get("userAuthorizedFreedom"):
         merged["userAuthorizedFreedom"] = True
     return merged
-
-
-def _is_distinct_subject(old_subject: str, new_subject: str) -> bool:
-    old_clean = re.sub(r"\s+", "", old_subject or "").lower()
-    new_clean = re.sub(r"\s+", "", new_subject or "").lower()
-    if not old_clean or not new_clean:
-        return False
-    return old_clean not in new_clean and new_clean not in old_clean
-
-
-def merge_current_turn_intent(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
-    """合并当前轮意图。
-
-    当前轮如果显式给了新的主视觉对象，就认为这是新任务锚点：
-    保留风格/氛围/色彩/光线等可复用偏好，但清掉上一任务的主体相关字段。
-    """
-    incoming_subject = str((incoming or {}).get("subject") or "").strip()
-    base_subject = str((base or {}).get("subject") or "").strip()
-    if incoming_subject and _is_distinct_subject(base_subject, incoming_subject):
-        trimmed = dict(base or {})
-        for key in SUBJECT_BOUND_KEYS:
-            trimmed[key] = ""
-        return merge_intent(trimmed, incoming)
-    return merge_intent(base, incoming)
 
 
 def has_meaningful_intent_update(incoming: dict[str, Any]) -> bool:
@@ -1238,16 +1181,19 @@ def apply_decision_to_state(state: dict[str, Any], decision: dict[str, Any], use
 
 
 async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any]:
-    """VLM 质检：真正读取图片并传给 VLM 做视觉分析。"""
+    """VLM 质检：拿实际生成的图片，与「用户确认过的 Brief + 实际生图 Prompt」逐项对比。"""
     summary = "图片已生成，但视觉质检暂未完成。"
     result = {
         "qualityScore": 0,
         "intentMatch": 0,
+        "briefMatch": {},  # 每个 brief 维度的独立评分
         "autoRetry": False,
         "satisfiedElements": [],
         "problemElements": ["VLM 质检未完成，不能判断是否符合 brief"],
         "iterationDiff": {"keep": [], "adjust": [], "promptDelta": {"add": [], "remove": [], "modify": {}}},
         "userFacingSummary": summary,
+        "confidence": 0.0,
+        "nextStepSuggestion": "",
         "status": "not_checked",
     }
     if not settings.agent_vlm_api_key:
@@ -1260,24 +1206,68 @@ async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any
         return result
 
     prompt_payload = state.get("currentPrompt") or {}
+    brief = state.get("brief") or {}
+    # 把 brief 各维度拆成结构化检查点
+    brief_dimensions = []
+    if brief.get("concept"):
+        brief_dimensions.append(("核心方案 (concept)", brief["concept"]))
+    if brief.get("visualElements"):
+        for el in (brief["visualElements"] if isinstance(brief["visualElements"], list) else [brief["visualElements"]]):
+            if el:
+                brief_dimensions.append(("视觉要素 (visualElement)", el))
+    if brief.get("style"):
+        brief_dimensions.append(("风格 (style)", brief["style"]))
+    if brief.get("mood"):
+        brief_dimensions.append(("氛围 (mood)", brief["mood"]))
+    if brief.get("colorDirection"):
+        brief_dimensions.append(("色彩方向 (colorDirection)", brief["colorDirection"]))
+
+    brief_checklist = "\n".join(f"  - {name}：{val}" for name, val in brief_dimensions) or "  (无明确维度)"
+
     content: list[dict[str, Any]] = [
         {
             "type": "text",
-            "text": f"""你是图片质检助手。请以“实际生图 Prompt”为主要验收标准，结合用户确认过的 Brief，分析图片质量并返回 JSON。
+            "text": f"""你是图片质检助手。拿用户确认过的 Brief 与实际生图 Prompt 逐项对比，判断生成图是否同时满足两者。
 
-用户确认 Brief：
-{json.dumps(state.get("brief") or state.get("intent") or {}, ensure_ascii=False)}
+【用户确认 Brief】（用户在 Agent 流程中点过「确认，开始生成」的方案，权威基准）
+{json.dumps(brief, ensure_ascii=False, indent=2)}
 
-实际生图 Prompt：
-{json.dumps(prompt_payload, ensure_ascii=False)}
+【Brief 各维度拆解】
+{brief_checklist}
+
+【实际生图 Prompt】（已注入场景模板，包含 positive/negative/parameters）
+{json.dumps(prompt_payload, ensure_ascii=False, indent=2)}
 
 判断要求：
-1. 检查图片是否满足 positive prompt 的主体、用途、构图、文案、比例和风格。
-2. 检查图片是否违反 negative prompt，例如出现了明确要求避免的产品、包装、文字错误等。
-3. 如果 prompt 里要求精确中文文案，请重点检查画面文字是否存在、是否正确。
+1. **核心方案**：图片是否表达 Brief 的 concept
+2. **视觉要素**：brief.visualElements 列出的每项是否在图中出现
+3. **风格 / 氛围 / 色彩**：是否匹配
+4. **避免项**：图片是否包含 negative prompt 禁止的元素（如品牌名、错别字、不该出现的包装）
+5. **文案准确性**：若 brief.copyText 里有具体文字，画面文字是否正确
+6. **质量**：清晰度、构图、色彩
 
 请返回 JSON：
-{{"qualityScore":0-100,"intentMatch":0-100,"satisfiedElements":["..."],"problemElements":["..."],"userFacingSummary":"一句中文总结图片质量和匹配度"}}""",
+{{
+  "qualityScore": 0-100,
+  "intentMatch": 0-100,
+  "confidence": 0.0-1.0,                    // 你对这次判断的把握度
+  "briefMatch": {{                              // 逐维度评分（0-100），不存在的维度省略
+    "concept": 0-100,
+    "visualElements": 0-100,
+    "style": 0-100,
+    "mood": 0-100,
+    "colorDirection": 0-100
+  }},
+  "satisfiedElements": ["满足 Brief 的具体点"],
+  "problemElements": ["未满足或违反的具体点"],
+  "userFacingSummary": "一句中文（不超过 30 字）说明图片是否达到 Brief 要求",
+  "nextStepSuggestion": "如果完全满意，填「可以基于这版微调」；如需改进，填具体调整方向",
+  "iterationDiff": {{
+    "keep": ["建议保留的元素"],
+    "adjust": ["建议调整的元素"],
+    "promptDelta": {{"add": [], "remove": [], "modify": {{"key": "value"}}}}
+  }}
+}}""",
         },
         {"type": "image_url", "image_url": {"url": image_data_url}},
     ]
@@ -1293,7 +1283,7 @@ async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any
                 json={
                     "model": settings.agent_vlm_model,
                     "messages": [{"role": "user", "content": content}],
-                    "max_tokens": 300,
+                    "max_tokens": 600,
                     "temperature": 0.2,
                     "stream": False,
                 },
@@ -1306,11 +1296,21 @@ async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any
                 parsed = json.loads(match.group(1))
                 result["qualityScore"] = int(parsed.get("qualityScore") or result["qualityScore"])
                 result["intentMatch"] = int(parsed.get("intentMatch") or result["intentMatch"])
+                if isinstance(parsed.get("briefMatch"), dict):
+                    result["briefMatch"] = parsed.get("briefMatch")
                 if isinstance(parsed.get("satisfiedElements"), list):
                     result["satisfiedElements"] = parsed.get("satisfiedElements")
                 if isinstance(parsed.get("problemElements"), list):
                     result["problemElements"] = parsed.get("problemElements")
+                if isinstance(parsed.get("iterationDiff"), dict):
+                    result["iterationDiff"] = parsed["iterationDiff"]
                 result["userFacingSummary"] = str(parsed.get("userFacingSummary") or result["userFacingSummary"])
+                result["nextStepSuggestion"] = str(parsed.get("nextStepSuggestion") or "")
+                if isinstance(parsed.get("confidence"), (int, float)):
+                    result["confidence"] = float(parsed["confidence"])
+                # autoRetry：质量分<50 或 intentMatch<50 且 confidence>0.6 时建议自动重试
+                if (result["qualityScore"] < 50 or result["intentMatch"] < 50) and result["confidence"] > 0.6:
+                    result["autoRetry"] = True
                 result["status"] = "checked"
     except Exception:
         logger.exception("vlm critic failed")
