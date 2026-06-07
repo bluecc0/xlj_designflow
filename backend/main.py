@@ -58,11 +58,9 @@ from .agent_mode import (
     decide_next_action,
     default_project_state,
     detect_confirm,
-    detect_new_topic_request,
     extract_message_constraints,
     has_meaningful_intent_update,
     make_sse,
-    merge_current_turn_intent,
     merge_intent,
     normalize_project_state,
     run_vlm_critic,
@@ -1829,10 +1827,6 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
             state = normalize_project_state(project)
             recent_messages = load_agent_messages(project_id, user_id=user["id"], limit=12)
             user_payload = {}
-            if detect_new_topic_request(message):
-                state = default_project_state()
-                recent_messages = []
-                user_payload["reset_context"] = True
             metadata = dict(state.get("metadata") or {})
             state["metadata"] = metadata
             cached_reference = dict(metadata.get("referenceContext") or {})
@@ -1975,18 +1969,10 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
             extracted = dict(action_intent.extracted_info or {})
             if hard_constraints:
                 extracted = merge_intent(extracted, hard_constraints)
-            guessed_subject = _coarse_subject_from_message(message)
-            if (
-                guessed_subject
-                and not extracted.get("subject")
-                and not should_direct_generate
-                and message.strip().lower() not in {"确认", "确定", "ok", "okay", "go ahead"}
-            ):
-                extracted["subject"] = guessed_subject
             if has_meaningful_intent_update(extracted):
-                state["intent"] = merge_current_turn_intent(state.get("intent") or {}, extracted)
-                state.setdefault("metadata", {})["lastTurnIntent"] = extracted
+                state["intent"] = merge_intent(state.get("intent") or {}, extracted)
             elif not (state.get("intent") or {}).get("subject"):
+                guessed_subject = _coarse_subject_from_message(message)
                 if guessed_subject:
                     state["intent"] = merge_intent(state.get("intent") or {}, {"subject": guessed_subject})
             if state["brief"] and detect_confirm(message):
