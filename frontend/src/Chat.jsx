@@ -533,12 +533,19 @@ const ChatEmpty = ({ greetingKey }) => {
 const AgentWelcome = () => {
   // Agent 模式专属欢迎页（不随机轮播）—— 简约版
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '40px 16px 16px' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center', textAlign: 'center' }}>
-        <div className="serif" style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>
+    <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px' }}>
+      <div style={{ padding: '20px 4px 16px', display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: 11,
+          background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
+          color: 'white', display: 'grid', placeItems: 'center',
+        }}>
+          <I.sparkles size={18} stroke={1.8}/>
+        </div>
+        <div className="serif" style={{ fontSize: 19, letterSpacing: '-0.01em' }}>
           你想做一张什么样的图？
         </div>
-        <div style={{ fontSize: 12, color: 'var(--ink-3)', maxWidth: 280, lineHeight: 1.6 }}>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
           描述你的需求，Agent 会先和你确认方向，再开始生成。
         </div>
       </div>
