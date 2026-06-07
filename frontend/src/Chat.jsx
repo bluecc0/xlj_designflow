@@ -534,7 +534,7 @@ const AgentWelcome = () => {
   // Agent 模式专属欢迎页（不随机轮播）—— 简约版
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ padding: '20px 4px 16px', display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
         <div style={{
           width: 40, height: 40, borderRadius: 11,
           background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
@@ -542,7 +542,7 @@ const AgentWelcome = () => {
         }}>
           <I.sparkles size={18} stroke={1.8}/>
         </div>
-        <div className="serif" style={{ fontSize: 19, letterSpacing: '-0.01em' }}>
+        <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)' }}>
           你想做一张什么样的图？
         </div>
         <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
