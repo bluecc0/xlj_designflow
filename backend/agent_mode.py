@@ -1360,6 +1360,7 @@ async def stream_generation_events(
     *,
     state: dict[str, Any],
     user_id: str,
+    username: str = "",
     prompt_payload: dict[str, Any],
     current_image: Optional[dict[str, Any]] = None,
     reference_images: Optional[list[tuple[bytes, str]]] = None,
@@ -1417,6 +1418,29 @@ async def stream_generation_events(
             continue
 
     result = await task
+    image_url = result.get("url", "")
+    # 记录到操作日志：让管理后台能看到 Agent 触发的生图请求
+    try:
+        from .job_store import log_operation as _log_op
+        _log_op(
+            user_id=user_id,
+            username=username or "agent",
+            action="ai_image",
+            detail=f"agent_gen job={str(result.get('task_id') or '?')[:8]} model={resolved_model} size={size} refs={len(reference_images or [])} image={image_url[:60]}",
+            payload=json.dumps({
+                "source": "agent",
+                "model": resolved_model,
+                "size": size,
+                "resolution": resolution,
+                "image_url": image_url,
+                "usage": result.get("usage"),
+                "cost": result.get("cost"),
+                "ref_count": len(reference_images or []),
+                "current_image_id": (current_image or {}).get("id"),
+            }, ensure_ascii=False),
+        )
+    except Exception:
+        logger.exception("agent: failed to log operation for image gen")
     yield "generation_completed", {
         "jobId": result.get("task_id"),
         "image": {
