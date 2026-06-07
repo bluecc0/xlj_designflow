@@ -208,8 +208,9 @@ var AdminPage = function(props) {
       // ── 统计卡片 ──
       stats ? React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12 } },
         React.createElement(StatCard, { label: '用户数', value: stats.users, sub: '活跃会话 ' + stats.active_sessions }),
-        React.createElement(StatCard, { label: '合成任务', value: stats.jobs && stats.jobs.total || 0, sub: (stats.jobs && stats.jobs.done || 0) + ' 完成 / ' + (stats.jobs && stats.jobs.failed || 0) + ' 失败（含特殊品）' }),
+        React.createElement(StatCard, { label: '合成任务', value: stats.jobs && stats.jobs.total || 0, sub: (stats.jobs && stats.jobs.done || 0) + ' 完成 / ' + (stats.jobs && stats.jobs.failed || 0) + ' 失败' }),
         React.createElement(StatCard, { label: 'AI 生图', value: stats.ai_images && stats.ai_images.total || 0, sub: (stats.ai_images && stats.ai_images.done || 0) + ' 完成' }),
+        React.createElement(StatCard, { label: '特殊品合成', value: stats.special_jobs || 0 }),
         React.createElement(StatCard, { label: 'Agent 项目', value: stats.agent_projects || 0, sub: '对话 ' + (stats.ai_chat_sessions || 0) + ' 次' }),
         React.createElement(StatCard, { label: '操作日志', value: stats.operations_logged || 0 })
       ) : null,

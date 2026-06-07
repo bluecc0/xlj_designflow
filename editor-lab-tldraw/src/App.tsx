@@ -498,18 +498,80 @@ function TldrawHostBridge() {
     [editor]
   )
 
-  const insertTrackerRef = React.useRef<{ col: number; lastMaxX: number; rowTopY: number; rowMaxH: number; rowStartX?: number }>({ col: 0, lastMaxX: 0, rowTopY: 0, rowMaxH: 0 })
   const recentInsertsRef = React.useRef<Record<string, number>>({})
-  // 清除画布时重置插入位置
-  React.useEffect(() => {
-    insertTrackerRef.current = { col: 0, lastMaxX: 0, rowTopY: 0, rowMaxH: 0 }
-  }, [clearCanvas])
+
+  const isDesignflowImageShape = React.useCallback(
+    (shape: TLShape) => {
+      if (shape.type !== 'image' || shape.isLocked) return false
+      const assetId = (shape.props as any).assetId
+      const asset = assetId ? editor.getAsset(assetId) : null
+      const src = String((asset as any)?.props?.src || '')
+      return src.startsWith('/ai-images/') || src.startsWith('/results/') || src.includes('/ai-images/') || src.includes('/results/')
+    },
+    [editor]
+  )
+
+  const reflowDesignflowImages = React.useCallback(
+    (selectedIds: string[] = []) => {
+      const shapes = editor.getCurrentPageShapes().filter(isDesignflowImageShape)
+      if (!shapes.length) return
+
+      const viewport = editor.getViewportPageBounds()
+      const spacing = 40
+      const maxW = 420
+      const maxH = 560
+      const normalized = shapes.map((shape) => {
+        const props = shape.props as any
+        const rawW = Number(props.w || 1)
+        const rawH = Number(props.h || 1)
+        const scale = Math.min(1, maxW / rawW, maxH / rawH)
+        return {
+          shape,
+          w: Math.max(1, Math.round(rawW * scale)),
+          h: Math.max(1, Math.round(rawH * scale)),
+        }
+      })
+
+      const cellW = Math.max(...normalized.map((item) => item.w))
+      const cellH = Math.max(...normalized.map((item) => item.h))
+      const maxCols = 4
+      const availableCols = Math.max(1, Math.floor((viewport.width + spacing) / (cellW + spacing)))
+      const cols = Math.min(maxCols, availableCols, normalized.length)
+      const totalW = cols * cellW + (cols - 1) * spacing
+      const originX = viewport.center.x - totalW / 2
+      const originY = viewport.minY + spacing
+
+      editor.updateShapes(
+        normalized.map((item, index) => {
+          const col = index % cols
+          const row = Math.floor(index / cols)
+          const x = originX + col * (cellW + spacing) + (cellW - item.w) / 2
+          const y = originY + row * (cellH + spacing)
+          return {
+            id: item.shape.id,
+            type: item.shape.type,
+            x,
+            y,
+            props: {
+              ...(item.shape.props as any),
+              w: item.w,
+              h: item.h,
+            },
+          } as any
+        })
+      )
+
+      if (selectedIds.length) {
+        ;(editor as any).setSelectedShapes(selectedIds)
+      }
+      editor.zoomToFit({ animation: { duration: 0 } })
+    },
+    [editor, isDesignflowImageShape]
+  )
 
   const insertImage = React.useCallback(
     async ({ url, mode, name }: { url: string; mode?: 'image' | 'background'; name?: string }) => {
       const viewport = editor.getViewportPageBounds()
-      const spacing = 32
-      const MAX_COLS = 5
 
       const file = await fetchImageAsFile(url, name)
       const previewUrl = window.URL.createObjectURL(file)
@@ -553,98 +615,12 @@ function TldrawHostBridge() {
           flipY: false,
           altText: file.name,
         },
+        meta: {
+          designflowInserted: true,
+        },
       })
       editor.setSelectedShapes([shapeId])
       const insertedIds = [shapeId]
-
-      // 非背景图：插入后重新定位到网格中，顶部对齐
-      if (mode !== 'background') {
-        const shape = editor.getShape(shapeId) as TLShape | undefined
-        if (shape) {
-          const bounds = editor.getShapePageBounds(shape)
-          if (bounds) {
-            const t = insertTrackerRef.current
-            let targetX: number
-            let targetY: number
-
-            if (t.col === 0) {
-              // 行首：沿用上一行的起始 X，第一行则放在视口中心
-              if (t.rowStartX !== undefined) {
-                targetX = t.rowStartX + bounds.w / 2
-                targetY = t.rowTopY + t.rowMaxH + spacing + bounds.h / 2
-              } else {
-                targetX = viewport.center.x
-                targetY = viewport.center.y
-              }
-              insertTrackerRef.current = {
-                col: 1,
-                lastMaxX: targetX + bounds.w / 2,
-                rowTopY: targetY - bounds.h / 2,
-                rowMaxH: bounds.h,
-                rowStartX: t.rowStartX !== undefined ? t.rowStartX : (targetX - bounds.w / 2),
-              }
-            } else {
-              // 同行后续：放在上一张图片右侧
-              targetX = t.lastMaxX + spacing + bounds.w / 2
-              targetY = t.rowTopY + bounds.h / 2
-            }
-
-            // 换行判断
-            if (t.col > 0 && t.col < MAX_COLS) {
-              // 继续当前行
-            } else if (t.col >= MAX_COLS) {
-              // 换行：重置 col，保留 rowStartX 用于新行对齐
-              targetX = t.rowStartX !== undefined ? t.rowStartX + bounds.w / 2 : viewport.center.x
-              targetY = t.rowTopY + t.rowMaxH + spacing + bounds.h / 2
-              insertTrackerRef.current = {
-                col: 1,
-                lastMaxX: targetX + bounds.w / 2,
-                rowTopY: targetY - bounds.h / 2,
-                rowMaxH: bounds.h,
-                rowStartX: t.rowStartX,
-              }
-              // 跳过下面的 col+1 更新
-              const nb = editor.getShapePageBounds(shape)
-              if (nb) {
-                const t3 = insertTrackerRef.current
-                insertTrackerRef.current = {
-                  ...t3,
-                  lastMaxX: nb.maxX,
-                  rowMaxH: Math.max(t3.rowMaxH, nb.height),
-                }
-              }
-              // 移动 shape 到目标位置
-              editor.updateShapes([{
-                id: shape.id,
-                type: shape.type,
-                x: targetX - bounds.w / 2,
-                y: targetY - bounds.h / 2,
-              } as any])
-              return
-            }
-
-            // 移动 shape 到目标位置
-            editor.updateShapes([{
-              id: shape.id,
-              type: shape.type,
-              x: targetX - bounds.w / 2,
-              y: targetY - bounds.h / 2,
-            } as any])
-
-            // 更新追踪
-            const newBounds = editor.getShapePageBounds(shape)
-            if (newBounds) {
-              const t2 = insertTrackerRef.current
-              insertTrackerRef.current = {
-                ...t2,
-                col: t2.col + 1,
-                lastMaxX: newBounds.maxX,
-                rowMaxH: Math.max(t2.rowMaxH, newBounds.height),
-              }
-            }
-          }
-        }
-      }
 
       if (mode === 'background') {
         const shape = editor.getOnlySelectedShape()
@@ -669,9 +645,10 @@ function TldrawHostBridge() {
         editor.selectNone()
       } else {
         editor.bringToFront(insertedIds)
+        reflowDesignflowImages(insertedIds)
       }
     },
-    [editor]
+    [editor, reflowDesignflowImages]
   )
 
   const insertImages = React.useCallback(
@@ -703,7 +680,6 @@ function TldrawHostBridge() {
         if (ids.length) insertedShapeIds.push(ids[0])
       }
 
-      // 第一轮 insertImage 已按 insertTrackerRef 向右依次排列，zoomToFit 即可
       if (insertedShapeIds.length) {
         ;(editor as any).setSelectedShapes(insertedShapeIds)
         editor.zoomToFit({ animation: { duration: 0 } })
@@ -828,6 +804,7 @@ function TldrawHostBridge() {
           const store = data.snapshot.store || data.snapshot.document
           if (store && typeof store === 'object' && Object.keys(store).length > 0) {
             editor.loadSnapshot(normalizeImageShapesInSnapshot(data.snapshot))
+            window.setTimeout(() => reflowDesignflowImages(), 0)
           }
         }
       } catch (e) {}
@@ -849,7 +826,7 @@ function TldrawHostBridge() {
       if (saveTimer) clearTimeout(saveTimer)
       window.removeEventListener('beforeunload', doSaveSync)
     }
-  }, [editor])
+  }, [editor, reflowDesignflowImages])
 
   return null
 }
