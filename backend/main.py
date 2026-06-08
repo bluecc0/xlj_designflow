@@ -2730,11 +2730,28 @@ def admin_stats(request: Request):
 
 @app.get("/admin/users")
 def admin_users(request: Request):
-    """用户列表 + 活动统计（仅管理员）"""
+    """用户列表 + 活动统计（仅管理员，以 login_users.json 为准，补充 DB 活动数据）"""
     user = _current_user(request)
     if not _is_admin(user):
         raise HTTPException(403, "需要管理员权限")
-    return {"users": load_admin_users()}
+    db_users = load_admin_users()
+    db_by_id = {u["id"]: u for u in db_users}
+    merged = []
+    for u in settings.allowed_login_users:
+        stats = db_by_id.get(u["id"], {})
+        merged.append({
+            "id": u["id"],
+            "username": u["username"],
+            "role": u.get("role", "user"),
+            "created_at": stats.get("created_at"),
+            "total_jobs": stats.get("total_jobs", 0),
+            "total_special_jobs": stats.get("total_special_jobs", 0),
+            "total_ai_images": stats.get("total_ai_images", 0),
+            "total_agent_projects": stats.get("total_agent_projects", 0),
+            "total_operations": stats.get("total_operations", 0),
+            "last_action": stats.get("last_action"),
+        })
+    return {"users": merged}
 
 
 @app.post("/admin/users")
@@ -2790,7 +2807,8 @@ def admin_delete_user(request: Request, user_id: str):
     users = list(settings.allowed_login_users)
     idx = next((i for i, u in enumerate(users) if u["id"] == user_id), None)
     if idx is None:
-        raise HTTPException(404, f"用户 {user_id} 不存在")
+        # 用户不在 login_users.json 中（可能已被删除或仅在 DB 中有记录），不算错误
+        return {"deleted": {"id": user_id, "note": "不在认证列表中，无需删除"}}
     deleted = users.pop(idx)
     settings.save_login_users(users)
     return {"deleted": deleted}
