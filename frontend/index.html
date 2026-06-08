@@ -5766,6 +5766,158 @@ var FilterSelect = function(props) {
   );
 };
 
+// ---------- UserManagement（用户增删改）----------
+
+var UserManagement = function(props) {
+  var currentUser = props.currentUser;
+  var onChanged = props.onChanged;
+
+  var _useState = React.useState;
+  var _useCallback = React.useCallback;
+  var _useEffect = React.useEffect;
+
+  var _l = _useState([]);
+  var users = _l[0]; var setUsers = _l[1];
+
+  var _f = _useState({ username: '', role: 'user' });
+  var form = _f[0]; var setForm = _f[1];
+
+  var _e = _useState('');
+  var error = _e[0]; var setError = _e[1];
+
+  var _b = _useState(false);
+  var busy = _b[0]; var setBusy = _b[1];
+
+  var load = _useCallback(function() {
+    window.API.getAdminUsers()
+      .then(function(d) { setUsers(d.users || []); })
+      .catch(function(e) { setError('加载失败'); });
+  }, []);
+  _useEffect(function() { load(); }, [load]);
+
+  var handleCreate = function() {
+    if (!form.username.trim() || busy) return;
+    setBusy(true); setError('');
+    window.API.createAdminUser(form.username.trim(), form.role)
+      .then(function() {
+        setForm({ username: '', role: 'user' });
+        load(); if (onChanged) onChanged();
+      })
+      .catch(function(e) { setError(e.message || '创建失败'); })
+      .finally(function() { setBusy(false); });
+  };
+
+  var handleDelete = function(uid) {
+    if (busy) return;
+    if (uid === currentUser.id) { setError('不能删除自己'); return; }
+    if (!window.confirm('确定删除用户 ' + uid + '？')) return;
+    setBusy(true); setError('');
+    window.API.deleteAdminUser(uid)
+      .then(function() { load(); if (onChanged) onChanged(); })
+      .catch(function(e) { setError(e.message || '删除失败'); })
+      .finally(function() { setBusy(false); });
+  };
+
+  var handleToggleRole = function(uid, currentRole) {
+    if (busy) return;
+    var newRole = currentRole === 'admin' ? 'user' : 'admin';
+    window.API.updateAdminUser(uid, { role: newRole })
+      .then(function() { load(); if (onChanged) onChanged(); })
+      .catch(function(e) { setError(e.message || '更新失败'); });
+  };
+
+  return (
+    <div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)', marginBottom: 10 }}>用户管理</div>
+      <div style={{
+        borderRadius: 8, border: '1px solid var(--line)', background: 'var(--panel)', padding: 12, marginBottom: 20,
+      }}>
+        {/* 新增表单 */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            value={form.username}
+            onChange={function(e) { setForm({ username: e.target.value, role: form.role }); }}
+            placeholder="用户名"
+            disabled={busy}
+            style={{
+              flex: '1 1 160px', height: 30, padding: '0 10px', borderRadius: 6,
+              border: '1px solid var(--line-2)', background: 'var(--panel-2)',
+              color: 'var(--ink)', fontSize: 12, outline: 'none',
+            }}
+          />
+          <select
+            value={form.role}
+            onChange={function(e) { setForm({ username: form.username, role: e.target.value }); }}
+            disabled={busy}
+            style={{
+              height: 30, padding: '0 8px', borderRadius: 6, border: '1px solid var(--line-2)',
+              background: 'var(--panel-2)', color: 'var(--ink)', fontSize: 12, cursor: 'pointer',
+            }}
+          >
+            <option value="user">普通用户</option>
+            <option value="admin">管理员</option>
+          </select>
+          <button
+            onClick={handleCreate}
+            disabled={busy || !form.username.trim()}
+            style={{
+              height: 30, padding: '0 14px', borderRadius: 6, border: 'none',
+              background: busy || !form.username.trim() ? 'var(--line)' : 'var(--ink)',
+              color: busy || !form.username.trim() ? 'var(--ink-3)' : 'white',
+              fontSize: 12, cursor: busy || !form.username.trim() ? 'default' : 'pointer',
+            }}
+          >+ 新增</button>
+        </div>
+        {error ? React.createElement('div', {
+          style: { fontSize: 11.5, color: 'var(--warn)', marginBottom: 8 }
+        }, error) : null}
+
+        {/* 用户列表 */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {users.map(function(u) {
+            var isSelf = u.id === currentUser.id;
+            return (
+              <div key={u.id} style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
+                borderRadius: 6, background: 'var(--panel-2)',
+                border: '1px solid var(--line-2)',
+              }}>
+                <span style={{ flex: 1, fontSize: 12, color: 'var(--ink)' }}>{u.username}</span>
+                <span style={{
+                  fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                  background: u.role === 'admin' ? 'var(--accent-soft)' : 'var(--panel)',
+                  color: u.role === 'admin' ? 'var(--accent)' : 'var(--ink-3)',
+                  fontWeight: u.role === 'admin' ? 500 : 400,
+                }}>{u.role === 'admin' ? '管理员' : '普通'}</span>
+                <button
+                  onClick={function() { handleToggleRole(u.id, u.role); }}
+                  disabled={busy}
+                  style={{
+                    height: 24, padding: '0 8px', borderRadius: 4, fontSize: 11,
+                    background: 'var(--panel)', border: '1px solid var(--line-2)',
+                    color: 'var(--ink-2)', cursor: 'pointer',
+                  }}
+                >切角色</button>
+                <button
+                  onClick={function() { handleDelete(u.id); }}
+                  disabled={busy || isSelf}
+                  title={isSelf ? '不能删除自己' : '删除用户'}
+                  style={{
+                    height: 24, padding: '0 8px', borderRadius: 4, fontSize: 11,
+                    background: 'var(--panel)', border: '1px solid var(--line-2)',
+                    color: isSelf ? 'var(--ink-3)' : '#dc2626', cursor: isSelf ? 'default' : 'pointer',
+                    opacity: isSelf ? 0.5 : 1,
+                  }}
+                >删除</button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 var thStyle = {
   textAlign: 'left', padding: '10px 14px',
   fontSize: 11, fontWeight: 600, color: 'var(--ink-2)',
@@ -5914,6 +6066,9 @@ var AdminPage = function(props) {
         React.createElement(StatCard, { label: 'Agent 项目', value: stats.agent_projects || 0, sub: '对话 ' + (stats.ai_chat_sessions || 0) + ' 次' }),
         React.createElement(StatCard, { label: '操作日志', value: stats.operations_logged || 0 })
       ) : null,
+
+      // ── 用户管理 ──
+      React.createElement(UserManagement, { key: 'user-mgmt', currentUser: user, onChanged: loadStatsAndUsers }),
 
       // ── 用户活动表（可点击筛选）──
       users.length > 0 ? React.createElement('div', null,

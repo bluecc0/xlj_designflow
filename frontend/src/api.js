@@ -237,6 +237,25 @@
     getAdminUsers: function() {
       return request('/admin/users');
     },
+    createAdminUser: function(username, role) {
+      return request('/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, role: role }),
+      });
+    },
+    updateAdminUser: function(userId, updates) {
+      return request('/admin/users/' + encodeURIComponent(userId), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+    },
+    deleteAdminUser: function(userId) {
+      return request('/admin/users/' + encodeURIComponent(userId), {
+        method: 'DELETE',
+      });
+    },
     getAdminOperations: function(limit, offset, action, userId) {
       var qs = '?limit=' + (limit || 50) + '&offset=' + (offset || 0);
       if (action) qs += '&action=' + encodeURIComponent(action);

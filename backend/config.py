@@ -175,5 +175,18 @@ class Settings:
                     users.append({"id": user_id, "username": username, "role": role})
         return users or default_users
 
+    def reload_login_users(self) -> list[dict[str, str]]:
+        """从 login_users.json 重新读取用户列表（热加载用）。"""
+        self.allowed_login_users = self._load_login_users()
+        return self.allowed_login_users
+
+    def save_login_users(self, users: list[dict[str, str]]) -> None:
+        """写入 login_users.json 并热更新内存。"""
+        self.login_users_path.write_text(
+            json.dumps(users, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.reload_login_users()
+
 
 settings = Settings()

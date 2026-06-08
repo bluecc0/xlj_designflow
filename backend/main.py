@@ -2737,6 +2737,65 @@ def admin_users(request: Request):
     return {"users": load_admin_users()}
 
 
+@app.post("/admin/users")
+def admin_create_user(request: Request, body: dict):
+    """新增用户（仅管理员）"""
+    admin = _current_user(request)
+    if not _is_admin(admin):
+        raise HTTPException(403, "需要管理员权限")
+    username = (body.get("username") or "").strip()
+    role = (body.get("role") or "user").strip()
+    if not username:
+        raise HTTPException(400, "username 不能为空")
+    if role not in ("admin", "user"):
+        raise HTTPException(400, "role 必须是 admin 或 user")
+    new_id = username.casefold().replace(" ", "_")
+    if any(u["id"] == new_id for u in settings.allowed_login_users):
+        raise HTTPException(409, f"用户 {new_id} 已存在")
+    new_user = {"id": new_id, "username": username, "role": role}
+    settings.save_login_users(list(settings.allowed_login_users) + [new_user])
+    return {"user": new_user}
+
+
+@app.put("/admin/users/{user_id}")
+def admin_update_user(request: Request, user_id: str, body: dict):
+    """更新用户角色（仅管理员）"""
+    admin = _current_user(request)
+    if not _is_admin(admin):
+        raise HTTPException(403, "需要管理员权限")
+    users = list(settings.allowed_login_users)
+    idx = next((i for i, u in enumerate(users) if u["id"] == user_id), None)
+    if idx is None:
+        raise HTTPException(404, f"用户 {user_id} 不存在")
+    updates = {}
+    if "role" in body and body["role"] in ("admin", "user"):
+        updates["role"] = body["role"]
+    if "username" in body and body["username"].strip():
+        updates["username"] = body["username"].strip()
+    if not updates:
+        raise HTTPException(400, "至少需要 role 或 username 字段")
+    users[idx].update(updates)
+    settings.save_login_users(users)
+    return {"user": users[idx]}
+
+
+@app.delete("/admin/users/{user_id}")
+def admin_delete_user(request: Request, user_id: str):
+    """删除用户（仅管理员）"""
+    admin = _current_user(request)
+    if not _is_admin(admin):
+        raise HTTPException(403, "需要管理员权限")
+    if user_id == admin["id"]:
+        raise HTTPException(400, "不能删除自己")
+    users = list(settings.allowed_login_users)
+    idx = next((i for i, u in enumerate(users) if u["id"] == user_id), None)
+    if idx is None:
+        raise HTTPException(404, f"用户 {user_id} 不存在")
+    deleted = users.pop(idx)
+    settings.save_login_users(users)
+    return {"deleted": deleted}
+
+
 @app.get("/admin/operations")
 def admin_operations(
     request: Request,
