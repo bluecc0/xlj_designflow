@@ -3015,6 +3015,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const args = trimmed.replace(/^\/花瓣下载\s*/, '').trim();
       const match = args.match(/^(\S+)(?:\s+([A-Za-z0-9._-]+))?$/);
       setMessages(msgs => [...msgs, { who: 'user', text: args || text }]);
+      if (!match) {
         setMessages(msgs => [...msgs, { who: 'ai', text: '请使用格式：/花瓣下载 URL 或 /花瓣下载 URL PSD', meta: 'Loom' }]);
         return;
       }
