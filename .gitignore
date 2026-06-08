@@ -20,6 +20,8 @@ output/
 
 # Env
 .env
+.env.*
+!.env.example
 login_users.json
 start.bat
 
