@@ -115,6 +115,39 @@ def _ensure_user_output_dir(user_id: str) -> Path:
     return out_dir
 
 
+def save_user_refs(user_id: str, job_id: str, refs: list[tuple[bytes, str]]) -> list[str]:
+    """持久化用户上传的参考图到磁盘，返回相对路径列表。"""
+    ref_dir = _ensure_user_output_dir(user_id) / "refs" / job_id
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[str] = []
+    for i, (ref_bytes, ref_name) in enumerate(refs):
+        safe_name = f"ref_{i}.png" if not ref_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")) else f"ref_{i}{Path(ref_name).suffix}"
+        ref_path = ref_dir / safe_name
+        ref_path.write_bytes(ref_bytes)
+        paths.append(str(ref_path))
+    return paths
+
+
+def load_user_refs(user_id: str, job_id: str) -> list[tuple[bytes, str]]:
+    """从磁盘加载用户上传的参考图。"""
+    ref_dir = _ensure_user_output_dir(user_id) / "refs" / job_id
+    if not ref_dir.exists():
+        return []
+    refs: list[tuple[bytes, str]] = []
+    for p in sorted(ref_dir.iterdir()):
+        if p.is_file():
+            refs.append((p.read_bytes(), p.name))
+    return refs
+
+
+def cleanup_user_refs(user_id: str, job_id: str) -> None:
+    """删除用户参考图临时目录。"""
+    import shutil
+    ref_dir = _ensure_user_output_dir(user_id) / "refs" / job_id
+    if ref_dir.exists():
+        shutil.rmtree(ref_dir)
+
+
 def _model_credentials(model: str) -> tuple[str, str]:
     base_url = settings.ai_image_base_url.rstrip("/")
     api_key = settings.ai_image_api_key

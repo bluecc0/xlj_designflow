@@ -38,12 +38,15 @@ from fastapi.staticfiles import StaticFiles
 
 from .ai_image import (
     PROVIDER_ZENMUX,
+    cleanup_user_refs,
     generate_image,
     generate_image_with_reference,
     generate_image_async,
     generate_image_zenmux_async,
     generate_image_with_reference_async,
+    load_user_refs,
     normalize_provider,
+    save_user_refs,
     SLASH_MODEL_MAP,
 )
 from .agent_mode import (
@@ -2297,6 +2300,11 @@ async def _run_ai_image_background(
             },
             created_at=time.time(),
         )
+        # 成功后清理持久化的参考图
+        try:
+            cleanup_user_refs(user_id, job_id)
+        except Exception:
+            pass
     except Exception as e:
         logger.exception("ai_image background task failed: job_id=%s", job_id)
         save_ai_image_job(
@@ -2320,7 +2328,6 @@ async def _run_ai_image_background(
                 "status": "failed", "error": str(e),
                 "hasReference": has_reference,
                 "refCount": len(refs),
-                "refPreviews": ref_previews or [],
             },
             created_at=time.time(),
         )
@@ -2345,6 +2352,77 @@ def ai_image_status(request: Request, job_id: str):
         "task_id": job.get("task_id"),
         "error": job.get("error"),
     }
+
+
+@app.post("/ai-image/retry")
+async def ai_image_retry(request: Request):
+    """默认线路失败后，用官方线路重试。复用原 prompt + 磁盘参考图 + 上下文参考图。"""
+    body = await request.json()
+    job_id = (body.get("job_id") or "").strip()
+    session_id = (body.get("session_id") or "").strip()
+    if not job_id or not session_id:
+        raise HTTPException(400, "job_id 和 session_id 不能为空")
+
+    user = _current_user(request)
+    old_job = load_ai_image_job(job_id)
+    if not old_job:
+        raise HTTPException(404, "任务不存在")
+    if old_job.get("user_id") != user["id"]:
+        raise HTTPException(404, "任务不存在")
+
+    prompt = (old_job.get("prompt") or "").strip()
+    model = (old_job.get("model") or "gpt-image-2").strip()
+    size = (old_job.get("size") or "1024x1024").strip()
+    resolution = (old_job.get("resolution") or "").strip()
+
+    # 1. 从磁盘加载用户上传的参考图
+    user_refs = load_user_refs(user["id"], job_id)
+
+    # 2. 取上一张成功生成的图片作为上下文参考图
+    context_ref_bytes: list[tuple[bytes, str]] = []
+    prev_messages = load_ai_chat_messages(session_id, user_id=user["id"])
+    for m in reversed(prev_messages):
+        prev_url = m.get("imageUrl") or ""
+        if prev_url and prev_url.startswith("/ai-images/"):
+            local_path = settings.output_path / "ai-images" / prev_url[len("/ai-images/"):]
+            try:
+                if local_path.exists():
+                    context_ref_bytes.append((local_path.read_bytes(), local_path.name))
+                    break
+            except Exception:
+                pass
+
+    # 3. 合并参考图
+    all_refs = context_ref_bytes + user_refs
+    all_refs = all_refs[:4]
+    has_reference = bool(all_refs)
+
+    new_job_id = uuid.uuid4().hex
+    created_at = time.time()
+    save_ai_image_job(
+        job_id=new_job_id, user_id=user["id"], status="processing",
+        model=model, prompt=prompt, size=size,
+        has_reference=has_reference, created_at=created_at,
+    )
+    log_operation(
+        user_id=user["id"], username=user["username"],
+        action="ai_image",
+        detail=f"job={new_job_id[:8]} model={model} size={size} result=retry_zenmux refs={len(all_refs)}",
+        payload=json.dumps({"job_id": new_job_id, "model": model, "size": size, "provider": PROVIDER_ZENMUX, "retry_from": job_id}, ensure_ascii=False),
+    )
+    # 重试消息不重新写入聊天记录（不重复显示 prompt），后台任务完成/失败时会自动追加
+    asyncio.create_task(
+        _run_ai_image_background(
+            job_id=new_job_id, user_id=user["id"], username=user["username"],
+            session_id=session_id,
+            provider=PROVIDER_ZENMUX,
+            model=model, prompt=prompt,
+            size=size, resolution=resolution,
+            refs=all_refs, has_reference=has_reference, created_at=created_at,
+            ref_previews=[],
+        )
+    )
+    return {"job_id": new_job_id, "status": "processing", "provider": PROVIDER_ZENMUX}
 
 
 @app.post("/editor/snapshot")
@@ -2479,9 +2557,16 @@ async def ai_image_endpoint(
                         pass
 
         # 3. 合并用户上传的参考图与上下文的参考图
-        all_refs: list[tuple[bytes, str]] = context_ref_bytes + [
+        user_refs: list[tuple[bytes, str]] = [
             (await f.read(), f.filename or f"ref{i}.png") for i, f in enumerate(images)
         ]
+        # 持久化用户参考图，供重试时复用
+        if user_refs:
+            try:
+                save_user_refs(user["id"], job_id, user_refs)
+            except Exception:
+                logger.warning("Failed to save user refs for job %s", job_id)
+        all_refs: list[tuple[bytes, str]] = context_ref_bytes + user_refs
         all_refs = all_refs[:4]  # 总共最多 4 张
 
         has_reference = bool(images) or bool(context_ref_bytes)

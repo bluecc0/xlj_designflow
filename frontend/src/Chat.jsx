@@ -717,7 +717,15 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
               ),
               m.status === 'failed' && m.error && React.createElement('div', {
                 style: { padding: '8px 10px', borderRadius: 6, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)' }
-              }, m.error)
+              }, m.error),
+              m.status === 'failed' && m.provider !== 'zenmux' && React.createElement('button', {
+                onClick: function() { handleRetryWithZenmux(m); },
+                style: {
+                  marginTop: 6, padding: '5px 12px', borderRadius: 6,
+                  border: '1px solid var(--accent)', background: 'var(--panel)',
+                  color: 'var(--accent)', fontSize: 11, cursor: 'pointer',
+                }
+              }, '切换到官方线路重试')
             );
           })() : m.type === 'parse-result' ? (() => {
                 const matchedCount = m.data.products.filter(p => p.image_path).length;
@@ -2580,6 +2588,79 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     img.src = url;
   });
 
+  // —— 官方线路重试 ——
+  const handleRetryWithZenmux = React.useCallback(async (failedMsg) => {
+    const jobId = failedMsg.jobId;
+    if (!jobId || !currentAiChatId) return;
+
+    const startedAt = Date.now();
+    setMessages(msgs => [...msgs, {
+      who: 'ai', type: 'ai-image-generating',
+      model: failedMsg.model || 'gpt-image-2',
+      provider: 'zenmux',
+      prompt: failedMsg.prompt || '',
+      size: failedMsg.size || '1024x1024',
+      resolution: failedMsg.resolution || '',
+      status: 'running', startedAt,
+      progress: 0,
+      hasReference: true,
+      refCount: 0,
+      refPreviews: [],
+      jobId: null,
+    }]);
+
+    try {
+      const apiBase = window.API_BASE || window.location.origin;
+      const retryRes = await window.API.retryAiImage(jobId, currentAiChatId);
+      const newJobId = retryRes.job_id;
+
+      setMessages(msgs => msgs.map(m =>
+        m.type === 'ai-image-generating' && m.startedAt === startedAt
+          ? { ...m, jobId: newJobId }
+          : m
+      ));
+
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(apiBase + '/ai-image/' + newJobId, { credentials: 'include' });
+          if (!statusRes.ok) return;
+          const sd = await statusRes.json();
+          setMessages(msgs => msgs.map(m =>
+            m.type === 'ai-image-generating' && m.startedAt === startedAt
+              ? { ...m, status: sd.status, progress: sd.progress || m.progress }
+              : m
+          ));
+          if (sd.status === 'done' && sd.image_url) {
+            clearInterval(pollInterval);
+            const fe = Math.floor((Date.now() - startedAt) / 1000);
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === startedAt
+                ? { ...m, status: 'done', imageUrl: sd.image_url, finalElapsed: fe, progress: 100 }
+                : m
+            ));
+            loadAiChatHistory();
+          } else if (sd.status === 'failed') {
+            clearInterval(pollInterval);
+            const fe = Math.floor((Date.now() - startedAt) / 1000);
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === startedAt
+                ? { ...m, status: 'failed', error: sd.error || '重试失败', finalElapsed: fe }
+                : m
+            ));
+            loadAiChatHistory();
+          }
+        } catch (e) { /* ignore polling errors */ }
+      }, 2000);
+    } catch (e) {
+      const fe = Math.floor((Date.now() - startedAt) / 1000);
+      setMessages(msgs => msgs.map(m =>
+        m.type === 'ai-image-generating' && m.startedAt === startedAt
+          ? { ...m, status: 'failed', error: e.message || '重试失败', finalElapsed: fe }
+          : m
+      ));
+    }
+  }, [currentAiChatId, loadAiChatHistory]);
+
   // —— AI 生图核心流程（共享）——
   const runAiImageGeneration = React.useCallback(async (model, prompt, displayText, refImages, aiOptions) => {
     setIsLoading(true);
@@ -2644,6 +2725,11 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const data = await res.json();
       if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
       const jobId = data.job_id;
+      setMessages(msgs => msgs.map(m =>
+        m.type === 'ai-image-generating' && m.startedAt === startedAt
+          ? { ...m, jobId }
+          : m
+      ));
 
       // 轮询任务状态
       const pollInterval = setInterval(async () => {

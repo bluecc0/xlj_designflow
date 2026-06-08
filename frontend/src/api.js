@@ -81,6 +81,13 @@
     listAiImages: function(limit) { return request('/history/ai-images?limit=' + (limit || 20)); },
     listAiChats: function(limit) { return request('/history/ai-chats?limit=' + (limit || 20)).then(function(res) { return res.sessions || []; }); },
     getAiChat: function(sessionId) { return request('/history/ai-chats/' + encodeURIComponent(sessionId)); },
+    retryAiImage: function(jobId, sessionId) {
+      return request('/ai-image/retry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId, session_id: sessionId }),
+      });
+    },
     deleteAiChat: function(sessionId) { return request('/history/ai-chats/' + encodeURIComponent(sessionId), { method: 'DELETE' }); },
     createLayeredPsd: function(prompt, imageFile, options) {
       var form = new FormData();
