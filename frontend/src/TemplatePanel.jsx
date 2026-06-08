@@ -441,23 +441,7 @@ var StatusFooter = function(_ref3) {
     }
   },
     React.createElement(I.layers, { size: 11, style: { color: 'var(--ink-3)' } }),
-    React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)', flex: 1 } }, count + ' 个模板'),
-    React.createElement('a', {
-      href: '/ui/PROGRESS.html',
-      target: '_blank',
-      rel: 'noreferrer',
-      style: {
-        display: 'flex', alignItems: 'center', gap: 5,
-        padding: '4px 9px', borderRadius: 6,
-        border: '1px solid var(--line)',
-        background: 'var(--panel)',
-        fontSize: 11, color: 'var(--ink-2)',
-        textDecoration: 'none',
-      }
-    },
-      React.createElement(I.film, { size: 11 }),
-      '开发进度'
-    )
+    React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)', flex: 1 } }, count + ' 个模板')
   );
 };
 
