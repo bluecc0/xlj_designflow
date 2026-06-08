@@ -2626,7 +2626,7 @@ const ChatGenerating = () => (
   </div>
 );
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey, onQuickReply, agentEnabled }) => {
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey, onQuickReply, agentEnabled, onRetryWithZenmux }) => {
   const userMsgs = messages.filter(m => m.who === 'user').length;
   const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
   const bottomRef = React.useRef(null);
@@ -2698,8 +2698,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
                     ? React.createElement(ChatTimer, { startedAt: m.startedAt })
                     : null
               ),
-              React.createElement(InlineRefStrip, { items: m.refPreviews }),
-              promptPositive && React.createElement('div', {
+              m.status !== 'failed' && React.createElement(InlineRefStrip, { items: m.refPreviews }),
+              agentEnabled && promptPositive && React.createElement('div', {
                 style: {
                   padding: '9px 10px',
                   borderRadius: 8,
@@ -2759,7 +2759,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
                 style: { padding: '8px 10px', borderRadius: 6, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)' }
               }, m.error),
               m.status === 'failed' && m.provider !== 'zenmux' && React.createElement('button', {
-                onClick: function() { handleRetryWithZenmux(m); },
+                onClick: function() { onRetryWithZenmux(m); },
                 style: {
                   marginTop: 6, padding: '5px 12px', borderRadius: 6,
                   border: '1px solid var(--accent)', background: 'var(--panel)',
@@ -4826,17 +4826,23 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     if (!text.trim() || isLoading) return;
     setLastSubmittedMessage(text);
 
-    if (agentEnabled) {
-      var agentRefPreviews = [];
-      if (refImages.length > 0) {
-        try {
-          agentRefPreviews = await Promise.all(refImages.map(function(item) {
-            return fileToThumbDataUrl(item.file);
-          }));
-        } catch (e) {
-          agentRefPreviews = [];
-        }
+    // 计算用户消息中的参考图预览
+    var userRefPreviews = [];
+    var userRefMeta = [];
+    if (refImages.length > 0) {
+      try {
+        userRefPreviews = await Promise.all(refImages.map(function(item) {
+          return fileToThumbDataUrl(item.file);
+        }));
+      } catch (e) {
+        userRefPreviews = [];
       }
+      userRefMeta = refImages.map(function(item) {
+        return { name: item.name || '' };
+      });
+    }
+
+    if (agentEnabled) {
       setIsLoading(true);
       var projectId = '';
       var assistantIdx = null;
@@ -4866,7 +4872,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       setMessages(function(msgs) {
         assistantIdx = msgs.length + 1;
         return msgs.concat([
-          { who: 'user', text: text, refPreviews: agentRefPreviews },
+          { who: 'user', text: text, refPreviews: userRefPreviews, refMeta: userRefMeta },
           { who: 'ai', type: 'thinking', text: '正在连接 Agent...', thinkingStatus: thinkingStatus, meta: 'Agent' },
         ]);
       });
@@ -4937,7 +4943,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                     startedAt: Date.now(),
                     progress: 0,
                     meta: 'Agent · ' + actionLabel,
-                    refPreviews: agentRefPreviews,
+                    refPreviews: userRefPreviews,
                   }]);
                 });
               }
@@ -5030,7 +5036,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     // ── 设为头像 ──────────────────────────────────────────────────────────────
     const trimmed = text.trimStart();
     if ((trimmed === '设为头像' || trimmed === '設置頭像') && refImages.length > 0) {
-      setMessages(msgs => [...msgs, { who: 'user', text }]);
+      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       setIsLoading(true);
       try {
         const apiBase = window.API_BASE || window.location.origin;
@@ -5054,7 +5060,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     if (trimmed.startsWith('/花瓣下载')) {
       const args = trimmed.replace(/^\/花瓣下载\s*/, '').trim();
       const match = args.match(/^(\S+)(?:\s+([A-Za-z0-9._-]+))?$/);
-      setMessages(msgs => [...msgs, { who: 'user', text: args || text }]);
+      setMessages(msgs => [...msgs, { who: 'user', text: args || text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       if (!match) {
         setMessages(msgs => [...msgs, { who: 'ai', text: '请使用格式：/花瓣下载 URL 或 /花瓣下载 URL PSD', meta: 'Loom' }]);
         return;
@@ -5163,7 +5169,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const lastOpts = getLastAiImageOptions();
       const model = aiCmd ? aiCmd.model : (lastOpts?.model || 'gpt-image-2');
       const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, provider: lastOpts?.provider || aiOptions.provider };
-      setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? rawPrompt : text }]);
+      setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? rawPrompt : text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       return;
     }
 
@@ -5182,12 +5188,12 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         const prefixLabel = aiCmd.implicit ? '（复用上次模型）' : aiCmd.prefix;
         const displayText = aiCmd && !aiCmd.implicit ? (prompt || text) : text;
         setMessages(msgs => [...msgs,
-          { who: 'user', text: displayText },
+          { who: 'user', text: displayText, refPreviews: userRefPreviews, refMeta: userRefMeta },
           { who: 'ai', text: `请在 ${prefixLabel} 后输入图片描述` },
         ]);
         return;
       }
-      setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? prompt : text }]);
+      setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? prompt : text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       await runAiImageGeneration(aiCmd.model, prompt, text, refImages, aiOptions);
       return;
     }
@@ -5206,7 +5212,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const _tplHint   = _isSpecialFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板';
 
       const displayText = text.replace(_argRegex, '').trim() || text;
-      setMessages(msgs => [...msgs, { who: 'user', text: displayText }]);
+      setMessages(msgs => [...msgs, { who: 'user', text: displayText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       setIsLoading(true);
       // 先插入 generating 消息占位
       let specialMsgIdx = null;
@@ -5305,7 +5311,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     setMessages(msgs => {
       thinkingIdx = msgs.length + 1; // +1 跳过用户消息，定位到 thinking 占位
       return [...msgs,
-        { who: 'user', text },
+        { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta },
         { who: 'ai', type: 'thinking', text: '...' },
       ];
     });
@@ -5675,9 +5681,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       </div>
 
       {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled}/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled}/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux}/>}
 
       <Composer
         onSend={handleSend}
