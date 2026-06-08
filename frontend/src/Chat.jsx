@@ -3123,8 +3123,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const lastOpts = getLastAiImageOptions();
       const model = aiCmd ? aiCmd.model : (lastOpts?.model || 'gpt-image-2');
       const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, provider: lastOpts?.provider || aiOptions.provider };
-      setMessages(msgs => [...msgs, { who: 'user', text }]);
-      await runAiImageGeneration(model, freshPrompt, text, refImages, { ...opts, skipContext: true });
+      setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? rawPrompt : text }]);
       return;
     }
 
@@ -3141,13 +3140,14 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const prompt = aiCmd.implicit ? trimmed : trimmed.slice(aiCmd.prefix.length).trim();
       if (!prompt) {
         const prefixLabel = aiCmd.implicit ? '（复用上次模型）' : aiCmd.prefix;
+        const displayText = aiCmd && !aiCmd.implicit ? (prompt || text) : text;
         setMessages(msgs => [...msgs,
-          { who: 'user', text },
+          { who: 'user', text: displayText },
           { who: 'ai', text: `请在 ${prefixLabel} 后输入图片描述` },
         ]);
         return;
       }
-      setMessages(msgs => [...msgs, { who: 'user', text }]);
+      setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? prompt : text }]);
       await runAiImageGeneration(aiCmd.model, prompt, text, refImages, aiOptions);
       return;
     }
