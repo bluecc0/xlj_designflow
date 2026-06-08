@@ -20,8 +20,10 @@ output/
 
 # Env
 .env
+.env.save
 login_users.json
 start.bat
+.claude/settings.local.json
 
 # OS / editor
 .DS_Store
