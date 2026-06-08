@@ -732,8 +732,7 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate }) => {
             <path d="M4 20 V6 M4 6 C10 6, 10 14, 16 14 C22 14, 22 6, 20 6"/>
           </svg>
         </div>
-        <span className="serif" style={{ fontSize: 18, letterSpacing: '-0.01em' }}>Designflow</span>
-        <span className="mono" style={{ fontSize: 9, color: 'var(--ink-3)', padding: '2px 5px', borderRadius: 3, background: 'var(--panel-2)', border: '1px solid var(--line)' }}>BETA</span>
+        <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>Designflow</span>
       </div>
 
       <div style={{ flex: 1 }}/>
@@ -1254,23 +1253,7 @@ var StatusFooter = function(_ref3) {
     }
   },
     React.createElement(I.layers, { size: 11, style: { color: 'var(--ink-3)' } }),
-    React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)', flex: 1 } }, count + ' 个模板'),
-    React.createElement('a', {
-      href: '/ui/PROGRESS.html',
-      target: '_blank',
-      rel: 'noreferrer',
-      style: {
-        display: 'flex', alignItems: 'center', gap: 5,
-        padding: '4px 9px', borderRadius: 6,
-        border: '1px solid var(--line)',
-        background: 'var(--panel)',
-        fontSize: 11, color: 'var(--ink-2)',
-        textDecoration: 'none',
-      }
-    },
-      React.createElement(I.film, { size: 11 }),
-      '开发进度'
-    )
+    React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)', flex: 1 } }, count + ' 个模板')
   );
 };
 
@@ -2774,7 +2757,15 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
               ),
               m.status === 'failed' && m.error && React.createElement('div', {
                 style: { padding: '8px 10px', borderRadius: 6, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)' }
-              }, m.error)
+              }, m.error),
+              m.status === 'failed' && m.provider !== 'zenmux' && React.createElement('button', {
+                onClick: function() { handleRetryWithZenmux(m); },
+                style: {
+                  marginTop: 6, padding: '5px 12px', borderRadius: 6,
+                  border: '1px solid var(--accent)', background: 'var(--panel)',
+                  color: 'var(--accent)', fontSize: 11, cursor: 'pointer',
+                }
+              }, '切换到官方线路重试')
             );
           })() : m.type === 'parse-result' ? (() => {
                 const matchedCount = m.data.products.filter(p => p.image_path).length;
@@ -2956,7 +2947,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
                     animation: 'pulse 1.2s ease-in-out infinite',
                   }}/>
                   <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
-                    {getThinkingPreview(m.thinkingStatus || m.text)}
+                    {m.meta === 'Agent' ? getThinkingPreview(m.thinkingStatus || m.text) : '让我想想...'}
                   </span>
                 </div>
                 {m.thinking ? <ThinkingBlock text={m.thinking}/> : null}
@@ -3347,7 +3338,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
 
   const handleSend = () => {
     const body = text.trim();
-    const message = lockedCommand ? (body || lockedCommand) : body;
+    const message = lockedCommand ? (lockedCommand + (body ? ' ' + body : '')) : body;
     if (!message || isLoading) return;
     const imagesToSend = [...refImages];
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
@@ -4637,6 +4628,79 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     img.src = url;
   });
 
+  // —— 官方线路重试 ——
+  const handleRetryWithZenmux = React.useCallback(async (failedMsg) => {
+    const jobId = failedMsg.jobId;
+    if (!jobId || !currentAiChatId) return;
+
+    const startedAt = Date.now();
+    setMessages(msgs => [...msgs, {
+      who: 'ai', type: 'ai-image-generating',
+      model: failedMsg.model || 'gpt-image-2',
+      provider: 'zenmux',
+      prompt: failedMsg.prompt || '',
+      size: failedMsg.size || '1024x1024',
+      resolution: failedMsg.resolution || '',
+      status: 'running', startedAt,
+      progress: 0,
+      hasReference: true,
+      refCount: 0,
+      refPreviews: [],
+      jobId: null,
+    }]);
+
+    try {
+      const apiBase = window.API_BASE || window.location.origin;
+      const retryRes = await window.API.retryAiImage(jobId, currentAiChatId);
+      const newJobId = retryRes.job_id;
+
+      setMessages(msgs => msgs.map(m =>
+        m.type === 'ai-image-generating' && m.startedAt === startedAt
+          ? { ...m, jobId: newJobId }
+          : m
+      ));
+
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(apiBase + '/ai-image/' + newJobId, { credentials: 'include' });
+          if (!statusRes.ok) return;
+          const sd = await statusRes.json();
+          setMessages(msgs => msgs.map(m =>
+            m.type === 'ai-image-generating' && m.startedAt === startedAt
+              ? { ...m, status: sd.status, progress: sd.progress || m.progress }
+              : m
+          ));
+          if (sd.status === 'done' && sd.image_url) {
+            clearInterval(pollInterval);
+            const fe = Math.floor((Date.now() - startedAt) / 1000);
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === startedAt
+                ? { ...m, status: 'done', imageUrl: sd.image_url, finalElapsed: fe, progress: 100 }
+                : m
+            ));
+            loadAiChatHistory();
+          } else if (sd.status === 'failed') {
+            clearInterval(pollInterval);
+            const fe = Math.floor((Date.now() - startedAt) / 1000);
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === startedAt
+                ? { ...m, status: 'failed', error: sd.error || '重试失败', finalElapsed: fe }
+                : m
+            ));
+            loadAiChatHistory();
+          }
+        } catch (e) { /* ignore polling errors */ }
+      }, 2000);
+    } catch (e) {
+      const fe = Math.floor((Date.now() - startedAt) / 1000);
+      setMessages(msgs => msgs.map(m =>
+        m.type === 'ai-image-generating' && m.startedAt === startedAt
+          ? { ...m, status: 'failed', error: e.message || '重试失败', finalElapsed: fe }
+          : m
+      ));
+    }
+  }, [currentAiChatId, loadAiChatHistory]);
+
   // —— AI 生图核心流程（共享）——
   const runAiImageGeneration = React.useCallback(async (model, prompt, displayText, refImages, aiOptions) => {
     setIsLoading(true);
@@ -4701,6 +4765,11 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const data = await res.json();
       if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
       const jobId = data.job_id;
+      setMessages(msgs => msgs.map(m =>
+        m.type === 'ai-image-generating' && m.startedAt === startedAt
+          ? { ...m, jobId }
+          : m
+      ));
 
       // 轮询任务状态
       const pollInterval = setInterval(async () => {
@@ -5136,7 +5205,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         : '请提供 SKU，格式：/特殊品 SKU，文案，时间文案';
       const _tplHint   = _isSpecialFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板';
 
-      setMessages(msgs => [...msgs, { who: 'user', text }]);
+      const displayText = text.replace(_argRegex, '').trim() || text;
+      setMessages(msgs => [...msgs, { who: 'user', text: displayText }]);
       setIsLoading(true);
       // 先插入 generating 消息占位
       let specialMsgIdx = null;

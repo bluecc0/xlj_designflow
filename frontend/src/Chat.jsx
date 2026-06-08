@@ -907,7 +907,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
                     animation: 'pulse 1.2s ease-in-out infinite',
                   }}/>
                   <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
-                    {getThinkingPreview(m.thinkingStatus || m.text)}
+                    {m.meta === 'Agent' ? getThinkingPreview(m.thinkingStatus || m.text) : '让我想想...'}
                   </span>
                 </div>
                 {m.thinking ? <ThinkingBlock text={m.thinking}/> : null}
@@ -1298,7 +1298,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
 
   const handleSend = () => {
     const body = text.trim();
-    const message = lockedCommand ? (body || lockedCommand) : body;
+    const message = lockedCommand ? (lockedCommand + (body ? ' ' + body : '')) : body;
     if (!message || isLoading) return;
     const imagesToSend = [...refImages];
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
@@ -3165,7 +3165,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         : '请提供 SKU，格式：/特殊品 SKU，文案，时间文案';
       const _tplHint   = _isSpecialFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板';
 
-      setMessages(msgs => [...msgs, { who: 'user', text }]);
+      const displayText = text.replace(_argRegex, '').trim() || text;
+      setMessages(msgs => [...msgs, { who: 'user', text: displayText }]);
       setIsLoading(true);
       // 先插入 generating 消息占位
       let specialMsgIdx = null;
