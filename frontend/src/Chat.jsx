@@ -586,7 +586,7 @@ const ChatGenerating = () => (
   </div>
 );
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey, onQuickReply, agentEnabled, onRetryWithZenmux }) => {
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey, onQuickReply, agentEnabled, onRetryWithZenmux, onPublishInspiration, onUnpublishInspiration }) => {
   const userMsgs = messages.filter(m => m.who === 'user').length;
   const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
   const bottomRef = React.useRef(null);
@@ -699,11 +699,11 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
                   }, React.createElement(I.download, { size: 10 }), '下载'),
                   m.inspirationPostId
                     ? React.createElement('button', {
-                        onClick: function() { handleUnpublishInspiration(m); },
+                        onClick: function() { onUnpublishInspiration(m); },
                         style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ok)', border: '1px solid var(--ok)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
                       }, React.createElement(I.check, { size: 10 }), '已发布 · 取消')
                     : React.createElement('button', {
-                        onClick: function() { handlePublishInspiration(m); },
+                        onClick: function() { onPublishInspiration(m); },
                         style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ink-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
                       }, React.createElement(I.sparkles, { size: 10 }), '发布到灵感')
                 )
@@ -3684,9 +3684,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       </div>
 
       {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux}/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux}/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
 
       <Composer
         onSend={handleSend}
