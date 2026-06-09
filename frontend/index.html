@@ -1034,13 +1034,14 @@ var TemplatePanel = function(_ref2) {
 
   return (
     React.createElement('div', { style: { position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--panel)', borderRight: '1px solid var(--line)' } },
-      React.createElement('div', { style: { display: 'flex', flexShrink: 0, borderBottom: '1px solid var(--line)', padding: '0 10px', gap: 2 } },
+      React.createElement('div', { style: { display: 'flex', flexShrink: 0, height: 44, borderBottom: '1px solid var(--line)', padding: '0 10px', gap: 2, alignItems: 'center' } },
         PANEL_TABS.map(function(t) {
           return React.createElement('button', {
             key: t.id,
             onClick: function() { if (!t.soon) setTab(t.id); },
             style: {
-              padding: '10px 10px 9px',
+              height: '100%',
+              padding: '0 10px',
               fontSize: 12, fontWeight: tab === t.id ? 600 : 400,
               color: t.soon ? 'var(--ink-3)' : tab === t.id ? 'var(--ink)' : 'var(--ink-2)',
               borderBottom: tab === t.id ? '2px solid var(--ink)' : '2px solid transparent',
