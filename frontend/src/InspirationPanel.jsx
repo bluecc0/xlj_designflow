@@ -12,23 +12,8 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [detailPost, setDetailPost] = React.useState(null);
-  const [containerWidth, setContainerWidth] = React.useState(0);
   const containerRef = React.useRef(null);
   const loadIdRef = React.useRef(0);
-
-  // 跟踪容器宽度用于瀑布流分列
-  React.useEffect(() => {
-    if (!containerRef.current) return;
-    const el = containerRef.current;
-    const ro = new ResizeObserver(function(entries) {
-      for (const e of entries) {
-        setContainerWidth(e.contentRect.width);
-      }
-    });
-    ro.observe(el);
-    setContainerWidth(el.clientWidth);
-    return function() { ro.disconnect(); };
-  }, []);
 
   // 加载列表
   const loadPosts = React.useCallback(function() {
@@ -60,21 +45,6 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
       return (p.prompt || '').toLowerCase().includes(q);
     });
   }, [posts, search]);
-
-  // 瀑布流分列
-  const columnCount = React.useMemo(function() {
-    if (!containerWidth) return COLUMN_COUNT_DESKTOP;
-    const possible = Math.floor((containerWidth + COLUMN_GAP) / (COLUMN_MIN_WIDTH + COLUMN_GAP));
-    return Math.max(1, Math.min(COLUMN_COUNT_DESKTOP, possible));
-  }, [containerWidth]);
-
-  const columns = React.useMemo(function() {
-    const cols = Array.from({ length: columnCount }, function() { return []; });
-    filtered.forEach(function(post, idx) {
-      cols[idx % columnCount].push(post);
-    });
-    return cols;
-  }, [filtered, columnCount]);
 
   // 关闭详情
   const closeDetail = React.useCallback(function() { setDetailPost(null); }, []);
@@ -195,19 +165,14 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
         )}
         {filtered.length > 0 && (
           <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(' + columnCount + ', minmax(0, 1fr))',
-            gap: COLUMN_GAP,
+            columnCount: COLUMN_COUNT_DESKTOP,
+            columnGap: COLUMN_GAP,
           }}>
-            {columns.map(function(col, ci) {
-              return React.createElement('div', { key: ci, style: { display: 'flex', flexDirection: 'column', gap: COLUMN_GAP } },
-                col.map(function(post) {
-                  return React.createElement(InspirationCard, {
-                    key: post.id, post: post,
-                    onOpen: function() { openDetail(post); },
-                  });
-                })
-              );
+            {filtered.map(function(post) {
+              return React.createElement(InspirationCard, {
+                key: post.id, post: post,
+                onOpen: function() { openDetail(post); },
+              });
             })}
           </div>
         )}
@@ -231,7 +196,9 @@ const InspirationCard = ({ post, onOpen }) => {
     onClick: onOpen,
     style: {
       width: '100%',
+      display: 'inline-block', // CSS columns 需要
       padding: 0,
+      margin: '0 0 ' + COLUMN_GAP + 'px 0',
       border: '1px solid var(--line-2)',
       borderRadius: 10,
       background: 'var(--panel)',
@@ -239,6 +206,9 @@ const InspirationCard = ({ post, onOpen }) => {
       overflow: 'hidden',
       textAlign: 'left',
       transition: 'transform 120ms, box-shadow 120ms',
+      breakInside: 'avoid',
+      WebkitColumnBreakInside: 'avoid',
+      pageBreakInside: 'avoid',
     },
     onMouseEnter: function(e) {
       e.currentTarget.style.transform = 'translateY(-2px)';
