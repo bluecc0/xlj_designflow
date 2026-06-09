@@ -254,13 +254,7 @@ const InspirationCard = ({ post, onOpen }) => {
       alt: post.prompt,
       loading: 'lazy',
       style: { width: '100%', display: 'block', background: 'var(--panel-2)' },
-    }),
-    React.createElement('div', {
-      style: { padding: '8px 10px', fontSize: 11, color: 'var(--ink-2)', lineHeight: 1.4,
-        display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-        overflow: 'hidden',
-      }
-    }, post.prompt || '（无 prompt）')
+    })
   );
 };
 
