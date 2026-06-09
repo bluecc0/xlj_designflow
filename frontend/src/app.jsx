@@ -282,15 +282,7 @@ const App = () => {
               activeId={activeTemplate ? (activeTemplate.file_id || '') + ':' + (activeTemplate.group_name || activeTemplate.id) : null}
               onSelect={selectTemplate}
             />
-            <div style={{ position: 'relative', minWidth: 0, minHeight: 0 }}>
-              <Canvas template={activeTemplate} resultTemplate={resultTemplate} editorCommand={editorCommand}/>
-              {inspirationOpen && (
-                <InspirationPanel
-                  onClose={function() { setInspirationOpen(false); }}
-                  onUsePrompt={handleUseInspirationPrompt}
-                />
-              )}
-            </div>
+            <Canvas template={activeTemplate} resultTemplate={resultTemplate} editorCommand={editorCommand}/>
             <Chat
               key={'chat:' + currentUser.id}
               state={tweaks.chatState}
@@ -303,6 +295,12 @@ const App = () => {
               onSeedConsumed={handleSeedConsumed}
             />
           </div>
+          {inspirationOpen && (
+            <InspirationPanel
+              onClose={function() { setInspirationOpen(false); }}
+              onUsePrompt={handleUseInspirationPrompt}
+            />
+          )}
           <Tweaks
             visible={tweaksVisible}
             tweaks={tweaks}

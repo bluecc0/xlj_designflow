@@ -254,7 +254,6 @@ window.renderAiProviderDetail = renderAiProviderDetail;
             <span>管理</span>
           </button>
         )}
-        <StatusIcon title="AI 服务商" fetchUrl="/health" okKey="ai_provider" icon={I.sparkles} renderDetail={window.renderAiProviderDetail}/>
         {user && React.createElement('div', {
           style: {
             display: 'flex', alignItems: 'center', gap: 8,
@@ -281,3 +280,4 @@ window.renderAiProviderDetail = renderAiProviderDetail;
 };
 
 window.TopBar = TopBar;
+window.StatusIcon = StatusIcon;

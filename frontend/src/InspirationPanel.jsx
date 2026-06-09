@@ -12,8 +12,28 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [detailPost, setDetailPost] = React.useState(null);
-  const containerRef = React.useRef(null);
+  const [canvasRect, setCanvasRect] = React.useState(null);
   const loadIdRef = React.useRef(0);
+
+  // 跟踪画布位置，让浮层只覆盖画布区
+  React.useEffect(function() {
+    const iframe = document.querySelector('iframe[src*="editor-beta"]');
+    if (!iframe) return;
+    const update = function() {
+      const r = iframe.getBoundingClientRect();
+      setCanvasRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(iframe);
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return function() {
+      ro.disconnect();
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, []);
 
   // 加载列表
   const loadPosts = React.useCallback(function() {
@@ -70,8 +90,13 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
   }, []);
 
   return (
-    <div ref={containerRef} style={{
-      position: 'absolute', inset: 0, zIndex: 10,
+    <div style={{
+      position: 'fixed',
+      top: canvasRect ? canvasRect.top : 0,
+      left: canvasRect ? canvasRect.left : 0,
+      width: canvasRect ? canvasRect.width : '100vw',
+      height: canvasRect ? canvasRect.height : '100vh',
+      zIndex: 50,
       background: 'var(--panel-2)',
       display: 'flex', flexDirection: 'column',
       overflow: 'hidden',

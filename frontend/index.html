@@ -801,7 +801,6 @@ window.renderAiProviderDetail = renderAiProviderDetail;
             <span>管理</span>
           </button>
         )}
-        <StatusIcon title="AI 服务商" fetchUrl="/health" okKey="ai_provider" icon={I.sparkles} renderDetail={window.renderAiProviderDetail}/>
         {user && React.createElement('div', {
           style: {
             display: 'flex', alignItems: 'center', gap: 8,
@@ -828,6 +827,7 @@ window.renderAiProviderDetail = renderAiProviderDetail;
 };
 
 window.TopBar = TopBar;
+window.StatusIcon = StatusIcon;
 
 </script>
 <script type="text/babel" src="src/TemplatePanel.jsx" data-presets="react">
@@ -6380,8 +6380,28 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [detailPost, setDetailPost] = React.useState(null);
-  const containerRef = React.useRef(null);
+  const [canvasRect, setCanvasRect] = React.useState(null);
   const loadIdRef = React.useRef(0);
+
+  // 跟踪画布位置，让浮层只覆盖画布区
+  React.useEffect(function() {
+    const iframe = document.querySelector('iframe[src*="editor-beta"]');
+    if (!iframe) return;
+    const update = function() {
+      const r = iframe.getBoundingClientRect();
+      setCanvasRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(iframe);
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return function() {
+      ro.disconnect();
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, []);
 
   // 加载列表
   const loadPosts = React.useCallback(function() {
@@ -6438,8 +6458,13 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
   }, []);
 
   return (
-    <div ref={containerRef} style={{
-      position: 'absolute', inset: 0, zIndex: 10,
+    <div style={{
+      position: 'fixed',
+      top: canvasRect ? canvasRect.top : 0,
+      left: canvasRect ? canvasRect.left : 0,
+      width: canvasRect ? canvasRect.width : '100vw',
+      height: canvasRect ? canvasRect.height : '100vh',
+      zIndex: 50,
       background: 'var(--panel-2)',
       display: 'flex', flexDirection: 'column',
       overflow: 'hidden',
@@ -7004,15 +7029,7 @@ const App = () => {
               activeId={activeTemplate ? (activeTemplate.file_id || '') + ':' + (activeTemplate.group_name || activeTemplate.id) : null}
               onSelect={selectTemplate}
             />
-            <div style={{ position: 'relative', minWidth: 0, minHeight: 0 }}>
-              <Canvas template={activeTemplate} resultTemplate={resultTemplate} editorCommand={editorCommand}/>
-              {inspirationOpen && (
-                <InspirationPanel
-                  onClose={function() { setInspirationOpen(false); }}
-                  onUsePrompt={handleUseInspirationPrompt}
-                />
-              )}
-            </div>
+            <Canvas template={activeTemplate} resultTemplate={resultTemplate} editorCommand={editorCommand}/>
             <Chat
               key={'chat:' + currentUser.id}
               state={tweaks.chatState}
@@ -7025,6 +7042,12 @@ const App = () => {
               onSeedConsumed={handleSeedConsumed}
             />
           </div>
+          {inspirationOpen && (
+            <InspirationPanel
+              onClose={function() { setInspirationOpen(false); }}
+              onUsePrompt={handleUseInspirationPrompt}
+            />
+          )}
           <Tweaks
             visible={tweaksVisible}
             tweaks={tweaks}
