@@ -213,23 +213,22 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration
             <span>主工作台</span>
           </a>
         )}
-        <StatusIcon title="后端服务" fetchUrl="/health" icon={I.settings}/>
-        <StatusIcon title="素材库" fetchUrl="/health" okKey="library" icon={I.folder}/>
-        <StatusIcon title="AI 服务商" fetchUrl="/health" okKey="ai_provider" icon={I.sparkles} renderDetail={renderAiProviderDetail}/>
         {user && (
           <button
             onClick={onOpenInspiration}
             title="灵感"
             style={{
               height: 28, padding: '0 10px', borderRadius: 7,
-              background: inspirationOpen ? 'var(--accent-soft)' : 'var(--panel-2)',
-              border: '1px solid ' + (inspirationOpen ? 'var(--accent)' : 'var(--line-2)'),
-              color: inspirationOpen ? 'var(--accent)' : 'var(--ink-2)', fontSize: 11.5, cursor: 'pointer',
+              background: inspirationOpen ? 'var(--ink)' : 'var(--panel)',
+              border: '1px solid ' + (inspirationOpen ? 'var(--ink)' : 'var(--line)'),
+              color: inspirationOpen ? 'white' : 'var(--ink)',
+              fontSize: 11.5, fontWeight: 500, cursor: 'pointer',
               display: 'inline-flex', alignItems: 'center', gap: 5,
               flexShrink: 0,
+              boxShadow: inspirationOpen ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
             }}
           >
-            <I.sparkles size={12}/>
+            <I.sparkles size={12} style={{ color: inspirationOpen ? 'white' : 'var(--accent)' }}/>
             <span>灵感</span>
           </button>
         )}
@@ -251,6 +250,10 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration
             <span>管理</span>
           </button>
         )}
+        <div style={{ width: 1, height: 18, background: 'var(--line-2)', margin: '0 4px' }}/>
+        <StatusIcon title="后端服务" fetchUrl="/health" icon={I.settings}/>
+        <StatusIcon title="素材库" fetchUrl="/health" okKey="library" icon={I.folder}/>
+        <StatusIcon title="AI 服务商" fetchUrl="/health" okKey="ai_provider" icon={I.sparkles} renderDetail={renderAiProviderDetail}/>
         {user && React.createElement('div', {
           style: {
             display: 'flex', alignItems: 'center', gap: 8,
