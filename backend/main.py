@@ -110,6 +110,11 @@ from .job_store import (
     save_special_job,
     load_special_jobs,
     update_agent_project,
+    create_inspiration_post,
+    get_inspiration_post,
+    get_inspiration_post_by_job,
+    delete_inspiration_post,
+    list_inspiration_posts,
 )
 from .models import (
     ComposeJob,
@@ -2423,6 +2428,109 @@ async def ai_image_retry(request: Request):
         )
     )
     return {"job_id": new_job_id, "status": "processing", "provider": PROVIDER_ZENMUX}
+
+
+# ─── 灵感（inspiration） ──────────────────────────────────────────────────────
+
+@app.post("/inspiration")
+async def publish_inspiration(request: Request):
+    """把已完成的生图结果发布到灵感页。同一 job_id 只能发布一次。"""
+    user = _current_user(request)
+    body = await request.json()
+    job_id = (body.get("job_id") or "").strip()
+    if not job_id:
+        raise HTTPException(400, "job_id 不能为空")
+
+    job = load_ai_image_job(job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在")
+    if not _is_admin(user) and job.get("user_id") != user["id"]:
+        raise HTTPException(404, "任务不存在")
+    if job.get("status") != "done":
+        raise HTTPException(400, "生图任务未完成，不能发布")
+    image_url = job.get("image_url") or ""
+    if not image_url:
+        raise HTTPException(400, "任务没有图片 URL")
+
+    existing = get_inspiration_post_by_job(job_id)
+    if existing:
+        return {"post": _inspiration_to_api(existing), "already_published": True}
+
+    post_id = uuid.uuid4().hex
+    created_at = time.time()
+    create_inspiration_post(
+        post_id=post_id,
+        job_id=job_id,
+        user_id=user["id"],
+        image_url=image_url,
+        prompt=job.get("prompt") or "",
+        model=job.get("model") or "gpt-image-2",
+        size=job.get("size") or "1024x1024",
+        resolution=job.get("resolution") or "",
+        has_ref=bool(job.get("has_reference")),
+        created_at=created_at,
+    )
+    log_operation(
+        user_id=user["id"], username=user["username"],
+        action="inspiration_publish",
+        detail=f"post={post_id[:8]} job={job_id[:8]} model={job.get('model')}",
+        payload=json.dumps({"post_id": post_id, "job_id": job_id, "model": job.get("model")}, ensure_ascii=False),
+    )
+    post = get_inspiration_post(post_id)
+    return {"post": _inspiration_to_api(post), "already_published": False}
+
+
+@app.delete("/inspiration/{post_id}")
+async def unpublish_inspiration(request: Request, post_id: str):
+    """下架灵感：发布者本人或 admin 可操作。"""
+    user = _current_user(request)
+    post = get_inspiration_post(post_id)
+    if not post:
+        raise HTTPException(404, "灵感不存在")
+    if not _is_admin(user) and post.get("user_id") != user["id"]:
+        raise HTTPException(403, "无权下架该灵感")
+    delete_inspiration_post(post_id)
+    log_operation(
+        user_id=user["id"], username=user["username"],
+        action="inspiration_unpublish",
+        detail=f"post={post_id[:8]} job={post.get('job_id', '')[:8]}",
+        payload=json.dumps({"post_id": post_id}, ensure_ascii=False),
+    )
+    return {"deleted": True}
+
+
+@app.get("/inspiration")
+async def list_inspiration(request: Request, limit: int = 20, offset: int = 0, mine: int = 0):
+    """列出灵感。mine=1 只返回当前用户的发布。"""
+    user = _current_user(request)
+    mine_user_id = user["id"] if mine else None
+    rows = list_inspiration_posts(limit, offset, mine_user_id)
+    return {"posts": [_inspiration_to_api(r, current_user_id=user["id"]) for r in rows]}
+
+
+@app.get("/inspiration/{post_id}")
+async def get_inspiration_detail(request: Request, post_id: str):
+    user = _current_user(request)
+    post = get_inspiration_post(post_id)
+    if not post:
+        raise HTTPException(404, "灵感不存在")
+    return {"post": _inspiration_to_api(post, current_user_id=user["id"])}
+
+
+def _inspiration_to_api(post: dict, current_user_id: str | None = None) -> dict:
+    """把 DB 记录转 API 返回结构。username 不暴露（匿名）。"""
+    return {
+        "id": post["id"],
+        "job_id": post["job_id"],
+        "image_url": post["image_url"],
+        "prompt": post["prompt"],
+        "model": post["model"],
+        "size": post["size"],
+        "resolution": post.get("resolution") or "",
+        "has_ref": bool(post.get("has_ref")),
+        "is_mine": bool(current_user_id and post.get("user_id") == current_user_id),
+        "created_at": post["created_at"],
+    }
 
 
 @app.post("/editor/snapshot")

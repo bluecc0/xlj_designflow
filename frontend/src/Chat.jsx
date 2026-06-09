@@ -692,11 +692,20 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
                   style: { width: '100%', borderRadius: 10, display: 'block', border: '1px solid var(--line-2)', cursor: 'pointer' },
                   onClick: () => window.open(m.imageUrl, '_blank'),
                 }),
-                React.createElement('div', { style: { marginTop: 6, display: 'flex', gap: 6 } },
+                React.createElement('div', { style: { marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' } },
                   React.createElement('a', {
                     href: m.imageUrl, download: true,
                     style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 },
-                  }, React.createElement(I.download, { size: 10 }), '下载')
+                  }, React.createElement(I.download, { size: 10 }), '下载'),
+                  m.inspirationPostId
+                    ? React.createElement('button', {
+                        onClick: function() { handleUnpublishInspiration(m); },
+                        style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ok)', border: '1px solid var(--ok)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
+                      }, React.createElement(I.check, { size: 10 }), '已发布 · 取消')
+                    : React.createElement('button', {
+                        onClick: function() { handlePublishInspiration(m); },
+                        style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ink-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
+                      }, React.createElement(I.sparkles, { size: 10 }), '发布到灵感')
                 )
               ),
               // VLM 质检反馈
@@ -997,7 +1006,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
 
 // ---------- Composer ----------
 
-const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate }) => {
+const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt }) => {
   const [text, setText] = React.useState('');
   const [lockedCommand, setLockedCommand] = React.useState('');
   const [files, setFiles] = React.useState([]);
@@ -1137,6 +1146,22 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       el.setSelectionRange(0, 0);
     }, 0);
   }, [agentEnabled, slashTrigger?.key, cmdToWorkflow]);
+
+  // 外部触发：从灵感页"生成同款"传过来，自动锁定 /Gpt image 2 并填入 prompt
+  React.useEffect(() => {
+    if (!seedPrompt) return;
+    setLockedCommand('/Gpt image 2');
+    setSelectedWorkflow('ai-image');
+    setPrototypePanel('');
+    setText(String(seedPrompt));
+    setTimeout(() => {
+      const el = taRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(0, 0);
+    }, 0);
+    if (onSeedConsumed) onSeedConsumed();
+  }, [seedPrompt, onSeedConsumed]);
 
   React.useEffect(() => {
     if (agentEnabled) {
@@ -2195,7 +2220,7 @@ const mapAgentProjectMessages = function(project, images) {
 };
 
 console.log('[Main] Chat component definition');
-const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onRequestSpecialTemplate }) => {
+const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed }) => {
   const [messages, setMessages] = React.useState([]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
   const [agentMessages, setAgentMessages] = React.useState([]);
@@ -2621,6 +2646,63 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       ));
     }
   }, [currentAiChatId, loadAiChatHistory]);
+
+  // —— 发布/取消发布灵感 ——
+  const handlePublishInspiration = React.useCallback(async (msg) => {
+    if (!msg || !msg.jobId) return;
+    // 乐观更新
+    setMessages(function(msgs) {
+      return msgs.map(function(m) {
+        return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: true }) : m;
+      });
+    });
+    try {
+      const res = await window.API.publishInspiration(msg.jobId);
+      const post = res && res.post;
+      setMessages(function(msgs) {
+        return msgs.map(function(m) {
+          return m.startedAt === msg.startedAt
+            ? Object.assign({}, m, { inspirationPostId: post ? post.id : null, inspirationPublishing: false })
+            : m;
+        });
+      });
+    } catch (e) {
+      setMessages(function(msgs) {
+        return msgs.map(function(m) {
+          return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: false }) : m;
+        });
+      });
+      window.alert('发布失败：' + (e.message || '未知错误'));
+    }
+  }, []);
+
+  const handleUnpublishInspiration = React.useCallback(async (msg) => {
+    if (!msg || !msg.inspirationPostId) return;
+    if (!window.confirm('下架这条灵感？')) return;
+    const postId = msg.inspirationPostId;
+    setMessages(function(msgs) {
+      return msgs.map(function(m) {
+        return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: true }) : m;
+      });
+    });
+    try {
+      await window.API.unpublishInspiration(postId);
+      setMessages(function(msgs) {
+        return msgs.map(function(m) {
+          return m.startedAt === msg.startedAt
+            ? Object.assign({}, m, { inspirationPostId: null, inspirationPublishing: false })
+            : m;
+        });
+      });
+    } catch (e) {
+      setMessages(function(msgs) {
+        return msgs.map(function(m) {
+          return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: false }) : m;
+        });
+      });
+      window.alert('下架失败：' + (e.message || '未知错误'));
+    }
+  }, []);
 
   // —— AI 生图核心流程（共享）——
   const runAiImageGeneration = React.useCallback(async (model, prompt, displayText, refImages, aiOptions) => {
@@ -3617,6 +3699,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         onToggleAgent={toggleAgentMode}
         resetKey={composerResetKey}
         onRequestSpecialTemplate={onRequestSpecialTemplate}
+        seedPrompt={seedPrompt}
+        onSeedConsumed={onSeedConsumed}
       />
     </div>
   );

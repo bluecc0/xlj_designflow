@@ -88,6 +88,24 @@
         body: JSON.stringify({ job_id: jobId, session_id: sessionId }),
       });
     },
+    publishInspiration: function(jobId) {
+      return request('/inspiration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId }),
+      });
+    },
+    unpublishInspiration: function(postId) {
+      return request('/inspiration/' + encodeURIComponent(postId), { method: 'DELETE' });
+    },
+    listInspiration: function(limit, offset, mine) {
+      var qs = '?limit=' + (limit || 20) + '&offset=' + (offset || 0);
+      if (mine) qs += '&mine=1';
+      return request('/inspiration' + qs).then(function(res) { return res.posts || []; });
+    },
+    getInspiration: function(postId) {
+      return request('/inspiration/' + encodeURIComponent(postId)).then(function(res) { return res.post; });
+    },
     deleteAiChat: function(sessionId) { return request('/history/ai-chats/' + encodeURIComponent(sessionId), { method: 'DELETE' }); },
     createLayeredPsd: function(prompt, imageFile, options) {
       var form = new FormData();

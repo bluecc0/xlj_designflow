@@ -214,6 +214,23 @@ def init_db() -> None:
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_oplogs_ts ON operation_logs(created_at)
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS inspiration_posts (
+                id          TEXT PRIMARY KEY,
+                job_id      TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                image_url   TEXT NOT NULL,
+                prompt      TEXT NOT NULL,
+                model       TEXT NOT NULL,
+                size        TEXT NOT NULL,
+                resolution  TEXT,
+                has_ref     INTEGER NOT NULL DEFAULT 0,
+                created_at  REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_inspiration_created ON inspiration_posts(created_at)
+        """)
         conn.commit()
 
 
@@ -1284,3 +1301,69 @@ def load_admin_users() -> list[dict]:
             "last_action": dict(last_op) if last_op else None,
         })
     return users
+
+
+# ─── 灵感（inspiration_posts）──────────────────────────────────────────────────
+
+def create_inspiration_post(
+    post_id: str,
+    job_id: str,
+    user_id: str,
+    image_url: str,
+    prompt: str,
+    model: str,
+    size: str,
+    resolution: str,
+    has_ref: bool,
+    created_at: float,
+) -> None:
+    """发布灵感记录。同一个 job_id 不重复发布（job_id 唯一约束由调用方在传参前检查）。"""
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO inspiration_posts
+                (id, job_id, user_id, image_url, prompt, model, size, resolution, has_ref, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (post_id, job_id, user_id, image_url, prompt, model, size, resolution, 1 if has_ref else 0, created_at),
+        )
+
+
+def get_inspiration_post_by_job(job_id: str) -> dict | None:
+    """根据 job_id 查找已发布的灵感（用于检测同 job 是否已发布）。"""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM inspiration_posts WHERE job_id = ? ORDER BY created_at DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_inspiration_post(post_id: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM inspiration_posts WHERE id = ?", (post_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_inspiration_post(post_id: str) -> bool:
+    with _lock, _connect() as conn:
+        cur = conn.execute("DELETE FROM inspiration_posts WHERE id = ?", (post_id,))
+        return cur.rowcount > 0
+
+
+def list_inspiration_posts(limit: int, offset: int, mine_user_id: str | None = None) -> list[dict]:
+    """列出灵感。mine_user_id 不为 None 时只返回该用户的发布。"""
+    with _connect() as conn:
+        if mine_user_id:
+            rows = conn.execute(
+                "SELECT * FROM inspiration_posts WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (mine_user_id, limit, offset),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM inspiration_posts ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+    return [dict(r) for r in rows]

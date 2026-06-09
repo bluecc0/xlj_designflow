@@ -77,6 +77,14 @@ const App = () => {
   const [currentUser, setCurrentUser] = React.useState(null);
   const [authLoading, setAuthLoading] = React.useState(true);
   const [authError, setAuthError] = React.useState('');
+  const [inspirationOpen, setInspirationOpen] = React.useState(false);
+  const [seedPrompt, setSeedPrompt] = React.useState('');
+
+  const handleUseInspirationPrompt = React.useCallback(function(post) {
+    setInspirationOpen(false);
+    setSeedPrompt(post.prompt || '');
+  }, []);
+  const handleSeedConsumed = React.useCallback(function() { setSeedPrompt(''); }, []);
 
   const getViewFromHash = () => (window.location.hash === '#/admin' ? 'admin' : 'workbench');
   const [currentView, setCurrentView] = React.useState(getViewFromHash);
@@ -267,14 +275,22 @@ const App = () => {
       )}
       {currentUser && !showAdmin && (
         <>
-          <TopBar user={currentUser} onSwitchUser={handleSwitchUser} currentView="workbench" onNavigate={navigateTo} />
+          <TopBar user={currentUser} onSwitchUser={handleSwitchUser} currentView="workbench" onNavigate={navigateTo} onOpenInspiration={function() { setInspirationOpen(function(v) { return !v; }); }} inspirationOpen={inspirationOpen} />
           <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '260px minmax(0, 1fr) 360px', gridTemplateRows: 'minmax(0, 1fr)', minHeight: 0 }}>
             <TemplatePanel
               key={'templates:' + currentUser.id}
               activeId={activeTemplate ? (activeTemplate.file_id || '') + ':' + (activeTemplate.group_name || activeTemplate.id) : null}
               onSelect={selectTemplate}
             />
-            <Canvas template={activeTemplate} resultTemplate={resultTemplate} editorCommand={editorCommand}/>
+            <div style={{ position: 'relative', minWidth: 0, minHeight: 0 }}>
+              <Canvas template={activeTemplate} resultTemplate={resultTemplate} editorCommand={editorCommand}/>
+              {inspirationOpen && (
+                <InspirationPanel
+                  onClose={function() { setInspirationOpen(false); }}
+                  onUsePrompt={handleUseInspirationPrompt}
+                />
+              )}
+            </div>
             <Chat
               key={'chat:' + currentUser.id}
               state={tweaks.chatState}
@@ -283,6 +299,8 @@ const App = () => {
               slashTrigger={slashTrigger}
               user={currentUser}
               onRequestSpecialTemplate={handleRequestSpecialTemplate}
+              seedPrompt={seedPrompt}
+              onSeedConsumed={handleSeedConsumed}
             />
           </div>
           <Tweaks

@@ -138,7 +138,7 @@ const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail }) => {
   );
 };
 
-const TopBar = ({ user, onSwitchUser, currentView, onNavigate }) => {
+const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration, inspirationOpen }) => {
   const isAgentPage = typeof window !== 'undefined' && /\/ui\/agent\.html(?:$|\?)/.test(window.location.href);
   const fmtBalance = (n) => {
     if (typeof n !== 'number') return '';
@@ -216,6 +216,23 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate }) => {
         <StatusIcon title="后端服务" fetchUrl="/health" icon={I.settings}/>
         <StatusIcon title="素材库" fetchUrl="/health" okKey="library" icon={I.folder}/>
         <StatusIcon title="AI 服务商" fetchUrl="/health" okKey="ai_provider" icon={I.sparkles} renderDetail={renderAiProviderDetail}/>
+        {user && (
+          <button
+            onClick={onOpenInspiration}
+            title="灵感"
+            style={{
+              height: 28, padding: '0 10px', borderRadius: 7,
+              background: inspirationOpen ? 'var(--accent-soft)' : 'var(--panel-2)',
+              border: '1px solid ' + (inspirationOpen ? 'var(--accent)' : 'var(--line-2)'),
+              color: inspirationOpen ? 'var(--accent)' : 'var(--ink-2)', fontSize: 11.5, cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              flexShrink: 0,
+            }}
+          >
+            <I.sparkles size={12}/>
+            <span>灵感</span>
+          </button>
+        )}
         {user && user.role === 'admin' && onNavigate && (
           <button
             onClick={() => onNavigate('#/admin')}

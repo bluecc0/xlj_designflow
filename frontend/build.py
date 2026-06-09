@@ -27,6 +27,7 @@ BABEL_FILES = [
     'src/Chat.jsx',
     'src/Tweaks.jsx',
     'src/AdminPage.jsx',
+    'src/InspirationPanel.jsx',
     'src/app.jsx',
 ]
 
