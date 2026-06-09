@@ -1064,7 +1064,6 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     setFiles([]);
     clearRefImages();
     setPrototypePanel('');
-    setMenuOpen(false);
   }, [resetKey]);
 
   // —— Composer 拖拽调整高度 ——
@@ -1131,7 +1130,6 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     setSelectedWorkflow(cmdToWorkflow(nextCmd));
     setPrototypePanel('');
     setText('');
-    setMenuOpen(false);
     setTimeout(() => {
       const el = taRef.current;
       if (!el) return;
@@ -1144,8 +1142,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     if (agentEnabled) {
       setLockedCommand('');
       setSelectedWorkflow('chat');
-      setMenuOpen(false);
-    }
+      }
   }, [agentEnabled]);
 
   React.useEffect(() => {
@@ -1227,8 +1224,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     if (cmd) {
       setLockedCommand(cmd);
       setSelectedWorkflow(cmdToWorkflow(cmd));
-      setMenuOpen(false);
-      setPrototypePanel('');
+        setPrototypePanel('');
       setTimeout(() => {
         const el = taRef.current;
         if (!el) return;
@@ -1239,38 +1235,12 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     }
     setLockedCommand('');
     setSelectedWorkflow(next && next.workflow ? next.workflow : 'chat');
-    setMenuOpen(false);
     setPrototypePanel('');
     setTimeout(() => {
       const el = taRef.current;
       if (el) el.focus();
     }, 0);
   }, [agentEnabled, cmdToWorkflow]);
-
-  const [menuOpen, setMenuOpen] = React.useState(false);
-  React.useEffect(() => {
-    if (agentEnabled) {
-      setMenuOpen(false);
-      return;
-    }
-    setMenuOpen(!lockedCommand && /^\/\S*$/.test(text));
-  }, [agentEnabled, text, lockedCommand]);
-
-  const slashQuery = menuOpen ? (text.match(/^\/\S*/) || [null])[0] : null;
-
-  const pickCommand = (c) => {
-    if (agentEnabled) return;
-    setLockedCommand(c.cmd);
-    setSelectedWorkflow(cmdToWorkflow(c.cmd));
-    setText('');
-    setMenuOpen(false);
-    setTimeout(() => {
-      const el = taRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(0, 0);
-    }, 0);
-  };
 
   const restoreMessage = React.useCallback((message) => {
     const raw = String(message || '');
@@ -1286,7 +1256,6 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       setSelectedWorkflow('chat');
       setText(raw);
     }
-    setMenuOpen(false);
     setTimeout(() => {
       const el = taRef.current;
       if (!el) return;
@@ -1514,7 +1483,6 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     setSelectedWorkflow('chat');
     setFiles([]);
     clearRefImages();
-    setMenuOpen(false);
     setTimeout(() => {
       const el = taRef.current;
       if (el) el.focus();
@@ -1610,8 +1578,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     lockedCommand ||
     refImages.length > 0 ||
     files.length > 0 ||
-    (!agentEnabled && prototypePanel) ||
-    (!agentEnabled && menuOpen)
+    (!agentEnabled && prototypePanel)
   );
   const minComposerHeight = statusBarVisible ? STATUS_COMPOSER_HEIGHT : COLLAPSED_COMPOSER_HEIGHT;
   minComposerHeightRef.current = minComposerHeight;
@@ -2026,20 +1993,14 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         flex: 1,
         margin: '0 12px 12px',
         borderRadius: 18,
-        border: menuOpen ? '1px solid var(--accent)' : '1px solid var(--line)',
+        border: '1px solid var(--line)',
         background: 'var(--panel)',
         padding: statusBarVisible ? '18px 10px 10px' : '10px',
         display: 'flex', flexDirection: 'column', gap: 10,
-        boxShadow: menuOpen
-          ? '0 0 0 3px var(--accent-soft)'
-          : 'none',
+        boxShadow: 'none',
         transition: 'box-shadow 150ms, border-color 150ms, transform 150ms',
         position: 'relative',
       }}>
-        {menuOpen && slashQuery && !agentEnabled && (
-          <SlashMenu query={slashQuery} onPick={pickCommand} onClose={() => { setText(''); setMenuOpen(false); }}/>
-        )}
-
         {renderPrototypePanel()}
 
         <textarea
