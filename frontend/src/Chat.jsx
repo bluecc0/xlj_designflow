@@ -2649,7 +2649,15 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
 
   // —— 发布/取消发布灵感 ——
   const handlePublishInspiration = React.useCallback(async (msg) => {
-    if (!msg || !msg.jobId) return;
+    if (!msg) return;
+    // 优先用 jobId（生图时记录在消息上）；历史消息恢复后没有 jobId，回退到用 image_url
+    const payload = msg.jobId
+      ? { job_id: msg.jobId }
+      : (msg.imageUrl ? { image_url: msg.imageUrl } : null);
+    if (!payload) {
+      window.alert('这条消息无法发布（缺少 job_id 和 image_url）');
+      return;
+    }
     // 乐观更新
     setMessages(function(msgs) {
       return msgs.map(function(m) {
@@ -2657,7 +2665,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       });
     });
     try {
-      const res = await window.API.publishInspiration(msg.jobId);
+      const res = await window.API.publishInspiration(payload);
       const post = res && res.post;
       setMessages(function(msgs) {
         return msgs.map(function(m) {

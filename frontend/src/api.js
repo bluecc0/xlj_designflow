@@ -88,11 +88,15 @@
         body: JSON.stringify({ job_id: jobId, session_id: sessionId }),
       });
     },
-    publishInspiration: function(jobId) {
+    publishInspiration: function(payload) {
+      // payload: { job_id } 或 { image_url }（用于从历史消息中发布时拿不到 job_id）
+      var body = {};
+      if (payload && payload.job_id) body.job_id = payload.job_id;
+      if (payload && payload.image_url) body.image_url = payload.image_url;
       return request('/inspiration', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: jobId }),
+        body: JSON.stringify(body),
       });
     },
     unpublishInspiration: function(postId) {

@@ -97,6 +97,7 @@ from .job_store import (
     load_agent_messages,
     load_ai_image_job,
     load_ai_image_jobs,
+    load_ai_image_job_by_image_url,
     load_job,
     count_operation_logs,
     load_operation_logs,
@@ -2434,27 +2435,32 @@ async def ai_image_retry(request: Request):
 
 @app.post("/inspiration")
 async def publish_inspiration(request: Request):
-    """把已完成的生图结果发布到灵感页。同一 job_id 只能发布一次。"""
+    """把已完成的生图结果发布到灵感页。同一 job_id 只能发布一次。
+    支持 job_id 或 image_url（用于从历史消息里点发布时拿不到 job_id 的场景）。"""
     user = _current_user(request)
     body = await request.json()
     job_id = (body.get("job_id") or "").strip()
-    if not job_id:
-        raise HTTPException(400, "job_id 不能为空")
+    image_url = (body.get("image_url") or "").strip()
 
-    job = load_ai_image_job(job_id)
+    job = None
+    if job_id:
+        job = load_ai_image_job(job_id)
+    elif image_url:
+        job = load_ai_image_job_by_image_url(image_url, user_id=user["id"])
     if not job:
         raise HTTPException(404, "任务不存在")
     if not _is_admin(user) and job.get("user_id") != user["id"]:
         raise HTTPException(404, "任务不存在")
     if job.get("status") != "done":
         raise HTTPException(400, "生图任务未完成，不能发布")
+    job_id = job["id"]
     image_url = job.get("image_url") or ""
     if not image_url:
         raise HTTPException(400, "任务没有图片 URL")
 
     existing = get_inspiration_post_by_job(job_id)
     if existing:
-        return {"post": _inspiration_to_api(existing), "already_published": True}
+        return {"post": _inspiration_to_api(existing, current_user_id=user["id"]), "already_published": True}
 
     post_id = uuid.uuid4().hex
     created_at = time.time()
@@ -2477,7 +2483,7 @@ async def publish_inspiration(request: Request):
         payload=json.dumps({"post_id": post_id, "job_id": job_id, "model": job.get("model")}, ensure_ascii=False),
     )
     post = get_inspiration_post(post_id)
-    return {"post": _inspiration_to_api(post), "already_published": False}
+    return {"post": _inspiration_to_api(post, current_user_id=user["id"]), "already_published": False}
 
 
 @app.delete("/inspiration/{post_id}")

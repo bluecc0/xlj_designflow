@@ -627,10 +627,34 @@ def load_ai_image_job(job_id: str) -> dict | None:
         "image_url": row["image_url"],
         "has_reference": bool(row["has_reference"]),
         "error": row["error"],
-        "task_id": row["task_id"],
-        "progress": row["progress"],
-        "created_at": row["created_at"],
-        "_type": "ai-image",
+    }
+
+
+def load_ai_image_job_by_image_url(image_url: str, user_id: str | None = None) -> dict | None:
+    """通过 image_url 反查 ai_image_jobs（用于从历史消息中点发布时拿 job_id）。"""
+    with _connect() as conn:
+        if user_id:
+            row = conn.execute(
+                "SELECT * FROM ai_image_jobs WHERE image_url = ? AND user_id = ? ORDER BY created_at DESC LIMIT 1",
+                (image_url, user_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM ai_image_jobs WHERE image_url = ? ORDER BY created_at DESC LIMIT 1",
+                (image_url,),
+            ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "status": row["status"],
+        "model": row["model"],
+        "prompt": row["prompt"],
+        "size": row["size"],
+        "image_url": row["image_url"],
+        "has_reference": bool(row["has_reference"]),
+        "error": row["error"],
     }
 
 
