@@ -6,7 +6,7 @@ const STATUS_COLORS = {
   err: 'oklch(0.6 0.18 25)',
 };
 
-const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail }) => {
+const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail, placement = 'bottom' }) => {
   const [status, setStatus] = React.useState('loading'); // 'loading' | 'ok' | 'err'
   const [payload, setPayload] = React.useState(null);
   const [open, setOpen] = React.useState(false);
@@ -120,7 +120,9 @@ const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail }) => {
       {open && detail && (
         <div style={{
           position: 'absolute',
-          top: 'calc(100% + 8px)',
+          ...(placement === 'top'
+            ? { bottom: 'calc(100% + 8px)', top: 'auto' }
+            : { top: 'calc(100% + 8px)' }),
           right: 0,
           minWidth: 180,
           padding: 10,
@@ -140,31 +142,33 @@ const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail }) => {
 
 const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration, inspirationOpen }) => {
   const isAgentPage = typeof window !== 'undefined' && /\/ui\/agent\.html(?:$|\?)/.test(window.location.href);
-  const fmtBalance = (n) => {
-    if (typeof n !== 'number') return '';
-    return Math.min(n, 99.99).toFixed(2);
-  };
-  const renderAiProviderDetail = React.useCallback((data) => {
-    const info = data && data.ai_provider;
-    if (!info) return null;
-    const hasBalance = typeof info.remain_balance !== 'undefined';
-    const zenmux = info.zenmux;
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
-          APIMart {info.connected ? '正常' : (info.configured ? '异常' : '未配置')}
-          {hasBalance ? ` · 余额 $${fmtBalance(info.remain_balance)}` : ''}
-        </div>
-        {zenmux && (
-          <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
-            ZenMux {zenmux.connected ? '正常' : (zenmux.configured ? '异常' : '未配置')}
-            {typeof zenmux.total_credits === 'number' ? ` · 余额 $${fmtBalance(zenmux.total_credits)}` : ''}
-          </div>
-        )}
-        {info.message && <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>{String(info.message).slice(0, 120)}</div>}
+const fmtBalance = (n) => {
+  if (typeof n !== 'number') return '';
+  return Math.min(n, 99.99).toFixed(2);
+};
+const renderAiProviderDetail = function(data) {
+  const info = data && data.ai_provider;
+  if (!info) return null;
+  const hasBalance = typeof info.remain_balance !== 'undefined';
+  const zenmux = info.zenmux;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
+        APIMart {info.connected ? '正常' : (info.configured ? '异常' : '未配置')}
+        {hasBalance ? ` · 余额 $${fmtBalance(info.remain_balance)}` : ''}
       </div>
-    );
-  }, []);
+      {zenmux && (
+        <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
+          ZenMux {zenmux.connected ? '正常' : (zenmux.configured ? '异常' : '未配置')}
+          {typeof zenmux.total_credits === 'number' ? ` · 余额 $${fmtBalance(zenmux.total_credits)}` : ''}
+        </div>
+      )}
+      {info.message && <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>{String(info.message).slice(0, 120)}</div>}
+    </div>
+  );
+};
+window.renderAiProviderDetail = renderAiProviderDetail;
+
 
   return (
     <div style={{
@@ -250,10 +254,7 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration
             <span>管理</span>
           </button>
         )}
-        <div style={{ width: 1, height: 18, background: 'var(--line-2)', margin: '0 4px' }}/>
-        <StatusIcon title="后端服务" fetchUrl="/health" icon={I.settings}/>
-        <StatusIcon title="素材库" fetchUrl="/health" okKey="library" icon={I.folder}/>
-        <StatusIcon title="AI 服务商" fetchUrl="/health" okKey="ai_provider" icon={I.sparkles} renderDetail={renderAiProviderDetail}/>
+        <StatusIcon title="AI 服务商" fetchUrl="/health" okKey="ai_provider" icon={I.sparkles} renderDetail={window.renderAiProviderDetail}/>
         {user && React.createElement('div', {
           style: {
             display: 'flex', alignItems: 'center', gap: 8,

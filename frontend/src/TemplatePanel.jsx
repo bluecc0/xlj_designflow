@@ -437,12 +437,15 @@ var StatusFooter = function(_ref3) {
       borderTop: '1px solid var(--line)',
       background: 'var(--panel-2)',
       padding: '8px 10px',
-      display: 'flex', alignItems: 'center', gap: 6,
+      display: 'flex', alignItems: 'center', gap: 8,
       boxSizing: 'border-box',
     }
   },
     React.createElement(I.layers, { size: 11, style: { color: 'var(--ink-3)' } }),
-    React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)', flex: 1 } }, count + ' 个模板')
+    React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)', flex: 1 } }, count + ' 个模板'),
+    React.createElement(window.StatusIcon, { title: '后端服务', fetchUrl: '/health', icon: I.settings, placement: 'top' }),
+    React.createElement(window.StatusIcon, { title: '素材库', fetchUrl: '/health', okKey: 'library', icon: I.folder, placement: 'top' }),
+    React.createElement(window.StatusIcon, { title: 'AI 服务商', fetchUrl: '/health', okKey: 'ai_provider', icon: I.sparkles, renderDetail: window.renderAiProviderDetail, placement: 'top' })
   );
 };
 
