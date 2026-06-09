@@ -344,15 +344,6 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onUnpublish }) => {
           >
             <I.sparkles size={12}/>生成同款
           </button>
-          <a href={post.image_url} download style={{
-            height: 36, padding: '0 12px', borderRadius: 6,
-            background: 'var(--panel)', color: 'var(--ink)',
-            border: '1px solid var(--line)', fontSize: 12,
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-            textDecoration: 'none', cursor: 'pointer',
-          }}>
-            <I.download size={12}/>下载
-          </a>
           {onUnpublish && (
             <button
               onClick={function() { onUnpublish(post); }}

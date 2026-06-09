@@ -44,6 +44,7 @@ from .ai_image import (
     generate_image_async,
     generate_image_zenmux_async,
     generate_image_with_reference_async,
+    generate_inspiration_thumb,
     load_user_refs,
     normalize_provider,
     save_user_refs,
@@ -112,6 +113,7 @@ from .job_store import (
     load_special_jobs,
     update_agent_project,
     create_inspiration_post,
+    update_inspiration_thumb_url,
     get_inspiration_post,
     get_inspiration_post_by_job,
     delete_inspiration_post,
@@ -140,6 +142,24 @@ from .proxy_download_relay import inspect_url as proxy_download_inspect_url, dow
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # 启动时迁移：给没有 thumb_url 的旧灵感记录补缩略图（避免启动阻塞，用后台任务）
+    try:
+        rows = list_inspiration_posts(limit=10000, offset=0)
+        pending = [r for r in rows if not r.get("thumb_url")]
+        if pending:
+            import asyncio
+            async def _migrate():
+                for r in pending:
+                    try:
+                        thumb = generate_inspiration_thumb(
+                            r["image_url"], r["user_id"], r["job_id"]
+                        )
+                        update_inspiration_thumb_url(r["id"], thumb)
+                    except Exception:
+                        pass
+            asyncio.create_task(_migrate())
+    except Exception:
+        pass
     try:
         yield
     finally:
@@ -2460,15 +2480,23 @@ async def publish_inspiration(request: Request):
 
     existing = get_inspiration_post_by_job(job_id)
     if existing:
+        # 兼容旧记录：没 thumb_url 就补一张
+        if not existing.get("thumb_url"):
+            thumb_url = generate_inspiration_thumb(image_url, user["id"], job_id)
+            update_inspiration_thumb_url(existing["id"], thumb_url)
+            existing = dict(existing)
+            existing["thumb_url"] = thumb_url
         return {"post": _inspiration_to_api(existing, current_user_id=user["id"]), "already_published": True}
 
     post_id = uuid.uuid4().hex
     created_at = time.time()
+    thumb_url = generate_inspiration_thumb(image_url, user["id"], job_id)
     create_inspiration_post(
         post_id=post_id,
         job_id=job_id,
         user_id=user["id"],
         image_url=image_url,
+        thumb_url=thumb_url,
         prompt=job.get("prompt") or "",
         model=job.get("model") or "gpt-image-2",
         size=job.get("size") or "1024x1024",
@@ -2524,11 +2552,11 @@ async def get_inspiration_detail(request: Request, post_id: str):
 
 
 def _inspiration_to_api(post: dict, current_user_id: str | None = None) -> dict:
-    """把 DB 记录转 API 返回结构。username 不暴露（匿名）。"""
+    """把 DB 记录转 API 返回结构。展示统一用 thumb_url。"""
     return {
         "id": post["id"],
         "job_id": post["job_id"],
-        "image_url": post["image_url"],
+        "image_url": post.get("thumb_url") or post.get("image_url") or "",
         "prompt": post["prompt"],
         "model": post["model"],
         "size": post["size"],

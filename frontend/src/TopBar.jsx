@@ -142,6 +142,75 @@ const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail, placemen
 
 const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration, inspirationOpen }) => {
   const isAgentPage = typeof window !== 'undefined' && /\/ui\/agent\.html(?:$|\?)/.test(window.location.href);
+  const lottieContainerRef = React.useRef(null);
+  const lottieAnimRef = React.useRef(null);
+
+  React.useEffect(function() {
+    if (document.getElementById('inspiration-flow-style')) return;
+    const style = document.createElement('style');
+    style.id = 'inspiration-flow-style';
+    style.textContent = `
+.inspiration-flow {
+  position: relative;
+  border-radius: 8px;
+}
+.inspiration-flow__inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 2;
+  height: 100%;
+  width: 100%;
+  padding: 0 10px 0 2px;
+  border-radius: 7px;
+  background: var(--panel);
+  cursor: pointer;
+  flex-shrink: 0;
+  border: none;
+  outline: none;
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: none;
+}
+.inspiration-flow__inner:hover,
+.inspiration-flow__inner:focus,
+.inspiration-flow__inner:active,
+.inspiration-flow__inner:focus-visible,
+.inspiration-flow__inner:focus-within {
+  background: var(--panel);
+  outline: none;
+}
+.inspiration-flow__text {
+  font-size: 13px;
+  font-weight: 600;
+  background: linear-gradient(90deg, #06b6d4 0%, #3b82f6 50%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+`;
+    document.head.appendChild(style);
+  }, []);
+
+  React.useEffect(function() {
+    const el = lottieContainerRef.current;
+    if (!el || !window.lottie) return;
+    if (lottieAnimRef.current) return;
+    lottieAnimRef.current = window.lottie.loadAnimation({
+      container: el,
+      renderer: 'svg',
+      loop: true,
+      autoplay: true,
+      path: 'src/icon/animation/cffe9aa4-4cd6-11f0-8880-1b96160dc82b.json',
+    });
+    return function() {
+      if (lottieAnimRef.current) {
+        lottieAnimRef.current.destroy();
+        lottieAnimRef.current = null;
+      }
+    };
+  }, []);
 const fmtBalance = (n) => {
   if (typeof n !== 'number') return '';
   return Math.min(n, 99.99).toFixed(2);
@@ -218,23 +287,16 @@ window.renderAiProviderDetail = renderAiProviderDetail;
           </a>
         )}
         {user && (
-          <button
-            onClick={onOpenInspiration}
-            title="灵感"
-            style={{
-              height: 28, padding: '0 10px', borderRadius: 7,
-              background: inspirationOpen ? 'var(--ink)' : 'var(--panel)',
-              border: '1px solid ' + (inspirationOpen ? 'var(--ink)' : 'var(--line)'),
-              color: inspirationOpen ? 'white' : 'var(--ink)',
-              fontSize: 11.5, fontWeight: 500, cursor: 'pointer',
-              display: 'inline-flex', alignItems: 'center', gap: 5,
-              flexShrink: 0,
-              boxShadow: inspirationOpen ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
-            }}
-          >
-            <I.sparkles size={12} style={{ color: inspirationOpen ? 'white' : 'var(--accent)' }}/>
-            <span>灵感</span>
-          </button>
+          <div className="inspiration-flow" style={{ height: 30, flexShrink: 0 }}>
+            <button
+              onClick={onOpenInspiration}
+              title="灵感"
+              className="inspiration-flow__inner"
+            >
+              <span ref={lottieContainerRef} style={{ width: 30, height: 30, display: 'inline-block' }}/>
+              <span className="inspiration-flow__text">灵感</span>
+            </button>
+          </div>
         )}
         {user && user.role === 'admin' && onNavigate && (
           <button
