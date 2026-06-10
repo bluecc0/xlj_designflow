@@ -3341,15 +3341,23 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   };
 
   // 从文本内容检测当前模式
-  const _t = (lockedCommand || text).trimStart();
+  // trimmed = 用户实际打的内容（剥去 lockedCommand 锁定的前缀）
+  const _t = (() => {
+    const raw = String(text || '').trimStart();
+    if (lockedCommand && raw.toLowerCase().startsWith(lockedCommand.toLowerCase())) {
+      return raw.slice(lockedCommand.length).trimStart();
+    }
+    return raw;
+  })();
+  // activeAiModel: 只看 lockedCommand (UI 选的任务, 用户不再手动打前缀)
   const activeAiModel =
-    /^\/Gpt image 2/i.test(_t) ? 'gpt-image-2' :
-    /^\/Nano Banana pro/i.test(_t) ? 'nano-banana-pro' :
+    lockedCommand === '/Gpt image 2' ? 'gpt-image-2' :
+    lockedCommand === '/Nano Banana pro' ? 'nano-banana-pro' :
     '';
   const activeMode =
-    /^\/(Nano Banana pro|Gpt image 2)/i.test(_t) ? 'ai-image' :
-    _t.startsWith('/特殊品（完整）') ? 'special_full' :
-    _t.startsWith('/特殊品') ? 'special' :
+    (lockedCommand === '/Gpt image 2' || lockedCommand === '/Nano Banana pro') ? 'ai-image' :
+    lockedCommand === '/特殊品（完整）' ? 'special_full' :
+    lockedCommand === '/特殊品' ? 'special' :
     selectedWorkflow === 'compose' ? 'compose' : 'chat';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
@@ -3427,8 +3435,6 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
     onSend(message, imagesToSend, { size: aiImageSize, resolution: aiQuality, provider: aiProvider });
     setText('');
-    setLockedCommand('');
-    setSelectedWorkflow('chat');
     clearRefImages();
   };
 
@@ -5198,7 +5204,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     // ── 花瓣下载 ─────────────────────────────────────────────────────────────
-    if (trimmed.startsWith('/花瓣下载')) {
+    // UI 锁定 /花瓣下载, 或用户显式打字 (向后兼容)
+    if (lockedCommand === '/花瓣下载' || trimmed.startsWith('/花瓣下载')) {
       const args = trimmed.replace(/^\/花瓣下载\s*/, '').trim();
       const match = args.match(/^(\S+)(?:\s+([A-Za-z0-9._-]+))?$/);
       setMessages(msgs => [...msgs, { who: 'user', text: args || text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
@@ -5294,15 +5301,19 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     // ── AI 生图指令匹配 ────────────────────────────────────────────────────────
+    // 用户心智: 只通过 UI 选模型 (lockedCommand), 不再手动打 / 指令.
+    // aiCmd 直接从 lockedCommand 解析, 永远 implicit.
     const AI_IMAGE_CMDS = [
       { prefix: '/Nano Banana pro', model: 'nano-banana-pro' },
       { prefix: '/Gpt image 2',     model: 'gpt-image-2' },
     ];
     const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
-    let aiCmd = AI_IMAGE_CMDS.find(c => trimmed.toLowerCase().startsWith(c.prefix.toLowerCase()));
+    const aiCmd = lockedCommand && AI_IMAGE_CMDS.find(c => c.prefix === lockedCommand)
+      ? Object.assign({}, AI_IMAGE_CMDS.find(c => c.prefix === lockedCommand), { implicit: true })
+      : null;
 
-    // 检测"重新生成"关键词（可能跟在模型前缀后面，也可能单独出现）
-    const rawPrompt = aiCmd ? trimmed.slice(aiCmd.prefix.length).trim() : trimmed;
+    // 检测"重新生成"关键词
+    const rawPrompt = text.trim();
     const freshMatch = FRESH_KEYWORDS.find(kw => rawPrompt.startsWith(kw));
     if (freshMatch) {
       const rest = rawPrompt.slice(freshMatch.length).trim();
@@ -5314,27 +5325,17 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       return;
     }
 
-    // 无 / 指令时，复用当前会话的上一个生图模型、尺寸、分辨率
-    if (!aiCmd && !trimmed.startsWith('/')) {
-      const lastOpts = getLastAiImageOptions();
-      if (lastOpts) {
-        aiCmd = { prefix: '', model: lastOpts.model, implicit: true };
-        aiOptions = { ...aiOptions, size: lastOpts.size || aiOptions.size, resolution: lastOpts.resolution || aiOptions.resolution, provider: lastOpts.provider || aiOptions.provider };
-      }
-    }
-
     if (aiCmd) {
-      const prompt = aiCmd.implicit ? trimmed : trimmed.slice(aiCmd.prefix.length).trim();
+      const prompt = text.trim();
       if (!prompt) {
         const prefixLabel = aiCmd.implicit ? '（复用上次模型）' : aiCmd.prefix;
-        const displayText = aiCmd && !aiCmd.implicit ? (prompt || text) : text;
         setMessages(msgs => [...msgs,
-          { who: 'user', text: displayText, refPreviews: userRefPreviews, refMeta: userRefMeta },
+          { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta },
           { who: 'ai', text: `请在 ${prefixLabel} 后输入图片描述` },
         ]);
         return;
       }
-      setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? prompt : text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
+      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       await runAiImageGeneration(aiCmd.model, prompt, text, refImages, aiOptions);
       return;
     }
