@@ -54,6 +54,97 @@ if errorlevel 1 (
 )
 
 echo.
+echo  [0.4/4] Checking frontend build...
+set FE_NEEDS_BUILD=0
+if not exist "%ROOT%frontend\index.html" (
+    set FE_NEEDS_BUILD=1
+    echo        frontend index.html not found.
+) else (
+    for %%I in ("%ROOT%frontend\index.html") do set FE_INDEX_AGE=%%~tI
+    :: 检查 src 下任何 jsx 是否比 index 新
+    for /r "%ROOT%frontend\src" %%F in (*.jsx) do (
+        for %%I in ("%%F") do set FE_FILE_AGE=%%~tI
+        if "!FE_FILE_AGE!" GTR "!FE_INDEX_AGE!" (
+            if !FE_NEEDS_BUILD!==0 (
+                echo        src\*.jsx newer than index.html, rebuild needed.
+            )
+            set FE_NEEDS_BUILD=1
+        )
+    )
+)
+if %FE_NEEDS_BUILD%==1 (
+    pushd "%ROOT%frontend"
+    call "%VENV_PYTHON%" build.py
+    if errorlevel 1 (
+        echo        Frontend build failed.
+        popd
+        pause
+        exit /b 1
+    )
+    popd
+    echo        Frontend built.
+) else (
+    echo        Frontend up-to-date, skipping build.
+)
+
+echo.
+echo  [0.5/4] Checking editor (tldraw) build...
+set NEEDS_BUILD=0
+if not exist "%ROOT%editor-lab-tldraw\dist\index.html" (
+    set NEEDS_BUILD=1
+    echo        editor dist not found.
+)
+if exist "%ROOT%editor-lab-tldraw\.env" (
+    if exist "%ROOT%editor-lab-tldraw\dist\index.html" (
+        for %%I in ("%ROOT%editor-lab-tldraw\.env") do set ENV_AGE=%%~tI
+        for %%I in ("%ROOT%editor-lab-tldraw\dist\index.html") do set DIST_AGE=%%~tI
+        if "!ENV_AGE!" GTR "!DIST_AGE!" (
+            echo        .env newer than dist, rebuild needed.
+            set NEEDS_BUILD=1
+        )
+    )
+)
+if %NEEDS_BUILD%==1 (
+    if not exist "%ROOT%editor-lab-tldraw\node_modules" (
+        echo        Installing editor dependencies...
+        pushd "%ROOT%editor-lab-tldraw"
+        call npm install
+        if errorlevel 1 (
+            echo        Failed to install editor dependencies.
+            popd
+            pause
+            exit /b 1
+        )
+        popd
+    )
+    if not exist "%ROOT%editor-lab-tldraw\.env" (
+        echo        WARNING: .env not found, creating from .env.example...
+        if exist "%ROOT%editor-lab-tldraw\.env.example" (
+            copy /Y "%ROOT%editor-lab-tldraw\.env.example" "%ROOT%editor-lab-tldraw\.env" >nul
+            echo        Please edit editor-lab-tldraw\.env to add your license key, then re-run.
+        ) else (
+            echo        # VITE_TLDRAW_LICENSE_KEY=tldraw-YYYY-MM-DD/xxxxx > "%ROOT%editor-lab-tldraw\.env"
+            echo        No .env.example found, created template. Please fill license key.
+        )
+        pause
+        exit /b 1
+    )
+    echo        Building editor...
+    pushd "%ROOT%editor-lab-tldraw"
+    call npm run build
+    if errorlevel 1 (
+        echo        Failed to build editor.
+        popd
+        pause
+        exit /b 1
+    )
+    popd
+    echo        Editor built.
+) else (
+    echo        Editor dist up-to-date, skipping build.
+)
+
+echo.
 echo  Design Tool - Starting...
 echo  ================================
 echo.

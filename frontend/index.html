@@ -6444,6 +6444,9 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
   const [error, setError] = React.useState(null);
   const [detailPost, setDetailPost] = React.useState(null);
   const [canvasRect, setCanvasRect] = React.useState(null);
+  const [ratios, setRatios] = React.useState({}); // postId -> width/height
+  const containerRef = React.useRef(null);
+  const [containerWidth, setContainerWidth] = React.useState(0);
   const loadIdRef = React.useRef(0);
 
   // 跟踪画布位置，让浮层只覆盖画布区
@@ -6464,6 +6467,18 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
       window.removeEventListener('resize', update);
       window.removeEventListener('scroll', update, true);
     };
+  }, []);
+
+  // 跟踪主区域宽度
+  React.useEffect(function() {
+    if (!containerRef.current) return;
+    const el = containerRef.current;
+    const ro = new ResizeObserver(function(entries) {
+      for (const e of entries) setContainerWidth(e.contentRect.width);
+    });
+    ro.observe(el);
+    setContainerWidth(el.clientWidth);
+    return function() { ro.disconnect(); };
   }, []);
 
   // 加载列表
@@ -6489,6 +6504,13 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
   React.useEffect(function() { loadPosts(); }, [loadPosts]);
 
   // 搜索过滤
+  const setRatio = React.useCallback(function(postId, ratio) {
+    setRatios(function(prev) {
+      if (prev[postId] === ratio) return prev;
+      return Object.assign({}, prev, { [postId]: ratio });
+    });
+  }, []);
+
   const filtered = React.useMemo(function() {
     if (!search.trim()) return posts;
     const q = search.trim().toLowerCase();
@@ -6496,6 +6518,29 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
       return (p.prompt || '').toLowerCase().includes(q);
     });
   }, [posts, search]);
+
+  // 瀑布流分列（按图片宽高比，优先后端返回的尺寸）
+  const waterFallCols = React.useMemo(function() {
+    const colCount = containerWidth
+      ? Math.max(1, Math.min(COLUMN_COUNT_DESKTOP,
+          Math.floor((containerWidth + COLUMN_GAP) / (COLUMN_MIN_WIDTH + COLUMN_GAP))))
+      : COLUMN_COUNT_DESKTOP;
+    const colWidth = containerWidth
+      ? Math.floor((containerWidth - COLUMN_GAP * (colCount - 1)) / colCount)
+      : 0;
+    const cols = Array.from({ length: colCount }, function() { return { items: [], height: 0 }; });
+    filtered.forEach(function(post) {
+      const ratio = (post.width && post.height) ? post.width / post.height : (ratios[post.id] || 1);
+      const itemHeight = colWidth > 0 ? colWidth / ratio : colWidth;
+      let minIdx = 0;
+      for (let i = 1; i < colCount; i++) {
+        if (cols[i].height < cols[minIdx].height) minIdx = i;
+      }
+      cols[minIdx].items.push({ post: post, height: itemHeight });
+      cols[minIdx].height += itemHeight + COLUMN_GAP;
+    });
+    return { colCount: colCount, cols: cols };
+  }, [filtered, containerWidth, ratios]);
 
   // 关闭详情
   const closeDetail = React.useCallback(function() { setDetailPost(null); }, []);
@@ -6619,19 +6664,29 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
             {tab === 'mine' ? '你还没有发布过灵感' : '还没有灵感，去生张图试试吧'}
           </div>
         )}
-        {filtered.length > 0 && (
-          <div style={{
-            columnCount: COLUMN_COUNT_DESKTOP,
-            columnGap: COLUMN_GAP,
-          }}>
-            {filtered.map(function(post) {
+        {filtered.length > 0 && (() => {
+          // cols 已经在 useMemo 中算好
+          return React.createElement('div', {
+            style: {
+              display: 'grid',
+              gridTemplateColumns: 'repeat(' + waterFallCols.colCount + ', minmax(0, 1fr))',
+              gap: COLUMN_GAP,
+              alignItems: 'flex-start',
+            }
+          }, waterFallCols.cols.map(function(col, ci) {
+            return React.createElement('div', {
+              key: ci,
+              style: { display: 'flex', flexDirection: 'column', gap: COLUMN_GAP, minWidth: 0 }
+            }, col.items.map(function(item) {
               return React.createElement(InspirationCard, {
-                key: post.id, post: post,
-                onOpen: function() { openDetail(post); },
+                key: item.post.id, post: item.post,
+                height: item.height,
+                onRatioLoad: setRatio,
+                onOpen: function() { openDetail(item.post); },
               });
-            })}
-          </div>
-        )}
+            }));
+          }));
+        })()}
       </div>
 
       {/* 详情抽屉 */}
@@ -6647,14 +6702,13 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
   );
 };
 
-const InspirationCard = ({ post, onOpen }) => {
+const InspirationCard = ({ post, height, onRatioLoad, onOpen }) => {
   return React.createElement('button', {
     onClick: onOpen,
     style: {
       width: '100%',
-      display: 'inline-block', // CSS columns 需要
+      display: 'block',
       padding: 0,
-      margin: '0 0 ' + COLUMN_GAP + 'px 0',
       border: '1px solid var(--line-2)',
       borderRadius: 10,
       background: 'var(--panel)',
@@ -6662,9 +6716,6 @@ const InspirationCard = ({ post, onOpen }) => {
       overflow: 'hidden',
       textAlign: 'left',
       transition: 'transform 120ms, box-shadow 120ms',
-      breakInside: 'avoid',
-      WebkitColumnBreakInside: 'avoid',
-      pageBreakInside: 'avoid',
     },
     onMouseEnter: function(e) {
       e.currentTarget.style.transform = 'translateY(-2px)';
@@ -6679,7 +6730,13 @@ const InspirationCard = ({ post, onOpen }) => {
       src: post.image_url,
       alt: post.prompt,
       loading: 'lazy',
-      style: { width: '100%', display: 'block', background: 'var(--panel-2)' },
+      onLoad: function(e) {
+        const img = e.currentTarget;
+        if (img.naturalWidth && img.naturalHeight && onRatioLoad) {
+          onRatioLoad(post.id, img.naturalWidth / img.naturalHeight);
+        }
+      },
+      style: height ? { width: '100%', height: height + 'px', objectFit: 'cover', display: 'block', background: 'var(--panel-2)' } : { width: '100%', display: 'block', background: 'var(--panel-2)' },
     })
   );
 };

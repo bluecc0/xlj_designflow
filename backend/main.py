@@ -114,6 +114,7 @@ from .job_store import (
     update_agent_project,
     create_inspiration_post,
     update_inspiration_thumb_url,
+    update_inspiration_dimensions,
     get_inspiration_post,
     get_inspiration_post_by_job,
     delete_inspiration_post,
@@ -142,19 +143,21 @@ from .proxy_download_relay import inspect_url as proxy_download_inspect_url, dow
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    # 启动时迁移：给没有 thumb_url 的旧灵感记录补缩略图（避免启动阻塞，用后台任务）
+    # 启动时迁移：给没有 thumb_url / image_width / image_height 的旧记录回填
     try:
         rows = list_inspiration_posts(limit=10000, offset=0)
-        pending = [r for r in rows if not r.get("thumb_url")]
+        pending = [r for r in rows if not r.get("thumb_url") or not r.get("image_width") or not r.get("image_height")]
         if pending:
             import asyncio
             async def _migrate():
                 for r in pending:
                     try:
-                        thumb = generate_inspiration_thumb(
+                        thumb, tw, th = generate_inspiration_thumb(
                             r["image_url"], r["user_id"], r["job_id"]
                         )
                         update_inspiration_thumb_url(r["id"], thumb)
+                        if tw and th:
+                            update_inspiration_dimensions(r["id"], tw, th)
                     except Exception:
                         pass
             asyncio.create_task(_migrate())
@@ -2482,7 +2485,7 @@ async def publish_inspiration(request: Request):
     if existing:
         # 兼容旧记录：没 thumb_url 就补一张
         if not existing.get("thumb_url"):
-            thumb_url = generate_inspiration_thumb(image_url, user["id"], job_id)
+            thumb_url, tw, th = generate_inspiration_thumb(image_url, user["id"], job_id)
             update_inspiration_thumb_url(existing["id"], thumb_url)
             existing = dict(existing)
             existing["thumb_url"] = thumb_url
@@ -2490,7 +2493,8 @@ async def publish_inspiration(request: Request):
 
     post_id = uuid.uuid4().hex
     created_at = time.time()
-    thumb_url = generate_inspiration_thumb(image_url, user["id"], job_id)
+    thumb_url, tw, th = generate_inspiration_thumb(image_url, user["id"], job_id)
+    # 缩略图尺寸即瀑布流要用的尺寸
     create_inspiration_post(
         post_id=post_id,
         job_id=job_id,
@@ -2502,6 +2506,8 @@ async def publish_inspiration(request: Request):
         size=job.get("size") or "1024x1024",
         resolution=job.get("resolution") or "",
         has_ref=bool(job.get("has_reference")),
+        image_width=tw,
+        image_height=th,
         created_at=created_at,
     )
     log_operation(
@@ -2563,6 +2569,8 @@ def _inspiration_to_api(post: dict, current_user_id: str | None = None) -> dict:
         "resolution": post.get("resolution") or "",
         "has_ref": bool(post.get("has_ref")),
         "is_mine": bool(current_user_id and post.get("user_id") == current_user_id),
+        "width": int(post.get("image_width") or 0),
+        "height": int(post.get("image_height") or 0),
         "created_at": post["created_at"],
     }
 

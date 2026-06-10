@@ -216,25 +216,35 @@ def init_db() -> None:
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS inspiration_posts (
-                id          TEXT PRIMARY KEY,
-                job_id      TEXT NOT NULL,
-                user_id     TEXT NOT NULL,
-                image_url   TEXT NOT NULL,
-                thumb_url   TEXT NOT NULL DEFAULT '',
-                prompt      TEXT NOT NULL,
-                model       TEXT NOT NULL,
-                size        TEXT NOT NULL,
-                resolution  TEXT,
-                has_ref     INTEGER NOT NULL DEFAULT 0,
-                created_at  REAL NOT NULL
+                id            TEXT PRIMARY KEY,
+                job_id        TEXT NOT NULL,
+                user_id       TEXT NOT NULL,
+                image_url     TEXT NOT NULL,
+                thumb_url     TEXT NOT NULL DEFAULT '',
+                prompt        TEXT NOT NULL,
+                model         TEXT NOT NULL,
+                size          TEXT NOT NULL,
+                resolution    TEXT,
+                has_ref       INTEGER NOT NULL DEFAULT 0,
+                image_width   INTEGER NOT NULL DEFAULT 0,
+                image_height  INTEGER NOT NULL DEFAULT 0,
+                created_at    REAL NOT NULL
             )
         """)
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_inspiration_created ON inspiration_posts(created_at)
         """)
-        # 兼容旧表：添加 thumb_url 列
+        # 兼容旧表
         try:
             conn.execute("ALTER TABLE inspiration_posts ADD COLUMN thumb_url TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE inspiration_posts ADD COLUMN image_width INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE inspiration_posts ADD COLUMN image_height INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
         conn.commit()
@@ -1346,6 +1356,8 @@ def create_inspiration_post(
     size: str,
     resolution: str,
     has_ref: bool,
+    image_width: int,
+    image_height: int,
     created_at: float,
 ) -> None:
     """发布灵感记录。同一个 job_id 不重复发布（job_id 唯一约束由调用方在传参前检查）。"""
@@ -1353,10 +1365,10 @@ def create_inspiration_post(
         conn.execute(
             """
             INSERT INTO inspiration_posts
-                (id, job_id, user_id, image_url, thumb_url, prompt, model, size, resolution, has_ref, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, job_id, user_id, image_url, thumb_url, prompt, model, size, resolution, has_ref, image_width, image_height, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (post_id, job_id, user_id, image_url, thumb_url, prompt, model, size, resolution, 1 if has_ref else 0, created_at),
+            (post_id, job_id, user_id, image_url, thumb_url, prompt, model, size, resolution, 1 if has_ref else 0, int(image_width or 0), int(image_height or 0), created_at),
         )
 
 
@@ -1364,6 +1376,13 @@ def update_inspiration_thumb_url(post_id: str, thumb_url: str) -> None:
     """回填缩略图 URL（旧记录兼容用）。"""
     with _connect() as conn:
         conn.execute("UPDATE inspiration_posts SET thumb_url = ? WHERE id = ?", (thumb_url, post_id))
+
+
+def update_inspiration_dimensions(post_id: str, image_width: int, image_height: int) -> None:
+    """回填图片宽高。"""
+    with _connect() as conn:
+        conn.execute("UPDATE inspiration_posts SET image_width = ?, image_height = ? WHERE id = ?",
+                     (int(image_width or 0), int(image_height or 0), post_id))
 
 
 def get_inspiration_post_by_job(job_id: str) -> dict | None:
