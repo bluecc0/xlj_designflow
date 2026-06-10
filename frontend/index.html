@@ -3669,7 +3669,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       { id: 'chat', label: '默认', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat' },
       { id: 'gpt-image', label: 'GPT Image 2', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', cmd: '/Gpt image 2', available: available('/Gpt image 2') },
       { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro', available: available('/Nano Banana pro') },
-      { id: 'compose', label: '模板合成', desc: '上传表格并匹配本地图库', iconKey: 'grid', workflow: 'compose' },
+      { id: 'compose', label: '智能铺品', desc: '上传表格并匹配本地图库', iconKey: 'grid', workflow: 'compose' },
       { id: 'special', label: '特殊品', desc: '使用特殊品模板合成结果', iconKey: 'layers', cmd: template && template.is_special_full ? '/特殊品（完整）' : '/特殊品', available: available(template && template.is_special_full ? '/特殊品（完整）' : '/特殊品') },
       { id: 'download', label: '花瓣下载', desc: '下载花瓣素材或指定格式', iconKey: 'download', cmd: '/花瓣下载', available: available('/花瓣下载') },
     ];
@@ -3684,7 +3684,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       : activeMode === 'special'
         ? '特殊品'
         : selectedWorkflow === 'compose'
-          ? '模板合成'
+          ? '智能铺品'
           : selectedWorkflow === 'download'
             ? '花瓣下载'
             : '默认';
@@ -5205,7 +5205,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
 
     // ── 花瓣下载 ─────────────────────────────────────────────────────────────
     // UI 锁定 /花瓣下载, 或用户显式打字 (向后兼容)
-    if (lockedCommand === '/花瓣下载' || trimmed.startsWith('/花瓣下载')) {
+    if (trimmed.startsWith('/花瓣下载')) {
       const args = trimmed.replace(/^\/花瓣下载\s*/, '').trim();
       const match = args.match(/^(\S+)(?:\s+([A-Za-z0-9._-]+))?$/);
       setMessages(msgs => [...msgs, { who: 'user', text: args || text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
@@ -5308,8 +5308,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       { prefix: '/Gpt image 2',     model: 'gpt-image-2' },
     ];
     const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
-    const aiCmd = lockedCommand && AI_IMAGE_CMDS.find(c => c.prefix === lockedCommand)
-      ? Object.assign({}, AI_IMAGE_CMDS.find(c => c.prefix === lockedCommand), { implicit: true })
+    const aiCmd = AI_IMAGE_CMDS.find(c => text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase()))
+      ? Object.assign({}, AI_IMAGE_CMDS.find(c => text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase())), { implicit: true })
       : null;
 
     // 检测"重新生成"关键词
@@ -5326,8 +5326,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     if (aiCmd) {
-      const prompt = text.trim();
-      if (!prompt) {
+      const plainText = text.trim().slice(aiCmd.prefix.length).trimStart();
+      if (!plainText) {
         const prefixLabel = aiCmd.implicit ? '（复用上次模型）' : aiCmd.prefix;
         setMessages(msgs => [...msgs,
           { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta },
@@ -5335,8 +5335,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         ]);
         return;
       }
-      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
-      await runAiImageGeneration(aiCmd.model, prompt, text, refImages, aiOptions);
+      setMessages(msgs => [...msgs, { who: 'user', text: plainText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
+      await runAiImageGeneration(aiCmd.model, plainText, plainText, refImages, aiOptions);
       return;
     }
 
