@@ -643,6 +643,10 @@ def load_ai_image_job(job_id: str) -> dict | None:
         "image_url": row["image_url"],
         "has_reference": bool(row["has_reference"]),
         "error": row["error"],
+        "task_id": row["task_id"],
+        "progress": int(row["progress"] or 0),
+        "resolution": row["resolution"] if "resolution" in row.keys() else "",
+        "created_at": row["created_at"],
     }
 
 
@@ -671,6 +675,10 @@ def load_ai_image_job_by_image_url(image_url: str, user_id: str | None = None) -
         "image_url": row["image_url"],
         "has_reference": bool(row["has_reference"]),
         "error": row["error"],
+        "task_id": row["task_id"],
+        "progress": int(row["progress"] or 0),
+        "resolution": row["resolution"] if "resolution" in row.keys() else "",
+        "created_at": row["created_at"],
     }
 
 
