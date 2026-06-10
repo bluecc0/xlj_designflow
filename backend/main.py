@@ -2319,6 +2319,7 @@ async def _run_ai_image_background(
             role="ai", type="ai_image_result",
             text=prompt, image_url=result.get("url"),
             meta={
+                "job_id": job_id,
                 "model": model, "prompt": prompt,
                 "provider": provider,
                 "size": size, "resolution": resolution,
@@ -2352,6 +2353,7 @@ async def _run_ai_image_background(
             role="ai", type="ai_image_result",
             text=prompt, image_url=None,
             meta={
+                "job_id": job_id,
                 "model": model, "prompt": prompt,
                 "provider": provider,
                 "status": "failed", "error": str(e),

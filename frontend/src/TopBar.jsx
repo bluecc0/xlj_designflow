@@ -258,7 +258,10 @@ window.renderAiProviderDetail = renderAiProviderDetail;
             <path d="M4 20 V6 M4 6 C10 6, 10 14, 16 14 C22 14, 22 6, 20 6"/>
           </svg>
         </div>
-        <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>Designflow</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>Designflow</span>
+            <span style={{ fontSize: 11, color: 'var(--ink-3)', letterSpacing: '0.02em', marginTop: 1 }}>丨  AI 驱动的电商设计资产生成平台</span>
+          </div>
       </div>
 
       <div style={{ flex: 1 }}/>

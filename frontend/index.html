@@ -807,7 +807,10 @@ window.renderAiProviderDetail = renderAiProviderDetail;
             <path d="M4 20 V6 M4 6 C10 6, 10 14, 16 14 C22 14, 22 6, 20 6"/>
           </svg>
         </div>
-        <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>Designflow</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>Designflow</span>
+            <span style={{ fontSize: 11, color: 'var(--ink-3)', letterSpacing: '0.02em', marginTop: 1 }}>丨  AI 驱动的电商设计资产生成平台</span>
+          </div>
       </div>
 
       <div style={{ flex: 1 }}/>
@@ -1180,31 +1183,63 @@ var TemplatePanel = function(_ref2) {
           React.createElement('div', null, '加载失败'),
           React.createElement('div', { style: { color: 'var(--ink-3)', fontSize: 10 } }, String(loadErr))
         ),
-        !loading && !loadErr && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 10px 56px' } },
+        !loading && !loadErr && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 14px 56px' } },
           filteredSections.map(function(section) {
             var colA = section.items.filter(function(_, i) { return i % 2 === 0; });
             var colB = section.items.filter(function(_, i) { return i % 2 === 1; });
             var collapsed = isCollapsed(section.key);
-            return React.createElement('div', { key: section.key, style: { marginBottom: 4 } },
+            return React.createElement('div', { key: section.key, style: { marginBottom: 8 } },
               React.createElement('div', {
                 onClick: function() { toggleSection(section.key); },
                 style: {
-                  padding: '8px 12px',
-                  fontSize: 12, fontWeight: 600,
-                  color: 'var(--ink-2)',
+                  padding: '8px 10px',
+                  margin: '0 0 8px',
+                  fontSize: 12,
+                  fontWeight: 650,
+                  color: 'var(--ink)',
                   display: 'flex', alignItems: 'center', gap: 6,
                   cursor: 'pointer', userSelect: 'none',
-                  borderRadius: 6,
-                  transition: 'background 120ms',
+                  borderRadius: 7,
+                  background: collapsed ? 'transparent' : 'var(--panel-2)',
+                  border: '1px solid var(--line-2)',
+                  transition: 'background 120ms, border-color 120ms, transform 120ms',
                 },
-                onMouseEnter: function(e) { e.currentTarget.style.background = 'var(--panel-2)'; },
-                onMouseLeave: function(e) { e.currentTarget.style.background = 'transparent'; },
+                onMouseEnter: function(e) {
+                  e.currentTarget.style.background = collapsed ? 'var(--panel-2)' : 'var(--panel)';
+                  e.currentTarget.style.borderColor = 'var(--line)';
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                },
+                onMouseLeave: function(e) {
+                  e.currentTarget.style.background = collapsed ? 'transparent' : 'var(--panel-2)';
+                  e.currentTarget.style.borderColor = 'var(--line-2)';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                },
               },
                 React.createElement('span', {
-                  style: { fontSize: 10, transition: 'transform 150ms', display: 'inline-block', transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }
-                }, '▼'),
-                section.label,
-                React.createElement('span', { style: { fontSize: 10, color: 'var(--ink-3)', fontWeight: 400 } }, section.items.length)
+                  style: {
+                    width: 12,
+                    color: 'var(--ink-3)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 13,
+                    fontWeight: 500,
+                    lineHeight: 1,
+                    transition: 'transform 150ms, color 120ms',
+                    transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)',
+                    flexShrink: 0,
+                  }
+                }, '>'),
+                React.createElement('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, section.label),
+                React.createElement('span', {
+                  className: 'mono',
+                  style: {
+                    color: 'var(--ink-3)',
+                    fontSize: 10,
+                    fontWeight: 600,
+                    lineHeight: 1,
+                  }
+                }, section.items.length)
               ),
               !collapsed && (section.items.length > 0
                 ? React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 } },

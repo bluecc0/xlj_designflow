@@ -862,6 +862,7 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 (session_id,),
             ).fetchall()
     result = []
+    job_id_to_idx = {}  # job_id -> result index (ai_image_result only)
     for row in rows:
         meta = json.loads(row["meta_json"] or "{}")
         if row["type"] == "user_text":
@@ -871,6 +872,7 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 "createdAt": row["created_at"],
             })
         elif row["type"] == "ai_image_result":
+            idx = len(result)
             result.append({
                 "who": "ai",
                 "type": "ai-image-generating",
@@ -886,6 +888,9 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 "meta": "Loom",
                 "createdAt": row["created_at"],
             })
+            job_id = meta.get("job_id")
+            if job_id:
+                job_id_to_idx[job_id] = idx
         elif row["type"] == "ai_text":
             result.append({
                 "who": "ai",
@@ -893,6 +898,34 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 "meta": meta.get("meta") or "Loom",
                 "createdAt": row["created_at"],
             })
+    # 批量查灵感状态: job_id 精确匹配 + image_url 兜底
+    if job_id_to_idx:
+        jids = list(job_id_to_idx.keys())
+        placeholders = ",".join("?" * len(jids))
+        with _connect() as conn:
+            insp_rows = conn.execute(
+                f"SELECT job_id, id FROM inspiration_posts WHERE job_id IN ({placeholders})",
+                jids,
+            ).fetchall()
+        for r in insp_rows:
+            idx = job_id_to_idx.get(r["job_id"])
+            if idx is not None:
+                result[idx]["inspirationPostId"] = r["id"]
+    # image_url 兜底 (兼容老消息没有 job_id)
+    img_msgs = {m.get("imageUrl"): idx for idx, m in enumerate(result)
+                if m.get("type") == "ai-image-generating" and not m.get("inspirationPostId") and m.get("imageUrl")}
+    if img_msgs:
+        urls = list(img_msgs.keys())
+        placeholders = ",".join("?" * len(urls))
+        with _connect() as conn:
+            insp_rows = conn.execute(
+                f"SELECT image_url, id FROM inspiration_posts WHERE image_url IN ({placeholders})",
+                urls,
+            ).fetchall()
+        for r in insp_rows:
+            idx = img_msgs.get(r["image_url"])
+            if idx is not None:
+                result[idx]["inspirationPostId"] = r["id"]
     return result
 
 
