@@ -1531,7 +1531,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       return slashMap[cmd] !== false;
     }
     return [
-      { id: 'chat', label: '问答', desc: '询问流程、模板、素材规则', iconKey: 'eye', workflow: 'chat' },
+      { id: 'chat', label: '默认', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat' },
       { id: 'gpt-image', label: 'GPT Image 2', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', cmd: '/Gpt image 2', available: available('/Gpt image 2') },
       { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro', available: available('/Nano Banana pro') },
       { id: 'compose', label: '模板合成', desc: '上传表格并匹配本地图库', iconKey: 'grid', workflow: 'compose' },
@@ -1552,7 +1552,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           ? '模板合成'
           : selectedWorkflow === 'download'
             ? '花瓣下载'
-            : '问答';
+            : '默认';
   const activeTaskIconKey = activeMode === 'ai-image'
     ? 'image'
     : activeMode === 'special' || activeMode === 'special_full'
@@ -1561,7 +1561,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         ? 'grid'
         : selectedWorkflow === 'download'
           ? 'download'
-          : 'eye';
+          : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
   const activeTaskIconSrc = activeMode === 'ai-image'
     ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
@@ -2114,9 +2114,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             width: 34,
             minWidth: 34,
             height: 34,
-            background: prototypePanel === 'task' || activeTaskLabel !== '问答' ? 'var(--panel-2)' : 'transparent',
-            color: activeTaskLabel !== '问答' ? 'var(--ink)' : undefined,
-            borderColor: prototypePanel === 'task' || activeTaskLabel !== '问答' ? 'var(--line)' : undefined,
+            background: 'transparent',
+            color: 'var(--ink-2)',
           })}
           {!agentEnabled && prototypeToolButton('params', '参数设置', React.createElement(I.settings, { size: 14 }), null, {
             width: 34,

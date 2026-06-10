@@ -454,6 +454,7 @@ const I = {
   image: (p) => <Icon {...p}><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="m3 17 5-5 5 5 3-3 5 5"/></Icon>,
   sparkles: (p) => <Icon {...p}><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></Icon>,
   wand: (p) => <Icon d="M15 4V2m0 14v-2M8 9h2M20 9h2M17.8 11.8 19 13M17.8 6.2 19 5M3 21l9-9m-1.8-3.8L12 7" {...p}/>,
+  logo: (p) => <span {...p} style={Object.assign({ display: 'inline-grid', placeItems: 'center', color: 'white', background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08  275))', borderRadius: 5 }, p.style || {})}><svg width={p.size || 12} height={p.size || 12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></svg></span>,
   close: (p) => <Icon d="M6 6l12 12M18 6 6 18" {...p}/>,
   more: (p) => <Icon {...p}><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></Icon>,
   grid: (p) => <Icon {...p}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></Icon>,
@@ -3659,7 +3660,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       return slashMap[cmd] !== false;
     }
     return [
-      { id: 'chat', label: '问答', desc: '询问流程、模板、素材规则', iconKey: 'eye', workflow: 'chat' },
+      { id: 'chat', label: '默认', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat' },
       { id: 'gpt-image', label: 'GPT Image 2', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', cmd: '/Gpt image 2', available: available('/Gpt image 2') },
       { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro', available: available('/Nano Banana pro') },
       { id: 'compose', label: '模板合成', desc: '上传表格并匹配本地图库', iconKey: 'grid', workflow: 'compose' },
@@ -3680,7 +3681,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           ? '模板合成'
           : selectedWorkflow === 'download'
             ? '花瓣下载'
-            : '问答';
+            : '默认';
   const activeTaskIconKey = activeMode === 'ai-image'
     ? 'image'
     : activeMode === 'special' || activeMode === 'special_full'
@@ -3689,7 +3690,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         ? 'grid'
         : selectedWorkflow === 'download'
           ? 'download'
-          : 'eye';
+          : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
   const activeTaskIconSrc = activeMode === 'ai-image'
     ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
@@ -4242,9 +4243,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             width: 34,
             minWidth: 34,
             height: 34,
-            background: prototypePanel === 'task' || activeTaskLabel !== '问答' ? 'var(--panel-2)' : 'transparent',
-            color: activeTaskLabel !== '问答' ? 'var(--ink)' : undefined,
-            borderColor: prototypePanel === 'task' || activeTaskLabel !== '问答' ? 'var(--line)' : undefined,
+            background: 'transparent',
+            color: 'var(--ink-2)',
           })}
           {!agentEnabled && prototypeToolButton('params', '参数设置', React.createElement(I.settings, { size: 14 }), null, {
             width: 34,
