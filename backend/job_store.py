@@ -234,6 +234,10 @@ def init_db() -> None:
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_inspiration_created ON inspiration_posts(created_at)
         """)
+        # 唯一约束: 同一 job_id 只能有一条灵感 (用 UNIQUE INDEX 实现, 替代 ALTER TABLE 加 UNIQUE)
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_inspiration_job_id_unique ON inspiration_posts(job_id)
+        """)
         # 兼容旧表
         try:
             conn.execute("ALTER TABLE inspiration_posts ADD COLUMN thumb_url TEXT NOT NULL DEFAULT ''")
@@ -247,6 +251,23 @@ def init_db() -> None:
             conn.execute("ALTER TABLE inspiration_posts ADD COLUMN image_height INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        # 兼容旧表: 如果存在重复 job_id, 保留 created_at 最大的最新一条, 删除较早的
+        # SQLite 不支持 DELETE FROM t WHERE id IN (SELECT ... FROM t) 这种自引用, 用嵌套子查询
+        conn.execute("""
+            DELETE FROM inspiration_posts
+            WHERE id IN (
+                SELECT id FROM (
+                    SELECT id FROM inspiration_posts
+                    WHERE job_id IN (
+                        SELECT job_id FROM inspiration_posts GROUP BY job_id HAVING COUNT(*) > 1
+                    )
+                    AND created_at < (
+                        SELECT MAX(created_at) FROM inspiration_posts AS t2
+                        WHERE t2.job_id = inspiration_posts.job_id
+                    )
+                )
+            )
+        """)
         conn.commit()
 
 
@@ -1367,17 +1388,24 @@ def create_inspiration_post(
     image_width: int,
     image_height: int,
     created_at: float,
-) -> None:
-    """发布灵感记录。同一个 job_id 不重复发布（job_id 唯一约束由调用方在传参前检查）。"""
-    with _lock, _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO inspiration_posts
-                (id, job_id, user_id, image_url, thumb_url, prompt, model, size, resolution, has_ref, image_width, image_height, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (post_id, job_id, user_id, image_url, thumb_url, prompt, model, size, resolution, 1 if has_ref else 0, int(image_width or 0), int(image_height or 0), created_at),
-        )
+) -> bool:
+    """发布灵感记录。同一 job_id 唯一约束, 重复插入返回 False (调用方应转为 already_published 语义)。"""
+    try:
+        with _lock, _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO inspiration_posts
+                    (id, job_id, user_id, image_url, thumb_url, prompt, model, size, resolution, has_ref, image_width, image_height, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (post_id, job_id, user_id, image_url, thumb_url, prompt, model, size, resolution, 1 if has_ref else 0, int(image_width or 0), int(image_height or 0), created_at),
+            )
+        return True
+    except Exception as e:
+        # UNIQUE INDEX 冲突: 同 job_id 重复插入, 视为已存在
+        if "UNIQUE constraint failed" in str(e):
+            return False
+        raise
 
 
 def update_inspiration_thumb_url(post_id: str, thumb_url: str) -> None:

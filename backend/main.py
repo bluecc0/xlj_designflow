@@ -2495,7 +2495,7 @@ async def publish_inspiration(request: Request):
     created_at = time.time()
     thumb_url, tw, th = generate_inspiration_thumb(image_url, user["id"], job_id)
     # 缩略图尺寸即瀑布流要用的尺寸
-    create_inspiration_post(
+    inserted = create_inspiration_post(
         post_id=post_id,
         job_id=job_id,
         user_id=user["id"],
@@ -2510,6 +2510,12 @@ async def publish_inspiration(request: Request):
         image_height=th,
         created_at=created_at,
     )
+    if not inserted:
+        # 竞态: 并发请求在我们 SELECT 之后/INSERT 之前插入了同 job_id
+        # 重新查询返回已存在的那条
+        existing = get_inspiration_post_by_job(job_id)
+        if existing:
+            return {"post": _inspiration_to_api(existing, current_user_id=user["id"]), "already_published": True}
     log_operation(
         user_id=user["id"], username=user["username"],
         action="inspiration_publish",
