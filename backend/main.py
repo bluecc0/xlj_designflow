@@ -44,6 +44,7 @@ from .ai_image import (
     generate_image_async,
     generate_image_zenmux_async,
     generate_image_with_reference_async,
+    generate_inspiration_thumb,
     load_user_refs,
     normalize_provider,
     save_user_refs,
@@ -97,6 +98,7 @@ from .job_store import (
     load_agent_messages,
     load_ai_image_job,
     load_ai_image_jobs,
+    load_ai_image_job_by_image_url,
     load_job,
     count_operation_logs,
     load_operation_logs,
@@ -110,6 +112,13 @@ from .job_store import (
     save_special_job,
     load_special_jobs,
     update_agent_project,
+    create_inspiration_post,
+    update_inspiration_thumb_url,
+    update_inspiration_dimensions,
+    get_inspiration_post,
+    get_inspiration_post_by_job,
+    delete_inspiration_post,
+    list_inspiration_posts,
 )
 from .models import (
     ComposeJob,
@@ -134,6 +143,26 @@ from .proxy_download_relay import inspect_url as proxy_download_inspect_url, dow
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # 启动时迁移：给没有 thumb_url / image_width / image_height 的旧记录回填
+    try:
+        rows = list_inspiration_posts(limit=10000, offset=0)
+        pending = [r for r in rows if not r.get("thumb_url") or not r.get("image_width") or not r.get("image_height")]
+        if pending:
+            import asyncio
+            async def _migrate():
+                for r in pending:
+                    try:
+                        thumb, tw, th = generate_inspiration_thumb(
+                            r["image_url"], r["user_id"], r["job_id"]
+                        )
+                        update_inspiration_thumb_url(r["id"], thumb)
+                        if tw and th:
+                            update_inspiration_dimensions(r["id"], tw, th)
+                    except Exception:
+                        pass
+            asyncio.create_task(_migrate())
+    except Exception:
+        pass
     try:
         yield
     finally:
@@ -2423,6 +2452,133 @@ async def ai_image_retry(request: Request):
         )
     )
     return {"job_id": new_job_id, "status": "processing", "provider": PROVIDER_ZENMUX}
+
+
+# ─── 灵感（inspiration） ──────────────────────────────────────────────────────
+
+@app.post("/inspiration")
+async def publish_inspiration(request: Request):
+    """把已完成的生图结果发布到灵感页。同一 job_id 只能发布一次。
+    支持 job_id 或 image_url（用于从历史消息里点发布时拿不到 job_id 的场景）。"""
+    user = _current_user(request)
+    body = await request.json()
+    job_id = (body.get("job_id") or "").strip()
+    image_url = (body.get("image_url") or "").strip()
+
+    job = None
+    if job_id:
+        job = load_ai_image_job(job_id)
+    elif image_url:
+        job = load_ai_image_job_by_image_url(image_url, user_id=user["id"])
+    if not job:
+        raise HTTPException(404, "任务不存在")
+    if not _is_admin(user) and job.get("user_id") != user["id"]:
+        raise HTTPException(404, "任务不存在")
+    if job.get("status") != "done":
+        raise HTTPException(400, "生图任务未完成，不能发布")
+    job_id = job["id"]
+    image_url = job.get("image_url") or ""
+    if not image_url:
+        raise HTTPException(400, "任务没有图片 URL")
+
+    existing = get_inspiration_post_by_job(job_id)
+    if existing:
+        # 兼容旧记录：没 thumb_url 就补一张
+        if not existing.get("thumb_url"):
+            thumb_url, tw, th = generate_inspiration_thumb(image_url, user["id"], job_id)
+            update_inspiration_thumb_url(existing["id"], thumb_url)
+            existing = dict(existing)
+            existing["thumb_url"] = thumb_url
+        return {"post": _inspiration_to_api(existing, current_user_id=user["id"]), "already_published": True}
+
+    post_id = uuid.uuid4().hex
+    created_at = time.time()
+    thumb_url, tw, th = generate_inspiration_thumb(image_url, user["id"], job_id)
+    # 缩略图尺寸即瀑布流要用的尺寸
+    inserted = create_inspiration_post(
+        post_id=post_id,
+        job_id=job_id,
+        user_id=user["id"],
+        image_url=image_url,
+        thumb_url=thumb_url,
+        prompt=job.get("prompt") or "",
+        model=job.get("model") or "gpt-image-2",
+        size=job.get("size") or "1024x1024",
+        resolution=job.get("resolution") or "",
+        has_ref=bool(job.get("has_reference")),
+        image_width=tw,
+        image_height=th,
+        created_at=created_at,
+    )
+    if not inserted:
+        # 竞态: 并发请求在我们 SELECT 之后/INSERT 之前插入了同 job_id
+        # 重新查询返回已存在的那条
+        existing = get_inspiration_post_by_job(job_id)
+        if existing:
+            return {"post": _inspiration_to_api(existing, current_user_id=user["id"]), "already_published": True}
+    log_operation(
+        user_id=user["id"], username=user["username"],
+        action="inspiration_publish",
+        detail=f"post={post_id[:8]} job={job_id[:8]} model={job.get('model')}",
+        payload=json.dumps({"post_id": post_id, "job_id": job_id, "model": job.get("model")}, ensure_ascii=False),
+    )
+    post = get_inspiration_post(post_id)
+    return {"post": _inspiration_to_api(post, current_user_id=user["id"]), "already_published": False}
+
+
+@app.delete("/inspiration/{post_id}")
+async def unpublish_inspiration(request: Request, post_id: str):
+    """下架灵感：发布者本人或 admin 可操作。"""
+    user = _current_user(request)
+    post = get_inspiration_post(post_id)
+    if not post:
+        raise HTTPException(404, "灵感不存在")
+    if not _is_admin(user) and post.get("user_id") != user["id"]:
+        raise HTTPException(403, "无权下架该灵感")
+    delete_inspiration_post(post_id)
+    log_operation(
+        user_id=user["id"], username=user["username"],
+        action="inspiration_unpublish",
+        detail=f"post={post_id[:8]} job={post.get('job_id', '')[:8]}",
+        payload=json.dumps({"post_id": post_id}, ensure_ascii=False),
+    )
+    return {"deleted": True}
+
+
+@app.get("/inspiration")
+async def list_inspiration(request: Request, limit: int = 20, offset: int = 0, mine: int = 0):
+    """列出灵感。mine=1 只返回当前用户的发布。"""
+    user = _current_user(request)
+    mine_user_id = user["id"] if mine else None
+    rows = list_inspiration_posts(limit, offset, mine_user_id)
+    return {"posts": [_inspiration_to_api(r, current_user_id=user["id"]) for r in rows]}
+
+
+@app.get("/inspiration/{post_id}")
+async def get_inspiration_detail(request: Request, post_id: str):
+    user = _current_user(request)
+    post = get_inspiration_post(post_id)
+    if not post:
+        raise HTTPException(404, "灵感不存在")
+    return {"post": _inspiration_to_api(post, current_user_id=user["id"])}
+
+
+def _inspiration_to_api(post: dict, current_user_id: str | None = None) -> dict:
+    """把 DB 记录转 API 返回结构。展示统一用 thumb_url。"""
+    return {
+        "id": post["id"],
+        "job_id": post["job_id"],
+        "image_url": post.get("thumb_url") or post.get("image_url") or "",
+        "prompt": post["prompt"],
+        "model": post["model"],
+        "size": post["size"],
+        "resolution": post.get("resolution") or "",
+        "has_ref": bool(post.get("has_ref")),
+        "is_mine": bool(current_user_id and post.get("user_id") == current_user_id),
+        "width": int(post.get("image_width") or 0),
+        "height": int(post.get("image_height") or 0),
+        "created_at": post["created_at"],
+    }
 
 
 @app.post("/editor/snapshot")

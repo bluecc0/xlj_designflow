@@ -872,7 +872,7 @@ export default function App() {
     <div className="app-shell">
       <div className="app-frame">
         <div className="canvas-shell">
-          <Tldraw onMount={handleMount} components={components} locale="zh-cn" assetUrls={assetUrls}>
+          <Tldraw onMount={handleMount} components={components} locale="zh-cn" assetUrls={assetUrls} licenseKey={import.meta.env.VITE_TLDRAW_LICENSE_KEY}>
             <EditorSurface />
           </Tldraw>
         </div>

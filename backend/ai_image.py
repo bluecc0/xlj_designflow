@@ -115,6 +115,39 @@ def _ensure_user_output_dir(user_id: str) -> Path:
     return out_dir
 
 
+def generate_inspiration_thumb(image_url: str, user_id: str, job_id: str, max_width: int = 480) -> tuple[str, int, int]:
+    """从 image_url 加载原图，生成 ≤max_width 宽度的 webp 缩略图，返回 (URL 路径, 缩略图宽, 缩略图高)。
+    失败时回退返回 (原 URL, 0, 0)。"""
+    from PIL import Image
+    # 从 image_url (/ai-images/xxx) 推断磁盘路径
+    if not image_url.startswith("/ai-images/"):
+        return image_url, 0, 0
+    rel = image_url[len("/ai-images/"):]
+    src_path = _OUTPUT_DIR / rel
+    if not src_path.exists():
+        return image_url, 0, 0
+    thumb_dir = _OUTPUT_DIR / user_id / "thumbs"
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    thumb_path = thumb_dir / f"{job_id}.webp"
+    if thumb_path.exists():
+        # 缓存命中：重新读尺寸返回
+        try:
+            with Image.open(thumb_path) as im:
+                return f"/ai-images/{user_id}/thumbs/{job_id}.webp", im.width, im.height
+        except Exception:
+            pass
+    try:
+        with Image.open(src_path) as im:
+            im = im.convert("RGB")
+            ratio = max_width / im.width if im.width > max_width else 1
+            new_size = (int(im.width * ratio), int(im.height * ratio))
+            im = im.resize(new_size, Image.LANCZOS)
+            im.save(thumb_path, "WEBP", quality=82, method=4)
+        return f"/ai-images/{user_id}/thumbs/{job_id}.webp", new_size[0], new_size[1]
+    except Exception:
+        return image_url, 0, 0
+
+
 def save_user_refs(user_id: str, job_id: str, refs: list[tuple[bytes, str]]) -> list[str]:
     """持久化用户上传的参考图到磁盘，返回相对路径列表。"""
     ref_dir = _ensure_user_output_dir(user_id) / "refs" / job_id

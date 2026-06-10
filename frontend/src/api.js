@@ -88,6 +88,28 @@
         body: JSON.stringify({ job_id: jobId, session_id: sessionId }),
       });
     },
+    publishInspiration: function(payload) {
+      // payload: { job_id } 或 { image_url }（用于从历史消息中发布时拿不到 job_id）
+      var body = {};
+      if (payload && payload.job_id) body.job_id = payload.job_id;
+      if (payload && payload.image_url) body.image_url = payload.image_url;
+      return request('/inspiration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    },
+    unpublishInspiration: function(postId) {
+      return request('/inspiration/' + encodeURIComponent(postId), { method: 'DELETE' });
+    },
+    listInspiration: function(limit, offset, mine) {
+      var qs = '?limit=' + (limit || 20) + '&offset=' + (offset || 0);
+      if (mine) qs += '&mine=1';
+      return request('/inspiration' + qs).then(function(res) { return res.posts || []; });
+    },
+    getInspiration: function(postId) {
+      return request('/inspiration/' + encodeURIComponent(postId)).then(function(res) { return res.post; });
+    },
     deleteAiChat: function(sessionId) { return request('/history/ai-chats/' + encodeURIComponent(sessionId), { method: 'DELETE' }); },
     createLayeredPsd: function(prompt, imageFile, options) {
       var form = new FormData();

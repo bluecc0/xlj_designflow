@@ -586,7 +586,7 @@ const ChatGenerating = () => (
   </div>
 );
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey, onQuickReply, agentEnabled, onRetryWithZenmux }) => {
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey, onQuickReply, agentEnabled, onRetryWithZenmux, onPublishInspiration, onUnpublishInspiration }) => {
   const userMsgs = messages.filter(m => m.who === 'user').length;
   const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
   const bottomRef = React.useRef(null);
@@ -692,11 +692,20 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
                   style: { width: '100%', borderRadius: 10, display: 'block', border: '1px solid var(--line-2)', cursor: 'pointer' },
                   onClick: () => window.open(m.imageUrl, '_blank'),
                 }),
-                React.createElement('div', { style: { marginTop: 6, display: 'flex', gap: 6 } },
+                React.createElement('div', { style: { marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' } },
                   React.createElement('a', {
                     href: m.imageUrl, download: true,
                     style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 },
-                  }, React.createElement(I.download, { size: 10 }), '下载')
+                  }, React.createElement(I.download, { size: 10 }), '下载'),
+                  m.inspirationPostId
+                    ? React.createElement('button', {
+                        onClick: function() { onUnpublishInspiration(m); },
+                        style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ok)', border: '1px solid var(--ok)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
+                      }, React.createElement(I.check, { size: 10 }), '已发布 · 取消')
+                    : React.createElement('button', {
+                        onClick: function() { onPublishInspiration(m); },
+                        style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ink-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
+                      }, React.createElement(I.sparkles, { size: 10 }), '发布到灵感')
                 )
               ),
               // VLM 质检反馈
@@ -997,7 +1006,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
 
 // ---------- Composer ----------
 
-const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate }) => {
+const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed }) => {
   const [text, setText] = React.useState('');
   const [lockedCommand, setLockedCommand] = React.useState('');
   const [files, setFiles] = React.useState([]);
@@ -1137,6 +1146,22 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       el.setSelectionRange(0, 0);
     }, 0);
   }, [agentEnabled, slashTrigger?.key, cmdToWorkflow]);
+
+  // 外部触发：从灵感页"生成同款"传过来，自动锁定 /Gpt image 2 并填入 prompt
+  React.useEffect(() => {
+    if (!seedPrompt) return;
+    setLockedCommand('/Gpt image 2');
+    setSelectedWorkflow('ai-image');
+    setPrototypePanel('');
+    setText(String(seedPrompt));
+    setTimeout(() => {
+      const el = taRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(0, 0);
+    }, 0);
+    if (onSeedConsumed) onSeedConsumed();
+  }, [seedPrompt, onSeedConsumed]);
 
   React.useEffect(() => {
     if (agentEnabled) {
@@ -1506,7 +1531,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       return slashMap[cmd] !== false;
     }
     return [
-      { id: 'chat', label: '问答', desc: '询问流程、模板、素材规则', iconKey: 'eye', workflow: 'chat' },
+      { id: 'chat', label: '默认', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat' },
       { id: 'gpt-image', label: 'GPT Image 2', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', cmd: '/Gpt image 2', available: available('/Gpt image 2') },
       { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro', available: available('/Nano Banana pro') },
       { id: 'compose', label: '模板合成', desc: '上传表格并匹配本地图库', iconKey: 'grid', workflow: 'compose' },
@@ -1527,7 +1552,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           ? '模板合成'
           : selectedWorkflow === 'download'
             ? '花瓣下载'
-            : '问答';
+            : '默认';
   const activeTaskIconKey = activeMode === 'ai-image'
     ? 'image'
     : activeMode === 'special' || activeMode === 'special_full'
@@ -1536,7 +1561,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         ? 'grid'
         : selectedWorkflow === 'download'
           ? 'download'
-          : 'eye';
+          : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
   const activeTaskIconSrc = activeMode === 'ai-image'
     ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
@@ -1730,6 +1755,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         ['1:1', '1:1'],
         ['3:2', '3:2'],
         ['2:3', '2:3'],
+        ['4:3', '4:3'],
+        ['3:4', '3:4'],
         ['5:4', '5:4'],
         ['16:9', '16:9'],
         ['9:16', '9:16'],
@@ -2089,9 +2116,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             width: 34,
             minWidth: 34,
             height: 34,
-            background: prototypePanel === 'task' || activeTaskLabel !== '问答' ? 'var(--panel-2)' : 'transparent',
-            color: activeTaskLabel !== '问答' ? 'var(--ink)' : undefined,
-            borderColor: prototypePanel === 'task' || activeTaskLabel !== '问答' ? 'var(--line)' : undefined,
+            background: 'transparent',
+            color: 'var(--ink-2)',
           })}
           {!agentEnabled && prototypeToolButton('params', '参数设置', React.createElement(I.settings, { size: 14 }), null, {
             width: 34,
@@ -2195,7 +2221,7 @@ const mapAgentProjectMessages = function(project, images) {
 };
 
 console.log('[Main] Chat component definition');
-const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onRequestSpecialTemplate }) => {
+const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed }) => {
   const [messages, setMessages] = React.useState([]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
   const [agentMessages, setAgentMessages] = React.useState([]);
@@ -2621,6 +2647,71 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       ));
     }
   }, [currentAiChatId, loadAiChatHistory]);
+
+  // —— 发布/取消发布灵感 ——
+  const handlePublishInspiration = React.useCallback(async (msg) => {
+    if (!msg) return;
+    // 优先用 jobId（生图时记录在消息上）；历史消息恢复后没有 jobId，回退到用 image_url
+    const payload = msg.jobId
+      ? { job_id: msg.jobId }
+      : (msg.imageUrl ? { image_url: msg.imageUrl } : null);
+    if (!payload) {
+      window.alert('这条消息无法发布（缺少 job_id 和 image_url）');
+      return;
+    }
+    // 乐观更新
+    setMessages(function(msgs) {
+      return msgs.map(function(m) {
+        return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: true }) : m;
+      });
+    });
+    try {
+      const res = await window.API.publishInspiration(payload);
+      const post = res && res.post;
+      setMessages(function(msgs) {
+        return msgs.map(function(m) {
+          return m.startedAt === msg.startedAt
+            ? Object.assign({}, m, { inspirationPostId: post ? post.id : null, inspirationPublishing: false })
+            : m;
+        });
+      });
+    } catch (e) {
+      setMessages(function(msgs) {
+        return msgs.map(function(m) {
+          return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: false }) : m;
+        });
+      });
+      window.alert('发布失败：' + (e.message || '未知错误'));
+    }
+  }, []);
+
+  const handleUnpublishInspiration = React.useCallback(async (msg) => {
+    if (!msg || !msg.inspirationPostId) return;
+    if (!window.confirm('下架这条灵感？')) return;
+    const postId = msg.inspirationPostId;
+    setMessages(function(msgs) {
+      return msgs.map(function(m) {
+        return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: true }) : m;
+      });
+    });
+    try {
+      await window.API.unpublishInspiration(postId);
+      setMessages(function(msgs) {
+        return msgs.map(function(m) {
+          return m.startedAt === msg.startedAt
+            ? Object.assign({}, m, { inspirationPostId: null, inspirationPublishing: false })
+            : m;
+        });
+      });
+    } catch (e) {
+      setMessages(function(msgs) {
+        return msgs.map(function(m) {
+          return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: false }) : m;
+        });
+      });
+      window.alert('下架失败：' + (e.message || '未知错误'));
+    }
+  }, []);
 
   // —— AI 生图核心流程（共享）——
   const runAiImageGeneration = React.useCallback(async (model, prompt, displayText, refImages, aiOptions) => {
@@ -3602,9 +3693,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       </div>
 
       {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux}/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux}/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
 
       <Composer
         onSend={handleSend}
@@ -3617,6 +3708,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         onToggleAgent={toggleAgentMode}
         resetKey={composerResetKey}
         onRequestSpecialTemplate={onRequestSpecialTemplate}
+        seedPrompt={seedPrompt}
+        onSeedConsumed={onSeedConsumed}
       />
     </div>
   );

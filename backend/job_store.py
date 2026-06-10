@@ -214,6 +214,60 @@ def init_db() -> None:
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_oplogs_ts ON operation_logs(created_at)
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS inspiration_posts (
+                id            TEXT PRIMARY KEY,
+                job_id        TEXT NOT NULL,
+                user_id       TEXT NOT NULL,
+                image_url     TEXT NOT NULL,
+                thumb_url     TEXT NOT NULL DEFAULT '',
+                prompt        TEXT NOT NULL,
+                model         TEXT NOT NULL,
+                size          TEXT NOT NULL,
+                resolution    TEXT,
+                has_ref       INTEGER NOT NULL DEFAULT 0,
+                image_width   INTEGER NOT NULL DEFAULT 0,
+                image_height  INTEGER NOT NULL DEFAULT 0,
+                created_at    REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_inspiration_created ON inspiration_posts(created_at)
+        """)
+        # 唯一约束: 同一 job_id 只能有一条灵感 (用 UNIQUE INDEX 实现, 替代 ALTER TABLE 加 UNIQUE)
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_inspiration_job_id_unique ON inspiration_posts(job_id)
+        """)
+        # 兼容旧表
+        try:
+            conn.execute("ALTER TABLE inspiration_posts ADD COLUMN thumb_url TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE inspiration_posts ADD COLUMN image_width INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE inspiration_posts ADD COLUMN image_height INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        # 兼容旧表: 如果存在重复 job_id, 保留 created_at 最大的最新一条, 删除较早的
+        # SQLite 不支持 DELETE FROM t WHERE id IN (SELECT ... FROM t) 这种自引用, 用嵌套子查询
+        conn.execute("""
+            DELETE FROM inspiration_posts
+            WHERE id IN (
+                SELECT id FROM (
+                    SELECT id FROM inspiration_posts
+                    WHERE job_id IN (
+                        SELECT job_id FROM inspiration_posts GROUP BY job_id HAVING COUNT(*) > 1
+                    )
+                    AND created_at < (
+                        SELECT MAX(created_at) FROM inspiration_posts AS t2
+                        WHERE t2.job_id = inspiration_posts.job_id
+                    )
+                )
+            )
+        """)
         conn.commit()
 
 
@@ -611,9 +665,41 @@ def load_ai_image_job(job_id: str) -> dict | None:
         "has_reference": bool(row["has_reference"]),
         "error": row["error"],
         "task_id": row["task_id"],
-        "progress": row["progress"],
+        "progress": int(row["progress"] or 0),
+        "resolution": row["resolution"] if "resolution" in row.keys() else "",
         "created_at": row["created_at"],
-        "_type": "ai-image",
+    }
+
+
+def load_ai_image_job_by_image_url(image_url: str, user_id: str | None = None) -> dict | None:
+    """通过 image_url 反查 ai_image_jobs（用于从历史消息中点发布时拿 job_id）。"""
+    with _connect() as conn:
+        if user_id:
+            row = conn.execute(
+                "SELECT * FROM ai_image_jobs WHERE image_url = ? AND user_id = ? ORDER BY created_at DESC LIMIT 1",
+                (image_url, user_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM ai_image_jobs WHERE image_url = ? ORDER BY created_at DESC LIMIT 1",
+                (image_url,),
+            ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "status": row["status"],
+        "model": row["model"],
+        "prompt": row["prompt"],
+        "size": row["size"],
+        "image_url": row["image_url"],
+        "has_reference": bool(row["has_reference"]),
+        "error": row["error"],
+        "task_id": row["task_id"],
+        "progress": int(row["progress"] or 0),
+        "resolution": row["resolution"] if "resolution" in row.keys() else "",
+        "created_at": row["created_at"],
     }
 
 
@@ -1284,3 +1370,92 @@ def load_admin_users() -> list[dict]:
             "last_action": dict(last_op) if last_op else None,
         })
     return users
+
+
+# ─── 灵感（inspiration_posts）──────────────────────────────────────────────────
+
+def create_inspiration_post(
+    post_id: str,
+    job_id: str,
+    user_id: str,
+    image_url: str,
+    thumb_url: str,
+    prompt: str,
+    model: str,
+    size: str,
+    resolution: str,
+    has_ref: bool,
+    image_width: int,
+    image_height: int,
+    created_at: float,
+) -> bool:
+    """发布灵感记录。同一 job_id 唯一约束, 重复插入返回 False (调用方应转为 already_published 语义)。"""
+    try:
+        with _lock, _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO inspiration_posts
+                    (id, job_id, user_id, image_url, thumb_url, prompt, model, size, resolution, has_ref, image_width, image_height, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (post_id, job_id, user_id, image_url, thumb_url, prompt, model, size, resolution, 1 if has_ref else 0, int(image_width or 0), int(image_height or 0), created_at),
+            )
+        return True
+    except Exception as e:
+        # UNIQUE INDEX 冲突: 同 job_id 重复插入, 视为已存在
+        if "UNIQUE constraint failed" in str(e):
+            return False
+        raise
+
+
+def update_inspiration_thumb_url(post_id: str, thumb_url: str) -> None:
+    """回填缩略图 URL（旧记录兼容用）。"""
+    with _connect() as conn:
+        conn.execute("UPDATE inspiration_posts SET thumb_url = ? WHERE id = ?", (thumb_url, post_id))
+
+
+def update_inspiration_dimensions(post_id: str, image_width: int, image_height: int) -> None:
+    """回填图片宽高。"""
+    with _connect() as conn:
+        conn.execute("UPDATE inspiration_posts SET image_width = ?, image_height = ? WHERE id = ?",
+                     (int(image_width or 0), int(image_height or 0), post_id))
+
+
+def get_inspiration_post_by_job(job_id: str) -> dict | None:
+    """根据 job_id 查找已发布的灵感（用于检测同 job 是否已发布）。"""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM inspiration_posts WHERE job_id = ? ORDER BY created_at DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_inspiration_post(post_id: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM inspiration_posts WHERE id = ?", (post_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_inspiration_post(post_id: str) -> bool:
+    with _lock, _connect() as conn:
+        cur = conn.execute("DELETE FROM inspiration_posts WHERE id = ?", (post_id,))
+        return cur.rowcount > 0
+
+
+def list_inspiration_posts(limit: int, offset: int, mine_user_id: str | None = None) -> list[dict]:
+    """列出灵感。mine_user_id 不为 None 时只返回该用户的发布。"""
+    with _connect() as conn:
+        if mine_user_id:
+            rows = conn.execute(
+                "SELECT * FROM inspiration_posts WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (mine_user_id, limit, offset),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM inspiration_posts ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+    return [dict(r) for r in rows]

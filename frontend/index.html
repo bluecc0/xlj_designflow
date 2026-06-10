@@ -427,6 +427,7 @@
 <script src="vendor/react.js"></script>
 <script src="vendor/react-dom.js"></script>
 <script src="vendor/babel.min.js"></script>
+<script src="vendor/lottie.min.js"></script>
 
 <script>
 // 运行时配置（可被 Penpot 插件覆盖）
@@ -453,6 +454,7 @@ const I = {
   image: (p) => <Icon {...p}><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="m3 17 5-5 5 5 3-3 5 5"/></Icon>,
   sparkles: (p) => <Icon {...p}><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></Icon>,
   wand: (p) => <Icon d="M15 4V2m0 14v-2M8 9h2M20 9h2M17.8 11.8 19 13M17.8 6.2 19 5M3 21l9-9m-1.8-3.8L12 7" {...p}/>,
+  logo: (p) => <span {...p} style={Object.assign({ display: 'inline-grid', placeItems: 'center', color: 'white', background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08  275))', borderRadius: 5 }, p.style || {})}><svg width={p.size || 12} height={p.size || 12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></svg></span>,
   close: (p) => <Icon d="M6 6l12 12M18 6 6 18" {...p}/>,
   more: (p) => <Icon {...p}><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></Icon>,
   grid: (p) => <Icon {...p}><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></Icon>,
@@ -553,7 +555,7 @@ const STATUS_COLORS = {
   err: 'oklch(0.6 0.18 25)',
 };
 
-const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail }) => {
+const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail, placement = 'bottom' }) => {
   const [status, setStatus] = React.useState('loading'); // 'loading' | 'ok' | 'err'
   const [payload, setPayload] = React.useState(null);
   const [open, setOpen] = React.useState(false);
@@ -667,7 +669,9 @@ const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail }) => {
       {open && detail && (
         <div style={{
           position: 'absolute',
-          top: 'calc(100% + 8px)',
+          ...(placement === 'top'
+            ? { bottom: 'calc(100% + 8px)', top: 'auto' }
+            : { top: 'calc(100% + 8px)' }),
           right: 0,
           minWidth: 180,
           padding: 10,
@@ -685,33 +689,104 @@ const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail }) => {
   );
 };
 
-const TopBar = ({ user, onSwitchUser, currentView, onNavigate }) => {
+const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration, inspirationOpen }) => {
   const isAgentPage = typeof window !== 'undefined' && /\/ui\/agent\.html(?:$|\?)/.test(window.location.href);
-  const fmtBalance = (n) => {
-    if (typeof n !== 'number') return '';
-    return Math.min(n, 99.99).toFixed(2);
-  };
-  const renderAiProviderDetail = React.useCallback((data) => {
-    const info = data && data.ai_provider;
-    if (!info) return null;
-    const hasBalance = typeof info.remain_balance !== 'undefined';
-    const zenmux = info.zenmux;
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
-          APIMart {info.connected ? '正常' : (info.configured ? '异常' : '未配置')}
-          {hasBalance ? ` · 余额 $${fmtBalance(info.remain_balance)}` : ''}
-        </div>
-        {zenmux && (
-          <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
-            ZenMux {zenmux.connected ? '正常' : (zenmux.configured ? '异常' : '未配置')}
-            {typeof zenmux.total_credits === 'number' ? ` · 余额 $${fmtBalance(zenmux.total_credits)}` : ''}
-          </div>
-        )}
-        {info.message && <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>{String(info.message).slice(0, 120)}</div>}
-      </div>
-    );
+  const lottieContainerRef = React.useRef(null);
+  const lottieAnimRef = React.useRef(null);
+
+  React.useEffect(function() {
+    if (document.getElementById('inspiration-flow-style')) return;
+    const style = document.createElement('style');
+    style.id = 'inspiration-flow-style';
+    style.textContent = `
+.inspiration-flow {
+  position: relative;
+  border-radius: 8px;
+}
+.inspiration-flow__inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 2;
+  height: 100%;
+  width: 100%;
+  padding: 0 10px 0 2px;
+  border-radius: 7px;
+  background: var(--panel);
+  cursor: pointer;
+  flex-shrink: 0;
+  border: none;
+  outline: none;
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: none;
+}
+.inspiration-flow__inner:hover,
+.inspiration-flow__inner:focus,
+.inspiration-flow__inner:active,
+.inspiration-flow__inner:focus-visible,
+.inspiration-flow__inner:focus-within {
+  background: var(--panel);
+  outline: none;
+}
+.inspiration-flow__text {
+  font-size: 13px;
+  font-weight: 600;
+  background: linear-gradient(90deg, #06b6d4 0%, #3b82f6 50%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+`;
+    document.head.appendChild(style);
   }, []);
+
+  React.useEffect(function() {
+    const el = lottieContainerRef.current;
+    if (!el || !window.lottie) return;
+    if (lottieAnimRef.current) return;
+    lottieAnimRef.current = window.lottie.loadAnimation({
+      container: el,
+      renderer: 'svg',
+      loop: true,
+      autoplay: true,
+      path: 'src/icon/animation/cffe9aa4-4cd6-11f0-8880-1b96160dc82b.json',
+    });
+    return function() {
+      if (lottieAnimRef.current) {
+        lottieAnimRef.current.destroy();
+        lottieAnimRef.current = null;
+      }
+    };
+  }, []);
+const fmtBalance = (n) => {
+  if (typeof n !== 'number') return '';
+  return Math.min(n, 99.99).toFixed(2);
+};
+const renderAiProviderDetail = function(data) {
+  const info = data && data.ai_provider;
+  if (!info) return null;
+  const hasBalance = typeof info.remain_balance !== 'undefined';
+  const zenmux = info.zenmux;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
+        APIMart {info.connected ? '正常' : (info.configured ? '异常' : '未配置')}
+        {hasBalance ? ` · 余额 $${fmtBalance(info.remain_balance)}` : ''}
+      </div>
+      {zenmux && (
+        <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
+          ZenMux {zenmux.connected ? '正常' : (zenmux.configured ? '异常' : '未配置')}
+          {typeof zenmux.total_credits === 'number' ? ` · 余额 $${fmtBalance(zenmux.total_credits)}` : ''}
+        </div>
+      )}
+      {info.message && <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>{String(info.message).slice(0, 120)}</div>}
+    </div>
+  );
+};
+window.renderAiProviderDetail = renderAiProviderDetail;
+
 
   return (
     <div style={{
@@ -760,9 +835,18 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate }) => {
             <span>主工作台</span>
           </a>
         )}
-        <StatusIcon title="后端服务" fetchUrl="/health" icon={I.settings}/>
-        <StatusIcon title="素材库" fetchUrl="/health" okKey="library" icon={I.folder}/>
-        <StatusIcon title="AI 服务商" fetchUrl="/health" okKey="ai_provider" icon={I.sparkles} renderDetail={renderAiProviderDetail}/>
+        {user && (
+          <div className="inspiration-flow" style={{ height: 30, flexShrink: 0 }}>
+            <button
+              onClick={onOpenInspiration}
+              title="灵感"
+              className="inspiration-flow__inner"
+            >
+              <span ref={lottieContainerRef} style={{ width: 30, height: 30, display: 'inline-block' }}/>
+              <span className="inspiration-flow__text">灵感</span>
+            </button>
+          </div>
+        )}
         {user && user.role === 'admin' && onNavigate && (
           <button
             onClick={() => onNavigate('#/admin')}
@@ -807,6 +891,7 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate }) => {
 };
 
 window.TopBar = TopBar;
+window.StatusIcon = StatusIcon;
 
 </script>
 <script type="text/babel" src="src/TemplatePanel.jsx" data-presets="react">
@@ -1249,12 +1334,15 @@ var StatusFooter = function(_ref3) {
       borderTop: '1px solid var(--line)',
       background: 'var(--panel-2)',
       padding: '8px 10px',
-      display: 'flex', alignItems: 'center', gap: 6,
+      display: 'flex', alignItems: 'center', gap: 8,
       boxSizing: 'border-box',
     }
   },
     React.createElement(I.layers, { size: 11, style: { color: 'var(--ink-3)' } }),
-    React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)', flex: 1 } }, count + ' 个模板')
+    React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)', flex: 1 } }, count + ' 个模板'),
+    React.createElement(window.StatusIcon, { title: '后端服务', fetchUrl: '/health', icon: I.settings, placement: 'top' }),
+    React.createElement(window.StatusIcon, { title: '素材库', fetchUrl: '/health', okKey: 'library', icon: I.folder, placement: 'top' }),
+    React.createElement(window.StatusIcon, { title: 'AI 服务商', fetchUrl: '/health', okKey: 'ai_provider', icon: I.sparkles, renderDetail: window.renderAiProviderDetail, placement: 'top' })
   );
 };
 
@@ -2627,7 +2715,7 @@ const ChatGenerating = () => (
   </div>
 );
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey, onQuickReply, agentEnabled, onRetryWithZenmux }) => {
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey, onQuickReply, agentEnabled, onRetryWithZenmux, onPublishInspiration, onUnpublishInspiration }) => {
   const userMsgs = messages.filter(m => m.who === 'user').length;
   const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
   const bottomRef = React.useRef(null);
@@ -2733,11 +2821,20 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
                   style: { width: '100%', borderRadius: 10, display: 'block', border: '1px solid var(--line-2)', cursor: 'pointer' },
                   onClick: () => window.open(m.imageUrl, '_blank'),
                 }),
-                React.createElement('div', { style: { marginTop: 6, display: 'flex', gap: 6 } },
+                React.createElement('div', { style: { marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' } },
                   React.createElement('a', {
                     href: m.imageUrl, download: true,
                     style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 },
-                  }, React.createElement(I.download, { size: 10 }), '下载')
+                  }, React.createElement(I.download, { size: 10 }), '下载'),
+                  m.inspirationPostId
+                    ? React.createElement('button', {
+                        onClick: function() { onUnpublishInspiration(m); },
+                        style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ok)', border: '1px solid var(--ok)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
+                      }, React.createElement(I.check, { size: 10 }), '已发布 · 取消')
+                    : React.createElement('button', {
+                        onClick: function() { onPublishInspiration(m); },
+                        style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ink-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
+                      }, React.createElement(I.sparkles, { size: 10 }), '发布到灵感')
                 )
               ),
               // VLM 质检反馈
@@ -3038,7 +3135,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
 
 // ---------- Composer ----------
 
-const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate }) => {
+const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed }) => {
   const [text, setText] = React.useState('');
   const [lockedCommand, setLockedCommand] = React.useState('');
   const [files, setFiles] = React.useState([]);
@@ -3178,6 +3275,22 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       el.setSelectionRange(0, 0);
     }, 0);
   }, [agentEnabled, slashTrigger?.key, cmdToWorkflow]);
+
+  // 外部触发：从灵感页"生成同款"传过来，自动锁定 /Gpt image 2 并填入 prompt
+  React.useEffect(() => {
+    if (!seedPrompt) return;
+    setLockedCommand('/Gpt image 2');
+    setSelectedWorkflow('ai-image');
+    setPrototypePanel('');
+    setText(String(seedPrompt));
+    setTimeout(() => {
+      const el = taRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(0, 0);
+    }, 0);
+    if (onSeedConsumed) onSeedConsumed();
+  }, [seedPrompt, onSeedConsumed]);
 
   React.useEffect(() => {
     if (agentEnabled) {
@@ -3547,7 +3660,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       return slashMap[cmd] !== false;
     }
     return [
-      { id: 'chat', label: '问答', desc: '询问流程、模板、素材规则', iconKey: 'eye', workflow: 'chat' },
+      { id: 'chat', label: '默认', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat' },
       { id: 'gpt-image', label: 'GPT Image 2', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', cmd: '/Gpt image 2', available: available('/Gpt image 2') },
       { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro', available: available('/Nano Banana pro') },
       { id: 'compose', label: '模板合成', desc: '上传表格并匹配本地图库', iconKey: 'grid', workflow: 'compose' },
@@ -3568,7 +3681,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           ? '模板合成'
           : selectedWorkflow === 'download'
             ? '花瓣下载'
-            : '问答';
+            : '默认';
   const activeTaskIconKey = activeMode === 'ai-image'
     ? 'image'
     : activeMode === 'special' || activeMode === 'special_full'
@@ -3577,7 +3690,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         ? 'grid'
         : selectedWorkflow === 'download'
           ? 'download'
-          : 'eye';
+          : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
   const activeTaskIconSrc = activeMode === 'ai-image'
     ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
@@ -3771,6 +3884,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         ['1:1', '1:1'],
         ['3:2', '3:2'],
         ['2:3', '2:3'],
+        ['4:3', '4:3'],
+        ['3:4', '3:4'],
         ['5:4', '5:4'],
         ['16:9', '16:9'],
         ['9:16', '9:16'],
@@ -4130,9 +4245,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             width: 34,
             minWidth: 34,
             height: 34,
-            background: prototypePanel === 'task' || activeTaskLabel !== '问答' ? 'var(--panel-2)' : 'transparent',
-            color: activeTaskLabel !== '问答' ? 'var(--ink)' : undefined,
-            borderColor: prototypePanel === 'task' || activeTaskLabel !== '问答' ? 'var(--line)' : undefined,
+            background: 'transparent',
+            color: 'var(--ink-2)',
           })}
           {!agentEnabled && prototypeToolButton('params', '参数设置', React.createElement(I.settings, { size: 14 }), null, {
             width: 34,
@@ -4236,7 +4350,7 @@ const mapAgentProjectMessages = function(project, images) {
 };
 
 console.log('[Main] Chat component definition');
-const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onRequestSpecialTemplate }) => {
+const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed }) => {
   const [messages, setMessages] = React.useState([]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
   const [agentMessages, setAgentMessages] = React.useState([]);
@@ -4662,6 +4776,71 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       ));
     }
   }, [currentAiChatId, loadAiChatHistory]);
+
+  // —— 发布/取消发布灵感 ——
+  const handlePublishInspiration = React.useCallback(async (msg) => {
+    if (!msg) return;
+    // 优先用 jobId（生图时记录在消息上）；历史消息恢复后没有 jobId，回退到用 image_url
+    const payload = msg.jobId
+      ? { job_id: msg.jobId }
+      : (msg.imageUrl ? { image_url: msg.imageUrl } : null);
+    if (!payload) {
+      window.alert('这条消息无法发布（缺少 job_id 和 image_url）');
+      return;
+    }
+    // 乐观更新
+    setMessages(function(msgs) {
+      return msgs.map(function(m) {
+        return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: true }) : m;
+      });
+    });
+    try {
+      const res = await window.API.publishInspiration(payload);
+      const post = res && res.post;
+      setMessages(function(msgs) {
+        return msgs.map(function(m) {
+          return m.startedAt === msg.startedAt
+            ? Object.assign({}, m, { inspirationPostId: post ? post.id : null, inspirationPublishing: false })
+            : m;
+        });
+      });
+    } catch (e) {
+      setMessages(function(msgs) {
+        return msgs.map(function(m) {
+          return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: false }) : m;
+        });
+      });
+      window.alert('发布失败：' + (e.message || '未知错误'));
+    }
+  }, []);
+
+  const handleUnpublishInspiration = React.useCallback(async (msg) => {
+    if (!msg || !msg.inspirationPostId) return;
+    if (!window.confirm('下架这条灵感？')) return;
+    const postId = msg.inspirationPostId;
+    setMessages(function(msgs) {
+      return msgs.map(function(m) {
+        return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: true }) : m;
+      });
+    });
+    try {
+      await window.API.unpublishInspiration(postId);
+      setMessages(function(msgs) {
+        return msgs.map(function(m) {
+          return m.startedAt === msg.startedAt
+            ? Object.assign({}, m, { inspirationPostId: null, inspirationPublishing: false })
+            : m;
+        });
+      });
+    } catch (e) {
+      setMessages(function(msgs) {
+        return msgs.map(function(m) {
+          return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: false }) : m;
+        });
+      });
+      window.alert('下架失败：' + (e.message || '未知错误'));
+    }
+  }, []);
 
   // —— AI 生图核心流程（共享）——
   const runAiImageGeneration = React.useCallback(async (model, prompt, displayText, refImages, aiOptions) => {
@@ -5643,9 +5822,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       </div>
 
       {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux}/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux}/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
 
       <Composer
         onSend={handleSend}
@@ -5658,6 +5837,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         onToggleAgent={toggleAgentMode}
         resetKey={composerResetKey}
         onRequestSpecialTemplate={onRequestSpecialTemplate}
+        seedPrompt={seedPrompt}
+        onSeedConsumed={onSeedConsumed}
       />
     </div>
   );
@@ -6249,6 +6430,433 @@ return (hasPayload && isExpanded) ? React.createElement(React.Fragment, { key: o
 window.AdminPage = AdminPage;
 
 </script>
+<script type="text/babel" src="src/InspirationPanel.jsx" data-presets="react">
+// 灵感面板：覆盖在画布区域的浮层
+// 布局：顶部栏（tab + 搜索 + 关闭） + 主体瀑布流（4 列） + 详情抽屉（点击图片展开）
+
+const COLUMN_COUNT_DESKTOP = 4;
+const COLUMN_GAP = 12;
+const COLUMN_MIN_WIDTH = 200;
+
+const InspirationPanel = ({ onClose, onUsePrompt }) => {
+  const [tab, setTab] = React.useState('all'); // 'all' | 'mine'
+  const [search, setSearch] = React.useState('');
+  const [posts, setPosts] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const [detailPost, setDetailPost] = React.useState(null);
+  const [canvasRect, setCanvasRect] = React.useState(null);
+  const [ratios, setRatios] = React.useState({}); // postId -> width/height
+  const containerRef = React.useRef(null);
+  const [containerWidth, setContainerWidth] = React.useState(0);
+  const loadIdRef = React.useRef(0);
+
+  // 跟踪画布位置，让浮层只覆盖画布区
+  React.useEffect(function() {
+    const iframe = document.querySelector('iframe[src*="editor-beta"]');
+    if (!iframe) return;
+    const update = function() {
+      const r = iframe.getBoundingClientRect();
+      setCanvasRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(iframe);
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return function() {
+      ro.disconnect();
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, []);
+
+  // 跟踪主区域宽度
+  React.useEffect(function() {
+    if (!containerRef.current) return;
+    const el = containerRef.current;
+    const ro = new ResizeObserver(function(entries) {
+      for (const e of entries) setContainerWidth(e.contentRect.width);
+    });
+    ro.observe(el);
+    setContainerWidth(el.clientWidth);
+    return function() { ro.disconnect(); };
+  }, []);
+
+  // 加载列表
+  const loadPosts = React.useCallback(function() {
+    const myLoadId = ++loadIdRef.current;
+    setLoading(true);
+    setError(null);
+    window.API.listInspiration(50, 0, tab === 'mine')
+      .then(function(rows) {
+        if (myLoadId !== loadIdRef.current) return;
+        setPosts(rows || []);
+      })
+      .catch(function(e) {
+        if (myLoadId !== loadIdRef.current) return;
+        setError(e.message || '加载失败');
+        setPosts([]);
+      })
+      .finally(function() {
+        if (myLoadId === loadIdRef.current) setLoading(false);
+      });
+  }, [tab]);
+
+  React.useEffect(function() { loadPosts(); }, [loadPosts]);
+
+  // 搜索过滤
+  const setRatio = React.useCallback(function(postId, ratio) {
+    setRatios(function(prev) {
+      if (prev[postId] === ratio) return prev;
+      return Object.assign({}, prev, { [postId]: ratio });
+    });
+  }, []);
+
+  const filtered = React.useMemo(function() {
+    if (!search.trim()) return posts;
+    const q = search.trim().toLowerCase();
+    return posts.filter(function(p) {
+      return (p.prompt || '').toLowerCase().includes(q);
+    });
+  }, [posts, search]);
+
+  // 瀑布流分列（按图片宽高比，优先后端返回的尺寸）
+  const waterFallCols = React.useMemo(function() {
+    const colCount = containerWidth
+      ? Math.max(1, Math.min(COLUMN_COUNT_DESKTOP,
+          Math.floor((containerWidth + COLUMN_GAP) / (COLUMN_MIN_WIDTH + COLUMN_GAP))))
+      : COLUMN_COUNT_DESKTOP;
+    const colWidth = containerWidth
+      ? Math.floor((containerWidth - COLUMN_GAP * (colCount - 1)) / colCount)
+      : 0;
+    const cols = Array.from({ length: colCount }, function() { return { items: [], height: 0 }; });
+    filtered.forEach(function(post) {
+      const ratio = (post.width && post.height) ? post.width / post.height : (ratios[post.id] || 1);
+      const itemHeight = colWidth > 0 ? colWidth / ratio : colWidth;
+      let minIdx = 0;
+      for (let i = 1; i < colCount; i++) {
+        if (cols[i].height < cols[minIdx].height) minIdx = i;
+      }
+      cols[minIdx].items.push({ post: post, height: itemHeight });
+      cols[minIdx].height += itemHeight + COLUMN_GAP;
+    });
+    return { colCount: colCount, cols: cols };
+  }, [filtered, containerWidth, ratios]);
+
+  // 关闭详情
+  const closeDetail = React.useCallback(function() { setDetailPost(null); }, []);
+
+  // 下架自己的
+  const handleUnpublish = React.useCallback(function(post) {
+    if (!window.confirm('下架这条灵感？')) return;
+    window.API.unpublishInspiration(post.id)
+      .then(function() {
+        setPosts(function(prev) { return prev.filter(function(p) { return p.id !== post.id; }); });
+        if (detailPost && detailPost.id === post.id) closeDetail();
+      })
+      .catch(function(e) {
+        window.alert('下架失败：' + (e.message || '未知错误'));
+      });
+  }, [detailPost, closeDetail]);
+
+  // 点击图片 → 加载完整详情
+  const openDetail = React.useCallback(function(post) {
+    window.API.getInspiration(post.id)
+      .then(function(full) { setDetailPost(full || post); })
+      .catch(function() { setDetailPost(post); });
+  }, []);
+
+  return (
+    <div style={{
+      position: 'fixed',
+      top: canvasRect ? canvasRect.top : 0,
+      left: canvasRect ? canvasRect.left : 0,
+      width: canvasRect ? canvasRect.width : '100vw',
+      height: canvasRect ? canvasRect.height : '100vh',
+      zIndex: 50,
+      background: 'var(--panel-2)',
+      display: 'flex', flexDirection: 'column',
+      overflow: 'hidden',
+    }}>
+      {/* 顶部栏 */}
+      <div style={{
+        height: 44, flexShrink: 0,
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '0 16px',
+        background: 'var(--panel)',
+        borderBottom: '1px solid var(--line)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500 }}>
+          <I.sparkles size={13} style={{ color: 'var(--accent)' }}/>
+          灵感
+        </div>
+        <div style={{ display: 'flex', gap: 2, marginLeft: 8 }}>
+          {[
+            { id: 'all', label: '全部' },
+            { id: 'mine', label: '我发布的' },
+          ].map(function(t) {
+            const active = tab === t.id;
+            return React.createElement('button', {
+              key: t.id,
+              onClick: function() { setTab(t.id); },
+              style: {
+                height: 28, padding: '0 12px',
+                borderRadius: 6, border: 'none',
+                background: active ? 'var(--panel-2)' : 'transparent',
+                color: active ? 'var(--ink)' : 'var(--ink-2)',
+                fontSize: 11.5, fontWeight: active ? 600 : 400,
+                cursor: 'pointer',
+              }
+            }, t.label);
+          })}
+        </div>
+        <div style={{ flex: 1 }}/>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '5px 10px', borderRadius: 6,
+          background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+          width: 220,
+        }}>
+          <I.search size={12} style={{ color: 'var(--ink-3)' }}/>
+          <input
+            value={search}
+            placeholder="搜索 prompt 关键词…"
+            style={{
+              flex: 1, border: 'none', outline: 'none',
+              background: 'transparent', fontSize: 11.5, color: 'var(--ink)',
+            }}
+            onChange={function(e) { setSearch(e.target.value); }}
+          />
+        </div>
+        <button
+          onClick={function() { loadPosts(); }}
+          title="刷新"
+          style={{
+            width: 28, height: 28, borderRadius: 6,
+            background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+            color: 'var(--ink-2)', display: 'grid', placeItems: 'center', cursor: 'pointer',
+          }}
+        >
+          <I.refresh size={12}/>
+        </button>
+        <button
+          onClick={onClose}
+          title="关闭灵感"
+          style={{
+            width: 28, height: 28, borderRadius: 6,
+            background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+            color: 'var(--ink-2)', display: 'grid', placeItems: 'center', cursor: 'pointer',
+          }}
+        >
+          <I.close size={12}/>
+        </button>
+      </div>
+
+      {/* 主体 */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 16 }}>
+        {error && (
+          <div style={{ padding: 12, color: 'var(--warn)', fontSize: 12 }}>加载失败：{error}</div>
+        )}
+        {!error && loading && filtered.length === 0 && (
+          <div style={{ padding: 24, color: 'var(--ink-3)', fontSize: 12, textAlign: 'center' }}>加载中…</div>
+        )}
+        {!error && !loading && filtered.length === 0 && (
+          <div style={{ padding: 40, color: 'var(--ink-3)', fontSize: 12, textAlign: 'center' }}>
+            {tab === 'mine' ? '你还没有发布过灵感' : '还没有灵感，去生张图试试吧'}
+          </div>
+        )}
+        {filtered.length > 0 && (() => {
+          // cols 已经在 useMemo 中算好
+          return React.createElement('div', {
+            style: {
+              display: 'grid',
+              gridTemplateColumns: 'repeat(' + waterFallCols.colCount + ', minmax(0, 1fr))',
+              gap: COLUMN_GAP,
+              alignItems: 'flex-start',
+            }
+          }, waterFallCols.cols.map(function(col, ci) {
+            return React.createElement('div', {
+              key: ci,
+              style: { display: 'flex', flexDirection: 'column', gap: COLUMN_GAP, minWidth: 0 }
+            }, col.items.map(function(item) {
+              return React.createElement(InspirationCard, {
+                key: item.post.id, post: item.post,
+                height: item.height,
+                onRatioLoad: setRatio,
+                onOpen: function() { openDetail(item.post); },
+              });
+            }));
+          }));
+        })()}
+      </div>
+
+      {/* 详情抽屉 */}
+      {detailPost && (
+        <InspirationDetail
+          post={detailPost}
+          onClose={closeDetail}
+          onUsePrompt={onUsePrompt}
+          onUnpublish={detailPost.is_mine ? handleUnpublish : null}
+        />
+      )}
+    </div>
+  );
+};
+
+const InspirationCard = ({ post, height, onRatioLoad, onOpen }) => {
+  return React.createElement('button', {
+    onClick: onOpen,
+    style: {
+      width: '100%',
+      display: 'block',
+      padding: 0,
+      border: '1px solid var(--line-2)',
+      borderRadius: 10,
+      background: 'var(--panel)',
+      cursor: 'pointer',
+      overflow: 'hidden',
+      textAlign: 'left',
+      transition: 'transform 120ms, box-shadow 120ms',
+    },
+    onMouseEnter: function(e) {
+      e.currentTarget.style.transform = 'translateY(-2px)';
+      e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.08)';
+    },
+    onMouseLeave: function(e) {
+      e.currentTarget.style.transform = 'none';
+      e.currentTarget.style.boxShadow = 'none';
+    },
+  },
+    React.createElement('img', {
+      src: post.image_url,
+      alt: post.prompt,
+      loading: 'lazy',
+      onLoad: function(e) {
+        const img = e.currentTarget;
+        if (img.naturalWidth && img.naturalHeight && onRatioLoad) {
+          onRatioLoad(post.id, img.naturalWidth / img.naturalHeight);
+        }
+      },
+      style: height ? { width: '100%', height: height + 'px', objectFit: 'cover', display: 'block', background: 'var(--panel-2)' } : { width: '100%', display: 'block', background: 'var(--panel-2)' },
+    })
+  );
+};
+
+const InspirationDetail = ({ post, onClose, onUsePrompt, onUnpublish }) => {
+  return (
+    <>
+      <div onClick={onClose} style={{
+        position: 'absolute', inset: 0,
+        background: 'rgba(0,0,0,0.32)',
+        zIndex: 20,
+      }}/>
+      <div style={{
+        position: 'absolute', top: 0, right: 0, bottom: 0,
+        width: 420, zIndex: 21,
+        background: 'var(--panel)',
+        borderLeft: '1px solid var(--line)',
+        display: 'flex', flexDirection: 'column',
+        boxShadow: '-8px 0 24px rgba(0,0,0,0.12)',
+      }}>
+        {/* 抽屉头 */}
+        <div style={{
+          height: 44, flexShrink: 0,
+          display: 'flex', alignItems: 'center',
+          padding: '0 14px', gap: 8,
+          borderBottom: '1px solid var(--line)',
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--ink)' }}>灵感详情</div>
+          <div style={{ flex: 1 }}/>
+          <button onClick={onClose} style={{
+            width: 28, height: 28, borderRadius: 6,
+            background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+            color: 'var(--ink-2)', display: 'grid', placeItems: 'center', cursor: 'pointer',
+          }}>
+            <I.close size={12}/>
+          </button>
+        </div>
+
+        {/* 大图 */}
+        <div style={{ padding: 14, flexShrink: 0 }}>
+          <img src={post.image_url} alt={post.prompt} style={{
+            width: '100%', maxHeight: 360, objectFit: 'contain',
+            borderRadius: 8, background: 'var(--panel-2)',
+            border: '1px solid var(--line-2)', display: 'block',
+          }}/>
+        </div>
+
+        {/* 信息 */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 14px 14px' }}>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }} className="mono">Prompt</div>
+            <div style={{
+              fontSize: 12, color: 'var(--ink)', lineHeight: 1.55,
+              padding: '8px 10px', borderRadius: 6,
+              background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>{post.prompt || '（无）'}</div>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+            {[
+              ['模型', post.model],
+              ['尺寸', post.size],
+              ['分辨率', post.resolution || '默认'],
+              post.has_ref ? ['参考图', '有'] : null,
+            ].filter(Boolean).map(function(item, i) {
+              return React.createElement('span', {
+                key: i,
+                className: 'mono',
+                style: {
+                  fontSize: 10, padding: '3px 8px', borderRadius: 4,
+                  background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+                  color: 'var(--ink-2)',
+                }
+              }, item[0] + '：' + item[1]);
+            })}
+          </div>
+        </div>
+
+        {/* 操作 */}
+        <div style={{
+          flexShrink: 0,
+          padding: 12, borderTop: '1px solid var(--line)',
+          display: 'flex', gap: 8,
+        }}>
+          <button
+            onClick={function() { onUsePrompt(post); }}
+            style={{
+              flex: 1, height: 36, padding: '0 14px', borderRadius: 6,
+              background: 'var(--ink)', color: 'white', border: '1px solid var(--ink)',
+              fontSize: 12, fontWeight: 500, cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            }}
+          >
+            <I.sparkles size={12}/>生成同款
+          </button>
+          {onUnpublish && (
+            <button
+              onClick={function() { onUnpublish(post); }}
+              style={{
+                height: 36, padding: '0 12px', borderRadius: 6,
+                background: 'var(--panel)', color: 'var(--warn)',
+                border: '1px solid var(--line)', fontSize: 12,
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                cursor: 'pointer',
+              }}
+            >
+              下架
+            </button>
+          )}
+        </div>
+      </div>
+    </>
+  );
+};
+
+window.InspirationPanel = InspirationPanel;
+
+</script>
 <script type="text/babel" src="src/app.jsx" data-presets="react">
 // App root - wires panels + tweaks + host communication
 
@@ -6329,6 +6937,14 @@ const App = () => {
   const [currentUser, setCurrentUser] = React.useState(null);
   const [authLoading, setAuthLoading] = React.useState(true);
   const [authError, setAuthError] = React.useState('');
+  const [inspirationOpen, setInspirationOpen] = React.useState(false);
+  const [seedPrompt, setSeedPrompt] = React.useState('');
+
+  const handleUseInspirationPrompt = React.useCallback(function(post) {
+    setInspirationOpen(false);
+    setSeedPrompt(post.prompt || '');
+  }, []);
+  const handleSeedConsumed = React.useCallback(function() { setSeedPrompt(''); }, []);
 
   const getViewFromHash = () => (window.location.hash === '#/admin' ? 'admin' : 'workbench');
   const [currentView, setCurrentView] = React.useState(getViewFromHash);
@@ -6519,7 +7135,7 @@ const App = () => {
       )}
       {currentUser && !showAdmin && (
         <>
-          <TopBar user={currentUser} onSwitchUser={handleSwitchUser} currentView="workbench" onNavigate={navigateTo} />
+          <TopBar user={currentUser} onSwitchUser={handleSwitchUser} currentView="workbench" onNavigate={navigateTo} onOpenInspiration={function() { setInspirationOpen(function(v) { return !v; }); }} inspirationOpen={inspirationOpen} />
           <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '260px minmax(0, 1fr) 360px', gridTemplateRows: 'minmax(0, 1fr)', minHeight: 0 }}>
             <TemplatePanel
               key={'templates:' + currentUser.id}
@@ -6535,8 +7151,16 @@ const App = () => {
               slashTrigger={slashTrigger}
               user={currentUser}
               onRequestSpecialTemplate={handleRequestSpecialTemplate}
+              seedPrompt={seedPrompt}
+              onSeedConsumed={handleSeedConsumed}
             />
           </div>
+          {inspirationOpen && (
+            <InspirationPanel
+              onClose={function() { setInspirationOpen(false); }}
+              onUsePrompt={handleUseInspirationPrompt}
+            />
+          )}
           <Tweaks
             visible={tweaksVisible}
             tweaks={tweaks}
