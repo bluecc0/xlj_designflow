@@ -1004,9 +1004,30 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
   );
 };
 
+const normalizeReferenceUrl = function(rawUrl) {
+  const value = String(rawUrl || '').trim();
+  if (!value) return '';
+  try {
+    const parsed = new URL(value, window.location.origin);
+    const localHosts = ['localhost', '127.0.0.1', '[::1]', '::1'];
+    const currentHost = String(window.location.hostname || '').toLowerCase();
+    const parsedHost = String(parsed.hostname || '').toLowerCase();
+    if (localHosts.includes(parsedHost) && localHosts.includes(currentHost)) {
+      parsed.protocol = window.location.protocol;
+      parsed.host = window.location.host;
+      return parsed.toString();
+    }
+    return parsed.toString();
+  } catch (e) {
+    return value;
+  }
+};
+
+const MAX_REFERENCE_IMAGES = 9;
+
 // ---------- Composer ----------
 
-const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed }) => {
+const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
   const [text, setText] = React.useState('');
   const [lockedCommand, setLockedCommand] = React.useState('');
   const [files, setFiles] = React.useState([]);
@@ -1021,7 +1042,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       return 'apimart';
     }
   });
-  const [refImages, setRefImages] = React.useState([]); // [{ file, previewUrl }, ...] 最多 4 张
+  const [manualRefImages, setManualRefImages] = React.useState([]);
+  const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
   const [selectedWorkflow, setSelectedWorkflow] = React.useState('chat');
   const taRef = React.useRef(null);
@@ -1029,6 +1051,11 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [composerHeight, setComposerHeight] = React.useState(null); // null = 默认自动高度
   const composerRef = React.useRef(null);
   const dragRef = React.useRef({ dragging: false, startY: 0, startH: 0 });
+  const revokePreviewUrl = React.useCallback(function(url) {
+    if (typeof url === 'string' && url.indexOf('blob:') === 0) {
+      URL.revokeObjectURL(url);
+    }
+  }, []);
   const COLLAPSED_COMPOSER_HEIGHT = 176;
   const STATUS_COMPOSER_HEIGHT = 208;
   const MAX_COMPOSER_HEIGHT = 500;
@@ -1074,6 +1101,77 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     clearRefImages();
     setPrototypePanel('');
   }, [resetKey]);
+
+  React.useEffect(() => {
+    if (!canvasReferenceSelection || !Array.isArray(canvasReferenceSelection.images)) return;
+    let alive = true;
+    (async function() {
+      try {
+        if (!canvasReferenceSelection.images.length) {
+          if (!alive) return;
+          setCanvasRefImages(function(prev) {
+            prev.forEach(function(entry) {
+              if (entry && entry.previewUrl) revokePreviewUrl(entry.previewUrl);
+            });
+            return [];
+          });
+          return;
+        }
+        var immediateEntries = canvasReferenceSelection.images.slice(0, MAX_REFERENCE_IMAGES).map(function(item, idx) {
+          const src = normalizeReferenceUrl(item && item.src ? item.src : '');
+          if (!src) return null;
+          return {
+            file: null,
+            name: String(item && item.name ? item.name : ('reference-' + (idx + 1) + '.png')),
+            previewUrl: src,
+            sourceUrl: src,
+            pending: true,
+            origin: 'canvas',
+          };
+        }).filter(Boolean);
+        if (!alive) return;
+        setCanvasRefImages(function(prev) {
+          prev.forEach(function(entry) {
+            if (entry && entry.previewUrl) revokePreviewUrl(entry.previewUrl);
+          });
+          return immediateEntries;
+        });
+        const loaded = await Promise.allSettled(
+          immediateEntries.map(async function(item) {
+            const response = await fetch(item.sourceUrl, { credentials: 'include' });
+            if (!response.ok) throw new Error('load_reference_failed');
+            const blob = await response.blob();
+            const ext = blob.type && blob.type.indexOf('/') > -1 ? blob.type.split('/')[1] : 'png';
+            const safeName = item.name && /\.[a-z0-9]+$/i.test(item.name) ? item.name : ((item.name || 'reference') + '.' + ext);
+            const file = new File([blob], safeName, { type: blob.type || 'image/png' });
+            return Object.assign({}, item, { file: file, pending: false });
+          })
+        );
+        if (!alive) {
+          return;
+        }
+        setCanvasRefImages(function(prev) {
+          return prev.map(function(entry) {
+            if (!entry || !entry.sourceUrl) return entry;
+            const match = loaded.find(function(result) {
+              return result && result.status === 'fulfilled' && result.value && result.value.sourceUrl === entry.sourceUrl;
+            });
+            if (match && match.status === 'fulfilled') return match.value;
+            return Object.assign({}, entry, { pending: false });
+          });
+        });
+      } catch (err) {
+        console.error('Load canvas reference images failed:', err);
+      }
+    })();
+    return function() {
+      alive = false;
+    };
+  }, [canvasReferenceSelection, revokePreviewUrl]);
+
+  const refImages = React.useMemo(function() {
+    return canvasRefImages.concat(manualRefImages).slice(0, MAX_REFERENCE_IMAGES);
+  }, [canvasRefImages, manualRefImages]);
 
   // —— Composer 拖拽调整高度 ——
   const handleDragStart = React.useCallback((e) => {
@@ -1452,14 +1550,36 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   };
 
   const removeRefImage = (idx) => {
-    setRefImages(prev => {
-      URL.revokeObjectURL(prev[idx]?.previewUrl);
-      return prev.filter((_, i) => i !== idx);
+    const target = refImages[idx];
+    if (!target) return;
+    if (target.origin === 'canvas') {
+      setCanvasRefImages(function(prev) {
+        const hitIndex = prev.findIndex(function(item) {
+          return item && target && item.sourceUrl === target.sourceUrl && item.previewUrl === target.previewUrl;
+        });
+        if (hitIndex >= 0) revokePreviewUrl(prev[hitIndex]?.previewUrl);
+        return prev.filter(function(_, i) { return i !== hitIndex; });
+      });
+      return;
+    }
+    setManualRefImages(function(prev) {
+      const hitIndex = prev.findIndex(function(item) {
+        return item && target && item.previewUrl === target.previewUrl;
+      });
+      if (hitIndex >= 0) revokePreviewUrl(prev[hitIndex]?.previewUrl);
+      return prev.filter(function(_, i) { return i !== hitIndex; });
     });
   };
 
   const clearRefImages = () => {
-    setRefImages(prev => { prev.forEach(r => URL.revokeObjectURL(r.previewUrl)); return []; });
+    setCanvasRefImages(function(prev) {
+      prev.forEach(function(r) { revokePreviewUrl(r.previewUrl); });
+      return [];
+    });
+    setManualRefImages(function(prev) {
+      prev.forEach(function(r) { revokePreviewUrl(r.previewUrl); });
+      return [];
+    });
   };
 
   // ---------- 拖拽上传图片 ----------
@@ -1470,14 +1590,14 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const addImageFiles = React.useCallback((files) => {
     const images = Array.from(files || []).filter(f => f && f.type && f.type.startsWith('image/'));
     if (!images.length) return 0;
-    setRefImages(prev => {
-      const remaining = 4 - prev.length;
+    setManualRefImages(prev => {
+      const remaining = Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - prev.length);
       if (remaining <= 0) return prev;
-      const toAdd = images.slice(0, remaining).map(file => ({ file, previewUrl: URL.createObjectURL(file) }));
+      const toAdd = images.slice(0, remaining).map(file => ({ file, name: file.name, previewUrl: URL.createObjectURL(file), sourceUrl: '', pending: false, origin: 'manual' }));
       return [...prev, ...toAdd];
     });
-    return Math.min(images.length, 4 - refImages.length);
-  }, [refImages.length]);
+    return Math.min(images.length, Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - manualRefImages.length));
+  }, [canvasRefImages.length, manualRefImages.length]);
 
   const handleDragEnter = (e) => {
     if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
@@ -1586,7 +1706,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     agentEnabled ? 'Agent' : activeTaskLabel,
     agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? providerLabel : ''),
     agentEnabled ? '' : modeParamLabel,
-    refImages.length > 0 ? ('参考图 ' + refImages.length + '/4') : '',
+    refImages.length > 0 ? ('参考图 ' + refImages.length + '/' + MAX_REFERENCE_IMAGES) : '',
     files.length > 0 ? ('文件 ' + files.length) : '',
   ].filter(Boolean);
   const composerPlaceholder = agentEnabled
@@ -1945,7 +2065,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             松手添加图片
           </div>
           <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>
-            最多 4 张参考图（当前 {refImages.length}/4）
+            最多 {MAX_REFERENCE_IMAGES} 张参考图（当前 {refImages.length}/{MAX_REFERENCE_IMAGES}）
           </div>
         </div>
       )}
@@ -2109,7 +2229,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
                 >×</button>
               </div>
             ))}
-            <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{refImages.length}/4</span>
+            <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{refImages.length}/{MAX_REFERENCE_IMAGES}</span>
           </div>
         )}
 
@@ -2226,8 +2346,7 @@ const mapAgentProjectMessages = function(project, images) {
   }));
 };
 
-console.log('[Main] Chat component definition');
-const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed }) => {
+const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
   const [messages, setMessages] = React.useState([]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
   const [agentMessages, setAgentMessages] = React.useState([]);
@@ -2533,6 +2652,26 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
     return files;
   }, []);
+
+  const materializeReferenceImages = React.useCallback(async function(refImages) {
+    var refs = Array.isArray(refImages) ? refImages : [];
+    return Promise.all(refs.map(async function(item, idx) {
+      if (item && item.file) return item;
+      var src = normalizeReferenceUrl(item && item.sourceUrl ? item.sourceUrl : item && item.previewUrl ? item.previewUrl : '');
+      if (!src) throw new Error('参考图缺少可读取地址');
+      var response = await fetch(src, { credentials: 'include' });
+      if (!response.ok) throw new Error('参考图读取失败: HTTP ' + response.status);
+      var blob = await response.blob();
+      var ext = blob.type && blob.type.indexOf('/') > -1 ? blob.type.split('/')[1] : 'png';
+      var name = String(item && item.name ? item.name : ('reference-' + (idx + 1) + '.' + ext));
+      if (!/\.[a-z0-9]+$/i.test(name)) name = name + '.' + ext;
+      return Object.assign({}, item || {}, {
+        file: new File([blob], name, { type: blob.type || 'image/png' }),
+        name: name,
+        pending: false,
+      });
+    }));
+  }, [normalizeReferenceUrl]);
 
   const enhancePromptWithProductRefs = React.useCallback(function(prompt, resolvedRefs, hasSceneReference) {
     var cleanPrompt = String(prompt || '');
@@ -2843,20 +2982,21 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
     if (!text.trim() || isLoading) return;
     setLastSubmittedMessage(text);
+    refImages = await materializeReferenceImages(refImages);
 
     // 计算用户消息中的参考图预览
     var userRefPreviews = [];
     var userRefMeta = [];
     if (refImages.length > 0) {
       try {
-        userRefPreviews = await Promise.all(refImages.map(function(item) {
+      userRefPreviews = await Promise.all(refImages.map(function(item) {
           return fileToThumbDataUrl(item.file);
         }));
       } catch (e) {
         userRefPreviews = [];
       }
       userRefMeta = refImages.map(function(item) {
-        return { name: item.name || '' };
+        return { name: item.name || (item.file && item.file.name) || '' };
       });
     }
 
@@ -3342,7 +3482,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       ));
     }
     setIsLoading(false);
-  }, [agentEnabled, currentAiChatId, ensureAgentProject, enhancePromptWithProductRefs, getLastAiImageOptions, isLoading, loadAiChatHistory, loadResolvedRefFiles, onComposeComplete, parseProductRefs, runAiImageGeneration, template]);
+  }, [agentEnabled, currentAiChatId, ensureAgentProject, enhancePromptWithProductRefs, getLastAiImageOptions, isLoading, loadAiChatHistory, loadResolvedRefFiles, materializeReferenceImages, onComposeComplete, parseProductRefs, runAiImageGeneration, template]);
 
   // ── 快捷回复：点击选项按钮触发 ──────────────────────────────────────────────
   const handleQuickReply = React.useCallback(function(value) {
@@ -3711,6 +3851,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         onRequestSpecialTemplate={onRequestSpecialTemplate}
         seedPrompt={seedPrompt}
         onSeedConsumed={onSeedConsumed}
+        canvasReferenceSelection={canvasReferenceSelection}
       />
     </div>
   );

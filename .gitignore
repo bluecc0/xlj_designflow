@@ -31,6 +31,9 @@ Thumbs.db
 .gstack/
 nul
 
+# Coverage
+*.profraw
+
 # SQLite
 *.db
 ~$*

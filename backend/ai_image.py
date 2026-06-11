@@ -690,7 +690,7 @@ async def generate_image_zenmux_async(
         form_data = {key: str(value) for key, value in payload.items()}
         files = [
             ("image[]", (filename or f"ref{i}.png", image_bytes, _mime_from_filename(filename)))
-            for i, (image_bytes, filename) in enumerate(refs[:4])
+            for i, (image_bytes, filename) in enumerate(refs[:9])
         ]
         if on_progress:
             on_progress(10, "processing")
@@ -848,7 +848,7 @@ async def generate_image_with_reference(
     }
     async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
         reference_urls: list[str] = []
-        for index, (image_bytes, filename) in enumerate(images[:4]):
+        for index, (image_bytes, filename) in enumerate(images[:9]):
             safe_name = filename or f"reference_{index}.png"
             reference_urls.append(
                 await _upload_reference_image(client, base_url, headers, image_bytes, safe_name)
@@ -948,7 +948,7 @@ async def generate_image_with_reference_async(
     }
     async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
         reference_urls: list[str] = []
-        for index, (image_bytes, filename) in enumerate(images[:4]):
+        for index, (image_bytes, filename) in enumerate(images[:9]):
             safe_name = filename or f"reference_{index}.png"
             reference_urls.append(
                 await _upload_reference_image(client, base_url, headers, image_bytes, safe_name)

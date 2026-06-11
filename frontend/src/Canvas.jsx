@@ -1,6 +1,6 @@
 ﻿// Main canvas — now simplified to just show the selected template preview.
 
-const Canvas = ({ template, resultTemplate, editorCommand }) => {
+const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages }) => {
   const t = template;
   const hasResult = resultTemplate != null;
   const iframeRef = React.useRef(null);
@@ -35,6 +35,13 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
         setEditorInsertState({ status: 'done', message: '已放入画布' });
       } else if (data.type === 'designflow:editor-error') {
         setEditorInsertState({ status: 'failed', message: data.message || '放入画布失败' });
+      } else if (data.type === 'designflow:use-as-reference') {
+        const images = Array.isArray(data.images) ? data.images.filter(function(item) {
+          return item && typeof item.src === 'string' && item.src.trim();
+        }) : [];
+        if (onUseReferenceImages) {
+          onUseReferenceImages(images);
+        }
       }
     };
     window.addEventListener('message', handleMessage);
@@ -51,7 +58,7 @@ const Canvas = ({ template, resultTemplate, editorCommand }) => {
     setTimeout(ping, 200);
 
     return () => window.removeEventListener('message', handleMessage);
-  }, [markEditorReady, postToEditor]);
+  }, [markEditorReady, onUseReferenceImages, postToEditor]);
 
   React.useEffect(() => {
     editorReadyRef.current = false;

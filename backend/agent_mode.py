@@ -788,7 +788,7 @@ async def analyze_reference_images(
 {user_message}
 """
     }]
-    for image_bytes, filename in reference_images[:4]:
+    for image_bytes, filename in reference_images[:9]:
         mime = mimetypes.guess_type(filename or "")[0] or "image/png"
         encoded = base64.b64encode(image_bytes).decode("ascii")
         content.append({

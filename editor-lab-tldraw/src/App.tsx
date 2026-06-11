@@ -189,6 +189,38 @@ function TldrawPropertiesPanel() {
     })
   }, [editor])
 
+  const getSelectedImageAssets = React.useCallback(() => {
+    const ids = editor.getSelectedShapeIds()
+    const imageIds = ids.filter((id) => editor.getShape(id)?.type === 'image')
+    const seen = new Set<string>()
+    return imageIds
+      .map((id) => {
+        const shape = editor.getShape(id)
+        if (!shape) return null
+        const asset = editor.getAsset((shape.props as any).assetId)
+        if (!asset) return null
+        const src = String((asset.props as any).src || '').trim()
+        if (!src || seen.has(src)) return null
+        seen.add(src)
+        return {
+          src,
+          name: String((asset.props as any).name || `reference-${seen.size}.png`),
+        }
+      })
+      .filter(Boolean) as Array<{ src: string; name: string }>
+  }, [editor])
+
+  React.useEffect(() => {
+    const images = getSelectedImageAssets()
+    window.parent.postMessage(
+      {
+        type: 'designflow:use-as-reference',
+        images,
+      },
+      '*'
+    )
+  }, [getSelectedImageAssets, selectedIds])
+
   const handleReplaceImage = React.useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0]

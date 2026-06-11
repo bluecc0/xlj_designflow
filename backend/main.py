@@ -2425,7 +2425,7 @@ async def ai_image_retry(request: Request):
 
     # 3. 合并参考图
     all_refs = context_ref_bytes + user_refs
-    all_refs = all_refs[:4]
+    all_refs = all_refs[:9]
     has_reference = bool(all_refs)
 
     new_job_id = uuid.uuid4().hex
@@ -2622,7 +2622,7 @@ async def ai_image_endpoint(
     ref_previews: str = Form(""),
 ):
     """
-    AI 生图接口（异步）。支持文生图（无 image）和图生图（最多 4 张参考图）。
+    AI 生图接口（异步）。支持文生图（无 image）和图生图（最多 9 张参考图）。
     自动注入对话历史上下文：用 LLM 改写 prompt + 上次结果图作为参考。
     提交任务后立即返回 {job_id, chat_session_id, status: "processing"}，
     前端轮询 GET /ai-image/{job_id} 获取进度与结果。
@@ -2658,7 +2658,7 @@ async def ai_image_endpoint(
         session = create_ai_chat_session(user_id=user["id"], title=_build_ai_chat_title(original_prompt), created_at=time.time())
         session_id = session["id"]
 
-    images = image[:4] if image else []
+    images = image[:9] if image else []
     created_at = time.time()
     append_ai_chat_message(
         session_id=session_id,
@@ -2725,7 +2725,7 @@ async def ai_image_endpoint(
             except Exception:
                 logger.warning("Failed to save user refs for job %s", job_id)
         all_refs: list[tuple[bytes, str]] = context_ref_bytes + user_refs
-        all_refs = all_refs[:4]  # 总共最多 4 张
+        all_refs = all_refs[:9]  # 总共最多 9 张
 
         has_reference = bool(images) or bool(context_ref_bytes)
         asyncio.create_task(

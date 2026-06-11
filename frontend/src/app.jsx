@@ -79,12 +79,20 @@ const App = () => {
   const [authError, setAuthError] = React.useState('');
   const [inspirationOpen, setInspirationOpen] = React.useState(false);
   const [seedPrompt, setSeedPrompt] = React.useState('');
+  const [canvasReferenceSelection, setCanvasReferenceSelection] = React.useState(null);
 
   const handleUseInspirationPrompt = React.useCallback(function(post) {
     setInspirationOpen(false);
     setSeedPrompt(post.prompt || '');
   }, []);
   const handleSeedConsumed = React.useCallback(function() { setSeedPrompt(''); }, []);
+  const handleUseCanvasReferences = React.useCallback(function(images) {
+    if (!Array.isArray(images)) return;
+    setCanvasReferenceSelection({
+      key: Date.now() + Math.random(),
+      images: images.slice(0, 9),
+    });
+  }, []);
 
   const getViewFromHash = () => (window.location.hash === '#/admin' ? 'admin' : 'workbench');
   const [currentView, setCurrentView] = React.useState(getViewFromHash);
@@ -282,7 +290,12 @@ const App = () => {
               activeId={activeTemplate ? (activeTemplate.file_id || '') + ':' + (activeTemplate.group_name || activeTemplate.id) : null}
               onSelect={selectTemplate}
             />
-            <Canvas template={activeTemplate} resultTemplate={resultTemplate} editorCommand={editorCommand}/>
+            <Canvas
+              template={activeTemplate}
+              resultTemplate={resultTemplate}
+              editorCommand={editorCommand}
+              onUseReferenceImages={handleUseCanvasReferences}
+            />
             <Chat
               key={'chat:' + currentUser.id}
               state={tweaks.chatState}
@@ -293,6 +306,7 @@ const App = () => {
               onRequestSpecialTemplate={handleRequestSpecialTemplate}
               seedPrompt={seedPrompt}
               onSeedConsumed={handleSeedConsumed}
+              canvasReferenceSelection={canvasReferenceSelection}
             />
           </div>
           {inspirationOpen && (

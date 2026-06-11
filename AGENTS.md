@@ -15,9 +15,21 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 # Install backend dependencies
 pip install -r backend/requirements.txt
 
+# Rebuild frontend after any src/*.jsx change
+cd frontend && python build.py
+
+# Rebuild canvas editor after any editor-lab-tldraw/src/*.tsx change
+cd editor-lab-tldraw && npm run build
+
 # Run a quick API health check
 curl http://localhost:8000/health
 ```
+
+## Build Discipline
+
+- Any change under `frontend/src/*.jsx` does **not** go live automatically. You must run `cd frontend && python build.py`, because the backend serves `frontend/index.html`, not the source files directly.
+- Any change under `editor-lab-tldraw/src/*.tsx` does **not** go live automatically. You must run `cd editor-lab-tldraw && npm run build`, because `/editor-beta/` serves the built `dist/` bundle.
+- If you changed both sides (main UI + canvas iframe), rebuild both before testing, otherwise the page may show a half-old, half-new state and produce false debugging results.
 
 The backend serves the frontend as static files at `/ui`. There is no Node.js build step — `frontend/index.html` contains inline `<script type="text/babel">` blocks that are compiled in the browser. `frontend/build.py` is known broken (see IDEAS.md #10).
 
