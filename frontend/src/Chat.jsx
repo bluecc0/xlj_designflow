@@ -586,9 +586,30 @@ const ChatGenerating = () => (
   </div>
 );
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user, historyControl, greetingKey, onQuickReply, agentEnabled, onRetryWithZenmux, onPublishInspiration, onUnpublishInspiration }) => {
+const ChatSessionBar = ({ messages, historyControl }) => {
   const userMsgs = messages.filter(m => m.who === 'user').length;
   const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
+
+  return (
+    <div style={{
+      flexShrink: 0,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '14px 16px 10px',
+      background: 'var(--panel)',
+      position: 'relative',
+      zIndex: 1,
+    }}>
+      <span className="mono" style={{ color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 10 }}>对话</span>
+      <div style={{ flex: 1 }}/>
+      <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10 }}>{turnCount}</span>
+      {historyControl}
+    </div>
+  );
+};
+
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greetingKey, onQuickReply, agentEnabled, onRetryWithZenmux, onPublishInspiration, onUnpublishInspiration }) => {
   const bottomRef = React.useRef(null);
   const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
 
@@ -600,17 +621,6 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, histo
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {/* Session header */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '4px 0', fontSize: 10,
-      }}>
-        <span className="mono" style={{ color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>对话</span>
-        <div style={{ flex: 1, height: 1, background: 'var(--line-2)' }}/>
-        <span className="mono" style={{ color: 'var(--ink-3)' }}>{turnCount}</span>
-        {historyControl}
-      </div>
-
       {messages.length === 0 ? (
         // Agent 模式用专属欢迎页，否则随机轮播
         agentEnabled ? <AgentWelcome /> : (
@@ -3833,10 +3843,12 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         </div>
       </div>
 
+      <ChatSessionBar messages={messages} historyControl={historyControl}/>
+
       {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} historyControl={historyControl} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
 
       <Composer
         onSend={handleSend}
