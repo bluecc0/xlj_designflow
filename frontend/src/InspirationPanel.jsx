@@ -264,7 +264,7 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
           post={detailPost}
           onClose={closeDetail}
           onUsePrompt={onUsePrompt}
-          onUnpublish={detailPost.is_mine ? handleUnpublish : null}
+          onUnpublish={detailPost.can_manage ? handleUnpublish : null}
         />
       )}
     </div>

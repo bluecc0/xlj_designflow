@@ -2491,7 +2491,7 @@ async def publish_inspiration(request: Request):
             update_inspiration_thumb_url(existing["id"], thumb_url)
             existing = dict(existing)
             existing["thumb_url"] = thumb_url
-        return {"post": _inspiration_to_api(existing, current_user_id=user["id"]), "already_published": True}
+        return {"post": _inspiration_to_api(existing, current_user=user), "already_published": True}
 
     post_id = uuid.uuid4().hex
     created_at = time.time()
@@ -2517,7 +2517,7 @@ async def publish_inspiration(request: Request):
         # 重新查询返回已存在的那条
         existing = get_inspiration_post_by_job(job_id)
         if existing:
-            return {"post": _inspiration_to_api(existing, current_user_id=user["id"]), "already_published": True}
+            return {"post": _inspiration_to_api(existing, current_user=user), "already_published": True}
     log_operation(
         user_id=user["id"], username=user["username"],
         action="inspiration_publish",
@@ -2525,7 +2525,7 @@ async def publish_inspiration(request: Request):
         payload=json.dumps({"post_id": post_id, "job_id": job_id, "model": job.get("model")}, ensure_ascii=False),
     )
     post = get_inspiration_post(post_id)
-    return {"post": _inspiration_to_api(post, current_user_id=user["id"]), "already_published": False}
+    return {"post": _inspiration_to_api(post, current_user=user), "already_published": False}
 
 
 @app.delete("/inspiration/{post_id}")
@@ -2553,7 +2553,7 @@ async def list_inspiration(request: Request, limit: int = 20, offset: int = 0, m
     user = _current_user(request)
     mine_user_id = user["id"] if mine else None
     rows = list_inspiration_posts(limit, offset, mine_user_id)
-    return {"posts": [_inspiration_to_api(r, current_user_id=user["id"]) for r in rows]}
+    return {"posts": [_inspiration_to_api(r, current_user=user) for r in rows]}
 
 
 @app.get("/inspiration/{post_id}")
@@ -2562,11 +2562,14 @@ async def get_inspiration_detail(request: Request, post_id: str):
     post = get_inspiration_post(post_id)
     if not post:
         raise HTTPException(404, "灵感不存在")
-    return {"post": _inspiration_to_api(post, current_user_id=user["id"])}
+    return {"post": _inspiration_to_api(post, current_user=user)}
 
 
-def _inspiration_to_api(post: dict, current_user_id: str | None = None) -> dict:
+def _inspiration_to_api(post: dict, current_user: dict | None = None) -> dict:
     """把 DB 记录转 API 返回结构。展示统一用 thumb_url。"""
+    current_user_id = current_user.get("id") if current_user else None
+    is_mine = bool(current_user_id and post.get("user_id") == current_user_id)
+    can_manage = bool(is_mine or _is_admin(current_user))
     return {
         "id": post["id"],
         "job_id": post["job_id"],
@@ -2576,7 +2579,8 @@ def _inspiration_to_api(post: dict, current_user_id: str | None = None) -> dict:
         "size": post["size"],
         "resolution": post.get("resolution") or "",
         "has_ref": bool(post.get("has_ref")),
-        "is_mine": bool(current_user_id and post.get("user_id") == current_user_id),
+        "is_mine": is_mine,
+        "can_manage": can_manage,
         "width": int(post.get("image_width") or 0),
         "height": int(post.get("image_height") or 0),
         "created_at": post["created_at"],
