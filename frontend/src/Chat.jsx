@@ -1020,9 +1020,8 @@ const normalizeReferenceUrl = function(rawUrl) {
   try {
     const parsed = new URL(value, window.location.origin);
     const localHosts = ['localhost', '127.0.0.1', '[::1]', '::1'];
-    const currentHost = String(window.location.hostname || '').toLowerCase();
     const parsedHost = String(parsed.hostname || '').toLowerCase();
-    if (localHosts.includes(parsedHost) && localHosts.includes(currentHost)) {
+    if (localHosts.includes(parsedHost)) {
       parsed.protocol = window.location.protocol;
       parsed.host = window.location.host;
       return parsed.toString();
