@@ -212,6 +212,19 @@ def _zenmux_model_name(model: str) -> str:
     return model_name
 
 
+def _is_zenmux_vertex_image_model(model_name: str) -> bool:
+    clean = str(model_name or "").strip().lower()
+    return clean.startswith("google/gemini-3-pro-image") or clean.startswith("gemini-3-pro-image")
+
+
+def _split_provider_model(model_name: str, default_provider: str = "google") -> tuple[str, str]:
+    clean = str(model_name or "").strip()
+    if "/" in clean:
+        provider, name = clean.split("/", 1)
+        return provider or default_provider, name or clean
+    return default_provider, clean
+
+
 def _zenmux_headers() -> dict[str, str]:
     if not settings.zenmux_api_key:
         raise ValueError("ZENMUX_API_KEY 未配置，请在 .env 中填写")
@@ -251,6 +264,16 @@ def _normalize_zenmux_size(size: str, resolution: str = "") -> str:
         clean_resolution = clean_resolution or mapped_resolution
     ratio_map = _ZENMUX_SIZE_MAP.get(clean or "1:1") or _ZENMUX_SIZE_MAP["1:1"]
     return ratio_map.get(clean_resolution) or ratio_map.get("1K") or "1024x1024"
+
+
+def _normalize_zenmux_vertex_image_config(size: str, resolution: str = "") -> dict[str, Any]:
+    ratio, clean_resolution = _normalize_size(size, resolution)
+    image_config: dict[str, Any] = {
+        "imageSize": clean_resolution if clean_resolution in {"1K", "2K", "4K"} else "1K",
+    }
+    if ratio and ratio != "auto":
+        image_config["aspectRatio"] = ratio
+    return image_config
 
 
 def _extract_error_text(resp: httpx.Response) -> str:
@@ -389,6 +412,42 @@ def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "zenmux")
     filename = f"{prefix}_{uuid.uuid4().hex}{_extension_from_mime(mime_type)}"
     (out_dir / filename).write_bytes(content)
     return f"/ai-images/{out_dir.name}/{filename}"
+
+
+def _extract_vertex_image_data_url(payload: Any) -> str | None:
+    if isinstance(payload, dict):
+        inline_data = payload.get("inlineData") or payload.get("inline_data")
+        if isinstance(inline_data, dict):
+            raw_b64 = inline_data.get("data")
+            if isinstance(raw_b64, str) and raw_b64.strip():
+                mime_type = str(inline_data.get("mimeType") or inline_data.get("mime_type") or "image/png").strip()
+                return f"data:{mime_type};base64,{raw_b64.strip()}"
+        for key in ("candidates", "content", "parts", "data", "result", "output"):
+            data_url = _extract_vertex_image_data_url(payload.get(key))
+            if data_url:
+                return data_url
+    if isinstance(payload, list):
+        for item in payload:
+            data_url = _extract_vertex_image_data_url(item)
+            if data_url:
+                return data_url
+    return None
+
+
+def _extract_vertex_usage(payload: Any) -> dict[str, int] | None:
+    if not isinstance(payload, dict):
+        return None
+    usage = payload.get("usageMetadata")
+    if not isinstance(usage, dict):
+        return None
+    input_tokens = int(usage.get("promptTokenCount") or 0)
+    output_tokens = int(usage.get("candidatesTokenCount") or 0)
+    total_tokens = int(usage.get("totalTokenCount") or (input_tokens + output_tokens))
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
 
 
 def _extract_task_id(payload: Any) -> str | None:
@@ -662,6 +721,80 @@ async def _download_final_image(
     return f"/ai-images/{out_dir.name}/{filename}"
 
 
+async def _generate_image_zenmux_vertex_async(
+    *,
+    model_name: str,
+    prompt: str,
+    refs: list[tuple[bytes, str]],
+    size: str,
+    resolution: str,
+    user_id: str,
+    headers: dict[str, str],
+    on_progress: Callable[[int, str], Any] | None = None,
+) -> dict:
+    provider_name, short_model_name = _split_provider_model(model_name, default_provider="google")
+    base_url = settings.zenmux_base_url.rstrip("/")
+    vertex_base_url = re.sub(r"/api/v1/?$", "/api/vertex-ai/v1", base_url)
+    if vertex_base_url == base_url:
+        vertex_base_url = base_url.rstrip("/") + "/api/vertex-ai/v1"
+    endpoint = f"{vertex_base_url}/publishers/{provider_name}/models/{short_model_name}:generateContent"
+
+    parts: list[dict[str, Any]] = []
+    for image_bytes, filename in refs[:9]:
+        parts.append({
+            "inlineData": {
+                "mimeType": _mime_from_filename(filename),
+                "data": base64.b64encode(image_bytes).decode("ascii"),
+            }
+        })
+    parts.append({"text": prompt})
+
+    payload: dict[str, Any] = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": parts,
+            }
+        ],
+        "generationConfig": {
+            "responseModalities": ["TEXT", "IMAGE"],
+            "imageConfig": _normalize_zenmux_vertex_image_config(size, resolution),
+        },
+    }
+
+    request_headers = {
+        "Authorization": headers["Authorization"],
+        "Content-Type": "application/json",
+    }
+    if on_progress:
+        on_progress(10, "processing")
+    async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
+        resp = await client.post(endpoint, json=payload, headers=request_headers)
+        if not resp.is_success:
+            raise RuntimeError(f"ZenMux 生图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
+        data = resp.json()
+        if on_progress:
+            on_progress(85, "processing")
+        image_data_url = _extract_vertex_image_data_url(data)
+        if not image_data_url:
+            raise RuntimeError(f"ZenMux Vertex 响应中没有图片: {str(data)[:240]}")
+        local_url = _save_data_url_image(image_data_url, user_id=user_id, prefix="zenmux")
+        if on_progress:
+            on_progress(100, "completed")
+
+    return {
+        "url": local_url,
+        "model": model_name,
+        "prompt": prompt,
+        "size": size,
+        "resolution": resolution,
+        "provider": PROVIDER_ZENMUX,
+        "reference": bool(refs),
+        "task_id": f"zenmux-vertex:{uuid.uuid4().hex}",
+        "usage": _extract_vertex_usage(data),
+    }
+
+
 async def generate_image_zenmux_async(
     model: str,
     prompt: str,
@@ -673,9 +806,20 @@ async def generate_image_zenmux_async(
 ) -> dict:
     """ZenMux 生图：无参考图时使用 SSE 流式获取进度 + token 用量；有参考图时使用非流式"""
     model_name = _zenmux_model_name(model)
-    base_url = settings.zenmux_base_url.rstrip("/")
     headers = _zenmux_headers()
     refs = images or []
+    if _is_zenmux_vertex_image_model(model_name):
+        return await _generate_image_zenmux_vertex_async(
+            model_name=model_name,
+            prompt=prompt,
+            refs=refs,
+            size=size,
+            resolution=resolution,
+            user_id=user_id,
+            headers=headers,
+            on_progress=on_progress,
+        )
+    base_url = settings.zenmux_base_url.rstrip("/")
     zenmux_size = _normalize_zenmux_size(size, resolution)
     payload: dict[str, Any] = {
         "model": model_name,
