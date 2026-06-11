@@ -33,7 +33,7 @@ from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from starlette.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .ai_image import (
@@ -260,6 +260,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/redoc",
     "/openapi.json",
 )
+_AUTH_EXEMPT_EXACT_PATHS = {"/"}
 
 
 class ProxyDownloadInspectRequest(pydantic.BaseModel):
@@ -380,13 +381,25 @@ def _assert_job_owner(job_user_id: Optional[str], user: dict) -> None:
 async def attach_user_context(request: Request, call_next):
     request.state.user = _get_session_user(request)
     path = request.url.path or "/"
-    if not any(path.startswith(prefix) for prefix in _AUTH_EXEMPT_PREFIXES):
+    is_exempt = path in _AUTH_EXEMPT_EXACT_PATHS or any(path.startswith(prefix) for prefix in _AUTH_EXEMPT_PREFIXES)
+    if not is_exempt:
         if request.state.user is None:
             return JSONResponse({"detail": "请先输入名字进入系统"}, status_code=401)
     return await call_next(request)
 
 
 # ─── 路由 ─────────────────────────────────────────────────────────────────────
+
+
+@app.get("/", include_in_schema=False)
+async def root_ui():
+    index_file = _frontend_dist / "index.html"
+    if index_file.exists():
+        html = index_file.read_text(encoding="utf-8")
+        if '<base href="/ui/">' not in html:
+            html = html.replace("<head>", '<head><base href="/ui/">', 1)
+        return HTMLResponse(content=html)
+    return {"detail": "Not found"}
 
 
 @app.get("/health")
