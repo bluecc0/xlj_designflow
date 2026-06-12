@@ -1043,14 +1043,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [imageType, setImageType] = React.useState('png');
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
-  const [aiProvider, setAiProvider] = React.useState(() => {
-    try {
-      const saved = localStorage.getItem('designflow_ai_provider') || 'apimart';
-      return ['apimart', 'zenmux'].includes(saved) ? saved : 'apimart';
-    } catch (e) {
-      return 'apimart';
-    }
-  });
+  const [aiProvider, setAiProvider] = React.useState('apimart');
   const [manualRefImages, setManualRefImages] = React.useState([]);
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
@@ -1094,12 +1087,6 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   }, []);
   const displayValue = text;
   const lockedPrefixLength = 0;
-
-  React.useEffect(() => {
-    try {
-      localStorage.setItem('designflow_ai_provider', aiProvider);
-    } catch (e) {}
-  }, [aiProvider]);
 
   React.useEffect(() => {
     if (!resetKey) return;
@@ -3340,7 +3327,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const freshPrompt = rest || '重新生成';
       const lastOpts = getLastAiImageOptions();
       const model = aiCmd ? aiCmd.model : (lastOpts?.model || 'gpt-image-2');
-      const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, provider: lastOpts?.provider || aiOptions.provider };
+      const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, provider: aiOptions.provider };
       setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? rawPrompt : text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       return;
     }
