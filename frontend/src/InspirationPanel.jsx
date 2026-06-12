@@ -4,9 +4,27 @@
 const COLUMN_COUNT_DESKTOP = 4;
 const COLUMN_GAP = 12;
 const COLUMN_MIN_WIDTH = 200;
+const PANEL_INSPIRATION_CATEGORIES = [
+  { id: 'share_card', label: '分享卡片' },
+  { id: 'moments', label: '朋友圈' },
+  { id: 'poster', label: '海报' },
+  { id: 'long_image', label: '长图文' },
+  { id: 'detail_page', label: '详情页' },
+  { id: 'main_image', label: '主图' },
+  { id: 'scene_compose', label: '场景合成' },
+  { id: 'ai_model', label: 'AI模特' },
+  { id: 'ai_tryon', label: 'AI换装' },
+  { id: 'ai_wearable', label: 'AI穿戴' },
+  { id: 'ai_pose', label: 'AI裂变姿势' },
+];
+const PANEL_INSPIRATION_TABS = [
+  { id: 'all', label: '全部' },
+  { id: 'mine', label: '我发布的' },
+  { id: 'favorite', label: '我收藏的' },
+].concat(PANEL_INSPIRATION_CATEGORIES);
 
 const InspirationPanel = ({ onClose, onUsePrompt }) => {
-  const [tab, setTab] = React.useState('all'); // 'all' | 'mine'
+  const [tab, setTab] = React.useState('all');
   const [search, setSearch] = React.useState('');
   const [posts, setPosts] = React.useState([]);
   const [loading, setLoading] = React.useState(false);
@@ -55,7 +73,13 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
     const myLoadId = ++loadIdRef.current;
     setLoading(true);
     setError(null);
-    window.API.listInspiration(50, 0, tab === 'mine')
+    var options = {
+      mine: tab === 'mine',
+      favorite: tab === 'favorite',
+      category: PANEL_INSPIRATION_CATEGORIES.some(function(c) { return c.id === tab; }) ? tab : '',
+      search: search.trim(),
+    };
+    window.API.listInspiration(80, 0, options)
       .then(function(rows) {
         if (myLoadId !== loadIdRef.current) return;
         setPosts(rows || []);
@@ -68,7 +92,7 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
       .finally(function() {
         if (myLoadId === loadIdRef.current) setLoading(false);
       });
-  }, [tab]);
+  }, [tab, search]);
 
   React.useEffect(function() { loadPosts(); }, [loadPosts]);
 
@@ -84,7 +108,10 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
     if (!search.trim()) return posts;
     const q = search.trim().toLowerCase();
     return posts.filter(function(p) {
-      return (p.prompt || '').toLowerCase().includes(q);
+      return (p.prompt || '').toLowerCase().includes(q)
+        || (p.vlm_prompt || '').toLowerCase().includes(q)
+        || (p.vlm_description || '').toLowerCase().includes(q)
+        || (Array.isArray(p.tags) && p.tags.join(' ').toLowerCase().includes(q));
     });
   }, [posts, search]);
 
@@ -127,6 +154,27 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
       });
   }, [detailPost, closeDetail]);
 
+  const toggleFavorite = React.useCallback(function(post) {
+    if (!post || !post.id) return;
+    const next = !post.favorited;
+    const apiCall = next ? window.API.favoriteInspiration : window.API.unfavoriteInspiration;
+    setPosts(function(prev) {
+      return prev.map(function(p) { return p.id === post.id ? Object.assign({}, p, { favorited: next }) : p; });
+    });
+    if (detailPost && detailPost.id === post.id) {
+      setDetailPost(Object.assign({}, detailPost, { favorited: next }));
+    }
+    apiCall(post.id).catch(function(e) {
+      setPosts(function(prev) {
+        return prev.map(function(p) { return p.id === post.id ? Object.assign({}, p, { favorited: !next }) : p; });
+      });
+      if (detailPost && detailPost.id === post.id) {
+        setDetailPost(Object.assign({}, detailPost, { favorited: !next }));
+      }
+      window.alert((next ? '收藏' : '取消收藏') + '失败：' + (e.message || '未知错误'));
+    });
+  }, [detailPost]);
+
   // 点击图片 → 加载完整详情
   const openDetail = React.useCallback(function(post) {
     window.API.getInspiration(post.id)
@@ -154,26 +202,27 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
         background: 'var(--panel)',
         borderBottom: '1px solid var(--line)',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500 }}>
-          <I.sparkles size={13} style={{ color: 'var(--accent)' }}/>
-          灵感
-        </div>
-        <div style={{ display: 'flex', gap: 2, marginLeft: 8 }}>
-          {[
-            { id: 'all', label: '全部' },
-            { id: 'mine', label: '我发布的' },
-          ].map(function(t) {
+        <div style={{
+          display: 'flex', gap: 18,
+          overflowX: 'auto', maxWidth: 'min(680px, 54vw)',
+          alignSelf: 'stretch', alignItems: 'center',
+        }} className="inspiration-tab-scroll">
+          {PANEL_INSPIRATION_TABS.map(function(t) {
             const active = tab === t.id;
             return React.createElement('button', {
               key: t.id,
               onClick: function() { setTab(t.id); },
               style: {
-                height: 28, padding: '0 12px',
-                borderRadius: 6, border: 'none',
-                background: active ? 'var(--panel-2)' : 'transparent',
+                height: '100%', padding: '0 1px',
+                borderRadius: 0,
+                border: 'none',
+                borderBottom: '2px solid ' + (active ? 'var(--ink)' : 'transparent'),
+                background: 'transparent',
                 color: active ? 'var(--ink)' : 'var(--ink-2)',
                 fontSize: 11.5, fontWeight: active ? 600 : 400,
                 cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                transform: 'translateY(1px)',
               }
             }, t.label);
           })}
@@ -188,7 +237,7 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
           <I.search size={12} style={{ color: 'var(--ink-3)' }}/>
           <input
             value={search}
-            placeholder="搜索 prompt 关键词…"
+            placeholder="搜索 prompt / 标签…"
             style={{
               flex: 1, border: 'none', outline: 'none',
               background: 'transparent', fontSize: 11.5, color: 'var(--ink)',
@@ -230,7 +279,7 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
         )}
         {!error && !loading && filtered.length === 0 && (
           <div style={{ padding: 40, color: 'var(--ink-3)', fontSize: 12, textAlign: 'center' }}>
-            {tab === 'mine' ? '你还没有发布过灵感' : '还没有灵感，去生张图试试吧'}
+            {tab === 'mine' ? '你还没有发布过灵感' : tab === 'favorite' ? '你还没有收藏灵感' : '还没有灵感，去生张图试试吧'}
           </div>
         )}
         {filtered.length > 0 && (() => {
@@ -252,6 +301,7 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
                 height: item.height,
                 onRatioLoad: setRatio,
                 onOpen: function() { openDetail(item.post); },
+                onToggleFavorite: toggleFavorite,
               });
             }));
           }));
@@ -264,6 +314,7 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
           post={detailPost}
           onClose={closeDetail}
           onUsePrompt={onUsePrompt}
+          onToggleFavorite={toggleFavorite}
           onUnpublish={detailPost.can_manage ? handleUnpublish : null}
         />
       )}
@@ -271,9 +322,17 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
   );
 };
 
-const InspirationCard = ({ post, height, onRatioLoad, onOpen }) => {
-  return React.createElement('button', {
+const InspirationCard = ({ post, height, onRatioLoad, onOpen, onToggleFavorite }) => {
+  return React.createElement('div', {
+    role: 'button',
+    tabIndex: 0,
     onClick: onOpen,
+    onKeyDown: function(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onOpen && onOpen();
+      }
+    },
     style: {
       width: '100%',
       display: 'block',
@@ -285,6 +344,7 @@ const InspirationCard = ({ post, height, onRatioLoad, onOpen }) => {
       overflow: 'hidden',
       textAlign: 'left',
       transition: 'transform 120ms, box-shadow 120ms',
+      position: 'relative',
     },
     onMouseEnter: function(e) {
       e.currentTarget.style.transform = 'translateY(-2px)';
@@ -295,6 +355,7 @@ const InspirationCard = ({ post, height, onRatioLoad, onOpen }) => {
       e.currentTarget.style.boxShadow = 'none';
     },
   },
+    React.createElement('div', { style: { position: 'relative' } },
     React.createElement('img', {
       src: post.image_url,
       alt: post.prompt,
@@ -306,11 +367,68 @@ const InspirationCard = ({ post, height, onRatioLoad, onOpen }) => {
         }
       },
       style: height ? { width: '100%', height: height + 'px', objectFit: 'cover', display: 'block', background: 'var(--panel-2)' } : { width: '100%', display: 'block', background: 'var(--panel-2)' },
-    })
+    }),
+      React.createElement('button', {
+        type: 'button',
+        title: post.favorited ? '取消收藏这张图' : '收藏这张图',
+        'aria-label': post.favorited ? '取消收藏这张图' : '收藏这张图',
+        onClick: function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          onToggleFavorite && onToggleFavorite(post);
+        },
+        onMouseEnter: function(e) {
+          e.currentTarget.style.transform = post.favorited ? 'scale(1.08)' : 'scale(1.06)';
+        },
+        onMouseLeave: function(e) {
+          e.currentTarget.style.transform = post.favorited ? 'scale(1.04)' : 'scale(1)';
+        },
+        onMouseDown: function(e) {
+          e.currentTarget.style.transform = 'scale(0.94)';
+        },
+        onMouseUp: function(e) {
+          e.currentTarget.style.transform = post.favorited ? 'scale(1.08)' : 'scale(1.06)';
+        },
+        style: {
+          position: 'absolute', right: 8, top: 8,
+          width: 28, height: 28, borderRadius: 999,
+          border: post.favorited ? '1px solid oklch(0.74 0.16 35)' : '1px solid rgba(255,255,255,0.72)',
+          background: post.favorited ? 'oklch(0.62 0.18 35)' : 'rgba(255,255,255,0.84)',
+          color: post.favorited ? '#fff' : 'var(--ink-2)',
+          display: 'grid', placeItems: 'center',
+          cursor: 'pointer',
+          backdropFilter: 'blur(8px)',
+          boxShadow: post.favorited ? '0 8px 18px rgba(190,72,45,0.28)' : '0 4px 12px rgba(15,23,42,0.10)',
+          transform: post.favorited ? 'scale(1.04)' : 'scale(1)',
+          transition: 'background 140ms, color 140ms, border-color 140ms, box-shadow 140ms, transform 140ms',
+        }
+      }, React.createElement(I.heart, { size: post.favorited ? 14 : 13 }))
+    )
   );
 };
 
-const InspirationDetail = ({ post, onClose, onUsePrompt, onUnpublish }) => {
+const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnpublish }) => {
+  const [describing, setDescribing] = React.useState(false);
+  const [describeError, setDescribeError] = React.useState('');
+  const [localPost, setLocalPost] = React.useState(post);
+  React.useEffect(function() { setLocalPost(post); setDescribeError(''); }, [post]);
+  const activePost = localPost || post;
+  const handleDescribe = React.useCallback(function() {
+    if (!activePost || !activePost.id) return;
+    setDescribeError('');
+    setDescribing(true);
+    window.API.describeInspiration(activePost.id)
+      .then(function(res) {
+        setLocalPost(function(prev) {
+          return Object.assign({}, prev || activePost, {
+            vlm_prompt: res.prompt || '',
+            vlm_description: res.description || '',
+          });
+        });
+      })
+      .catch(function(e) { setDescribeError(e.message || '未知错误'); })
+      .finally(function() { setDescribing(false); });
+  }, [activePost]);
   return (
     <>
       <div onClick={onClose} style={{
@@ -333,9 +451,18 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onUnpublish }) => {
           padding: '0 14px', gap: 8,
           borderBottom: '1px solid var(--line)',
         }}>
-          <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--ink)' }}>灵感详情</div>
-          <div style={{ flex: 1 }}/>
-          <button onClick={onClose} style={{
+	          <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--ink)' }}>灵感详情</div>
+	          <div style={{ flex: 1 }}/>
+	          <button onClick={function() { onToggleFavorite && onToggleFavorite(activePost); setLocalPost(Object.assign({}, activePost, { favorited: !activePost.favorited })); }} style={{
+	            height: 28, padding: '0 9px', borderRadius: 6,
+	            background: activePost.favorited ? 'oklch(0.96 0.04 35)' : 'var(--panel-2)',
+	            border: '1px solid var(--line-2)',
+	            color: activePost.favorited ? 'var(--warn)' : 'var(--ink-2)',
+	            display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 11,
+	          }}>
+	            <I.heart size={12}/>{activePost.favorited ? '已收藏' : '收藏'}
+	          </button>
+	          <button onClick={onClose} style={{
             width: 28, height: 28, borderRadius: 6,
             background: 'var(--panel-2)', border: '1px solid var(--line-2)',
             color: 'var(--ink-2)', display: 'grid', placeItems: 'center', cursor: 'pointer',
@@ -346,7 +473,7 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onUnpublish }) => {
 
         {/* 大图 */}
         <div style={{ padding: 14, flexShrink: 0 }}>
-          <img src={post.image_url} alt={post.prompt} style={{
+	          <img src={activePost.full_image_url || activePost.image_url} alt={activePost.prompt} style={{
             width: '100%', maxHeight: 360, objectFit: 'contain',
             borderRadius: 8, background: 'var(--panel-2)',
             border: '1px solid var(--line-2)', display: 'block',
@@ -355,22 +482,69 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onUnpublish }) => {
 
         {/* 信息 */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 14px 14px' }}>
+          {activePost.original_prompt && activePost.original_prompt !== activePost.prompt ? (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }} className="mono">原始输入</div>
+              <div style={{
+                fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.55,
+                padding: '8px 10px', borderRadius: 6,
+                background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              }}>{activePost.original_prompt}</div>
+            </div>
+          ) : null}
           <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 10, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }} className="mono">Prompt</div>
-            <div style={{
-              fontSize: 12, color: 'var(--ink)', lineHeight: 1.55,
-              padding: '8px 10px', borderRadius: 6,
-              background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-            }}>{post.prompt || '（无）'}</div>
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
-            {[
-              ['模型', post.model],
-              ['尺寸', post.size],
-              ['分辨率', post.resolution || '默认'],
-              post.has_ref ? ['参考图', '有'] : null,
-            ].filter(Boolean).map(function(item, i) {
+            <div style={{ fontSize: 10, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }} className="mono">生成 Prompt</div>
+	            <div style={{
+	              fontSize: 12, color: 'var(--ink)', lineHeight: 1.55,
+	              padding: '8px 10px', borderRadius: 6,
+	              background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+	              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+	            }}>{activePost.resolved_prompt || activePost.prompt || '（无）'}</div>
+	          </div>
+	          <div style={{ marginBottom: 10 }}>
+	            <div style={{
+	              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+	              gap: 8, marginBottom: 4,
+	            }}>
+	              <div style={{ fontSize: 10, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }} className="mono">VLM 反推 Prompt</div>
+	              <button
+	                onClick={handleDescribe}
+	                disabled={describing}
+	                style={{
+	                  height: 22, padding: '0 8px', borderRadius: 999,
+	                  background: 'var(--panel)', color: 'var(--ink-2)',
+	                  border: '1px solid var(--line)', fontSize: 10.5,
+	                  display: 'inline-flex', alignItems: 'center', gap: 4,
+	                  cursor: describing ? 'default' : 'pointer',
+	                  opacity: describing ? 0.65 : 1,
+	                }}
+	              >
+	                <I.eye size={11}/>{describing ? '分析中' : (activePost.vlm_prompt ? '重新反推' : '反推')}
+	              </button>
+	            </div>
+	            {describeError ? <div style={{
+	              fontSize: 11, color: 'var(--warn)', lineHeight: 1.45,
+	              padding: '7px 9px', borderRadius: 6,
+	              background: 'oklch(0.97 0.025 35)', border: '1px solid oklch(0.9 0.05 35)',
+	              marginBottom: 6,
+	            }}>反推失败：{describeError}</div> : null}
+	            <div style={{
+	              fontSize: 12, color: activePost.vlm_prompt ? 'var(--ink)' : 'var(--ink-3)', lineHeight: 1.55,
+	              padding: '8px 10px', borderRadius: 6,
+	              background: 'var(--panel-2)', border: '1px solid var(--line-2)',
+	              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+	              minHeight: 42,
+	            }}>{activePost.vlm_prompt || (describing ? '正在分析图片并生成可复用 prompt…' : '尚未反推。点击右上角“反推”，用 VLM 从图片生成更详细的复刻 prompt。')}</div>
+	          </div>
+	          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+	            {[
+	              ['分类', activePost.category_label || '分享卡片'],
+	              ['模型', activePost.model],
+	              ['尺寸', activePost.size],
+	              ['分辨率', activePost.resolution || '默认'],
+	              activePost.has_ref ? ['参考图', '有'] : null,
+	            ].filter(Boolean).map(function(item, i) {
               return React.createElement('span', {
                 key: i,
                 className: 'mono',
@@ -379,42 +553,61 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onUnpublish }) => {
                   background: 'var(--panel-2)', border: '1px solid var(--line-2)',
                   color: 'var(--ink-2)',
                 }
-              }, item[0] + '：' + item[1]);
-            })}
-          </div>
-        </div>
+	              }, item[0] + '：' + item[1]);
+	            })}
+	          </div>
+	          {Array.isArray(activePost.tags) && activePost.tags.length > 0 ? (
+	            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 12 }}>
+	              {activePost.tags.map(function(tag) {
+	                return React.createElement('span', { key: tag, style: { fontSize: 10.5, color: 'var(--ink-2)', padding: '3px 8px', borderRadius: 999, background: 'var(--panel-2)', border: '1px solid var(--line-2)' } }, '#' + tag);
+	              })}
+	            </div>
+	          ) : null}
+	        </div>
 
         {/* 操作 */}
         <div style={{
           flexShrink: 0,
           padding: 12, borderTop: '1px solid var(--line)',
-          display: 'flex', gap: 8,
+          display: 'flex', flexDirection: 'column', gap: 7,
         }}>
-          <button
-            onClick={function() { onUsePrompt(post); }}
-            style={{
-              flex: 1, height: 36, padding: '0 14px', borderRadius: 6,
-              background: 'var(--ink)', color: 'white', border: '1px solid var(--ink)',
-              fontSize: 12, fontWeight: 500, cursor: 'pointer',
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            }}
-          >
-            <I.sparkles size={12}/>生成同款
-          </button>
-          {onUnpublish && (
-            <button
-              onClick={function() { onUnpublish(post); }}
-              style={{
-                height: 36, padding: '0 12px', borderRadius: 6,
-                background: 'var(--panel)', color: 'var(--warn)',
-                border: '1px solid var(--line)', fontSize: 12,
-                display: 'inline-flex', alignItems: 'center', gap: 5,
-                cursor: 'pointer',
-              }}
-            >
-              下架
-            </button>
-          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+	          <button
+	            onClick={function() {
+	              const finalPrompt = activePost.vlm_prompt || activePost.resolved_prompt || activePost.prompt || activePost.original_prompt || '';
+	              const promptSource = activePost.vlm_prompt ? 'vlm' : (activePost.resolved_prompt ? 'resolved' : 'original');
+	              onUsePrompt(Object.assign({}, activePost, {
+	                prompt: finalPrompt,
+	                prompt_source: promptSource,
+	              }));
+	            }}
+	            style={{
+	              flex: 1, height: 36, padding: '0 14px', borderRadius: 6,
+	              background: 'var(--ink)', color: 'white', border: '1px solid var(--ink)',
+	              fontSize: 12, fontWeight: 500, cursor: 'pointer',
+	              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+	            }}
+	          >
+	            <I.sparkles size={12}/>{activePost.vlm_prompt ? '用反推 Prompt 生成同款' : (activePost.resolved_prompt ? '用生成 Prompt 生成同款' : '用原始 Prompt 生成同款')}
+	          </button>
+	          {onUnpublish && (
+	            <button
+	              onClick={function() { onUnpublish(post); }}
+	              style={{
+	                height: 36, padding: '0 12px', borderRadius: 6,
+	                background: 'var(--panel)', color: 'var(--warn)',
+	                border: '1px solid var(--line)', fontSize: 12,
+	                display: 'inline-flex', alignItems: 'center', gap: 5,
+	                cursor: 'pointer',
+	              }}
+	            >
+	              下架
+	            </button>
+	          )}
+          </div>
+          <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.4 }}>
+            当前优先使用 VLM 反推 Prompt；没有反推结果时使用生成时的完整 Prompt，再兜底原始输入。
+          </div>
         </div>
       </div>
     </>

@@ -101,6 +101,8 @@ def init_db() -> None:
                 status           TEXT NOT NULL,
                 model            TEXT NOT NULL,
                 prompt           TEXT NOT NULL,
+                original_prompt  TEXT NOT NULL DEFAULT '',
+                resolved_prompt  TEXT NOT NULL DEFAULT '',
                 size             TEXT NOT NULL,
                 image_url        TEXT,
                 has_reference    INTEGER NOT NULL DEFAULT 0,
@@ -111,7 +113,12 @@ def init_db() -> None:
             )
         """)
         # 兼容旧表：添加可能缺失的列
-        for col, col_def in [("task_id", "TEXT"), ("progress", "INTEGER NOT NULL DEFAULT 0")]:
+        for col, col_def in [
+            ("task_id", "TEXT"),
+            ("progress", "INTEGER NOT NULL DEFAULT 0"),
+            ("original_prompt", "TEXT NOT NULL DEFAULT ''"),
+            ("resolved_prompt", "TEXT NOT NULL DEFAULT ''"),
+        ]:
             try:
                 conn.execute(f"ALTER TABLE ai_image_jobs ADD COLUMN {col} {col_def}")
             except Exception:
@@ -222,13 +229,27 @@ def init_db() -> None:
                 image_url     TEXT NOT NULL,
                 thumb_url     TEXT NOT NULL DEFAULT '',
                 prompt        TEXT NOT NULL,
+                original_prompt TEXT NOT NULL DEFAULT '',
+                resolved_prompt TEXT NOT NULL DEFAULT '',
                 model         TEXT NOT NULL,
                 size          TEXT NOT NULL,
                 resolution    TEXT,
                 has_ref       INTEGER NOT NULL DEFAULT 0,
                 image_width   INTEGER NOT NULL DEFAULT 0,
                 image_height  INTEGER NOT NULL DEFAULT 0,
+                category      TEXT NOT NULL DEFAULT 'share_card',
+                tags_json     TEXT NOT NULL DEFAULT '[]',
+                vlm_prompt    TEXT NOT NULL DEFAULT '',
+                vlm_description TEXT NOT NULL DEFAULT '',
                 created_at    REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS inspiration_favorites (
+                post_id     TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                created_at  REAL NOT NULL,
+                PRIMARY KEY (post_id, user_id)
             )
         """)
         conn.execute("""
@@ -251,6 +272,18 @@ def init_db() -> None:
             conn.execute("ALTER TABLE inspiration_posts ADD COLUMN image_height INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        for col, typ in [
+            ("category", "TEXT NOT NULL DEFAULT 'share_card'"),
+            ("tags_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("vlm_prompt", "TEXT NOT NULL DEFAULT ''"),
+            ("vlm_description", "TEXT NOT NULL DEFAULT ''"),
+            ("original_prompt", "TEXT NOT NULL DEFAULT ''"),
+            ("resolved_prompt", "TEXT NOT NULL DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE inspiration_posts ADD COLUMN {col} {typ}")
+            except Exception:
+                pass
         # 兼容旧表: 如果存在重复 job_id, 保留 created_at 最大的最新一条, 删除较早的
         # SQLite 不支持 DELETE FROM t WHERE id IN (SELECT ... FROM t) 这种自引用, 用嵌套子查询
         conn.execute("""
@@ -573,6 +606,8 @@ def save_ai_image_job(
     model: str,
     prompt: str,
     size: str,
+    original_prompt: str | None = None,
+    resolved_prompt: str | None = None,
     image_url: str | None = None,
     has_reference: bool = False,
     error: str | None = None,
@@ -585,13 +620,15 @@ def save_ai_image_job(
         conn.execute(
             """
             INSERT INTO ai_image_jobs
-              (id, user_id, status, model, prompt, size, image_url, has_reference, error, task_id, progress, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (id, user_id, status, model, prompt, original_prompt, resolved_prompt, size, image_url, has_reference, error, task_id, progress, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 user_id = excluded.user_id,
                 status = excluded.status,
                 model = excluded.model,
                 prompt = excluded.prompt,
+                original_prompt = excluded.original_prompt,
+                resolved_prompt = excluded.resolved_prompt,
                 size = excluded.size,
                 image_url = excluded.image_url,
                 has_reference = excluded.has_reference,
@@ -605,6 +642,8 @@ def save_ai_image_job(
                 status,
                 model,
                 prompt,
+                original_prompt or "",
+                resolved_prompt or prompt or "",
                 size,
                 image_url,
                 1 if has_reference else 0,
@@ -636,6 +675,8 @@ def load_ai_image_jobs(limit: int = 50, user_id: Optional[str] = None) -> list[d
             "status": row["status"],
             "model": row["model"],
             "prompt": row["prompt"],
+            "original_prompt": row["original_prompt"] if "original_prompt" in row.keys() else "",
+            "resolved_prompt": row["resolved_prompt"] if "resolved_prompt" in row.keys() else "",
             "size": row["size"],
             "image_url": row["image_url"],
             "has_reference": bool(row["has_reference"]),
@@ -660,6 +701,8 @@ def load_ai_image_job(job_id: str) -> dict | None:
         "status": row["status"],
         "model": row["model"],
         "prompt": row["prompt"],
+        "original_prompt": row["original_prompt"] if "original_prompt" in row.keys() else "",
+        "resolved_prompt": row["resolved_prompt"] if "resolved_prompt" in row.keys() else "",
         "size": row["size"],
         "image_url": row["image_url"],
         "has_reference": bool(row["has_reference"]),
@@ -692,6 +735,8 @@ def load_ai_image_job_by_image_url(image_url: str, user_id: str | None = None) -
         "status": row["status"],
         "model": row["model"],
         "prompt": row["prompt"],
+        "original_prompt": row["original_prompt"] if "original_prompt" in row.keys() else "",
+        "resolved_prompt": row["resolved_prompt"] if "resolved_prompt" in row.keys() else "",
         "size": row["size"],
         "image_url": row["image_url"],
         "has_reference": bool(row["has_reference"]),
@@ -880,6 +925,7 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 "prompt": meta.get("prompt") or (row["text"] or ""),
                 "status": meta.get("status") or "done",
                 "imageUrl": row["image_url"],
+                "previewUrl": meta.get("previewUrl") or "",
                 "error": meta.get("error"),
                 "hasReference": bool(meta.get("hasReference")),
                 "refCount": int(meta.get("refCount") or 0),
@@ -1421,6 +1467,10 @@ def create_inspiration_post(
     image_width: int,
     image_height: int,
     created_at: float,
+    category: str = "share_card",
+    tags: Optional[list[str]] = None,
+    original_prompt: str = "",
+    resolved_prompt: str = "",
 ) -> bool:
     """发布灵感记录。同一 job_id 唯一约束, 重复插入返回 False (调用方应转为 already_published 语义)。"""
     try:
@@ -1428,10 +1478,16 @@ def create_inspiration_post(
             conn.execute(
                 """
                 INSERT INTO inspiration_posts
-                    (id, job_id, user_id, image_url, thumb_url, prompt, model, size, resolution, has_ref, image_width, image_height, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, job_id, user_id, image_url, thumb_url, prompt, original_prompt, resolved_prompt, model, size, resolution, has_ref, image_width, image_height, category, tags_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (post_id, job_id, user_id, image_url, thumb_url, prompt, model, size, resolution, 1 if has_ref else 0, int(image_width or 0), int(image_height or 0), created_at),
+                (
+                    post_id, job_id, user_id, image_url, thumb_url,
+                    prompt, original_prompt or "", resolved_prompt or prompt or "",
+                    model, size, resolution, 1 if has_ref else 0,
+                    int(image_width or 0), int(image_height or 0),
+                    category or "share_card", json.dumps(tags or [], ensure_ascii=False), created_at,
+                ),
             )
         return True
     except Exception as e:
@@ -1452,6 +1508,41 @@ def update_inspiration_dimensions(post_id: str, image_width: int, image_height: 
     with _connect() as conn:
         conn.execute("UPDATE inspiration_posts SET image_width = ?, image_height = ? WHERE id = ?",
                      (int(image_width or 0), int(image_height or 0), post_id))
+
+
+def update_inspiration_vlm(post_id: str, prompt: str, description: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE inspiration_posts SET vlm_prompt = ?, vlm_description = ? WHERE id = ?",
+            (prompt or "", description or "", post_id),
+        )
+
+
+def find_inspiration_vlm_cache(job_id: str | None = None, image_url: str | None = None) -> dict | None:
+    clauses: list[str] = []
+    params: list[str] = []
+    if job_id:
+        clauses.append("job_id = ?")
+        params.append(job_id)
+    if image_url:
+        clauses.append("image_url = ?")
+        params.append(image_url)
+    if not clauses:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT id, vlm_prompt, vlm_description
+            FROM inspiration_posts
+            WHERE ({' OR '.join(clauses)})
+              AND vlm_prompt IS NOT NULL
+              AND vlm_prompt != ''
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def get_inspiration_post_by_job(job_id: str) -> dict | None:
@@ -1478,17 +1569,59 @@ def delete_inspiration_post(post_id: str) -> bool:
         return cur.rowcount > 0
 
 
-def list_inspiration_posts(limit: int, offset: int, mine_user_id: str | None = None) -> list[dict]:
-    """列出灵感。mine_user_id 不为 None 时只返回该用户的发布。"""
+def list_inspiration_posts(
+    limit: int,
+    offset: int,
+    mine_user_id: str | None = None,
+    category: str | None = None,
+    favorite_user_id: str | None = None,
+    search: str | None = None,
+) -> list[dict]:
+    """列出灵感。支持按发布者、分类、收藏、prompt/tag 搜索过滤。"""
+    clauses: list[str] = []
+    params: list[object] = []
+    join = ""
+    if favorite_user_id:
+        join = "JOIN inspiration_favorites f ON f.post_id = p.id AND f.user_id = ?"
+        params.append(favorite_user_id)
+    if mine_user_id:
+        clauses.append("p.user_id = ?")
+        params.append(mine_user_id)
+    if category:
+        clauses.append("p.category = ?")
+        params.append(category)
+    if search:
+        clauses.append("(p.prompt LIKE ? OR p.tags_json LIKE ? OR p.vlm_prompt LIKE ? OR p.vlm_description LIKE ?)")
+        q = f"%{search}%"
+        params.extend([q, q, q, q])
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     with _connect() as conn:
-        if mine_user_id:
-            rows = conn.execute(
-                "SELECT * FROM inspiration_posts WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                (mine_user_id, limit, offset),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM inspiration_posts ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
+        rows = conn.execute(
+            f"SELECT p.* FROM inspiration_posts p {join} {where} ORDER BY p.created_at DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ).fetchall()
     return [dict(r) for r in rows]
+
+
+def is_inspiration_favorited(post_id: str, user_id: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM inspiration_favorites WHERE post_id = ? AND user_id = ?",
+            (post_id, user_id),
+        ).fetchone()
+    return bool(row)
+
+
+def set_inspiration_favorite(post_id: str, user_id: str, favorite: bool) -> bool:
+    with _lock, _connect() as conn:
+        if favorite:
+            conn.execute(
+                "INSERT OR IGNORE INTO inspiration_favorites (post_id, user_id, created_at) VALUES (?, ?, ?)",
+                (post_id, user_id, time.time()),
+            )
+            return True
+        cur = conn.execute(
+            "DELETE FROM inspiration_favorites WHERE post_id = ? AND user_id = ?",
+            (post_id, user_id),
+        )
+        return cur.rowcount > 0

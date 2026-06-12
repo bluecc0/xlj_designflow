@@ -113,6 +113,83 @@ const TextBubble = ({ who, children, markdown }) => {
   );
 };
 
+const copyTextToClipboard = async (text) => {
+  const value = String(text || '');
+  if (!value) return false;
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return true;
+  }
+  const el = document.createElement('textarea');
+  el.value = value;
+  el.setAttribute('readonly', '');
+  el.style.position = 'fixed';
+  el.style.left = '-9999px';
+  document.body.appendChild(el);
+  el.select();
+  const ok = document.execCommand('copy');
+  document.body.removeChild(el);
+  return ok;
+};
+
+const CopyableTextBubble = ({ who, text, markdown }) => {
+  const [hovered, setHovered] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+  const copyValue = String(text || '');
+  const onCopy = React.useCallback(async function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      const ok = await copyTextToClipboard(copyValue);
+      if (ok) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1100);
+      }
+    } catch (err) {
+      console.warn('copy message failed', err);
+    }
+  }, [copyValue]);
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{ maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: who === 'user' ? 'flex-end' : 'flex-start', gap: 4 }}
+    >
+      <TextBubble who={who} markdown={markdown}>{copyValue}</TextBubble>
+      {copyValue && (
+        <button
+          type="button"
+          title={copied ? '已复制' : '复制消息'}
+          aria-label={copied ? '已复制' : '复制消息'}
+          onClick={onCopy}
+          style={{
+            height: 22,
+            width: 22,
+            padding: 0,
+            borderRadius: 7,
+            border: '1px solid var(--line-2)',
+            background: who === 'user' ? 'var(--panel)' : 'transparent',
+            color: copied ? 'var(--ok)' : 'var(--ink-2)',
+            display: 'grid',
+            placeItems: 'center',
+            cursor: 'pointer',
+            opacity: hovered || copied ? 1 : 0,
+            transform: hovered || copied ? 'translateY(0)' : 'translateY(-2px)',
+            pointerEvents: hovered || copied ? 'auto' : 'none',
+            boxShadow: 'none',
+            transition: 'opacity 120ms ease, transform 120ms ease, color 120ms ease',
+            fontSize: 10.5,
+            lineHeight: 1,
+          }}
+        >
+          {copied ? <I.check size={11}/> : <I.copy size={11}/>}
+        </button>
+      )}
+    </div>
+  );
+};
+
 const FileCard = ({ name, size, type }) => (
   <div style={{
     display: 'flex', alignItems: 'center', gap: 10,
@@ -647,6 +724,11 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
             const promptPositive = promptPayload && promptPayload.positive ? promptPayload.positive : m.prompt;
             const promptNegative = promptPayload && promptPayload.negative ? promptPayload.negative : '';
             const promptParams = promptPayload && promptPayload.parameters ? promptPayload.parameters : null;
+            const fullImageUrl = m.imageUrl || '';
+            const displayImageUrlRaw = m.previewUrl || m.imagePreviewUrl || m.imageUrl || '';
+            const displayImageUrl = displayImageUrlRaw && displayImageUrlRaw.startsWith('/')
+              ? ((window.API_BASE || window.location.origin) + displayImageUrlRaw)
+              : displayImageUrlRaw;
             return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
               React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
                 m.status === 'done'
@@ -668,7 +750,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     ? React.createElement(ChatTimer, { startedAt: m.startedAt })
                     : null
               ),
-              m.status !== 'failed' && React.createElement(InlineRefStrip, { items: m.refPreviews }),
+              m.status !== 'failed' && m.status !== 'done' && React.createElement(InlineRefStrip, { items: m.refPreviews }),
               agentEnabled && promptPositive && React.createElement('div', {
                 style: {
                   padding: '9px 10px',
@@ -695,16 +777,16 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   'size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认'
                 ) : null
               ),
-              m.status === 'done' && m.imageUrl && React.createElement('div', null,
+              m.status === 'done' && fullImageUrl && React.createElement('div', null,
                 React.createElement('img', {
-                  src: m.imageUrl,
+                  src: displayImageUrl || fullImageUrl,
                   alt: m.prompt,
                   style: { width: '100%', borderRadius: 10, display: 'block', border: '1px solid var(--line-2)', cursor: 'pointer' },
-                  onClick: () => window.open(m.imageUrl, '_blank'),
+                  onClick: () => window.open(fullImageUrl, '_blank'),
                 }),
                 React.createElement('div', { style: { marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' } },
                   React.createElement('a', {
-                    href: m.imageUrl, download: true,
+                    href: fullImageUrl, download: true,
                     style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 },
                   }, React.createElement(I.download, { size: 10 }), '下载'),
                   m.inspirationPostId
@@ -937,7 +1019,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 {m.thinking ? (
                   <ThinkingBlock text={m.thinking}/>
                 ) : null}
-                <TextBubble who={m.who} markdown>{m.text}</TextBubble>
+                <CopyableTextBubble who={m.who} text={m.text} markdown/>
                 {/* Agent CONFIRM 阶段的创意方案卡片 */}
                 {m.brief ? (
                   <BriefCard brief={m.brief} completeness={m.completeness}/>
@@ -1033,6 +1115,19 @@ const normalizeReferenceUrl = function(rawUrl) {
 };
 
 const MAX_REFERENCE_IMAGES = 9;
+const CHAT_INSPIRATION_CATEGORIES = [
+  { id: 'share_card', label: '分享卡片' },
+  { id: 'moments', label: '朋友圈' },
+  { id: 'poster', label: '海报' },
+  { id: 'long_image', label: '长图文' },
+  { id: 'detail_page', label: '详情页' },
+  { id: 'main_image', label: '主图' },
+  { id: 'scene_compose', label: '场景合成' },
+  { id: 'ai_model', label: 'AI模特' },
+  { id: 'ai_tryon', label: 'AI换装' },
+  { id: 'ai_wearable', label: 'AI穿戴' },
+  { id: 'ai_pose', label: 'AI裂变姿势' },
+];
 
 // ---------- Composer ----------
 
@@ -2358,6 +2453,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
   const [historyLoading, setHistoryLoading] = React.useState(false);
   const [historySessions, setHistorySessions] = React.useState([]);
   const [hoveredHistoryId, setHoveredHistoryId] = React.useState('');
+  const [publishDialog, setPublishDialog] = React.useState(null);
   const historyWrapRef = React.useRef(null);
   const creatingAgentProjectRef = React.useRef(null);
 
@@ -2763,7 +2859,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
             const fe = Math.floor((Date.now() - startedAt) / 1000);
             setMessages(msgs => msgs.map(m =>
               m.type === 'ai-image-generating' && m.startedAt === startedAt
-                ? { ...m, status: 'done', imageUrl: sd.image_url, finalElapsed: fe, progress: 100 }
+                ? { ...m, status: 'done', imageUrl: sd.image_url, previewUrl: sd.preview_url || sd.image_url, finalElapsed: fe, progress: 100 }
                 : m
             ));
             loadAiChatHistory();
@@ -2792,6 +2888,13 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
   // —— 发布/取消发布灵感 ——
   const handlePublishInspiration = React.useCallback(async (msg) => {
     if (!msg) return;
+    setPublishDialog({ msg: msg, category: 'share_card', tags: '', submitting: false });
+  }, []);
+
+  const confirmPublishInspiration = React.useCallback(async () => {
+    const dialog = publishDialog;
+    const msg = dialog && dialog.msg;
+    if (!msg) return;
     // 优先用 jobId（生图时记录在消息上）；历史消息恢复后没有 jobId，回退到用 image_url
     const payload = msg.jobId
       ? { job_id: msg.jobId }
@@ -2800,6 +2903,12 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       window.alert('这条消息无法发布（缺少 job_id 和 image_url）');
       return;
     }
+    payload.category = dialog.category || 'share_card';
+    payload.tags = String(dialog.tags || '')
+      .split(/[,，、\s]+/)
+      .map(function(t) { return t.trim().replace(/^#/, ''); })
+      .filter(Boolean);
+    setPublishDialog(function(prev) { return prev ? Object.assign({}, prev, { submitting: true }) : prev; });
     // 乐观更新
     setMessages(function(msgs) {
       return msgs.map(function(m) {
@@ -2816,15 +2925,17 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
             : m;
         });
       });
+      setPublishDialog(null);
     } catch (e) {
       setMessages(function(msgs) {
         return msgs.map(function(m) {
           return m.startedAt === msg.startedAt ? Object.assign({}, m, { inspirationPublishing: false }) : m;
         });
       });
+      setPublishDialog(function(prev) { return prev ? Object.assign({}, prev, { submitting: false }) : prev; });
       window.alert('发布失败：' + (e.message || '未知错误'));
     }
-  }, []);
+  }, [publishDialog]);
 
   const handleUnpublishInspiration = React.useCallback(async (msg) => {
     if (!msg || !msg.inspirationPostId) return;
@@ -2940,7 +3051,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
             const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
             setMessages(msgs => msgs.map(m =>
               m.type === 'ai-image-generating' && m.startedAt === startedAt
-                ? { ...m, status: 'done', imageUrl: statusData.image_url, finalElapsed, progress: 100, refPreviews: refPreviews.length ? refPreviews : m.refPreviews }
+                ? { ...m, status: 'done', imageUrl: statusData.image_url, previewUrl: statusData.preview_url || statusData.image_url, finalElapsed, progress: 100, refPreviews: [] }
                 : m
             ));
             if (onComposeComplete) {
@@ -3830,6 +3941,99 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       </div>
 
       <ChatSessionBar messages={messages} historyControl={historyControl}/>
+
+      {publishDialog && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 90,
+          background: 'rgba(15,23,42,0.24)',
+          display: 'grid',
+          placeItems: 'center',
+        }}>
+          <div style={{
+            width: 360,
+            maxWidth: 'calc(100vw - 32px)',
+            borderRadius: 14,
+            background: 'var(--panel)',
+            border: '1px solid var(--line-2)',
+            boxShadow: '0 18px 50px rgba(15,23,42,0.18)',
+            padding: 16,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' }}>
+                <I.sparkles size={14}/>
+              </div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)' }}>发布到灵感</div>
+                <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>选择分类，标签可选，方便后续检索。</div>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 7 }}>分类</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {CHAT_INSPIRATION_CATEGORIES.map(function(cat) {
+                  const active = publishDialog.category === cat.id;
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      disabled={publishDialog.submitting}
+                      onClick={function() { setPublishDialog(function(prev) { return prev ? Object.assign({}, prev, { category: cat.id }) : prev; }); }}
+                      style={{
+                        height: 28,
+                        padding: '0 10px',
+                        borderRadius: 999,
+                        border: '1px solid ' + (active ? 'var(--ink)' : 'var(--line-2)'),
+                        background: active ? 'var(--ink)' : 'var(--panel-2)',
+                        color: active ? 'white' : 'var(--ink-2)',
+                        fontSize: 11,
+                        cursor: publishDialog.submitting ? 'default' : 'pointer',
+                      }}
+                    >{cat.label}</button>
+                  );
+                })}
+              </div>
+            </div>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+              <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>标签（可选）</span>
+              <input
+                value={publishDialog.tags}
+                disabled={publishDialog.submitting}
+                placeholder="例如：鞋类, 小红书, 夏季活动"
+                onChange={function(e) { setPublishDialog(function(prev) { return prev ? Object.assign({}, prev, { tags: e.target.value }) : prev; }); }}
+                style={{
+                  height: 34,
+                  borderRadius: 9,
+                  border: '1px solid var(--line-2)',
+                  background: 'var(--panel-2)',
+                  color: 'var(--ink)',
+                  outline: 'none',
+                  padding: '0 10px',
+                  fontSize: 12,
+                }}
+              />
+            </label>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 2 }}>
+              <button
+                type="button"
+                disabled={publishDialog.submitting}
+                onClick={function() { setPublishDialog(null); }}
+                style={{ height: 32, padding: '0 13px', borderRadius: 8, border: '1px solid var(--line-2)', background: 'var(--panel)', color: 'var(--ink-2)', fontSize: 12, cursor: publishDialog.submitting ? 'default' : 'pointer' }}
+              >取消</button>
+              <button
+                type="button"
+                disabled={publishDialog.submitting}
+                onClick={confirmPublishInspiration}
+                style={{ height: 32, padding: '0 15px', borderRadius: 8, border: '1px solid var(--ink)', background: 'var(--ink)', color: 'white', fontSize: 12, fontWeight: 600, cursor: publishDialog.submitting ? 'default' : 'pointer', opacity: publishDialog.submitting ? 0.7 : 1 }}
+              >{publishDialog.submitting ? '发布中…' : '确认发布'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
       {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}

@@ -93,6 +93,8 @@
       var body = {};
       if (payload && payload.job_id) body.job_id = payload.job_id;
       if (payload && payload.image_url) body.image_url = payload.image_url;
+      if (payload && payload.category) body.category = payload.category;
+      if (payload && payload.tags) body.tags = payload.tags;
       return request('/inspiration', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -102,13 +104,27 @@
     unpublishInspiration: function(postId) {
       return request('/inspiration/' + encodeURIComponent(postId), { method: 'DELETE' });
     },
-    listInspiration: function(limit, offset, mine) {
+    listInspiration: function(limit, offset, options) {
       var qs = '?limit=' + (limit || 20) + '&offset=' + (offset || 0);
-      if (mine) qs += '&mine=1';
+      if (options === true) options = { mine: true };
+      options = options || {};
+      if (options.mine) qs += '&mine=1';
+      if (options.favorite) qs += '&favorite=1';
+      if (options.category) qs += '&category=' + encodeURIComponent(options.category);
+      if (options.search) qs += '&search=' + encodeURIComponent(options.search);
       return request('/inspiration' + qs).then(function(res) { return res.posts || []; });
     },
     getInspiration: function(postId) {
       return request('/inspiration/' + encodeURIComponent(postId)).then(function(res) { return res.post; });
+    },
+    favoriteInspiration: function(postId) {
+      return request('/inspiration/' + encodeURIComponent(postId) + '/favorite', { method: 'POST' });
+    },
+    unfavoriteInspiration: function(postId) {
+      return request('/inspiration/' + encodeURIComponent(postId) + '/favorite', { method: 'DELETE' });
+    },
+    describeInspiration: function(postId) {
+      return request('/inspiration/' + encodeURIComponent(postId) + '/describe', { method: 'POST' });
     },
     deleteAiChat: function(sessionId) { return request('/history/ai-chats/' + encodeURIComponent(sessionId), { method: 'DELETE' }); },
     createLayeredPsd: function(prompt, imageFile, options) {

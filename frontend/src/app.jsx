@@ -83,7 +83,17 @@ const App = () => {
 
   const handleUseInspirationPrompt = React.useCallback(function(post) {
     setInspirationOpen(false);
-    setSeedPrompt(post.prompt || '');
+    setSeedPrompt(post.vlm_prompt || post.resolved_prompt || post.prompt || post.original_prompt || '');
+    const refUrl = post.full_image_url || post.image_url || '';
+    if (refUrl) {
+      setCanvasReferenceSelection({
+        key: Date.now() + Math.random(),
+        images: [{
+          src: refUrl,
+          name: 'inspiration-' + (post.id || Date.now()) + '.png',
+        }],
+      });
+    }
   }, []);
   const handleSeedConsumed = React.useCallback(function() { setSeedPrompt(''); }, []);
   const handleUseCanvasReferences = React.useCallback(function(images) {

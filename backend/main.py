@@ -16,6 +16,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -57,8 +58,10 @@ from .agent_mode import (
     apply_decision_to_state,
     build_brief,
     call_agent_llm,
+    _chat_completions_endpoint,
     _coarse_subject_from_message,
     _deep_copy_json,
+    _resolve_image_data_url,
     decide_next_action,
     default_project_state,
     detect_confirm,
@@ -115,10 +118,14 @@ from .job_store import (
     create_inspiration_post,
     update_inspiration_thumb_url,
     update_inspiration_dimensions,
+    update_inspiration_vlm,
+    find_inspiration_vlm_cache,
     get_inspiration_post,
     get_inspiration_post_by_job,
     delete_inspiration_post,
     list_inspiration_posts,
+    is_inspiration_favorited,
+    set_inspiration_favorite,
 )
 from .models import (
     ComposeJob,
@@ -2268,6 +2275,8 @@ async def _run_ai_image_background(
     refs: list[tuple[bytes, str]],
     has_reference: bool,
     created_at: float,
+    original_prompt: str = "",
+    resolved_prompt: str = "",
     ref_previews: list[str] | None = None,
 ):
     """后台异步生图：轮询进度 → 更新 DB → 下载结果 → 写聊天记录"""
@@ -2284,6 +2293,7 @@ async def _run_ai_image_background(
             save_ai_image_job(
                 job_id=job_id, user_id=user_id, status=db_status,
                 model=model, prompt=prompt, size=size,
+                original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
                 progress=pct, has_reference=has_reference, created_at=created_at,
             )
         except Exception:
@@ -2312,6 +2322,7 @@ async def _run_ai_image_background(
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="done",
             model=model, prompt=prompt, size=size,
+            original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             image_url=result.get("url"), task_id=result.get("task_id"),
             progress=100, has_reference=has_reference, created_at=created_at,
         )
@@ -2321,6 +2332,11 @@ async def _run_ai_image_background(
         usage_str = ""
         if isinstance(usage, dict):
             usage_str = f" tokens={usage.get('total_tokens') or usage.get('input_tokens',0)+usage.get('output_tokens',0)}"
+        preview_url = ""
+        try:
+            preview_url, _, _ = generate_inspiration_thumb(result.get("url") or "", user_id, job_id)
+        except Exception:
+            preview_url = result.get("url") or ""
         log_operation(
             user_id=user_id, username=username,
             action="ai_image",
@@ -2340,6 +2356,7 @@ async def _run_ai_image_background(
                 "hasReference": has_reference,
                 "refCount": len(refs),
                 "refPreviews": ref_previews or [],
+                "previewUrl": preview_url,
             },
             created_at=time.time(),
         )
@@ -2353,6 +2370,7 @@ async def _run_ai_image_background(
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="failed",
             model=model, prompt=prompt, size=size,
+            original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             has_reference=has_reference, error=str(e), created_at=created_at,
         )
         log_operation(
@@ -2388,11 +2406,18 @@ def ai_image_status(request: Request, job_id: str):
         raise HTTPException(404, "任务不存在")
     api_base = str(request.base_url).rstrip("/")
     image_url = job.get("image_url")
+    preview_url = ""
+    if image_url:
+        try:
+            preview_url, _, _ = generate_inspiration_thumb(image_url, job.get("user_id") or user["id"], job["id"])
+        except Exception:
+            preview_url = image_url
     return {
         "job_id": job["id"],
         "status": job["status"],
         "progress": job["progress"],
         "image_url": f"{api_base}{image_url}" if image_url else None,
+        "preview_url": f"{api_base}{preview_url}" if preview_url else None,
         "task_id": job.get("task_id"),
         "error": job.get("error"),
     }
@@ -2415,6 +2440,8 @@ async def ai_image_retry(request: Request):
         raise HTTPException(404, "任务不存在")
 
     prompt = (old_job.get("prompt") or "").strip()
+    original_prompt = (old_job.get("original_prompt") or "").strip()
+    resolved_prompt = (old_job.get("resolved_prompt") or prompt).strip()
     model = (old_job.get("model") or "gpt-image-2").strip()
     size = (old_job.get("size") or "1024x1024").strip()
     resolution = (old_job.get("resolution") or "").strip()
@@ -2446,6 +2473,7 @@ async def ai_image_retry(request: Request):
     save_ai_image_job(
         job_id=new_job_id, user_id=user["id"], status="processing",
         model=model, prompt=prompt, size=size,
+        original_prompt=original_prompt, resolved_prompt=resolved_prompt,
         has_reference=has_reference, created_at=created_at,
     )
     log_operation(
@@ -2463,6 +2491,7 @@ async def ai_image_retry(request: Request):
             model=model, prompt=prompt,
             size=size, resolution=resolution,
             refs=all_refs, has_reference=has_reference, created_at=created_at,
+            original_prompt=original_prompt, resolved_prompt=resolved_prompt,
             ref_previews=[],
         )
     )
@@ -2470,6 +2499,75 @@ async def ai_image_retry(request: Request):
 
 
 # ─── 灵感（inspiration） ──────────────────────────────────────────────────────
+
+INSPIRATION_CATEGORIES = {
+    "share_card": "分享卡片",
+    "moments": "朋友圈",
+    "poster": "海报",
+    "long_image": "长图文",
+    "detail_page": "详情页",
+    "main_image": "主图",
+    "scene_compose": "场景合成",
+    "ai_model": "AI模特",
+    "ai_tryon": "AI换装",
+    "ai_wearable": "AI穿戴",
+    "ai_pose": "AI裂变姿势",
+}
+
+
+def _normalize_inspiration_category(value: str | None) -> str:
+    clean = str(value or "").strip()
+    return clean if clean in INSPIRATION_CATEGORIES else "share_card"
+
+
+def _normalize_inspiration_tags(value) -> list[str]:
+    if isinstance(value, str):
+        raw_items = value.replace("，", ",").replace("、", ",").split(",")
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = []
+    tags: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        tag = str(item or "").strip().strip("#")
+        if not tag:
+            continue
+        tag = tag[:24]
+        key = tag.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        tags.append(tag)
+        if len(tags) >= 12:
+            break
+    return tags
+
+
+def _extract_sse_chat_content(text: str) -> str:
+    """Collect OpenAI-compatible text/event-stream chat chunks into plain content."""
+    parts: list[str] = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            chunk = json.loads(data)
+        except Exception:
+            continue
+        choice = (chunk.get("choices") or [{}])[0]
+        delta = choice.get("delta") or {}
+        message = choice.get("message") or {}
+        content = delta.get("content")
+        if content is None:
+            content = message.get("content")
+        if content:
+            parts.append(str(content))
+    return "".join(parts).strip()
+
 
 @app.post("/inspiration")
 async def publish_inspiration(request: Request):
@@ -2479,6 +2577,8 @@ async def publish_inspiration(request: Request):
     body = await request.json()
     job_id = (body.get("job_id") or "").strip()
     image_url = (body.get("image_url") or "").strip()
+    category = _normalize_inspiration_category(body.get("category"))
+    tags = _normalize_inspiration_tags(body.get("tags"))
 
     job = None
     if job_id:
@@ -2517,6 +2617,8 @@ async def publish_inspiration(request: Request):
         image_url=image_url,
         thumb_url=thumb_url,
         prompt=job.get("prompt") or "",
+        original_prompt=job.get("original_prompt") or "",
+        resolved_prompt=job.get("resolved_prompt") or job.get("prompt") or "",
         model=job.get("model") or "gpt-image-2",
         size=job.get("size") or "1024x1024",
         resolution=job.get("resolution") or "",
@@ -2524,6 +2626,8 @@ async def publish_inspiration(request: Request):
         image_width=tw,
         image_height=th,
         created_at=created_at,
+        category=category,
+        tags=tags,
     )
     if not inserted:
         # 竞态: 并发请求在我们 SELECT 之后/INSERT 之前插入了同 job_id
@@ -2534,8 +2638,8 @@ async def publish_inspiration(request: Request):
     log_operation(
         user_id=user["id"], username=user["username"],
         action="inspiration_publish",
-        detail=f"post={post_id[:8]} job={job_id[:8]} model={job.get('model')}",
-        payload=json.dumps({"post_id": post_id, "job_id": job_id, "model": job.get("model")}, ensure_ascii=False),
+        detail=f"post={post_id[:8]} job={job_id[:8]} category={category} model={job.get('model')}",
+        payload=json.dumps({"post_id": post_id, "job_id": job_id, "model": job.get("model"), "category": category, "tags": tags}, ensure_ascii=False),
     )
     post = get_inspiration_post(post_id)
     return {"post": _inspiration_to_api(post, current_user=user), "already_published": False}
@@ -2561,11 +2665,28 @@ async def unpublish_inspiration(request: Request, post_id: str):
 
 
 @app.get("/inspiration")
-async def list_inspiration(request: Request, limit: int = 20, offset: int = 0, mine: int = 0):
-    """列出灵感。mine=1 只返回当前用户的发布。"""
+async def list_inspiration(
+    request: Request,
+    limit: int = 20,
+    offset: int = 0,
+    mine: int = 0,
+    favorite: int = 0,
+    category: str = "",
+    search: str = "",
+):
+    """列出灵感。mine=1 只返回当前用户的发布；favorite=1 返回当前用户收藏。"""
     user = _current_user(request)
     mine_user_id = user["id"] if mine else None
-    rows = list_inspiration_posts(limit, offset, mine_user_id)
+    favorite_user_id = user["id"] if favorite else None
+    category_key = category if category in INSPIRATION_CATEGORIES else ""
+    rows = list_inspiration_posts(
+        min(max(limit, 1), 100),
+        max(offset, 0),
+        mine_user_id=mine_user_id,
+        favorite_user_id=favorite_user_id,
+        category=category_key or None,
+        search=(search or "").strip() or None,
+    )
     return {"posts": [_inspiration_to_api(r, current_user=user) for r in rows]}
 
 
@@ -2583,21 +2704,181 @@ def _inspiration_to_api(post: dict, current_user: dict | None = None) -> dict:
     current_user_id = current_user.get("id") if current_user else None
     is_mine = bool(current_user_id and post.get("user_id") == current_user_id)
     can_manage = bool(is_mine or _is_admin(current_user))
+    tags = []
+    try:
+        tags = json.loads(post.get("tags_json") or "[]")
+    except Exception:
+        tags = []
+    category = post.get("category") or "share_card"
     return {
         "id": post["id"],
         "job_id": post["job_id"],
         "image_url": post.get("thumb_url") or post.get("image_url") or "",
+        "full_image_url": post.get("image_url") or post.get("thumb_url") or "",
         "prompt": post["prompt"],
+        "original_prompt": post.get("original_prompt") or "",
+        "resolved_prompt": post.get("resolved_prompt") or post.get("prompt") or "",
+        "vlm_prompt": post.get("vlm_prompt") or "",
+        "vlm_description": post.get("vlm_description") or "",
         "model": post["model"],
         "size": post["size"],
         "resolution": post.get("resolution") or "",
         "has_ref": bool(post.get("has_ref")),
+        "category": category,
+        "category_label": INSPIRATION_CATEGORIES.get(category, "分享卡片"),
+        "tags": tags if isinstance(tags, list) else [],
+        "favorited": bool(current_user_id and is_inspiration_favorited(post["id"], current_user_id)),
         "is_mine": is_mine,
         "can_manage": can_manage,
         "width": int(post.get("image_width") or 0),
         "height": int(post.get("image_height") or 0),
         "created_at": post["created_at"],
     }
+
+
+@app.post("/inspiration/{post_id}/favorite")
+async def favorite_inspiration(request: Request, post_id: str):
+    user = _current_user(request)
+    post = get_inspiration_post(post_id)
+    if not post:
+        raise HTTPException(404, "灵感不存在")
+    set_inspiration_favorite(post_id, user["id"], True)
+    return {"favorited": True}
+
+
+@app.delete("/inspiration/{post_id}/favorite")
+async def unfavorite_inspiration(request: Request, post_id: str):
+    user = _current_user(request)
+    post = get_inspiration_post(post_id)
+    if not post:
+        raise HTTPException(404, "灵感不存在")
+    set_inspiration_favorite(post_id, user["id"], False)
+    return {"favorited": False}
+
+
+@app.post("/inspiration/{post_id}/describe")
+async def describe_inspiration(request: Request, post_id: str):
+    user = _current_user(request)
+    post = get_inspiration_post(post_id)
+    if not post:
+        raise HTTPException(404, "灵感不存在")
+    if post.get("vlm_prompt"):
+        return {"prompt": post.get("vlm_prompt") or "", "description": post.get("vlm_description") or "", "cached": True}
+    cached_vlm = find_inspiration_vlm_cache(
+        job_id=post.get("job_id") or "",
+        image_url=post.get("image_url") or "",
+    )
+    if cached_vlm and cached_vlm.get("vlm_prompt"):
+        update_inspiration_vlm(
+            post_id,
+            cached_vlm.get("vlm_prompt") or "",
+            cached_vlm.get("vlm_description") or "",
+        )
+        return {
+            "prompt": cached_vlm.get("vlm_prompt") or "",
+            "description": cached_vlm.get("vlm_description") or "",
+            "cached": True,
+            "cache_source": cached_vlm.get("id"),
+        }
+    if not settings.vlm_api_key:
+        raise HTTPException(503, "VLM 未配置，无法反推 prompt")
+    image_data_url = await _resolve_image_data_url(post.get("image_url") or post.get("thumb_url") or "")
+    if not image_data_url:
+        raise HTTPException(400, "无法读取灵感图片")
+    messages = [{
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    "你是资深电商视觉总监和生图提示词工程师。请只根据这张图片，反推出可复刻该图片视觉效果的详细中文生图 prompt。\n"
+                    "要求：\n"
+                    "1. 必须输出 JSON，不要 Markdown，不要解释。\n"
+                    "2. JSON 字段必须包含 description、prompt、elements。\n"
+                    "3. description 用 80-120 字概括画面，要说明用途、主体、视觉气质和画面结构。\n"
+                    "4. prompt 不少于 180 字，必须可直接用于生图，具体描述主体、构图、镜头视角、空间层次、光影、背景、色彩、材质质感、文字/留白区域、商业用途、精修风格和生成注意事项。\n"
+                    "5. elements 必须包含 subject、composition、camera、lighting、background、color、material、typography、style、negative。\n"
+                    "6. 如果图中有商品、人物、文案或品牌感，要分别说明它们的位置、比例、关系和优先级。\n"
+                    "7. 不要声称知道原始 prompt，不要编造不可见信息，只根据图像反推。"
+                ),
+            },
+            {"type": "image_url", "image_url": {"url": image_data_url}},
+        ],
+    }]
+    try:
+        endpoint = _chat_completions_endpoint(settings.vlm_base_url)
+        async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
+            resp = await client.post(
+                endpoint,
+                headers={"Authorization": f"Bearer {settings.vlm_api_key}", "Content-Type": "application/json"},
+                json={"model": settings.vlm_model, "messages": messages, "temperature": 0.2, "stream": False},
+            )
+        if not resp.is_success:
+            raise HTTPException(resp.status_code, f"VLM 反推失败: {resp.text[:200]}")
+
+        raw = ""
+        try:
+            payload = resp.json()
+        except Exception as exc:
+            preview = (resp.text or "").strip()[:200]
+            streamed_content = _extract_sse_chat_content(resp.text or "")
+            if streamed_content:
+                payload = {"choices": [{"message": {"content": streamed_content}}]}
+                raw = streamed_content
+            else:
+                logger.warning("VLM describe returned non-json response from %s: %s", endpoint, preview)
+                raise HTTPException(
+                    502,
+                    "VLM 反推失败: 接口返回的不是 OpenAI-compatible JSON，"
+                    f"请检查 VLM_BASE_URL/VLM_MODEL 是否为视觉对话模型。返回预览: {preview or '空响应'}",
+                ) from exc
+        else:
+            raw = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if not raw:
+                raw = _extract_sse_chat_content(resp.text or "")
+        if not raw:
+            logger.warning("VLM describe returned no usable content from %s: %s", endpoint, str(payload)[:300])
+            raise HTTPException(
+                502,
+                f"VLM 未返回可用 prompt，返回结构: {json.dumps(payload, ensure_ascii=False)[:300]}",
+            )
+        clean_raw = str(raw or "").strip()
+        if clean_raw.startswith("```"):
+            clean_raw = clean_raw.strip("`").strip()
+            if clean_raw.lower().startswith("json"):
+                clean_raw = clean_raw[4:].strip()
+        parsed = None
+        if clean_raw:
+            try:
+                parsed = json.loads(clean_raw)
+            except Exception:
+                match = re.search(r"(\{.*\})", clean_raw, flags=re.S)
+                if match:
+                    try:
+                        parsed = json.loads(match.group(1))
+                    except Exception:
+                        parsed = None
+        if isinstance(parsed, dict):
+            prompt = str(parsed.get("prompt") or "").strip()
+            description = str(parsed.get("description") or "").strip()
+        else:
+            prompt = clean_raw
+            description = ""
+        if not prompt:
+            raise HTTPException(502, f"VLM 未返回可用 prompt，返回结构: {json.dumps(payload, ensure_ascii=False)[:300]}")
+        update_inspiration_vlm(post_id, prompt, description)
+        log_operation(
+            user_id=user["id"], username=user["username"],
+            action="inspiration_describe",
+            detail=f"post={post_id[:8]}",
+            payload=json.dumps({"post_id": post_id, "prompt": prompt[:300]}, ensure_ascii=False),
+        )
+        return {"prompt": prompt, "description": description, "cached": False}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("inspiration describe failed: %s", post_id)
+        raise HTTPException(502, f"VLM 反推失败: {exc}") from exc
 
 
 @app.post("/editor/snapshot")
@@ -2693,6 +2974,8 @@ async def ai_image_endpoint(
         model=resolved,
         prompt=original_prompt,
         size=size,
+        original_prompt=original_prompt,
+        resolved_prompt=original_prompt,
         has_reference=bool(images),
         created_at=created_at,
     )
@@ -2753,6 +3036,7 @@ async def ai_image_endpoint(
                 model=resolved, prompt=enriched_prompt,
                 size=size, resolution=resolution,
                 refs=all_refs, has_reference=has_reference, created_at=created_at,
+                original_prompt=original_prompt, resolved_prompt=enriched_prompt,
                 ref_previews=ref_previews_list,
             )
         )
@@ -2768,6 +3052,8 @@ async def ai_image_endpoint(
             model=resolved,
             prompt=original_prompt,
             size=size,
+            original_prompt=original_prompt,
+            resolved_prompt=original_prompt,
             has_reference=bool(images) or bool(context_ref_bytes),
             error=str(e),
             created_at=created_at,
