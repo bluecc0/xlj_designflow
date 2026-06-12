@@ -594,6 +594,8 @@ async def _submit_generation_task(
         "size": ratio,
         "resolution": resolution,
     }
+    if model_name == "gpt-image-2":
+        payload["official_fallback"] = True
     if reference_urls:
         payload["image_urls"] = reference_urls
     endpoint = f"{base_url}/v1/images/generations"
