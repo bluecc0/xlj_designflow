@@ -325,6 +325,9 @@ class BrowserRelay:
 
         download = await self._try_click_download(page, download_format)
         if download is not None:
+            if isinstance(download, str):
+                logger.info("download_from_page: got captured file url, downloading via HTTP: %s", download[:100])
+                return await self._download_via_http(page.context, download, source_url)
             logger.info("download_from_page: got playwright download, saving...")
             return await self._save_playwright_download(download, source_url)
 
@@ -347,7 +350,8 @@ class BrowserRelay:
     def _assert_allowed_url(self, source_url: str) -> None:
         parsed = urlparse(source_url)
         hostname = (parsed.hostname or "").lower().rstrip(".")
-        if hostname and hostname not in settings.allowed_hosts:
+        allowed = settings.allowed_hosts
+        if hostname and not any(hostname == item or hostname.endswith("." + item) for item in allowed):
             raise ValueError(f"Host not allowed: {hostname}")
 
     async def _collect_button_texts(self, page: Page) -> list[str]:
@@ -367,12 +371,18 @@ class BrowserRelay:
 
     async def _try_click_download(
         self, page: Page, download_format: str | None
-    ) -> Download | None:
+    ) -> Download | str | None:
         if download_format:
             logger.info("try_click: targeting format %s", download_format)
             targeted = await self._try_click_specific_format(page, download_format)
             if targeted is not None:
                 return targeted
+            texts = await self._collect_button_texts(page)
+            await self._log_page_diagnostics(page, f"format-{download_format}-not-triggered", [])
+            raise RuntimeError(
+                f"指定格式 {download_format} 没有触发下载。Visible buttons: " +
+                (", ".join(texts[:30]) if texts else "(none)")
+            )
 
         for locator in [page.locator("a, button"), page.locator("[role='button']")]:
             count = await locator.count()
@@ -395,7 +405,7 @@ class BrowserRelay:
 
     async def _try_click_specific_format(
         self, page: Page, download_format: str
-    ) -> Download | None:
+    ) -> Download | str | None:
         normalized = download_format.strip().upper()
 
         direct_handle = await self._find_clickable_with_text(
@@ -430,8 +440,9 @@ class BrowserRelay:
 
         return None
 
-    async def _click_download_flow(self, page: Page, handle) -> Download | None:
+    async def _click_download_flow(self, page: Page, handle) -> Download | str | None:
         recent_responses: list[str] = []
+        file_response_urls: list[str] = []
 
         def _remember_response(response) -> None:
             try:
@@ -439,7 +450,11 @@ class BrowserRelay:
                 headers = response.headers
                 content_type = headers.get("content-type", "")
                 disposition = headers.get("content-disposition", "")
-                if response.status >= 400 or disposition or any(ext in url.lower() for ext in DIRECT_FILE_EXTENSIONS):
+                looks_like_file = bool(disposition) or any(ext in url.lower() for ext in DIRECT_FILE_EXTENSIONS)
+                if response.status < 400 and looks_like_file:
+                    file_response_urls.append(url)
+                    del file_response_urls[:-6]
+                if response.status >= 400 or looks_like_file:
                     recent_responses.append(
                         f"{response.status} {url[:180]} ct={content_type[:80]} cd={disposition[:120]}"
                     )
@@ -482,10 +497,16 @@ class BrowserRelay:
                 except PlaywrightError as exc:
                     logger.warning("click_flow: confirm '%s' did not trigger download: %s", label, exc)
                     await self._log_page_diagnostics(page, f"confirm-{label}", recent_responses)
+                    if file_response_urls:
+                        logger.warning("click_flow: using captured file response url=%s", file_response_urls[-1][:180])
+                        return file_response_urls[-1]
                     continue
 
             logger.info("click_flow: no download triggered")
             await self._log_page_diagnostics(page, "no-download-triggered", recent_responses)
+            if file_response_urls:
+                logger.warning("click_flow: using captured file response url=%s", file_response_urls[-1][:180])
+                return file_response_urls[-1]
             return None
         finally:
             try:

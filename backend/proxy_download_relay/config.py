@@ -56,11 +56,14 @@ class RelaySettings:
 
     @property
     def allowed_hosts(self) -> set[str]:
-        return {
+        hosts = {
             item.strip().lower()
             for item in self.relay_allowed_hosts.split(",")
             if item.strip()
         }
+        if "huaban.com" in hosts:
+            hosts.add("huabanimg.com")
+        return hosts
 
     @property
     def browser_channel(self) -> str | None:
