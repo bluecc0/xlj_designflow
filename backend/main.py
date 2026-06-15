@@ -125,6 +125,7 @@ from .job_store import (
     delete_inspiration_post,
     list_inspiration_posts,
     is_inspiration_favorited,
+    list_inspiration_favorite_ids,
     set_inspiration_favorite,
 )
 from .models import (
@@ -2687,7 +2688,11 @@ async def list_inspiration(
         category=category_key or None,
         search=(search or "").strip() or None,
     )
-    return {"posts": [_inspiration_to_api(r, current_user=user) for r in rows]}
+    favorite_ids = list_inspiration_favorite_ids(
+        [str(r.get("id")) for r in rows if r.get("id")],
+        user["id"],
+    )
+    return {"posts": [_inspiration_to_api(r, current_user=user, favorite_ids=favorite_ids) for r in rows]}
 
 
 @app.get("/inspiration/{post_id}")
@@ -2699,7 +2704,7 @@ async def get_inspiration_detail(request: Request, post_id: str):
     return {"post": _inspiration_to_api(post, current_user=user)}
 
 
-def _inspiration_to_api(post: dict, current_user: dict | None = None) -> dict:
+def _inspiration_to_api(post: dict, current_user: dict | None = None, favorite_ids: set[str] | None = None) -> dict:
     """把 DB 记录转 API 返回结构。展示统一用 thumb_url。"""
     current_user_id = current_user.get("id") if current_user else None
     is_mine = bool(current_user_id and post.get("user_id") == current_user_id)
@@ -2727,7 +2732,12 @@ def _inspiration_to_api(post: dict, current_user: dict | None = None) -> dict:
         "category": category,
         "category_label": INSPIRATION_CATEGORIES.get(category, "分享卡片"),
         "tags": tags if isinstance(tags, list) else [],
-        "favorited": bool(current_user_id and is_inspiration_favorited(post["id"], current_user_id)),
+        "favorited": bool(
+            current_user_id and (
+                (favorite_ids is not None and post["id"] in favorite_ids)
+                or (favorite_ids is None and is_inspiration_favorited(post["id"], current_user_id))
+            )
+        ),
         "is_mine": is_mine,
         "can_manage": can_manage,
         "width": int(post.get("image_width") or 0),

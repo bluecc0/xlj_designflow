@@ -3440,6 +3440,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const model = aiCmd ? aiCmd.model : (lastOpts?.model || 'gpt-image-2');
       const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, provider: aiOptions.provider };
       setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? rawPrompt : text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
+      await runAiImageGeneration(model, freshPrompt, freshPrompt, refImages, opts);
       return;
     }
 

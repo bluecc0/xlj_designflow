@@ -1612,6 +1612,18 @@ def is_inspiration_favorited(post_id: str, user_id: str) -> bool:
     return bool(row)
 
 
+def list_inspiration_favorite_ids(post_ids: list[str], user_id: str) -> set[str]:
+    if not post_ids or not user_id:
+        return set()
+    placeholders = ",".join("?" * len(post_ids))
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT post_id FROM inspiration_favorites WHERE user_id = ? AND post_id IN ({placeholders})",
+            (user_id, *post_ids),
+        ).fetchall()
+    return {str(row["post_id"]) for row in rows}
+
+
 def set_inspiration_favorite(post_id: str, user_id: str, favorite: bool) -> bool:
     with _lock, _connect() as conn:
         if favorite:

@@ -159,6 +159,9 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
     const next = !post.favorited;
     const apiCall = next ? window.API.favoriteInspiration : window.API.unfavoriteInspiration;
     setPosts(function(prev) {
+      if (!next && tab === 'favorite') {
+        return prev.filter(function(p) { return p.id !== post.id; });
+      }
       return prev.map(function(p) { return p.id === post.id ? Object.assign({}, p, { favorited: next }) : p; });
     });
     if (detailPost && detailPost.id === post.id) {
@@ -166,6 +169,9 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
     }
     apiCall(post.id).catch(function(e) {
       setPosts(function(prev) {
+        if (!next && tab === 'favorite') {
+          return [Object.assign({}, post, { favorited: !next })].concat(prev);
+        }
         return prev.map(function(p) { return p.id === post.id ? Object.assign({}, p, { favorited: !next }) : p; });
       });
       if (detailPost && detailPost.id === post.id) {
@@ -173,7 +179,7 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
       }
       window.alert((next ? '收藏' : '取消收藏') + '失败：' + (e.message || '未知错误'));
     });
-  }, [detailPost]);
+  }, [detailPost, tab]);
 
   // 点击图片 → 加载完整详情
   const openDetail = React.useCallback(function(post) {
