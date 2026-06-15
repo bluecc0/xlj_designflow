@@ -420,7 +420,7 @@ class BrowserRelay:
 
         trigger = await self._find_clickable_with_text(
             page,
-            {"\u4e0b\u8f7d PSD", "\u4e0b\u8f7dPNG", "\u4e0b\u8f7d PNG", "\u4e0b\u8f7d AI", "\u4e0b\u8f7d EPS", "\u4e0b\u8f7d JPG", "\u4e0b\u8f7d JPEG"},
+            {"\u4e0b\u8f7d", "\u7acb\u5373\u4e0b\u8f7d", "\u514d\u8d39\u4e0b\u8f7d", "\u4e0b\u8f7d\u7d20\u6750"},
             selectors=["button", "a", "[role='button']"],
         )
         if trigger is not None:
@@ -429,6 +429,8 @@ class BrowserRelay:
                 await page.wait_for_timeout(800)
             except PlaywrightError:
                 pass
+        else:
+            await self._open_format_dropdown(page)
 
         dropdown_handle = await self._find_clickable_with_text(
             page,
@@ -439,6 +441,42 @@ class BrowserRelay:
             return await self._click_download_flow(page, dropdown_handle)
 
         return None
+
+    async def _open_format_dropdown(self, page: Page) -> bool:
+        """Open a split download button without clicking its default format action."""
+        for selector in ["button", "a", "[role='button']"]:
+            locator = page.locator(selector)
+            count = await locator.count()
+            for index in range(min(count, 80)):
+                handle = locator.nth(index)
+                try:
+                    text = " ".join((await handle.inner_text(timeout=300)).strip().upper().split())
+                except PlaywrightError:
+                    continue
+                if not re.search(r"\u4e0b\u8f7d\s*(PSD|PNG|AI|EPS|JPG|JPEG|PDF|SVG)\b", text):
+                    continue
+                try:
+                    point = await handle.evaluate("""el => {
+                        const own = el.getBoundingClientRect();
+                        const parent = el.parentElement ? el.parentElement.getBoundingClientRect() : own;
+                        const rect = parent.width > own.width + 20 ? parent : own;
+                        return {
+                            x: rect.left + Math.max(4, rect.width - 18),
+                            y: rect.top + Math.max(4, rect.height / 2),
+                            width: rect.width,
+                            height: rect.height
+                        };
+                    }""")
+                    if not point or point.get("width", 0) < 20 or point.get("height", 0) < 10:
+                        continue
+                    logger.info("try_click: opening split download dropdown via right edge, text='%s'", text[:60])
+                    await page.mouse.click(point["x"], point["y"])
+                    await page.wait_for_timeout(800)
+                    return True
+                except PlaywrightError as exc:
+                    logger.warning("try_click: failed to open split dropdown for '%s': %s", text[:60], exc)
+                    continue
+        return False
 
     async def _click_download_flow(self, page: Page, handle) -> Download | str | None:
         recent_responses: list[str] = []

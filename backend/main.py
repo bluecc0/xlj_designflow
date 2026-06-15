@@ -341,6 +341,18 @@ def _safe_download_filename(name: str) -> str:
     return clean or "download.bin"
 
 
+def _download_format_matches(filename: str, requested_format: str | None) -> bool:
+    fmt = (requested_format or "").strip().lower()
+    if not fmt:
+        return True
+    suffix = Path(filename or "").suffix.lower().lstrip(".")
+    if not suffix:
+        return False
+    if fmt in {"jpg", "jpeg"}:
+        return suffix in {"jpg", "jpeg"}
+    return suffix == fmt
+
+
 class LiteLoginRequest(pydantic.BaseModel):
     username: str
 
@@ -638,6 +650,15 @@ async def proxy_download_download(body: ProxyDownloadRequest, request: Request):
         raise HTTPException(502, f"\u82b1\u74e3\u4e0b\u8f7d\u5931\u8d25: {exc}") from exc
 
     filename = _safe_download_filename(str(meta.get("filename") or Path(path).name))
+    if not _download_format_matches(filename, body.format):
+        logger.error(
+            "[proxy-download:%s] format mismatch requested=%s filename=%s meta=%s",
+            request_id,
+            body.format,
+            filename,
+            meta,
+        )
+        raise HTTPException(502, f"下载格式不匹配：选择的是 {body.format}，但实际文件是 {filename}")
     file_path = Path(path)
     if file_path.parent != _proxy_download_dir():
         stem = Path(filename).stem
