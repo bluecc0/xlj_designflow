@@ -4,6 +4,7 @@ import asyncio
 import logging
 import mimetypes
 import re
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -76,6 +77,7 @@ class BrowserRelay:
     async def start(self, headless: bool | None = None) -> None:
         if headless is None:
             headless = settings.relay_headless
+        logger.info("browser.start: headless=%s channel=%s profile=%s", headless, settings.browser_channel, settings.relay_profile_dir)
         settings.relay_storage_dir.mkdir(parents=True, exist_ok=True)
         settings.relay_profile_dir.mkdir(parents=True, exist_ok=True)
         self._playwright = await async_playwright().start()
@@ -95,6 +97,7 @@ class BrowserRelay:
                 "--no-sandbox",
             ],
         )
+        logger.info("browser.start: context ready")
 
     async def stop(self) -> None:
         if self._context is not None:
@@ -224,57 +227,74 @@ class BrowserRelay:
         self, source_url: str, download_format: str | None
     ) -> tuple[Path, dict[str, Any]]:
         async with self._lock:
+            started = time.monotonic()
             logger.info("fetch_with_format: start, url=%s format=%s", source_url[:100], download_format)
-            context = await self.ensure_started()
-            parsed = urlparse(source_url)
-            self._assert_allowed_url(source_url)
-
-            if Path(parsed.path).suffix.lower() in DIRECT_FILE_EXTENSIONS:
-                logger.info("fetch_with_format: direct file extension, using HTTP download")
-                return await self._download_via_http(context, source_url)
-
-            logger.info("fetch_with_format: opening page...")
-            page = await context.new_page()
             try:
-                await self._prepare_page(page)
-                return await self._download_from_page(page, source_url, download_format)
-            finally:
-                await page.close()
+                context = await self.ensure_started()
+                parsed = urlparse(source_url)
+                self._assert_allowed_url(source_url)
+
+                if Path(parsed.path).suffix.lower() in DIRECT_FILE_EXTENSIONS:
+                    logger.info("fetch_with_format: direct file extension, using HTTP download")
+                    return await self._download_via_http(context, source_url)
+
+                logger.info("fetch_with_format: opening page...")
+                page = await context.new_page()
+                try:
+                    await self._prepare_page(page)
+                    result = await self._download_from_page(page, source_url, download_format)
+                    logger.info("fetch_with_format: done elapsed=%.2fs", time.monotonic() - started)
+                    return result
+                finally:
+                    await page.close()
+            except Exception:
+                logger.exception("fetch_with_format: failed elapsed=%.2fs", time.monotonic() - started)
+                raise
 
     async def inspect(self, source_url: str) -> dict[str, Any]:
         async with self._lock:
-            context = await self.ensure_started()
-            self._assert_allowed_url(source_url)
-            parsed = urlparse(source_url)
-
-            suffix = Path(parsed.path).suffix.lower()
-            if suffix in DIRECT_FILE_EXTENSIONS:
-                direct_format = suffix.lstrip(".").upper()
-                return {
-                    "source_url": source_url,
-                    "title": Path(parsed.path).name,
-                    "formats": [direct_format],
-                }
-
-            page = await context.new_page()
+            started = time.monotonic()
+            logger.info("inspect: start url=%s", source_url[:100])
             try:
-                await self._prepare_page(page)
-                await page.goto(
-                    source_url,
-                    wait_until="domcontentloaded",
-                    timeout=settings.relay_navigation_timeout_ms,
-                )
-                self._assert_allowed_url(page.url)
-                await page.wait_for_timeout(1500)
-                title = await page.title()
-                formats = await self._discover_download_formats(page)
-                return {
-                    "source_url": source_url,
-                    "title": title,
-                    "formats": formats,
-                }
-            finally:
-                await page.close()
+                context = await self.ensure_started()
+                self._assert_allowed_url(source_url)
+                parsed = urlparse(source_url)
+
+                suffix = Path(parsed.path).suffix.lower()
+                if suffix in DIRECT_FILE_EXTENSIONS:
+                    direct_format = suffix.lstrip(".").upper()
+                    logger.info("inspect: direct file format=%s elapsed=%.2fs", direct_format, time.monotonic() - started)
+                    return {
+                        "source_url": source_url,
+                        "title": Path(parsed.path).name,
+                        "formats": [direct_format],
+                    }
+
+                page = await context.new_page()
+                try:
+                    await self._prepare_page(page)
+                    logger.info("inspect: goto domcontentloaded timeout=%sms", settings.relay_navigation_timeout_ms)
+                    await page.goto(
+                        source_url,
+                        wait_until="domcontentloaded",
+                        timeout=settings.relay_navigation_timeout_ms,
+                    )
+                    self._assert_allowed_url(page.url)
+                    logger.info("inspect: loaded final_url=%s", page.url[:120])
+                    await page.wait_for_timeout(1500)
+                    title = await page.title()
+                    formats = await self._discover_download_formats(page)
+                    logger.info("inspect: done elapsed=%.2fs formats=%s title=%s", time.monotonic() - started, formats, title)
+                    return {
+                        "source_url": source_url,
+                        "title": title,
+                        "formats": formats,
+                    }
+                finally:
+                    await page.close()
+            except Exception:
+                logger.exception("inspect: failed elapsed=%.2fs", time.monotonic() - started)
+                raise
 
     async def _prepare_page(self, page: Page) -> None:
         # 隐藏 webdriver 特征
@@ -285,6 +305,7 @@ class BrowserRelay:
     async def _download_from_page(
         self, page: Page, source_url: str, download_format: str | None
     ) -> tuple[Path, dict[str, Any]]:
+        started = time.monotonic()
         logger.info("download_from_page: loading %s", source_url[:100])
         await page.goto(
             source_url,
@@ -292,6 +313,7 @@ class BrowserRelay:
             timeout=settings.relay_navigation_timeout_ms,
         )
         self._assert_allowed_url(page.url)
+        logger.info("download_from_page: loaded final_url=%s elapsed=%.2fs", page.url[:120], time.monotonic() - started)
         logger.info("download_from_page: page loaded, waiting network idle...")
         try:
             await page.wait_for_load_state("networkidle", timeout=10_000)
@@ -614,10 +636,13 @@ class BrowserRelay:
     ) -> tuple[Path, dict[str, Any]]:
         suggested = download.suggested_filename
         file_path = self._unique_path(suggested)
+        started = time.monotonic()
+        logger.info("save_playwright_download: saving suggested=%s target=%s", suggested, file_path)
         await asyncio.wait_for(
             download.save_as(str(file_path)),
             timeout=max(30, settings.relay_request_timeout_seconds),
         )
+        logger.info("save_playwright_download: done elapsed=%.2fs size=%s", time.monotonic() - started, file_path.stat().st_size)
         return file_path, {
             "source_url": source_url,
             "filename": file_path.name,

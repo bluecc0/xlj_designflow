@@ -558,17 +558,29 @@ async def proxy_download_login(request: Request):
 
 @app.post("/proxy-download/inspect")
 async def proxy_download_inspect(body: ProxyDownloadInspectRequest, request: Request):
-    _current_user(request)
+    user = _current_user(request)
     if not settings.proxy_download_enabled and not (settings.root_dir / "proxy_download").exists():
         raise HTTPException(503, "\u82b1\u74e3\u4e0b\u8f7d\u670d\u52a1\u672a\u542f\u7528")
+    request_id = uuid.uuid4().hex[:8]
+    started = time.monotonic()
+    logger.info("[proxy-download:%s] inspect start user=%s url=%s", request_id, user.get("username"), body.url)
     try:
         payload = await asyncio.wait_for(
             proxy_download_inspect_url(body.url),
             timeout=max(10, settings.proxy_download_request_timeout_seconds),
         )
+        logger.info(
+            "[proxy-download:%s] inspect done elapsed=%.2fs formats=%s title=%s",
+            request_id,
+            time.monotonic() - started,
+            payload.get("formats") or [],
+            payload.get("title"),
+        )
     except (asyncio.TimeoutError, TimeoutError) as exc:
+        logger.exception("[proxy-download:%s] inspect timeout elapsed=%.2fs", request_id, time.monotonic() - started)
         raise HTTPException(504, "格式检测超时，请确认花瓣账号状态或稍后重试") from exc
     except Exception as exc:
+        logger.exception("[proxy-download:%s] inspect failed elapsed=%.2fs", request_id, time.monotonic() - started)
         raise HTTPException(502, f"\u683c\u5f0f\u68c0\u6d4b\u5931\u8d25: {exc}") from exc
     return {
         "source_url": payload.get("source_url") or body.url,
@@ -582,18 +594,33 @@ async def proxy_download_download(body: ProxyDownloadRequest, request: Request):
     user = _current_user(request)
     if not settings.proxy_download_enabled and not (settings.root_dir / "proxy_download").exists():
         raise HTTPException(503, "\u82b1\u74e3\u4e0b\u8f7d\u670d\u52a1\u672a\u542f\u7528")
+    request_id = uuid.uuid4().hex[:8]
+    started = time.monotonic()
+    logger.info(
+        "[proxy-download:%s] download start user=%s url=%s format=%s timeout=%ss",
+        request_id,
+        user.get("username"),
+        body.url,
+        body.format or "-",
+        max(30, settings.proxy_download_request_timeout_seconds),
+    )
     try:
         async def _download_flow():
+            logger.info("[proxy-download:%s] phase inspect", request_id)
             inspection = await proxy_download_inspect_url(body.url)
             formats = inspection.get("formats") or []
+            logger.info("[proxy-download:%s] phase inspect done formats=%s", request_id, formats)
             if len(formats) > 1 and not body.format:
+                logger.info("[proxy-download:%s] phase choose_format formats=%s", request_id, formats)
                 return {
                     "status": "choose_format",
                     "source_url": body.url,
                     "formats": formats,
                     "message": "\u8be5\u7d20\u6750\u652f\u6301\u591a\u79cd\u683c\u5f0f\uff0c\u8bf7\u5148\u9009\u62e9\u4e00\u79cd\u683c\u5f0f\u3002",
                 }, None, None
+            logger.info("[proxy-download:%s] phase download_url", request_id)
             path, meta = await proxy_download_download_url(body.url, body.format)
+            logger.info("[proxy-download:%s] phase download_url done path=%s meta=%s", request_id, path, meta)
             return None, path, meta
 
         early_response, path, meta = await asyncio.wait_for(
@@ -601,10 +628,13 @@ async def proxy_download_download(body: ProxyDownloadRequest, request: Request):
             timeout=max(30, settings.proxy_download_request_timeout_seconds),
         )
         if early_response is not None:
+            logger.info("[proxy-download:%s] download early_response elapsed=%.2fs status=%s", request_id, time.monotonic() - started, early_response.get("status"))
             return early_response
     except Exception as exc:
         if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+            logger.exception("[proxy-download:%s] download timeout elapsed=%.2fs", request_id, time.monotonic() - started)
             raise HTTPException(504, "花瓣下载超时：代理浏览器长时间没有返回，请检查登录状态或重试") from exc
+        logger.exception("[proxy-download:%s] download failed elapsed=%.2fs", request_id, time.monotonic() - started)
         raise HTTPException(502, f"\u82b1\u74e3\u4e0b\u8f7d\u5931\u8d25: {exc}") from exc
 
     filename = _safe_download_filename(str(meta.get("filename") or Path(path).name))
@@ -617,6 +647,13 @@ async def proxy_download_download(body: ProxyDownloadRequest, request: Request):
         target_path.write_bytes(file_path.read_bytes())
     else:
         target_path = file_path
+    logger.info(
+        "[proxy-download:%s] download done elapsed=%.2fs filename=%s size=%s",
+        request_id,
+        time.monotonic() - started,
+        filename,
+        target_path.stat().st_size,
+    )
     return {
         "status": "done",
         "source_url": str(meta.get("source_url") or body.url),

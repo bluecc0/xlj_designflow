@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import logging
 import sys
 import threading
+import time
 from pathlib import Path
 
 from .config import settings
 
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s %(message)s", datefmt="%H:%M:%S"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
 
 _loop: asyncio.AbstractEventLoop | None = None
 _thread: threading.Thread | None = None
@@ -55,22 +63,32 @@ def _ensure_thread() -> asyncio.AbstractEventLoop:
             _thread = threading.Thread(target=_thread_main, name="proxy-download-relay", daemon=True)
             _thread.start()
             _ready.wait(timeout=10)
+            logger.info("relay thread started alive=%s loop_ready=%s", _thread.is_alive(), _loop is not None)
         if _loop is None:
             raise RuntimeError("下载代理事件循环启动失败")
         return _loop
 
 
-async def _submit(coro, timeout_seconds: int | None = None):
+async def _submit(coro, timeout_seconds: int | None = None, label: str = "relay"):
     loop = _ensure_thread()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
     wrapped = asyncio.wrap_future(future)
+    started = time.monotonic()
+    logger.info("%s: submit timeout=%ss", label, timeout_seconds if timeout_seconds is not None else "none")
     try:
         if timeout_seconds is None:
-            return await wrapped
-        return await asyncio.wait_for(wrapped, timeout=max(1, timeout_seconds))
+            result = await wrapped
+        else:
+            result = await asyncio.wait_for(wrapped, timeout=max(1, timeout_seconds))
+        logger.info("%s: done elapsed=%.2fs", label, time.monotonic() - started)
+        return result
     except asyncio.TimeoutError:
         future.cancel()
+        logger.error("%s: timeout elapsed=%.2fs cancelled=%s", label, time.monotonic() - started, future.cancelled())
         raise TimeoutError(f"下载代理执行超时（>{timeout_seconds}s）")
+    except Exception:
+        logger.exception("%s: failed elapsed=%.2fs", label, time.monotonic() - started)
+        raise
 
 
 async def _ensure_started_impl() -> None:
@@ -79,7 +97,7 @@ async def _ensure_started_impl() -> None:
 
 
 async def ensure_started() -> None:
-    await _submit(_ensure_started_impl(), timeout_seconds=30)
+    await _submit(_ensure_started_impl(), timeout_seconds=30, label="ensure_started")
 
 
 async def _stop_impl() -> None:
@@ -112,7 +130,7 @@ async def _login_shell_impl() -> None:
 
 
 async def login_shell() -> None:
-    await _submit(_login_shell_impl())
+    await _submit(_login_shell_impl(), label="login_shell")
 
 
 async def _inspect_impl(source_url: str) -> dict[str, object]:
@@ -124,6 +142,7 @@ async def inspect_url(source_url: str) -> dict[str, object]:
     return await _submit(
         _inspect_impl(source_url),
         timeout_seconds=max(15, settings.relay_request_timeout_seconds),
+        label=f"inspect {source_url[:80]}",
     )
 
 
@@ -136,6 +155,7 @@ async def download_url(source_url: str, download_format: str | None = None) -> t
     return await _submit(
         _download_impl(source_url, download_format),
         timeout_seconds=max(30, settings.relay_request_timeout_seconds),
+        label=f"download {source_url[:80]} format={download_format or '-'}",
     )
 
 
@@ -148,6 +168,7 @@ async def check_login_status() -> dict[str, object]:
     return await _submit(
         _check_login_impl(),
         timeout_seconds=max(10, min(settings.relay_request_timeout_seconds, 30)),
+        label="check_login_status",
     )
 
 
@@ -157,4 +178,4 @@ async def _trigger_login_impl() -> None:
 
 
 async def trigger_login() -> None:
-    await _submit(_trigger_login_impl(), timeout_seconds=60)
+    await _submit(_trigger_login_impl(), timeout_seconds=60, label="trigger_login")
