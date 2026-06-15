@@ -1493,7 +1493,13 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     if (!message || isLoading) return;
     const imagesToSend = [...refImages];
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
-    onSend(message, imagesToSend, { size: aiImageSize, resolution: aiQuality, provider: aiProvider });
+    onSend(message, imagesToSend, {
+      size: aiImageSize,
+      resolution: aiQuality,
+      provider: aiProvider,
+      workflow: selectedWorkflow,
+      lockedCommand: lockedCommand,
+    });
     setText('');
     clearRefImages();
   };
@@ -3324,7 +3330,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     // ── 花瓣下载 ─────────────────────────────────────────────────────────────
     // 新交互: 用户通过功能按钮选择“花瓣下载”，输入框只填写 URL/ID/格式。
     // 旧的 /花瓣下载 文本仍兼容，但不再要求用户输入斜杠指令。
-    const isHuabanDownloadMode = selectedWorkflow === 'download' || lockedCommand === '/花瓣下载' || trimmed.startsWith('/花瓣下载');
+    const isHuabanDownloadMode = aiOptions.workflow === 'download' || aiOptions.lockedCommand === '/花瓣下载' || trimmed.startsWith('/花瓣下载');
     if (isHuabanDownloadMode) {
       const args = trimmed.startsWith('/花瓣下载')
         ? trimmed.replace(/^\/花瓣下载\s*/, '').trim()
