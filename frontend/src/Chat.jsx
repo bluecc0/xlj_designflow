@@ -1759,7 +1759,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro', available: available('/Nano Banana pro') },
       { id: 'compose', label: '智能铺品', desc: '上传表格并匹配本地图库', iconKey: 'grid', workflow: 'compose' },
       { id: 'special', label: '特殊品', desc: '使用特殊品模板合成结果', iconKey: 'layers', cmd: template && template.is_special_full ? '/特殊品（完整）' : '/特殊品', available: available(template && template.is_special_full ? '/特殊品（完整）' : '/特殊品') },
-      { id: 'download', label: '花瓣下载', desc: '下载花瓣素材或指定格式', iconKey: 'download', cmd: '/花瓣下载', available: available('/花瓣下载') },
+      { id: 'download', label: '花瓣下载', desc: '输入花瓣 ID，自动识别可下载格式', iconKey: 'download', cmd: '/花瓣下载', available: available('/花瓣下载') },
     ];
   }, [template && template.is_special_full, taskDefsKey]);
   const getTaskIcon = React.useCallback(function(iconKey) {
@@ -1819,7 +1819,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           : selectedWorkflow === 'compose'
             ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁'
             : selectedWorkflow === 'download'
-              ? '输入花瓣项目 ID 或下载要求'
+              ? '输入花瓣项目 ID 或链接，格式会自动识别'
               : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(
     text.trim() ||
@@ -3328,7 +3328,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     // ── 花瓣下载 ─────────────────────────────────────────────────────────────
-    // 新交互: 用户通过功能按钮选择“花瓣下载”，输入框只填写 URL/ID/格式。
+    // 新交互: 用户通过功能按钮选择“花瓣下载”，输入框只填写 URL/ID。
     // 旧的 /花瓣下载 文本仍兼容，但不再要求用户输入斜杠指令。
     const isHuabanDownloadMode = aiOptions.workflow === 'download' || aiOptions.lockedCommand === '/花瓣下载' || trimmed.startsWith('/花瓣下载');
     if (isHuabanDownloadMode) {
@@ -3338,7 +3338,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const match = args.match(/^(\S+)(?:\s+([A-Za-z0-9._-]+))?$/);
       setMessages(msgs => [...msgs, { who: 'user', text: args || text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       if (!match) {
-        setMessages(msgs => [...msgs, { who: 'ai', text: '请直接输入花瓣链接/项目 ID；如需指定格式，可写：链接 PSD', meta: '花瓣下载' }]);
+        setMessages(msgs => [...msgs, { who: 'ai', text: '请直接输入花瓣链接或项目 ID；如果素材有多个格式，我会让你点击选择。', meta: '花瓣下载' }]);
         return;
       }
       const normalizeHuabanSource = function(value) {
