@@ -46,6 +46,7 @@ from .ai_image import (
     generate_image_zenmux_async,
     generate_image_with_reference_async,
     generate_inspiration_thumb,
+    get_inspiration_thumb_url_if_exists,
     load_user_refs,
     normalize_provider,
     save_user_refs,
@@ -2409,10 +2410,11 @@ def ai_image_status(request: Request, job_id: str):
     image_url = job.get("image_url")
     preview_url = ""
     if image_url:
-        try:
-            preview_url, _, _ = generate_inspiration_thumb(image_url, job.get("user_id") or user["id"], job["id"])
-        except Exception:
-            preview_url = image_url
+        preview_url = get_inspiration_thumb_url_if_exists(
+            image_url,
+            job.get("user_id") or user["id"],
+            job["id"],
+        )
     return {
         "job_id": job["id"],
         "status": job["status"],

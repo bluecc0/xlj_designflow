@@ -148,6 +148,16 @@ def generate_inspiration_thumb(image_url: str, user_id: str, job_id: str, max_wi
         return image_url, 0, 0
 
 
+def get_inspiration_thumb_url_if_exists(image_url: str, user_id: str, job_id: str) -> str:
+    """只返回已经存在的缩略图 URL；不存在时回退原图，不做同步生成。"""
+    if not image_url.startswith("/ai-images/"):
+        return image_url
+    thumb_path = _OUTPUT_DIR / user_id / "thumbs" / f"{job_id}.webp"
+    if thumb_path.exists():
+        return f"/ai-images/{user_id}/thumbs/{job_id}.webp"
+    return image_url
+
+
 def save_user_refs(user_id: str, job_id: str, refs: list[tuple[bytes, str]]) -> list[str]:
     """持久化用户上传的参考图到磁盘，返回相对路径列表。"""
     ref_dir = _ensure_user_output_dir(user_id) / "refs" / job_id
