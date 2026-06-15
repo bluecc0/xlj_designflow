@@ -614,7 +614,10 @@ class BrowserRelay:
     ) -> tuple[Path, dict[str, Any]]:
         suggested = download.suggested_filename
         file_path = self._unique_path(suggested)
-        await download.save_as(str(file_path))
+        await asyncio.wait_for(
+            download.save_as(str(file_path)),
+            timeout=max(30, settings.relay_request_timeout_seconds),
+        )
         return file_path, {
             "source_url": source_url,
             "filename": file_path.name,

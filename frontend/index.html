@@ -3181,7 +3181,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     animation: 'pulse 1.2s ease-in-out infinite',
                   }}/>
                   <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
-                    {m.meta === 'Agent' ? getThinkingPreview(m.thinkingStatus || m.text) : '让我想想...'}
+                    {m.meta === 'Agent' ? getThinkingPreview(m.thinkingStatus || m.text) : (m.text || '让我想想...')}
                   </span>
                 </div>
                 {m.thinking ? <ThinkingBlock text={m.thinking}/> : null}
@@ -5495,13 +5495,17 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     // ── 花瓣下载 ─────────────────────────────────────────────────────────────
-    // UI 锁定 /花瓣下载, 或用户显式打字 (向后兼容)
-    if (trimmed.startsWith('/花瓣下载')) {
-      const args = trimmed.replace(/^\/花瓣下载\s*/, '').trim();
+    // 新交互: 用户通过功能按钮选择“花瓣下载”，输入框只填写 URL/ID/格式。
+    // 旧的 /花瓣下载 文本仍兼容，但不再要求用户输入斜杠指令。
+    const isHuabanDownloadMode = selectedWorkflow === 'download' || lockedCommand === '/花瓣下载' || trimmed.startsWith('/花瓣下载');
+    if (isHuabanDownloadMode) {
+      const args = trimmed.startsWith('/花瓣下载')
+        ? trimmed.replace(/^\/花瓣下载\s*/, '').trim()
+        : trimmed.trim();
       const match = args.match(/^(\S+)(?:\s+([A-Za-z0-9._-]+))?$/);
       setMessages(msgs => [...msgs, { who: 'user', text: args || text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       if (!match) {
-        setMessages(msgs => [...msgs, { who: 'ai', text: '请使用格式：/花瓣下载 URL 或 /花瓣下载 URL PSD', meta: 'Loom' }]);
+        setMessages(msgs => [...msgs, { who: 'ai', text: '请直接输入花瓣链接/项目 ID；如需指定格式，可写：链接 PSD', meta: '花瓣下载' }]);
         return;
       }
       const normalizeHuabanSource = function(value) {
@@ -5534,8 +5538,17 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         }
         // 轮换提示文字，让用户感知进度
         const stages = isFirstCall
-          ? [{ after: 6000, text: '正在查找下载按钮…' }, { after: 15000, text: '页面加载较慢，请耐心等待…' }]
-          : [{ after: 8000, text: '文件较大，仍在下载中…' }, { after: 20000, text: '网络较慢，请耐心等待…' }];
+          ? [
+              { after: 6000, text: '正在查找下载按钮…' },
+              { after: 15000, text: '页面加载较慢，请耐心等待…' },
+              { after: 30000, text: '还在等待花瓣页面响应，若账号失效会自动报错…' },
+              { after: 60000, text: '下载代理仍在处理，稍后会给出成功或失败结果…' },
+            ]
+          : [
+              { after: 8000, text: '文件较大，仍在下载中…' },
+              { after: 20000, text: '网络较慢，请耐心等待…' },
+              { after: 45000, text: '仍在等待文件流返回…' },
+            ];
         let stageIdx = 0;
         let progressTimer = null;
         const scheduleNext = () => {
@@ -5613,6 +5626,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const model = aiCmd ? aiCmd.model : (lastOpts?.model || 'gpt-image-2');
       const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, provider: aiOptions.provider };
       setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? rawPrompt : text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
+      await runAiImageGeneration(model, freshPrompt, freshPrompt, refImages, opts);
       return;
     }
 
@@ -6980,6 +6994,9 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
     const next = !post.favorited;
     const apiCall = next ? window.API.favoriteInspiration : window.API.unfavoriteInspiration;
     setPosts(function(prev) {
+      if (!next && tab === 'favorite') {
+        return prev.filter(function(p) { return p.id !== post.id; });
+      }
       return prev.map(function(p) { return p.id === post.id ? Object.assign({}, p, { favorited: next }) : p; });
     });
     if (detailPost && detailPost.id === post.id) {
@@ -6987,6 +7004,9 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
     }
     apiCall(post.id).catch(function(e) {
       setPosts(function(prev) {
+        if (!next && tab === 'favorite') {
+          return [Object.assign({}, post, { favorited: !next })].concat(prev);
+        }
         return prev.map(function(p) { return p.id === post.id ? Object.assign({}, p, { favorited: !next }) : p; });
       });
       if (detailPost && detailPost.id === post.id) {
@@ -6994,7 +7014,7 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
       }
       window.alert((next ? '收藏' : '取消收藏') + '失败：' + (e.message || '未知错误'));
     });
-  }, [detailPost]);
+  }, [detailPost, tab]);
 
   // 点击图片 → 加载完整详情
   const openDetail = React.useCallback(function(post) {

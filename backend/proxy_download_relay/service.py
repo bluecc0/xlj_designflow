@@ -6,6 +6,8 @@ import sys
 import threading
 from pathlib import Path
 
+from .config import settings
+
 
 _loop: asyncio.AbstractEventLoop | None = None
 _thread: threading.Thread | None = None
@@ -58,10 +60,17 @@ def _ensure_thread() -> asyncio.AbstractEventLoop:
         return _loop
 
 
-async def _submit(coro):
+async def _submit(coro, timeout_seconds: int | None = None):
     loop = _ensure_thread()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return await asyncio.wrap_future(future)
+    wrapped = asyncio.wrap_future(future)
+    try:
+        if timeout_seconds is None:
+            return await wrapped
+        return await asyncio.wait_for(wrapped, timeout=max(1, timeout_seconds))
+    except asyncio.TimeoutError:
+        future.cancel()
+        raise TimeoutError(f"下载代理执行超时（>{timeout_seconds}s）")
 
 
 async def _ensure_started_impl() -> None:
@@ -70,7 +79,7 @@ async def _ensure_started_impl() -> None:
 
 
 async def ensure_started() -> None:
-    await _submit(_ensure_started_impl())
+    await _submit(_ensure_started_impl(), timeout_seconds=30)
 
 
 async def _stop_impl() -> None:
@@ -112,7 +121,10 @@ async def _inspect_impl(source_url: str) -> dict[str, object]:
 
 
 async def inspect_url(source_url: str) -> dict[str, object]:
-    return await _submit(_inspect_impl(source_url))
+    return await _submit(
+        _inspect_impl(source_url),
+        timeout_seconds=max(15, settings.relay_request_timeout_seconds),
+    )
 
 
 async def _download_impl(source_url: str, download_format: str | None) -> tuple[Path, dict[str, object]]:
@@ -121,7 +133,10 @@ async def _download_impl(source_url: str, download_format: str | None) -> tuple[
 
 
 async def download_url(source_url: str, download_format: str | None = None) -> tuple[Path, dict[str, object]]:
-    return await _submit(_download_impl(source_url, download_format))
+    return await _submit(
+        _download_impl(source_url, download_format),
+        timeout_seconds=max(30, settings.relay_request_timeout_seconds),
+    )
 
 
 async def _check_login_impl() -> dict[str, object]:
@@ -130,7 +145,10 @@ async def _check_login_impl() -> dict[str, object]:
 
 
 async def check_login_status() -> dict[str, object]:
-    return await _submit(_check_login_impl())
+    return await _submit(
+        _check_login_impl(),
+        timeout_seconds=max(10, min(settings.relay_request_timeout_seconds, 30)),
+    )
 
 
 async def _trigger_login_impl() -> None:
@@ -139,4 +157,4 @@ async def _trigger_login_impl() -> None:
 
 
 async def trigger_login() -> None:
-    await _submit(_trigger_login_impl())
+    await _submit(_trigger_login_impl(), timeout_seconds=60)

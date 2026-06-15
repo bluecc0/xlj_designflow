@@ -562,7 +562,12 @@ async def proxy_download_inspect(body: ProxyDownloadInspectRequest, request: Req
     if not settings.proxy_download_enabled and not (settings.root_dir / "proxy_download").exists():
         raise HTTPException(503, "\u82b1\u74e3\u4e0b\u8f7d\u670d\u52a1\u672a\u542f\u7528")
     try:
-        payload = await proxy_download_inspect_url(body.url)
+        payload = await asyncio.wait_for(
+            proxy_download_inspect_url(body.url),
+            timeout=max(10, settings.proxy_download_request_timeout_seconds),
+        )
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        raise HTTPException(504, "格式检测超时，请确认花瓣账号状态或稍后重试") from exc
     except Exception as exc:
         raise HTTPException(502, f"\u683c\u5f0f\u68c0\u6d4b\u5931\u8d25: {exc}") from exc
     return {
@@ -578,17 +583,28 @@ async def proxy_download_download(body: ProxyDownloadRequest, request: Request):
     if not settings.proxy_download_enabled and not (settings.root_dir / "proxy_download").exists():
         raise HTTPException(503, "\u82b1\u74e3\u4e0b\u8f7d\u670d\u52a1\u672a\u542f\u7528")
     try:
-        inspection = await proxy_download_inspect_url(body.url)
-        formats = inspection.get("formats") or []
-        if len(formats) > 1 and not body.format:
-            return {
-                "status": "choose_format",
-                "source_url": body.url,
-                "formats": formats,
-                "message": "\u8be5\u7d20\u6750\u652f\u6301\u591a\u79cd\u683c\u5f0f\uff0c\u8bf7\u5148\u9009\u62e9\u4e00\u79cd\u683c\u5f0f\u3002",
-            }
-        path, meta = await proxy_download_download_url(body.url, body.format)
+        async def _download_flow():
+            inspection = await proxy_download_inspect_url(body.url)
+            formats = inspection.get("formats") or []
+            if len(formats) > 1 and not body.format:
+                return {
+                    "status": "choose_format",
+                    "source_url": body.url,
+                    "formats": formats,
+                    "message": "\u8be5\u7d20\u6750\u652f\u6301\u591a\u79cd\u683c\u5f0f\uff0c\u8bf7\u5148\u9009\u62e9\u4e00\u79cd\u683c\u5f0f\u3002",
+                }, None, None
+            path, meta = await proxy_download_download_url(body.url, body.format)
+            return None, path, meta
+
+        early_response, path, meta = await asyncio.wait_for(
+            _download_flow(),
+            timeout=max(30, settings.proxy_download_request_timeout_seconds),
+        )
+        if early_response is not None:
+            return early_response
     except Exception as exc:
+        if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+            raise HTTPException(504, "花瓣下载超时：代理浏览器长时间没有返回，请检查登录状态或重试") from exc
         raise HTTPException(502, f"\u82b1\u74e3\u4e0b\u8f7d\u5931\u8d25: {exc}") from exc
 
     filename = _safe_download_filename(str(meta.get("filename") or Path(path).name))
