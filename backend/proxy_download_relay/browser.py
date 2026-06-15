@@ -431,41 +431,112 @@ class BrowserRelay:
         return None
 
     async def _click_download_flow(self, page: Page, handle) -> Download | None:
+        recent_responses: list[str] = []
+
+        def _remember_response(response) -> None:
+            try:
+                url = str(response.url)
+                headers = response.headers
+                content_type = headers.get("content-type", "")
+                disposition = headers.get("content-disposition", "")
+                if response.status >= 400 or disposition or any(ext in url.lower() for ext in DIRECT_FILE_EXTENSIONS):
+                    recent_responses.append(
+                        f"{response.status} {url[:180]} ct={content_type[:80]} cd={disposition[:120]}"
+                    )
+                    del recent_responses[:-12]
+            except Exception:
+                pass
+
+        page.on("response", _remember_response)
         # \u63d0\u53d6 href \u5907\u7528
         href = None
         try:
-            tag = await handle.evaluate("el => el.tagName.toLowerCase()")
-            if tag == "a":
-                href = await handle.get_attribute("href")
-                logger.info("click_flow: clicked <a> href=%s", href[:100] if href else None)
-        except PlaywrightError:
-            pass
-
-        # \u5148\u5c1d\u8bd5 expect_download
-        try:
-            async with page.expect_download(timeout=8_000) as event:
-                await handle.click()
-            logger.info("click_flow: expect_download succeeded")
-            return await event.value
-        except PlaywrightError:
-            logger.info("click_flow: expect_download failed, checking confirm buttons...")
-
-        # \u68c0\u67e5\u786e\u8ba4\u6309\u94ae
-        await page.wait_for_timeout(1_000)
-        for label in ("\u786e\u8ba4\u4e0b\u8f7d", "\u518d\u6b21\u4e0b\u8f7d"):
-            confirm = page.locator("button").filter(has_text=label).first
             try:
-                if await confirm.is_visible():
-                    logger.info("click_flow: clicking confirm '%s'", label)
-                    async with page.expect_download(timeout=20_000) as event:
-                        await confirm.click()
-                    logger.info("click_flow: confirm download succeeded")
-                    return await event.value
+                tag = await handle.evaluate("el => el.tagName.toLowerCase()")
+                if tag == "a":
+                    href = await handle.get_attribute("href")
+                    logger.info("click_flow: clicked <a> href=%s", href[:100] if href else None)
             except PlaywrightError:
-                continue
+                pass
 
-        logger.info("click_flow: no download triggered")
-        return None
+            # \u5148\u5c1d\u8bd5 expect_download
+            try:
+                async with page.expect_download(timeout=8_000) as event:
+                    await handle.click()
+                logger.info("click_flow: expect_download succeeded")
+                return await event.value
+            except PlaywrightError as exc:
+                logger.info("click_flow: expect_download failed, checking confirm buttons: %s", exc)
+
+            # \u68c0\u67e5\u786e\u8ba4\u6309\u94ae
+            await page.wait_for_timeout(1_000)
+            for label in ("\u786e\u8ba4\u4e0b\u8f7d", "\u518d\u6b21\u4e0b\u8f7d"):
+                confirm = page.locator("button").filter(has_text=label).first
+                try:
+                    if await confirm.is_visible():
+                        logger.info("click_flow: clicking confirm '%s'", label)
+                        async with page.expect_download(timeout=20_000) as event:
+                            await confirm.click()
+                        logger.info("click_flow: confirm download succeeded")
+                        return await event.value
+                except PlaywrightError as exc:
+                    logger.warning("click_flow: confirm '%s' did not trigger download: %s", label, exc)
+                    await self._log_page_diagnostics(page, f"confirm-{label}", recent_responses)
+                    continue
+
+            logger.info("click_flow: no download triggered")
+            await self._log_page_diagnostics(page, "no-download-triggered", recent_responses)
+            return None
+        finally:
+            try:
+                page.remove_listener("response", _remember_response)
+            except Exception:
+                pass
+
+    async def _log_page_diagnostics(self, page: Page, reason: str, recent_responses: list[str] | None = None) -> None:
+        """Dump enough browser state to diagnose why a click did not produce a download."""
+        safe_reason = re.sub(r"[^a-zA-Z0-9._-]+", "_", reason)[:60] or "debug"
+        stamp = int(time.time() * 1000)
+        debug_dir = settings.relay_storage_dir / "debug"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        screenshot_path = debug_dir / f"{stamp}_{safe_reason}.png"
+        html_path = debug_dir / f"{stamp}_{safe_reason}.html"
+        try:
+            pages = []
+            for p in page.context.pages:
+                try:
+                    pages.append(p.url[:180])
+                except Exception:
+                    pass
+            title = await page.title()
+            body_text = ""
+            try:
+                body_text = (await page.inner_text("body", timeout=1000)).strip()
+            except PlaywrightError as exc:
+                body_text = f"<body text unavailable: {exc}>"
+            button_texts = await self._collect_button_texts(page)
+            logger.warning(
+                "download_diag: reason=%s url=%s title=%s pages=%s recent_responses=%s buttons=%s body_preview=%s",
+                reason,
+                page.url[:180],
+                title[:120],
+                pages,
+                recent_responses or [],
+                button_texts[:30],
+                " ".join(body_text.split())[:500],
+            )
+            try:
+                await page.screenshot(path=str(screenshot_path), full_page=True, timeout=3000)
+                logger.warning("download_diag: screenshot=%s", screenshot_path)
+            except PlaywrightError as exc:
+                logger.warning("download_diag: screenshot failed: %s", exc)
+            try:
+                html_path.write_text(await page.content(), encoding="utf-8")
+                logger.warning("download_diag: html=%s", html_path)
+            except Exception as exc:
+                logger.warning("download_diag: html dump failed: %s", exc)
+        except Exception:
+            logger.exception("download_diag: failed reason=%s", reason)
 
     async def _discover_download_formats(self, page: Page) -> list[str]:
         formats = self._extract_formats(await self._collect_candidate_texts(page))
