@@ -3417,6 +3417,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
   const [aiProvider, setAiProvider] = React.useState('apimart');
+  const [aiBatchCount, setAiBatchCount] = React.useState(1);
   const [manualRefImages, setManualRefImages] = React.useState([]);
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
@@ -3791,6 +3792,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       provider: aiProvider,
       workflow: selectedWorkflow,
       lockedCommand: lockedCommand,
+      batchCount: aiBatchCount,
     });
     setText('');
     clearRefImages();
@@ -4361,9 +4363,31 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
               type: 'button',
               onClick: function() { setAiProvider('zenmux'); },
               style: Object.assign({}, protoChipStyle(aiProvider === 'zenmux'), { cursor: 'pointer' })
-            }, '官方')
+            }, '官方'),
+            React.createElement('div', { style: { width: 1, height: 30, background: 'var(--line)', margin: '0 1px' } }),
+            [1, 2, 4, 8].map(function(n) {
+              const active = aiBatchCount === n;
+              return React.createElement('button', {
+                key: 'batch-' + n,
+                type: 'button',
+                onClick: function() { setAiBatchCount(n); },
+                title: n === 1 ? '单张生图' : '一次并发 ' + n + ' 张',
+                style: Object.assign({}, protoChipStyle(active), { cursor: 'pointer' })
+              }, n + (n === 1 ? ' 张' : ' 张并发'));
+            })
           )
         ),
+        aiBatchCount > 1 && React.createElement('div', {
+          style: {
+            marginTop: 8,
+            padding: '8px 10px',
+            borderRadius: 8,
+            background: 'var(--panel-2)',
+            color: 'var(--ink-3)',
+            fontSize: 11,
+            lineHeight: 1.5,
+          }
+        }, '并发 ' + aiBatchCount + ' 张候选图会同时提交，全部完成才可发布到灵感。'),
         activeMode === 'chat' && React.createElement('div', {
           style: {
             marginTop: 12,
@@ -5303,8 +5327,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
 
   // —— AI 生图核心流程（共享）——
   const runAiImageGeneration = React.useCallback(async (model, prompt, displayText, refImages, aiOptions) => {
+    const batchCount = Math.max(1, Math.min(parseInt(aiOptions.batchCount) || 1, 8));
     setIsLoading(true);
-    const startedAt = Date.now();
     var finalPrompt = prompt;
     var finalRefImages = Array.isArray(refImages) ? refImages.slice() : [];
 
@@ -5312,16 +5336,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     var lastSize = aiOptions.size || '1024x1024';
     var lastResolution = aiOptions.resolution || '1K';
     var provider = aiOptions.provider || 'apimart';
-    setMessages(msgs => [...msgs, {
-      who: 'ai', type: 'ai-image-generating',
-      model, provider, prompt, size: lastSize, resolution: lastResolution,
-      status: 'running', startedAt,
-      progress: 0,
-      meta: 'Loom',
-      hasReference: refImages.length > 0,
-      refCount: refImages.length,
-      refPreviews: [],
-    }]);
+
+    // 预解析 product refs（一次，多 job 共享）
     try {
       var productRefs = parseProductRefs(prompt);
       if (productRefs.length > 0) {
@@ -5336,88 +5352,122 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         finalRefImages = finalRefImages.concat(productRefFiles);
         finalPrompt = enhancePromptWithProductRefs(prompt, resolvedRefs, refImages.length > 0);
       }
-
-      // 将所有参考图（用户上传 + 产品图）转为缩略图 data URL
       try {
         refPreviews = await Promise.all(finalRefImages.map(r => fileToThumbDataUrl(r.file)));
       } catch (e) { refPreviews = []; }
-
-      const apiBase = window.API_BASE || window.location.origin;
-      const fd = new FormData();
-      fd.append('model', model);
-      fd.append('provider', provider);
-      fd.append('prompt', finalPrompt);
-      fd.append('size', aiOptions.size || '1024x1024');
-      fd.append('resolution', aiOptions.resolution || '1K');
-      if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
-      fd.append('ref_previews', JSON.stringify(refPreviews));
-      finalRefImages.forEach(r => fd.append('image', r.file));
-      const res = await fetch(apiBase + '/ai-image', { method: 'POST', body: fd, credentials: 'include' });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        if (err.detail && typeof err.detail === 'object' && err.detail.chat_session_id) {
-          setCurrentAiChatId(err.detail.chat_session_id);
-        }
-        throw new Error(
-          (err.detail && typeof err.detail === 'object' ? err.detail.message : err.detail) || `HTTP ${res.status}`
-        );
-      }
-      const data = await res.json();
-      if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
-      const jobId = data.job_id;
-      setMessages(msgs => msgs.map(m =>
-        m.type === 'ai-image-generating' && m.startedAt === startedAt
-          ? { ...m, jobId }
-          : m
-      ));
-
-      // 轮询任务状态
-      const pollInterval = setInterval(async () => {
-        try {
-          const statusRes = await fetch(apiBase + '/ai-image/' + jobId, { credentials: 'include' });
-          if (!statusRes.ok) return;
-          const statusData = await statusRes.json();
-          setMessages(msgs => msgs.map(m =>
-            m.type === 'ai-image-generating' && m.startedAt === startedAt
-              ? { ...m, status: statusData.status, progress: statusData.progress || m.progress }
-              : m
-          ));
-          if (statusData.status === 'done' && statusData.image_url) {
-            clearInterval(pollInterval);
-            const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
-            setMessages(msgs => msgs.map(m =>
-              m.type === 'ai-image-generating' && m.startedAt === startedAt
-                ? { ...m, status: 'done', imageUrl: statusData.image_url, previewUrl: statusData.preview_url || statusData.image_url, finalElapsed, progress: 100, refPreviews: [] }
-                : m
-            ));
-            if (onComposeComplete) {
-              onComposeComplete(null, null, [statusData.image_url], null);
-            }
-            loadAiChatHistory();
-            setIsLoading(false);
-          } else if (statusData.status === 'failed') {
-            clearInterval(pollInterval);
-            const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
-            setMessages(msgs => msgs.map(m =>
-              m.type === 'ai-image-generating' && m.startedAt === startedAt
-                ? { ...m, status: 'failed', error: statusData.error || '未知错误', finalElapsed, refPreviews: refPreviews.length ? refPreviews : m.refPreviews }
-                : m
-            ));
-            loadAiChatHistory();
-            setIsLoading(false);
-          }
-        } catch (e) {
-          // 轮询网络异常，忽略，下次重试
-        }
-      }, 2000);
     } catch (e) {
-      const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
-      setMessages(msgs => msgs.map(m =>
-        m.type === 'ai-image-generating' && m.startedAt === startedAt
-          ? { ...m, status: 'failed', error: e.message, finalElapsed }
-          : m
-      ));
-      loadAiChatHistory();
+      const failedAt = Date.now();
+      setMessages(msgs => [...msgs, {
+        who: 'ai', type: 'ai-image-generating',
+        model, provider, prompt, size: lastSize, resolution: lastResolution,
+        status: 'failed', error: e.message, finalElapsed: 0, startedAt: failedAt,
+        meta: 'Loom', hasReference: refImages.length > 0, refCount: refImages.length, refPreviews: [],
+      }]);
+      setIsLoading(false);
+      return;
+    }
+
+    // 创建 N 个生成占位（每个 startedAt 独立）
+    const slots = [];
+    const baseAt = Date.now();
+    for (let i = 0; i < batchCount; i++) {
+      const slotAt = baseAt + i;
+      slots.push(slotAt);
+      setMessages(msgs => [...msgs, {
+        who: 'ai', type: 'ai-image-generating',
+        model, provider, prompt, size: lastSize, resolution: lastResolution,
+        status: 'running', startedAt: slotAt, progress: 0,
+        meta: batchCount > 1 ? 'Loom · ' + (i + 1) + '/' + batchCount : 'Loom',
+        hasReference: refImages.length > 0, refCount: refImages.length, refPreviews: [],
+        batchIndex: i, batchCount: batchCount,
+      }]);
+    }
+
+    const apiBase = window.API_BASE || window.location.origin;
+    // 并发提交 N 个 job
+    const submitOne = function(slotAt, index) {
+      return new Promise(function(resolve) {
+        const fd = new FormData();
+        fd.append('model', model);
+        fd.append('provider', provider);
+        fd.append('prompt', finalPrompt);
+        fd.append('size', aiOptions.size || '1024x1024');
+        fd.append('resolution', aiOptions.resolution || '1K');
+        if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
+        fd.append('ref_previews', JSON.stringify(refPreviews));
+        finalRefImages.forEach(r => fd.append('image', r.file));
+        fd.append('batch_count', '1');
+        fetch(apiBase + '/ai-image', { method: 'POST', body: fd, credentials: 'include' })
+          .then(function(res) {
+            if (!res.ok) {
+              return res.json().catch(function() { return {}; }).then(function(err) {
+                throw new Error((err && err.detail && typeof err.detail === 'object' ? err.detail.message : (err && err.detail)) || ('HTTP ' + res.status));
+              });
+            }
+            return res.json();
+          })
+          .then(function(data) {
+            if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
+            const jobId = data.job_id;
+            if (!jobId) { resolve(); return; }
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === slotAt
+                ? Object.assign({}, m, { jobId })
+                : m
+            ));
+            const pollInterval = setInterval(function() {
+              fetch(apiBase + '/ai-image/' + jobId, { credentials: 'include' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(statusData) {
+                  if (!statusData) return;
+                  setMessages(msgs => msgs.map(m =>
+                    m.type === 'ai-image-generating' && m.startedAt === slotAt
+                      ? Object.assign({}, m, { status: statusData.status, progress: statusData.progress || m.progress })
+                      : m
+                  ));
+                  if (statusData.status === 'done' && statusData.image_url) {
+                    clearInterval(pollInterval);
+                    const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+                    setMessages(msgs => msgs.map(m =>
+                      m.type === 'ai-image-generating' && m.startedAt === slotAt
+                        ? Object.assign({}, m, { status: 'done', imageUrl: statusData.image_url, previewUrl: statusData.preview_url || statusData.image_url, finalElapsed, progress: 100, refPreviews: refPreviews.length ? refPreviews : m.refPreviews })
+                        : m
+                    ));
+                    if (index === 0 && onComposeComplete) {
+                      onComposeComplete(null, null, [statusData.image_url], null);
+                    }
+                    loadAiChatHistory();
+                    resolve();
+                  } else if (statusData.status === 'failed') {
+                    clearInterval(pollInterval);
+                    const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+                    setMessages(msgs => msgs.map(m =>
+                      m.type === 'ai-image-generating' && m.startedAt === slotAt
+                        ? Object.assign({}, m, { status: 'failed', error: statusData.error || '未知错误', finalElapsed, refPreviews: refPreviews.length ? refPreviews : m.refPreviews })
+                        : m
+                    ));
+                    loadAiChatHistory();
+                    resolve();
+                  }
+                })
+                .catch(function() {});
+            }, 2000);
+          })
+          .catch(function(err) {
+            const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === slotAt
+                ? Object.assign({}, m, { status: 'failed', error: err.message, finalElapsed })
+                : m
+            ));
+            resolve();
+          });
+      });
+    };
+
+    try {
+      await Promise.all(slots.map(function(slotAt, i) { return submitOne(slotAt, i); }));
+    } finally {
       setIsLoading(false);
     }
   }, [currentAiChatId, enhancePromptWithProductRefs, loadAiChatHistory, loadResolvedRefFiles, onComposeComplete, parseProductRefs]);

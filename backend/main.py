@@ -3066,13 +3066,16 @@ async def ai_image_endpoint(
     chat_session_id: str = Form(""),
     image: List[UploadFile] = File(default=[]),
     ref_previews: str = Form(""),
+    batch_count: int = Form(1),
 ):
     """
     AI 生图接口（异步）。支持文生图（无 image）和图生图（最多 9 张参考图）。
     自动注入对话历史上下文：用 LLM 改写 prompt + 上次结果图作为参考。
-    提交任务后立即返回 {job_id, chat_session_id, status: "processing"}，
+    batch_count > 1 时并发创建 N 个独立 job（共享 chat_session_id），返回 job_ids 列表。
+    提交任务后立即返回 {job_id(s), chat_session_id, status: "processing"}，
     前端轮询 GET /ai-image/{job_id} 获取进度与结果。
     """
+    batch_count = max(1, min(int(batch_count or 1), 8))
     original_prompt = prompt.strip()
     ref_previews_list = []
     try:
@@ -3112,28 +3115,9 @@ async def ai_image_endpoint(
         role="user",
         type="user_text",
         text=original_prompt,
-        meta={"model": resolved, "size": size, "resolution": resolution, "refPreviews": ref_previews_list},
+        meta={"model": resolved, "size": size, "resolution": resolution, "refPreviews": ref_previews_list, "batchCount": batch_count},
         created_at=created_at,
     )
-    save_ai_image_job(
-        job_id=job_id,
-        user_id=user["id"],
-        status="processing",
-        model=resolved,
-        prompt=original_prompt,
-        size=size,
-        original_prompt=original_prompt,
-        resolved_prompt=original_prompt,
-        has_reference=bool(images),
-        created_at=created_at,
-    )
-    log_operation(
-        user_id=user["id"], username=user["username"],
-        action="ai_image",
-        detail=f"job={job_id[:8]} model={resolved} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(images)}",
-        payload=json.dumps({"job_id": job_id, "model": resolved, "size": size, "prompt": original_prompt[:200], "refs": len(images), "provider": resolved_provider}, ensure_ascii=False),
-    )
-
     try:
         # —— 上下文注入（对用户透明）——
         enriched_prompt = original_prompt
@@ -3166,46 +3150,76 @@ async def ai_image_endpoint(
         user_refs: list[tuple[bytes, str]] = [
             (await f.read(), f.filename or f"ref{i}.png") for i, f in enumerate(images)
         ]
-        # 持久化用户参考图，供重试时复用
-        if user_refs:
-            try:
-                save_user_refs(user["id"], job_id, user_refs)
-            except Exception:
-                logger.warning("Failed to save user refs for job %s", job_id)
-        all_refs: list[tuple[bytes, str]] = context_ref_bytes + user_refs
-        all_refs = all_refs[:9]  # 总共最多 9 张
 
         has_reference = bool(images) or bool(context_ref_bytes)
-        asyncio.create_task(
-            _run_ai_image_background(
-                job_id=job_id, user_id=user["id"], username=user["username"],
-                session_id=session_id,
-                provider=resolved_provider,
-                model=resolved, prompt=enriched_prompt,
-                size=size, resolution=resolution,
-                refs=all_refs, has_reference=has_reference, created_at=created_at,
-                original_prompt=original_prompt, resolved_prompt=enriched_prompt,
-                ref_previews=ref_previews_list,
+        # 批次模式：N 个独立 job 共享同样的 session/参数
+        job_ids: list[str] = []
+        for _idx in range(batch_count):
+            jid = uuid.uuid4().hex
+            job_ids.append(jid)
+            # 持久化用户参考图（每个 job 各存一份，避免并发覆盖）
+            if user_refs:
+                try:
+                    save_user_refs(user["id"], jid, user_refs)
+                except Exception:
+                    logger.warning("Failed to save user refs for job %s", jid)
+            all_refs_batch: list[tuple[bytes, str]] = context_ref_bytes + user_refs
+            all_refs_batch = all_refs_batch[:9]  # 总共最多 9 张
+            save_ai_image_job(
+                job_id=jid,
+                user_id=user["id"],
+                status="processing",
+                model=resolved,
+                prompt=original_prompt,
+                size=size,
+                original_prompt=original_prompt,
+                resolved_prompt=original_prompt,
+                has_reference=has_reference,
+                created_at=created_at,
             )
-        )
-        return {"job_id": job_id, "chat_session_id": session_id, "status": "processing"}
+            log_operation(
+                user_id=user["id"], username=user["username"],
+                action="ai_image",
+                detail=f"job={jid[:8]} model={resolved} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(all_refs_batch)} batch={batch_count}",
+                payload=json.dumps({"job_id": jid, "model": resolved, "size": size, "prompt": original_prompt[:200], "refs": len(all_refs_batch), "provider": resolved_provider, "batch_count": batch_count}, ensure_ascii=False),
+            )
+            asyncio.create_task(
+                _run_ai_image_background(
+                    job_id=jid, user_id=user["id"], username=user["username"],
+                    session_id=session_id,
+                    provider=resolved_provider,
+                    model=resolved, prompt=enriched_prompt,
+                    size=size, resolution=resolution,
+                    refs=all_refs_batch, has_reference=has_reference, created_at=created_at,
+                    original_prompt=original_prompt, resolved_prompt=enriched_prompt,
+                    ref_previews=ref_previews_list,
+                )
+            )
+        if batch_count == 1:
+            return {"job_id": job_ids[0], "chat_session_id": session_id, "status": "processing"}
+        return {"job_ids": job_ids, "chat_session_id": session_id, "status": "processing"}
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("ai_image_endpoint error: model=%s size=%s", resolved, size)
-        save_ai_image_job(
-            job_id=job_id,
-            user_id=user["id"],
-            status="failed",
-            model=resolved,
-            prompt=original_prompt,
-            size=size,
-            original_prompt=original_prompt,
-            resolved_prompt=original_prompt,
-            has_reference=bool(images) or bool(context_ref_bytes),
-            error=str(e),
-            created_at=created_at,
-        )
+        # 失败时给 batch_count 个失败 job，方便前端轮询看到状态
+        failed_ids: list[str] = []
+        for _ in range(batch_count):
+            fid = uuid.uuid4().hex
+            failed_ids.append(fid)
+            save_ai_image_job(
+                job_id=fid,
+                user_id=user["id"],
+                status="failed",
+                model=resolved,
+                prompt=original_prompt,
+                size=size,
+                original_prompt=original_prompt,
+                resolved_prompt=original_prompt,
+                has_reference=bool(images) or bool(context_ref_bytes),
+                error=str(e),
+                created_at=created_at,
+            )
         raise HTTPException(502, {"message": f"{type(e).__name__}: {e}", "chat_session_id": session_id})
 
 
