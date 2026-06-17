@@ -1833,6 +1833,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     agentEnabled ? 'Agent' : activeTaskLabel,
     agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? providerLabel : ''),
     agentEnabled ? '' : modeParamLabel,
+    (activeMode === 'ai-image' && aiBatchCount > 1) ? ('并发 ' + aiBatchCount) : '',
     refImages.length > 0 ? ('参考图 ' + refImages.length + '/' + MAX_REFERENCE_IMAGES) : '',
     files.length > 0 ? ('文件 ' + files.length) : '',
   ].filter(Boolean);
@@ -2103,7 +2104,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           )
         ),
         React.createElement('div', {
-          style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 11.5, color: 'var(--ink-3)' }
+          style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 11.5, color: 'var(--ink-3)', flexWrap: 'nowrap' }
         },
           React.createElement('span', null, '并发数'),
           React.createElement('input', {
@@ -2128,6 +2129,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             }
           }),
           React.createElement('span', { style: { fontSize: 10.5, color: 'var(--ink-3)' } }, '张 (1-4)')
+        )
         ),
         activeMode === 'chat' && React.createElement('div', {
           style: {
@@ -3125,9 +3127,11 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     const apiBase = window.API_BASE || window.location.origin;
-    // 并发提交 N 个 job
-    const submitOne = function(slotAt, index) {
-      return new Promise(function(resolve) {
+    // 共享的收集器：所有子任务完成后用此数组调用 onComposeComplete
+    const collected: { url: string; index: number }[] = [];
+    const allDone: { value: boolean } = { value: false };
+    const submitOne = function(slotAt: number, index: number) {
+      return new Promise<void>(function(resolve) {
         const fd = new FormData();
         fd.append('model', model);
         fd.append('provider', provider);
@@ -3174,10 +3178,16 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                         ? Object.assign({}, m, { status: 'done', imageUrl: statusData.image_url, previewUrl: statusData.preview_url || statusData.image_url, finalElapsed, progress: 100, refPreviews: refPreviews.length ? refPreviews : m.refPreviews })
                         : m
                     ));
-                    if (index === 0 && onComposeComplete) {
-                      onComposeComplete(null, null, [statusData.image_url], null);
-                    }
+                    collected.push({ url: statusData.image_url, index });
                     loadAiChatHistory();
+                    // 等所有 done 才通知画布（批次模式：把 4 张图都传过去）
+                    if (collected.length === batchCount && !allDone.value) {
+                      allDone.value = true;
+                      if (onComposeComplete) {
+                        const sortedUrls = collected.slice().sort((a, b) => a.index - b.index).map(x => x.url);
+                        onComposeComplete(null, null, sortedUrls, null);
+                      }
+                    }
                     resolve();
                   } else if (statusData.status === 'failed') {
                     clearInterval(pollInterval);
