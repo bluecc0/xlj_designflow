@@ -3715,8 +3715,12 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       if (!AI_OPTIONS[aiRatio].qualities.includes(aiQuality)) {
         setAiQuality(AI_OPTIONS[aiRatio].qualities[0]);
       }
+      // Sub2API 不支持 Nano Banana，切换时自动回默认
+      if (activeAiModel === 'nano-banana-pro' && aiProvider === 'sub2api') {
+        setAiProvider('apimart');
+      }
     }
-  }, [activeAiModel, aiQuality, aiRatio]);
+  }, [activeAiModel, aiQuality, aiRatio, aiProvider]);
 
   const selectWorkflow = React.useCallback(function(next) {
     if (agentEnabled) return;
@@ -4339,7 +4343,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
               onClick: function() { setAiProvider('zenmux'); },
               style: Object.assign({}, protoChipStyle(aiProvider === 'zenmux'), { cursor: 'pointer' })
             }, '官方'),
-            React.createElement('button', {
+            activeAiModel !== 'nano-banana-pro' && React.createElement('button', {
               type: 'button',
               onClick: function() { setAiProvider('sub2api'); },
               style: Object.assign({}, protoChipStyle(aiProvider === 'sub2api'), { cursor: 'pointer' })
