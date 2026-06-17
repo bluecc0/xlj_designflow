@@ -3075,7 +3075,7 @@ async def ai_image_endpoint(
     提交任务后立即返回 {job_id(s), chat_session_id, status: "processing"}，
     前端轮询 GET /ai-image/{job_id} 获取进度与结果。
     """
-    batch_count = max(1, min(int(batch_count or 1), 8))
+    batch_count = max(1, min(int(batch_count or 1), 4))
     original_prompt = prompt.strip()
     ref_previews_list = []
     try:

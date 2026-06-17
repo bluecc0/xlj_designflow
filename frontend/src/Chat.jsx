@@ -2099,31 +2099,36 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
               type: 'button',
               onClick: function() { setAiProvider('zenmux'); },
               style: Object.assign({}, protoChipStyle(aiProvider === 'zenmux'), { cursor: 'pointer' })
-            }, '官方'),
-            React.createElement('div', { style: { width: 1, height: 30, background: 'var(--line)', margin: '0 1px' } }),
-            [1, 2, 4, 8].map(function(n) {
-              const active = aiBatchCount === n;
-              return React.createElement('button', {
-                key: 'batch-' + n,
-                type: 'button',
-                onClick: function() { setAiBatchCount(n); },
-                title: n === 1 ? '单张生图' : '一次并发 ' + n + ' 张',
-                style: Object.assign({}, protoChipStyle(active), { cursor: 'pointer' })
-              }, n + (n === 1 ? ' 张' : ' 张并发'));
-            })
+            }, '官方')
           )
         ),
-        aiBatchCount > 1 && React.createElement('div', {
-          style: {
-            marginTop: 8,
-            padding: '8px 10px',
-            borderRadius: 8,
-            background: 'var(--panel-2)',
-            color: 'var(--ink-3)',
-            fontSize: 11,
-            lineHeight: 1.5,
-          }
-        }, '并发 ' + aiBatchCount + ' 张候选图会同时提交，全部完成才可发布到灵感。'),
+        React.createElement('div', {
+          style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 11.5, color: 'var(--ink-3)' }
+        },
+          React.createElement('span', null, '并发数'),
+          React.createElement('input', {
+            type: 'number',
+            min: 1,
+            max: 4,
+            value: aiBatchCount,
+            onChange: function(e) {
+              const v = parseInt(e.target.value);
+              if (Number.isFinite(v)) setAiBatchCount(Math.max(1, Math.min(4, v)));
+              else if (e.target.value === '') setAiBatchCount(1);
+            },
+            style: {
+              width: 50,
+              padding: '4px 8px',
+              border: '1px solid var(--line)',
+              borderRadius: 6,
+              fontSize: 12,
+              color: 'var(--ink)',
+              background: 'var(--panel)',
+              textAlign: 'center',
+            }
+          }),
+          React.createElement('span', { style: { fontSize: 10.5, color: 'var(--ink-3)' } }, '张 (1-4)')
+        ),
         activeMode === 'chat' && React.createElement('div', {
           style: {
             marginTop: 12,
@@ -3063,7 +3068,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
 
   // —— AI 生图核心流程（共享）——
   const runAiImageGeneration = React.useCallback(async (model, prompt, displayText, refImages, aiOptions) => {
-    const batchCount = Math.max(1, Math.min(parseInt(aiOptions.batchCount) || 1, 8));
+    const batchCount = Math.max(1, Math.min(parseInt(aiOptions.batchCount) || 1, 4));
     setIsLoading(true);
     var finalPrompt = prompt;
     var finalRefImages = Array.isArray(refImages) ? refImages.slice() : [];
