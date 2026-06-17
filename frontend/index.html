@@ -691,114 +691,10 @@ const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail, placemen
   );
 };
 
-const InspirationCurveIcon = () => {
-  const groupRef = React.useRef(null);
-  const pathRef = React.useRef(null);
-  const particlesRef = React.useRef([]);
-
-  React.useEffect(function() {
-    const group = groupRef.current;
-    const path = pathRef.current;
-    const particles = particlesRef.current.filter(Boolean);
-    if (!group || !path || !particles.length) return;
-
-    const config = {
-      amplitude: 9.2,
-      petalCount: 2,
-      curveScale: 3.25,
-      particleCount: particles.length,
-      trailSpan: 0.42,
-      durationMs: 4600,
-      rotationDurationMs: 28000,
-      pulseDurationMs: 4200,
-      strokeWidth: 5.5,
-      rotate: true,
-      point: function(progress, detailScale, cfg) {
-        const t = progress * Math.PI * 2;
-        const petals = Math.round(cfg.petalCount);
-        const radius = cfg.amplitude * detailScale * Math.cos(petals * t);
-        return {
-          x: 50 + radius * Math.cos(t) * cfg.curveScale,
-          y: 50 + radius * Math.sin(t) * cfg.curveScale,
-        };
-      },
-    };
-    const normalizeProgress = function(progress) {
-      return ((progress % 1) + 1) % 1;
-    };
-    const buildPath = function(detailScale, steps) {
-      return Array.from({ length: steps + 1 }, function(_, index) {
-        const point = config.point(index / steps, detailScale, config);
-        return (index === 0 ? 'M' : 'L') + ' ' + point.x.toFixed(2) + ' ' + point.y.toFixed(2);
-      }).join(' ');
-    };
-    const getDetailScale = function(time) {
-      const pulseProgress = (time % config.pulseDurationMs) / config.pulseDurationMs;
-      const pulseAngle = pulseProgress * Math.PI * 2;
-      return 0.52 + ((Math.sin(pulseAngle + 0.55) + 1) / 2) * 0.48;
-    };
-    const getParticle = function(index, progress, detailScale) {
-      const tailOffset = index / (config.particleCount - 1);
-      const point = config.point(
-        normalizeProgress(progress - tailOffset * config.trailSpan),
-        detailScale,
-        config
-      );
-      const fade = Math.pow(1 - tailOffset, 0.56);
-      return {
-        x: point.x,
-        y: point.y,
-        radius: 0.9 + fade * 2.7,
-        opacity: 0.04 + fade * 0.96,
-      };
-    };
-
-    const startedAt = performance.now();
-    let raf = 0;
-    const render = function(now) {
-      const time = now - startedAt;
-      const progress = (time % config.durationMs) / config.durationMs;
-      const detailScale = getDetailScale(time);
-      const rotation = -((time % config.rotationDurationMs) / config.rotationDurationMs) * 360;
-
-      group.setAttribute('transform', 'rotate(' + rotation.toFixed(2) + ' 50 50)');
-      path.setAttribute('d', buildPath(detailScale, 220));
-      particles.forEach(function(node, index) {
-        const particle = getParticle(index, progress, detailScale);
-        node.setAttribute('cx', particle.x.toFixed(2));
-        node.setAttribute('cy', particle.y.toFixed(2));
-        node.setAttribute('r', (particle.radius * 0.78).toFixed(2));
-        node.setAttribute('opacity', particle.opacity.toFixed(3));
-      });
-      raf = requestAnimationFrame(render);
-    };
-    raf = requestAnimationFrame(render);
-    return function() { cancelAnimationFrame(raf); };
-  }, []);
-
-  return (
-    <span className="inspiration-curve-icon" aria-hidden="true">
-      <svg width="30" height="30" viewBox="0 0 100 100" fill="none" style={{ display: 'block' }}>
-        <defs>
-          <linearGradient id="inspirationIconGradient" x1="16" y1="18" x2="84" y2="82" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor="#06b6d4"/>
-            <stop offset="50%" stopColor="#3b82f6"/>
-            <stop offset="100%" stopColor="#8b5cf6"/>
-          </linearGradient>
-        </defs>
-        <g ref={groupRef} className="inspiration-curve-icon__dots">
-          <path ref={pathRef} stroke="url(#inspirationIconGradient)" strokeWidth="5.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.14"/>
-          {Array.from({ length: 64 }).map(function(_, i) {
-            return <circle key={i} ref={function(node) { particlesRef.current[i] = node; }} fill="url(#inspirationIconGradient)"/>;
-          })}
-        </g>
-      </svg>
-    </span>
-  );
-};
-
 const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration, inspirationOpen }) => {
   const isAgentPage = typeof window !== 'undefined' && /\/ui\/agent\.html(?:$|\?)/.test(window.location.href);
+  const lottieContainerRef = React.useRef(null);
+  const lottieAnimRef = React.useRef(null);
 
   React.useEffect(function() {
     if (document.getElementById('inspiration-flow-style')) return;
@@ -844,14 +740,27 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
-.inspiration-curve-icon {
-  width: 30px;
-  height: 30px;
-  display: inline-grid;
-  place-items: center;
-}
 `;
     document.head.appendChild(style);
+  }, []);
+
+  React.useEffect(function() {
+    const el = lottieContainerRef.current;
+    if (!el || !window.lottie) return;
+    if (lottieAnimRef.current) return;
+    lottieAnimRef.current = window.lottie.loadAnimation({
+      container: el,
+      renderer: 'svg',
+      loop: true,
+      autoplay: true,
+      path: 'src/icon/animation/cffe9aa4-4cd6-11f0-8880-1b96160dc82b.json',
+    });
+    return function() {
+      if (lottieAnimRef.current) {
+        lottieAnimRef.current.destroy();
+        lottieAnimRef.current = null;
+      }
+    };
   }, []);
 const fmtBalance = (n) => {
   if (typeof n !== 'number') return '';
@@ -938,7 +847,7 @@ window.renderAiProviderDetail = renderAiProviderDetail;
               title="灵感"
               className="inspiration-flow__inner"
             >
-              <InspirationCurveIcon/>
+              <span ref={lottieContainerRef} style={{ width: 30, height: 30, display: 'inline-block' }}/>
               <span className="inspiration-flow__text">灵感</span>
             </button>
           </div>
@@ -5063,31 +4972,6 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     return null;
   }, [messages]);
 
-  const normalizeAiImageModel = React.useCallback(function(model) {
-    const value = String(model || '').trim().toLowerCase();
-    if (!value) return '';
-    if (value.includes('nano') || value.includes('banana') || value.includes('gemini')) return 'nano-banana-pro';
-    if (value.includes('gpt') || value.includes('image')) return 'gpt-image-2';
-    return value;
-  }, []);
-
-  const hasDoneAiImageInCurrentThread = React.useCallback(function() {
-    return messages.some(function(m) {
-      return m && m.type === 'ai-image-generating' && m.status === 'done' && (m.imageUrl || m.previewUrl);
-    });
-  }, [messages]);
-
-  const isLikelyAiImageFollowup = React.useCallback(function(value) {
-    const s = String(value || '').trim();
-    if (!s) return false;
-    if (s.startsWith('/')) return false;
-    if (/^(为什么|怎么|如何|什么|吗|是不是|能不能解释|帮我分析)/.test(s)) return false;
-    if (s.length <= 80 && /(改|换|调|变成|去掉|删除|加上|增加|减少|保留|不要|更|再|继续|上一张|这张|这个|背景|颜色|色调|风格|构图|比例|尺寸|文案|字体|清晰|高级|简约|真实|产品|人物|模特|重新生成|重画|出一版|来一版)/.test(s)) {
-      return true;
-    }
-    return /(基于上一张|参考上一张|在上一版基础上|沿用上一版|保持.*改|只把.*改|其他不变)/.test(s);
-  }, []);
-
   // 将 File / Blob 转为 data URL（缩略图，最长边 200px）
   const fileToThumbDataUrl = (file) => new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
@@ -5734,15 +5618,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       { prefix: '/Gpt image 2',     model: 'gpt-image-2' },
     ];
     const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
-    const lockedAiCmd = AI_IMAGE_CMDS.find(function(c) {
-      return String(aiOptions.lockedCommand || '').trim().toLowerCase() === c.prefix.toLowerCase();
-    });
-    const textAiCmd = AI_IMAGE_CMDS.find(function(c) {
-      return text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase());
-    });
-    const aiCmd = lockedAiCmd
-      ? Object.assign({}, lockedAiCmd, { implicit: true, fromLockedCommand: true })
-      : (textAiCmd ? Object.assign({}, textAiCmd, { implicit: true, fromLockedCommand: false }) : null);
+    const aiCmd = AI_IMAGE_CMDS.find(c => text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase()))
+      ? Object.assign({}, AI_IMAGE_CMDS.find(c => text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase())), { implicit: true })
+      : null;
 
     // 检测"重新生成"关键词
     const rawPrompt = text.trim();
@@ -5759,10 +5637,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     if (aiCmd) {
-      const rawAiText = text.trim();
-      const plainText = rawAiText.toLowerCase().startsWith(aiCmd.prefix.toLowerCase())
-        ? rawAiText.slice(aiCmd.prefix.length).trimStart()
-        : rawAiText;
+      const plainText = text.trim().slice(aiCmd.prefix.length).trimStart();
       if (!plainText) {
         const prefixLabel = aiCmd.implicit ? '（复用上次模型）' : aiCmd.prefix;
         setMessages(msgs => [...msgs,
@@ -5773,23 +5648,6 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       }
       setMessages(msgs => [...msgs, { who: 'user', text: plainText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       await runAiImageGeneration(aiCmd.model, plainText, plainText, refImages, aiOptions);
-      return;
-    }
-
-    // ── 当前生图会话的自然语言修改 ───────────────────────────────────────────
-    // 用户说“改成红色 / 背景换白色 / 更高级一点”时，必须继续走 /ai-image，
-    // 后端会结合 chat_session_id 的历史 prompt，并自动把上一张结果图作为参考图。
-    if (currentAiChatId && hasDoneAiImageInCurrentThread() && isLikelyAiImageFollowup(text)) {
-      const lastOpts = getLastAiImageOptions();
-      const model = normalizeAiImageModel(lastOpts?.model) || 'gpt-image-2';
-      const opts = {
-        ...aiOptions,
-        size: lastOpts?.size || aiOptions.size,
-        resolution: lastOpts?.resolution || aiOptions.resolution,
-        provider: aiOptions.provider,
-      };
-      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
-      await runAiImageGeneration(model, text.trim(), text.trim(), refImages, opts);
       return;
     }
 
@@ -5924,7 +5782,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       ));
     }
     setIsLoading(false);
-  }, [agentEnabled, currentAiChatId, ensureAgentProject, enhancePromptWithProductRefs, getLastAiImageOptions, hasDoneAiImageInCurrentThread, isLikelyAiImageFollowup, isLoading, loadAiChatHistory, loadResolvedRefFiles, materializeReferenceImages, normalizeAiImageModel, onComposeComplete, parseProductRefs, runAiImageGeneration, template]);
+  }, [agentEnabled, currentAiChatId, ensureAgentProject, enhancePromptWithProductRefs, getLastAiImageOptions, isLoading, loadAiChatHistory, loadResolvedRefFiles, materializeReferenceImages, onComposeComplete, parseProductRefs, runAiImageGeneration, template]);
 
   // ── 快捷回复：点击选项按钮触发 ──────────────────────────────────────────────
   const handleQuickReply = React.useCallback(function(value) {
