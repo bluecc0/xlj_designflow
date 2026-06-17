@@ -1438,7 +1438,9 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const aiOptionMap = AI_OPTIONS;
   const AI_RATIOS = Object.keys(aiOptionMap);
   const currentAiRatioMeta = aiOptionMap[aiRatio] || aiOptionMap[AI_RATIOS[0]];
-  const allowedAiQualities = currentAiRatioMeta ? currentAiRatioMeta.qualities : AI_QUALITIES;
+  // Sub2API 订阅渠道只支持 1K
+  const _rawQualities = currentAiRatioMeta ? currentAiRatioMeta.qualities : AI_QUALITIES;
+  const allowedAiQualities = aiProvider === 'sub2api' ? ['1K'] : _rawQualities;
   const currentAiPx = currentAiRatioMeta && currentAiRatioMeta.px ? (currentAiRatioMeta.px[aiQuality] || currentAiRatioMeta.preview) : '';
   const aiImageSize = aiRatio;
 
@@ -1453,6 +1455,14 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       }
       // Sub2API 不支持 Nano Banana，切换时自动回默认
       if (activeAiModel === 'nano-banana-pro' && aiProvider === 'sub2api') {
+        setAiProvider('apimart');
+      }
+      // Sub2API 只支持 1K：切换 provider 时若 quality 不兼容，降级到 1K
+      if (aiProvider === 'sub2api' && aiQuality !== '1K') {
+        setAiQuality('1K');
+      }
+      // 选 2K/4K 时若 provider 是 sub2api，切回默认
+      if (['2K', '4K'].includes(aiQuality) && aiProvider === 'sub2api') {
         setAiProvider('apimart');
       }
     }
@@ -1879,8 +1889,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       background: active ? 'var(--ink)' : 'var(--panel)',
       color: active ? 'var(--panel)' : 'var(--ink-2)',
       borderRadius: 999,
-      padding: '7px 10px',
-      fontSize: 11.5,
+      padding: '6px 8px',
+      fontSize: 10.5,
       fontWeight: 600,
       display: 'inline-flex',
       alignItems: 'center',
@@ -2054,7 +2064,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             })
           ),
           protoSectionLabel('清晰度 / 渠道'),
-          React.createElement('div', { style: { display: 'flex', gap: 7, flexWrap: 'wrap' } },
+          React.createElement('div', { style: { display: 'flex', gap: 4, flexWrap: 'wrap' } },
             ['1K', '2K', '4K'].map(function(q) {
               const disabled = !allowedAiQualities.includes(q);
               return React.createElement('button', {
@@ -2069,6 +2079,15 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
               }, q);
             }),
             React.createElement('div', { style: { width: 1, height: 30, background: 'var(--line)', margin: '0 1px' } }),
+            activeAiModel !== 'nano-banana-pro' && React.createElement('button', {
+              type: 'button',
+              disabled: ['2K', '4K'].includes(aiQuality),
+              onClick: function() { if (!['2K', '4K'].includes(aiQuality)) setAiProvider('sub2api'); },
+              style: Object.assign({}, protoChipStyle(aiProvider === 'sub2api'), {
+                cursor: ['2K', '4K'].includes(aiQuality) ? 'not-allowed' : 'pointer',
+                opacity: ['2K', '4K'].includes(aiQuality) ? 0.45 : 1,
+              })
+            }, '订阅'),
             React.createElement('button', {
               type: 'button',
               onClick: function() { setAiProvider('apimart'); },
@@ -2078,12 +2097,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
               type: 'button',
               onClick: function() { setAiProvider('zenmux'); },
               style: Object.assign({}, protoChipStyle(aiProvider === 'zenmux'), { cursor: 'pointer' })
-            }, '官方'),
-            activeAiModel !== 'nano-banana-pro' && React.createElement('button', {
-              type: 'button',
-              onClick: function() { setAiProvider('sub2api'); },
-              style: Object.assign({}, protoChipStyle(aiProvider === 'sub2api'), { cursor: 'pointer' })
-            }, '订阅')
+            }, '官方')
           )
         ),
         activeMode === 'chat' && React.createElement('div', {
