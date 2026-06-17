@@ -2129,7 +2129,6 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             }
           }),
           React.createElement('span', { style: { fontSize: 10.5, color: 'var(--ink-3)' } }, '张 (1-4)')
-        )
         ),
         activeMode === 'chat' && React.createElement('div', {
           style: {
