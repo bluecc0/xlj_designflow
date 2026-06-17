@@ -1161,7 +1161,7 @@ def _build_sub2api_input(
     文生图: 只有 input_text
     图生图: input_text + input_image (base64 data URL)"""
     content: list[dict] = [{"type": "input_text", "text": prompt}]
-    for image_bytes, filename in refs[:4]:
+    for image_bytes, filename in refs[:9]:
         mime = _mime_from_filename(filename)
         b64 = base64.b64encode(image_bytes).decode("ascii")
         content.append({
@@ -1174,12 +1174,14 @@ def _build_sub2api_input(
 def _build_sub2api_tools(
     model: str,
     size: str,
+    has_refs: bool = False,
 ) -> list[dict]:
-    """构建 Sub2API /responses 的 tools 数组。"""
+    """构建 Sub2API /responses 的 tools 数组。
+    文生图 action 为 generate，图生图 action 为 edit。"""
     mapped_size = _SUB2API_SIZE_MAP.get(size, "1:1")
     return [{
         "type": "image_generation",
-        "action": "generate",
+        "action": "edit" if has_refs else "generate",
         "model": "gpt-image-2",
         "size": mapped_size,
         "quality": "medium",
@@ -1240,7 +1242,7 @@ async def generate_sub2api_async(
 
     refs = images or []
     input_payload = _build_sub2api_input(prompt, refs)
-    tools = _build_sub2api_tools(model, size)
+    tools = _build_sub2api_tools(model, size, has_refs=bool(refs))
 
     payload = {
         "stream": True,
