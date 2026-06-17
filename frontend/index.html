@@ -2671,21 +2671,55 @@ const AnalyzedSubject = () => (
 
 // ---------- BriefCard（Agent 模式 CONFIRM 阶段的创意方案卡片）----------
 
-const BriefCard = ({ brief, completeness }) => {
-  if (!brief) return null;
+const BriefCard = ({ brief, contract, completeness }) => {
+  if (!brief && !contract) return null;
   const rows = [];
-  if (brief.concept) rows.push(['核心方案', brief.concept]);
-  if (Array.isArray(brief.visualElements) && brief.visualElements.length > 0) {
-    rows.push(['视觉要素', brief.visualElements.join(' · ')]);
+  if (contract) {
+    const task = contract.task || {};
+    const subject = contract.subject || {};
+    const composition = contract.composition || {};
+    const visualStyle = contract.visualStyle || {};
+    const copy = contract.copy || {};
+    const mainTitle = copy.mainTitle || {};
+    const subtitle = copy.subtitle || {};
+    const constraints = contract.constraints || {};
+    const acceptance = Array.isArray(contract.acceptanceCriteria) ? contract.acceptanceCriteria : [];
+    const channels = Array.isArray(task.channel) ? task.channel.filter(Boolean) : [];
+    const palette = Array.isArray(visualStyle.colorPalette) ? visualStyle.colorPalette.filter(Boolean) : [];
+    const mustInclude = Array.isArray(constraints.mustInclude) ? constraints.mustInclude.filter(Boolean) : [];
+    const avoid = Array.isArray(constraints.avoid) ? constraints.avoid.filter(Boolean) : [];
+    if (task.purpose) rows.push(['任务目的', task.purpose]);
+    if (subject.description || subject.category) rows.push(['主体内容', subject.description || subject.category]);
+    if (composition.aspectRatio) rows.push(['画幅比例', composition.aspectRatio]);
+    if (composition.layout) rows.push(['构图方式', composition.layout]);
+    if (visualStyle.overall) rows.push(['整体风格', visualStyle.overall]);
+    if (visualStyle.backgroundStyle) rows.push(['背景风格', visualStyle.backgroundStyle]);
+    if (visualStyle.lighting) rows.push(['光线方向', visualStyle.lighting]);
+    if (composition.safeArea) rows.push(['安全线', composition.safeArea]);
+    if (mainTitle.text) rows.push(['主标题', mainTitle.text]);
+    if (mainTitle.fontStyle) rows.push(['标题字体', mainTitle.fontStyle]);
+    if (subtitle.text) rows.push(['副标题', subtitle.text]);
+    if (subtitle.fontStyle) rows.push(['副标字体', subtitle.fontStyle]);
+    if (channels.length) rows.push(['投放渠道', channels.join(' / ')]);
+    if (palette.length) rows.push(['色彩方向', palette.join(' · ')]);
+    if (mustInclude.length) rows.push(['必须包含', mustInclude.join(' · ')]);
+    if (avoid.length) rows.push(['避免项', avoid.join(' · ')]);
+    if (acceptance.length) rows.push(['验收标准', acceptance.join(' · ')]);
+  } else {
+    if (brief.concept) rows.push(['核心方案', brief.concept]);
+    if (Array.isArray(brief.visualElements) && brief.visualElements.length > 0) {
+      rows.push(['视觉要素', brief.visualElements.join(' · ')]);
+    }
+    if (brief.copyText) rows.push(['画面文案', brief.copyText]);
+    if (brief.subtitleText) rows.push(['副标题', brief.subtitleText]);
+    if (brief.aspectRatio) rows.push(['画幅比例', brief.aspectRatio]);
+    if (brief.style) rows.push(['风格', brief.style]);
+    if (brief.mood) rows.push(['氛围', brief.mood]);
+    if (brief.colorDirection) rows.push(['色彩方向', brief.colorDirection]);
   }
-  if (brief.copyText) rows.push(['画面文案', brief.copyText]);
-  if (brief.aspectRatio) rows.push(['画幅比例', brief.aspectRatio]);
-  if (brief.style) rows.push(['风格', brief.style]);
-  if (brief.mood) rows.push(['氛围', brief.mood]);
-  if (brief.colorDirection) rows.push(['色彩方向', brief.colorDirection]);
 
   const score = completeness && typeof completeness.score === 'number' ? completeness.score : null;
-  const isConfirmed = brief.confirmedByUser;
+  const isConfirmed = brief && brief.confirmedByUser;
 
   return (
     <div style={{
@@ -3299,8 +3333,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 ) : null}
                 <CopyableTextBubble who={m.who} text={m.text} markdown/>
                 {/* Agent CONFIRM 阶段的创意方案卡片 */}
-                {m.brief ? (
-                  <BriefCard brief={m.brief} completeness={m.completeness}/>
+                {m.brief || m.contract ? (
+                  <BriefCard brief={m.brief} contract={m.contract} completeness={m.completeness}/>
                 ) : null}
                 {/* 快捷选项按钮：ASK 的 choices 或 CONFIRM 的 quickActions */}
                 {(Array.isArray(m.choices) && m.choices.length > 0) || (Array.isArray(m.quickActions) && m.quickActions.length > 0) ? (
@@ -4777,6 +4811,7 @@ const mapAgentProjectMessages = function(project, images) {
     // 恢复 CONFIRM 的 Brief 卡片 + 快捷按钮
     if (decision && decision.type === 'CONFIRM') {
       if (decision.brief) msg.brief = decision.brief;
+      if (decision.contract) msg.contract = decision.contract;
       if (decision.completeness) msg.completeness = decision.completeness;
       if (Array.isArray(decision.quickActions) && decision.quickActions.length > 0) {
         msg.quickActions = decision.quickActions;
@@ -5422,7 +5457,15 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     const apiBase = window.API_BASE || window.location.origin;
-    const composeBatchId = batchCount > 1 ? ('ai-batch-' + baseAt) : null;
+    const collected = [];
+    var doneCount = 0;
+    const tryFlushCollected = function() {
+      doneCount++;
+      if (doneCount === batchCount && onComposeComplete && collected.length > 0) {
+        const sortedUrls = collected.slice().sort(function(a, b) { return a.index - b.index; }).map(function(x) { return x.url; });
+        onComposeComplete(null, null, sortedUrls, null);
+      }
+    };
     const submitOne = function(slotAt, index) {
       return new Promise(function(resolve) {
         const fd = new FormData();
@@ -5447,7 +5490,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
           .then(function(data) {
             if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
             const jobId = data.job_id;
-            if (!jobId) { resolve(); return; }
+            if (!jobId) { tryFlushCollected(); resolve(); return; }
             setMessages(msgs => msgs.map(m =>
               m.type === 'ai-image-generating' && m.startedAt === slotAt
                 ? Object.assign({}, m, { jobId })
@@ -5472,9 +5515,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                         : m
                     ));
                     loadAiChatHistory();
-                    if (onComposeComplete) {
-                      onComposeComplete(composeBatchId || jobId, null, [statusData.image_url], null);
-                    }
+                    collected.push({ url: statusData.image_url, index: index });
+                    tryFlushCollected();
                     resolve();
                   } else if (statusData.status === 'failed') {
                     clearInterval(pollInterval);
@@ -5485,6 +5527,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                         : m
                     ));
                     loadAiChatHistory();
+                    tryFlushCollected();
                     resolve();
                   }
                 })
@@ -5498,6 +5541,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                 ? Object.assign({}, m, { status: 'failed', error: err.message, finalElapsed })
                 : m
             ));
+            tryFlushCollected();
             resolve();
           });
       });
@@ -5605,6 +5649,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                     // CONFIRM 阶段附带 Creative Brief 卡片数据
                     if (payload.type === 'CONFIRM' && payload.brief) {
                       patch.brief = payload.brief;
+                    }
+                    if (payload.contract) {
+                      patch.contract = payload.contract;
                     }
                     if (payload.completeness) {
                       patch.completeness = payload.completeness;

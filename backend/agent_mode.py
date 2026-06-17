@@ -241,14 +241,20 @@ INTENT_KEYS = (
     "scene",
     "style",
     "mood",
+    "backgroundStyle",
     "composition",
+    "safeArea",
     "camera",
     "colorPalette",
     "lighting",
     "useCase",
+    "taskPurpose",
     "platform",
     "targetAudience",
     "copyText",
+    "subtitleText",
+    "titleFontStyle",
+    "subtitleFontStyle",
     "aspectRatio",
     "mustInclude",
     "avoid",
@@ -598,6 +604,37 @@ def build_suggested_refine_from_vlm(vlm_analysis: dict[str, Any] | None) -> dict
     }
 
 
+def build_vlm_followup_decision(vlm_analysis: dict[str, Any] | None) -> dict[str, Any] | None:
+    analysis = vlm_analysis or {}
+    suggestion = str(analysis.get("nextStepSuggestion") or "").strip()
+    problems = [str(item).strip() for item in (analysis.get("problemElements") or []) if str(item).strip()]
+    quality = int(analysis.get("qualityScore") or 0)
+    intent_match = int(analysis.get("intentMatch") or 0)
+    if not suggestion and not problems:
+        return None
+    if quality >= 85 and intent_match >= 85 and suggestion in {"", "可以基于这版微调"}:
+        return None
+
+    prompt_bits: list[str] = []
+    if suggestion:
+        prompt_bits.append(suggestion)
+    if problems:
+        prompt_bits.append("重点处理：" + "；".join(problems[:3]))
+    refine_value = "优化一下：" + "；".join(prompt_bits[:2]) if prompt_bits else "优化一下当前这版"
+    question = suggestion or "我看这版还有可优化空间，要不要按建议继续细修一版？"
+    return {
+        "type": "ASK",
+        "question": question,
+        "dimension": "vlm_refine",
+        "choices": [
+            {"label": "按建议优化", "value": refine_value},
+            {"label": "换个方向优化", "value": "优化一下，但换个方向给我一版新的修改方案"},
+            {"label": "先保留这版", "value": "这版先这样，我们继续下一步"},
+        ],
+        "source": "vlm",
+    }
+
+
 def _coarse_subject_from_message(message: str) -> str:
     text = (message or "").strip()
     if not text:
@@ -638,13 +675,51 @@ def extract_message_constraints(message: str) -> dict[str, Any]:
         return {}
     extracted: dict[str, Any] = {}
 
+    subtitle_match = re.search(r"(?:副标题|副文案|副字)\s*(?:是|为|[:：])?\s*[“\"「『](.*?)[”\"」』]", text)
+    if subtitle_match and subtitle_match.group(1).strip():
+        extracted["subtitleText"] = subtitle_match.group(1).strip()
+
+    title_match = re.search(r"(?:主文案|主标题)\s*(?:是|为|[:：])?\s*[“\"「『](.*?)[”\"」』]", text)
+    if title_match and title_match.group(1).strip():
+        extracted["copyText"] = title_match.group(1).strip()
+
     copy_match = re.search(r"(?:文案|标题|文字|slogan|Slogan)\s*[:：]?\s*[“\"「『](.*?)[”\"」』]", text)
-    if copy_match and copy_match.group(1).strip():
+    if copy_match and copy_match.group(1).strip() and not extracted.get("copyText"):
         extracted["copyText"] = copy_match.group(1).strip()
 
     ratio_match = re.search(r"(\d{1,2})\s*[:：]\s*(\d{1,2})", text)
     if ratio_match:
         extracted["aspectRatio"] = f"{ratio_match.group(1)}:{ratio_match.group(2)}"
+
+    task_match = re.search(r"(?:用途|目的|任务|要做|做一张)\s*[:：]?\s*([^，。；;\n]{2,40})", text)
+    if task_match and task_match.group(1).strip():
+        extracted["taskPurpose"] = task_match.group(1).strip()
+
+    background_match = re.search(r"(?:背景|背景风格)\s*(?:是|为|[:：])?\s*([^，。；;\n]{2,40})", text)
+    if background_match and background_match.group(1).strip():
+        extracted["backgroundStyle"] = background_match.group(1).strip()
+
+    title_font_match = re.search(r"(?:主标题字体|标题字体|主文案字体)\s*(?:是|为|[:：])?\s*([^，。；;\n]{2,50})", text)
+    if title_font_match and title_font_match.group(1).strip():
+        extracted["titleFontStyle"] = title_font_match.group(1).strip()
+
+    subtitle_font_match = re.search(r"(?:副标题字体|副文案字体)\s*(?:是|为|[:：])?\s*([^，。；;\n]{2,50})", text)
+    if subtitle_font_match and subtitle_font_match.group(1).strip():
+        extracted["subtitleFontStyle"] = subtitle_font_match.group(1).strip()
+
+    safe_area_match = re.search(r"(?:安全线|留白要求|文字区域)\s*(?:是|为|[:：])?\s*([^，。；;\n]{2,50})", text)
+    if safe_area_match and safe_area_match.group(1).strip():
+        extracted["safeArea"] = safe_area_match.group(1).strip()
+    elif any(token in text for token in ("不贴边", "不被遮挡", "文字清晰", "清晰可读")):
+        safe_bits: list[str] = []
+        if "不贴边" in text:
+            safe_bits.append("文字不贴边")
+        if "不被遮挡" in text:
+            safe_bits.append("文字不被主体遮挡")
+        if "文字清晰" in text or "清晰可读" in text:
+            safe_bits.append("文字清晰可读")
+        if safe_bits:
+            extracted["safeArea"] = "，".join(dict.fromkeys(safe_bits))
 
     use_case_parts: list[str] = []
     platform_parts: list[str] = []
@@ -757,8 +832,9 @@ def calculate_completeness(state: dict[str, Any]) -> AgentCompletenessResult:
     inferrable_gaps: list[str] = []
     explicit_count = 0
     intent = state.get("intent") or {}
-    for dim in DIMENSIONS:
-        value = intent.get(dim["key"])
+    contract_fields = _contract_field_map(build_creative_contract(state))
+    for dim in CONTRACT_DIMENSIONS:
+        value = contract_fields.get(dim["key"]) or ""
         has_value = isinstance(value, str) and value.strip()
         if has_value:
             score += dim["weight"]
@@ -822,7 +898,7 @@ def pick_question(gaps: list[str]) -> dict[str, Any]:
             "question": "我先帮你收一下核心信息，这张图最想表现的主体是什么？比如人物、产品、场景，或者某个具体物件。",
             "choices": [],  # 主体太开放，不适合选项
         },
-        "useCase": {
+        "purpose": {
             "question": "这张图主要用在哪里？",
             "choices": [
                 {"label": "电商海报", "value": "电商海报"},
@@ -832,13 +908,44 @@ def pick_question(gaps: list[str]) -> dict[str, Any]:
                 {"label": "你来决定", "value": "你来决定"},
             ],
         },
-        "style": {
+        "overallStyle": {
             "question": "风格上你更偏好哪一种？",
             "choices": [
                 {"label": "高级简约", "value": "高级简约风格"},
                 {"label": "酷炫潮流", "value": "酷炫潮流风格"},
                 {"label": "自然温暖", "value": "自然温暖风格"},
                 {"label": "电影感大片", "value": "电影感大片风格"},
+                {"label": "你来决定", "value": "你来决定"},
+            ],
+        },
+        "backgroundStyle": {
+            "question": "背景更想走哪种方向？",
+            "choices": [
+                {"label": "纯净统一", "value": "纯净统一背景"},
+                {"label": "柔光氛围", "value": "柔和自然光背景"},
+                {"label": "空间场景", "value": "简洁空间场景背景"},
+                {"label": "你来决定", "value": "你来决定"},
+            ],
+        },
+        "layout": {
+            "question": "构图上有没有明确偏好？",
+            "choices": [
+                {"label": "产品居中", "value": "产品居中特写"},
+                {"label": "留白设计", "value": "留白设计感构图"},
+                {"label": "纵深感", "value": "场景纵深构图"},
+                {"label": "你来决定", "value": "你来决定"},
+            ],
+        },
+        "mainTitle": {
+            "question": "画面里要不要带主标题文案？如果要，主标题写什么？",
+            "choices": [],
+        },
+        "titleFontStyle": {
+            "question": "主标题字体感觉你更偏哪一种？",
+            "choices": [
+                {"label": "高级力量感", "value": "高级力量感无衬线"},
+                {"label": "简约现代", "value": "简约现代无衬线"},
+                {"label": "科技锐利", "value": "科技感锐利字形"},
                 {"label": "你来决定", "value": "你来决定"},
             ],
         },
@@ -852,17 +959,8 @@ def pick_question(gaps: list[str]) -> dict[str, Any]:
                 {"label": "你来决定", "value": "你来决定"},
             ],
         },
-        "composition": {
-            "question": "构图上有没有明确偏好？",
-            "choices": [
-                {"label": "产品居中特写", "value": "产品居中特写"},
-                {"label": "场景纵深感", "value": "场景纵深构图"},
-                {"label": "留白设计感", "value": "留白设计感构图"},
-                {"label": "你来决定", "value": "你来决定"},
-            ],
-        },
     }
-    for key in ("subject", "useCase", "style", "mood", "composition"):
+    for key in ("subject", "purpose", "overallStyle", "backgroundStyle", "layout", "mainTitle", "titleFontStyle", "mood"):
         if key in gaps:
             return templates.get(key, {"question": "我再补一个关键点，这张图里你最在意的视觉信息是什么？", "choices": []})
     return {"question": "我再补一个关键点，这张图里你最在意的视觉信息是什么？", "choices": []}
@@ -871,22 +969,30 @@ def pick_question(gaps: list[str]) -> dict[str, Any]:
 def infer_defaults(intent: dict[str, Any], gaps: list[str]) -> dict[str, str]:
     subject = (intent.get("subject") or "").lower()
     defaults: dict[str, str] = {}
-    if "scene" in gaps:
+    if "backgroundStyle" in gaps:
         defaults["scene"] = "clean branded scene" if "产品" in subject or "shoe" in subject else "simple contextual scene"
-    if "style" in gaps:
+        defaults["backgroundStyle"] = "简洁统一背景" if "产品" in subject or "shoe" in subject else "简洁场景背景"
+    if "overallStyle" in gaps:
         defaults["style"] = "cinematic commercial illustration" if any(token in subject for token in ("product", "shoe", "bag", "汽车")) else "cinematic concept art"
     if "mood" in gaps:
         defaults["mood"] = "focused and atmospheric"
-    if "composition" in gaps:
+    if "layout" in gaps:
         defaults["composition"] = "clear hero composition"
+    if "aspectRatio" in gaps:
+        defaults["aspectRatio"] = settings.agent_image_size
+    if "titleFontStyle" in gaps and intent.get("copyText"):
+        defaults["titleFontStyle"] = "简约现代无衬线"
+    if "subtitleFontStyle" in gaps and intent.get("subtitleText"):
+        defaults["subtitleFontStyle"] = "清晰信息型无衬线"
     if "camera" in gaps:
         defaults["camera"] = "hero-angle shot"
     if "colorPalette" in gaps:
         defaults["colorPalette"] = "rich contrast with controlled highlight colors"
     if "lighting" in gaps:
         defaults["lighting"] = "dramatic directional lighting"
-    if "useCase" in gaps:
+    if "purpose" in gaps:
         defaults["useCase"] = "hero image"
+        defaults["taskPurpose"] = "生成一张可直接投放的创意图"
     if "platform" in gaps:
         defaults["platform"] = "brand campaign"
     if "targetAudience" in gaps:
@@ -899,7 +1005,7 @@ def build_brief(state: dict[str, Any]) -> dict[str, Any]:
     concept_parts = [intent.get("subject"), intent.get("scene"), intent.get("style"), intent.get("mood")]
     concept = "，".join([part for part in concept_parts if isinstance(part, str) and part.strip()]) or "待补充视觉方案"
     visual_elements = []
-    for key in ("subject", "scene", "composition", "camera", "copyText", "aspectRatio", "lighting", "colorPalette", "mustInclude"):
+    for key in ("subject", "scene", "composition", "camera", "copyText", "subtitleText", "aspectRatio", "lighting", "colorPalette", "mustInclude"):
         value = intent.get(key)
         if isinstance(value, str) and value.strip():
             visual_elements.append(value.strip())
@@ -912,8 +1018,154 @@ def build_brief(state: dict[str, Any]) -> dict[str, Any]:
         "mood": intent.get("mood") or "",
         "colorDirection": intent.get("colorPalette") or "",
         "copyText": intent.get("copyText") or "",
+        "subtitleText": intent.get("subtitleText") or "",
         "aspectRatio": intent.get("aspectRatio") or "",
         "confirmedByUser": False,
+    }
+
+
+def _split_channel_values(value: Any) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [item.strip() for item in re.split(r"[/／,，、|]+", text) if item.strip()]
+
+
+def _nonempty_list(*values: Any) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if isinstance(value, list):
+            source = value
+        else:
+            source = [value]
+        for item in source:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            key = text.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(text)
+    return items
+
+
+def build_creative_contract(state: dict[str, Any]) -> dict[str, Any]:
+    intent = state.get("intent") or {}
+    subject_text = str(intent.get("subject") or "").strip()
+    use_case = str(intent.get("useCase") or "").strip()
+    task_purpose = str(intent.get("taskPurpose") or "").strip() or use_case
+    aspect_ratio = str(intent.get("aspectRatio") or "").strip().replace("：", ":") or _intent_size(intent)
+    composition = str(intent.get("composition") or "").strip()
+    safe_area = str(intent.get("safeArea") or "").strip()
+    style = str(intent.get("style") or "").strip()
+    background_style = str(intent.get("backgroundStyle") or "").strip() or str(intent.get("scene") or "").strip()
+    lighting = str(intent.get("lighting") or "").strip()
+    color_palette = _split_constraint_items(intent.get("colorPalette"))
+    copy_text = str(intent.get("copyText") or "").strip()
+    subtitle_text = str(intent.get("subtitleText") or "").strip()
+    title_font_style = str(intent.get("titleFontStyle") or "").strip()
+    subtitle_font_style = str(intent.get("subtitleFontStyle") or "").strip()
+    must_include_items = _split_constraint_items(intent.get("mustInclude"))
+    avoid_items = _split_constraint_items(intent.get("avoid"))
+    platform_items = _split_channel_values(intent.get("platform"))
+    target_audience = str(intent.get("targetAudience") or "").strip()
+    mood = str(intent.get("mood") or "").strip()
+    camera = str(intent.get("camera") or "").strip()
+
+    acceptance = _nonempty_list(
+        subject_text and "主体是画面第一焦点",
+        copy_text and "主标题清晰可读",
+        background_style and "背景风格统一干净",
+        style and f"整体风格符合{style}",
+        safe_area and "文字区域不贴边、不被主体遮挡",
+    )
+
+    return {
+        "task": {
+            "purpose": task_purpose,
+            "channel": platform_items,
+            "targetAudience": target_audience,
+        },
+        "subject": {
+            "category": subject_text,
+            "description": subject_text,
+            "presentation": style,
+            "mustShow": must_include_items[:4],
+        },
+        "composition": {
+            "aspectRatio": aspect_ratio,
+            "layout": composition,
+            "safeArea": safe_area,
+            "focus": subject_text and "主体为第一视觉中心" or "",
+            "camera": camera,
+        },
+        "visualStyle": {
+            "overall": style,
+            "backgroundStyle": background_style,
+            "lighting": lighting,
+            "mood": mood,
+            "colorPalette": color_palette,
+        },
+        "copy": {
+            "mainTitle": {
+                "text": copy_text,
+                "fontStyle": title_font_style,
+            },
+            "subtitle": {
+                "text": subtitle_text,
+                "fontStyle": subtitle_font_style,
+            },
+            "requirements": _nonempty_list(
+                copy_text and "主标题清晰可读",
+                subtitle_text and "副标题清晰可读",
+                (copy_text or subtitle_text) and "中文不乱码",
+                (copy_text or subtitle_text) and "文字不变形",
+            ),
+        },
+        "constraints": {
+            "mustInclude": must_include_items,
+            "avoid": avoid_items,
+            "preserve": [],
+        },
+        "acceptanceCriteria": acceptance,
+    }
+
+
+CONTRACT_DIMENSIONS = (
+    {"key": "subject", "weight": 28, "required": True, "inferrable": False},
+    {"key": "purpose", "weight": 12, "required": False, "inferrable": True},
+    {"key": "aspectRatio", "weight": 10, "required": False, "inferrable": True},
+    {"key": "overallStyle", "weight": 16, "required": False, "inferrable": True},
+    {"key": "backgroundStyle", "weight": 10, "required": False, "inferrable": True},
+    {"key": "layout", "weight": 8, "required": False, "inferrable": True},
+    {"key": "mainTitle", "weight": 6, "required": False, "inferrable": True},
+    {"key": "titleFontStyle", "weight": 4, "required": False, "inferrable": True},
+    {"key": "subtitle", "weight": 3, "required": False, "inferrable": True},
+    {"key": "subtitleFontStyle", "weight": 3, "required": False, "inferrable": True},
+)
+
+
+def _contract_field_map(contract: dict[str, Any]) -> dict[str, str]:
+    task = contract.get("task") or {}
+    subject = contract.get("subject") or {}
+    composition = contract.get("composition") or {}
+    visual_style = contract.get("visualStyle") or {}
+    copy = contract.get("copy") or {}
+    main_title = copy.get("mainTitle") or {}
+    subtitle = copy.get("subtitle") or {}
+    return {
+        "subject": str(subject.get("description") or subject.get("category") or "").strip(),
+        "purpose": str(task.get("purpose") or "").strip(),
+        "aspectRatio": str(composition.get("aspectRatio") or "").strip(),
+        "overallStyle": str(visual_style.get("overall") or "").strip(),
+        "backgroundStyle": str(visual_style.get("backgroundStyle") or "").strip(),
+        "layout": str(composition.get("layout") or composition.get("focus") or "").strip(),
+        "mainTitle": str(main_title.get("text") or "").strip(),
+        "titleFontStyle": str(main_title.get("fontStyle") or "").strip(),
+        "subtitle": str(subtitle.get("text") or "").strip(),
+        "subtitleFontStyle": str(subtitle.get("fontStyle") or "").strip(),
     }
 
 
@@ -943,6 +1195,7 @@ def build_generation_instruction(state: dict[str, Any]) -> dict[str, Any]:
     platform = str(intent.get("platform") or "").strip()
     target_audience = str(intent.get("targetAudience") or "").strip()
     composition = str(intent.get("composition") or "").strip()
+    safe_area = str(intent.get("safeArea") or "").strip()
     aspect_ratio = str(intent.get("aspectRatio") or "").strip().replace("：", ":")
     style = str(intent.get("style") or "").strip()
     mood = str(intent.get("mood") or "").strip()
@@ -950,6 +1203,11 @@ def build_generation_instruction(state: dict[str, Any]) -> dict[str, Any]:
     lighting = str(intent.get("lighting") or "").strip()
     color_palette = str(intent.get("colorPalette") or "").strip()
     copy_text = str(intent.get("copyText") or "").strip()
+    subtitle_text = str(intent.get("subtitleText") or "").strip()
+    background_style = str(intent.get("backgroundStyle") or "").strip()
+    title_font_style = str(intent.get("titleFontStyle") or "").strip()
+    subtitle_font_style = str(intent.get("subtitleFontStyle") or "").strip()
+    task_purpose = str(intent.get("taskPurpose") or "").strip()
 
     instruction_parts: list[str] = []
     if subject and aspect_ratio:
@@ -960,14 +1218,20 @@ def build_generation_instruction(state: dict[str, Any]) -> dict[str, Any]:
         instruction_parts.append(f"Create a {aspect_ratio} image with a single clear visual focus")
     if use_case:
         instruction_parts.append(f"The intended use is {use_case}")
+    elif task_purpose:
+        instruction_parts.append(f"The creative task is {task_purpose}")
     if platform:
         instruction_parts.append(f"Target publishing context: {platform}")
     if target_audience:
         instruction_parts.append(f"Target audience: {target_audience}")
     if scene_text:
         instruction_parts.append(f"Scene direction: {scene_text}")
+    if background_style:
+        instruction_parts.append(f"Background style: {background_style}")
     if composition:
         instruction_parts.append(f"Use {composition}")
+    if safe_area:
+        instruction_parts.append(f"Typography safe area: {safe_area}")
     if camera:
         instruction_parts.append(f"Camera direction: {camera}")
     if style:
@@ -980,6 +1244,12 @@ def build_generation_instruction(state: dict[str, Any]) -> dict[str, Any]:
         instruction_parts.append(f"Color direction: {color_palette}")
     if copy_text:
         instruction_parts.append(f'Include the exact Chinese text "{copy_text}" clearly in the composition')
+        if title_font_style:
+            instruction_parts.append(f"Main title font style: {title_font_style}")
+    if subtitle_text:
+        instruction_parts.append(f'Include the exact Chinese subtitle text "{subtitle_text}" clearly in the composition')
+        if subtitle_font_style:
+            instruction_parts.append(f"Subtitle font style: {subtitle_font_style}")
     if must_include_items:
         instruction_parts.append(f"Must include: {', '.join(must_include_items)}")
     if scene:
@@ -990,19 +1260,25 @@ def build_generation_instruction(state: dict[str, Any]) -> dict[str, Any]:
         scene_name = "通用视觉"
 
     provider_positive_parts: list[str] = []
-    for key in ("subject", "scene", "useCase", "platform", "targetAudience", "composition", "aspectRatio", "camera", "style", "mood", "lighting", "colorPalette"):
+    for key in ("subject", "scene", "useCase", "taskPurpose", "platform", "targetAudience", "composition", "safeArea", "aspectRatio", "camera", "style", "mood", "lighting", "colorPalette", "backgroundStyle"):
         value = intent.get(key)
         if isinstance(value, str) and value.strip():
             provider_positive_parts.append(value.strip())
     if copy_text:
         provider_positive_parts.append(f'include exact Chinese title text "{copy_text}"')
+        if title_font_style:
+            provider_positive_parts.append(f"main title font style {title_font_style}")
+    if subtitle_text:
+        provider_positive_parts.append(f'include exact Chinese subtitle text "{subtitle_text}"')
+        if subtitle_font_style:
+            provider_positive_parts.append(f"subtitle font style {subtitle_font_style}")
     provider_positive_parts.extend(must_include_items)
     provider_positive_parts.extend(scene["positive_elements"] if scene else [FALLBACK_POSITIVE])
     provider_positive_parts.append(QUALITY_SUFFIX)
 
     negative_items = _split_constraint_items(scene["negative"] if scene else FALLBACK_NEGATIVE) + avoid_items
     negative_items = _split_constraint_items(negative_items)
-    if copy_text:
+    if copy_text or subtitle_text:
         negative_items = [item for item in negative_items if "text" not in item.lower()]
 
     return {
@@ -1280,8 +1556,13 @@ async def call_agent_llm(
 4. JSON 中只保留你本轮新提取的信息，没有就留空对象。
 5. 如果参考图分析里明确写了用户已经上传参考图，不要再要求用户重复上传参考图。
 6. 如果本轮用户明确确认了方向，turnType 用 confirm。
-7. 如果用户给了文案/标题/画幅/比例/禁忌，请务必写入 patch：
-   - copyText：用户要求出现在画面里的精确文字
+7. 如果用户给了文案/标题/画幅/比例/禁忌/背景/字体风格，请务必写入 patch：
+   - copyText：主标题/主文案，用户要求出现在画面里的精确文字
+   - subtitleText：副标题/副文案，用户要求出现在画面里的第二段精确文字
+   - backgroundStyle：背景风格，例如“米白统一背景 / 发布会舞台背景 / 极简纯色背景”
+   - titleFontStyle：主标题字体风格，例如“高级力量感 / 几何无衬线 / 科技感字形”
+   - subtitleFontStyle：副标题字体风格，例如“简约现代 / 信息型无衬线”
+   - safeArea：文字安全区域要求，例如“文字不贴边，不被主体遮挡”
    - aspectRatio：例如 "3:4"、"9:16"
    - mustInclude：必须出现的元素
    - avoid：必须避免的元素
@@ -1302,7 +1583,7 @@ async def call_agent_llm(
 {user_message}
 
 输出示例：
-[[VISUAL_INTENT_PATCH]]{{"turnType":"add_detail","operationHint":"text_to_image","targetRegion":"whole_image","patch":{{"subject":"...","style":"...","copyText":"...","aspectRatio":"3:4","avoid":"..."}},"preserve":[],"change":["style"],"avoid":["..."],"assumptions":[],"missingCriticalInfo":[],"confidence":0.72,"creativeSuggestion":"..."}}"""
+[[VISUAL_INTENT_PATCH]]{{"turnType":"add_detail","operationHint":"text_to_image","targetRegion":"whole_image","patch":{{"subject":"...","style":"...","backgroundStyle":"...","copyText":"...","subtitleText":"...","titleFontStyle":"...","subtitleFontStyle":"...","safeArea":"...","aspectRatio":"3:4","avoid":"..."}},"preserve":[],"change":["style"],"avoid":["..."],"assumptions":[],"missingCriticalInfo":[],"confidence":0.72,"creativeSuggestion":"..."}}"""
 
     use_stream = on_chunk is not None
 
@@ -1441,6 +1722,7 @@ def decide_next_action(state: dict[str, Any], action_intent: VisualIntentPatch, 
             "type": "GENERATE",
             "prompt": build_generation_prompt(state),
             "brief": build_brief(state),
+            "contract": build_creative_contract(state),
             "completeness": completeness.model_dump(),
             "operationReadiness": readiness.model_dump(),
         }
@@ -1474,6 +1756,7 @@ def decide_next_action(state: dict[str, Any], action_intent: VisualIntentPatch, 
             "type": "GENERATE",
             "prompt": build_generation_prompt(state),
             "brief": build_brief(state),
+            "contract": build_creative_contract(state),
             "completeness": completeness.model_dump(),
             "operationReadiness": readiness.model_dump(),
         }
@@ -1497,6 +1780,7 @@ def decide_next_action(state: dict[str, Any], action_intent: VisualIntentPatch, 
             "type": "GENERATE",
             "prompt": build_generation_prompt(state),
             "brief": build_brief(state),
+            "contract": build_creative_contract(state),
             "completeness": completeness.model_dump(),
             "operationReadiness": readiness.model_dump(),
         }
@@ -1510,7 +1794,7 @@ def decide_next_action(state: dict[str, Any], action_intent: VisualIntentPatch, 
         }
 
     if completeness.inferrable_gaps:
-        high_weight_gaps = [g for g in completeness.inferrable_gaps if g in ("style", "mood", "useCase")]
+        high_weight_gaps = [g for g in completeness.inferrable_gaps if g in ("overallStyle", "backgroundStyle", "purpose", "titleFontStyle")]
         if high_weight_gaps:
             q = pick_question([high_weight_gaps[0]])
             return {
@@ -1524,9 +1808,9 @@ def decide_next_action(state: dict[str, Any], action_intent: VisualIntentPatch, 
         defaults = infer_defaults(state.get("intent") or {}, completeness.inferrable_gaps)
         state["intent"] = merge_intent(state.get("intent") or {}, defaults)
         brief = build_brief(state)
-        return {"type": "CONFIRM", "brief": brief, "completeness": completeness.model_dump(), "operationReadiness": readiness.model_dump()}
+        return {"type": "CONFIRM", "brief": brief, "contract": build_creative_contract(state), "completeness": completeness.model_dump(), "operationReadiness": readiness.model_dump()}
 
-    return {"type": "CONFIRM", "brief": build_brief(state), "completeness": completeness.model_dump(), "operationReadiness": readiness.model_dump()}
+    return {"type": "CONFIRM", "brief": build_brief(state), "contract": build_creative_contract(state), "completeness": completeness.model_dump(), "operationReadiness": readiness.model_dump()}
 
 
 def _brief_fragment(intent: dict[str, Any]) -> str:
@@ -1637,7 +1921,13 @@ def _build_confirm_action(
 ) -> dict[str, Any]:
     """构造 CONFIRM 动作，给出基于当前 brief 的少量拓展方向。"""
     quick_actions = _build_creative_quick_actions(state, action_intent)
-    payload = {"type": "CONFIRM", "brief": build_brief(state), "completeness": completeness.model_dump(), "quickActions": quick_actions}
+    payload = {
+        "type": "CONFIRM",
+        "brief": build_brief(state),
+        "contract": build_creative_contract(state),
+        "completeness": completeness.model_dump(),
+        "quickActions": quick_actions,
+    }
     if readiness is not None:
         payload["operationReadiness"] = readiness.model_dump()
     return payload
@@ -1660,6 +1950,8 @@ def apply_decision_to_state(state: dict[str, Any], decision: dict[str, Any], use
     if kind == "CONFIRM" and decision.get("brief"):
         updated["brief"] = decision["brief"]
         # confirmedByUser 不持久化，状态由 normalize_project_state 每次重置
+    if decision.get("contract"):
+        updated.setdefault("metadata", {})["creativeContract"] = decision.get("contract")
     logs = (((updated.get("metadata") or {}).get("decisionLogs")) or [])
     logs.append({"type": kind, "at": math.floor(time.time()), "userMessage": user_message[:200]})
     updated.setdefault("metadata", {})["decisionLogs"] = logs[-20:]

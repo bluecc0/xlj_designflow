@@ -60,6 +60,7 @@ from .agent_mode import (
     apply_intent_patch_to_state,
     apply_decision_to_state,
     build_suggested_refine_from_vlm,
+    build_vlm_followup_decision,
     build_brief,
     call_agent_llm,
     _chat_completions_endpoint,
@@ -2178,6 +2179,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
             prompt_payload["_snapshot"] = {
                 "intent": _deep_copy_json(state.get("intent") or {}),
                 "brief": _deep_copy_json(state.get("brief") or {}),
+                "contract": _deep_copy_json(((state.get("metadata") or {}).get("creativeContract")) or decision.get("contract") or {}),
                 "decisionType": decision.get("type"),
                 "createdAt": time.time(),
             }
@@ -2254,11 +2256,27 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                         "constraints": prompt_payload.get("constraints"),
                         "parameters": prompt_payload.get("parameters"),
                         "reasoningForUser": prompt_payload.get("reasoningForUser"),
+                        "contract": ((state.get("metadata") or {}).get("creativeContract")) or decision.get("contract") or {},
                     },
                 },
                 decision_action=decision.get("type"),
                 created_at=time.time(),
             )
+            followup_decision = build_vlm_followup_decision(vlm_analysis)
+            if followup_decision:
+                append_agent_message(
+                    project_id=project_id,
+                    user_id=user["id"],
+                    role="assistant",
+                    type="agent_text",
+                    text=followup_decision.get("question") or "这版还有可优化空间，要不要继续细修？",
+                    payload={
+                        "decision": followup_decision,
+                        "vlmAnalysis": vlm_analysis,
+                    },
+                    decision_action=followup_decision.get("type"),
+                    created_at=time.time(),
+                )
             yield make_sse("agent_text", {"delta": vlm_analysis.get("userFacingSummary") or "图已经生成好了，我们可以继续细修。"})
             yield make_sse("done", {
                 "project": _public_agent_project(updated or project),
@@ -2270,6 +2288,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                     "constraints": prompt_payload.get("constraints"),
                     "parameters": prompt_payload.get("parameters"),
                     "reasoningForUser": prompt_payload.get("reasoningForUser"),
+                    "contract": ((state.get("metadata") or {}).get("creativeContract")) or decision.get("contract") or {},
                 },
             })
         except Exception as exc:
