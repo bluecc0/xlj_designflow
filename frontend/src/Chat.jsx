@@ -1833,8 +1833,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     agentEnabled ? 'Agent' : activeTaskLabel,
     agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? providerLabel : ''),
     agentEnabled ? '' : modeParamLabel,
-    (activeMode === 'ai-image' && aiBatchCount > 1) ? ('并发 ' + aiBatchCount) : '',
-    refImages.length > 0 ? ('参考图 ' + refImages.length + '/' + MAX_REFERENCE_IMAGES) : '',
+    (activeMode === 'ai-image' && aiBatchCount > 1) ? ('x' + aiBatchCount) : '',
+    refImages.length > 0 ? ('ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES) : '',
     files.length > 0 ? ('文件 ' + files.length) : '',
   ].filter(Boolean);
   const composerPlaceholder = agentEnabled
@@ -3158,9 +3158,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     const apiBase = window.API_BASE || window.location.origin;
-    // 共享的收集器：所有子任务完成后用此数组调用 onComposeComplete
-    const collected = [];
-    const allDone = { value: false };
+    const composeBatchId = batchCount > 1 ? ('ai-batch-' + baseAt) : null;
     const submitOne = function(slotAt, index) {
       return new Promise(function(resolve) {
         const fd = new FormData();
@@ -3209,15 +3207,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                         ? Object.assign({}, m, { status: 'done', imageUrl: statusData.image_url, previewUrl: statusData.preview_url || statusData.image_url, finalElapsed, progress: 100, refPreviews: refPreviews.length ? refPreviews : m.refPreviews })
                         : m
                     ));
-                    collected.push({ url: statusData.image_url, index });
                     loadAiChatHistory();
-                    // 等所有 done 才通知画布（批次模式：把 4 张图都传过去）
-                    if (collected.length === batchCount && !allDone.value) {
-                      allDone.value = true;
-                      if (onComposeComplete) {
-                        const sortedUrls = collected.slice().sort((a, b) => a.index - b.index).map(x => x.url);
-                        onComposeComplete(null, null, sortedUrls, null);
-                      }
+                    if (onComposeComplete) {
+                      onComposeComplete(composeBatchId || jobId, null, [statusData.image_url], null);
                     }
                     resolve();
                   } else if (statusData.status === 'failed') {

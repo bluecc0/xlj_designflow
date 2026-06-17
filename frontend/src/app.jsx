@@ -137,6 +137,7 @@ const App = () => {
 
   const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl) => {
     const explicitClear = !jobId && !resultTpl && Array.isArray(directImageUrls) && directImageUrls.length === 0;
+    const urls = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : (directImageUrls ? [directImageUrls] : []);
     if (explicitClear) {
       setResultTemplate(null);
       setEditorCommand({
@@ -151,17 +152,28 @@ const App = () => {
     }
     if (resultTpl) {
       setResultTemplate(resultTpl);
-    } else if (jobId && directImageUrls) {
-      const tpl = {
-        id: jobId,
-        name: '生成结果',
-        frames: Array.isArray(directImageUrls)
-          ? directImageUrls.map((url, i) => ({ id: `${jobId}_${i}`, resultUrl: url }))
-          : [{ id: jobId, resultUrl: directImageUrls }],
-      };
-      setResultTemplate(tpl);
+    } else if (urls.length > 0) {
+      setResultTemplate(function(prev) {
+        const templateId = jobId || (prev && prev.id) || ('generated_' + Date.now());
+        const sameBatch = !!(prev && prev.id && jobId && prev.id === jobId);
+        const nextFrames = urls.map(function(url, i) {
+          return {
+            id: `${templateId}_${Date.now()}_${i}`,
+            resultUrl: url,
+          };
+        });
+        if (sameBatch && prev && Array.isArray(prev.frames)) {
+          return Object.assign({}, prev, {
+            frames: prev.frames.concat(nextFrames),
+          });
+        }
+        return {
+          id: templateId,
+          name: '生成结果',
+          frames: nextFrames,
+        };
+      });
     }
-    const urls = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : (directImageUrls ? [directImageUrls] : []);
     if (urls.length > 0) {
       setEditorCommand({
         key: Date.now() + Math.random(),
