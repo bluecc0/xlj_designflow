@@ -1190,38 +1190,44 @@ def _build_sub2api_tools(
 
 
 def _parse_sub2api_sse_image_url(text: str) -> str | None:
-    """从 Sub2API SSE 流式响应文本中解析图片 URL。
-    逐行解析 data: 事件，找 output 数组中 type=image 的 image_url。"""
+    """从 Sub2API SSE 流式响应文本中解析图片数据。
+    优先从 partial_image_b64 提取（直接 base64），其次找 image_url 字段。
+    返回 (data_url, is_base64) 元组或 None。"""
+    import re
+    b64_match = re.search(r'"partial_image_b64"\s*:\s*"([^"]+)"', text)
+    if b64_match:
+        b64 = b64_match.group(1)
+        return (f"data:image/png;base64,{b64}", True)
     for line in text.splitlines():
         line = line.strip()
         if not line.startswith("data:"):
             continue
         data = line[5:].strip()
-        if data == "[DONE]":
+        if data == "[DONE]" or not data:
             continue
         try:
             event = json.loads(data)
         except Exception:
             continue
-        # 优先从 output 数组里找 image
-        if isinstance(event, dict):
-            output = event.get("output")
-            if isinstance(output, list):
-                for item in output:
-                    if isinstance(item, dict):
-                        if item.get("type") == "image":
-                            return item.get("image_url") or item.get("url")
-            # fallback: 找 result 或 completion
-            result = event.get("result") or event.get("completion")
-            if isinstance(result, dict):
-                img = result.get("image_url") or result.get("url")
-                if img:
-                    return img
-            # 更深层 fallback
-            for key in ("image_url", "url", "content", "text"):
-                val = event.get(key)
-                if val and isinstance(val, str) and val.startswith("http"):
-                    return val
+        if not isinstance(event, dict):
+            continue
+        # 兼容 OpenAI Responses API 各种可能字段
+        for key in ("image_url", "url"):
+            val = event.get(key)
+            if val and isinstance(val, str) and val.startswith("http"):
+                return (val, False)
+        output = event.get("output")
+        if isinstance(output, list):
+            for item in output:
+                if isinstance(item, dict):
+                    if item.get("type") == "image":
+                        img = item.get("image_url") or item.get("url")
+                        if img:
+                            return (img, False)
+        for key in ("content", "text"):
+            val = event.get(key)
+            if val and isinstance(val, str) and val.startswith("http"):
+                return (val, False)
     return None
 
 
@@ -1284,7 +1290,27 @@ async def generate_sub2api_async(
     if on_progress:
         on_progress(80, "downloading")
 
-    local_url = await _download_final_image(client, image_url=image_url, user_id=user_id)
+    parse_result = _parse_sub2api_sse_image_url(sse_text)
+    if not parse_result:
+        logger.warning("Sub2API 未解析到图片，SSE 前 2KB: %s", sse_text[:2048])
+        raise RuntimeError("Sub2API 返回中未找到图片，请检查响应格式")
+    image_url, is_base64 = parse_result
+
+    if is_base64:
+        # base64 data URL，直接解码保存
+        b64_str = image_url.split(",", 1)[1] if "," in image_url else image_url
+        try:
+            image_bytes = base64.b64decode(b64_str)
+        except Exception as e:
+            raise RuntimeError(f"Sub2API 图片 base64 解码失败: {e}")
+        filename = f"{uuid.uuid4().hex}.png"
+        out_dir = _ensure_user_output_dir(user_id)
+        out_path = out_dir / filename
+        out_path.write_bytes(image_bytes)
+        local_url = f"/ai-images/{out_dir.name}/{filename}"
+    else:
+        async with httpx.AsyncClient(timeout=120, trust_env=False) as client2:
+            local_url = await _download_final_image(client2, image_url=image_url, user_id=user_id)
 
     if on_progress:
         on_progress(100, "done")
