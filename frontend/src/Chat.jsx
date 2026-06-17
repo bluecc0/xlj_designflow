@@ -1528,7 +1528,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       provider: aiProvider,
       workflow: selectedWorkflow,
       lockedCommand: lockedCommand,
-      batchCount: aiBatchCount,
+      batchCount: selectedWorkflow === 'ai-image' ? aiBatchCount : 1,
     });
     setText('');
     clearRefImages();
@@ -2103,7 +2103,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             }, '官方')
           )
         ),
-        React.createElement('div', {
+        isImageParams && React.createElement('div', {
           style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 11.5, color: 'var(--ink-3)', flexWrap: 'nowrap' }
         },
           React.createElement('span', null, '并发数'),
