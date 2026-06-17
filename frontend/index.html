@@ -4372,18 +4372,22 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         },
           React.createElement('span', null, '并发数'),
           React.createElement('input', {
-            type: 'number',
-            min: 1,
-            max: 4,
+            type: 'text',
+            inputMode: 'numeric',
+            pattern: '[1-4]*',
             value: aiBatchCount,
             onChange: function(e) {
-              const v = parseInt(e.target.value);
+              const raw = String(e.target.value || '').replace(/\D+/g, '');
+              if (!raw) {
+                setAiBatchCount(1);
+                return;
+              }
+              const v = parseInt(raw, 10);
               if (Number.isFinite(v)) setAiBatchCount(Math.max(1, Math.min(4, v)));
-              else if (e.target.value === '') setAiBatchCount(1);
             },
             style: {
-              width: 50,
-              padding: '4px 8px',
+              width: 38,
+              padding: '4px 6px',
               border: '1px solid var(--line)',
               borderRadius: 6,
               fontSize: 12,
