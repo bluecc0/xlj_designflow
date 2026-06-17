@@ -4283,6 +4283,29 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       const isSpecialParams = activeMode === 'special' || activeMode === 'special_full';
       const isComposeParams = activeMode === 'compose';
       const paramsTitle = isImageParams ? '生图参数' : isSpecialParams ? '特殊品参数' : isComposeParams ? '合成参数' : '问答参数';
+      const providerItems = [
+        activeAiModel !== 'nano-banana-pro' ? {
+          key: 'sub2api',
+          label: '订阅',
+          active: aiProvider === 'sub2api',
+          disabled: ['2K', '4K'].includes(aiQuality),
+          onClick: function() { if (!['2K', '4K'].includes(aiQuality)) setAiProvider('sub2api'); },
+        } : null,
+        {
+          key: 'apimart',
+          label: '默认',
+          active: aiProvider === 'apimart',
+          disabled: false,
+          onClick: function() { setAiProvider('apimart'); },
+        },
+        {
+          key: 'zenmux',
+          label: '官方',
+          active: aiProvider === 'zenmux',
+          disabled: false,
+          onClick: function() { setAiProvider('zenmux'); },
+        },
+      ].filter(Boolean);
       return protoPanelShell(React.createElement(React.Fragment, null,
         React.createElement('div', { style: { fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--ink)' } }, paramsTitle),
         isImageParams && React.createElement(React.Fragment, null,
@@ -4331,40 +4354,45 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             })
           ),
           protoSectionLabel('清晰度 / 渠道'),
-          React.createElement('div', { style: { display: 'flex', gap: 4, flexWrap: 'wrap' } },
-            ['1K', '2K', '4K'].map(function(q) {
-              const disabled = !allowedAiQualities.includes(q);
-              return React.createElement('button', {
-                key: q,
-                type: 'button',
-                disabled: disabled,
-                onClick: function() { if (!disabled) setAiQuality(q); },
-                style: Object.assign({}, protoChipStyle(aiQuality === q), {
-                  cursor: disabled ? 'not-allowed' : 'pointer',
-                  opacity: disabled ? 0.45 : 1,
-                })
-              }, q);
-            }),
-            React.createElement('div', { style: { width: 1, height: 30, background: 'var(--line)', margin: '0 1px' } }),
-            activeAiModel !== 'nano-banana-pro' && React.createElement('button', {
-              type: 'button',
-              disabled: ['2K', '4K'].includes(aiQuality),
-              onClick: function() { if (!['2K', '4K'].includes(aiQuality)) setAiProvider('sub2api'); },
-              style: Object.assign({}, protoChipStyle(aiProvider === 'sub2api'), {
-                cursor: ['2K', '4K'].includes(aiQuality) ? 'not-allowed' : 'pointer',
-                opacity: ['2K', '4K'].includes(aiQuality) ? 0.45 : 1,
+          React.createElement('div', { style: { display: 'flex', alignItems: 'stretch', gap: 8, width: '100%' } },
+            React.createElement('div', {
+              style: { flex: 1, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 4 }
+            },
+              ['1K', '2K', '4K'].map(function(q) {
+                const disabled = !allowedAiQualities.includes(q);
+                return React.createElement('button', {
+                  key: q,
+                  type: 'button',
+                  disabled: disabled,
+                  onClick: function() { if (!disabled) setAiQuality(q); },
+                  style: Object.assign({}, protoChipStyle(aiQuality === q), {
+                    width: '100%',
+                    minWidth: 0,
+                    cursor: disabled ? 'not-allowed' : 'pointer',
+                    opacity: disabled ? 0.45 : 1,
+                  })
+                }, q);
               })
-            }, '订阅'),
-            React.createElement('button', {
-              type: 'button',
-              onClick: function() { setAiProvider('apimart'); },
-              style: Object.assign({}, protoChipStyle(aiProvider === 'apimart'), { cursor: 'pointer' })
-            }, '默认'),
-            React.createElement('button', {
-              type: 'button',
-              onClick: function() { setAiProvider('zenmux'); },
-              style: Object.assign({}, protoChipStyle(aiProvider === 'zenmux'), { cursor: 'pointer' })
-            }, '官方')
+            ),
+            React.createElement('div', { style: { width: 1, alignSelf: 'stretch', background: 'var(--line)' } }),
+            React.createElement('div', {
+              style: { flex: 1, display: 'grid', gridTemplateColumns: 'repeat(' + providerItems.length + ', minmax(0, 1fr))', gap: 4 }
+            },
+              providerItems.map(function(item) {
+                return React.createElement('button', {
+                  key: item.key,
+                  type: 'button',
+                  disabled: item.disabled,
+                  onClick: item.onClick,
+                  style: Object.assign({}, protoChipStyle(item.active), {
+                    width: '100%',
+                    minWidth: 0,
+                    cursor: item.disabled ? 'not-allowed' : 'pointer',
+                    opacity: item.disabled ? 0.45 : 1,
+                  })
+                }, item.label);
+              })
+            )
           )
         ),
         isImageParams && React.createElement('div', {
