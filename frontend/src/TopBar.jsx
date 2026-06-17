@@ -140,10 +140,114 @@ const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail, placemen
   );
 };
 
+const InspirationCurveIcon = () => {
+  const groupRef = React.useRef(null);
+  const pathRef = React.useRef(null);
+  const particlesRef = React.useRef([]);
+
+  React.useEffect(function() {
+    const group = groupRef.current;
+    const path = pathRef.current;
+    const particles = particlesRef.current.filter(Boolean);
+    if (!group || !path || !particles.length) return;
+
+    const config = {
+      amplitude: 9.2,
+      petalCount: 2,
+      curveScale: 3.25,
+      particleCount: particles.length,
+      trailSpan: 0.42,
+      durationMs: 4600,
+      rotationDurationMs: 28000,
+      pulseDurationMs: 4200,
+      strokeWidth: 5.5,
+      rotate: true,
+      point: function(progress, detailScale, cfg) {
+        const t = progress * Math.PI * 2;
+        const petals = Math.round(cfg.petalCount);
+        const radius = cfg.amplitude * detailScale * Math.cos(petals * t);
+        return {
+          x: 50 + radius * Math.cos(t) * cfg.curveScale,
+          y: 50 + radius * Math.sin(t) * cfg.curveScale,
+        };
+      },
+    };
+    const normalizeProgress = function(progress) {
+      return ((progress % 1) + 1) % 1;
+    };
+    const buildPath = function(detailScale, steps) {
+      return Array.from({ length: steps + 1 }, function(_, index) {
+        const point = config.point(index / steps, detailScale, config);
+        return (index === 0 ? 'M' : 'L') + ' ' + point.x.toFixed(2) + ' ' + point.y.toFixed(2);
+      }).join(' ');
+    };
+    const getDetailScale = function(time) {
+      const pulseProgress = (time % config.pulseDurationMs) / config.pulseDurationMs;
+      const pulseAngle = pulseProgress * Math.PI * 2;
+      return 0.52 + ((Math.sin(pulseAngle + 0.55) + 1) / 2) * 0.48;
+    };
+    const getParticle = function(index, progress, detailScale) {
+      const tailOffset = index / (config.particleCount - 1);
+      const point = config.point(
+        normalizeProgress(progress - tailOffset * config.trailSpan),
+        detailScale,
+        config
+      );
+      const fade = Math.pow(1 - tailOffset, 0.56);
+      return {
+        x: point.x,
+        y: point.y,
+        radius: 0.9 + fade * 2.7,
+        opacity: 0.04 + fade * 0.96,
+      };
+    };
+
+    const startedAt = performance.now();
+    let raf = 0;
+    const render = function(now) {
+      const time = now - startedAt;
+      const progress = (time % config.durationMs) / config.durationMs;
+      const detailScale = getDetailScale(time);
+      const rotation = -((time % config.rotationDurationMs) / config.rotationDurationMs) * 360;
+
+      group.setAttribute('transform', 'rotate(' + rotation.toFixed(2) + ' 50 50)');
+      path.setAttribute('d', buildPath(detailScale, 220));
+      particles.forEach(function(node, index) {
+        const particle = getParticle(index, progress, detailScale);
+        node.setAttribute('cx', particle.x.toFixed(2));
+        node.setAttribute('cy', particle.y.toFixed(2));
+        node.setAttribute('r', (particle.radius * 0.78).toFixed(2));
+        node.setAttribute('opacity', particle.opacity.toFixed(3));
+      });
+      raf = requestAnimationFrame(render);
+    };
+    raf = requestAnimationFrame(render);
+    return function() { cancelAnimationFrame(raf); };
+  }, []);
+
+  return (
+    <span className="inspiration-curve-icon" aria-hidden="true">
+      <svg width="30" height="30" viewBox="0 0 100 100" fill="none" style={{ display: 'block' }}>
+        <defs>
+          <linearGradient id="inspirationIconGradient" x1="16" y1="18" x2="84" y2="82" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#06b6d4"/>
+            <stop offset="50%" stopColor="#3b82f6"/>
+            <stop offset="100%" stopColor="#8b5cf6"/>
+          </linearGradient>
+        </defs>
+        <g ref={groupRef} className="inspiration-curve-icon__dots">
+          <path ref={pathRef} stroke="url(#inspirationIconGradient)" strokeWidth="5.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.14"/>
+          {Array.from({ length: 64 }).map(function(_, i) {
+            return <circle key={i} ref={function(node) { particlesRef.current[i] = node; }} fill="url(#inspirationIconGradient)"/>;
+          })}
+        </g>
+      </svg>
+    </span>
+  );
+};
+
 const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration, inspirationOpen }) => {
   const isAgentPage = typeof window !== 'undefined' && /\/ui\/agent\.html(?:$|\?)/.test(window.location.href);
-  const lottieContainerRef = React.useRef(null);
-  const lottieAnimRef = React.useRef(null);
 
   React.useEffect(function() {
     if (document.getElementById('inspiration-flow-style')) return;
@@ -189,27 +293,14 @@ const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
+.inspiration-curve-icon {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+}
 `;
     document.head.appendChild(style);
-  }, []);
-
-  React.useEffect(function() {
-    const el = lottieContainerRef.current;
-    if (!el || !window.lottie) return;
-    if (lottieAnimRef.current) return;
-    lottieAnimRef.current = window.lottie.loadAnimation({
-      container: el,
-      renderer: 'svg',
-      loop: true,
-      autoplay: true,
-      path: 'src/icon/animation/cffe9aa4-4cd6-11f0-8880-1b96160dc82b.json',
-    });
-    return function() {
-      if (lottieAnimRef.current) {
-        lottieAnimRef.current.destroy();
-        lottieAnimRef.current = null;
-      }
-    };
   }, []);
 const fmtBalance = (n) => {
   if (typeof n !== 'number') return '';
@@ -296,7 +387,7 @@ window.renderAiProviderDetail = renderAiProviderDetail;
               title="灵感"
               className="inspiration-flow__inner"
             >
-              <span ref={lottieContainerRef} style={{ width: 30, height: 30, display: 'inline-block' }}/>
+              <InspirationCurveIcon/>
               <span className="inspiration-flow__text">灵感</span>
             </button>
           </div>

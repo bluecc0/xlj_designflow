@@ -2799,6 +2799,31 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     return null;
   }, [messages]);
 
+  const normalizeAiImageModel = React.useCallback(function(model) {
+    const value = String(model || '').trim().toLowerCase();
+    if (!value) return '';
+    if (value.includes('nano') || value.includes('banana') || value.includes('gemini')) return 'nano-banana-pro';
+    if (value.includes('gpt') || value.includes('image')) return 'gpt-image-2';
+    return value;
+  }, []);
+
+  const hasDoneAiImageInCurrentThread = React.useCallback(function() {
+    return messages.some(function(m) {
+      return m && m.type === 'ai-image-generating' && m.status === 'done' && (m.imageUrl || m.previewUrl);
+    });
+  }, [messages]);
+
+  const isLikelyAiImageFollowup = React.useCallback(function(value) {
+    const s = String(value || '').trim();
+    if (!s) return false;
+    if (s.startsWith('/')) return false;
+    if (/^(为什么|怎么|如何|什么|吗|是不是|能不能解释|帮我分析)/.test(s)) return false;
+    if (s.length <= 80 && /(改|换|调|变成|去掉|删除|加上|增加|减少|保留|不要|更|再|继续|上一张|这张|这个|背景|颜色|色调|风格|构图|比例|尺寸|文案|字体|清晰|高级|简约|真实|产品|人物|模特|重新生成|重画|出一版|来一版)/.test(s)) {
+      return true;
+    }
+    return /(基于上一张|参考上一张|在上一版基础上|沿用上一版|保持.*改|只把.*改|其他不变)/.test(s);
+  }, []);
+
   // 将 File / Blob 转为 data URL（缩略图，最长边 200px）
   const fileToThumbDataUrl = (file) => new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
@@ -3445,9 +3470,15 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       { prefix: '/Gpt image 2',     model: 'gpt-image-2' },
     ];
     const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
-    const aiCmd = AI_IMAGE_CMDS.find(c => text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase()))
-      ? Object.assign({}, AI_IMAGE_CMDS.find(c => text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase())), { implicit: true })
-      : null;
+    const lockedAiCmd = AI_IMAGE_CMDS.find(function(c) {
+      return String(aiOptions.lockedCommand || '').trim().toLowerCase() === c.prefix.toLowerCase();
+    });
+    const textAiCmd = AI_IMAGE_CMDS.find(function(c) {
+      return text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase());
+    });
+    const aiCmd = lockedAiCmd
+      ? Object.assign({}, lockedAiCmd, { implicit: true, fromLockedCommand: true })
+      : (textAiCmd ? Object.assign({}, textAiCmd, { implicit: true, fromLockedCommand: false }) : null);
 
     // 检测"重新生成"关键词
     const rawPrompt = text.trim();
@@ -3464,7 +3495,10 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     if (aiCmd) {
-      const plainText = text.trim().slice(aiCmd.prefix.length).trimStart();
+      const rawAiText = text.trim();
+      const plainText = rawAiText.toLowerCase().startsWith(aiCmd.prefix.toLowerCase())
+        ? rawAiText.slice(aiCmd.prefix.length).trimStart()
+        : rawAiText;
       if (!plainText) {
         const prefixLabel = aiCmd.implicit ? '（复用上次模型）' : aiCmd.prefix;
         setMessages(msgs => [...msgs,
@@ -3475,6 +3509,23 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       }
       setMessages(msgs => [...msgs, { who: 'user', text: plainText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       await runAiImageGeneration(aiCmd.model, plainText, plainText, refImages, aiOptions);
+      return;
+    }
+
+    // ── 当前生图会话的自然语言修改 ───────────────────────────────────────────
+    // 用户说“改成红色 / 背景换白色 / 更高级一点”时，必须继续走 /ai-image，
+    // 后端会结合 chat_session_id 的历史 prompt，并自动把上一张结果图作为参考图。
+    if (currentAiChatId && hasDoneAiImageInCurrentThread() && isLikelyAiImageFollowup(text)) {
+      const lastOpts = getLastAiImageOptions();
+      const model = normalizeAiImageModel(lastOpts?.model) || 'gpt-image-2';
+      const opts = {
+        ...aiOptions,
+        size: lastOpts?.size || aiOptions.size,
+        resolution: lastOpts?.resolution || aiOptions.resolution,
+        provider: aiOptions.provider,
+      };
+      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
+      await runAiImageGeneration(model, text.trim(), text.trim(), refImages, opts);
       return;
     }
 
@@ -3609,7 +3660,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       ));
     }
     setIsLoading(false);
-  }, [agentEnabled, currentAiChatId, ensureAgentProject, enhancePromptWithProductRefs, getLastAiImageOptions, isLoading, loadAiChatHistory, loadResolvedRefFiles, materializeReferenceImages, onComposeComplete, parseProductRefs, runAiImageGeneration, template]);
+  }, [agentEnabled, currentAiChatId, ensureAgentProject, enhancePromptWithProductRefs, getLastAiImageOptions, hasDoneAiImageInCurrentThread, isLikelyAiImageFollowup, isLoading, loadAiChatHistory, loadResolvedRefFiles, materializeReferenceImages, normalizeAiImageModel, onComposeComplete, parseProductRefs, runAiImageGeneration, template]);
 
   // ── 快捷回复：点击选项按钮触发 ──────────────────────────────────────────────
   const handleQuickReply = React.useCallback(function(value) {
