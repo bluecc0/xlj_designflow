@@ -4394,7 +4394,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           }),
           React.createElement('span', { style: { fontSize: 10.5, color: 'var(--ink-3)' } }, '张 (1-4)')
         )
-        ),
+        ,
         activeMode === 'chat' && React.createElement('div', {
           style: {
             marginTop: 12,
@@ -5392,10 +5392,10 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
 
     const apiBase = window.API_BASE || window.location.origin;
     // 共享的收集器：所有子任务完成后用此数组调用 onComposeComplete
-    const collected: { url: string; index: number }[] = [];
-    const allDone: { value: boolean } = { value: false };
-    const submitOne = function(slotAt: number, index: number) {
-      return new Promise<void>(function(resolve) {
+    const collected = [];
+    const allDone = { value: false };
+    const submitOne = function(slotAt, index) {
+      return new Promise(function(resolve) {
         const fd = new FormData();
         fd.append('model', model);
         fd.append('provider', provider);
