@@ -2194,6 +2194,8 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 yield make_sse(event_name, payload)
                 if event_name == "generation_completed":
                     generated_image = payload.get("image")
+                    if isinstance(generated_image, dict) and payload.get("provider"):
+                        generated_image["provider"] = payload.get("provider")
 
             if not generated_image or not generated_image.get("url"):
                 yield make_sse("error", {"message": "生成完成但未拿到图片地址"})
@@ -2205,7 +2207,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
             image_record = create_agent_image(
                 project_id=project_id,
                 user_id=user["id"],
-                provider="apimart",
+                provider=str(generated_image.get("provider") or settings.ai_image_provider or "apimart"),
                 model=str(prompt_payload.get("model") or ""),
                 prompt=prompt_payload,
                 image_url=generated_image["url"],
