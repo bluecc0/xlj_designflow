@@ -721,9 +721,11 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
             {m.type === 'ai-image-generating' ? (() => {
             const fmtSecs = s => { const mm = Math.floor(s/60), ss = s%60; return mm > 0 ? mm+'m '+String(ss).padStart(2,'0')+'s' : ss+'s'; };
             const promptPayload = m.promptPayload || null;
-            const promptPositive = promptPayload && promptPayload.positive ? promptPayload.positive : m.prompt;
+            const promptInstruction = promptPayload && promptPayload.instruction ? promptPayload.instruction : (promptPayload && promptPayload.positive ? promptPayload.positive : m.prompt);
             const promptNegative = promptPayload && promptPayload.negative ? promptPayload.negative : '';
             const promptParams = promptPayload && promptPayload.parameters ? promptPayload.parameters : null;
+            const promptConstraints = promptPayload && promptPayload.constraints ? promptPayload.constraints : null;
+            const promptReasoning = promptPayload && promptPayload.reasoningForUser ? promptPayload.reasoningForUser : '';
             const fullImageUrl = m.imageUrl || '';
             const displayImageUrlRaw = m.previewUrl || m.imagePreviewUrl || m.imageUrl || '';
             const displayImageUrl = displayImageUrlRaw && displayImageUrlRaw.startsWith('/')
@@ -751,7 +753,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     : null
               ),
               m.status !== 'failed' && m.status !== 'done' && React.createElement(InlineRefStrip, { items: m.refPreviews }),
-              agentEnabled && promptPositive && React.createElement('div', {
+              agentEnabled && promptInstruction && React.createElement('div', {
                 style: {
                   padding: '9px 10px',
                   borderRadius: 8,
@@ -765,16 +767,28 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 React.createElement('div', {
                   className: 'mono',
                   style: { fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }
-                }, 'Prompt 标准'),
+                }, '执行标准'),
                 React.createElement('div', { style: { fontSize: 11.2, color: 'var(--ink-2)', lineHeight: 1.45 } },
-                  String(promptPositive).slice(0, 360),
-                  String(promptPositive).length > 360 ? '...' : ''
+                  String(promptInstruction).slice(0, 360),
+                  String(promptInstruction).length > 360 ? '...' : ''
                 ),
-                promptNegative ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.4 } },
-                  '避免：', String(promptNegative).slice(0, 220), String(promptNegative).length > 220 ? '...' : ''
+                promptReasoning ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.4 } },
+                  '说明：', String(promptReasoning).slice(0, 180), String(promptReasoning).length > 180 ? '...' : ''
+                ) : null,
+                promptConstraints && Array.isArray(promptConstraints.mustInclude) && promptConstraints.mustInclude.length > 0 ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-2)', lineHeight: 1.4 } },
+                  '必须包含：', promptConstraints.mustInclude.join('； ')
+                ) : null,
+                promptConstraints && Array.isArray(promptConstraints.preserve) && promptConstraints.preserve.length > 0 ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-2)', lineHeight: 1.4 } },
+                  '保留：', promptConstraints.preserve.join('； ')
+                ) : null,
+                ((promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0) || promptNegative) ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.4 } },
+                  '避免：',
+                  promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0
+                    ? promptConstraints.avoid.join('； ')
+                    : (String(promptNegative).slice(0, 220) + (String(promptNegative).length > 220 ? '...' : ''))
                 ) : null,
                 promptParams ? React.createElement('div', { className: 'mono', style: { fontSize: 10, color: 'var(--ink-3)' } },
-                  'size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认'
+                  'ratio=', promptParams.aspectRatio || promptParams.size || 'auto', ' · size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认'
                 ) : null
               ),
               m.status === 'done' && fullImageUrl && React.createElement('div', null,
@@ -1789,7 +1803,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const activeTaskIconSrc = activeMode === 'ai-image'
     ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
     : null;
-  const providerLabel = aiProvider === 'zenmux' ? '官方' : '默认';
+  const providerLabel = aiProvider === 'zenmux' ? '官方' : aiProvider === 'sub2api' ? '订阅' : '默认';
   const modeParamLabel = activeMode === 'ai-image'
     ? (aiRatio + ' · ' + aiQuality)
     : activeMode === 'special_full'
@@ -2060,7 +2074,12 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
               type: 'button',
               onClick: function() { setAiProvider('zenmux'); },
               style: Object.assign({}, protoChipStyle(aiProvider === 'zenmux'), { cursor: 'pointer' })
-            }, '官方')
+            }, '官方'),
+            React.createElement('button', {
+              type: 'button',
+              onClick: function() { setAiProvider('sub2api'); },
+              style: Object.assign({}, protoChipStyle(aiProvider === 'sub2api'), { cursor: 'pointer' })
+            }, '订阅')
           )
         ),
         activeMode === 'chat' && React.createElement('div', {
@@ -2403,11 +2422,13 @@ const mapAgentProjectMessages = function(project, images) {
     var payload = item && item.payload ? item.payload : {};
     var refMeta = Array.isArray(payload.reference_images) ? payload.reference_images : [];
     var decision = (payload && payload.decision) || {};
+    var intentPatch = (payload && (payload.intent_patch || payload.action_intent)) || {};
     var msg = {
       who: item && item.role === 'user' ? 'user' : 'ai',
       text: (item && item.text) || '',
       meta: item && item.role === 'assistant' ? 'Agent' : undefined,
       refMeta: refMeta,
+      intentPatch: intentPatch,
     };
     // 恢复 CONFIRM 的 Brief 卡片 + 快捷按钮
     if (decision && decision.type === 'CONFIRM') {
@@ -2428,17 +2449,19 @@ const mapAgentProjectMessages = function(project, images) {
   const items = Array.isArray(images) ? images : [];
   if (!items.length) return base;
   return base.concat(items.map(function(image) {
+    var promptPayload = image && image.prompt ? image.prompt : null;
     return {
       who: 'ai',
       type: 'ai-image-generating',
       model: (image && image.model) || 'agent',
-      prompt: image && image.prompt ? (image.prompt.positive || '') : '',
-      promptPayload: image && image.prompt ? image.prompt : null,
+      prompt: promptPayload ? (promptPayload.instruction || promptPayload.positive || '') : '',
+      promptPayload: promptPayload,
       status: 'done',
       imageUrl: image && image.image_url ? ((window.API_BASE || window.location.origin) + image.image_url) : '',
       finalElapsed: null,
       progress: 100,
       meta: 'Agent',
+      vlm: image && image.vlm_analysis ? image.vlm_analysis : null,
     };
   }));
 };
@@ -3231,7 +3254,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                     who: 'ai',
                     type: 'ai-image-generating',
                     model: modelLabel,
-                    prompt: payload.prompt && payload.prompt.positive ? payload.prompt.positive : text,
+                    prompt: payload.prompt && (payload.prompt.instruction || payload.prompt.positive) ? (payload.prompt.instruction || payload.prompt.positive) : text,
                     promptPayload: payload.prompt || null,
                     size: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.size : 'auto',
                     resolution: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.resolution : '1K',
@@ -3278,6 +3301,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                     progress: 100,
                     finalElapsed: m.startedAt ? Math.floor((Date.now() - m.startedAt) / 1000) : null,
                     vlm: vlm,
+                    promptPayload: (payload && payload.generationInstruction)
+                      ? Object.assign({}, m.promptPayload || {}, payload.generationInstruction)
+                      : m.promptPayload,
                   };
                 });
               });

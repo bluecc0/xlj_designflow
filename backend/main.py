@@ -38,6 +38,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .ai_image import (
+    PROVIDER_SUB2API,
     PROVIDER_ZENMUX,
     cleanup_user_refs,
     generate_image,
@@ -45,6 +46,7 @@ from .ai_image import (
     generate_image_async,
     generate_image_zenmux_async,
     generate_image_with_reference_async,
+    generate_sub2api_async,
     generate_inspiration_thumb,
     load_user_refs,
     normalize_provider,
@@ -52,10 +54,12 @@ from .ai_image import (
     SLASH_MODEL_MAP,
 )
 from .agent_mode import (
-    AgentActionIntent,
+    VisualIntentPatch,
     AgentChatRequest,
     analyze_reference_images,
+    apply_intent_patch_to_state,
     apply_decision_to_state,
+    build_suggested_refine_from_vlm,
     build_brief,
     call_agent_llm,
     _chat_completions_endpoint,
@@ -66,6 +70,7 @@ from .agent_mode import (
     default_project_state,
     detect_confirm,
     extract_message_constraints,
+    has_meaningful_patch,
     has_meaningful_intent_update,
     make_sse,
     merge_intent,
@@ -368,6 +373,7 @@ def _public_agent_project(project: dict, *, messages: Optional[list[dict]] = Non
         "currentImageUrl": (project.get("current_image") or {}).get("imageUrl"),
         "currentPrompt": project.get("current_prompt"),
         "conversationSummary": project.get("conversation_summary") or "",
+        "metadata": project.get("metadata") or {},
         "messages": messages if messages is not None else None,
         "iterations": images if images is not None else None,
         "createdAt": project["created_at"],
@@ -521,6 +527,28 @@ async def health():
     ai_provider["zenmux"] = zenmux_status
     ai_provider["connected"] = bool(ai_provider.get("connected") or zenmux_status.get("connected"))
     ai_provider["configured"] = bool(ai_provider.get("configured") or zenmux_status.get("configured"))
+
+    # Sub2API 状态探测
+    sub2api_status = {
+        "connected": False,
+        "configured": bool(settings.sub2api_api_key and settings.sub2api_base_url),
+        "provider": "Sub2API",
+        "url": settings.sub2api_base_url,
+    }
+    if settings.sub2api_api_key and settings.sub2api_base_url:
+        try:
+            async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
+                r = await client.get(
+                    f"{settings.sub2api_base_url.rstrip('/')}/health",
+                    headers={"Authorization": f"Bearer {settings.sub2api_api_key}"},
+                )
+            sub2api_status["status_code"] = r.status_code
+            sub2api_status["connected"] = r.status_code == 200
+        except Exception as e:
+            sub2api_status["message"] = str(e)
+    ai_provider["sub2api"] = sub2api_status
+    ai_provider["connected"] = bool(ai_provider.get("connected") or sub2api_status.get("connected"))
+    ai_provider["configured"] = bool(ai_provider.get("configured") or sub2api_status.get("configured"))
 
     return {
         "status": "ok",
@@ -2022,7 +2050,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
 
             # ── 真流式：LLM 逐 token 回调 → 入队 → SSE yield ──
             agent_reply = ""
-            action_intent = None
+            intent_patch = None
             hard_constraints = extract_message_constraints(message)
             should_direct_generate = bool(
                 detect_confirm(message)
@@ -2044,8 +2072,8 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                     pass
 
             async def _run_llm():
-                nonlocal agent_reply, action_intent
-                agent_reply, action_intent = await call_agent_llm(
+                nonlocal agent_reply, intent_patch
+                agent_reply, intent_patch = await call_agent_llm(
                     message, state, recent_messages, reference_context,
                     on_chunk=_on_llm_chunk,
                     on_think=_on_llm_think,
@@ -2054,11 +2082,11 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
 
             if should_direct_generate:
                 agent_reply = "收到，开始生成。"
-                action_intent = AgentActionIntent(
-                    type="REQUEST_GENERATE",
+                intent_patch = VisualIntentPatch(
+                    turn_type="confirm",
                     confidence=1.0,
-                    extracted_info={},
-                    open_questions=[],
+                    operation_hint="text_to_image",
+                    patch={},
                     creative_suggestion="",
                 )
                 yield make_sse("agent_text", {"delta": agent_reply})
@@ -2091,14 +2119,14 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                     else:
                         yield make_sse("agent_text", {"delta": content})
 
-                await llm_task  # 确保拿到 agent_reply / action_intent
+                await llm_task  # 确保拿到 agent_reply / intent_patch
 
-            extracted = dict(action_intent.extracted_info or {})
-            if hard_constraints:
-                extracted = merge_intent(extracted, hard_constraints)
-            if has_meaningful_intent_update(extracted):
-                state["intent"] = merge_intent(state.get("intent") or {}, extracted)
-            elif not (state.get("intent") or {}).get("subject"):
+            state = apply_intent_patch_to_state(
+                state,
+                intent_patch,
+                hard_constraints=hard_constraints,
+            )
+            if not (state.get("intent") or {}).get("subject"):
                 guessed_subject = _coarse_subject_from_message(message)
                 if guessed_subject:
                     state["intent"] = merge_intent(state.get("intent") or {}, {"subject": guessed_subject})
@@ -2106,7 +2134,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 state["brief"] = dict(state["brief"])
                 state["brief"]["confirmedByUser"] = True
 
-            decision = decide_next_action(state, action_intent, message)
+            decision = decide_next_action(state, intent_patch or VisualIntentPatch(), message)
             state = apply_decision_to_state(state, decision, message)
             title = summarize_project_title(state, project.get("title") or message)
 
@@ -2130,7 +2158,11 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 role="assistant",
                 type="agent_text",
                 text=agent_reply,
-                payload={"action_intent": action_intent.model_dump(), "decision": decision},
+                payload={
+                    "intent_patch": (intent_patch.model_dump() if intent_patch else {}),
+                    "action_intent": (intent_patch.model_dump() if intent_patch else {}),
+                    "decision": decision,
+                },
                 decision_action=decision.get("type"),
                 created_at=time.time(),
             )
@@ -2187,6 +2219,10 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 "imageUrl": image_record["image_url"],
                 "iterationNumber": image_record["iteration_number"],
             }
+            metadata = dict(state.get("metadata") or {})
+            metadata["lastVlmAnalysis"] = vlm_analysis
+            metadata["suggestedRefine"] = build_suggested_refine_from_vlm(vlm_analysis)
+            state["metadata"] = metadata
             state["phase"] = {"stage": "refining", "turnsInStage": 0}
             updated = update_agent_project(
                 project_id,
@@ -2198,7 +2234,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 current_prompt=prompt_payload,
                 current_image=state["currentImage"],
                 conversation_summary=state.get("conversationSummary") or "",
-                metadata=state.get("metadata"),
+                metadata=metadata,
                 updated_at=time.time(),
             )
             append_agent_message(
@@ -2207,12 +2243,33 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 role="assistant",
                 type="generation_result",
                 text=vlm_analysis.get("userFacingSummary") or "图已经生成好了，我们可以继续细修。",
-                payload={"image": image_record, "vlmAnalysis": vlm_analysis},
+                payload={
+                    "image": image_record,
+                    "vlmAnalysis": vlm_analysis,
+                    "generationInstruction": {
+                        "mode": prompt_payload.get("mode"),
+                        "instruction": prompt_payload.get("instruction"),
+                        "constraints": prompt_payload.get("constraints"),
+                        "parameters": prompt_payload.get("parameters"),
+                        "reasoningForUser": prompt_payload.get("reasoningForUser"),
+                    },
+                },
                 decision_action=decision.get("type"),
                 created_at=time.time(),
             )
             yield make_sse("agent_text", {"delta": vlm_analysis.get("userFacingSummary") or "图已经生成好了，我们可以继续细修。"})
-            yield make_sse("done", {"project": _public_agent_project(updated or project), "image": image_record, "vlmAnalysis": vlm_analysis})
+            yield make_sse("done", {
+                "project": _public_agent_project(updated or project),
+                "image": image_record,
+                "vlmAnalysis": vlm_analysis,
+                "generationInstruction": {
+                    "mode": prompt_payload.get("mode"),
+                    "instruction": prompt_payload.get("instruction"),
+                    "constraints": prompt_payload.get("constraints"),
+                    "parameters": prompt_payload.get("parameters"),
+                    "reasoningForUser": prompt_payload.get("reasoningForUser"),
+                },
+            })
         except Exception as exc:
             logger.exception("agent project chat failed: %s", project_id)
             yield make_sse("error", {"message": f"{type(exc).__name__}: {exc}"})
@@ -2375,7 +2432,14 @@ async def _run_ai_image_background(
             pass
 
     try:
-        if provider == PROVIDER_ZENMUX:
+        if provider == PROVIDER_SUB2API:
+            result = await generate_sub2api_async(
+                model=model, prompt=prompt,
+                images=refs if refs else None,
+                size=size, resolution=resolution, user_id=user_id,
+                on_progress=on_progress,
+            )
+        elif provider == PROVIDER_ZENMUX:
             result = await generate_image_zenmux_async(
                 model=model, prompt=prompt,
                 images=refs,

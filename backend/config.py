@@ -62,6 +62,10 @@ class Settings:
     zenmux_gpt_image_model: str = os.getenv("ZENMUX_GPT_IMAGE_MODEL", "openai/gpt-image-2")
     zenmux_nano_banana_model: str = os.getenv("ZENMUX_NANO_BANANA_MODEL", "google/gemini-3-pro-image-preview")
 
+    # AI 生图 API（Sub2API 订阅线路；API key 留空则禁用）
+    sub2api_base_url: str = os.getenv("SUB2API_BASE_URL", "")
+    sub2api_api_key: str = os.getenv("SUB2API_API_KEY", "")
+
     # AI 生图 API（可选的单独图生图配置；留空则复用上面的 APIMart 配置）
     nano_banana_base_url: str = os.getenv("NANO_BANANA_BASE_URL", "")
     nano_banana_api_key: str = os.getenv("NANO_BANANA_API_KEY", "")

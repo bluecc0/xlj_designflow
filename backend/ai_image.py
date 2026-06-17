@@ -200,6 +200,8 @@ def normalize_provider(provider: str | None = None) -> str:
         return PROVIDER_APIMART
     if clean in ("zenmux", "zen-mux", "zen_mux"):
         return PROVIDER_ZENMUX
+    if clean in ("sub2api", "sub2-api", "sub_2api"):
+        return PROVIDER_SUB2API
     raise ValueError(f"未知生图线路: {provider}")
 
 
@@ -1128,4 +1130,169 @@ async def generate_image_with_reference_async(
         "cost": _task_detail.get("cost") if _task_detail else None,
         "estimated_time": _task_detail.get("estimated_time") if _task_detail else None,
         "actual_time": _task_detail.get("actual_time") if _task_detail else None,
+    }
+
+
+# ── Sub2API 订阅线路 ─────────────────────────────────────────────────────────
+
+PROVIDER_SUB2API = "sub2api"
+
+_SUB2API_SIZE_MAP: dict[str, str] = {
+    "auto":    "1:1",
+    "1024x1024": "1:1",
+    "2048x2048": "1:1",
+    "4096x4096": "1:1",
+    "768x1024":  "3:4",
+    "1536x2048": "3:4",
+    "2448x3264": "3:4",
+    "1280x1024": "5:4",
+    "2560x2048": "5:4",
+    "1080x1920": "9:16",
+    "1152x2048": "9:16",
+    "2160x3840": "9:16",
+}
+
+
+def _build_sub2api_input(
+    prompt: str,
+    refs: list[tuple[bytes, str]],
+) -> list[dict]:
+    """构建 Sub2API /responses 的 input 数组。
+    文生图: 只有 input_text
+    图生图: input_text + input_image (base64 data URL)"""
+    content: list[dict] = [{"type": "input_text", "text": prompt}]
+    for image_bytes, filename in refs[:4]:
+        mime = _mime_from_filename(filename)
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        content.append({
+            "type": "input_image",
+            "image_url": f"data:{mime};base64,{b64}",
+        })
+    return [{"role": "user", "content": content}]
+
+
+def _build_sub2api_tools(
+    model: str,
+    size: str,
+) -> list[dict]:
+    """构建 Sub2API /responses 的 tools 数组。"""
+    mapped_size = _SUB2API_SIZE_MAP.get(size, "1:1")
+    return [{
+        "type": "image_generation",
+        "action": "generate",
+        "model": "gpt-image-2",
+        "size": mapped_size,
+        "quality": "medium",
+        "output_format": "png",
+    }]
+
+
+def _parse_sub2api_sse_image_url(text: str) -> str | None:
+    """从 Sub2API SSE 流式响应文本中解析图片 URL。
+    逐行解析 data: 事件，找 output 数组中 type=image 的 image_url。"""
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            continue
+        try:
+            event = json.loads(data)
+        except Exception:
+            continue
+        # 优先从 output 数组里找 image
+        if isinstance(event, dict):
+            output = event.get("output")
+            if isinstance(output, list):
+                for item in output:
+                    if isinstance(item, dict):
+                        if item.get("type") == "image":
+                            return item.get("image_url") or item.get("url")
+            # fallback: 找 result 或 completion
+            result = event.get("result") or event.get("completion")
+            if isinstance(result, dict):
+                img = result.get("image_url") or result.get("url")
+                if img:
+                    return img
+            # 更深层 fallback
+            for key in ("image_url", "url", "content", "text"):
+                val = event.get(key)
+                if val and isinstance(val, str) and val.startswith("http"):
+                    return val
+    return None
+
+
+async def generate_sub2api_async(
+    model: str,
+    prompt: str,
+    images: list[tuple[bytes, str]] | None = None,
+    size: str = "1024x1024",
+    resolution: str = "",
+    user_id: str = "anonymous",
+    on_progress: Callable[[int, str], Any] | None = None,
+) -> dict:
+    """Sub2API 订阅线路：POST /responses，SSE 流式返回图片 URL。"""
+    base_url = settings.sub2api_base_url.rstrip("/")
+    api_key = settings.sub2api_api_key
+    if not base_url or not api_key:
+        raise RuntimeError("Sub2API 未配置：请检查 SUB2API_BASE_URL 和 SUB2API_API_KEY")
+
+    refs = images or []
+    input_payload = _build_sub2api_input(prompt, refs)
+    tools = _build_sub2api_tools(model, size)
+
+    payload = {
+        "stream": True,
+        "model": "gpt-5.4-mini",
+        "store": False,
+        "tool_choice": {"type": "image_generation"},
+        "input": input_payload,
+        "tools": tools,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+
+    if on_progress:
+        on_progress(10, "submitted")
+
+    sse_text = ""
+    async with httpx.AsyncClient(timeout=600, trust_env=False) as client:
+        try:
+            async with client.stream("POST", f"{base_url}/responses", json=payload, headers=headers) as resp:
+                if not resp.is_success:
+                    raw = await resp.aread()
+                    raise RuntimeError(_api_error_msg(resp.status_code, raw.decode("utf-8", errors="replace")))
+                if on_progress:
+                    on_progress(30, "processing")
+                async for chunk in resp.aiter_text():
+                    sse_text += chunk
+        except httpx.TimeoutException:
+            raise RuntimeError("Sub2API 请求超时，请稍后重试")
+
+    image_url = _parse_sub2api_sse_image_url(sse_text)
+    if not image_url:
+        logger.warning("Sub2API 未解析到图片 URL，SSE 前 2KB: %s", sse_text[:2048])
+        raise RuntimeError("Sub2API 返回中未找到图片，请检查响应格式")
+
+    if on_progress:
+        on_progress(80, "downloading")
+
+    local_url = await _download_final_image(client, image_url=image_url, user_id=user_id)
+
+    if on_progress:
+        on_progress(100, "done")
+
+    return {
+        "url": local_url,
+        "model": model,
+        "prompt": prompt,
+        "size": size,
+        "resolution": resolution,
+        "provider": PROVIDER_SUB2API,
+        "task_id": None,
     }
