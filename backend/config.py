@@ -62,9 +62,11 @@ class Settings:
     zenmux_gpt_image_model: str = os.getenv("ZENMUX_GPT_IMAGE_MODEL", "openai/gpt-image-2")
     zenmux_nano_banana_model: str = os.getenv("ZENMUX_NANO_BANANA_MODEL", "google/gemini-3-pro-image-preview")
 
-    # AI 生图 API（Sub2API 订阅线路；API key 留空则禁用）
+    # AI 生图 API（订阅线路；CLIProxyAPI 优先，兼容旧 SUB2API_* 环境变量）
     sub2api_base_url: str = os.getenv("SUB2API_BASE_URL", "")
     sub2api_api_key: str = os.getenv("SUB2API_API_KEY", "")
+    cliproxy_base_url: str = os.getenv("CLIPROXY_BASE_URL", "") or sub2api_base_url
+    cliproxy_api_key: str = os.getenv("CLIPROXY_API_KEY", "") or sub2api_api_key
 
     # AI 生图 API（可选的单独图生图配置；留空则复用上面的 APIMart 配置）
     nano_banana_base_url: str = os.getenv("NANO_BANANA_BASE_URL", "")
@@ -126,7 +128,7 @@ class Settings:
         self.allowed_login_users = self._load_login_users()
 
         # 统一补协议前缀，避免 ai_image_base_url 等配置没有 http://
-        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "zenmux_base_url"):
+        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "zenmux_base_url", "cliproxy_base_url"):
             _val = getattr(self, _key, "")
             if _val and not _val.startswith("http"):
                 setattr(self, _key, "https://" + _val)

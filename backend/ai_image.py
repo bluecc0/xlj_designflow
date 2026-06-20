@@ -1133,112 +1133,160 @@ async def generate_image_with_reference_async(
     }
 
 
-# ── Sub2API 订阅线路 ─────────────────────────────────────────────────────────
+# ── Sub2API/CLIProxyAPI 订阅线路 ───────────────────────────────────────────────
 
 PROVIDER_SUB2API = "sub2api"
 
-_SUB2API_SIZE_MAP: dict[str, str] = {
-    "auto":    "1024x1024",
+_CLIPROXY_SIZE_MAP: dict[str, dict[str, str]] = {
+    "1K": {
+        "auto": "1024x1024",
+        "1:1": "1024x1024",
+        "4:5": "1024x1280",
+        "5:4": "1280x1024",
+        "3:4": "1152x1536",
+        "4:3": "1536x1152",
+        "2:3": "1024x1536",
+        "3:2": "1536x1024",
+        "9:16": "864x1536",
+        "16:9": "1536x864",
+        "9:21": "672x1568",
+        "21:9": "1568x672",
+    },
+    "2K": {
+        "auto": "2048x2048",
+        "1:1": "2048x2048",
+        "4:5": "1600x2000",
+        "5:4": "2000x1600",
+        "3:4": "1536x2048",
+        "4:3": "2048x1536",
+        "2:3": "1344x2016",
+        "3:2": "2016x1344",
+        "9:16": "1152x2048",
+        "16:9": "2048x1152",
+        "9:21": "1152x2688",
+        "21:9": "2688x1152",
+    },
+    "4K": {
+        "auto": "2880x2880",
+        "1:1": "2880x2880",
+        "4:5": "2560x3200",
+        "5:4": "3200x2560",
+        "3:4": "2448x3264",
+        "4:3": "3264x2448",
+        "2:3": "2336x3504",
+        "3:2": "3504x2336",
+        "9:16": "2160x3840",
+        "16:9": "3840x2160",
+        "9:21": "1632x3808",
+        "21:9": "3808x1632",
+    },
+}
+
+_CLIPROXY_PIXEL_ALIAS: dict[str, str] = {
+    # 历史 UI/旧服务商像素值兼容到文档推荐尺寸。
     "1024x1024": "1024x1024",
     "2048x2048": "2048x2048",
-    "4096x4096": "2048x2048",  # 文档最大 2048x2048
-    "1:1":   "1024x1024",
-    "3:4":   "1024x1536",
-    "4:3":   "1536x1024",
-    "5:4":   "1280x1024",  # 文档未列 5:4，回退到 1536x1024
-    "4:5":   "1024x1536",
-    "9:16":  "1024x1536",  # 文档未列 9:16
-    "16:9":  "1536x1024",  # 文档未列 16:9
-    "3:2":   "1536x1024",  # 文档未列 3:2，转具体像素
-    "2:3":   "1024x1536",  # 文档未列 2:3，转具体像素
-    # 像素尺寸兼容
-    "768x1024":  "1024x1536",
-    "1536x2048": "1024x1536",  # 文档最大 2048x2048
-    "2448x3264": "1024x1536",
-    "1280x1024": "1536x1024",
-    "2560x2048": "2048x2048",
-    "1080x1920": "1024x1536",
-    "1152x2048": "1024x1536",
-    "2160x3840": "1024x1536",
+    "4096x4096": "2880x2880",
+    "1024x1280": "1024x1280",
+    "1280x1024": "1280x1024",
+    "1152x1536": "1152x1536",
+    "1536x1152": "1536x1152",
+    "1024x1536": "1024x1536",
+    "1536x1024": "1536x1024",
+    "864x1536": "864x1536",
+    "1536x864": "1536x864",
+    "768x1024": "1152x1536",
+    "1024x768": "1536x1152",
+    "1080x1920": "864x1536",
+    "1920x1080": "1536x864",
+    "1360x2048": "1344x2016",
+    "2048x1360": "2016x1344",
+    "2480x3312": "2448x3264",
+    "3312x2480": "3264x2448",
+    "3520x2336": "3504x2336",
+    "2336x3520": "2336x3504",
 }
 
 
-def _build_sub2api_input(
-    prompt: str,
-    refs: list[tuple[bytes, str]],
-) -> list[dict]:
-    """构建 Sub2API /responses 的 input 数组。
-    文生图: 只有 input_text
-    图生图: input_text + input_image (base64 data URL)"""
-    content: list[dict] = [{"type": "input_text", "text": prompt}]
-    for image_bytes, filename in refs[:9]:
-        mime = _mime_from_filename(filename)
-        b64 = base64.b64encode(image_bytes).decode("ascii")
-        content.append({
-            "type": "input_image",
-            "image_url": f"data:{mime};base64,{b64}",
-        })
-    return [{"role": "user", "content": content}]
+def _cliproxy_size(size: str, resolution: str = "") -> str:
+    raw_size = str(size or "auto").strip().lower().replace("×", "x")
+    raw_resolution = str(resolution or "1K").strip().upper()
+    if raw_resolution not in _CLIPROXY_SIZE_MAP:
+        raw_resolution = "1K"
+    if raw_size in _CLIPROXY_SIZE_MAP[raw_resolution]:
+        return _CLIPROXY_SIZE_MAP[raw_resolution][raw_size]
+    if raw_size in _CLIPROXY_PIXEL_ALIAS:
+        return _CLIPROXY_PIXEL_ALIAS[raw_size]
+    if re.match(r"^\d{2,5}x\d{2,5}$", raw_size):
+        return raw_size
+    return _CLIPROXY_SIZE_MAP[raw_resolution]["auto"]
 
 
-def _build_sub2api_tools(
-    model: str,
-    size: str,
-    has_refs: bool = False,
-) -> list[dict]:
-    """构建 Sub2API /responses 的 tools 数组。
-    文生图 action 为 generate，图生图 action 为 edit。"""
-    mapped_size = _SUB2API_SIZE_MAP.get(size, "1:1")
-    return [{
-        "type": "image_generation",
-        "action": "edit" if has_refs else "generate",
-        "model": "gpt-image-2",
-        "size": mapped_size,
-        "quality": "medium",
-        "output_format": "png",
-    }]
+def _cliproxy_headers(api_key: str, *, json_request: bool = False) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+        "Accept-Language": "en,zh;q=0.9,zh-CN;q=0.8",
+    }
+    if json_request:
+        headers["Content-Type"] = "application/json"
+    return headers
 
 
-def _parse_sub2api_sse_image_url(text: str) -> str | None:
-    """从 Sub2API SSE 流式响应文本中解析图片数据。
-    优先从 partial_image_b64 提取（直接 base64），其次找 image_url 字段。
-    返回 (data_url, is_base64) 元组或 None。"""
-    import re
-    b64_match = re.search(r'"partial_image_b64"\s*:\s*"([^"]+)"', text)
-    if b64_match:
-        b64 = b64_match.group(1)
-        return (f"data:image/png;base64,{b64}", True)
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        data = line[5:].strip()
-        if data == "[DONE]" or not data:
-            continue
-        try:
-            event = json.loads(data)
-        except Exception:
-            continue
-        if not isinstance(event, dict):
-            continue
-        # 兼容 OpenAI Responses API 各种可能字段
-        for key in ("image_url", "url"):
-            val = event.get(key)
-            if val and isinstance(val, str) and val.startswith("http"):
-                return (val, False)
-        output = event.get("output")
-        if isinstance(output, list):
-            for item in output:
-                if isinstance(item, dict):
-                    if item.get("type") == "image":
-                        img = item.get("image_url") or item.get("url")
-                        if img:
-                            return (img, False)
-        for key in ("content", "text"):
-            val = event.get(key)
-            if val and isinstance(val, str) and val.startswith("http"):
-                return (val, False)
-    return None
+def _save_base64_image(b64_value: str, *, user_id: str) -> str:
+    raw = str(b64_value or "")
+    if "," in raw and raw.startswith("data:"):
+        raw = raw.split(",", 1)[1]
+    try:
+        image_bytes = base64.b64decode(raw)
+    except Exception as exc:
+        raise RuntimeError(f"CLIProxyAPI 图片 base64 解码失败: {exc}") from exc
+    if not image_bytes:
+        raise RuntimeError("CLIProxyAPI 返回的 base64 图片为空")
+    filename = f"{uuid.uuid4().hex}.png"
+    out_dir = _ensure_user_output_dir(user_id)
+    out_path = out_dir / filename
+    out_path.write_bytes(image_bytes)
+    return f"/ai-images/{out_dir.name}/{filename}"
+
+
+async def _download_cliproxy_image(
+    image_url: str,
+    *,
+    user_id: str,
+    api_key: str,
+) -> str:
+    timeout = httpx.Timeout(300.0, connect=30.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        resp = await client.get(image_url)
+        if resp.status_code in (401, 403):
+            resp = await client.get(image_url, headers=_cliproxy_headers(api_key))
+        if not resp.is_success:
+            raise RuntimeError(f"下载 CLIProxyAPI 结果图片失败：HTTP {resp.status_code}")
+        filename = f"{uuid.uuid4().hex}.png"
+        out_dir = _ensure_user_output_dir(user_id)
+        out_path = out_dir / filename
+        out_path.write_bytes(resp.content)
+        return f"/ai-images/{out_dir.name}/{filename}"
+
+
+async def _save_cliproxy_response_image(data: dict[str, Any], *, user_id: str, api_key: str) -> tuple[str, dict[str, Any]]:
+    if not isinstance(data, dict):
+        raise RuntimeError(f"CLIProxyAPI 响应格式异常: {str(data)[:200]}")
+    if data.get("error"):
+        raise RuntimeError(f"CLIProxyAPI 生图失败: {str(data.get('error'))[:300]}")
+    items = data.get("data")
+    if not isinstance(items, list) or not items:
+        raise RuntimeError(f"CLIProxyAPI 响应中没有图片 data: {str(data)[:300]}")
+    item = items[0]
+    if not isinstance(item, dict):
+        raise RuntimeError(f"CLIProxyAPI 图片条目格式异常: {str(item)[:200]}")
+    if item.get("b64_json"):
+        return _save_base64_image(str(item.get("b64_json")), user_id=user_id), item
+    if item.get("url"):
+        return await _download_cliproxy_image(str(item.get("url")), user_id=user_id, api_key=api_key), item
+    raise RuntimeError(f"CLIProxyAPI 图片条目没有 b64_json 或 url: {str(item)[:300]}")
 
 
 async def generate_sub2api_async(
@@ -1250,87 +1298,88 @@ async def generate_sub2api_async(
     user_id: str = "anonymous",
     on_progress: Callable[[int, str], Any] | None = None,
 ) -> dict:
-    """Sub2API 订阅线路：POST /responses，SSE 流式返回图片 URL。"""
-    base_url = settings.sub2api_base_url.rstrip("/")
-    api_key = settings.sub2api_api_key
+    """订阅线路：通过 CLIProxyAPI 的 OpenAI Images 兼容接口生图。"""
+    base_url = settings.cliproxy_base_url.rstrip("/")
+    api_key = settings.cliproxy_api_key
     if not base_url or not api_key:
-        raise RuntimeError("Sub2API 未配置：请检查 SUB2API_BASE_URL 和 SUB2API_API_KEY")
+        raise RuntimeError("CLIProxyAPI 未配置：请检查 CLIPROXY_BASE_URL/CLIPROXY_API_KEY")
+    if base_url.endswith("/v1"):
+        api_base = base_url
+    else:
+        api_base = f"{base_url}/v1"
 
-    refs = images or []
-    input_payload = _build_sub2api_input(prompt, refs)
-    tools = _build_sub2api_tools(model, size, has_refs=bool(refs))
+    model_name = _normalize_model_name(model)
+    if model_name != "gpt-image-2":
+        raise RuntimeError("CLIProxyAPI 订阅线路当前仅支持 gpt-image-2")
 
-    payload = {
-        "stream": True,
-        "model": "gpt-5.4-mini",
-        "store": False,
-        "tool_choice": {"type": "image_generation"},
-        "input": input_payload,
-        "tools": tools,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-    }
+    refs = (images or [])[:9]
+    mapped_size = _cliproxy_size(size, resolution)
+    timeout = httpx.Timeout(1800.0, connect=30.0)
 
     if on_progress:
         on_progress(10, "submitted")
 
-    sse_text = ""
-    async with httpx.AsyncClient(timeout=600, trust_env=False) as client:
-        try:
-            async with client.stream("POST", f"{base_url}/responses", json=payload, headers=headers) as resp:
-                if not resp.is_success:
-                    raw = await resp.aread()
-                    raise RuntimeError(_api_error_msg(resp.status_code, raw.decode("utf-8", errors="replace")))
-                if on_progress:
-                    on_progress(30, "processing")
-                async for chunk in resp.aiter_text():
-                    sse_text += chunk
-        except httpx.TimeoutException:
-            raise RuntimeError("Sub2API 请求超时，请稍后重试")
+    try:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            if refs:
+                data = {
+                    "model": model_name,
+                    "prompt": prompt,
+                    "size": mapped_size,
+                    "n": "1",
+                    "quality": "auto",
+                    "output_format": "png",
+                    "moderation": "auto",
+                }
+                files = [
+                    ("image", (filename or f"reference-{idx + 1}.png", image_bytes, _mime_from_filename(filename)))
+                    for idx, (image_bytes, filename) in enumerate(refs)
+                ]
+                endpoint = f"{api_base}/images/edits"
+                resp = await client.post(endpoint, data=data, files=files, headers=_cliproxy_headers(api_key))
+            else:
+                payload = {
+                    "model": model_name,
+                    "prompt": prompt,
+                    "size": mapped_size,
+                    "n": 1,
+                    "quality": "auto",
+                    "output_format": "png",
+                    "moderation": "auto",
+                }
+                endpoint = f"{api_base}/images/generations"
+                resp = await client.post(endpoint, json=payload, headers=_cliproxy_headers(api_key, json_request=True))
+    except httpx.TimeoutException as exc:
+        raise RuntimeError("CLIProxyAPI 请求超时，请降低并发或稍后重试") from exc
+    except httpx.RequestError as exc:
+        raise RuntimeError(f"CLIProxyAPI 请求失败：{exc}") from exc
 
-    image_url = _parse_sub2api_sse_image_url(sse_text)
-    if not image_url:
-        logger.warning("Sub2API 未解析到图片 URL，SSE 前 2KB: %s", sse_text[:2048])
-        raise RuntimeError("Sub2API 返回中未找到图片，请检查响应格式")
+    raw_text = resp.text
+    if not resp.is_success:
+        raise RuntimeError(f"CLIProxyAPI 生图失败：{_api_error_msg(resp.status_code, raw_text[:500])}")
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        raise RuntimeError(f"CLIProxyAPI 返回不是 JSON: {raw_text[:300]}") from exc
+    if isinstance(payload, dict) and payload.get("error"):
+        raise RuntimeError(f"CLIProxyAPI 生图失败: {str(payload.get('error'))[:300]}")
 
     if on_progress:
-        on_progress(80, "downloading")
-
-    parse_result = _parse_sub2api_sse_image_url(sse_text)
-    if not parse_result:
-        logger.warning("Sub2API 未解析到图片，SSE 前 2KB: %s", sse_text[:2048])
-        raise RuntimeError("Sub2API 返回中未找到图片，请检查响应格式")
-    image_url, is_base64 = parse_result
-
-    if is_base64:
-        # base64 data URL，直接解码保存
-        b64_str = image_url.split(",", 1)[1] if "," in image_url else image_url
-        try:
-            image_bytes = base64.b64decode(b64_str)
-        except Exception as e:
-            raise RuntimeError(f"Sub2API 图片 base64 解码失败: {e}")
-        filename = f"{uuid.uuid4().hex}.png"
-        out_dir = _ensure_user_output_dir(user_id)
-        out_path = out_dir / filename
-        out_path.write_bytes(image_bytes)
-        local_url = f"/ai-images/{out_dir.name}/{filename}"
-    else:
-        async with httpx.AsyncClient(timeout=120, trust_env=False) as client2:
-            local_url = await _download_final_image(client2, image_url=image_url, user_id=user_id)
-
+        on_progress(85, "saving")
+    local_url, item = await _save_cliproxy_response_image(payload, user_id=user_id, api_key=api_key)
     if on_progress:
         on_progress(100, "done")
 
+    usage = payload.get("usage") if isinstance(payload, dict) else None
     return {
         "url": local_url,
-        "model": model,
+        "model": model_name,
         "prompt": prompt,
-        "size": size,
+        "size": mapped_size,
+        "requested_size": size,
         "resolution": resolution,
         "provider": PROVIDER_SUB2API,
         "task_id": None,
+        "usage": usage if isinstance(usage, dict) else None,
+        "revised_prompt": item.get("revised_prompt") if isinstance(item, dict) else None,
     }

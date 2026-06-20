@@ -1481,9 +1481,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const aiOptionMap = AI_OPTIONS;
   const AI_RATIOS = Object.keys(aiOptionMap);
   const currentAiRatioMeta = aiOptionMap[aiRatio] || aiOptionMap[AI_RATIOS[0]];
-  // Sub2API 订阅渠道只支持 1K
   const _rawQualities = currentAiRatioMeta ? currentAiRatioMeta.qualities : AI_QUALITIES;
-  const allowedAiQualities = aiProvider === 'sub2api' ? ['1K'] : _rawQualities;
+  const allowedAiQualities = _rawQualities;
   const currentAiPx = currentAiRatioMeta && currentAiRatioMeta.px ? (currentAiRatioMeta.px[aiQuality] || currentAiRatioMeta.preview) : '';
   const aiImageSize = aiRatio;
 
@@ -1498,14 +1497,6 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       }
       // Sub2API 不支持 Nano Banana，切换时自动回默认
       if (activeAiModel === 'nano-banana-pro' && aiProvider === 'sub2api') {
-        setAiProvider('apimart');
-      }
-      // Sub2API 只支持 1K：切换 provider 时若 quality 不兼容，降级到 1K
-      if (aiProvider === 'sub2api' && aiQuality !== '1K') {
-        setAiQuality('1K');
-      }
-      // 选 2K/4K 时若 provider 是 sub2api，切回默认
-      if (['2K', '4K'].includes(aiQuality) && aiProvider === 'sub2api') {
         setAiProvider('apimart');
       }
     }
@@ -2066,8 +2057,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           key: 'sub2api',
           label: '订阅',
           active: aiProvider === 'sub2api',
-          disabled: ['2K', '4K'].includes(aiQuality),
-          onClick: function() { if (!['2K', '4K'].includes(aiQuality)) setAiProvider('sub2api'); },
+          disabled: false,
+          onClick: function() { setAiProvider('sub2api'); },
         } : null,
         {
           key: 'apimart',

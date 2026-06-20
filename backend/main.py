@@ -529,24 +529,15 @@ async def health():
     ai_provider["connected"] = bool(ai_provider.get("connected") or zenmux_status.get("connected"))
     ai_provider["configured"] = bool(ai_provider.get("configured") or zenmux_status.get("configured"))
 
-    # Sub2API 状态探测
+    # 订阅线路状态探测：CLIProxyAPI 没有稳定的 health endpoint，配置存在即认为可用。
     sub2api_status = {
-        "connected": False,
-        "configured": bool(settings.sub2api_api_key and settings.sub2api_base_url),
-        "provider": "Sub2API",
-        "url": settings.sub2api_base_url,
+        "connected": bool(settings.cliproxy_api_key and settings.cliproxy_base_url),
+        "configured": bool(settings.cliproxy_api_key and settings.cliproxy_base_url),
+        "provider": "CLIProxyAPI",
+        "url": settings.cliproxy_base_url,
     }
-    if settings.sub2api_api_key and settings.sub2api_base_url:
-        try:
-            async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
-                r = await client.get(
-                    f"{settings.sub2api_base_url.rstrip('/')}/health",
-                    headers={"Authorization": f"Bearer {settings.sub2api_api_key}"},
-                )
-            sub2api_status["status_code"] = r.status_code
-            sub2api_status["connected"] = r.status_code == 200
-        except Exception as e:
-            sub2api_status["message"] = str(e)
+    if sub2api_status["configured"]:
+        sub2api_status["message"] = "configured"
     ai_provider["sub2api"] = sub2api_status
     ai_provider["connected"] = bool(ai_provider.get("connected") or sub2api_status.get("connected"))
     ai_provider["configured"] = bool(ai_provider.get("configured") or sub2api_status.get("configured"))
