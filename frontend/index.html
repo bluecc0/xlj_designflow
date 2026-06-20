@@ -3112,6 +3112,14 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                       }, React.createElement(I.sparkles, { size: 10 }), '发布到灵感')
                 )
               ),
+              m.status === 'done' && m.vlmPending && React.createElement('div', {
+                style: { marginTop: 8, padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--line-2)' }
+              },
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+                  React.createElement(I.eye, { size: 11, style: { color: 'var(--ink-3)' } }),
+                  React.createElement('span', { style: { fontSize: 11, color: 'var(--ink-2)' } }, '图片已生成，VLM 质检中...')
+                )
+              ),
               // VLM 质检反馈
               m.status === 'done' && m.vlm && m.vlm.status === 'checked' && React.createElement('div', {
                 style: { marginTop: 8, padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--line-2)' }
@@ -4818,6 +4826,9 @@ const mapAgentProjectMessages = function(project, images) {
       }
       msg.decisionType = 'CONFIRM';
     } else if (decision && decision.type === 'ASK') {
+      if (decision.brief) msg.brief = decision.brief;
+      if (decision.contract) msg.contract = decision.contract;
+      if (decision.completeness) msg.completeness = decision.completeness;
       if (Array.isArray(decision.choices) && decision.choices.length > 0) {
         msg.choices = decision.choices;
       }
@@ -5642,12 +5653,18 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                 setMessages(function(msgs) {
                   return msgs.map(function(m, i) {
                     if (i !== assistantIdx) return m;
-                    var patch = {};
+                    var patch = {
+                      choices: payload.type === 'ASK' ? [] : undefined,
+                      quickActions: payload.type === 'CONFIRM' ? [] : undefined,
+                    };
                     if (Array.isArray(opts) && opts.length > 0) {
                       patch[payload.type === 'ASK' ? 'choices' : 'quickActions'] = opts;
                     }
                     // CONFIRM 阶段附带 Creative Brief 卡片数据
                     if (payload.type === 'CONFIRM' && payload.brief) {
+                      patch.brief = payload.brief;
+                    }
+                    if (payload.type === 'ASK' && payload.brief) {
                       patch.brief = payload.brief;
                     }
                     if (payload.contract) {
@@ -5694,6 +5711,26 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
               });
               return;
             }
+            if (eventName === 'generation_completed') {
+              var generatedImage = payload && payload.image ? payload.image : null;
+              var generatedUrl = generatedImage && generatedImage.url
+                ? ((window.API_BASE || window.location.origin) + generatedImage.url)
+                : '';
+              setMessages(function(msgs) {
+                return msgs.map(function(m, i) {
+                  if (i !== imageIdx) return m;
+                  return Object.assign({}, m, {
+                    status: 'done',
+                    imageUrl: generatedUrl || m.imageUrl || '',
+                    previewUrl: generatedUrl || m.previewUrl || '',
+                    progress: 100,
+                    finalElapsed: m.startedAt ? Math.floor((Date.now() - m.startedAt) / 1000) : m.finalElapsed,
+                    vlmPending: true,
+                  });
+                });
+              });
+              return;
+            }
             if (eventName === 'error') {
               setMessages(function(msgs) {
                 return msgs.map(function(m, i) {
@@ -5718,6 +5755,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                     progress: 100,
                     finalElapsed: m.startedAt ? Math.floor((Date.now() - m.startedAt) / 1000) : null,
                     vlm: vlm,
+                    vlmPending: false,
                     promptPayload: (payload && payload.generationInstruction)
                       ? Object.assign({}, m.promptPayload || {}, payload.generationInstruction)
                       : m.promptPayload,

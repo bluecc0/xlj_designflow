@@ -635,18 +635,39 @@ def build_vlm_followup_decision(vlm_analysis: dict[str, Any] | None) -> dict[str
     }
 
 
+def _extract_subject_description(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    patterns = (
+        r"(?:画面主体|产品主体|主体|主视觉)\s*(?:是|为|[:：])?\s*([^，。；;\n]{2,80})",
+        r"(?:画面以|主画面是|主图是)\s*([^，。；;\n]{2,80})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, raw)
+        if match and match.group(1).strip():
+            return match.group(1).strip(" \"'“”‘’[]()（）")
+    return ""
+
+
 def _coarse_subject_from_message(message: str) -> str:
     text = (message or "").strip()
     if not text:
         return ""
+    explicit_subject = _extract_subject_description(text)
+    if explicit_subject:
+        return explicit_subject
     lowered = text.lower()
     for token in ("generate it now", "generate now", "generate it", "go ahead", "please", "帮我", "给我", "现在", "生成", "出图"):
         lowered = lowered.replace(token, " ")
         text = re.sub(re.escape(token), " ", text, flags=re.I)
+    for token in ("做一张", "来一张", "要一张", "帮我做", "生成一张", "出一张"):
+        text = text.replace(token, " ")
     text = re.sub(r"\s+", " ", text).strip(" ,.，。!！?？")
     if len(text) < 4:
         return ""
-    return text[:160]
+    first_clause = re.split(r"[，。；;\n]", text)[0].strip()
+    return (first_clause or text)[:160]
 
 
 def _collect_keyword_phrases(text: str, keywords: tuple[str, ...]) -> list[str]:
@@ -666,6 +687,21 @@ def _collect_keyword_phrases(text: str, keywords: tuple[str, ...]) -> list[str]:
         seen.add(key)
         clean.append(phrase)
     return clean
+
+
+def _infer_subject_category(subject_text: str) -> str:
+    text = str(subject_text or "").strip().lower()
+    if not text:
+        return ""
+    if any(token in text for token in ("汽车", "新车", "跑车", "轿车", "suv", "concept car")):
+        return "汽车"
+    if any(token in text for token in ("球鞋", "运动鞋", "鞋子", "鞋款", "鞋")):
+        return "鞋类产品"
+    if any(token in text for token in ("人物", "人像", "女性", "男模", "模特", "portrait")):
+        return "人物"
+    if any(token in text for token in ("手机", "智能手机", "iphone", "安卓机")):
+        return "手机产品"
+    return subject_text
 
 
 def extract_message_constraints(message: str) -> dict[str, Any]:
@@ -721,6 +757,10 @@ def extract_message_constraints(message: str) -> dict[str, Any]:
         if safe_bits:
             extracted["safeArea"] = "，".join(dict.fromkeys(safe_bits))
 
+    explicit_subject = _extract_subject_description(text)
+    if explicit_subject:
+        extracted["subject"] = explicit_subject
+
     use_case_parts: list[str] = []
     platform_parts: list[str] = []
     if "小红书" in text:
@@ -749,12 +789,13 @@ def extract_message_constraints(message: str) -> dict[str, Any]:
         extracted["platform"] = " / ".join(dict.fromkeys(platform_parts))
 
     lowered = text.lower()
-    if any(token in text for token in ("汽车", "新车", "跑车", "轿车", "suv")) or "concept car" in lowered:
-        extracted["subject"] = "汽车"
-    elif any(token in text for token in ("球鞋", "运动鞋", "鞋子")):
-        extracted["subject"] = "鞋类产品"
-    elif ("人物" in text or "人像" in text or "女性" in text) and any(token in text for token in ("封面", "海报", "肖像")):
-        extracted["subject"] = "人物"
+    if not extracted.get("subject"):
+        if any(token in text for token in ("汽车", "新车", "跑车", "轿车", "suv")) or "concept car" in lowered:
+            extracted["subject"] = "汽车"
+        elif any(token in text for token in ("球鞋", "运动鞋", "鞋子")):
+            extracted["subject"] = "鞋类产品"
+        elif ("人物" in text or "人像" in text or "女性" in text) and any(token in text for token in ("封面", "海报", "肖像")):
+            extracted["subject"] = "人物"
 
     composition_parts: list[str] = []
     if "竖版" in text:
@@ -891,8 +932,97 @@ def calculate_operation_readiness(state: dict[str, Any], intent_patch: "VisualIn
     )
 
 
-def pick_question(gaps: list[str]) -> dict[str, Any]:
+def get_confirmation_gaps(state: dict[str, Any]) -> list[str]:
+    intent = state.get("intent") or {}
+    gaps: list[str] = []
+    copy_text = str(intent.get("copyText") or "").strip()
+    subtitle_text = str(intent.get("subtitleText") or "").strip()
+    title_font_style = str(intent.get("titleFontStyle") or "").strip()
+    subtitle_font_style = str(intent.get("subtitleFontStyle") or "").strip()
+    background_style = str(intent.get("backgroundStyle") or "").strip()
+    use_case = str(intent.get("useCase") or "").strip()
+    task_purpose = str(intent.get("taskPurpose") or "").strip()
+
+    if copy_text and not title_font_style:
+        gaps.append("titleFontStyle")
+    if subtitle_text and not subtitle_font_style:
+        gaps.append("subtitleFontStyle")
+    if (("海报" in use_case) or ("封面" in use_case) or ("海报" in task_purpose) or ("封面" in task_purpose)) and not background_style:
+        gaps.append("backgroundStyle")
+    return gaps
+
+
+def _font_style_choices_for_state(state: dict[str, Any], *, subtitle: bool = False) -> list[dict[str, str]]:
+    intent = state.get("intent") or {}
+    subject = str(intent.get("subject") or "")
+    use_case = str(intent.get("useCase") or "")
+    task_purpose = str(intent.get("taskPurpose") or "")
+    style = str(intent.get("style") or "")
+    context = " ".join([subject, use_case, task_purpose, style])
+
+    if any(token in context for token in ("运动", "鞋", "球", "竞速", "力量")):
+        return [
+            {"label": ("副标题更有力量感" if subtitle else "主标题更有力量感"), "value": "高级力量感无衬线"},
+            {"label": ("副标题更有速度感" if subtitle else "主标题更有速度感"), "value": "速度感斜切字形"},
+            {"label": ("副标题更偏锐利科技" if subtitle else "主标题更偏锐利科技"), "value": "科技锐利无衬线"},
+            {"label": "你来决定", "value": "你来决定"},
+        ]
+    if any(token in context for token in ("手机", "数码", "科技", "电子")):
+        return [
+            {"label": ("副标题更偏科技锐利" if subtitle else "主标题更偏科技锐利"), "value": "科技锐利无衬线"},
+            {"label": ("副标题更偏极简现代" if subtitle else "主标题更偏极简现代"), "value": "极简现代无衬线"},
+            {"label": ("副标题更偏高级克制" if subtitle else "主标题更偏高级克制"), "value": "高级克制几何字形"},
+            {"label": "你来决定", "value": "你来决定"},
+        ]
+    if any(token in context for token in ("美妆", "护肤", "香水", "高级", "轻奢")):
+        return [
+            {"label": ("副标题更偏轻奢高级" if subtitle else "主标题更偏轻奢高级"), "value": "轻奢高级细体无衬线"},
+            {"label": ("副标题更偏简约现代" if subtitle else "主标题更偏简约现代"), "value": "简约现代无衬线"},
+            {"label": ("副标题更偏优雅克制" if subtitle else "主标题更偏优雅克制"), "value": "优雅克制字形"},
+            {"label": "你来决定", "value": "你来决定"},
+        ]
+    return [
+        {"label": ("副标题更偏简约现代" if subtitle else "主标题更偏简约现代"), "value": "简约现代无衬线"},
+        {"label": ("副标题更偏高级力量感" if subtitle else "主标题更偏高级力量感"), "value": "高级力量感无衬线"},
+        {"label": ("副标题更偏科技锐利" if subtitle else "主标题更偏科技锐利"), "value": "科技锐利无衬线"},
+        {"label": "你来决定", "value": "你来决定"},
+    ]
+
+
+def _background_style_choices_for_state(state: dict[str, Any]) -> list[dict[str, str]]:
+    intent = state.get("intent") or {}
+    subject = str(intent.get("subject") or "")
+    use_case = str(intent.get("useCase") or "")
+    task_purpose = str(intent.get("taskPurpose") or "")
+    style = str(intent.get("style") or "")
+    context = " ".join([subject, use_case, task_purpose, style])
+    if any(token in context for token in ("运动", "鞋", "球", "海报", "大促")):
+        return [
+            {"label": "背景更有冲击感", "value": "运动冲击感背景"},
+            {"label": "背景更简洁促销", "value": "简洁促销背景"},
+            {"label": "背景更有速度氛围", "value": "速度感氛围背景"},
+            {"label": "你来决定", "value": "你来决定"},
+        ]
+    if any(token in context for token in ("手机", "数码", "科技")):
+        return [
+            {"label": "背景更偏纯净科技", "value": "纯净科技背景"},
+            {"label": "背景更偏柔光空间", "value": "柔光空间背景"},
+            {"label": "背景更偏极简纯色", "value": "极简纯色背景"},
+            {"label": "你来决定", "value": "你来决定"},
+        ]
+    return [
+        {"label": "背景更纯净统一", "value": "纯净统一背景"},
+        {"label": "背景更偏柔光氛围", "value": "柔和自然光背景"},
+        {"label": "背景更偏空间场景", "value": "简洁空间场景背景"},
+        {"label": "你来决定", "value": "你来决定"},
+    ]
+
+
+def pick_question(state: dict[str, Any], gaps: list[str]) -> dict[str, Any]:
     """根据缺失维度生成问题 + 结构化选项。"""
+    intent = state.get("intent") or {}
+    copy_text = str(intent.get("copyText") or "").strip()
+    subtitle_text = str(intent.get("subtitleText") or "").strip()
     templates: dict[str, dict[str, Any]] = {
         "subject": {
             "question": "我先帮你收一下核心信息，这张图最想表现的主体是什么？比如人物、产品、场景，或者某个具体物件。",
@@ -919,13 +1049,8 @@ def pick_question(gaps: list[str]) -> dict[str, Any]:
             ],
         },
         "backgroundStyle": {
-            "question": "背景更想走哪种方向？",
-            "choices": [
-                {"label": "纯净统一", "value": "纯净统一背景"},
-                {"label": "柔光氛围", "value": "柔和自然光背景"},
-                {"label": "空间场景", "value": "简洁空间场景背景"},
-                {"label": "你来决定", "value": "你来决定"},
-            ],
+            "question": "现在是在确认背景风格，不是在改主体构图。你更想让这张海报的背景走哪种感觉？",
+            "choices": _background_style_choices_for_state(state),
         },
         "layout": {
             "question": "构图上有没有明确偏好？",
@@ -941,13 +1066,12 @@ def pick_question(gaps: list[str]) -> dict[str, Any]:
             "choices": [],
         },
         "titleFontStyle": {
-            "question": "主标题字体感觉你更偏哪一种？",
-            "choices": [
-                {"label": "高级力量感", "value": "高级力量感无衬线"},
-                {"label": "简约现代", "value": "简约现代无衬线"},
-                {"label": "科技锐利", "value": "科技感锐利字形"},
-                {"label": "你来决定", "value": "你来决定"},
-            ],
+            "question": f"现在是在确认主标题「{copy_text or '当前主标题'}」的字体风格，不是在改主体画面。你希望这行标题更偏哪种字感？",
+            "choices": _font_style_choices_for_state(state, subtitle=False),
+        },
+        "subtitleFontStyle": {
+            "question": f"现在是在确认副标题「{subtitle_text or '当前副标题'}」的字体风格。你希望这行副标题更偏哪种字感？",
+            "choices": _font_style_choices_for_state(state, subtitle=True),
         },
         "mood": {
             "question": "你希望画面的情绪更偏哪边？",
@@ -960,10 +1084,34 @@ def pick_question(gaps: list[str]) -> dict[str, Any]:
             ],
         },
     }
-    for key in ("subject", "purpose", "overallStyle", "backgroundStyle", "layout", "mainTitle", "titleFontStyle", "mood"):
+    for key in ("subject", "purpose", "overallStyle", "backgroundStyle", "layout", "mainTitle", "titleFontStyle", "subtitleFontStyle", "mood"):
         if key in gaps:
             return templates.get(key, {"question": "我再补一个关键点，这张图里你最在意的视觉信息是什么？", "choices": []})
     return {"question": "我再补一个关键点，这张图里你最在意的视觉信息是什么？", "choices": []}
+
+
+def _build_ask_action(
+    state: dict[str, Any],
+    *,
+    question: str,
+    dimension: str,
+    choices: list[dict[str, Any]] | None = None,
+    completeness: AgentCompletenessResult | None = None,
+    readiness: AgentOperationReadiness | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "type": "ASK",
+        "question": question,
+        "dimension": dimension,
+        "choices": choices or [],
+        "brief": build_brief(state),
+        "contract": build_creative_contract(state),
+    }
+    if completeness is not None:
+        payload["completeness"] = completeness.model_dump()
+    if readiness is not None:
+        payload["operationReadiness"] = readiness.model_dump()
+    return payload
 
 
 def infer_defaults(intent: dict[str, Any], gaps: list[str]) -> dict[str, str]:
@@ -1054,6 +1202,7 @@ def _nonempty_list(*values: Any) -> list[str]:
 def build_creative_contract(state: dict[str, Any]) -> dict[str, Any]:
     intent = state.get("intent") or {}
     subject_text = str(intent.get("subject") or "").strip()
+    subject_category = _infer_subject_category(subject_text)
     use_case = str(intent.get("useCase") or "").strip()
     task_purpose = str(intent.get("taskPurpose") or "").strip() or use_case
     aspect_ratio = str(intent.get("aspectRatio") or "").strip().replace("：", ":") or _intent_size(intent)
@@ -1089,7 +1238,7 @@ def build_creative_contract(state: dict[str, Any]) -> dict[str, Any]:
             "targetAudience": target_audience,
         },
         "subject": {
-            "category": subject_text,
+            "category": subject_category,
             "description": subject_text,
             "presentation": style,
             "mustShow": must_include_items[:4],
@@ -1698,23 +1847,23 @@ def decide_next_action(state: dict[str, Any], action_intent: VisualIntentPatch, 
     readiness = calculate_operation_readiness(state, action_intent)
 
     if action_intent.turn_type == "ask_question" and action_intent.missing_critical_info:
-        question_meta = pick_question(action_intent.missing_critical_info)
-        return {
-            "type": "ASK",
-            "question": question_meta["question"],
-            "dimension": action_intent.missing_critical_info[0],
-            "choices": question_meta.get("choices", []),
-            "operationReadiness": readiness.model_dump(),
-        }
+        question_meta = pick_question(state, action_intent.missing_critical_info)
+        return _build_ask_action(
+            state,
+            question=question_meta["question"],
+            dimension=action_intent.missing_critical_info[0],
+            choices=question_meta.get("choices", []),
+            readiness=readiness,
+        )
 
     if action_intent.turn_type == "reject_result":
-        return {
-            "type": "ASK",
-            "question": "我收到这版不对了。先告诉我最想改的是主体、风格、构图、颜色，还是画面气质？我只抓最关键的那个点继续收。",
-            "dimension": (action_intent.missing_critical_info[0] if action_intent.missing_critical_info else "feedback"),
-            "choices": [],
-            "operationReadiness": readiness.model_dump(),
-        }
+        return _build_ask_action(
+            state,
+            question="我收到这版不对了。先告诉我最想改的是主体、风格、构图、颜色，还是画面气质？我只抓最关键的那个点继续收。",
+            dimension=(action_intent.missing_critical_info[0] if action_intent.missing_critical_info else "feedback"),
+            choices=[],
+            readiness=readiness,
+        )
 
     if detect_regenerate(user_message) and (state.get("brief") or state.get("currentPrompt")):
         completeness = calculate_completeness(state)
@@ -1734,13 +1883,13 @@ def decide_next_action(state: dict[str, Any], action_intent: VisualIntentPatch, 
                 "prompt": build_refine_prompt(state, user_message),
                 "operationReadiness": readiness.model_dump(),
             }
-        return {
-            "type": "ASK",
-            "question": "我可以继续细修，但当前还没有可继承的图。要不要先确定方向并生成第一版？",
-            "dimension": "current_image",
-            "choices": [],
-            "operationReadiness": readiness.model_dump(),
-        }
+        return _build_ask_action(
+            state,
+            question="我可以继续细修，但当前还没有可继承的图。要不要先确定方向并生成第一版？",
+            dimension="current_image",
+            choices=[],
+            readiness=readiness,
+        )
 
     if detect_refine(user_message, state):
         return {
@@ -1750,8 +1899,19 @@ def decide_next_action(state: dict[str, Any], action_intent: VisualIntentPatch, 
         }
 
     completeness = calculate_completeness(state)
+    confirmation_gaps = get_confirmation_gaps(state)
 
     if action_intent.turn_type == "confirm" or detect_confirm(user_message):
+        if confirmation_gaps:
+            q = pick_question(state, [confirmation_gaps[0]])
+            return _build_ask_action(
+                state,
+                question=q["question"],
+                dimension=confirmation_gaps[0],
+                choices=q.get("choices", []),
+                completeness=completeness,
+                readiness=readiness,
+            )
         return {
             "type": "GENERATE",
             "prompt": build_generation_prompt(state),
@@ -1762,17 +1922,27 @@ def decide_next_action(state: dict[str, Any], action_intent: VisualIntentPatch, 
         }
 
     if completeness.critical_gaps:
-        q = pick_question(completeness.critical_gaps)
-        return {
-            "type": "ASK",
-            "question": q["question"],
-            "dimension": completeness.critical_gaps[0],
-            "choices": q.get("choices", []),
-            "completeness": completeness.model_dump(),
-            "operationReadiness": readiness.model_dump(),
-        }
+        q = pick_question(state, completeness.critical_gaps)
+        return _build_ask_action(
+            state,
+            question=q["question"],
+            dimension=completeness.critical_gaps[0],
+            choices=q.get("choices", []),
+            completeness=completeness,
+            readiness=readiness,
+        )
 
     if completeness.can_generate:
+        if confirmation_gaps:
+            q = pick_question(state, [confirmation_gaps[0]])
+            return _build_ask_action(
+                state,
+                question=q["question"],
+                dimension=confirmation_gaps[0],
+                choices=q.get("choices", []),
+                completeness=completeness,
+                readiness=readiness,
+            )
         brief = state.get("brief")
         if not brief or not brief.get("confirmedByUser"):
             return _build_confirm_action(state, completeness, action_intent, readiness)
@@ -1794,17 +1964,17 @@ def decide_next_action(state: dict[str, Any], action_intent: VisualIntentPatch, 
         }
 
     if completeness.inferrable_gaps:
-        high_weight_gaps = [g for g in completeness.inferrable_gaps if g in ("overallStyle", "backgroundStyle", "purpose", "titleFontStyle")]
+        high_weight_gaps = [g for g in completeness.inferrable_gaps if g in ("overallStyle", "backgroundStyle", "purpose", "titleFontStyle", "subtitleFontStyle")]
         if high_weight_gaps:
-            q = pick_question([high_weight_gaps[0]])
-            return {
-                "type": "ASK",
-                "question": q["question"],
-                "dimension": high_weight_gaps[0],
-                "choices": q.get("choices", []),
-                "completeness": completeness.model_dump(),
-                "operationReadiness": readiness.model_dump(),
-            }
+            q = pick_question(state, [high_weight_gaps[0]])
+            return _build_ask_action(
+                state,
+                question=q["question"],
+                dimension=high_weight_gaps[0],
+                choices=q.get("choices", []),
+                completeness=completeness,
+                readiness=readiness,
+            )
         defaults = infer_defaults(state.get("intent") or {}, completeness.inferrable_gaps)
         state["intent"] = merge_intent(state.get("intent") or {}, defaults)
         brief = build_brief(state)
