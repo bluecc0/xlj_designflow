@@ -440,6 +440,27 @@ def _normalize_agent_images_for_api(images: list[dict]) -> list[dict]:
     return normalized
 
 
+def _normalize_editor_snapshot_assets(snapshot: dict | None) -> dict | None:
+    if not isinstance(snapshot, dict):
+        return snapshot
+    store = snapshot.get("store") or snapshot.get("document")
+    if not isinstance(store, dict):
+        return snapshot
+    for record in store.values():
+        if not isinstance(record, dict):
+            continue
+        if record.get("typeName") != "asset" or record.get("type") != "image":
+            continue
+        props = record.get("props")
+        if not isinstance(props, dict):
+            continue
+        src = props.get("src")
+        normalized_src = _normalize_public_asset_url(src)
+        if normalized_src and normalized_src != src:
+            props["src"] = normalized_src
+    return snapshot
+
+
 def _assert_job_owner(job_user_id: Optional[str], user: dict) -> None:
     if _is_admin(user):
         return
@@ -3105,7 +3126,7 @@ def editor_load_snapshot(request: Request):
     if raw is None:
         return {"snapshot": None}
     try:
-        return {"snapshot": json.loads(raw)}
+        return {"snapshot": _normalize_editor_snapshot_assets(json.loads(raw))}
     except Exception:
         return {"snapshot": None}
 
