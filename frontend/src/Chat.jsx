@@ -1195,7 +1195,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
   const [aiProvider, setAiProvider] = React.useState('apimart');
-  const [aiBatchCount, setAiBatchCount] = React.useState(1);
+  const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [manualRefImages, setManualRefImages] = React.useState([]);
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
@@ -1221,6 +1221,13 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     if (clean === '/特殊品' || clean === '/特殊品（完整）') return 'special';
     if (clean === '/花瓣下载') return 'download';
     return 'chat';
+  }, []);
+  const normalizeBatchCount = React.useCallback(function(value) {
+    const digits = String(value || '').replace(/\D+/g, '');
+    if (!digits) return 1;
+    const parsed = parseInt(digits, 10);
+    if (!Number.isFinite(parsed)) return 1;
+    return Math.max(1, Math.min(4, parsed));
   }, []);
 
   const [taskDefsKey, setTaskDefsKey] = React.useState(0);
@@ -1554,6 +1561,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     const message = lockedCommand ? (lockedCommand + (body ? ' ' + body : '')) : body;
     if (!message || isLoading) return;
     const imagesToSend = [...refImages];
+    const normalizedBatchCount = normalizeBatchCount(aiBatchCount);
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
     onSend(message, imagesToSend, {
       size: aiImageSize,
@@ -1561,8 +1569,9 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       provider: aiProvider,
       workflow: selectedWorkflow,
       lockedCommand: lockedCommand,
-      batchCount: selectedWorkflow === 'ai-image' ? aiBatchCount : 1,
+      batchCount: selectedWorkflow === 'ai-image' ? normalizedBatchCount : 1,
     });
+    setAiBatchCount(String(normalizedBatchCount));
     setText('');
     clearRefImages();
   };
@@ -1866,7 +1875,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     agentEnabled ? 'Agent' : activeTaskLabel,
     agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? providerLabel : ''),
     agentEnabled ? '' : modeParamLabel,
-    (activeMode === 'ai-image' && aiBatchCount > 1) ? ('x' + aiBatchCount) : '',
+    (activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1) ? ('x' + normalizeBatchCount(aiBatchCount)) : '',
     refImages.length > 0 ? ('ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES) : '',
     files.length > 0 ? ('文件 ' + files.length) : '',
   ].filter(Boolean);
@@ -2174,13 +2183,11 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             pattern: '[1-4]*',
             value: aiBatchCount,
             onChange: function(e) {
-              const raw = String(e.target.value || '').replace(/\D+/g, '');
-              if (!raw) {
-                setAiBatchCount(1);
-                return;
-              }
-              const v = parseInt(raw, 10);
-              if (Number.isFinite(v)) setAiBatchCount(Math.max(1, Math.min(4, v)));
+              const raw = String(e.target.value || '').replace(/\D+/g, '').slice(0, 2);
+              setAiBatchCount(raw);
+            },
+            onBlur: function() {
+              setAiBatchCount(String(normalizeBatchCount(aiBatchCount)));
             },
             style: {
               width: 38,
