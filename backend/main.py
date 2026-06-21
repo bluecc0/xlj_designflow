@@ -2555,7 +2555,6 @@ def ai_image_status(request: Request, job_id: str):
         raise HTTPException(404, "任务不存在")
     if not _is_admin(user) and job.get("user_id") != user["id"]:
         raise HTTPException(404, "任务不存在")
-    api_base = str(request.base_url).rstrip("/")
     image_url = job.get("image_url")
     preview_url = ""
     if image_url:
@@ -2567,8 +2566,9 @@ def ai_image_status(request: Request, job_id: str):
         "job_id": job["id"],
         "status": job["status"],
         "progress": job["progress"],
-        "image_url": f"{api_base}{image_url}" if image_url else None,
-        "preview_url": f"{api_base}{preview_url}" if preview_url else None,
+        # 统一返回站内相对路径，避免公网域名 / 内网 IP / 代理 Host 混用时把结果图指到错误主机。
+        "image_url": image_url or None,
+        "preview_url": preview_url or None,
         "task_id": job.get("task_id"),
         "error": job.get("error"),
     }
