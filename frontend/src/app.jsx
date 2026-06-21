@@ -104,6 +104,26 @@ const App = () => {
     });
   }, []);
 
+  const normalizeDesignflowAssetUrl = React.useCallback(function(rawUrl) {
+    const value = String(rawUrl || '').trim();
+    if (!value) return '';
+    const publicPrefixes = ['/ai-images/', '/results/', '/output/', '/avatars/'];
+    const isPublicPath = function(pathname) {
+      return publicPrefixes.some(function(prefix) { return pathname.indexOf(prefix) === 0; })
+        || /^\/compose\/[^/]+\/image\/?$/.test(pathname)
+        || pathname.indexOf('/export/grid/') === 0;
+    };
+    try {
+      const parsed = new URL(value, window.location.origin);
+      if (isPublicPath(parsed.pathname)) {
+        return parsed.pathname + parsed.search + parsed.hash;
+      }
+      return parsed.toString();
+    } catch (e) {
+      return value;
+    }
+  }, []);
+
   const getViewFromHash = () => (window.location.hash === '#/admin' ? 'admin' : 'workbench');
   const [currentView, setCurrentView] = React.useState(getViewFromHash);
   const navigateTo = React.useCallback(function(hash) {
@@ -137,7 +157,10 @@ const App = () => {
 
   const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl) => {
     const explicitClear = !jobId && !resultTpl && Array.isArray(directImageUrls) && directImageUrls.length === 0;
-    const urls = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : (directImageUrls ? [directImageUrls] : []);
+    const rawUrls = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : (directImageUrls ? [directImageUrls] : []);
+    const urls = (rawUrls.length ? rawUrls : (jobId ? ['/compose/' + encodeURIComponent(jobId) + '/image'] : []))
+      .map(normalizeDesignflowAssetUrl)
+      .filter(Boolean);
     if (explicitClear) {
       setResultTemplate(null);
       setEditorCommand({
@@ -186,7 +209,7 @@ const App = () => {
     if (penpotEditUrl) {
       window.resultPenpotUrl = penpotEditUrl;
     }
-  }, [activeTemplate]);
+  }, [activeTemplate, normalizeDesignflowAssetUrl]);
 
   React.useEffect(() => {
     setResultTemplate(null);

@@ -1547,10 +1547,27 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages 
 
   React.useEffect(() => {
     if (!editorCommand) return;
+    const normalizeAssetUrl = (rawUrl) => {
+      const value = String(rawUrl || '').trim();
+      if (!value) return '';
+      const publicPrefixes = ['/ai-images/', '/results/', '/output/', '/avatars/'];
+      const isPublicPath = (pathname) => publicPrefixes.some(prefix => pathname.startsWith(prefix))
+        || /^\/compose\/[^/]+\/image\/?$/.test(pathname)
+        || pathname.startsWith('/export/grid/');
+      try {
+        const parsed = new URL(value, window.location.origin);
+        if (isPublicPath(parsed.pathname)) {
+          return parsed.pathname + parsed.search + parsed.hash;
+        }
+        return parsed.toString();
+      } catch (e) {
+        return value;
+      }
+    };
     const message = editorCommand.type === 'insert-images'
       ? {
           type: 'designflow:insert-image',
-          urls: editorCommand.urls || [],
+          urls: (editorCommand.urls || []).map(normalizeAssetUrl).filter(Boolean),
           mode: editorCommand.mode,
           name: editorCommand.name,
         }
@@ -3421,6 +3438,10 @@ const normalizeReferenceUrl = function(rawUrl) {
   if (!value) return '';
   try {
     const parsed = new URL(value, window.location.origin);
+    const publicPrefixes = ['/ai-images/', '/results/', '/output/', '/avatars/'];
+    if (publicPrefixes.some(function(prefix) { return parsed.pathname.indexOf(prefix) === 0; })) {
+      return parsed.pathname + parsed.search + parsed.hash;
+    }
     const localHosts = ['localhost', '127.0.0.1', '[::1]', '::1'];
     const parsedHost = String(parsed.hostname || '').toLowerCase();
     if (localHosts.includes(parsedHost)) {
@@ -3459,7 +3480,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
   const [aiProvider, setAiProvider] = React.useState('apimart');
-  const [aiBatchCount, setAiBatchCount] = React.useState(1);
+  const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [manualRefImages, setManualRefImages] = React.useState([]);
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
@@ -3485,6 +3506,13 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     if (clean === '/特殊品' || clean === '/特殊品（完整）') return 'special';
     if (clean === '/花瓣下载') return 'download';
     return 'chat';
+  }, []);
+  const normalizeBatchCount = React.useCallback(function(value) {
+    const digits = String(value || '').replace(/\D+/g, '');
+    if (!digits) return 1;
+    const parsed = parseInt(digits, 10);
+    if (!Number.isFinite(parsed)) return 1;
+    return Math.max(1, Math.min(4, parsed));
   }, []);
 
   const [taskDefsKey, setTaskDefsKey] = React.useState(0);
@@ -3745,9 +3773,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const aiOptionMap = AI_OPTIONS;
   const AI_RATIOS = Object.keys(aiOptionMap);
   const currentAiRatioMeta = aiOptionMap[aiRatio] || aiOptionMap[AI_RATIOS[0]];
-  // Sub2API 订阅渠道只支持 1K
   const _rawQualities = currentAiRatioMeta ? currentAiRatioMeta.qualities : AI_QUALITIES;
-  const allowedAiQualities = aiProvider === 'sub2api' ? ['1K'] : _rawQualities;
+  const allowedAiQualities = _rawQualities;
   const currentAiPx = currentAiRatioMeta && currentAiRatioMeta.px ? (currentAiRatioMeta.px[aiQuality] || currentAiRatioMeta.preview) : '';
   const aiImageSize = aiRatio;
 
@@ -3762,14 +3789,6 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       }
       // Sub2API 不支持 Nano Banana，切换时自动回默认
       if (activeAiModel === 'nano-banana-pro' && aiProvider === 'sub2api') {
-        setAiProvider('apimart');
-      }
-      // Sub2API 只支持 1K：切换 provider 时若 quality 不兼容，降级到 1K
-      if (aiProvider === 'sub2api' && aiQuality !== '1K') {
-        setAiQuality('1K');
-      }
-      // 选 2K/4K 时若 provider 是 sub2api，切回默认
-      if (['2K', '4K'].includes(aiQuality) && aiProvider === 'sub2api') {
         setAiProvider('apimart');
       }
     }
@@ -3827,6 +3846,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     const message = lockedCommand ? (lockedCommand + (body ? ' ' + body : '')) : body;
     if (!message || isLoading) return;
     const imagesToSend = [...refImages];
+    const normalizedBatchCount = normalizeBatchCount(aiBatchCount);
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
     onSend(message, imagesToSend, {
       size: aiImageSize,
@@ -3834,8 +3854,9 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       provider: aiProvider,
       workflow: selectedWorkflow,
       lockedCommand: lockedCommand,
-      batchCount: selectedWorkflow === 'ai-image' ? aiBatchCount : 1,
+      batchCount: selectedWorkflow === 'ai-image' ? normalizedBatchCount : 1,
     });
+    setAiBatchCount(String(normalizedBatchCount));
     setText('');
     clearRefImages();
   };
@@ -4139,7 +4160,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     agentEnabled ? 'Agent' : activeTaskLabel,
     agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? providerLabel : ''),
     agentEnabled ? '' : modeParamLabel,
-    (activeMode === 'ai-image' && aiBatchCount > 1) ? ('x' + aiBatchCount) : '',
+    (activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1) ? ('x' + normalizeBatchCount(aiBatchCount)) : '',
     refImages.length > 0 ? ('ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES) : '',
     files.length > 0 ? ('文件 ' + files.length) : '',
   ].filter(Boolean);
@@ -4330,8 +4351,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           key: 'sub2api',
           label: '订阅',
           active: aiProvider === 'sub2api',
-          disabled: ['2K', '4K'].includes(aiQuality),
-          onClick: function() { if (!['2K', '4K'].includes(aiQuality)) setAiProvider('sub2api'); },
+          disabled: false,
+          onClick: function() { setAiProvider('sub2api'); },
         } : null,
         {
           key: 'apimart',
@@ -4447,13 +4468,11 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             pattern: '[1-4]*',
             value: aiBatchCount,
             onChange: function(e) {
-              const raw = String(e.target.value || '').replace(/\D+/g, '');
-              if (!raw) {
-                setAiBatchCount(1);
-                return;
-              }
-              const v = parseInt(raw, 10);
-              if (Number.isFinite(v)) setAiBatchCount(Math.max(1, Math.min(4, v)));
+              const raw = String(e.target.value || '').replace(/\D+/g, '').slice(0, 2);
+              setAiBatchCount(raw);
+            },
+            onBlur: function() {
+              setAiBatchCount(String(normalizeBatchCount(aiBatchCount)));
             },
             style: {
               width: 38,
@@ -7932,6 +7951,26 @@ const App = () => {
     });
   }, []);
 
+  const normalizeDesignflowAssetUrl = React.useCallback(function(rawUrl) {
+    const value = String(rawUrl || '').trim();
+    if (!value) return '';
+    const publicPrefixes = ['/ai-images/', '/results/', '/output/', '/avatars/'];
+    const isPublicPath = function(pathname) {
+      return publicPrefixes.some(function(prefix) { return pathname.indexOf(prefix) === 0; })
+        || /^\/compose\/[^/]+\/image\/?$/.test(pathname)
+        || pathname.indexOf('/export/grid/') === 0;
+    };
+    try {
+      const parsed = new URL(value, window.location.origin);
+      if (isPublicPath(parsed.pathname)) {
+        return parsed.pathname + parsed.search + parsed.hash;
+      }
+      return parsed.toString();
+    } catch (e) {
+      return value;
+    }
+  }, []);
+
   const getViewFromHash = () => (window.location.hash === '#/admin' ? 'admin' : 'workbench');
   const [currentView, setCurrentView] = React.useState(getViewFromHash);
   const navigateTo = React.useCallback(function(hash) {
@@ -7965,7 +8004,10 @@ const App = () => {
 
   const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl) => {
     const explicitClear = !jobId && !resultTpl && Array.isArray(directImageUrls) && directImageUrls.length === 0;
-    const urls = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : (directImageUrls ? [directImageUrls] : []);
+    const rawUrls = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : (directImageUrls ? [directImageUrls] : []);
+    const urls = (rawUrls.length ? rawUrls : (jobId ? ['/compose/' + encodeURIComponent(jobId) + '/image'] : []))
+      .map(normalizeDesignflowAssetUrl)
+      .filter(Boolean);
     if (explicitClear) {
       setResultTemplate(null);
       setEditorCommand({
@@ -8014,7 +8056,7 @@ const App = () => {
     if (penpotEditUrl) {
       window.resultPenpotUrl = penpotEditUrl;
     }
-  }, [activeTemplate]);
+  }, [activeTemplate, normalizeDesignflowAssetUrl]);
 
   React.useEffect(() => {
     setResultTemplate(null);

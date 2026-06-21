@@ -397,17 +397,25 @@ def _is_admin(user: Optional[dict]) -> bool:
     return bool(user and user.get("role") == "admin")
 
 
+def _is_public_asset_path(path: str) -> bool:
+    safe_prefixes = ("/ai-images/", "/results/", "/output/", "/avatars/")
+    return (
+        path.startswith(safe_prefixes)
+        or re.match(r"^/compose/[^/]+/image/?$", path) is not None
+        or path.startswith("/export/grid/")
+    )
+
+
 def _normalize_public_asset_url(raw_url: str | None) -> str:
     value = str(raw_url or "").strip()
     if not value:
         return ""
-    safe_prefixes = ("/ai-images/", "/results/", "/avatars/")
-    if value.startswith(safe_prefixes):
+    if _is_public_asset_path(value):
         return value
     if value.startswith(("http://", "https://")):
         try:
             parsed = urlsplit(value)
-            if parsed.path.startswith(safe_prefixes):
+            if _is_public_asset_path(parsed.path):
                 return urlunsplit(("", "", parsed.path, parsed.query, parsed.fragment))
         except Exception:
             return value
@@ -443,7 +451,10 @@ def _normalize_agent_images_for_api(images: list[dict]) -> list[dict]:
 def _normalize_editor_snapshot_assets(snapshot: dict | None) -> dict | None:
     if not isinstance(snapshot, dict):
         return snapshot
-    store = snapshot.get("store") or snapshot.get("document")
+    document = snapshot.get("document")
+    store = snapshot.get("store")
+    if not isinstance(store, dict) and isinstance(document, dict):
+        store = document.get("store")
     if not isinstance(store, dict):
         return snapshot
     for record in store.values():

@@ -492,7 +492,7 @@ function getImageSize(src: string) {
 }
 
 function normalizeImageShapesInSnapshot(snapshot: any) {
-  const store = snapshot?.store || snapshot?.document
+  const store = snapshot?.store || snapshot?.document?.store
   if (!store || typeof store !== 'object') return snapshot
 
   Object.values(store).forEach((record: any) => {
@@ -506,6 +506,44 @@ function normalizeImageShapesInSnapshot(snapshot: any) {
       flipX: typeof props.flipX === 'boolean' ? props.flipX : false,
       flipY: typeof props.flipY === 'boolean' ? props.flipY : false,
       altText: typeof props.altText === 'string' ? props.altText : '',
+    }
+  })
+  return snapshot
+}
+
+function normalizeDesignflowAssetUrl(rawUrl: string) {
+  const value = String(rawUrl || '').trim()
+  if (!value) return ''
+  const publicPrefixes = ['/ai-images/', '/results/', '/output/', '/avatars/']
+  const isPublicPath = (pathname: string) =>
+    publicPrefixes.some((prefix) => pathname.startsWith(prefix)) ||
+    /^\/compose\/[^/]+\/image\/?$/.test(pathname) ||
+    pathname.startsWith('/export/grid/')
+  try {
+    const parsed = new URL(value, window.location.origin)
+    if (isPublicPath(parsed.pathname)) {
+      return parsed.pathname + parsed.search + parsed.hash
+    }
+    return parsed.toString()
+  } catch (error) {
+    return value
+  }
+}
+
+function normalizeDesignflowAssetUrlsInSnapshot(snapshot: any) {
+  const store = snapshot?.store || snapshot?.document?.store
+  if (!store || typeof store !== 'object') return snapshot
+
+  Object.values(store).forEach((record: any) => {
+    if (!record || record.typeName !== 'asset' || record.type !== 'image') return
+    const props = record.props || {}
+    const src = typeof props.src === 'string' ? props.src : ''
+    const normalized = normalizeDesignflowAssetUrl(src)
+    if (normalized && normalized !== src) {
+      record.props = {
+        ...props,
+        src: normalized,
+      }
     }
   })
   return snapshot
@@ -531,6 +569,32 @@ function TldrawHostBridge() {
   )
 
   const recentInsertsRef = React.useRef<Record<string, number>>({})
+
+  const normalizeCurrentAssetUrls = React.useCallback(() => {
+    try {
+      const assets = ((editor as any).getAssets ? (editor as any).getAssets() : []).filter(Boolean)
+      const updates = assets
+        .filter((asset: any) => asset && asset.type === 'image' && asset.props && typeof asset.props.src === 'string')
+        .map((asset: any) => {
+          const normalized = normalizeDesignflowAssetUrl(asset.props.src)
+          if (!normalized || normalized === asset.props.src) return null
+          return {
+            ...asset,
+            props: {
+              ...asset.props,
+              src: normalized,
+            },
+          }
+        })
+        .filter(Boolean)
+      if (updates.length) {
+        ;(editor as any).updateAssets(updates)
+      }
+      return updates.length
+    } catch (error) {
+      return 0
+    }
+  }, [editor])
 
   const isDesignflowImageShape = React.useCallback(
     (shape: TLShape) => {
@@ -603,6 +667,7 @@ function TldrawHostBridge() {
 
   const insertImage = React.useCallback(
     async ({ url, mode, name }: { url: string; mode?: 'image' | 'background'; name?: string }) => {
+      url = normalizeDesignflowAssetUrl(url)
       const viewport = editor.getViewportPageBounds()
 
       const file = await fetchImageAsFile(url, name)
@@ -693,7 +758,7 @@ function TldrawHostBridge() {
       mode?: 'image' | 'background'
       name?: string
     }) => {
-      const cleanUrls = urls.filter(Boolean)
+      const cleanUrls = urls.map(normalizeDesignflowAssetUrl).filter(Boolean)
       if (!cleanUrls.length) return
 
       if (cleanUrls.length === 1 || mode === 'background') {
@@ -794,7 +859,7 @@ function TldrawHostBridge() {
     const doSave = () => {
       try {
         const snapshot = editor.getSnapshot() as any
-        const store = snapshot.store || snapshot.document
+        const store = snapshot.store || snapshot.document?.store
         if (!store || typeof store !== 'object' || Object.keys(store).length === 0) return
         const raw = JSON.stringify(snapshot)
         if (raw === lastRaw) return
@@ -811,7 +876,7 @@ function TldrawHostBridge() {
     const doSaveSync = () => {
       try {
         const snapshot = editor.getSnapshot() as any
-        const store = snapshot.store || snapshot.document
+        const store = snapshot.store || snapshot.document?.store
         if (!store || typeof store !== 'object' || Object.keys(store).length === 0) return
         const raw = JSON.stringify(snapshot)
         if (raw === lastRaw) return
@@ -833,16 +898,26 @@ function TldrawHostBridge() {
         const data = await res.json()
         if (data.snapshot) {
           // 验证快照有效：store 至少有一个 page 记录
-          const store = data.snapshot.store || data.snapshot.document
+          const normalizedSnapshot = normalizeDesignflowAssetUrlsInSnapshot(normalizeImageShapesInSnapshot(data.snapshot))
+          const store = normalizedSnapshot.store || normalizedSnapshot.document?.store
           if (store && typeof store === 'object' && Object.keys(store).length > 0) {
-            editor.loadSnapshot(normalizeImageShapesInSnapshot(data.snapshot))
-            window.setTimeout(() => reflowDesignflowImages(), 0)
+            editor.loadSnapshot(normalizedSnapshot)
+            window.setTimeout(() => {
+              normalizeCurrentAssetUrls()
+              reflowDesignflowImages()
+              doSave()
+            }, 0)
           }
         }
       } catch (e) {}
     }
 
     loadSnapshot()
+    window.setTimeout(() => {
+      if (normalizeCurrentAssetUrls()) {
+        doSave()
+      }
+    }, 500)
 
     // 监听用户变更，debounce 2 秒后自动保存（source: 'user' 过滤掉 loadSnapshot 触发的变更）
     const unlisten = editor.store.listen(() => {
@@ -858,7 +933,7 @@ function TldrawHostBridge() {
       if (saveTimer) clearTimeout(saveTimer)
       window.removeEventListener('beforeunload', doSaveSync)
     }
-  }, [editor, reflowDesignflowImages])
+  }, [editor, normalizeCurrentAssetUrls, reflowDesignflowImages])
 
   return null
 }

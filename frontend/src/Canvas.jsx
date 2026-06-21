@@ -66,10 +66,27 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages 
 
   React.useEffect(() => {
     if (!editorCommand) return;
+    const normalizeAssetUrl = (rawUrl) => {
+      const value = String(rawUrl || '').trim();
+      if (!value) return '';
+      const publicPrefixes = ['/ai-images/', '/results/', '/output/', '/avatars/'];
+      const isPublicPath = (pathname) => publicPrefixes.some(prefix => pathname.startsWith(prefix))
+        || /^\/compose\/[^/]+\/image\/?$/.test(pathname)
+        || pathname.startsWith('/export/grid/');
+      try {
+        const parsed = new URL(value, window.location.origin);
+        if (isPublicPath(parsed.pathname)) {
+          return parsed.pathname + parsed.search + parsed.hash;
+        }
+        return parsed.toString();
+      } catch (e) {
+        return value;
+      }
+    };
     const message = editorCommand.type === 'insert-images'
       ? {
           type: 'designflow:insert-image',
-          urls: editorCommand.urls || [],
+          urls: (editorCommand.urls || []).map(normalizeAssetUrl).filter(Boolean),
           mode: editorCommand.mode,
           name: editorCommand.name,
         }

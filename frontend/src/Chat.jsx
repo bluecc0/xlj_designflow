@@ -1157,6 +1157,10 @@ const normalizeReferenceUrl = function(rawUrl) {
   if (!value) return '';
   try {
     const parsed = new URL(value, window.location.origin);
+    const publicPrefixes = ['/ai-images/', '/results/', '/output/', '/avatars/'];
+    if (publicPrefixes.some(function(prefix) { return parsed.pathname.indexOf(prefix) === 0; })) {
+      return parsed.pathname + parsed.search + parsed.hash;
+    }
     const localHosts = ['localhost', '127.0.0.1', '[::1]', '::1'];
     const parsedHost = String(parsed.hostname || '').toLowerCase();
     if (localHosts.includes(parsedHost)) {
