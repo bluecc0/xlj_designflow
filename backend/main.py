@@ -20,7 +20,7 @@ import re
 import threading
 import time
 import uuid
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
 from pathlib import Path
@@ -371,12 +371,12 @@ def _public_agent_project(project: dict, *, messages: Optional[list[dict]] = Non
         "phase": project["phase"],
         "intent": project["intent"],
         "brief": project["brief"],
-        "currentImageUrl": (project.get("current_image") or {}).get("imageUrl"),
+        "currentImageUrl": _normalize_public_asset_url((project.get("current_image") or {}).get("imageUrl")),
         "currentPrompt": project.get("current_prompt"),
         "conversationSummary": project.get("conversation_summary") or "",
         "metadata": project.get("metadata") or {},
-        "messages": messages if messages is not None else None,
-        "iterations": images if images is not None else None,
+        "messages": _normalize_ai_chat_messages_for_api(messages) if messages is not None else None,
+        "iterations": _normalize_agent_images_for_api(images) if images is not None else None,
         "createdAt": project["created_at"],
         "updatedAt": project["updated_at"],
     }
@@ -395,6 +395,49 @@ def _current_user(request: Request) -> dict:
 
 def _is_admin(user: Optional[dict]) -> bool:
     return bool(user and user.get("role") == "admin")
+
+
+def _normalize_public_asset_url(raw_url: str | None) -> str:
+    value = str(raw_url or "").strip()
+    if not value:
+        return ""
+    safe_prefixes = ("/ai-images/", "/results/", "/avatars/")
+    if value.startswith(safe_prefixes):
+        return value
+    if value.startswith(("http://", "https://")):
+        try:
+            parsed = urlsplit(value)
+            if parsed.path.startswith(safe_prefixes):
+                return urlunsplit(("", "", parsed.path, parsed.query, parsed.fragment))
+        except Exception:
+            return value
+    return value
+
+
+def _normalize_ai_chat_messages_for_api(messages: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in messages or []:
+        msg = dict(item or {})
+        if msg.get("type") == "ai-image-generating":
+            msg["imageUrl"] = _normalize_public_asset_url(msg.get("imageUrl"))
+            msg["previewUrl"] = _normalize_public_asset_url(msg.get("previewUrl"))
+            refs = msg.get("refPreviews")
+            if isinstance(refs, list):
+                msg["refPreviews"] = [
+                    _normalize_public_asset_url(ref) if isinstance(ref, str) else ref
+                    for ref in refs
+                ]
+        normalized.append(msg)
+    return normalized
+
+
+def _normalize_agent_images_for_api(images: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in images or []:
+        image = dict(item or {})
+        image["image_url"] = _normalize_public_asset_url(image.get("image_url"))
+        normalized.append(image)
+    return normalized
 
 
 def _assert_job_owner(job_user_id: Optional[str], user: dict) -> None:
@@ -1907,7 +1950,7 @@ def list_agent_projects_endpoint(request: Request, page: int = 1, limit: int = 2
         data.append({
             "id": project["id"],
             "title": project["title"],
-            "currentImageUrl": (project.get("current_image") or {}).get("imageUrl"),
+            "currentImageUrl": _normalize_public_asset_url((project.get("current_image") or {}).get("imageUrl")),
             "phase": project["phase"],
             "totalGenerations": len(images),
             "updatedAt": project["updated_at"],
@@ -1932,7 +1975,7 @@ def list_agent_project_images_endpoint(request: Request, project_id: str):
     project = get_agent_project(project_id, user_id=user["id"])
     if not project:
         raise HTTPException(404, "项目不存在")
-    return {"success": True, "data": list_agent_images(project_id, user_id=user["id"])}
+    return {"success": True, "data": _normalize_agent_images_for_api(list_agent_images(project_id, user_id=user["id"]))}
 
 
 @app.delete("/api/projects/{project_id}")
@@ -2393,7 +2436,7 @@ def history_ai_chat_detail(request: Request, session_id: str):
     session = get_ai_chat_session(session_id, user_id=user["id"])
     if not session:
         raise HTTPException(404, "未找到历史对话")
-    messages = load_ai_chat_messages(session_id, user_id=user["id"])
+    messages = _normalize_ai_chat_messages_for_api(load_ai_chat_messages(session_id, user_id=user["id"]))
     return {"session": session, "messages": messages}
 
 
@@ -2868,8 +2911,8 @@ def _inspiration_to_api(post: dict, current_user: dict | None = None, favorite_i
     return {
         "id": post["id"],
         "job_id": post["job_id"],
-        "image_url": post.get("thumb_url") or post.get("image_url") or "",
-        "full_image_url": post.get("image_url") or post.get("thumb_url") or "",
+        "image_url": _normalize_public_asset_url(post.get("thumb_url") or post.get("image_url") or ""),
+        "full_image_url": _normalize_public_asset_url(post.get("image_url") or post.get("thumb_url") or ""),
         "prompt": post["prompt"],
         "original_prompt": post.get("original_prompt") or "",
         "resolved_prompt": post.get("resolved_prompt") or post.get("prompt") or "",
