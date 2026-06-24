@@ -33,26 +33,17 @@ def _is_yellow(cell) -> bool:
     fill = cell.fill
     if not fill:
         return False
-    # 只有 fill_type=solid 才认为是手动设置的颜色
     if fill.fill_type != "solid":
         return False
     fg = fill.fgColor
-    if fg is None:
-        return False
-    # 有 theme 或 indexed 说明不是手动 RGB 色
-    if fg.theme is not None or fg.indexed is not None:
+    if fg is None or fg.theme is not None or fg.indexed is not None:
         return False
     if fg.type != "rgb" or not fg.rgb:
         return False
     raw = str(fg.rgb)
-    # 忽略透明/无色/白色
     if raw.upper() in ("0", "00000000", "FFFFFF", "FFFFFFFF"):
         return False
-    # ARGB 去掉 alpha
-    if len(raw) == 8:
-        hex_val = raw[2:].upper()
-    else:
-        hex_val = raw.upper()
+    hex_val = raw[2:].upper() if len(raw) == 8 else raw.upper()
     return hex_val in _YELLOW_HEXES
 
 
@@ -114,16 +105,19 @@ class SmartDistributor:
 
             field_order = list(headers.values())
             image_field = field_order[0]
-            modules = self._detect_modules(ws, header_row, module_col_idx)
 
-            rows_data, sheet_yellow_cells = self._read_rows(ws, header_row, headers, field_order)
+            # 先找出数据最后一行
+            last_row = self._find_last_data_row(ws, header_row, headers)
+            modules = self._detect_modules(ws, header_row, module_col_idx, last_row)
+
+            rows_data, sheet_yellow_cells = self._read_rows(ws, header_row, headers, last_row)
             if not rows_data:
                 warnings.append(f"Sheet[{sheet_name}] 没有有效数据行")
                 continue
 
             if sheet_yellow_cells:
                 has_yellow = True
-                module_groups = self._group_by_module(rows_data, modules, module_col_idx, field_order)
+                module_groups = self._group_by_module(rows_data, modules, module_col_idx)
                 for mod in module_groups:
                     for ri, row_data in enumerate(mod["rows"]):
                         for fi, field_name in enumerate(field_order):
@@ -140,11 +134,9 @@ class SmartDistributor:
                                 })
                                 global_slot += 1
             else:
-                # full: 每个模块一个独立 job
-                module_groups = self._group_by_module(rows_data, modules, module_col_idx, field_order)
+                module_groups = self._group_by_module(rows_data, modules, module_col_idx)
                 for mod in module_groups:
-                    job = self._build_module_job(sheet_name, field_order, image_field, mod)
-                    all_jobs.append(job)
+                    all_jobs.append(self._build_module_job(sheet_name, field_order, image_field, mod))
 
         if has_yellow and yellow_items:
             all_jobs.append({
@@ -189,7 +181,7 @@ class SmartDistributor:
     def _find_header_row(self, ws) -> Optional[int]:
         for row_idx in range(1, min(ws.max_row + 1, 20)):
             count = sum(1 for col in range(1, ws.max_column + 1) if _cell_str(ws.cell(row=row_idx, column=col)))
-            if count >= 3:
+            if count >= 2:
                 return row_idx
         return None
 
@@ -197,7 +189,6 @@ class SmartDistributor:
         headers = {}
         module_col_idx = None
         for col_idx in range(1, ws.max_column + 1):
-            # 跳过隐藏列
             col_letter = openpyxl.utils.get_column_letter(col_idx)
             col_dim = ws.column_dimensions.get(col_letter)
             if col_dim is not None and col_dim.hidden:
@@ -211,71 +202,74 @@ class SmartDistributor:
                 headers[col_idx] = raw
         return headers, module_col_idx
 
+    def _find_last_data_row(self, ws, header_row: int, headers: dict[int, str]) -> int:
+        """从表头后向前扫描，找到连续空行块的结尾，避免 max_row 被格式残留撑大"""
+        blank_run = 0
+        last_row = header_row
+        for row_idx in range(header_row + 1, ws.max_row + 1):
+            if _is_row_hidden(ws, row_idx):
+                continue
+            has_any = False
+            for col_idx in headers:
+                if _cell_str(ws.cell(row=row_idx, column=col_idx)):
+                    has_any = True
+                    break
+            if has_any:
+                blank_run = 0
+                last_row = row_idx
+            else:
+                blank_run += 1
+                if blank_run >= 15:
+                    break
+        return last_row
+
     def _read_rows(self, ws, header_row: int, headers: dict[int, str],
-                   field_order: list[str]) -> tuple[list[dict], set]:
+                   last_row: int) -> tuple[list[dict], set]:
         rows_data = []
         yellow_cells = set()
-        # 只读第一个数据块，遇到连续空行就结束
-        max_check = min(ws.max_row + 1, header_row + 1 + 200)  # 最多读 200 行
-        blank_run = 0
-        for row_idx in range(header_row + 1, max_check):
+        for row_idx in range(header_row + 1, last_row + 1):
             if _is_row_hidden(ws, row_idx):
                 continue
             row_values = {"_row": row_idx}
-            has_value = False
             sku_value = ""
             for col_idx, field_name in headers.items():
                 cell = ws.cell(row=row_idx, column=col_idx)
                 val = _cell_str(cell)
-                if val:
-                    has_value = True
                 if _is_yellow(cell):
                     yellow_cells.add((row_idx, field_name))
                 row_values[field_name] = val
                 if col_idx == min(headers.keys()):
                     sku_value = val
-            if not has_value:
-                blank_run += 1
-                if blank_run >= 5:  # 连续 5 行空行则停止
-                    break
-                continue
-            blank_run = 0
             if not sku_value or _is_na(sku_value):
                 continue
             rows_data.append(row_values)
         return rows_data, yellow_cells
 
-    def _detect_modules(self, ws, header_row: int, module_col_idx: Optional[int]) -> list[dict]:
+    def _detect_modules(self, ws, header_row: int, module_col_idx: Optional[int],
+                        last_row: int) -> list[dict]:
         if module_col_idx is None:
             return []
         modules = []
         current = None
         start = None
-        max_check = min(ws.max_row + 1, header_row + 1 + 200)
-        blank_run = 0
-        for row_idx in range(header_row + 1, max_check):
+        for row_idx in range(header_row + 1, last_row + 1):
             if _is_row_hidden(ws, row_idx):
                 continue
             cell = ws.cell(row=row_idx, column=module_col_idx)
             mv = _get_merged_range(ws, row_idx, module_col_idx) or _cell_str(cell)
             if not mv:
-                blank_run += 1
-                if blank_run >= 5:
-                    break
                 continue
-            blank_run = 0
             if current is None:
                 current, start = mv, row_idx
             elif mv != current:
                 modules.append({"moduleName": current, "rowStart": start, "rowEnd": row_idx - 1})
                 current, start = mv, row_idx
         if current is not None and start is not None:
-            modules.append({"moduleName": current, "rowStart": start, "rowEnd": row_idx - 1})
+            modules.append({"moduleName": current, "rowStart": start, "rowEnd": last_row})
         return modules
 
     def _group_by_module(self, rows_data: list[dict], modules: list[dict],
-                         module_col_idx: Optional[int],
-                         field_order: list[str]) -> list[dict]:
+                         module_col_idx: Optional[int]) -> list[dict]:
         if not modules:
             return [{"moduleName": "默认", "rowCount": len(rows_data), "rows": rows_data}]
         result = []
