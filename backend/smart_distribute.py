@@ -33,8 +33,13 @@ def _get_cell_color(cell) -> Optional[str]:
     if not fill or fill.fgColor is None:
         return None
     color = fill.fgColor
-    if color.type == "rgb" and color.rgb:
+    # 只处理手动设置的 RGB 填充色，忽略主题色和索引色
+    if color.type not in ("rgb",):
+        return None
+    if color.rgb:
         raw = str(color.rgb)
+        if raw.upper() in ("0", "00000000", "FFFFFF", "FFFFFFFF"):
+            return None
         if len(raw) == 8:
             return raw[2:].upper()
         return raw.upper()

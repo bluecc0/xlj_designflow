@@ -3261,59 +3261,65 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 const data = m.data;
                 const modeLabel = data.mode === 'patch' ? 'patch（增量）' : 'full（全量）';
                 const totalJobs = (data.jobs || []).length;
-                const totalModules = (data.jobs || []).reduce(function(acc, j) { return acc + (j.modules || []).length; }, 0);
                 const totalSlots = (data.jobs || []).reduce(function(acc, j) {
                   return acc + (j.modules || []).reduce(function(a, m) {
                     return a + (m.values || m.patches || []).length;
                   }, 0);
                 }, 0);
-                const yellowCount = data.mode === 'patch' ? totalSlots : 0;
                 var jsonStr = '';
-                try { jsonStr = JSON.stringify(data, null, 2); } catch(e) { jsonStr = '/* JSON 序列化失败 */'; }
+                try { jsonStr = JSON.stringify(data, null, 2); } catch(e) { jsonStr = ''; }
                 return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + (((data.jobs || []).length >= 2) ? '共 ' + (data.jobs || []).length + ' 个模板，已自动复制第一个' : ((data.jobs || []).length === 1 ? 'JSON 已自动复制到剪贴板' : '但未匹配到任何模板规则'))),
+                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + (totalJobs + ' 个模块，' + totalSlots + ' 个槽位，' + (m.copied ? 'JSON 已自动复制到剪贴板' : 'JSON 已自动复制'))),
                   data.warnings && data.warnings.length > 0 ? React.createElement('div', {
                     style: { padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }
                   }, data.warnings.map(function(w, wi) { return React.createElement('div', { key: wi }, '⚠ ' + w); })) : null,
-                  (data.jobs || []).map(function(job, ji) {
-                    var singleJson = (m.jobJsons || [])[ji] || '';
-                    var jobModeLabel = data.mode === 'patch' ? 'patch（增量）' : 'full（全量）';
-                    var jobModules = (job.modules || []).length;
-                    var jobSlots = (job.modules || []).reduce(function(a, m) { return a + (m.values || m.patches || []).length; }, 0);
-                    var jobYellow = data.mode === 'patch' ? jobSlots : 0;
-                    return React.createElement('div', { key: ji, style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden', marginTop: ji > 0 ? 4 : 0 } },
-                      React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
-                        React.createElement('div', { style: { width: 20, height: 20, borderRadius: 5, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' } },
-                          React.createElement(I.file, { size: 11 })
+                  data.mode === 'patch'
+                    ? React.createElement('div', { style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden', marginTop: 4 } },
+                        React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
+                          React.createElement('div', { style: { width: 20, height: 20, borderRadius: 5, background: 'var(--warn-soft)', color: 'var(--warn)', display: 'grid', placeItems: 'center' } },
+                            React.createElement(I.file, { size: 11 })
+                          ),
+                          React.createElement('div', { style: { flex: 1 } },
+                            React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' } }, '增量修改（patch）'),
+                            React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)' } }, totalSlots + ' 个标黄槽位')
+                          )
                         ),
-                        React.createElement('div', { style: { flex: 1 } },
-                          React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' } }, job.templateName || job.sheetName || ('模板 ' + (ji + 1))),
-                          React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)' } }, jobModeLabel + ' · ' + jobModules + ' 个模块 · ' + jobSlots + ' 个槽位')
-                        )
-                      ),
-                      React.createElement('div', { style: { padding: '10px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11.5 } },
-                        React.createElement('div', { style: { color: 'var(--ink)' } }, 'Sheet: ' + job.sheetName),
-                        React.createElement('div', { style: { color: 'var(--ink-2)' } }, '模块: ' + jobModules + ' 个'),
-                        React.createElement('div', { style: { color: 'var(--ink-2)' } }, '替换槽位: ' + jobSlots + ' 个'),
-                        jobYellow > 0 ? React.createElement('div', { style: { color: 'var(--warn)' } }, '标黄字段: ' + jobYellow + ' 个') : null,
-                        data.warnings && data.warnings.length > 0 && ji === 0 ? React.createElement('div', { style: { color: 'var(--warn)', fontSize: 10.5, lineHeight: 1.4, marginTop: 2 } },
-                          data.warnings.map(function(w, wi) { return React.createElement('div', { key: wi }, '⚠ ' + w); })
-                        ) : null
-                      ),
-                      React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
-                        React.createElement(CopyButton2, { jsonStr: singleJson, label: job.templateName || job.sheetName })
-                      ),
-                      React.createElement('pre', {
-                        style: {
-                          margin: 0, padding: '10px 12px', fontSize: 10,
-                          color: 'var(--ink-2)', overflow: 'auto', maxHeight: 250,
-                          borderTop: '1px solid var(--line-2)',
-                          whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-                          fontFamily: 'Menlo, Monaco, monospace',
-                        }
-                      }, singleJson.slice(0, 2500) + (singleJson.length > 2500 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
-                    );
-                  })
+                        React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
+                          React.createElement(CopyButton2, { jsonStr: jsonStr })
+                        ),
+                        React.createElement('pre', {
+                          style: {
+                            margin: 0, padding: '10px 12px', fontSize: 10,
+                            color: 'var(--ink-2)', overflow: 'auto', maxHeight: 250,
+                            borderTop: '1px solid var(--line-2)',
+                            whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                            fontFamily: 'Menlo, Monaco, monospace',
+                          }
+                        }, jsonStr.slice(0, 2500) + (jsonStr.length > 2500 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
+                      )
+                    : React.createElement('div', { style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden' } },
+                        React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
+                          React.createElement('div', { style: { width: 20, height: 20, borderRadius: 5, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' } },
+                            React.createElement(I.file, { size: 11 })
+                          ),
+                          React.createElement('div', { style: { flex: 1 } },
+                            React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' } }, data.source ? data.source.fileName : '表格'),
+                            React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)' } }, totalJobs + ' 个模块 · ' + totalSlots + ' 个槽位')
+                          )
+                        ),
+                        React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
+                          React.createElement(CopyButton2, { jsonStr: jsonStr })
+                        ),
+                        React.createElement('pre', {
+                          style: {
+                            margin: 0, padding: '10px 12px', fontSize: 10,
+                            color: 'var(--ink-2)', overflow: 'auto', maxHeight: 250,
+                            borderTop: '1px solid var(--line-2)',
+                            whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                            fontFamily: 'Menlo, Monaco, monospace',
+                          }
+                        }, jsonStr.slice(0, 2500) + (jsonStr.length > 2500 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
+                      )
                 );
               })() : m.type === 'generating' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
