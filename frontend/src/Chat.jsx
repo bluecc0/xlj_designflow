@@ -1013,7 +1013,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 var jsonStr = '';
                 try { jsonStr = JSON.stringify(data, null, 2); } catch(e) { jsonStr = ''; }
                 return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + (totalJobs + ' 个模块，' + totalSlots + ' 个槽位，' + (m.copied ? 'JSON 已自动复制到剪贴板' : 'JSON 已自动复制'))),
+                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + (data.mode === 'patch' ? (totalSlots + ' 个增量槽位，') : (totalJobs + ' 个 sheet，' + totalSlots + ' 个槽位，')) + (m.copied ? (data.mode === 'patch' ? 'JSON 已自动复制到剪贴板' : '已自动复制第 1 个 sheet JSON') : 'JSON 已生成')),
                   data.warnings && data.warnings.length > 0 ? React.createElement('div', {
                     style: { padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }
                   }, data.warnings.map(function(w, wi) { return React.createElement('div', { key: wi }, '⚠ ' + w); })) : null,
@@ -1041,28 +1041,51 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                           }
                         }, jsonStr.slice(0, 2500) + (jsonStr.length > 2500 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
                       )
-                    : React.createElement('div', { style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden' } },
-                        React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
-                          React.createElement('div', { style: { width: 20, height: 20, borderRadius: 5, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' } },
-                            React.createElement(I.file, { size: 11 })
-                          ),
-                          React.createElement('div', { style: { flex: 1 } },
-                            React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' } }, data.source ? data.source.fileName : '表格'),
-                            React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)' } }, totalJobs + ' 个模块 · ' + totalSlots + ' 个槽位')
-                          )
-                        ),
-                        React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
-                          React.createElement(CopyButton2, { jsonStr: jsonStr })
-                        ),
-                        React.createElement('pre', {
-                          style: {
-                            margin: 0, padding: '10px 12px', fontSize: 10,
-                            color: 'var(--ink-2)', overflow: 'auto', maxHeight: 250,
-                            borderTop: '1px solid var(--line-2)',
-                            whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-                            fontFamily: 'Menlo, Monaco, monospace',
+                    : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                        (data.jobs || []).map(function(job, ji) {
+                          var sheetJson = (m.jobJsons && m.jobJsons[ji]) || '';
+                          if (!sheetJson) {
+                            try {
+                              sheetJson = JSON.stringify({
+                                schemaVersion: data.schemaVersion,
+                                mode: data.mode,
+                                source: data.source,
+                                defaults: data.defaults,
+                                jobs: [job],
+                              }, null, 2);
+                            } catch(e) { sheetJson = ''; }
                           }
-                        }, jsonStr.slice(0, 2500) + (jsonStr.length > 2500 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
+                          var jobSlots = (job.modules || []).reduce(function(a, mod) {
+                            return a + (mod.values || mod.patches || []).length;
+                          }, 0);
+                          var jobModules = (job.modules || []).length;
+                          return React.createElement('div', {
+                            key: job.sheetName || ji,
+                            style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden' }
+                          },
+                            React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
+                              React.createElement('div', { style: { width: 20, height: 20, borderRadius: 5, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' } },
+                                React.createElement(I.file, { size: 11 })
+                              ),
+                              React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                                React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, job.sheetName || job.templateName || ('Sheet ' + (ji + 1))),
+                                React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)' } }, jobModules + ' 个模块 · ' + jobSlots + ' 个槽位')
+                              )
+                            ),
+                            React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
+                              React.createElement(CopyButton2, { jsonStr: sheetJson })
+                            ),
+                            React.createElement('pre', {
+                              style: {
+                                margin: 0, padding: '10px 12px', fontSize: 10,
+                                color: 'var(--ink-2)', overflow: 'auto', maxHeight: 180,
+                                borderTop: '1px solid var(--line-2)',
+                                whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                                fontFamily: 'Menlo, Monaco, monospace',
+                              }
+                            }, sheetJson.slice(0, 1400) + (sheetJson.length > 1400 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
+                          );
+                        })
                       )
                 );
               })() : m.type === 'generating' ? (
