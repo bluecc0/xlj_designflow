@@ -1850,7 +1850,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     e.preventDefault();
     const files = fileItems.map(it => it.getAsFile()).filter(Boolean);
     const images = files.filter(f => f && f.type.startsWith('image/'));
-    const excels = files.filter(f => f && /\.(xlsx|xls|csv)$/i.test(f.name));
+    const excels = files.filter(f => f && /\.(xlsx|xlsm)$/i.test(f.name));
     if (excels.length && selectedWorkflow === 'distribute' && onSmartDistribute) {
       onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute paste error:', err); });
     } else if (images.length) {
@@ -1939,7 +1939,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     if (selectedWorkflow === 'distribute') {
       // 智能铺货模式支持 Excel 拖入
       var excels = Array.from(files || []).filter(function(f) {
-        return /\.(xlsx|xls|csv)$/i.test(f.name);
+        return /\.(xlsx|xlsm)$/i.test(f.name);
       });
       if (excels.length && onSmartDistribute) {
         onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute drop error:', err); });
@@ -2050,7 +2050,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           : selectedWorkflow === 'compose'
             ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁'
             : selectedWorkflow === 'distribute'
-              ? '上传或拖入 Excel 表格，自动解析为铺货 JSON'
+              ? '上传或拖入 Excel（.xlsx / .xlsm），自动解析为铺货 JSON'
               : selectedWorkflow === 'download'
               ? '输入花瓣项目 ID 或链接，格式会自动识别'
               : '忘了怎么用？试试直接提问吧';
@@ -2461,7 +2461,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
             松手添加文件
           </div>
           <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>
-            支持图片和 Excel 表格
+            支持图片和 Excel（.xlsx / .xlsm）
           </div>
         </div>
       )}
@@ -2598,7 +2598,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           type="file"
           ref={fileInputRef}
           onChange={handleFileSelect}
-          accept="image/*,.csv,.xlsx,.xls"
+          accept="image/*,.xlsx,.xlsm"
           multiple
           style={{ display: 'none' }}
         />

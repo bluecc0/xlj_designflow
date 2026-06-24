@@ -640,7 +640,7 @@ def _extract_subject_description(text: str) -> str:
     if not raw:
         return ""
     patterns = (
-        r"(?:画面主体|产品主体|主体|主视觉)\s*(?:是|为|[:：])?\s*([^，。；;\n]{2,80})",
+        r"(?:画面主体|产品主体|主体|主视觉)\s*(?:是|为|[:：])\s*([^，。；;\n]{2,80})",
         r"(?:画面以|主画面是|主图是)\s*([^，。；;\n]{2,80})",
     )
     for pattern in patterns:

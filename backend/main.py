@@ -1355,10 +1355,15 @@ async def smart_distribute_endpoint(file: UploadFile = File(...)):
     """
     from .smart_distribute import SmartDistributor
 
+    filename = file.filename or "upload.xlsx"
+    lowered = filename.lower()
+    if not (lowered.endswith(".xlsx") or lowered.endswith(".xlsm")):
+        raise HTTPException(400, "智能铺货当前仅支持 .xlsx / .xlsm 文件")
+
     content = await file.read()
     try:
         distributor = SmartDistributor()
-        result = distributor.process(content, file.filename or "upload.xlsx")
+        result = distributor.process(content, filename)
         return result
     except Exception as e:
         raise HTTPException(500, f"智能铺货解析失败: {e}")
