@@ -143,6 +143,18 @@ class GridExportRequest(BaseModel):
     cols: int = 3
 
 
+# ─── 智能铺货 ────────────────────────────────────────────────────────────────
+
+
+class SmartDistributeResponse(BaseModel):
+    schemaVersion: str = "1.0"
+    mode: str  # "full" | "patch"
+    source: dict
+    defaults: dict
+    jobs: list
+    warnings: list[str] = Field(default_factory=list)
+
+
 # ─── 特殊品合成 ──────────────────────────────────────────────────────────────
 
 

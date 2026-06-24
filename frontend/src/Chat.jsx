@@ -190,6 +190,29 @@ const CopyableTextBubble = ({ who, text, markdown }) => {
   );
 };
 
+// 带反馈的复制按钮组件
+var CopyButton2 = function(props) {
+  var _useState = React.useState(false);
+  var copied = _useState[0];
+  var setCopied = _useState[1];
+  return React.createElement('button', {
+    onClick: function() {
+      try {
+        navigator.clipboard.writeText(props.jsonStr);
+        setCopied(true);
+        setTimeout(function() { setCopied(false); }, 2000);
+      } catch(e) {}
+    },
+    style: {
+      fontSize: 11, padding: '5px 14px', borderRadius: 5,
+      background: copied ? 'var(--ok)' : 'var(--ink)',
+      color: 'white', border: 'none',
+      cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4,
+      transition: 'background 200ms',
+    }
+  }, React.createElement(copied ? I.check : I.copy, { size: 10 }), copied ? ('已复制 ' + (props.label || '')) : ('复制 ' + (props.label || 'JSON')));
+};
+
 const FileCard = ({ name, size, type }) => (
   <div style={{
     display: 'flex', alignItems: 'center', gap: 10,
@@ -407,21 +430,55 @@ const AnalyzedSubject = () => (
 
 // ---------- BriefCard（Agent 模式 CONFIRM 阶段的创意方案卡片）----------
 
-const BriefCard = ({ brief, completeness }) => {
-  if (!brief) return null;
+const BriefCard = ({ brief, contract, completeness }) => {
+  if (!brief && !contract) return null;
   const rows = [];
-  if (brief.concept) rows.push(['核心方案', brief.concept]);
-  if (Array.isArray(brief.visualElements) && brief.visualElements.length > 0) {
-    rows.push(['视觉要素', brief.visualElements.join(' · ')]);
+  if (contract) {
+    const task = contract.task || {};
+    const subject = contract.subject || {};
+    const composition = contract.composition || {};
+    const visualStyle = contract.visualStyle || {};
+    const copy = contract.copy || {};
+    const mainTitle = copy.mainTitle || {};
+    const subtitle = copy.subtitle || {};
+    const constraints = contract.constraints || {};
+    const acceptance = Array.isArray(contract.acceptanceCriteria) ? contract.acceptanceCriteria : [];
+    const channels = Array.isArray(task.channel) ? task.channel.filter(Boolean) : [];
+    const palette = Array.isArray(visualStyle.colorPalette) ? visualStyle.colorPalette.filter(Boolean) : [];
+    const mustInclude = Array.isArray(constraints.mustInclude) ? constraints.mustInclude.filter(Boolean) : [];
+    const avoid = Array.isArray(constraints.avoid) ? constraints.avoid.filter(Boolean) : [];
+    if (task.purpose) rows.push(['任务目的', task.purpose]);
+    if (subject.description || subject.category) rows.push(['主体内容', subject.description || subject.category]);
+    if (composition.aspectRatio) rows.push(['画幅比例', composition.aspectRatio]);
+    if (composition.layout) rows.push(['构图方式', composition.layout]);
+    if (visualStyle.overall) rows.push(['整体风格', visualStyle.overall]);
+    if (visualStyle.backgroundStyle) rows.push(['背景风格', visualStyle.backgroundStyle]);
+    if (visualStyle.lighting) rows.push(['光线方向', visualStyle.lighting]);
+    if (composition.safeArea) rows.push(['安全线', composition.safeArea]);
+    if (mainTitle.text) rows.push(['主标题', mainTitle.text]);
+    if (mainTitle.fontStyle) rows.push(['标题字体', mainTitle.fontStyle]);
+    if (subtitle.text) rows.push(['副标题', subtitle.text]);
+    if (subtitle.fontStyle) rows.push(['副标字体', subtitle.fontStyle]);
+    if (channels.length) rows.push(['投放渠道', channels.join(' / ')]);
+    if (palette.length) rows.push(['色彩方向', palette.join(' · ')]);
+    if (mustInclude.length) rows.push(['必须包含', mustInclude.join(' · ')]);
+    if (avoid.length) rows.push(['避免项', avoid.join(' · ')]);
+    if (acceptance.length) rows.push(['验收标准', acceptance.join(' · ')]);
+  } else {
+    if (brief.concept) rows.push(['核心方案', brief.concept]);
+    if (Array.isArray(brief.visualElements) && brief.visualElements.length > 0) {
+      rows.push(['视觉要素', brief.visualElements.join(' · ')]);
+    }
+    if (brief.copyText) rows.push(['画面文案', brief.copyText]);
+    if (brief.subtitleText) rows.push(['副标题', brief.subtitleText]);
+    if (brief.aspectRatio) rows.push(['画幅比例', brief.aspectRatio]);
+    if (brief.style) rows.push(['风格', brief.style]);
+    if (brief.mood) rows.push(['氛围', brief.mood]);
+    if (brief.colorDirection) rows.push(['色彩方向', brief.colorDirection]);
   }
-  if (brief.copyText) rows.push(['画面文案', brief.copyText]);
-  if (brief.aspectRatio) rows.push(['画幅比例', brief.aspectRatio]);
-  if (brief.style) rows.push(['风格', brief.style]);
-  if (brief.mood) rows.push(['氛围', brief.mood]);
-  if (brief.colorDirection) rows.push(['色彩方向', brief.colorDirection]);
 
   const score = completeness && typeof completeness.score === 'number' ? completeness.score : null;
-  const isConfirmed = brief.confirmedByUser;
+  const isConfirmed = brief && brief.confirmedByUser;
 
   return (
     <div style={{
@@ -721,9 +778,11 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
             {m.type === 'ai-image-generating' ? (() => {
             const fmtSecs = s => { const mm = Math.floor(s/60), ss = s%60; return mm > 0 ? mm+'m '+String(ss).padStart(2,'0')+'s' : ss+'s'; };
             const promptPayload = m.promptPayload || null;
-            const promptPositive = promptPayload && promptPayload.positive ? promptPayload.positive : m.prompt;
+            const promptInstruction = promptPayload && promptPayload.instruction ? promptPayload.instruction : (promptPayload && promptPayload.positive ? promptPayload.positive : m.prompt);
             const promptNegative = promptPayload && promptPayload.negative ? promptPayload.negative : '';
             const promptParams = promptPayload && promptPayload.parameters ? promptPayload.parameters : null;
+            const promptConstraints = promptPayload && promptPayload.constraints ? promptPayload.constraints : null;
+            const promptReasoning = promptPayload && promptPayload.reasoningForUser ? promptPayload.reasoningForUser : '';
             const fullImageUrl = m.imageUrl || '';
             const displayImageUrlRaw = m.previewUrl || m.imagePreviewUrl || m.imageUrl || '';
             const displayImageUrl = displayImageUrlRaw && displayImageUrlRaw.startsWith('/')
@@ -751,7 +810,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     : null
               ),
               m.status !== 'failed' && m.status !== 'done' && React.createElement(InlineRefStrip, { items: m.refPreviews }),
-              agentEnabled && promptPositive && React.createElement('div', {
+              agentEnabled && promptInstruction && React.createElement('div', {
                 style: {
                   padding: '9px 10px',
                   borderRadius: 8,
@@ -765,16 +824,28 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 React.createElement('div', {
                   className: 'mono',
                   style: { fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }
-                }, 'Prompt 标准'),
+                }, '执行标准'),
                 React.createElement('div', { style: { fontSize: 11.2, color: 'var(--ink-2)', lineHeight: 1.45 } },
-                  String(promptPositive).slice(0, 360),
-                  String(promptPositive).length > 360 ? '...' : ''
+                  String(promptInstruction).slice(0, 360),
+                  String(promptInstruction).length > 360 ? '...' : ''
                 ),
-                promptNegative ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.4 } },
-                  '避免：', String(promptNegative).slice(0, 220), String(promptNegative).length > 220 ? '...' : ''
+                promptReasoning ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.4 } },
+                  '说明：', String(promptReasoning).slice(0, 180), String(promptReasoning).length > 180 ? '...' : ''
+                ) : null,
+                promptConstraints && Array.isArray(promptConstraints.mustInclude) && promptConstraints.mustInclude.length > 0 ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-2)', lineHeight: 1.4 } },
+                  '必须包含：', promptConstraints.mustInclude.join('； ')
+                ) : null,
+                promptConstraints && Array.isArray(promptConstraints.preserve) && promptConstraints.preserve.length > 0 ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-2)', lineHeight: 1.4 } },
+                  '保留：', promptConstraints.preserve.join('； ')
+                ) : null,
+                ((promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0) || promptNegative) ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.4 } },
+                  '避免：',
+                  promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0
+                    ? promptConstraints.avoid.join('； ')
+                    : (String(promptNegative).slice(0, 220) + (String(promptNegative).length > 220 ? '...' : ''))
                 ) : null,
                 promptParams ? React.createElement('div', { className: 'mono', style: { fontSize: 10, color: 'var(--ink-3)' } },
-                  'size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认'
+                  'ratio=', promptParams.aspectRatio || promptParams.size || 'auto', ' · size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认'
                 ) : null
               ),
               m.status === 'done' && fullImageUrl && React.createElement('div', null,
@@ -798,6 +869,14 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                         onClick: function() { onPublishInspiration(m); },
                         style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ink-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
                       }, React.createElement(I.sparkles, { size: 10 }), '发布到灵感')
+                )
+              ),
+              m.status === 'done' && m.vlmPending && React.createElement('div', {
+                style: { marginTop: 8, padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--line-2)' }
+              },
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+                  React.createElement(I.eye, { size: 11, style: { color: 'var(--ink-3)' } }),
+                  React.createElement('span', { style: { fontSize: 11, color: 'var(--ink-2)' } }, '图片已生成，VLM 质检中...')
                 )
               ),
               // VLM 质检反馈
@@ -897,6 +976,95 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     </div>
                   </div>
                 );
+              })() : m.type === 'smart-distribute-loading' ? (
+                <div style={{
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  background: 'var(--panel)',
+                  border: '1px solid var(--line-2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                }}>
+                  <div style={{
+                    width: 18, height: 18, borderRadius: 99,
+                    border: '2px solid var(--line-2)',
+                    borderTopColor: 'var(--accent)',
+                    animation: 'spin 0.8s linear infinite',
+                    flexShrink: 0,
+                  }}/>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 12.5, color: 'var(--ink)', fontWeight: 600 }}>正在解析表格</div>
+                    <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 2 }}>
+                      {m.fileName ? ('已接收 ' + m.fileName + '，正在识别 sheet、标黄区域和替换字段…') : '正在识别 sheet、标黄区域和替换字段…'}
+                    </div>
+                  </div>
+                  {m.startedAt ? <ChatTimer startedAt={m.startedAt}/> : null}
+                </div>
+              ) : m.type === 'smart-distribute' ? (() => {
+                const data = m.data;
+                const modeLabel = data.mode === 'patch' ? 'patch（增量）' : 'full（全量）';
+                const totalJobs = (data.jobs || []).length;
+                const totalSlots = (data.jobs || []).reduce(function(acc, j) {
+                  return acc + (j.modules || []).reduce(function(a, m) {
+                    return a + (m.values || m.patches || []).length;
+                  }, 0);
+                }, 0);
+                var jsonStr = '';
+                try { jsonStr = JSON.stringify(data, null, 2); } catch(e) { jsonStr = ''; }
+                return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + (totalJobs + ' 个模块，' + totalSlots + ' 个槽位，' + (m.copied ? 'JSON 已自动复制到剪贴板' : 'JSON 已自动复制'))),
+                  data.warnings && data.warnings.length > 0 ? React.createElement('div', {
+                    style: { padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }
+                  }, data.warnings.map(function(w, wi) { return React.createElement('div', { key: wi }, '⚠ ' + w); })) : null,
+                  data.mode === 'patch'
+                    ? React.createElement('div', { style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden', marginTop: 4 } },
+                        React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
+                          React.createElement('div', { style: { width: 20, height: 20, borderRadius: 5, background: 'var(--warn-soft)', color: 'var(--warn)', display: 'grid', placeItems: 'center' } },
+                            React.createElement(I.file, { size: 11 })
+                          ),
+                          React.createElement('div', { style: { flex: 1 } },
+                            React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' } }, '增量修改（patch）'),
+                            React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)' } }, totalSlots + ' 个标黄槽位')
+                          )
+                        ),
+                        React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
+                          React.createElement(CopyButton2, { jsonStr: jsonStr })
+                        ),
+                        React.createElement('pre', {
+                          style: {
+                            margin: 0, padding: '10px 12px', fontSize: 10,
+                            color: 'var(--ink-2)', overflow: 'auto', maxHeight: 250,
+                            borderTop: '1px solid var(--line-2)',
+                            whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                            fontFamily: 'Menlo, Monaco, monospace',
+                          }
+                        }, jsonStr.slice(0, 2500) + (jsonStr.length > 2500 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
+                      )
+                    : React.createElement('div', { style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden' } },
+                        React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
+                          React.createElement('div', { style: { width: 20, height: 20, borderRadius: 5, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' } },
+                            React.createElement(I.file, { size: 11 })
+                          ),
+                          React.createElement('div', { style: { flex: 1 } },
+                            React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' } }, data.source ? data.source.fileName : '表格'),
+                            React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)' } }, totalJobs + ' 个模块 · ' + totalSlots + ' 个槽位')
+                          )
+                        ),
+                        React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
+                          React.createElement(CopyButton2, { jsonStr: jsonStr })
+                        ),
+                        React.createElement('pre', {
+                          style: {
+                            margin: 0, padding: '10px 12px', fontSize: 10,
+                            color: 'var(--ink-2)', overflow: 'auto', maxHeight: 250,
+                            borderTop: '1px solid var(--line-2)',
+                            whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                            fontFamily: 'Menlo, Monaco, monospace',
+                          }
+                        }, jsonStr.slice(0, 2500) + (jsonStr.length > 2500 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
+                      )
+                );
               })() : m.type === 'generating' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -944,6 +1112,18 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     {m.error}
                   </div>
                 )}
+              </div>
+            ) : m.type === 'file-attach' ? (
+              <div style={{
+                padding: '8px 10px', borderRadius: 8,
+                background: 'var(--panel)', border: '1px solid var(--line-2)',
+                display: 'flex', alignItems: 'center', gap: 8, fontSize: 12,
+              }}>
+                <I.file size={14} style={{ color: 'var(--accent)', flexShrink: 0 }}/>
+                <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{m.text || '文件'}</span>
+                <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, marginLeft: 'auto' }}>
+                  已上传
+                </span>
               </div>
             ) : m.type === 'proxy-download-choice' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1008,7 +1188,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     animation: 'pulse 1.2s ease-in-out infinite',
                   }}/>
                   <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
-                    {m.meta === 'Agent' ? getThinkingPreview(m.thinkingStatus || m.text) : '让我想想...'}
+                    {m.meta === 'Agent' ? getThinkingPreview(m.thinkingStatus || m.text) : (m.text || '让我想想...')}
                   </span>
                 </div>
                 {m.thinking ? <ThinkingBlock text={m.thinking}/> : null}
@@ -1021,8 +1201,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 ) : null}
                 <CopyableTextBubble who={m.who} text={m.text} markdown/>
                 {/* Agent CONFIRM 阶段的创意方案卡片 */}
-                {m.brief ? (
-                  <BriefCard brief={m.brief} completeness={m.completeness}/>
+                {m.brief || m.contract ? (
+                  <BriefCard brief={m.brief} contract={m.contract} completeness={m.completeness}/>
                 ) : null}
                 {/* 快捷选项按钮：ASK 的 choices 或 CONFIRM 的 quickActions */}
                 {(Array.isArray(m.choices) && m.choices.length > 0) || (Array.isArray(m.quickActions) && m.quickActions.length > 0) ? (
@@ -1101,6 +1281,10 @@ const normalizeReferenceUrl = function(rawUrl) {
   if (!value) return '';
   try {
     const parsed = new URL(value, window.location.origin);
+    const publicPrefixes = ['/ai-images/', '/results/', '/output/', '/avatars/'];
+    if (publicPrefixes.some(function(prefix) { return parsed.pathname.indexOf(prefix) === 0; })) {
+      return parsed.pathname + parsed.search + parsed.hash;
+    }
     const localHosts = ['localhost', '127.0.0.1', '[::1]', '::1'];
     const parsedHost = String(parsed.hostname || '').toLowerCase();
     if (localHosts.includes(parsedHost)) {
@@ -1131,7 +1315,7 @@ const CHAT_INSPIRATION_CATEGORIES = [
 
 // ---------- Composer ----------
 
-const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
+const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
   const [text, setText] = React.useState('');
   const [lockedCommand, setLockedCommand] = React.useState('');
   const [files, setFiles] = React.useState([]);
@@ -1139,6 +1323,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
   const [aiProvider, setAiProvider] = React.useState('apimart');
+  const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [manualRefImages, setManualRefImages] = React.useState([]);
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
@@ -1164,6 +1349,13 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     if (clean === '/特殊品' || clean === '/特殊品（完整）') return 'special';
     if (clean === '/花瓣下载') return 'download';
     return 'chat';
+  }, []);
+  const normalizeBatchCount = React.useCallback(function(value) {
+    const digits = String(value || '').replace(/\D+/g, '');
+    if (!digits) return 1;
+    const parsed = parseInt(digits, 10);
+    if (!Number.isFinite(parsed)) return 1;
+    return Math.max(1, Math.min(4, parsed));
   }, []);
 
   const [taskDefsKey, setTaskDefsKey] = React.useState(0);
@@ -1418,13 +1610,14 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     (lockedCommand === '/Gpt image 2' || lockedCommand === '/Nano Banana pro') ? 'ai-image' :
     lockedCommand === '/特殊品（完整）' ? 'special_full' :
     lockedCommand === '/特殊品' ? 'special' :
-    selectedWorkflow === 'compose' ? 'compose' : 'chat';
+    selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
   const aiOptionMap = AI_OPTIONS;
   const AI_RATIOS = Object.keys(aiOptionMap);
   const currentAiRatioMeta = aiOptionMap[aiRatio] || aiOptionMap[AI_RATIOS[0]];
-  const allowedAiQualities = currentAiRatioMeta ? currentAiRatioMeta.qualities : AI_QUALITIES;
+  const _rawQualities = currentAiRatioMeta ? currentAiRatioMeta.qualities : AI_QUALITIES;
+  const allowedAiQualities = _rawQualities;
   const currentAiPx = currentAiRatioMeta && currentAiRatioMeta.px ? (currentAiRatioMeta.px[aiQuality] || currentAiRatioMeta.preview) : '';
   const aiImageSize = aiRatio;
 
@@ -1437,8 +1630,12 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       if (!AI_OPTIONS[aiRatio].qualities.includes(aiQuality)) {
         setAiQuality(AI_OPTIONS[aiRatio].qualities[0]);
       }
+      // Sub2API 不支持 Nano Banana，切换时自动回默认
+      if (activeAiModel === 'nano-banana-pro' && aiProvider === 'sub2api') {
+        setAiProvider('apimart');
+      }
     }
-  }, [activeAiModel, aiQuality, aiRatio]);
+  }, [activeAiModel, aiQuality, aiRatio, aiProvider]);
 
   const selectWorkflow = React.useCallback(function(next) {
     if (agentEnabled) return;
@@ -1492,8 +1689,17 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     const message = lockedCommand ? (lockedCommand + (body ? ' ' + body : '')) : body;
     if (!message || isLoading) return;
     const imagesToSend = [...refImages];
+    const normalizedBatchCount = normalizeBatchCount(aiBatchCount);
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
-    onSend(message, imagesToSend, { size: aiImageSize, resolution: aiQuality, provider: aiProvider });
+    onSend(message, imagesToSend, {
+      size: aiImageSize,
+      resolution: aiQuality,
+      provider: aiProvider,
+      workflow: selectedWorkflow,
+      lockedCommand: lockedCommand,
+      batchCount: selectedWorkflow === 'ai-image' ? normalizedBatchCount : 1,
+    });
+    setAiBatchCount(String(normalizedBatchCount));
     setText('');
     clearRefImages();
   };
@@ -1622,10 +1828,16 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     if (images.length) addImageFiles(images);
     if (others.length && !agentEnabled) {
       const file = others[0];
-      const fileObj = { name: file.name, size: formatFileSize(file.size), file, imageType };
-      setFiles(prev => [...prev, fileObj]);
-      if (onParseTable) {
-        onParseTable(file, file.name, imageType).catch(err => console.error('Parse table error:', err));
+      if (selectedWorkflow === 'distribute') {
+        if (onSmartDistribute) {
+          onSmartDistribute(file, file.name).catch(err => console.error('Smart distribute error:', err));
+        }
+      } else {
+        const fileObj = { name: file.name, size: formatFileSize(file.size), file, imageType };
+        setFiles(prev => [...prev, fileObj]);
+        if (onParseTable) {
+          onParseTable(file, file.name, imageType).catch(err => console.error('Parse table error:', err));
+        }
       }
     }
     e.target.value = '';
@@ -1633,11 +1845,19 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
 
   const handlePaste = (e) => {
     const items = Array.from(e.clipboardData?.items || []);
-    const imageItems = items.filter(it => it.kind === 'file' && it.type.startsWith('image/'));
-    if (!imageItems.length) return;
+    const fileItems = items.filter(it => it.kind === 'file');
+    if (!fileItems.length) return;
     e.preventDefault();
-    const files = imageItems.map(it => it.getAsFile()).filter(Boolean);
-    addImageFiles(files);
+    const files = fileItems.map(it => it.getAsFile()).filter(Boolean);
+    const images = files.filter(f => f && f.type.startsWith('image/'));
+    const excels = files.filter(f => f && /\.(xlsx|xls|csv)$/i.test(f.name));
+    if (excels.length && selectedWorkflow === 'distribute' && onSmartDistribute) {
+      onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute paste error:', err); });
+    } else if (images.length) {
+      addImageFiles(images);
+    } else if (excels.length && onSmartDistribute) {
+      onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute paste error:', err); });
+    }
   };
 
   const removeRefImage = (idx) => {
@@ -1715,8 +1935,20 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     e.preventDefault();
     dragCounterRef.current = 0;
     setIsDraggingOver(false);
-    const files = e.dataTransfer.files;
-    if (files && files.length) addImageFiles(files);
+    var files = e.dataTransfer.files;
+    if (selectedWorkflow === 'distribute') {
+      // 智能铺货模式支持 Excel 拖入
+      var excels = Array.from(files || []).filter(function(f) {
+        return /\.(xlsx|xls|csv)$/i.test(f.name);
+      });
+      if (excels.length && onSmartDistribute) {
+        onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute drop error:', err); });
+      } else {
+        if (files && files.length) addImageFiles(files);
+      }
+    } else {
+      if (files && files.length) addImageFiles(files);
+    }
   };
 
   const clearComposer = React.useCallback(() => {
@@ -1751,9 +1983,9 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       { id: 'chat', label: '默认', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat' },
       { id: 'gpt-image', label: 'GPT Image 2', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', cmd: '/Gpt image 2', available: available('/Gpt image 2') },
       { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro', available: available('/Nano Banana pro') },
-      { id: 'compose', label: '智能铺品', desc: '上传表格并匹配本地图库', iconKey: 'grid', workflow: 'compose' },
+      { id: 'distribute', label: '智能铺货', desc: '上传表格，自动解析为铺货 JSON', iconKey: 'grid', workflow: 'distribute' },
       { id: 'special', label: '特殊品', desc: '使用特殊品模板合成结果', iconKey: 'layers', cmd: template && template.is_special_full ? '/特殊品（完整）' : '/特殊品', available: available(template && template.is_special_full ? '/特殊品（完整）' : '/特殊品') },
-      { id: 'download', label: '花瓣下载', desc: '下载花瓣素材或指定格式', iconKey: 'download', cmd: '/花瓣下载', available: available('/花瓣下载') },
+      { id: 'download', label: '花瓣下载', desc: '输入花瓣 ID，自动识别可下载格式', iconKey: 'download', cmd: '/花瓣下载', available: available('/花瓣下载') },
     ];
   }, [template && template.is_special_full, taskDefsKey]);
   const getTaskIcon = React.useCallback(function(iconKey) {
@@ -1767,6 +1999,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         ? '特殊品'
         : selectedWorkflow === 'compose'
           ? '智能铺品'
+          : selectedWorkflow === 'distribute'
+            ? '智能铺货'
           : selectedWorkflow === 'download'
             ? '花瓣下载'
             : '默认';
@@ -1774,7 +2008,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     ? 'image'
     : activeMode === 'special' || activeMode === 'special_full'
       ? 'layers'
-      : selectedWorkflow === 'compose'
+      : selectedWorkflow === 'compose' || selectedWorkflow === 'distribute'
         ? 'grid'
         : selectedWorkflow === 'download'
           ? 'download'
@@ -1783,7 +2017,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
   const activeTaskIconSrc = activeMode === 'ai-image'
     ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
     : null;
-  const providerLabel = aiProvider === 'zenmux' ? '官方' : '默认';
+  const providerLabel = aiProvider === 'zenmux' ? '官方' : aiProvider === 'sub2api' ? '订阅' : '默认';
   const modeParamLabel = activeMode === 'ai-image'
     ? (aiRatio + ' · ' + aiQuality)
     : activeMode === 'special_full'
@@ -1792,12 +2026,15 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         ? '线路 普通'
         : selectedWorkflow === 'compose'
           ? (imageType ? ('素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType)) : '')
-          : '';
+          : selectedWorkflow === 'distribute'
+            ? ''
+            : '';
   const selectedSettingBits = [
     agentEnabled ? 'Agent' : activeTaskLabel,
     agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? providerLabel : ''),
     agentEnabled ? '' : modeParamLabel,
-    refImages.length > 0 ? ('参考图 ' + refImages.length + '/' + MAX_REFERENCE_IMAGES) : '',
+    (activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1) ? ('x' + normalizeBatchCount(aiBatchCount)) : '',
+    refImages.length > 0 ? ('ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES) : '',
     files.length > 0 ? ('文件 ' + files.length) : '',
   ].filter(Boolean);
   const composerPlaceholder = agentEnabled
@@ -1812,8 +2049,10 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售'
           : selectedWorkflow === 'compose'
             ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁'
-            : selectedWorkflow === 'download'
-              ? '输入花瓣项目 ID 或下载要求'
+            : selectedWorkflow === 'distribute'
+              ? '上传或拖入 Excel 表格，自动解析为铺货 JSON'
+              : selectedWorkflow === 'download'
+              ? '输入花瓣项目 ID 或链接，格式会自动识别'
               : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(
     text.trim() ||
@@ -1855,8 +2094,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       background: active ? 'var(--ink)' : 'var(--panel)',
       color: active ? 'var(--panel)' : 'var(--ink-2)',
       borderRadius: 999,
-      padding: '7px 10px',
-      fontSize: 11.5,
+      padding: '6px 8px',
+      fontSize: 10.5,
       fontWeight: 600,
       display: 'inline-flex',
       alignItems: 'center',
@@ -1982,6 +2221,29 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       const isSpecialParams = activeMode === 'special' || activeMode === 'special_full';
       const isComposeParams = activeMode === 'compose';
       const paramsTitle = isImageParams ? '生图参数' : isSpecialParams ? '特殊品参数' : isComposeParams ? '合成参数' : '问答参数';
+      const providerItems = [
+        activeAiModel !== 'nano-banana-pro' ? {
+          key: 'sub2api',
+          label: '订阅',
+          active: aiProvider === 'sub2api',
+          disabled: false,
+          onClick: function() { setAiProvider('sub2api'); },
+        } : null,
+        {
+          key: 'apimart',
+          label: '默认',
+          active: aiProvider === 'apimart',
+          disabled: false,
+          onClick: function() { setAiProvider('apimart'); },
+        },
+        {
+          key: 'zenmux',
+          label: '官方',
+          active: aiProvider === 'zenmux',
+          disabled: false,
+          onClick: function() { setAiProvider('zenmux'); },
+        },
+      ].filter(Boolean);
       return protoPanelShell(React.createElement(React.Fragment, null,
         React.createElement('div', { style: { fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--ink)' } }, paramsTitle),
         isImageParams && React.createElement(React.Fragment, null,
@@ -2030,32 +2292,75 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
             })
           ),
           protoSectionLabel('清晰度 / 渠道'),
-          React.createElement('div', { style: { display: 'flex', gap: 7, flexWrap: 'wrap' } },
-            ['1K', '2K', '4K'].map(function(q) {
-              const disabled = !allowedAiQualities.includes(q);
-              return React.createElement('button', {
-                key: q,
-                type: 'button',
-                disabled: disabled,
-                onClick: function() { if (!disabled) setAiQuality(q); },
-                style: Object.assign({}, protoChipStyle(aiQuality === q), {
-                  cursor: disabled ? 'not-allowed' : 'pointer',
-                  opacity: disabled ? 0.45 : 1,
-                })
-              }, q);
-            }),
-            React.createElement('div', { style: { width: 1, height: 30, background: 'var(--line)', margin: '0 1px' } }),
-            React.createElement('button', {
-              type: 'button',
-              onClick: function() { setAiProvider('apimart'); },
-              style: Object.assign({}, protoChipStyle(aiProvider === 'apimart'), { cursor: 'pointer' })
-            }, '默认'),
-            React.createElement('button', {
-              type: 'button',
-              onClick: function() { setAiProvider('zenmux'); },
-              style: Object.assign({}, protoChipStyle(aiProvider === 'zenmux'), { cursor: 'pointer' })
-            }, '官方')
+          React.createElement('div', { style: { display: 'flex', alignItems: 'stretch', gap: 8, width: '100%' } },
+            React.createElement('div', {
+              style: { flex: 1, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 4 }
+            },
+              ['1K', '2K', '4K'].map(function(q) {
+                const disabled = !allowedAiQualities.includes(q);
+                return React.createElement('button', {
+                  key: q,
+                  type: 'button',
+                  disabled: disabled,
+                  onClick: function() { if (!disabled) setAiQuality(q); },
+                  style: Object.assign({}, protoChipStyle(aiQuality === q), {
+                    width: '100%',
+                    minWidth: 0,
+                    cursor: disabled ? 'not-allowed' : 'pointer',
+                    opacity: disabled ? 0.45 : 1,
+                  })
+                }, q);
+              })
+            ),
+            React.createElement('div', { style: { width: 1, alignSelf: 'stretch', background: 'var(--line)' } }),
+            React.createElement('div', {
+              style: { flex: 1, display: 'grid', gridTemplateColumns: 'repeat(' + providerItems.length + ', minmax(0, 1fr))', gap: 4 }
+            },
+              providerItems.map(function(item) {
+                return React.createElement('button', {
+                  key: item.key,
+                  type: 'button',
+                  disabled: item.disabled,
+                  onClick: item.onClick,
+                  style: Object.assign({}, protoChipStyle(item.active), {
+                    width: '100%',
+                    minWidth: 0,
+                    cursor: item.disabled ? 'not-allowed' : 'pointer',
+                    opacity: item.disabled ? 0.45 : 1,
+                  })
+                }, item.label);
+              })
+            )
           )
+        ),
+        isImageParams && React.createElement('div', {
+          style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 11.5, color: 'var(--ink-3)', flexWrap: 'nowrap' }
+        },
+          React.createElement('span', null, '并发数'),
+          React.createElement('input', {
+            type: 'text',
+            inputMode: 'numeric',
+            pattern: '[1-4]*',
+            value: aiBatchCount,
+            onChange: function(e) {
+              const raw = String(e.target.value || '').replace(/\D+/g, '').slice(0, 2);
+              setAiBatchCount(raw);
+            },
+            onBlur: function() {
+              setAiBatchCount(String(normalizeBatchCount(aiBatchCount)));
+            },
+            style: {
+              width: 38,
+              padding: '4px 6px',
+              border: '1px solid var(--line)',
+              borderRadius: 6,
+              fontSize: 12,
+              color: 'var(--ink)',
+              background: 'var(--panel)',
+              textAlign: 'center',
+            }
+          }),
+          React.createElement('span', { style: { fontSize: 10.5, color: 'var(--ink-3)' } }, '张 (1-4)')
         ),
         activeMode === 'chat' && React.createElement('div', {
           style: {
@@ -2151,12 +2456,12 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           alignItems: 'center', justifyContent: 'center',
           gap: 8, pointerEvents: 'none',
         }}>
-          <I.image size={28} style={{ color: 'var(--accent)' }}/>
+          <I.file size={28} style={{ color: 'var(--accent)' }}/>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent)' }}>
-            松手添加图片
+            松手添加文件
           </div>
           <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>
-            最多 {MAX_REFERENCE_IMAGES} 张参考图（当前 {refImages.length}/{MAX_REFERENCE_IMAGES}）
+            支持图片和 Excel 表格
           </div>
         </div>
       )}
@@ -2397,21 +2702,27 @@ const mapAgentProjectMessages = function(project, images) {
     var payload = item && item.payload ? item.payload : {};
     var refMeta = Array.isArray(payload.reference_images) ? payload.reference_images : [];
     var decision = (payload && payload.decision) || {};
+    var intentPatch = (payload && (payload.intent_patch || payload.action_intent)) || {};
     var msg = {
       who: item && item.role === 'user' ? 'user' : 'ai',
       text: (item && item.text) || '',
       meta: item && item.role === 'assistant' ? 'Agent' : undefined,
       refMeta: refMeta,
+      intentPatch: intentPatch,
     };
     // 恢复 CONFIRM 的 Brief 卡片 + 快捷按钮
     if (decision && decision.type === 'CONFIRM') {
       if (decision.brief) msg.brief = decision.brief;
+      if (decision.contract) msg.contract = decision.contract;
       if (decision.completeness) msg.completeness = decision.completeness;
       if (Array.isArray(decision.quickActions) && decision.quickActions.length > 0) {
         msg.quickActions = decision.quickActions;
       }
       msg.decisionType = 'CONFIRM';
     } else if (decision && decision.type === 'ASK') {
+      if (decision.brief) msg.brief = decision.brief;
+      if (decision.contract) msg.contract = decision.contract;
+      if (decision.completeness) msg.completeness = decision.completeness;
       if (Array.isArray(decision.choices) && decision.choices.length > 0) {
         msg.choices = decision.choices;
       }
@@ -2422,17 +2733,19 @@ const mapAgentProjectMessages = function(project, images) {
   const items = Array.isArray(images) ? images : [];
   if (!items.length) return base;
   return base.concat(items.map(function(image) {
+    var promptPayload = image && image.prompt ? image.prompt : null;
     return {
       who: 'ai',
       type: 'ai-image-generating',
       model: (image && image.model) || 'agent',
-      prompt: image && image.prompt ? (image.prompt.positive || '') : '',
-      promptPayload: image && image.prompt ? image.prompt : null,
+      prompt: promptPayload ? (promptPayload.instruction || promptPayload.positive || '') : '',
+      promptPayload: promptPayload,
       status: 'done',
       imageUrl: image && image.image_url ? ((window.API_BASE || window.location.origin) + image.image_url) : '',
       finalElapsed: null,
       progress: 100,
       meta: 'Agent',
+      vlm: image && image.vlm_analysis ? image.vlm_analysis : null,
     };
   }));
 };
@@ -2793,6 +3106,31 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     return null;
   }, [messages]);
 
+  const normalizeAiImageModel = React.useCallback(function(model) {
+    const value = String(model || '').trim().toLowerCase();
+    if (!value) return '';
+    if (value.includes('nano') || value.includes('banana') || value.includes('gemini')) return 'nano-banana-pro';
+    if (value.includes('gpt') || value.includes('image')) return 'gpt-image-2';
+    return value;
+  }, []);
+
+  const hasDoneAiImageInCurrentThread = React.useCallback(function() {
+    return messages.some(function(m) {
+      return m && m.type === 'ai-image-generating' && m.status === 'done' && (m.imageUrl || m.previewUrl);
+    });
+  }, [messages]);
+
+  const isLikelyAiImageFollowup = React.useCallback(function(value) {
+    const s = String(value || '').trim();
+    if (!s) return false;
+    if (s.startsWith('/')) return false;
+    if (/^(为什么|怎么|如何|什么|吗|是不是|能不能解释|帮我分析)/.test(s)) return false;
+    if (s.length <= 80 && /(改|换|调|变成|去掉|删除|加上|增加|减少|保留|不要|更|再|继续|上一张|这张|这个|背景|颜色|色调|风格|构图|比例|尺寸|文案|字体|清晰|高级|简约|真实|产品|人物|模特|重新生成|重画|出一版|来一版)/.test(s)) {
+      return true;
+    }
+    return /(基于上一张|参考上一张|在上一版基础上|沿用上一版|保持.*改|只把.*改|其他不变)/.test(s);
+  }, []);
+
   // 将 File / Blob 转为 data URL（缩略图，最长边 200px）
   const fileToThumbDataUrl = (file) => new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
@@ -2967,8 +3305,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
 
   // —— AI 生图核心流程（共享）——
   const runAiImageGeneration = React.useCallback(async (model, prompt, displayText, refImages, aiOptions) => {
+    const batchCount = Math.max(1, Math.min(parseInt(aiOptions.batchCount) || 1, 4));
     setIsLoading(true);
-    const startedAt = Date.now();
     var finalPrompt = prompt;
     var finalRefImages = Array.isArray(refImages) ? refImages.slice() : [];
 
@@ -2976,16 +3314,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     var lastSize = aiOptions.size || '1024x1024';
     var lastResolution = aiOptions.resolution || '1K';
     var provider = aiOptions.provider || 'apimart';
-    setMessages(msgs => [...msgs, {
-      who: 'ai', type: 'ai-image-generating',
-      model, provider, prompt, size: lastSize, resolution: lastResolution,
-      status: 'running', startedAt,
-      progress: 0,
-      meta: 'Loom',
-      hasReference: refImages.length > 0,
-      refCount: refImages.length,
-      refPreviews: [],
-    }]);
+
+    // 预解析 product refs（一次，多 job 共享）
     try {
       var productRefs = parseProductRefs(prompt);
       if (productRefs.length > 0) {
@@ -3000,88 +3330,131 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         finalRefImages = finalRefImages.concat(productRefFiles);
         finalPrompt = enhancePromptWithProductRefs(prompt, resolvedRefs, refImages.length > 0);
       }
-
-      // 将所有参考图（用户上传 + 产品图）转为缩略图 data URL
       try {
         refPreviews = await Promise.all(finalRefImages.map(r => fileToThumbDataUrl(r.file)));
       } catch (e) { refPreviews = []; }
-
-      const apiBase = window.API_BASE || window.location.origin;
-      const fd = new FormData();
-      fd.append('model', model);
-      fd.append('provider', provider);
-      fd.append('prompt', finalPrompt);
-      fd.append('size', aiOptions.size || '1024x1024');
-      fd.append('resolution', aiOptions.resolution || '1K');
-      if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
-      fd.append('ref_previews', JSON.stringify(refPreviews));
-      finalRefImages.forEach(r => fd.append('image', r.file));
-      const res = await fetch(apiBase + '/ai-image', { method: 'POST', body: fd, credentials: 'include' });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        if (err.detail && typeof err.detail === 'object' && err.detail.chat_session_id) {
-          setCurrentAiChatId(err.detail.chat_session_id);
-        }
-        throw new Error(
-          (err.detail && typeof err.detail === 'object' ? err.detail.message : err.detail) || `HTTP ${res.status}`
-        );
-      }
-      const data = await res.json();
-      if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
-      const jobId = data.job_id;
-      setMessages(msgs => msgs.map(m =>
-        m.type === 'ai-image-generating' && m.startedAt === startedAt
-          ? { ...m, jobId }
-          : m
-      ));
-
-      // 轮询任务状态
-      const pollInterval = setInterval(async () => {
-        try {
-          const statusRes = await fetch(apiBase + '/ai-image/' + jobId, { credentials: 'include' });
-          if (!statusRes.ok) return;
-          const statusData = await statusRes.json();
-          setMessages(msgs => msgs.map(m =>
-            m.type === 'ai-image-generating' && m.startedAt === startedAt
-              ? { ...m, status: statusData.status, progress: statusData.progress || m.progress }
-              : m
-          ));
-          if (statusData.status === 'done' && statusData.image_url) {
-            clearInterval(pollInterval);
-            const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
-            setMessages(msgs => msgs.map(m =>
-              m.type === 'ai-image-generating' && m.startedAt === startedAt
-                ? { ...m, status: 'done', imageUrl: statusData.image_url, previewUrl: statusData.preview_url || statusData.image_url, finalElapsed, progress: 100, refPreviews: [] }
-                : m
-            ));
-            if (onComposeComplete) {
-              onComposeComplete(null, null, [statusData.image_url], null);
-            }
-            loadAiChatHistory();
-            setIsLoading(false);
-          } else if (statusData.status === 'failed') {
-            clearInterval(pollInterval);
-            const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
-            setMessages(msgs => msgs.map(m =>
-              m.type === 'ai-image-generating' && m.startedAt === startedAt
-                ? { ...m, status: 'failed', error: statusData.error || '未知错误', finalElapsed, refPreviews: refPreviews.length ? refPreviews : m.refPreviews }
-                : m
-            ));
-            loadAiChatHistory();
-            setIsLoading(false);
-          }
-        } catch (e) {
-          // 轮询网络异常，忽略，下次重试
-        }
-      }, 2000);
     } catch (e) {
-      const finalElapsed = Math.floor((Date.now() - startedAt) / 1000);
-      setMessages(msgs => msgs.map(m =>
-        m.type === 'ai-image-generating' && m.startedAt === startedAt
-          ? { ...m, status: 'failed', error: e.message, finalElapsed }
-          : m
-      ));
-      loadAiChatHistory();
+      const failedAt = Date.now();
+      setMessages(msgs => [...msgs, {
+        who: 'ai', type: 'ai-image-generating',
+        model, provider, prompt, size: lastSize, resolution: lastResolution,
+        status: 'failed', error: e.message, finalElapsed: 0, startedAt: failedAt,
+        meta: 'Loom', hasReference: refImages.length > 0, refCount: refImages.length, refPreviews: [],
+      }]);
+      setIsLoading(false);
+      return;
+    }
+
+    // 创建 N 个生成占位（每个 startedAt 独立）
+    const slots = [];
+    const baseAt = Date.now();
+    for (let i = 0; i < batchCount; i++) {
+      const slotAt = baseAt + i;
+      slots.push(slotAt);
+      setMessages(msgs => [...msgs, {
+        who: 'ai', type: 'ai-image-generating',
+        model, provider, prompt, size: lastSize, resolution: lastResolution,
+        status: 'running', startedAt: slotAt, progress: 0,
+        meta: batchCount > 1 ? 'Loom · ' + (i + 1) + '/' + batchCount : 'Loom',
+        hasReference: refImages.length > 0, refCount: refImages.length, refPreviews: [],
+        batchIndex: i, batchCount: batchCount,
+      }]);
+    }
+
+    const apiBase = window.API_BASE || window.location.origin;
+    const collected = [];
+    var doneCount = 0;
+    const tryFlushCollected = function() {
+      doneCount++;
+      if (doneCount === batchCount && onComposeComplete && collected.length > 0) {
+        const sortedUrls = collected.slice().sort(function(a, b) { return a.index - b.index; }).map(function(x) { return x.url; });
+        onComposeComplete(null, null, sortedUrls, null);
+      }
+    };
+    const submitOne = function(slotAt, index) {
+      return new Promise(function(resolve) {
+        const fd = new FormData();
+        fd.append('model', model);
+        fd.append('provider', provider);
+        fd.append('prompt', finalPrompt);
+        fd.append('size', aiOptions.size || '1024x1024');
+        fd.append('resolution', aiOptions.resolution || '1K');
+        if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
+        fd.append('ref_previews', JSON.stringify(refPreviews));
+        finalRefImages.forEach(r => fd.append('image', r.file));
+        fd.append('batch_count', '1');
+        fetch(apiBase + '/ai-image', { method: 'POST', body: fd, credentials: 'include' })
+          .then(function(res) {
+            if (!res.ok) {
+              return res.json().catch(function() { return {}; }).then(function(err) {
+                throw new Error((err && err.detail && typeof err.detail === 'object' ? err.detail.message : (err && err.detail)) || ('HTTP ' + res.status));
+              });
+            }
+            return res.json();
+          })
+          .then(function(data) {
+            if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
+            const jobId = data.job_id;
+            if (!jobId) { tryFlushCollected(); resolve(); return; }
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === slotAt
+                ? Object.assign({}, m, { jobId })
+                : m
+            ));
+            const pollInterval = setInterval(function() {
+              fetch(apiBase + '/ai-image/' + jobId, { credentials: 'include' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(statusData) {
+                  if (!statusData) return;
+                  setMessages(msgs => msgs.map(m =>
+                    m.type === 'ai-image-generating' && m.startedAt === slotAt
+                      ? Object.assign({}, m, { status: statusData.status, progress: statusData.progress || m.progress })
+                      : m
+                  ));
+                  if (statusData.status === 'done' && statusData.image_url) {
+                    clearInterval(pollInterval);
+                    const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+                    setMessages(msgs => msgs.map(m =>
+                      m.type === 'ai-image-generating' && m.startedAt === slotAt
+                        ? Object.assign({}, m, { status: 'done', imageUrl: statusData.image_url, previewUrl: statusData.preview_url || statusData.image_url, finalElapsed, progress: 100, refPreviews: refPreviews.length ? refPreviews : m.refPreviews })
+                        : m
+                    ));
+                    loadAiChatHistory();
+                    collected.push({ url: statusData.image_url, index: index });
+                    tryFlushCollected();
+                    resolve();
+                  } else if (statusData.status === 'failed') {
+                    clearInterval(pollInterval);
+                    const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+                    setMessages(msgs => msgs.map(m =>
+                      m.type === 'ai-image-generating' && m.startedAt === slotAt
+                        ? Object.assign({}, m, { status: 'failed', error: statusData.error || '未知错误', finalElapsed, refPreviews: refPreviews.length ? refPreviews : m.refPreviews })
+                        : m
+                    ));
+                    loadAiChatHistory();
+                    tryFlushCollected();
+                    resolve();
+                  }
+                })
+                .catch(function() {});
+            }, 2000);
+          })
+          .catch(function(err) {
+            const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === slotAt
+                ? Object.assign({}, m, { status: 'failed', error: err.message, finalElapsed })
+                : m
+            ));
+            tryFlushCollected();
+            resolve();
+          });
+      });
+    };
+
+    try {
+      await Promise.all(slots.map(function(slotAt, i) { return submitOne(slotAt, i); }));
+    } finally {
       setIsLoading(false);
     }
   }, [currentAiChatId, enhancePromptWithProductRefs, loadAiChatHistory, loadResolvedRefFiles, onComposeComplete, parseProductRefs]);
@@ -3174,13 +3547,22 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                 setMessages(function(msgs) {
                   return msgs.map(function(m, i) {
                     if (i !== assistantIdx) return m;
-                    var patch = {};
+                    var patch = {
+                      choices: payload.type === 'ASK' ? [] : undefined,
+                      quickActions: payload.type === 'CONFIRM' ? [] : undefined,
+                    };
                     if (Array.isArray(opts) && opts.length > 0) {
                       patch[payload.type === 'ASK' ? 'choices' : 'quickActions'] = opts;
                     }
                     // CONFIRM 阶段附带 Creative Brief 卡片数据
                     if (payload.type === 'CONFIRM' && payload.brief) {
                       patch.brief = payload.brief;
+                    }
+                    if (payload.type === 'ASK' && payload.brief) {
+                      patch.brief = payload.brief;
+                    }
+                    if (payload.contract) {
+                      patch.contract = payload.contract;
                     }
                     if (payload.completeness) {
                       patch.completeness = payload.completeness;
@@ -3200,7 +3582,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                     who: 'ai',
                     type: 'ai-image-generating',
                     model: modelLabel,
-                    prompt: payload.prompt && payload.prompt.positive ? payload.prompt.positive : text,
+                    prompt: payload.prompt && (payload.prompt.instruction || payload.prompt.positive) ? (payload.prompt.instruction || payload.prompt.positive) : text,
                     promptPayload: payload.prompt || null,
                     size: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.size : 'auto',
                     resolution: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.resolution : '1K',
@@ -3219,6 +3601,26 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                 return msgs.map(function(m, i) {
                   if (i !== imageIdx) return m;
                   return { ...m, status: 'running', progress: payload.progress || m.progress || 0 };
+                });
+              });
+              return;
+            }
+            if (eventName === 'generation_completed') {
+              var generatedImage = payload && payload.image ? payload.image : null;
+              var generatedUrl = generatedImage && generatedImage.url
+                ? ((window.API_BASE || window.location.origin) + generatedImage.url)
+                : '';
+              setMessages(function(msgs) {
+                return msgs.map(function(m, i) {
+                  if (i !== imageIdx) return m;
+                  return Object.assign({}, m, {
+                    status: 'done',
+                    imageUrl: generatedUrl || m.imageUrl || '',
+                    previewUrl: generatedUrl || m.previewUrl || '',
+                    progress: 100,
+                    finalElapsed: m.startedAt ? Math.floor((Date.now() - m.startedAt) / 1000) : m.finalElapsed,
+                    vlmPending: true,
+                  });
                 });
               });
               return;
@@ -3247,6 +3649,10 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                     progress: 100,
                     finalElapsed: m.startedAt ? Math.floor((Date.now() - m.startedAt) / 1000) : null,
                     vlm: vlm,
+                    vlmPending: false,
+                    promptPayload: (payload && payload.generationInstruction)
+                      ? Object.assign({}, m.promptPayload || {}, payload.generationInstruction)
+                      : m.promptPayload,
                   };
                 });
               });
@@ -3322,13 +3728,17 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     // ── 花瓣下载 ─────────────────────────────────────────────────────────────
-    // UI 锁定 /花瓣下载, 或用户显式打字 (向后兼容)
-    if (trimmed.startsWith('/花瓣下载')) {
-      const args = trimmed.replace(/^\/花瓣下载\s*/, '').trim();
+    // 新交互: 用户通过功能按钮选择“花瓣下载”，输入框只填写 URL/ID。
+    // 旧的 /花瓣下载 文本仍兼容，但不再要求用户输入斜杠指令。
+    const isHuabanDownloadMode = aiOptions.workflow === 'download' || aiOptions.lockedCommand === '/花瓣下载' || trimmed.startsWith('/花瓣下载');
+    if (isHuabanDownloadMode) {
+      const args = trimmed.startsWith('/花瓣下载')
+        ? trimmed.replace(/^\/花瓣下载\s*/, '').trim()
+        : trimmed.trim();
       const match = args.match(/^(\S+)(?:\s+([A-Za-z0-9._-]+))?$/);
       setMessages(msgs => [...msgs, { who: 'user', text: args || text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       if (!match) {
-        setMessages(msgs => [...msgs, { who: 'ai', text: '请使用格式：/花瓣下载 URL 或 /花瓣下载 URL PSD', meta: 'Loom' }]);
+        setMessages(msgs => [...msgs, { who: 'ai', text: '请直接输入花瓣链接或项目 ID；如果素材有多个格式，我会让你点击选择。', meta: '花瓣下载' }]);
         return;
       }
       const normalizeHuabanSource = function(value) {
@@ -3361,8 +3771,17 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         }
         // 轮换提示文字，让用户感知进度
         const stages = isFirstCall
-          ? [{ after: 6000, text: '正在查找下载按钮…' }, { after: 15000, text: '页面加载较慢，请耐心等待…' }]
-          : [{ after: 8000, text: '文件较大，仍在下载中…' }, { after: 20000, text: '网络较慢，请耐心等待…' }];
+          ? [
+              { after: 6000, text: '正在查找下载按钮…' },
+              { after: 15000, text: '页面加载较慢，请耐心等待…' },
+              { after: 30000, text: '还在等待花瓣页面响应，若账号失效会自动报错…' },
+              { after: 60000, text: '下载代理仍在处理，稍后会给出成功或失败结果…' },
+            ]
+          : [
+              { after: 8000, text: '文件较大，仍在下载中…' },
+              { after: 20000, text: '网络较慢，请耐心等待…' },
+              { after: 45000, text: '仍在等待文件流返回…' },
+            ];
         let stageIdx = 0;
         let progressTimer = null;
         const scheduleNext = () => {
@@ -3426,9 +3845,15 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       { prefix: '/Gpt image 2',     model: 'gpt-image-2' },
     ];
     const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
-    const aiCmd = AI_IMAGE_CMDS.find(c => text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase()))
-      ? Object.assign({}, AI_IMAGE_CMDS.find(c => text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase())), { implicit: true })
-      : null;
+    const lockedAiCmd = AI_IMAGE_CMDS.find(function(c) {
+      return String(aiOptions.lockedCommand || '').trim().toLowerCase() === c.prefix.toLowerCase();
+    });
+    const textAiCmd = AI_IMAGE_CMDS.find(function(c) {
+      return text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase());
+    });
+    const aiCmd = lockedAiCmd
+      ? Object.assign({}, lockedAiCmd, { implicit: true, fromLockedCommand: true })
+      : (textAiCmd ? Object.assign({}, textAiCmd, { implicit: true, fromLockedCommand: false }) : null);
 
     // 检测"重新生成"关键词
     const rawPrompt = text.trim();
@@ -3445,7 +3870,10 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     if (aiCmd) {
-      const plainText = text.trim().slice(aiCmd.prefix.length).trimStart();
+      const rawAiText = text.trim();
+      const plainText = rawAiText.toLowerCase().startsWith(aiCmd.prefix.toLowerCase())
+        ? rawAiText.slice(aiCmd.prefix.length).trimStart()
+        : rawAiText;
       if (!plainText) {
         const prefixLabel = aiCmd.implicit ? '（复用上次模型）' : aiCmd.prefix;
         setMessages(msgs => [...msgs,
@@ -3456,6 +3884,23 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       }
       setMessages(msgs => [...msgs, { who: 'user', text: plainText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       await runAiImageGeneration(aiCmd.model, plainText, plainText, refImages, aiOptions);
+      return;
+    }
+
+    // ── 当前生图会话的自然语言修改 ───────────────────────────────────────────
+    // 用户说“改成红色 / 背景换白色 / 更高级一点”时，必须继续走 /ai-image，
+    // 后端会结合 chat_session_id 的历史 prompt，并自动把上一张结果图作为参考图。
+    if (currentAiChatId && hasDoneAiImageInCurrentThread() && isLikelyAiImageFollowup(text)) {
+      const lastOpts = getLastAiImageOptions();
+      const model = normalizeAiImageModel(lastOpts?.model) || 'gpt-image-2';
+      const opts = {
+        ...aiOptions,
+        size: lastOpts?.size || aiOptions.size,
+        resolution: lastOpts?.resolution || aiOptions.resolution,
+        provider: aiOptions.provider,
+      };
+      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
+      await runAiImageGeneration(model, text.trim(), text.trim(), refImages, opts);
       return;
     }
 
@@ -3590,7 +4035,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       ));
     }
     setIsLoading(false);
-  }, [agentEnabled, currentAiChatId, ensureAgentProject, enhancePromptWithProductRefs, getLastAiImageOptions, isLoading, loadAiChatHistory, loadResolvedRefFiles, materializeReferenceImages, onComposeComplete, parseProductRefs, runAiImageGeneration, template]);
+  }, [agentEnabled, currentAiChatId, ensureAgentProject, enhancePromptWithProductRefs, getLastAiImageOptions, hasDoneAiImageInCurrentThread, isLikelyAiImageFollowup, isLoading, loadAiChatHistory, loadResolvedRefFiles, materializeReferenceImages, normalizeAiImageModel, onComposeComplete, parseProductRefs, runAiImageGeneration, template]);
 
   // ── 快捷回复：点击选项按钮触发 ──────────────────────────────────────────────
   const handleQuickReply = React.useCallback(function(value) {
@@ -3616,6 +4061,50 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
     setIsLoading(false);
   }, [isLoading, templateFields]);
+
+  const handleSmartDistribute = React.useCallback(async (file, filename) => {
+    const pendingId = 'smart-distribute-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    setMessages(msgs => [
+      ...msgs,
+      { who: 'user', type: 'file-attach', text: filename, file: filename },
+      { who: 'ai', type: 'smart-distribute-loading', id: pendingId, fileName: filename, meta: '智能铺货', startedAt: Date.now() }
+    ]);
+    setIsLoading(true);
+    try {
+      const result = await window.API.smartDistribute(file);
+      // 每个 job 组装独立 JSON（只包该 job），自动复制第一个
+      var jobJsons = (result.jobs || []).map(function(job) {
+        var single = {
+          schemaVersion: result.schemaVersion,
+          mode: result.mode,
+          source: result.source,
+          defaults: result.defaults,
+          jobs: [job],
+        };
+        var str = '';
+        try { str = JSON.stringify(single, null, 2); } catch(e) { str = ''; }
+        return str;
+      });
+      if (jobJsons.length > 0 && jobJsons[0] && navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(jobJsons[0]).catch(function() {});
+      }
+      setMessages(msgs => msgs.map(function(m) {
+        return m.id === pendingId ? {
+          who: 'ai',
+          type: 'smart-distribute',
+          data: result,
+          jobJsons: jobJsons,
+          meta: '智能铺货',
+          copied: jobJsons.length > 0 && !!(navigator.clipboard && window.isSecureContext),
+        } : m;
+      }));
+    } catch (e) {
+      setMessages(msgs => msgs.map(function(m) {
+        return m.id === pendingId ? { who: 'ai', text: '解析错误: ' + (e.message || '未知错误'), meta: '错误' } : m;
+      }));
+    }
+    setIsLoading(false);
+  }, [isLoading]);
 
   const handleCompose = React.useCallback(async (template, parseResult) => {
     if (!template || !parseResult) return;
@@ -4044,6 +4533,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       <Composer
         onSend={handleSend}
         onParseTable={handleParseTable}
+        onSmartDistribute={handleSmartDistribute}
         isLoading={isLoading}
         slashTrigger={slashTrigger}
         template={template}

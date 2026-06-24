@@ -20,7 +20,7 @@ import re
 import threading
 import time
 import uuid
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
 from pathlib import Path
@@ -38,6 +38,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .ai_image import (
+    PROVIDER_SUB2API,
     PROVIDER_ZENMUX,
     cleanup_user_refs,
     generate_image,
@@ -45,6 +46,7 @@ from .ai_image import (
     generate_image_async,
     generate_image_zenmux_async,
     generate_image_with_reference_async,
+    generate_sub2api_async,
     generate_inspiration_thumb,
     get_inspiration_thumb_url_if_exists,
     load_user_refs,
@@ -53,10 +55,13 @@ from .ai_image import (
     SLASH_MODEL_MAP,
 )
 from .agent_mode import (
-    AgentActionIntent,
+    VisualIntentPatch,
     AgentChatRequest,
     analyze_reference_images,
+    apply_intent_patch_to_state,
     apply_decision_to_state,
+    build_suggested_refine_from_vlm,
+    build_vlm_followup_decision,
     build_brief,
     call_agent_llm,
     _chat_completions_endpoint,
@@ -67,6 +72,7 @@ from .agent_mode import (
     default_project_state,
     detect_confirm,
     extract_message_constraints,
+    has_meaningful_patch,
     has_meaningful_intent_update,
     make_sse,
     merge_intent,
@@ -342,6 +348,18 @@ def _safe_download_filename(name: str) -> str:
     return clean or "download.bin"
 
 
+def _download_format_matches(filename: str, requested_format: str | None) -> bool:
+    fmt = (requested_format or "").strip().lower()
+    if not fmt:
+        return True
+    suffix = Path(filename or "").suffix.lower().lstrip(".")
+    if not suffix:
+        return False
+    if fmt in {"jpg", "jpeg"}:
+        return suffix in {"jpg", "jpeg"}
+    return suffix == fmt
+
+
 class LiteLoginRequest(pydantic.BaseModel):
     username: str
 
@@ -354,11 +372,12 @@ def _public_agent_project(project: dict, *, messages: Optional[list[dict]] = Non
         "phase": project["phase"],
         "intent": project["intent"],
         "brief": project["brief"],
-        "currentImageUrl": (project.get("current_image") or {}).get("imageUrl"),
+        "currentImageUrl": _normalize_public_asset_url((project.get("current_image") or {}).get("imageUrl")),
         "currentPrompt": project.get("current_prompt"),
         "conversationSummary": project.get("conversation_summary") or "",
-        "messages": messages if messages is not None else None,
-        "iterations": images if images is not None else None,
+        "metadata": project.get("metadata") or {},
+        "messages": _normalize_ai_chat_messages_for_api(messages) if messages is not None else None,
+        "iterations": _normalize_agent_images_for_api(images) if images is not None else None,
         "createdAt": project["created_at"],
         "updatedAt": project["updated_at"],
     }
@@ -377,6 +396,81 @@ def _current_user(request: Request) -> dict:
 
 def _is_admin(user: Optional[dict]) -> bool:
     return bool(user and user.get("role") == "admin")
+
+
+def _is_public_asset_path(path: str) -> bool:
+    safe_prefixes = ("/ai-images/", "/results/", "/output/", "/avatars/")
+    return (
+        path.startswith(safe_prefixes)
+        or re.match(r"^/compose/[^/]+/image/?$", path) is not None
+        or path.startswith("/export/grid/")
+    )
+
+
+def _normalize_public_asset_url(raw_url: str | None) -> str:
+    value = str(raw_url or "").strip()
+    if not value:
+        return ""
+    if _is_public_asset_path(value):
+        return value
+    if value.startswith(("http://", "https://")):
+        try:
+            parsed = urlsplit(value)
+            if _is_public_asset_path(parsed.path):
+                return urlunsplit(("", "", parsed.path, parsed.query, parsed.fragment))
+        except Exception:
+            return value
+    return value
+
+
+def _normalize_ai_chat_messages_for_api(messages: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in messages or []:
+        msg = dict(item or {})
+        if msg.get("type") == "ai-image-generating":
+            msg["imageUrl"] = _normalize_public_asset_url(msg.get("imageUrl"))
+            msg["previewUrl"] = _normalize_public_asset_url(msg.get("previewUrl"))
+            refs = msg.get("refPreviews")
+            if isinstance(refs, list):
+                msg["refPreviews"] = [
+                    _normalize_public_asset_url(ref) if isinstance(ref, str) else ref
+                    for ref in refs
+                ]
+        normalized.append(msg)
+    return normalized
+
+
+def _normalize_agent_images_for_api(images: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in images or []:
+        image = dict(item or {})
+        image["image_url"] = _normalize_public_asset_url(image.get("image_url"))
+        normalized.append(image)
+    return normalized
+
+
+def _normalize_editor_snapshot_assets(snapshot: dict | None) -> dict | None:
+    if not isinstance(snapshot, dict):
+        return snapshot
+    document = snapshot.get("document")
+    store = snapshot.get("store")
+    if not isinstance(store, dict) and isinstance(document, dict):
+        store = document.get("store")
+    if not isinstance(store, dict):
+        return snapshot
+    for record in store.values():
+        if not isinstance(record, dict):
+            continue
+        if record.get("typeName") != "asset" or record.get("type") != "image":
+            continue
+        props = record.get("props")
+        if not isinstance(props, dict):
+            continue
+        src = props.get("src")
+        normalized_src = _normalize_public_asset_url(src)
+        if normalized_src and normalized_src != src:
+            props["src"] = normalized_src
+    return snapshot
 
 
 def _assert_job_owner(job_user_id: Optional[str], user: dict) -> None:
@@ -511,6 +605,19 @@ async def health():
     ai_provider["connected"] = bool(ai_provider.get("connected") or zenmux_status.get("connected"))
     ai_provider["configured"] = bool(ai_provider.get("configured") or zenmux_status.get("configured"))
 
+    # 订阅线路状态探测：CLIProxyAPI 没有稳定的 health endpoint，配置存在即认为可用。
+    sub2api_status = {
+        "connected": bool(settings.cliproxy_api_key and settings.cliproxy_base_url),
+        "configured": bool(settings.cliproxy_api_key and settings.cliproxy_base_url),
+        "provider": "CLIProxyAPI",
+        "url": settings.cliproxy_base_url,
+    }
+    if sub2api_status["configured"]:
+        sub2api_status["message"] = "configured"
+    ai_provider["sub2api"] = sub2api_status
+    ai_provider["connected"] = bool(ai_provider.get("connected") or sub2api_status.get("connected"))
+    ai_provider["configured"] = bool(ai_provider.get("configured") or sub2api_status.get("configured"))
+
     return {
         "status": "ok",
         "version": "team-scan-v2",
@@ -559,12 +666,29 @@ async def proxy_download_login(request: Request):
 
 @app.post("/proxy-download/inspect")
 async def proxy_download_inspect(body: ProxyDownloadInspectRequest, request: Request):
-    _current_user(request)
+    user = _current_user(request)
     if not settings.proxy_download_enabled and not (settings.root_dir / "proxy_download").exists():
         raise HTTPException(503, "\u82b1\u74e3\u4e0b\u8f7d\u670d\u52a1\u672a\u542f\u7528")
+    request_id = uuid.uuid4().hex[:8]
+    started = time.monotonic()
+    logger.info("[proxy-download:%s] inspect start user=%s url=%s", request_id, user.get("username"), body.url)
     try:
-        payload = await proxy_download_inspect_url(body.url)
+        payload = await asyncio.wait_for(
+            proxy_download_inspect_url(body.url),
+            timeout=max(10, settings.proxy_download_request_timeout_seconds),
+        )
+        logger.info(
+            "[proxy-download:%s] inspect done elapsed=%.2fs formats=%s title=%s",
+            request_id,
+            time.monotonic() - started,
+            payload.get("formats") or [],
+            payload.get("title"),
+        )
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        logger.exception("[proxy-download:%s] inspect timeout elapsed=%.2fs", request_id, time.monotonic() - started)
+        raise HTTPException(504, "格式检测超时，请确认花瓣账号状态或稍后重试") from exc
     except Exception as exc:
+        logger.exception("[proxy-download:%s] inspect failed elapsed=%.2fs", request_id, time.monotonic() - started)
         raise HTTPException(502, f"\u683c\u5f0f\u68c0\u6d4b\u5931\u8d25: {exc}") from exc
     return {
         "source_url": payload.get("source_url") or body.url,
@@ -578,21 +702,59 @@ async def proxy_download_download(body: ProxyDownloadRequest, request: Request):
     user = _current_user(request)
     if not settings.proxy_download_enabled and not (settings.root_dir / "proxy_download").exists():
         raise HTTPException(503, "\u82b1\u74e3\u4e0b\u8f7d\u670d\u52a1\u672a\u542f\u7528")
+    request_id = uuid.uuid4().hex[:8]
+    started = time.monotonic()
+    logger.info(
+        "[proxy-download:%s] download start user=%s url=%s format=%s timeout=%ss",
+        request_id,
+        user.get("username"),
+        body.url,
+        body.format or "-",
+        max(30, settings.proxy_download_request_timeout_seconds),
+    )
     try:
-        inspection = await proxy_download_inspect_url(body.url)
-        formats = inspection.get("formats") or []
-        if len(formats) > 1 and not body.format:
-            return {
-                "status": "choose_format",
-                "source_url": body.url,
-                "formats": formats,
-                "message": "\u8be5\u7d20\u6750\u652f\u6301\u591a\u79cd\u683c\u5f0f\uff0c\u8bf7\u5148\u9009\u62e9\u4e00\u79cd\u683c\u5f0f\u3002",
-            }
-        path, meta = await proxy_download_download_url(body.url, body.format)
+        async def _download_flow():
+            logger.info("[proxy-download:%s] phase inspect", request_id)
+            inspection = await proxy_download_inspect_url(body.url)
+            formats = inspection.get("formats") or []
+            logger.info("[proxy-download:%s] phase inspect done formats=%s", request_id, formats)
+            if len(formats) > 1 and not body.format:
+                logger.info("[proxy-download:%s] phase choose_format formats=%s", request_id, formats)
+                return {
+                    "status": "choose_format",
+                    "source_url": body.url,
+                    "formats": formats,
+                    "message": "\u8be5\u7d20\u6750\u652f\u6301\u591a\u79cd\u683c\u5f0f\uff0c\u8bf7\u5148\u9009\u62e9\u4e00\u79cd\u683c\u5f0f\u3002",
+                }, None, None
+            logger.info("[proxy-download:%s] phase download_url", request_id)
+            path, meta = await proxy_download_download_url(body.url, body.format)
+            logger.info("[proxy-download:%s] phase download_url done path=%s meta=%s", request_id, path, meta)
+            return None, path, meta
+
+        early_response, path, meta = await asyncio.wait_for(
+            _download_flow(),
+            timeout=max(30, settings.proxy_download_request_timeout_seconds),
+        )
+        if early_response is not None:
+            logger.info("[proxy-download:%s] download early_response elapsed=%.2fs status=%s", request_id, time.monotonic() - started, early_response.get("status"))
+            return early_response
     except Exception as exc:
+        if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+            logger.exception("[proxy-download:%s] download timeout elapsed=%.2fs", request_id, time.monotonic() - started)
+            raise HTTPException(504, "花瓣下载超时：代理浏览器长时间没有返回，请检查登录状态或重试") from exc
+        logger.exception("[proxy-download:%s] download failed elapsed=%.2fs", request_id, time.monotonic() - started)
         raise HTTPException(502, f"\u82b1\u74e3\u4e0b\u8f7d\u5931\u8d25: {exc}") from exc
 
     filename = _safe_download_filename(str(meta.get("filename") or Path(path).name))
+    if not _download_format_matches(filename, body.format):
+        logger.error(
+            "[proxy-download:%s] format mismatch requested=%s filename=%s meta=%s",
+            request_id,
+            body.format,
+            filename,
+            meta,
+        )
+        raise HTTPException(502, f"下载格式不匹配：选择的是 {body.format}，但实际文件是 {filename}")
     file_path = Path(path)
     if file_path.parent != _proxy_download_dir():
         stem = Path(filename).stem
@@ -602,6 +764,13 @@ async def proxy_download_download(body: ProxyDownloadRequest, request: Request):
         target_path.write_bytes(file_path.read_bytes())
     else:
         target_path = file_path
+    logger.info(
+        "[proxy-download:%s] download done elapsed=%.2fs filename=%s size=%s",
+        request_id,
+        time.monotonic() - started,
+        filename,
+        target_path.stat().st_size,
+    )
     return {
         "status": "done",
         "source_url": str(meta.get("source_url") or body.url),
@@ -1175,6 +1344,24 @@ async def parse_table_endpoint(
         raise HTTPException(500, f"解析失败: {e}")
 
     return result
+
+
+@app.post("/smart-distribute")
+async def smart_distribute_endpoint(file: UploadFile = File(...)):
+    """
+    上传 Excel，解析为「铺货 JSON」。
+    用 openpyxl 读取单元格 + 模板规则库，不调用 AI。
+    供 Photoshop 小变量脚本消费。
+    """
+    from .smart_distribute import SmartDistributor
+
+    content = await file.read()
+    try:
+        distributor = SmartDistributor()
+        result = distributor.process(content, file.filename or "upload.xlsx")
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"智能铺货解析失败: {e}")
 
 
 @app.get("/image-types")
@@ -1814,7 +2001,7 @@ def list_agent_projects_endpoint(request: Request, page: int = 1, limit: int = 2
         data.append({
             "id": project["id"],
             "title": project["title"],
-            "currentImageUrl": (project.get("current_image") or {}).get("imageUrl"),
+            "currentImageUrl": _normalize_public_asset_url((project.get("current_image") or {}).get("imageUrl")),
             "phase": project["phase"],
             "totalGenerations": len(images),
             "updatedAt": project["updated_at"],
@@ -1839,7 +2026,7 @@ def list_agent_project_images_endpoint(request: Request, project_id: str):
     project = get_agent_project(project_id, user_id=user["id"])
     if not project:
         raise HTTPException(404, "项目不存在")
-    return {"success": True, "data": list_agent_images(project_id, user_id=user["id"])}
+    return {"success": True, "data": _normalize_agent_images_for_api(list_agent_images(project_id, user_id=user["id"]))}
 
 
 @app.delete("/api/projects/{project_id}")
@@ -1949,7 +2136,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
 
             # ── 真流式：LLM 逐 token 回调 → 入队 → SSE yield ──
             agent_reply = ""
-            action_intent = None
+            intent_patch = None
             hard_constraints = extract_message_constraints(message)
             should_direct_generate = bool(
                 detect_confirm(message)
@@ -1971,8 +2158,8 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                     pass
 
             async def _run_llm():
-                nonlocal agent_reply, action_intent
-                agent_reply, action_intent = await call_agent_llm(
+                nonlocal agent_reply, intent_patch
+                agent_reply, intent_patch = await call_agent_llm(
                     message, state, recent_messages, reference_context,
                     on_chunk=_on_llm_chunk,
                     on_think=_on_llm_think,
@@ -1981,11 +2168,11 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
 
             if should_direct_generate:
                 agent_reply = "收到，开始生成。"
-                action_intent = AgentActionIntent(
-                    type="REQUEST_GENERATE",
+                intent_patch = VisualIntentPatch(
+                    turn_type="confirm",
                     confidence=1.0,
-                    extracted_info={},
-                    open_questions=[],
+                    operation_hint="text_to_image",
+                    patch={},
                     creative_suggestion="",
                 )
                 yield make_sse("agent_text", {"delta": agent_reply})
@@ -2018,14 +2205,14 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                     else:
                         yield make_sse("agent_text", {"delta": content})
 
-                await llm_task  # 确保拿到 agent_reply / action_intent
+                await llm_task  # 确保拿到 agent_reply / intent_patch
 
-            extracted = dict(action_intent.extracted_info or {})
-            if hard_constraints:
-                extracted = merge_intent(extracted, hard_constraints)
-            if has_meaningful_intent_update(extracted):
-                state["intent"] = merge_intent(state.get("intent") or {}, extracted)
-            elif not (state.get("intent") or {}).get("subject"):
+            state = apply_intent_patch_to_state(
+                state,
+                intent_patch,
+                hard_constraints=hard_constraints,
+            )
+            if not (state.get("intent") or {}).get("subject"):
                 guessed_subject = _coarse_subject_from_message(message)
                 if guessed_subject:
                     state["intent"] = merge_intent(state.get("intent") or {}, {"subject": guessed_subject})
@@ -2033,7 +2220,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 state["brief"] = dict(state["brief"])
                 state["brief"]["confirmedByUser"] = True
 
-            decision = decide_next_action(state, action_intent, message)
+            decision = decide_next_action(state, intent_patch or VisualIntentPatch(), message)
             state = apply_decision_to_state(state, decision, message)
             title = summarize_project_title(state, project.get("title") or message)
 
@@ -2057,7 +2244,11 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 role="assistant",
                 type="agent_text",
                 text=agent_reply,
-                payload={"action_intent": action_intent.model_dump(), "decision": decision},
+                payload={
+                    "intent_patch": (intent_patch.model_dump() if intent_patch else {}),
+                    "action_intent": (intent_patch.model_dump() if intent_patch else {}),
+                    "decision": decision,
+                },
                 decision_action=decision.get("type"),
                 created_at=time.time(),
             )
@@ -2073,6 +2264,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
             prompt_payload["_snapshot"] = {
                 "intent": _deep_copy_json(state.get("intent") or {}),
                 "brief": _deep_copy_json(state.get("brief") or {}),
+                "contract": _deep_copy_json(((state.get("metadata") or {}).get("creativeContract")) or decision.get("contract") or {}),
                 "decisionType": decision.get("type"),
                 "createdAt": time.time(),
             }
@@ -2089,6 +2281,8 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 yield make_sse(event_name, payload)
                 if event_name == "generation_completed":
                     generated_image = payload.get("image")
+                    if isinstance(generated_image, dict) and payload.get("provider"):
+                        generated_image["provider"] = payload.get("provider")
 
             if not generated_image or not generated_image.get("url"):
                 yield make_sse("error", {"message": "生成完成但未拿到图片地址"})
@@ -2100,7 +2294,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
             image_record = create_agent_image(
                 project_id=project_id,
                 user_id=user["id"],
-                provider="apimart",
+                provider=str(generated_image.get("provider") or settings.ai_image_provider or "apimart"),
                 model=str(prompt_payload.get("model") or ""),
                 prompt=prompt_payload,
                 image_url=generated_image["url"],
@@ -2114,6 +2308,10 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 "imageUrl": image_record["image_url"],
                 "iterationNumber": image_record["iteration_number"],
             }
+            metadata = dict(state.get("metadata") or {})
+            metadata["lastVlmAnalysis"] = vlm_analysis
+            metadata["suggestedRefine"] = build_suggested_refine_from_vlm(vlm_analysis)
+            state["metadata"] = metadata
             state["phase"] = {"stage": "refining", "turnsInStage": 0}
             updated = update_agent_project(
                 project_id,
@@ -2125,7 +2323,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 current_prompt=prompt_payload,
                 current_image=state["currentImage"],
                 conversation_summary=state.get("conversationSummary") or "",
-                metadata=state.get("metadata"),
+                metadata=metadata,
                 updated_at=time.time(),
             )
             append_agent_message(
@@ -2134,12 +2332,50 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 role="assistant",
                 type="generation_result",
                 text=vlm_analysis.get("userFacingSummary") or "图已经生成好了，我们可以继续细修。",
-                payload={"image": image_record, "vlmAnalysis": vlm_analysis},
+                payload={
+                    "image": image_record,
+                    "vlmAnalysis": vlm_analysis,
+                    "generationInstruction": {
+                        "mode": prompt_payload.get("mode"),
+                        "instruction": prompt_payload.get("instruction"),
+                        "constraints": prompt_payload.get("constraints"),
+                        "parameters": prompt_payload.get("parameters"),
+                        "reasoningForUser": prompt_payload.get("reasoningForUser"),
+                        "contract": ((state.get("metadata") or {}).get("creativeContract")) or decision.get("contract") or {},
+                    },
+                },
                 decision_action=decision.get("type"),
                 created_at=time.time(),
             )
+            followup_decision = build_vlm_followup_decision(vlm_analysis)
+            if followup_decision:
+                append_agent_message(
+                    project_id=project_id,
+                    user_id=user["id"],
+                    role="assistant",
+                    type="agent_text",
+                    text=followup_decision.get("question") or "这版还有可优化空间，要不要继续细修？",
+                    payload={
+                        "decision": followup_decision,
+                        "vlmAnalysis": vlm_analysis,
+                    },
+                    decision_action=followup_decision.get("type"),
+                    created_at=time.time(),
+                )
             yield make_sse("agent_text", {"delta": vlm_analysis.get("userFacingSummary") or "图已经生成好了，我们可以继续细修。"})
-            yield make_sse("done", {"project": _public_agent_project(updated or project), "image": image_record, "vlmAnalysis": vlm_analysis})
+            yield make_sse("done", {
+                "project": _public_agent_project(updated or project),
+                "image": image_record,
+                "vlmAnalysis": vlm_analysis,
+                "generationInstruction": {
+                    "mode": prompt_payload.get("mode"),
+                    "instruction": prompt_payload.get("instruction"),
+                    "constraints": prompt_payload.get("constraints"),
+                    "parameters": prompt_payload.get("parameters"),
+                    "reasoningForUser": prompt_payload.get("reasoningForUser"),
+                    "contract": ((state.get("metadata") or {}).get("creativeContract")) or decision.get("contract") or {},
+                },
+            })
         except Exception as exc:
             logger.exception("agent project chat failed: %s", project_id)
             yield make_sse("error", {"message": f"{type(exc).__name__}: {exc}"})
@@ -2251,7 +2487,7 @@ def history_ai_chat_detail(request: Request, session_id: str):
     session = get_ai_chat_session(session_id, user_id=user["id"])
     if not session:
         raise HTTPException(404, "未找到历史对话")
-    messages = load_ai_chat_messages(session_id, user_id=user["id"])
+    messages = _normalize_ai_chat_messages_for_api(load_ai_chat_messages(session_id, user_id=user["id"]))
     return {"session": session, "messages": messages}
 
 
@@ -2302,7 +2538,14 @@ async def _run_ai_image_background(
             pass
 
     try:
-        if provider == PROVIDER_ZENMUX:
+        if provider == PROVIDER_SUB2API:
+            result = await generate_sub2api_async(
+                model=model, prompt=prompt,
+                images=refs if refs else None,
+                size=size, resolution=resolution, user_id=user_id,
+                on_progress=on_progress,
+            )
+        elif provider == PROVIDER_ZENMUX:
             result = await generate_image_zenmux_async(
                 model=model, prompt=prompt,
                 images=refs,
@@ -2406,7 +2649,6 @@ def ai_image_status(request: Request, job_id: str):
         raise HTTPException(404, "任务不存在")
     if not _is_admin(user) and job.get("user_id") != user["id"]:
         raise HTTPException(404, "任务不存在")
-    api_base = str(request.base_url).rstrip("/")
     image_url = job.get("image_url")
     preview_url = ""
     if image_url:
@@ -2419,8 +2661,9 @@ def ai_image_status(request: Request, job_id: str):
         "job_id": job["id"],
         "status": job["status"],
         "progress": job["progress"],
-        "image_url": f"{api_base}{image_url}" if image_url else None,
-        "preview_url": f"{api_base}{preview_url}" if preview_url else None,
+        # 统一返回站内相对路径，避免公网域名 / 内网 IP / 代理 Host 混用时把结果图指到错误主机。
+        "image_url": image_url or None,
+        "preview_url": preview_url or None,
         "task_id": job.get("task_id"),
         "error": job.get("error"),
     }
@@ -2720,8 +2963,8 @@ def _inspiration_to_api(post: dict, current_user: dict | None = None, favorite_i
     return {
         "id": post["id"],
         "job_id": post["job_id"],
-        "image_url": post.get("thumb_url") or post.get("image_url") or "",
-        "full_image_url": post.get("image_url") or post.get("thumb_url") or "",
+        "image_url": _normalize_public_asset_url(post.get("thumb_url") or post.get("image_url") or ""),
+        "full_image_url": _normalize_public_asset_url(post.get("image_url") or post.get("thumb_url") or ""),
         "prompt": post["prompt"],
         "original_prompt": post.get("original_prompt") or "",
         "resolved_prompt": post.get("resolved_prompt") or post.get("prompt") or "",
@@ -2914,7 +3157,7 @@ def editor_load_snapshot(request: Request):
     if raw is None:
         return {"snapshot": None}
     try:
-        return {"snapshot": json.loads(raw)}
+        return {"snapshot": _normalize_editor_snapshot_assets(json.loads(raw))}
     except Exception:
         return {"snapshot": None}
 
@@ -2930,13 +3173,16 @@ async def ai_image_endpoint(
     chat_session_id: str = Form(""),
     image: List[UploadFile] = File(default=[]),
     ref_previews: str = Form(""),
+    batch_count: int = Form(1),
 ):
     """
     AI 生图接口（异步）。支持文生图（无 image）和图生图（最多 9 张参考图）。
     自动注入对话历史上下文：用 LLM 改写 prompt + 上次结果图作为参考。
-    提交任务后立即返回 {job_id, chat_session_id, status: "processing"}，
+    batch_count > 1 时并发创建 N 个独立 job（共享 chat_session_id），返回 job_ids 列表。
+    提交任务后立即返回 {job_id(s), chat_session_id, status: "processing"}，
     前端轮询 GET /ai-image/{job_id} 获取进度与结果。
     """
+    batch_count = max(1, min(int(batch_count or 1), 4))
     original_prompt = prompt.strip()
     ref_previews_list = []
     try:
@@ -2976,28 +3222,9 @@ async def ai_image_endpoint(
         role="user",
         type="user_text",
         text=original_prompt,
-        meta={"model": resolved, "size": size, "resolution": resolution, "refPreviews": ref_previews_list},
+        meta={"model": resolved, "size": size, "resolution": resolution, "refPreviews": ref_previews_list, "batchCount": batch_count},
         created_at=created_at,
     )
-    save_ai_image_job(
-        job_id=job_id,
-        user_id=user["id"],
-        status="processing",
-        model=resolved,
-        prompt=original_prompt,
-        size=size,
-        original_prompt=original_prompt,
-        resolved_prompt=original_prompt,
-        has_reference=bool(images),
-        created_at=created_at,
-    )
-    log_operation(
-        user_id=user["id"], username=user["username"],
-        action="ai_image",
-        detail=f"job={job_id[:8]} model={resolved} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(images)}",
-        payload=json.dumps({"job_id": job_id, "model": resolved, "size": size, "prompt": original_prompt[:200], "refs": len(images), "provider": resolved_provider}, ensure_ascii=False),
-    )
-
     try:
         # —— 上下文注入（对用户透明）——
         enriched_prompt = original_prompt
@@ -3030,46 +3257,76 @@ async def ai_image_endpoint(
         user_refs: list[tuple[bytes, str]] = [
             (await f.read(), f.filename or f"ref{i}.png") for i, f in enumerate(images)
         ]
-        # 持久化用户参考图，供重试时复用
-        if user_refs:
-            try:
-                save_user_refs(user["id"], job_id, user_refs)
-            except Exception:
-                logger.warning("Failed to save user refs for job %s", job_id)
-        all_refs: list[tuple[bytes, str]] = context_ref_bytes + user_refs
-        all_refs = all_refs[:9]  # 总共最多 9 张
 
         has_reference = bool(images) or bool(context_ref_bytes)
-        asyncio.create_task(
-            _run_ai_image_background(
-                job_id=job_id, user_id=user["id"], username=user["username"],
-                session_id=session_id,
-                provider=resolved_provider,
-                model=resolved, prompt=enriched_prompt,
-                size=size, resolution=resolution,
-                refs=all_refs, has_reference=has_reference, created_at=created_at,
-                original_prompt=original_prompt, resolved_prompt=enriched_prompt,
-                ref_previews=ref_previews_list,
+        # 批次模式：N 个独立 job 共享同样的 session/参数
+        job_ids: list[str] = []
+        for _idx in range(batch_count):
+            jid = uuid.uuid4().hex
+            job_ids.append(jid)
+            # 持久化用户参考图（每个 job 各存一份，避免并发覆盖）
+            if user_refs:
+                try:
+                    save_user_refs(user["id"], jid, user_refs)
+                except Exception:
+                    logger.warning("Failed to save user refs for job %s", jid)
+            all_refs_batch: list[tuple[bytes, str]] = context_ref_bytes + user_refs
+            all_refs_batch = all_refs_batch[:9]  # 总共最多 9 张
+            save_ai_image_job(
+                job_id=jid,
+                user_id=user["id"],
+                status="processing",
+                model=resolved,
+                prompt=original_prompt,
+                size=size,
+                original_prompt=original_prompt,
+                resolved_prompt=original_prompt,
+                has_reference=has_reference,
+                created_at=created_at,
             )
-        )
-        return {"job_id": job_id, "chat_session_id": session_id, "status": "processing"}
+            log_operation(
+                user_id=user["id"], username=user["username"],
+                action="ai_image",
+                detail=f"job={jid[:8]} model={resolved} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(all_refs_batch)} batch={batch_count}",
+                payload=json.dumps({"job_id": jid, "model": resolved, "size": size, "prompt": original_prompt[:200], "refs": len(all_refs_batch), "provider": resolved_provider, "batch_count": batch_count}, ensure_ascii=False),
+            )
+            asyncio.create_task(
+                _run_ai_image_background(
+                    job_id=jid, user_id=user["id"], username=user["username"],
+                    session_id=session_id,
+                    provider=resolved_provider,
+                    model=resolved, prompt=enriched_prompt,
+                    size=size, resolution=resolution,
+                    refs=all_refs_batch, has_reference=has_reference, created_at=created_at,
+                    original_prompt=original_prompt, resolved_prompt=enriched_prompt,
+                    ref_previews=ref_previews_list,
+                )
+            )
+        if batch_count == 1:
+            return {"job_id": job_ids[0], "chat_session_id": session_id, "status": "processing"}
+        return {"job_ids": job_ids, "chat_session_id": session_id, "status": "processing"}
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("ai_image_endpoint error: model=%s size=%s", resolved, size)
-        save_ai_image_job(
-            job_id=job_id,
-            user_id=user["id"],
-            status="failed",
-            model=resolved,
-            prompt=original_prompt,
-            size=size,
-            original_prompt=original_prompt,
-            resolved_prompt=original_prompt,
-            has_reference=bool(images) or bool(context_ref_bytes),
-            error=str(e),
-            created_at=created_at,
-        )
+        # 失败时给 batch_count 个失败 job，方便前端轮询看到状态
+        failed_ids: list[str] = []
+        for _ in range(batch_count):
+            fid = uuid.uuid4().hex
+            failed_ids.append(fid)
+            save_ai_image_job(
+                job_id=fid,
+                user_id=user["id"],
+                status="failed",
+                model=resolved,
+                prompt=original_prompt,
+                size=size,
+                original_prompt=original_prompt,
+                resolved_prompt=original_prompt,
+                has_reference=bool(images) or bool(context_ref_bytes),
+                error=str(e),
+                created_at=created_at,
+            )
         raise HTTPException(502, {"message": f"{type(e).__name__}: {e}", "chat_session_id": session_id})
 
 

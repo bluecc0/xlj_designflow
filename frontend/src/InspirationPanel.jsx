@@ -203,14 +203,16 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
       {/* 顶部栏 */}
       <div style={{
         height: 44, flexShrink: 0,
-        display: 'flex', alignItems: 'center', gap: 12,
+        display: 'flex', alignItems: 'center', gap: 8,
         padding: '0 16px',
         background: 'var(--panel)',
         borderBottom: '1px solid var(--line)',
       }}>
         <div style={{
-          display: 'flex', gap: 18,
-          overflowX: 'auto', maxWidth: 'min(680px, 54vw)',
+          display: 'flex', gap: 15,
+          overflowX: 'auto',
+          flex: '1 1 auto',
+          minWidth: 0,
           alignSelf: 'stretch', alignItems: 'center',
         }} className="inspiration-tab-scroll">
           {PANEL_INSPIRATION_TABS.map(function(t) {
@@ -233,12 +235,12 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
             }, t.label);
           })}
         </div>
-        <div style={{ flex: 1 }}/>
         <div style={{
           display: 'flex', alignItems: 'center', gap: 6,
           padding: '5px 10px', borderRadius: 6,
           background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-          width: 220,
+          width: 170,
+          flexShrink: 0,
         }}>
           <I.search size={12} style={{ color: 'var(--ink-3)' }}/>
           <input

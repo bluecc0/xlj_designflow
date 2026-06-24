@@ -1,0 +1,57 @@
+{
+  "version": "1.0",
+  "templates": {
+    "假期榜单": {
+      "fieldOrder": ["SKU", "商品名称", "立省", "到手价"],
+      "itemsPerModule": 9,
+      "exportFormat": "png",
+      "imageField": "SKU",
+      "moduleColumn": "模块",
+      "excludeFields": ["SPU", "吊牌价", "库存", "是否下架", "序号"],
+      "fieldAliases": {
+        "SKU": ["SKU", "sku", "商品编码", "货号"],
+        "商品名称": ["商品名称", "品名", "产品名", "商品名"],
+        "立省": ["立省", "优惠", "优惠金额"],
+        "到手价": ["到手价", "价格", "活动价", "售价"]
+      },
+      "skipIf": {
+        "是否下架": ["下架"]
+      }
+    },
+    "清凉装备": {
+      "fieldOrder": ["SKU", "商品名称", "立省", "到手价"],
+      "defaultSourceType": "白底",
+      "itemsPerModule": 9,
+      "exportFormat": "png",
+      "imageField": "SKU",
+      "moduleColumn": "模块",
+      "excludeFields": ["SPU", "吊牌价", "库存", "是否下架", "序号"],
+      "fieldAliases": {
+        "SKU": ["SKU", "sku", "商品编码", "货号"],
+        "商品名称": ["商品名称", "品名", "产品名", "商品名"],
+        "立省": ["立省", "优惠", "优惠金额"],
+        "到手价": ["到手价", "价格", "活动价", "售价"]
+      },
+      "skipIf": {
+        "是否下架": ["下架"]
+      }
+    },
+    "运动场景穿搭": {
+      "fieldOrder": ["SKU", "商品名称", "立省", "到手价"],
+      "itemsPerModule": 9,
+      "exportFormat": "png",
+      "imageField": "SKU",
+      "moduleColumn": "模块",
+      "excludeFields": ["SPU", "吊牌价", "库存", "是否下架", "序号"],
+      "fieldAliases": {
+        "SKU": ["SKU", "sku", "商品编码", "货号"],
+        "商品名称": ["商品名称", "品名", "产品名", "商品名"],
+        "立省": ["立省", "优惠", "优惠金额"],
+        "到手价": ["到手价", "价格", "活动价", "售价"]
+      },
+      "skipIf": {
+        "是否下架": ["下架"]
+      }
+    }
+  }
+}
