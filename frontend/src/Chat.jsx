@@ -976,7 +976,32 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     </div>
                   </div>
                 );
-              })() : m.type === 'smart-distribute' ? (() => {
+              })() : m.type === 'smart-distribute-loading' ? (
+                <div style={{
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  background: 'var(--panel)',
+                  border: '1px solid var(--line-2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                }}>
+                  <div style={{
+                    width: 18, height: 18, borderRadius: 99,
+                    border: '2px solid var(--line-2)',
+                    borderTopColor: 'var(--accent)',
+                    animation: 'spin 0.8s linear infinite',
+                    flexShrink: 0,
+                  }}/>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 12.5, color: 'var(--ink)', fontWeight: 600 }}>正在解析表格</div>
+                    <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 2 }}>
+                      {m.fileName ? ('已接收 ' + m.fileName + '，正在识别 sheet、标黄区域和替换字段…') : '正在识别 sheet、标黄区域和替换字段…'}
+                    </div>
+                  </div>
+                  {m.startedAt ? <ChatTimer startedAt={m.startedAt}/> : null}
+                </div>
+              ) : m.type === 'smart-distribute' ? (() => {
                 const data = m.data;
                 const modeLabel = data.mode === 'patch' ? 'patch（增量）' : 'full（全量）';
                 const totalJobs = (data.jobs || []).length;
@@ -4038,7 +4063,12 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
   }, [isLoading, templateFields]);
 
   const handleSmartDistribute = React.useCallback(async (file, filename) => {
-    setMessages(msgs => [...msgs, { who: 'user', type: 'file-attach', text: filename, file: filename }]);
+    const pendingId = 'smart-distribute-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    setMessages(msgs => [
+      ...msgs,
+      { who: 'user', type: 'file-attach', text: filename, file: filename },
+      { who: 'ai', type: 'smart-distribute-loading', id: pendingId, fileName: filename, meta: '智能铺货', startedAt: Date.now() }
+    ]);
     setIsLoading(true);
     try {
       const result = await window.API.smartDistribute(file);
@@ -4058,16 +4088,20 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       if (jobJsons.length > 0 && jobJsons[0] && navigator.clipboard && window.isSecureContext) {
         navigator.clipboard.writeText(jobJsons[0]).catch(function() {});
       }
-      setMessages(msgs => [...msgs, {
-        who: 'ai',
-        type: 'smart-distribute',
-        data: result,
-        jobJsons: jobJsons,
-        meta: '智能铺货',
-        copied: jobJsons.length > 0 && !!(navigator.clipboard && window.isSecureContext),
-      }]);
+      setMessages(msgs => msgs.map(function(m) {
+        return m.id === pendingId ? {
+          who: 'ai',
+          type: 'smart-distribute',
+          data: result,
+          jobJsons: jobJsons,
+          meta: '智能铺货',
+          copied: jobJsons.length > 0 && !!(navigator.clipboard && window.isSecureContext),
+        } : m;
+      }));
     } catch (e) {
-      setMessages(msgs => [...msgs, { who: 'ai', text: '解析错误: ' + (e.message || '未知错误'), meta: '错误' }]);
+      setMessages(msgs => msgs.map(function(m) {
+        return m.id === pendingId ? { who: 'ai', text: '解析错误: ' + (e.message || '未知错误'), meta: '错误' } : m;
+      }));
     }
     setIsLoading(false);
   }, [isLoading]);
