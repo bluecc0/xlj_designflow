@@ -43,6 +43,19 @@
     });
   }
 
+  function smartDistribute(file) {
+    var form = new FormData();
+    form.append('file', file);
+    return fetch(BASE + '/smart-distribute', { method: 'POST', body: form, credentials: 'include' }).then(function(resp) {
+      if (!resp.ok) {
+        return resp.text().then(function(text) {
+          throw new Error('智能铺货 HTTP ' + resp.status + ': ' + text.slice(0, 200));
+        });
+      }
+      return resp.json();
+    });
+  }
+
   window.API = {
     BASE: BASE,
     getCurrentUser: function() {
@@ -68,6 +81,7 @@
     },
     getTemplateThumbnailUrl: getTemplateThumbnailUrl,
     parseTable: parseTable,
+    smartDistribute: smartDistribute,
     createCompose: function(req) {
       return request('/compose', {
         method: 'POST',

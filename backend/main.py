@@ -1345,6 +1345,24 @@ async def parse_table_endpoint(
     return result
 
 
+@app.post("/smart-distribute")
+async def smart_distribute_endpoint(file: UploadFile = File(...)):
+    """
+    上传 Excel，解析为「铺货 JSON」。
+    用 openpyxl 读取单元格 + 模板规则库，不调用 AI。
+    供 Photoshop 小变量脚本消费。
+    """
+    from .smart_distribute import SmartDistributor
+
+    content = await file.read()
+    try:
+        distributor = SmartDistributor()
+        result = distributor.process(content, file.filename or "upload.xlsx")
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"智能铺货解析失败: {e}")
+
+
 @app.get("/image-types")
 def list_image_types():
     """返回可用的图片类型列表（key + 显示名 + 子文件夹是否存在）"""

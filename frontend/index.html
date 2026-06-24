@@ -2471,6 +2471,29 @@ const CopyableTextBubble = ({ who, text, markdown }) => {
   );
 };
 
+// 带反馈的复制按钮组件
+var CopyButton2 = function(props) {
+  var _useState = React.useState(false);
+  var copied = _useState[0];
+  var setCopied = _useState[1];
+  return React.createElement('button', {
+    onClick: function() {
+      try {
+        navigator.clipboard.writeText(props.jsonStr);
+        setCopied(true);
+        setTimeout(function() { setCopied(false); }, 2000);
+      } catch(e) {}
+    },
+    style: {
+      fontSize: 11, padding: '5px 14px', borderRadius: 5,
+      background: copied ? 'var(--ok)' : 'var(--ink)',
+      color: 'white', border: 'none',
+      cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4,
+      transition: 'background 200ms',
+    }
+  }, React.createElement(copied ? I.check : I.copy, { size: 10 }), copied ? '已复制' : '复制 JSON');
+};
+
 const FileCard = ({ name, size, type }) => (
   <div style={{
     display: 'flex', alignItems: 'center', gap: 10,
@@ -3234,6 +3257,63 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     </div>
                   </div>
                 );
+              })() : m.type === 'smart-distribute' ? (() => {
+                const data = m.data;
+                const modeLabel = data.mode === 'patch' ? 'patch（增量）' : 'full（全量）';
+                const totalJobs = (data.jobs || []).length;
+                const totalModules = (data.jobs || []).reduce(function(acc, j) { return acc + (j.modules || []).length; }, 0);
+                const totalSlots = (data.jobs || []).reduce(function(acc, j) {
+                  return acc + (j.modules || []).reduce(function(a, m) {
+                    return a + (m.values || m.patches || []).length;
+                  }, 0);
+                }, 0);
+                const suffixOverrides = (data.jobs || []).reduce(function(acc, j) {
+                  return acc + (j.modules || []).reduce(function(a, m) {
+                    var items = m.values || m.patches || [];
+                    return a + items.filter(function(v) { return v.sourceTypeReason && v.sourceTypeReason.indexOf('sku_suffix') === 0; }).length;
+                  }, 0);
+                }, 0);
+                const yellowCount = data.mode === 'patch' ? totalSlots : 0;
+                var jsonStr = '';
+                try { jsonStr = JSON.stringify(data, null, 2); } catch(e) { jsonStr = '/* JSON 序列化失败 */'; }
+                return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                  m.copied ? React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，JSON 已自动复制到剪贴板') : React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，以下是铺货 JSON：'),
+                  React.createElement('div', { style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden' } },
+                    React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
+                      React.createElement('div', { style: { width: 20, height: 20, borderRadius: 5, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' } },
+                        React.createElement(I.file, { size: 11 })
+                      ),
+                      React.createElement('div', { style: { flex: 1 } },
+                        React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' } }, data.source ? data.source.fileName : '表格'),
+                        React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)' } }, modeLabel + ' · ' + totalModules + ' 个模块 · ' + totalSlots + ' 个槽位')
+                      )
+                    ),
+                    React.createElement('div', { style: { padding: '10px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11.5 } },
+                      React.createElement('div', { style: { color: 'var(--ink)' } }, '模式: ' + modeLabel),
+                      React.createElement('div', { style: { color: 'var(--ink-2)' } }, '模板: ' + totalJobs + ' 个'),
+                      React.createElement('div', { style: { color: 'var(--ink-2)' } }, '模块: ' + totalModules + ' 个'),
+                      React.createElement('div', { style: { color: 'var(--ink-2)' } }, '替换槽位: ' + totalSlots + ' 个'),
+                      React.createElement('div', { style: { color: 'var(--ink-2)' } }, '图片素材: ' + data.defaults.sourceType),
+                      suffixOverrides > 0 ? React.createElement('div', { style: { color: 'var(--ok)' } }, '后缀覆盖: ' + suffixOverrides + ' 个') : null,
+                      yellowCount > 0 ? React.createElement('div', { style: { color: 'var(--warn)' } }, '标黄字段: ' + yellowCount + ' 个') : null,
+                      data.warnings && data.warnings.length > 0 ? React.createElement('div', { style: { color: 'var(--warn)', fontSize: 10.5, lineHeight: 1.4, marginTop: 2 } },
+                        data.warnings.map(function(w, wi) { return React.createElement('div', { key: wi }, '⚠ ' + w); })
+                      ) : null
+                    ),
+                    React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
+                      React.createElement(CopyButton2, { jsonStr: jsonStr })
+                    ),
+                    React.createElement('pre', {
+                      style: {
+                        margin: 0, padding: '10px 12px', fontSize: 10,
+                        color: 'var(--ink-2)', overflow: 'auto', maxHeight: 300,
+                        borderTop: '1px solid var(--line-2)',
+                        whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                        fontFamily: 'Menlo, Monaco, monospace',
+                      }
+                    }, jsonStr.slice(0, 3000) + (jsonStr.length > 3000 ? '\n/* ... 截断，完整 JSON 请点击复制 */' : ''))
+                  )
+                );
               })() : m.type === 'generating' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -3281,6 +3361,18 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     {m.error}
                   </div>
                 )}
+              </div>
+            ) : m.type === 'file-attach' ? (
+              <div style={{
+                padding: '8px 10px', borderRadius: 8,
+                background: 'var(--panel)', border: '1px solid var(--line-2)',
+                display: 'flex', alignItems: 'center', gap: 8, fontSize: 12,
+              }}>
+                <I.file size={14} style={{ color: 'var(--accent)', flexShrink: 0 }}/>
+                <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{m.text || '文件'}</span>
+                <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, marginLeft: 'auto' }}>
+                  已上传
+                </span>
               </div>
             ) : m.type === 'proxy-download-choice' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -3472,7 +3564,7 @@ const CHAT_INSPIRATION_CATEGORIES = [
 
 // ---------- Composer ----------
 
-const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
+const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
   const [text, setText] = React.useState('');
   const [lockedCommand, setLockedCommand] = React.useState('');
   const [files, setFiles] = React.useState([]);
@@ -3767,7 +3859,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     (lockedCommand === '/Gpt image 2' || lockedCommand === '/Nano Banana pro') ? 'ai-image' :
     lockedCommand === '/特殊品（完整）' ? 'special_full' :
     lockedCommand === '/特殊品' ? 'special' :
-    selectedWorkflow === 'compose' ? 'compose' : 'chat';
+    selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
   const aiOptionMap = AI_OPTIONS;
@@ -3985,10 +4077,16 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     if (images.length) addImageFiles(images);
     if (others.length && !agentEnabled) {
       const file = others[0];
-      const fileObj = { name: file.name, size: formatFileSize(file.size), file, imageType };
-      setFiles(prev => [...prev, fileObj]);
-      if (onParseTable) {
-        onParseTable(file, file.name, imageType).catch(err => console.error('Parse table error:', err));
+      if (selectedWorkflow === 'distribute') {
+        if (onSmartDistribute) {
+          onSmartDistribute(file, file.name).catch(err => console.error('Smart distribute error:', err));
+        }
+      } else {
+        const fileObj = { name: file.name, size: formatFileSize(file.size), file, imageType };
+        setFiles(prev => [...prev, fileObj]);
+        if (onParseTable) {
+          onParseTable(file, file.name, imageType).catch(err => console.error('Parse table error:', err));
+        }
       }
     }
     e.target.value = '';
@@ -3996,11 +4094,19 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
 
   const handlePaste = (e) => {
     const items = Array.from(e.clipboardData?.items || []);
-    const imageItems = items.filter(it => it.kind === 'file' && it.type.startsWith('image/'));
-    if (!imageItems.length) return;
+    const fileItems = items.filter(it => it.kind === 'file');
+    if (!fileItems.length) return;
     e.preventDefault();
-    const files = imageItems.map(it => it.getAsFile()).filter(Boolean);
-    addImageFiles(files);
+    const files = fileItems.map(it => it.getAsFile()).filter(Boolean);
+    const images = files.filter(f => f && f.type.startsWith('image/'));
+    const excels = files.filter(f => f && /\.(xlsx|xls|csv)$/i.test(f.name));
+    if (excels.length && selectedWorkflow === 'distribute' && onSmartDistribute) {
+      onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute paste error:', err); });
+    } else if (images.length) {
+      addImageFiles(images);
+    } else if (excels.length && onSmartDistribute) {
+      onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute paste error:', err); });
+    }
   };
 
   const removeRefImage = (idx) => {
@@ -4078,8 +4184,20 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     e.preventDefault();
     dragCounterRef.current = 0;
     setIsDraggingOver(false);
-    const files = e.dataTransfer.files;
-    if (files && files.length) addImageFiles(files);
+    var files = e.dataTransfer.files;
+    if (selectedWorkflow === 'distribute') {
+      // 智能铺货模式支持 Excel 拖入
+      var excels = Array.from(files || []).filter(function(f) {
+        return /\.(xlsx|xls|csv)$/i.test(f.name);
+      });
+      if (excels.length && onSmartDistribute) {
+        onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute drop error:', err); });
+      } else {
+        if (files && files.length) addImageFiles(files);
+      }
+    } else {
+      if (files && files.length) addImageFiles(files);
+    }
   };
 
   const clearComposer = React.useCallback(() => {
@@ -4114,7 +4232,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
       { id: 'chat', label: '默认', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat' },
       { id: 'gpt-image', label: 'GPT Image 2', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', cmd: '/Gpt image 2', available: available('/Gpt image 2') },
       { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro', available: available('/Nano Banana pro') },
-      { id: 'compose', label: '智能铺品', desc: '上传表格并匹配本地图库', iconKey: 'grid', workflow: 'compose' },
+      { id: 'distribute', label: '智能铺货', desc: '上传表格，自动解析为铺货 JSON', iconKey: 'grid', workflow: 'distribute' },
       { id: 'special', label: '特殊品', desc: '使用特殊品模板合成结果', iconKey: 'layers', cmd: template && template.is_special_full ? '/特殊品（完整）' : '/特殊品', available: available(template && template.is_special_full ? '/特殊品（完整）' : '/特殊品') },
       { id: 'download', label: '花瓣下载', desc: '输入花瓣 ID，自动识别可下载格式', iconKey: 'download', cmd: '/花瓣下载', available: available('/花瓣下载') },
     ];
@@ -4130,6 +4248,8 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         ? '特殊品'
         : selectedWorkflow === 'compose'
           ? '智能铺品'
+          : selectedWorkflow === 'distribute'
+            ? '智能铺货'
           : selectedWorkflow === 'download'
             ? '花瓣下载'
             : '默认';
@@ -4137,7 +4257,7 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
     ? 'image'
     : activeMode === 'special' || activeMode === 'special_full'
       ? 'layers'
-      : selectedWorkflow === 'compose'
+      : selectedWorkflow === 'compose' || selectedWorkflow === 'distribute'
         ? 'grid'
         : selectedWorkflow === 'download'
           ? 'download'
@@ -4155,7 +4275,9 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
         ? '线路 普通'
         : selectedWorkflow === 'compose'
           ? (imageType ? ('素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType)) : '')
-          : '';
+          : selectedWorkflow === 'distribute'
+            ? ''
+            : '';
   const selectedSettingBits = [
     agentEnabled ? 'Agent' : activeTaskLabel,
     agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? providerLabel : ''),
@@ -4176,7 +4298,9 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售'
           : selectedWorkflow === 'compose'
             ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁'
-            : selectedWorkflow === 'download'
+            : selectedWorkflow === 'distribute'
+              ? '上传或拖入 Excel 表格，自动解析为铺货 JSON'
+              : selectedWorkflow === 'download'
               ? '输入花瓣项目 ID 或链接，格式会自动识别'
               : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(
@@ -4581,12 +4705,12 @@ const Composer = ({ onSend, onParseTable, isLoading, slashTrigger, template, las
           alignItems: 'center', justifyContent: 'center',
           gap: 8, pointerEvents: 'none',
         }}>
-          <I.image size={28} style={{ color: 'var(--accent)' }}/>
+          <I.file size={28} style={{ color: 'var(--accent)' }}/>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent)' }}>
-            松手添加图片
+            松手添加文件
           </div>
           <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>
-            最多 {MAX_REFERENCE_IMAGES} 张参考图（当前 {refImages.length}/{MAX_REFERENCE_IMAGES}）
+            支持图片和 Excel 表格
           </div>
         </div>
       )}
@@ -6187,6 +6311,29 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     setIsLoading(false);
   }, [isLoading, templateFields]);
 
+  const handleSmartDistribute = React.useCallback(async (file, filename) => {
+    setMessages(msgs => [...msgs, { who: 'user', type: 'file-attach', text: filename, file: filename }]);
+    setIsLoading(true);
+    try {
+      const result = await window.API.smartDistribute(file);
+      var jsonStr = '';
+      try { jsonStr = JSON.stringify(result, null, 2); } catch(e) { jsonStr = ''; }
+      if (jsonStr && navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(jsonStr).catch(function() {});
+      }
+      setMessages(msgs => [...msgs, {
+        who: 'ai',
+        type: 'smart-distribute',
+        data: result,
+        meta: '智能铺货',
+        copied: !!(jsonStr && navigator.clipboard && window.isSecureContext),
+      }]);
+    } catch (e) {
+      setMessages(msgs => [...msgs, { who: 'ai', text: '解析错误: ' + (e.message || '未知错误'), meta: '错误' }]);
+    }
+    setIsLoading(false);
+  }, [isLoading]);
+
   const handleCompose = React.useCallback(async (template, parseResult) => {
     if (!template || !parseResult) return;
     // Build slots from products with image_path
@@ -6614,6 +6761,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       <Composer
         onSend={handleSend}
         onParseTable={handleParseTable}
+        onSmartDistribute={handleSmartDistribute}
         isLoading={isLoading}
         slashTrigger={slashTrigger}
         template={template}
