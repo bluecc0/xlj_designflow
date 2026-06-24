@@ -28,15 +28,6 @@ _RULES_PATH = _PROJECT_ROOT / "template_rules.json"
 # 常见黄色色值
 _YELLOW_HEXES = {"FFFF00", "FFF2CC", "FFEB9C", "FFE066", "FFD700"}
 
-# SKU 后缀映射（仅用于剥离后缀，不再输出 sourceType）
-_SKU_SUFFIX_PATTERNS = [
-    "-M", "__M",
-    "-P", "__P",
-    "-S", "__S",
-    "-W", "__W",
-    "-X2", "__X2",
-]
-
 
 def _load_rules() -> dict[str, Any]:
     """加载模板规则库"""
@@ -78,14 +69,6 @@ def _is_yellow(cell) -> bool:
     if hex_val and hex_val in _YELLOW_HEXES:
         return True
     return False
-
-
-def _strip_sku_suffix(sku: str) -> str:
-    """剥离 SKU 后缀，返回纯 value"""
-    for suffix in _SKU_SUFFIX_PATTERNS:
-        if sku.endswith(suffix):
-            return sku[:-len(suffix)]
-    return sku
 
 
 def _get_merged_range(ws, row: int, col: int) -> Optional[str]:
@@ -414,12 +397,9 @@ class SmartDistributor:
 
         if is_image:
             entry["type"] = "image"
-            cleaned = _strip_sku_suffix(raw_value)
-            entry["value"] = cleaned
-            entry["rawValue"] = raw_value
         else:
             entry["type"] = "text"
-            entry["value"] = raw_value
+        entry["value"] = raw_value
 
         return entry
 

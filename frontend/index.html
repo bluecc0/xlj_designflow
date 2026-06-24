@@ -3277,10 +3277,6 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     var jobModeLabel = data.mode === 'patch' ? 'patch（增量）' : 'full（全量）';
                     var jobModules = (job.modules || []).length;
                     var jobSlots = (job.modules || []).reduce(function(a, m) { return a + (m.values || m.patches || []).length; }, 0);
-                    var jobSuffix = (job.modules || []).reduce(function(a, m) {
-                      var items = m.values || m.patches || [];
-                      return a + items.filter(function(v) { return v.rawValue && v.rawValue !== v.value; }).length;
-                    }, 0);
                     var jobYellow = data.mode === 'patch' ? jobSlots : 0;
                     return React.createElement('div', { key: ji, style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden', marginTop: ji > 0 ? 4 : 0 } },
                       React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
@@ -3296,7 +3292,6 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                         React.createElement('div', { style: { color: 'var(--ink)' } }, 'Sheet: ' + job.sheetName),
                         React.createElement('div', { style: { color: 'var(--ink-2)' } }, '模块: ' + jobModules + ' 个'),
                         React.createElement('div', { style: { color: 'var(--ink-2)' } }, '替换槽位: ' + jobSlots + ' 个'),
-                        jobSuffix > 0 ? React.createElement('div', { style: { color: 'var(--ok)' } }, 'SKU 后缀覆盖: ' + jobSuffix + ' 个') : null,
                         jobYellow > 0 ? React.createElement('div', { style: { color: 'var(--warn)' } }, '标黄字段: ' + jobYellow + ' 个') : null,
                         data.warnings && data.warnings.length > 0 && ji === 0 ? React.createElement('div', { style: { color: 'var(--warn)', fontSize: 10.5, lineHeight: 1.4, marginTop: 2 } },
                           data.warnings.map(function(w, wi) { return React.createElement('div', { key: wi }, '⚠ ' + w); })
