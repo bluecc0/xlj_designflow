@@ -28,27 +28,32 @@ _YELLOW_HEXES = {"FFFF00", "FFF2CC", "FFEB9C", "FFE066", "FFD700"}
 _MODULE_COL_KEYWORDS = ["模块", "分类", "品类", "分组"]
 
 
-def _get_cell_color(cell) -> Optional[str]:
-    fill = cell.fill
-    if not fill or fill.fgColor is None:
-        return None
-    color = fill.fgColor
-    # 只处理手动设置的 RGB 填充色，忽略主题色和索引色
-    if color.type not in ("rgb",):
-        return None
-    if color.rgb:
-        raw = str(color.rgb)
-        if raw.upper() in ("0", "00000000", "FFFFFF", "FFFFFFFF"):
-            return None
-        if len(raw) == 8:
-            return raw[2:].upper()
-        return raw.upper()
-    return None
-
-
 def _is_yellow(cell) -> bool:
-    hex_val = _get_cell_color(cell)
-    return bool(hex_val and hex_val in _YELLOW_HEXES)
+    """判断单元格是否为手动设置的黄色填充"""
+    fill = cell.fill
+    if not fill:
+        return False
+    # 只有 fill_type=solid 才认为是手动设置的颜色
+    if fill.fill_type != "solid":
+        return False
+    fg = fill.fgColor
+    if fg is None:
+        return False
+    # 有 theme 或 indexed 说明不是手动 RGB 色
+    if fg.theme is not None or fg.indexed is not None:
+        return False
+    if fg.type != "rgb" or not fg.rgb:
+        return False
+    raw = str(fg.rgb)
+    # 忽略透明/无色/白色
+    if raw.upper() in ("0", "00000000", "FFFFFF", "FFFFFFFF"):
+        return False
+    # ARGB 去掉 alpha
+    if len(raw) == 8:
+        hex_val = raw[2:].upper()
+    else:
+        hex_val = raw.upper()
+    return hex_val in _YELLOW_HEXES
 
 
 def _get_merged_range(ws, row: int, col: int) -> Optional[str]:
