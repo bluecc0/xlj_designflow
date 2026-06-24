@@ -3271,7 +3271,10 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 var jsonStr = '';
                 try { jsonStr = JSON.stringify(data, null, 2); } catch(e) { jsonStr = '/* JSON 序列化失败 */'; }
                 return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + (((data.jobs || []).length >= 2) ? '共 ' + (data.jobs || []).length + ' 个模板，已自动复制第一个' : 'JSON 已自动复制到剪贴板')),
+                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + (((data.jobs || []).length >= 2) ? '共 ' + (data.jobs || []).length + ' 个模板，已自动复制第一个' : ((data.jobs || []).length === 1 ? 'JSON 已自动复制到剪贴板' : '但未匹配到任何模板规则'))),
+                  data.warnings && data.warnings.length > 0 ? React.createElement('div', {
+                    style: { padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }
+                  }, data.warnings.map(function(w, wi) { return React.createElement('div', { key: wi }, '⚠ ' + w); })) : null,
                   (data.jobs || []).map(function(job, ji) {
                     var singleJson = (m.jobJsons || [])[ji] || '';
                     var jobModeLabel = data.mode === 'patch' ? 'patch（增量）' : 'full（全量）';
