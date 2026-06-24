@@ -3,11 +3,11 @@
   "templates": {
     "假期榜单": {
       "fieldOrder": ["SKU", "商品名称", "立省", "到手价"],
-      "defaultSourceType": "PNG",
       "itemsPerModule": 9,
       "exportFormat": "png",
       "imageField": "SKU",
       "moduleColumn": "模块",
+      "excludeFields": ["SPU", "吊牌价", "库存", "是否下架", "序号"],
       "fieldAliases": {
         "SKU": ["SKU", "sku", "商品编码", "货号"],
         "商品名称": ["商品名称", "品名", "产品名", "商品名"],
@@ -25,6 +25,7 @@
       "exportFormat": "png",
       "imageField": "SKU",
       "moduleColumn": "模块",
+      "excludeFields": ["SPU", "吊牌价", "库存", "是否下架", "序号"],
       "fieldAliases": {
         "SKU": ["SKU", "sku", "商品编码", "货号"],
         "商品名称": ["商品名称", "品名", "产品名", "商品名"],
@@ -37,11 +38,11 @@
     },
     "运动场景穿搭": {
       "fieldOrder": ["SKU", "商品名称", "立省", "到手价"],
-      "defaultSourceType": "模特图",
       "itemsPerModule": 9,
       "exportFormat": "png",
       "imageField": "SKU",
       "moduleColumn": "模块",
+      "excludeFields": ["SPU", "吊牌价", "库存", "是否下架", "序号"],
       "fieldAliases": {
         "SKU": ["SKU", "sku", "商品编码", "货号"],
         "商品名称": ["商品名称", "品名", "产品名", "商品名"],
