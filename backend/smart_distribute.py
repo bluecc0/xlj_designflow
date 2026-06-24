@@ -197,6 +197,11 @@ class SmartDistributor:
         headers = {}
         module_col_idx = None
         for col_idx in range(1, ws.max_column + 1):
+            # 跳过隐藏列
+            col_letter = openpyxl.utils.get_column_letter(col_idx)
+            col_dim = ws.column_dimensions.get(col_letter)
+            if col_dim is not None and col_dim.hidden:
+                continue
             raw = _cell_str(ws.cell(row=header_row, column=col_idx))
             if not raw:
                 continue
@@ -210,19 +215,31 @@ class SmartDistributor:
                    field_order: list[str]) -> tuple[list[dict], set]:
         rows_data = []
         yellow_cells = set()
-        for row_idx in range(header_row + 1, ws.max_row + 1):
+        # 只读第一个数据块，遇到连续空行就结束
+        max_check = min(ws.max_row + 1, header_row + 1 + 200)  # 最多读 200 行
+        blank_run = 0
+        for row_idx in range(header_row + 1, max_check):
             if _is_row_hidden(ws, row_idx):
                 continue
             row_values = {"_row": row_idx}
+            has_value = False
             sku_value = ""
             for col_idx, field_name in headers.items():
                 cell = ws.cell(row=row_idx, column=col_idx)
                 val = _cell_str(cell)
+                if val:
+                    has_value = True
                 if _is_yellow(cell):
                     yellow_cells.add((row_idx, field_name))
                 row_values[field_name] = val
                 if col_idx == min(headers.keys()):
                     sku_value = val
+            if not has_value:
+                blank_run += 1
+                if blank_run >= 5:  # 连续 5 行空行则停止
+                    break
+                continue
+            blank_run = 0
             if not sku_value or _is_na(sku_value):
                 continue
             rows_data.append(row_values)
@@ -234,20 +251,26 @@ class SmartDistributor:
         modules = []
         current = None
         start = None
-        for row_idx in range(header_row + 1, ws.max_row + 1):
+        max_check = min(ws.max_row + 1, header_row + 1 + 200)
+        blank_run = 0
+        for row_idx in range(header_row + 1, max_check):
             if _is_row_hidden(ws, row_idx):
                 continue
             cell = ws.cell(row=row_idx, column=module_col_idx)
             mv = _get_merged_range(ws, row_idx, module_col_idx) or _cell_str(cell)
             if not mv:
+                blank_run += 1
+                if blank_run >= 5:
+                    break
                 continue
+            blank_run = 0
             if current is None:
                 current, start = mv, row_idx
             elif mv != current:
                 modules.append({"moduleName": current, "rowStart": start, "rowEnd": row_idx - 1})
                 current, start = mv, row_idx
         if current is not None and start is not None:
-            modules.append({"moduleName": current, "rowStart": start, "rowEnd": ws.max_row})
+            modules.append({"moduleName": current, "rowStart": start, "rowEnd": row_idx - 1})
         return modules
 
     def _group_by_module(self, rows_data: list[dict], modules: list[dict],
