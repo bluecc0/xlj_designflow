@@ -25,6 +25,7 @@ _YELLOW_HEXES = {"FFFF00", "FFF2CC", "FFEB9C", "FFE066", "FFD700"}
 _MODULE_COL_KEYWORDS = ["模块", "分类", "品类", "分组"]
 _IMAGE_FIELD_KEYWORDS = ["sku", "SKU", "货号", "商品编码", "款号", "图片", "素材"]
 _EXCLUDED_FIELD_NAMES = {"序号", "库存", "是否下架", "是否上架", "主推款", "SPU", "spu", "吊牌价", "划线价", "零售价"}
+_SUBMODULE_HEADER_KEYWORDS = {"序号", "子模块", "二级模块", "二级分类"}
 
 
 def _norm(value: Any) -> str:
@@ -80,11 +81,19 @@ def _is_module_col(header: str) -> bool:
     return any(_norm(kw) == cleaned for kw in _MODULE_COL_KEYWORDS)
 
 
+def _is_numeric_like(value: str) -> bool:
+    return bool(re.fullmatch(r"[\d\s.,，、\-—_]+", str(value or "").strip()))
+
+
+def _safe_name(value: str) -> str:
+    return re.sub(r"[\\/:\*\?\"<>\|]+", "_", str(value or "").strip()) or "默认"
+
+
 class SmartDistributor:
     """智能铺货核心处理类。"""
 
     def process(self, file_bytes: bytes, filename: str) -> SmartDistributeResponse:
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, keep_links=False)
         warnings: list[str] = []
         sheets: list[dict] = []
         visible_count = 0
@@ -138,7 +147,7 @@ class SmartDistributor:
             warnings.append(f"Sheet[{sheet_name}] 未检测到有效表头，已跳过")
             return None
 
-        headers, module_col_idx = self._scan_headers(ws, header_row)
+        headers, module_col_idx, excluded_cols = self._scan_headers(ws, header_row)
         if not headers:
             warnings.append(f"Sheet[{sheet_name}] 没有找到有效数据列，已跳过")
             return None
@@ -146,13 +155,14 @@ class SmartDistributor:
         field_order = [headers[col] for col in sorted(headers)]
         image_field = self._detect_image_field(field_order)
         last_row = self._find_last_data_row(ws, header_row, headers)
-        modules = self._detect_modules(ws, header_row, module_col_idx, last_row)
+        submodule_col_idx = self._find_submodule_col(ws, header_row, last_row, excluded_cols)
+        modules = self._detect_modules(ws, header_row, module_col_idx, submodule_col_idx, last_row)
         rows_data, yellow_cells, skipped_rows = self._read_rows(ws, header_row, headers, image_field, last_row)
         if not rows_data:
             warnings.append(f"Sheet[{sheet_name}] 没有有效数据行")
             return None
 
-        module_groups = self._group_by_module(rows_data, modules, headers, module_col_idx)
+        module_groups = self._group_by_module(rows_data, modules, headers, module_col_idx, submodule_col_idx)
         return {
             "sheetName": sheet_name,
             "templateName": sheet_name,
@@ -174,8 +184,9 @@ class SmartDistributor:
                 return row_idx
         return None
 
-    def _scan_headers(self, ws, header_row: int) -> tuple[dict[int, str], Optional[int]]:
+    def _scan_headers(self, ws, header_row: int) -> tuple[dict[int, str], Optional[int], dict[int, str]]:
         headers: dict[int, str] = {}
+        excluded_cols: dict[int, str] = {}
         module_col_idx = None
         for col_idx in range(1, ws.max_column + 1):
             if _is_col_hidden(ws, col_idx):
@@ -185,9 +196,11 @@ class SmartDistributor:
                 continue
             if _is_module_col(raw):
                 module_col_idx = col_idx
-            elif raw not in _EXCLUDED_FIELD_NAMES:
+            elif raw in _EXCLUDED_FIELD_NAMES:
+                excluded_cols[col_idx] = raw
+            else:
                 headers[col_idx] = raw
-        return headers, module_col_idx
+        return headers, module_col_idx, excluded_cols
 
     def _detect_image_field(self, field_order: list[str]) -> str:
         for field in field_order:
@@ -247,30 +260,56 @@ class SmartDistributor:
             rows_data.append(row_values)
         return rows_data, yellow_cells, skipped_rows
 
-    def _detect_modules(self, ws, header_row: int, module_col_idx: Optional[int], last_row: int) -> list[dict]:
-        if module_col_idx is None:
+    def _find_submodule_col(self, ws, header_row: int, last_row: int, excluded_cols: dict[int, str]) -> Optional[int]:
+        """在被排除列里识别“二级模块”列，避免把它误当替换字段。"""
+        for col_idx, header in excluded_cols.items():
+            if header not in _SUBMODULE_HEADER_KEYWORDS:
+                continue
+            for rng in ws.merged_cells.ranges:
+                if not (rng.min_col <= col_idx <= rng.max_col):
+                    continue
+                if rng.min_row <= header_row or rng.max_row < header_row + 1 or rng.min_row > last_row:
+                    continue
+                if rng.max_row - rng.min_row + 1 < 2:
+                    continue
+                value = _cell_str(ws.cell(row=rng.min_row, column=rng.min_col))
+                if value and not _is_numeric_like(value):
+                    return col_idx
+        return None
+
+    def _detect_modules(self, ws, header_row: int, module_col_idx: Optional[int],
+                        submodule_col_idx: Optional[int], last_row: int) -> list[dict]:
+        if module_col_idx is None and submodule_col_idx is None:
             return []
         modules = []
-        current = None
+        current_key = None
+        current_payload = None
         start = None
         for row_idx in range(header_row + 1, last_row + 1):
             if _is_row_hidden(ws, row_idx):
                 continue
-            cell = ws.cell(row=row_idx, column=module_col_idx)
-            mv = _get_merged_range(ws, row_idx, module_col_idx) or _cell_str(cell)
-            if not mv:
+            parent = ""
+            if module_col_idx is not None:
+                parent = _get_merged_range(ws, row_idx, module_col_idx) or _cell_str(ws.cell(row=row_idx, column=module_col_idx))
+            submodule = ""
+            if submodule_col_idx is not None:
+                submodule = _get_merged_range(ws, row_idx, submodule_col_idx) or _cell_str(ws.cell(row=row_idx, column=submodule_col_idx))
+            if not parent and not submodule:
                 continue
-            if current is None:
-                current, start = mv, row_idx
-            elif mv != current:
-                modules.append({"moduleName": current, "rowStart": start, "rowEnd": row_idx - 1})
-                current, start = mv, row_idx
-        if current is not None and start is not None:
-            modules.append({"moduleName": current, "rowStart": start, "rowEnd": last_row})
+            module_name = "/".join(part for part in (parent, submodule) if part) or "默认"
+            key = (parent, submodule)
+            payload = {"moduleName": module_name, "parentModule": parent, "subModule": submodule}
+            if current_key is None:
+                current_key, current_payload, start = key, payload, row_idx
+            elif key != current_key:
+                modules.append({**current_payload, "rowStart": start, "rowEnd": row_idx - 1})
+                current_key, current_payload, start = key, payload, row_idx
+        if current_payload is not None and start is not None:
+            modules.append({**current_payload, "rowStart": start, "rowEnd": last_row})
         return modules
 
     def _group_by_module(self, rows_data: list[dict], modules: list[dict], headers: dict[int, str],
-                         module_col_idx: Optional[int]) -> list[dict]:
+                         module_col_idx: Optional[int], submodule_col_idx: Optional[int]) -> list[dict]:
         if not modules:
             row_start = min(r["_row"] for r in rows_data)
             row_end = max(r["_row"] for r in rows_data)
@@ -278,7 +317,7 @@ class SmartDistributor:
                 "moduleName": "默认",
                 "rowStart": row_start,
                 "rowEnd": row_end,
-                "excelRange": self._excel_range(row_start, row_end, headers, module_col_idx),
+                "excelRange": self._excel_range(row_start, row_end, headers, module_col_idx, submodule_col_idx),
                 "rowCount": len(rows_data),
                 "rows": rows_data,
             }]
@@ -290,18 +329,23 @@ class SmartDistributor:
                 row_end = max(r["_row"] for r in mr)
                 result.append({
                     "moduleName": mod["moduleName"],
+                    "parentModule": mod.get("parentModule") or "",
+                    "subModule": mod.get("subModule") or "",
                     "rowStart": row_start,
                     "rowEnd": row_end,
-                    "excelRange": self._excel_range(row_start, row_end, headers, module_col_idx),
+                    "excelRange": self._excel_range(row_start, row_end, headers, module_col_idx, submodule_col_idx),
                     "rowCount": len(mr),
                     "rows": mr,
                 })
         return result
 
-    def _excel_range(self, row_start: int, row_end: int, headers: dict[int, str], module_col_idx: Optional[int]) -> str:
+    def _excel_range(self, row_start: int, row_end: int, headers: dict[int, str],
+                     module_col_idx: Optional[int], submodule_col_idx: Optional[int]) -> str:
         cols = list(headers.keys())
         if module_col_idx:
             cols.append(module_col_idx)
+        if submodule_col_idx:
+            cols.append(submodule_col_idx)
         if not cols:
             return ""
         return f"{get_column_letter(min(cols))}{row_start}:{get_column_letter(max(cols))}{row_end}"
@@ -318,8 +362,12 @@ class SmartDistributor:
                 "excelRange": mod["excelRange"],
                 "rowCount": mod["rowCount"],
                 "expectedLayerCount": mod["rowCount"] * len(sheet["fieldOrder"]),
-                "exportName": f"{sheet['sheetName']}_{mod['moduleName']}",
+                "exportName": f"{sheet['sheetName']}_{_safe_name(mod['moduleName'])}",
             }
+            if mod.get("parentModule"):
+                module_payload["parentModule"] = mod["parentModule"]
+            if mod.get("subModule"):
+                module_payload["subModule"] = mod["subModule"]
             module_payload["patches" if patch_mode else "values"] = entries
             modules.append(module_payload)
         if not modules:
