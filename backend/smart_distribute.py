@@ -2,8 +2,9 @@
 智能铺货 - Excel 解析 -> 铺货 JSON
 
 用 openpyxl 读取单元格，把每个可见 sheet 当作一个模板来生成 JSON。
-全程固定规则，不调用 AI，不依赖历史 template_rules.json。Chatbot 只解析替换内容，不决定图片素材类型。
-SKU / 货号等图片字段使用斜体时，表示该行手动处理，不进入自动替换 JSON。
+全程固定规则，不调用 AI，不依赖历史 template_rules.json。Chatbot 只解析替换内容，不决定最终替换动作。
+SKU / 货号等图片字段使用斜体，或“类型”列填写“海报”时，表示该行手动处理，不进入自动替换 JSON。
+“类型”列可按分类自动给图片字段追加素材后缀，如“模特图”追加 -M、“PNG”追加 -P。
 
 模式规则：
   - 全表没有黄色标记 -> full：每个 sheet 作为一个模板 job，输出全量 values
@@ -26,10 +27,28 @@ _MODULE_COL_KEYWORDS = ["模块", "分类", "品类", "分组"]
 _IMAGE_FIELD_KEYWORDS = ["sku", "SKU", "货号", "商品编码", "款号", "图片", "素材"]
 _EXCLUDED_FIELD_NAMES = {"序号", "库存", "是否下架", "是否上架", "主推款", "SPU", "spu", "吊牌价", "划线价", "零售价"}
 _SUBMODULE_HEADER_KEYWORDS = {"序号", "子模块", "二级模块", "二级分类"}
+_TYPE_HEADER_NAMES = {"类型"}
+_SKIP_TYPE_VALUES = {"海报"}
+_TYPE_SUFFIX_MAP = {
+    "模特": "-M",
+    "模特图": "-M",
+    "PNG": "-P",
+    "PNG带阴影": "-S",
+    "PNG 带阴影": "-S",
+    "带阴影": "-S",
+    "阴影": "-S",
+    "白底": "-W",
+    "白底图": "-W",
+    "一双鞋": "-X2",
+}
 
 
 def _norm(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or "").strip()).lower()
+
+
+_SKIP_TYPE_KEYS = {_norm(v) for v in _SKIP_TYPE_VALUES}
+_TYPE_SUFFIX_KEYS = {_norm(k): v for k, v in _TYPE_SUFFIX_MAP.items()}
 
 
 def _is_yellow(cell) -> bool:
@@ -87,6 +106,16 @@ def _is_numeric_like(value: str) -> bool:
 
 def _safe_name(value: str) -> str:
     return re.sub(r"[\\/:\*\?\"<>\|]+", "_", str(value or "").strip()) or "默认"
+
+
+def _with_type_suffix(value: str, suffix: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return text
+    suffix_key = _norm(suffix)
+    if _norm(text).endswith(suffix_key) or _norm(text).endswith(suffix_key.replace("-", "__", 1)):
+        return text
+    return f"{text}{suffix}"
 
 
 class SmartDistributor:
@@ -147,7 +176,7 @@ class SmartDistributor:
             warnings.append(f"Sheet[{sheet_name}] 未检测到有效表头，已跳过")
             return None
 
-        headers, module_col_idx, excluded_cols = self._scan_headers(ws, header_row)
+        headers, module_col_idx, excluded_cols, type_col_idx = self._scan_headers(ws, header_row)
         if not headers:
             warnings.append(f"Sheet[{sheet_name}] 没有找到有效数据列，已跳过")
             return None
@@ -157,7 +186,9 @@ class SmartDistributor:
         last_row = self._find_last_data_row(ws, header_row, headers)
         submodule_col_idx = self._find_submodule_col(ws, header_row, last_row, excluded_cols)
         modules = self._detect_modules(ws, header_row, module_col_idx, submodule_col_idx, last_row)
-        rows_data, yellow_cells, skipped_rows = self._read_rows(ws, header_row, headers, image_field, last_row)
+        rows_data, yellow_cells, skipped_rows = self._read_rows(
+            ws, header_row, headers, image_field, last_row, type_col_idx
+        )
         if not rows_data:
             warnings.append(f"Sheet[{sheet_name}] 没有有效数据行")
             return None
@@ -184,10 +215,11 @@ class SmartDistributor:
                 return row_idx
         return None
 
-    def _scan_headers(self, ws, header_row: int) -> tuple[dict[int, str], Optional[int], dict[int, str]]:
+    def _scan_headers(self, ws, header_row: int) -> tuple[dict[int, str], Optional[int], dict[int, str], Optional[int]]:
         headers: dict[int, str] = {}
         excluded_cols: dict[int, str] = {}
         module_col_idx = None
+        type_col_idx = None
         for col_idx in range(1, ws.max_column + 1):
             if _is_col_hidden(ws, col_idx):
                 continue
@@ -196,11 +228,13 @@ class SmartDistributor:
                 continue
             if _is_module_col(raw):
                 module_col_idx = col_idx
+            elif raw in _TYPE_HEADER_NAMES:
+                type_col_idx = col_idx
             elif raw in _EXCLUDED_FIELD_NAMES:
                 excluded_cols[col_idx] = raw
             else:
                 headers[col_idx] = raw
-        return headers, module_col_idx, excluded_cols
+        return headers, module_col_idx, excluded_cols, type_col_idx
 
     def _detect_image_field(self, field_order: list[str]) -> str:
         for field in field_order:
@@ -230,13 +264,22 @@ class SmartDistributor:
         return last_row
 
     def _read_rows(self, ws, header_row: int, headers: dict[int, str], image_field: str,
-                   last_row: int) -> tuple[list[dict], set, set]:
+                   last_row: int, type_col_idx: Optional[int]) -> tuple[list[dict], set, set]:
         rows_data = []
         yellow_cells = set()
         skipped_rows = set()
         image_col = next((col for col, field in headers.items() if field == image_field), min(headers.keys()))
         for row_idx in range(header_row + 1, last_row + 1):
             if _is_row_hidden(ws, row_idx):
+                continue
+            type_value = ""
+            if type_col_idx is not None:
+                type_value = _get_merged_range(ws, row_idx, type_col_idx) or _cell_str(
+                    ws.cell(row=row_idx, column=type_col_idx)
+                )
+            type_key = _norm(type_value)
+            if type_key in _SKIP_TYPE_KEYS:
+                skipped_rows.add(row_idx)
                 continue
             image_cell = ws.cell(row=row_idx, column=image_col)
             image_value = _cell_str(image_cell)
@@ -252,6 +295,10 @@ class SmartDistributor:
                 val = _cell_str(cell)
                 if _is_yellow(cell):
                     yellow_cells.add((row_idx, field_name))
+                suffix = _TYPE_SUFFIX_KEYS.get(type_key)
+                if field_name == image_field and suffix:
+                    val = _with_type_suffix(val, suffix)
+                    image_value = val
                 row_values[field_name] = val
                 has_any = has_any or bool(val)
                 has_error = has_error or _is_na(val)
