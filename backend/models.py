@@ -151,6 +151,7 @@ class SmartDistributeResponse(BaseModel):
     mode: str  # "full" | "patch"
     source: dict
     defaults: dict
+    summary: dict = Field(default_factory=dict)
     jobs: list
     warnings: list[str] = Field(default_factory=list)
 

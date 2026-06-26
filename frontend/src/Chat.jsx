@@ -1010,10 +1010,26 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     return a + (m.values || m.patches || []).length;
                   }, 0);
                 }, 0);
+                const summary = data.summary || {};
+                const formatCountMap = function(counts, opts) {
+                  opts = opts || {};
+                  return Object.keys(counts || {}).filter(function(k) {
+                    return !opts.exclude || opts.exclude.indexOf(k) < 0;
+                  }).map(function(k) {
+                    return k + ' ' + counts[k];
+                  }).join('，');
+                };
+                const specialText = formatCountMap(summary.typeCounts || {}, { exclude: ['海报'] });
+                const skippedText = summary.skippedRows ? ('跳过 ' + summary.skippedRows + ' 行' + ((summary.typeCounts || {}).海报 ? '（海报 ' + (summary.typeCounts || {}).海报 + '）' : '')) : '';
+                const summaryText = '解析到 ' + (summary.templateCount || totalJobs) + ' 个模板，'
+                  + (summary.skuCount || 0) + ' 个 SKU × ' + (summary.fieldCount || 0) + ' 个字段，共 '
+                  + (summary.totalSlots || totalSlots) + ' 个槽位'
+                  + (specialText ? '，特殊标记：' + specialText : '')
+                  + (skippedText ? '，' + skippedText : '');
                 var jsonStr = '';
                 try { jsonStr = JSON.stringify(data, null, 2); } catch(e) { jsonStr = ''; }
                 return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + (data.mode === 'patch' ? (totalSlots + ' 个增量槽位，') : (totalJobs + ' 个 sheet，' + totalSlots + ' 个槽位，')) + (m.copied ? (data.mode === 'patch' ? 'JSON 已自动复制到剪贴板' : '已自动复制第 1 个 sheet JSON') : 'JSON 已生成')),
+                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + summaryText + '。' + (m.copied ? (data.mode === 'patch' ? 'JSON 已自动复制到剪贴板' : '已自动复制第 1 个模板 JSON') : 'JSON 已生成')),
                   data.warnings && data.warnings.length > 0 ? React.createElement('div', {
                     style: { padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }
                   }, data.warnings.map(function(w, wi) { return React.createElement('div', { key: wi }, '⚠ ' + w); })) : null,
@@ -1051,6 +1067,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                                 mode: data.mode,
                                 source: data.source,
                                 defaults: data.defaults,
+                                summary: job.summary || {},
                                 jobs: [job],
                               }, null, 2);
                             } catch(e) { sheetJson = ''; }
@@ -1059,6 +1076,14 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                             return a + (mod.values || mod.patches || []).length;
                           }, 0);
                           var jobModules = (job.modules || []).length;
+                          var jobSummary = job.summary || {};
+                          var jobSpecialText = formatCountMap(jobSummary.typeCounts || {}, { exclude: ['海报'] });
+                          var jobSkippedText = jobSummary.skippedRows ? ('跳过 ' + jobSummary.skippedRows + ' 行' + ((jobSummary.typeCounts || {}).海报 ? '（海报 ' + (jobSummary.typeCounts || {}).海报 + '）' : '')) : '';
+                          var jobSummaryText = jobModules + ' 个模块 · '
+                            + (jobSummary.skuCount || 0) + ' 个 SKU × ' + (jobSummary.fieldCount || 0) + ' 个字段 · '
+                            + (jobSummary.totalSlots || jobSlots) + ' 个槽位'
+                            + (jobSpecialText ? ' · 特殊标记：' + jobSpecialText : '')
+                            + (jobSkippedText ? ' · ' + jobSkippedText : '');
                           return React.createElement('div', {
                             key: job.sheetName || ji,
                             style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden' }
@@ -1069,7 +1094,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                               ),
                               React.createElement('div', { style: { flex: 1, minWidth: 0 } },
                                 React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, job.sheetName || job.templateName || ('Sheet ' + (ji + 1))),
-                                React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)' } }, jobModules + ' 个模块 · ' + jobSlots + ' 个槽位')
+                                React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)', lineHeight: 1.45 } }, jobSummaryText)
                               )
                             ),
                             React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
@@ -4102,6 +4127,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
           mode: result.mode,
           source: result.source,
           defaults: result.defaults,
+          summary: job.summary || {},
           jobs: [job],
         };
         var str = '';

@@ -41,6 +41,13 @@ _TYPE_SUFFIX_MAP = {
     "白底图": "-W",
     "一双鞋": "-X2",
 }
+_TYPE_SUFFIX_LABELS = {
+    "-M": "模特",
+    "-P": "PNG",
+    "-S": "PNG 带阴影",
+    "-W": "白底",
+    "-X2": "一双鞋",
+}
 
 
 def _norm(value: Any) -> str:
@@ -151,6 +158,7 @@ class SmartDistributor:
 
         if not jobs:
             warnings.append("未生成任何铺货任务，请检查表格内容")
+        summary = self._build_response_summary(jobs)
 
         return SmartDistributeResponse(
             schemaVersion="1.0",
@@ -166,6 +174,7 @@ class SmartDistributor:
                 "exportMode": "moduleGroup",
                 "exportFormat": "png",
             },
+            summary=summary,
             jobs=jobs,
             warnings=warnings,
         )
@@ -186,7 +195,7 @@ class SmartDistributor:
         last_row = self._find_last_data_row(ws, header_row, headers)
         submodule_col_idx = self._find_submodule_col(ws, header_row, last_row, excluded_cols)
         modules = self._detect_modules(ws, header_row, module_col_idx, submodule_col_idx, last_row)
-        rows_data, yellow_cells, skipped_rows = self._read_rows(
+        rows_data, yellow_cells, skipped_rows, skipped_type_counts = self._read_rows(
             ws, header_row, headers, image_field, last_row, type_col_idx
         )
         if not rows_data:
@@ -202,6 +211,7 @@ class SmartDistributor:
             "modules": module_groups,
             "yellowCells": yellow_cells,
             "skippedRows": skipped_rows,
+            "skippedTypeCounts": skipped_type_counts,
             "hasYellow": bool(yellow_cells),
         }
 
@@ -264,10 +274,11 @@ class SmartDistributor:
         return last_row
 
     def _read_rows(self, ws, header_row: int, headers: dict[int, str], image_field: str,
-                   last_row: int, type_col_idx: Optional[int]) -> tuple[list[dict], set, set]:
+                   last_row: int, type_col_idx: Optional[int]) -> tuple[list[dict], set, set, dict[str, int]]:
         rows_data = []
         yellow_cells = set()
         skipped_rows = set()
+        skipped_type_counts: dict[str, int] = {}
         image_col = next((col for col, field in headers.items() if field == image_field), min(headers.keys()))
         for row_idx in range(header_row + 1, last_row + 1):
             if _is_row_hidden(ws, row_idx):
@@ -280,7 +291,11 @@ class SmartDistributor:
             type_key = _norm(type_value)
             if type_key in _SKIP_TYPE_KEYS:
                 skipped_rows.add(row_idx)
+                label = type_value or "跳过"
+                skipped_type_counts[label] = skipped_type_counts.get(label, 0) + 1
                 continue
+            suffix = _TYPE_SUFFIX_KEYS.get(type_key)
+            suffix_label = _TYPE_SUFFIX_LABELS.get(suffix or "", type_value)
             image_cell = ws.cell(row=row_idx, column=image_col)
             image_value = _cell_str(image_cell)
             if image_value and image_cell.font and image_cell.font.italic:
@@ -288,6 +303,10 @@ class SmartDistributor:
                 continue
 
             row_values = {"_row": row_idx}
+            if suffix:
+                row_values["_typeValue"] = type_value
+                row_values["_typeSuffix"] = suffix
+                row_values["_typeLabel"] = suffix_label
             has_any = False
             has_error = False
             for col_idx, field_name in headers.items():
@@ -295,7 +314,6 @@ class SmartDistributor:
                 val = _cell_str(cell)
                 if _is_yellow(cell):
                     yellow_cells.add((row_idx, field_name))
-                suffix = _TYPE_SUFFIX_KEYS.get(type_key)
                 if field_name == image_field and suffix:
                     val = _with_type_suffix(val, suffix)
                     image_value = val
@@ -305,7 +323,7 @@ class SmartDistributor:
             if not has_any or not image_value or _is_na(image_value) or has_error:
                 continue
             rows_data.append(row_values)
-        return rows_data, yellow_cells, skipped_rows
+        return rows_data, yellow_cells, skipped_rows, skipped_type_counts
 
     def _find_submodule_col(self, ws, header_row: int, last_row: int, excluded_cols: dict[int, str]) -> Optional[int]:
         """在被排除列里识别“二级模块”列，避免把它误当替换字段。"""
@@ -397,12 +415,66 @@ class SmartDistributor:
             return ""
         return f"{get_column_letter(min(cols))}{row_start}:{get_column_letter(max(cols))}{row_end}"
 
+    def _summarize_rows(self, rows: list[dict]) -> dict:
+        suffix_counts: dict[str, int] = {}
+        type_counts: dict[str, int] = {}
+        for row in rows:
+            suffix = row.get("_typeSuffix")
+            label = row.get("_typeLabel")
+            if suffix:
+                suffix_counts[suffix] = suffix_counts.get(suffix, 0) + 1
+            if label:
+                type_counts[label] = type_counts.get(label, 0) + 1
+        return {
+            "skuCount": len(rows),
+            "specialMarkedCount": sum(type_counts.values()),
+            "typeCounts": type_counts,
+            "suffixCounts": suffix_counts,
+        }
+
+    def _build_response_summary(self, jobs: list[dict]) -> dict:
+        summary = {
+            "templateCount": len(jobs),
+            "moduleCount": 0,
+            "skuCount": 0,
+            "fieldCount": 0,
+            "totalSlots": 0,
+            "skippedRows": 0,
+            "specialMarkedCount": 0,
+            "typeCounts": {},
+            "suffixCounts": {},
+        }
+        for job in jobs:
+            js = job.get("summary") or {}
+            summary["moduleCount"] += js.get("moduleCount", 0)
+            summary["skuCount"] += js.get("skuCount", 0)
+            summary["fieldCount"] = max(summary["fieldCount"], js.get("fieldCount", 0))
+            summary["totalSlots"] += js.get("totalSlots", 0)
+            summary["skippedRows"] += js.get("skippedRows", 0)
+            summary["specialMarkedCount"] += js.get("specialMarkedCount", 0)
+            for key, value in (js.get("typeCounts") or {}).items():
+                summary["typeCounts"][key] = summary["typeCounts"].get(key, 0) + value
+            for key, value in (js.get("suffixCounts") or {}).items():
+                summary["suffixCounts"][key] = summary["suffixCounts"].get(key, 0) + value
+        return summary
+
     def _build_sheet_job(self, sheet: dict, patch_mode: bool) -> Optional[dict]:
         modules = []
+        sheet_type_counts: dict[str, int] = {}
+        sheet_suffix_counts: dict[str, int] = {}
+        sheet_sku_count = 0
+        sheet_slot_count = 0
         for mod in sheet["modules"]:
             entries = self._build_entries(sheet, mod, patch_mode)
             if patch_mode and not entries:
                 continue
+            row_summary = self._summarize_rows(mod["rows"])
+            module_summary = {
+                **row_summary,
+                "fieldCount": len(sheet["fieldOrder"]),
+                "totalSlots": len(entries),
+                "skippedRows": 0,
+            }
             module_payload = {
                 "moduleName": mod["moduleName"],
                 "targetGroup": mod["moduleName"],
@@ -410,6 +482,7 @@ class SmartDistributor:
                 "rowCount": mod["rowCount"],
                 "expectedLayerCount": mod["rowCount"] * len(sheet["fieldOrder"]),
                 "exportName": f"{sheet['sheetName']}_{_safe_name(mod['moduleName'])}",
+                "summary": module_summary,
             }
             if mod.get("parentModule"):
                 module_payload["parentModule"] = mod["parentModule"]
@@ -417,13 +490,35 @@ class SmartDistributor:
                 module_payload["subModule"] = mod["subModule"]
             module_payload["patches" if patch_mode else "values"] = entries
             modules.append(module_payload)
+            sheet_sku_count += row_summary["skuCount"]
+            sheet_slot_count += len(entries)
+            for key, value in row_summary["typeCounts"].items():
+                sheet_type_counts[key] = sheet_type_counts.get(key, 0) + value
+            for key, value in row_summary["suffixCounts"].items():
+                sheet_suffix_counts[key] = sheet_suffix_counts.get(key, 0) + value
         if not modules:
             return None
+        for key, value in (sheet.get("skippedTypeCounts") or {}).items():
+            sheet_type_counts[key] = sheet_type_counts.get(key, 0) + value
+        skipped_rows = sorted(sheet.get("skippedRows") or [])
+        sheet_summary = {
+            "templateName": sheet["templateName"],
+            "moduleCount": len(modules),
+            "skuCount": sheet_sku_count,
+            "fieldCount": len(sheet["fieldOrder"]),
+            "totalSlots": sheet_slot_count,
+            "expectedLayerCount": sheet_sku_count * len(sheet["fieldOrder"]),
+            "skippedRows": len(skipped_rows),
+            "specialMarkedCount": sum(sheet_suffix_counts.values()),
+            "typeCounts": sheet_type_counts,
+            "suffixCounts": sheet_suffix_counts,
+        }
         return {
             "sheetName": sheet["sheetName"],
             "templateName": sheet["templateName"],
             "fieldOrder": sheet["fieldOrder"],
-            "skippedRows": sorted(sheet.get("skippedRows") or []),
+            "summary": sheet_summary,
+            "skippedRows": skipped_rows,
             "modules": modules,
         }
 
