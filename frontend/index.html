@@ -2476,22 +2476,38 @@ var CopyButton2 = function(props) {
   var _useState = React.useState(false);
   var copied = _useState[0];
   var setCopied = _useState[1];
+  var _errorState = React.useState(false);
+  var copyFailed = _errorState[0];
+  var setCopyFailed = _errorState[1];
+  var value = String(props.jsonStr || '');
   return React.createElement('button', {
-    onClick: function() {
+    type: 'button',
+    disabled: !value,
+    onClick: async function(e) {
+      e.preventDefault();
+      e.stopPropagation();
       try {
-        navigator.clipboard.writeText(props.jsonStr);
+        var ok = await copyTextToClipboard(value);
+        if (!ok) throw new Error('copy_failed');
+        setCopyFailed(false);
         setCopied(true);
         setTimeout(function() { setCopied(false); }, 2000);
-      } catch(e) {}
+      } catch(err) {
+        console.warn('copy json failed', err);
+        setCopied(false);
+        setCopyFailed(true);
+        setTimeout(function() { setCopyFailed(false); }, 2000);
+      }
     },
     style: {
       fontSize: 11, padding: '5px 14px', borderRadius: 5,
-      background: copied ? 'var(--ok)' : 'var(--ink)',
+      background: copyFailed ? 'var(--warn)' : (copied ? 'var(--ok)' : 'var(--ink)'),
       color: 'white', border: 'none',
-      cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4,
+      cursor: value ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: 4,
+      opacity: value ? 1 : 0.45,
       transition: 'background 200ms',
     }
-  }, React.createElement(copied ? I.check : I.copy, { size: 10 }), copied ? ('已复制 ' + (props.label || '')) : ('复制 ' + (props.label || 'JSON')));
+  }, React.createElement(copied ? I.check : I.copy, { size: 10 }), copyFailed ? '复制失败' : (copied ? ('已复制 ' + (props.label || '')) : ('复制 ' + (props.label || 'JSON'))));
 };
 
 const FileCard = ({ name, size, type }) => (
@@ -3257,7 +3273,32 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     </div>
                   </div>
                 );
-              })() : m.type === 'smart-distribute' ? (() => {
+              })() : m.type === 'smart-distribute-loading' ? (
+                <div style={{
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  background: 'var(--panel)',
+                  border: '1px solid var(--line-2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                }}>
+                  <div style={{
+                    width: 18, height: 18, borderRadius: 99,
+                    border: '2px solid var(--line-2)',
+                    borderTopColor: 'var(--accent)',
+                    animation: 'spin 0.8s linear infinite',
+                    flexShrink: 0,
+                  }}/>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 12.5, color: 'var(--ink)', fontWeight: 600 }}>正在解析表格</div>
+                    <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 2 }}>
+                      {m.fileName ? ('已接收 ' + m.fileName + '，正在识别 sheet、标黄区域和替换字段…') : '正在识别 sheet、标黄区域和替换字段…'}
+                    </div>
+                  </div>
+                  {m.startedAt ? <ChatTimer startedAt={m.startedAt}/> : null}
+                </div>
+              ) : m.type === 'smart-distribute' ? (() => {
                 const data = m.data;
                 const modeLabel = data.mode === 'patch' ? 'patch（增量）' : 'full（全量）';
                 const totalJobs = (data.jobs || []).length;
@@ -3266,10 +3307,26 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     return a + (m.values || m.patches || []).length;
                   }, 0);
                 }, 0);
+                const summary = data.summary || {};
+                const formatCountMap = function(counts, opts) {
+                  opts = opts || {};
+                  return Object.keys(counts || {}).filter(function(k) {
+                    return !opts.exclude || opts.exclude.indexOf(k) < 0;
+                  }).map(function(k) {
+                    return k + ' ' + counts[k];
+                  }).join('，');
+                };
+                const specialText = formatCountMap(summary.typeCounts || {}, { exclude: ['海报'] });
+                const skippedText = summary.skippedRows ? ('跳过 ' + summary.skippedRows + ' 行' + ((summary.typeCounts || {}).海报 ? '（海报 ' + (summary.typeCounts || {}).海报 + '）' : '')) : '';
+                const summaryText = '解析到 ' + (summary.templateCount || totalJobs) + ' 个模板，'
+                  + (summary.skuCount || 0) + ' 个 SKU × ' + (summary.fieldCount || 0) + ' 个字段，共 '
+                  + (summary.totalSlots || totalSlots) + ' 个槽位'
+                  + (specialText ? '，特殊标记：' + specialText : '')
+                  + (skippedText ? '，' + skippedText : '');
                 var jsonStr = '';
                 try { jsonStr = JSON.stringify(data, null, 2); } catch(e) { jsonStr = ''; }
                 return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + (totalJobs + ' 个模块，' + totalSlots + ' 个槽位，' + (m.copied ? 'JSON 已自动复制到剪贴板' : 'JSON 已自动复制'))),
+                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + summaryText + '。' + (m.copied ? (data.mode === 'patch' ? 'JSON 已自动复制到剪贴板' : '已自动复制第 1 个模板 JSON') : 'JSON 已生成')),
                   data.warnings && data.warnings.length > 0 ? React.createElement('div', {
                     style: { padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }
                   }, data.warnings.map(function(w, wi) { return React.createElement('div', { key: wi }, '⚠ ' + w); })) : null,
@@ -3297,28 +3354,60 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                           }
                         }, jsonStr.slice(0, 2500) + (jsonStr.length > 2500 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
                       )
-                    : React.createElement('div', { style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden' } },
-                        React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
-                          React.createElement('div', { style: { width: 20, height: 20, borderRadius: 5, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' } },
-                            React.createElement(I.file, { size: 11 })
-                          ),
-                          React.createElement('div', { style: { flex: 1 } },
-                            React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' } }, data.source ? data.source.fileName : '表格'),
-                            React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)' } }, totalJobs + ' 个模块 · ' + totalSlots + ' 个槽位')
-                          )
-                        ),
-                        React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
-                          React.createElement(CopyButton2, { jsonStr: jsonStr })
-                        ),
-                        React.createElement('pre', {
-                          style: {
-                            margin: 0, padding: '10px 12px', fontSize: 10,
-                            color: 'var(--ink-2)', overflow: 'auto', maxHeight: 250,
-                            borderTop: '1px solid var(--line-2)',
-                            whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-                            fontFamily: 'Menlo, Monaco, monospace',
+                    : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                        (data.jobs || []).map(function(job, ji) {
+                          var sheetJson = (m.jobJsons && m.jobJsons[ji]) || '';
+                          if (!sheetJson) {
+                            try {
+                              sheetJson = JSON.stringify({
+                                schemaVersion: data.schemaVersion,
+                                mode: data.mode,
+                                source: data.source,
+                                defaults: data.defaults,
+                                summary: job.summary || {},
+                                jobs: [job],
+                              }, null, 2);
+                            } catch(e) { sheetJson = ''; }
                           }
-                        }, jsonStr.slice(0, 2500) + (jsonStr.length > 2500 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
+                          var jobSlots = (job.modules || []).reduce(function(a, mod) {
+                            return a + (mod.values || mod.patches || []).length;
+                          }, 0);
+                          var jobModules = (job.modules || []).length;
+                          var jobSummary = job.summary || {};
+                          var jobSpecialText = formatCountMap(jobSummary.typeCounts || {}, { exclude: ['海报'] });
+                          var jobSkippedText = jobSummary.skippedRows ? ('跳过 ' + jobSummary.skippedRows + ' 行' + ((jobSummary.typeCounts || {}).海报 ? '（海报 ' + (jobSummary.typeCounts || {}).海报 + '）' : '')) : '';
+                          var jobSummaryText = jobModules + ' 个模块 · '
+                            + (jobSummary.skuCount || 0) + ' 个 SKU × ' + (jobSummary.fieldCount || 0) + ' 个字段 · '
+                            + (jobSummary.totalSlots || jobSlots) + ' 个槽位'
+                            + (jobSpecialText ? ' · 特殊标记：' + jobSpecialText : '')
+                            + (jobSkippedText ? ' · ' + jobSkippedText : '');
+                          return React.createElement('div', {
+                            key: job.sheetName || ji,
+                            style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden' }
+                          },
+                            React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
+                              React.createElement('div', { style: { width: 20, height: 20, borderRadius: 5, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' } },
+                                React.createElement(I.file, { size: 11 })
+                              ),
+                              React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                                React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, job.sheetName || job.templateName || ('Sheet ' + (ji + 1))),
+                                React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)', lineHeight: 1.45 } }, jobSummaryText)
+                              )
+                            ),
+                            React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
+                              React.createElement(CopyButton2, { jsonStr: sheetJson })
+                            ),
+                            React.createElement('pre', {
+                              style: {
+                                margin: 0, padding: '10px 12px', fontSize: 10,
+                                color: 'var(--ink-2)', overflow: 'auto', maxHeight: 180,
+                                borderTop: '1px solid var(--line-2)',
+                                whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                                fontFamily: 'Menlo, Monaco, monospace',
+                              }
+                            }, sheetJson.slice(0, 1400) + (sheetJson.length > 1400 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
+                          );
+                        })
                       )
                 );
               })() : m.type === 'generating' ? (
@@ -4106,7 +4195,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     e.preventDefault();
     const files = fileItems.map(it => it.getAsFile()).filter(Boolean);
     const images = files.filter(f => f && f.type.startsWith('image/'));
-    const excels = files.filter(f => f && /\.(xlsx|xls|csv)$/i.test(f.name));
+    const excels = files.filter(f => f && /\.(xlsx|xlsm)$/i.test(f.name));
     if (excels.length && selectedWorkflow === 'distribute' && onSmartDistribute) {
       onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute paste error:', err); });
     } else if (images.length) {
@@ -4195,7 +4284,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     if (selectedWorkflow === 'distribute') {
       // 智能铺货模式支持 Excel 拖入
       var excels = Array.from(files || []).filter(function(f) {
-        return /\.(xlsx|xls|csv)$/i.test(f.name);
+        return /\.(xlsx|xlsm)$/i.test(f.name);
       });
       if (excels.length && onSmartDistribute) {
         onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute drop error:', err); });
@@ -4306,7 +4395,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           : selectedWorkflow === 'compose'
             ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁'
             : selectedWorkflow === 'distribute'
-              ? '上传或拖入 Excel 表格，自动解析为铺货 JSON'
+              ? '上传或拖入 Excel（.xlsx / .xlsm），自动解析为铺货 JSON'
               : selectedWorkflow === 'download'
               ? '输入花瓣项目 ID 或链接，格式会自动识别'
               : '忘了怎么用？试试直接提问吧';
@@ -4717,7 +4806,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
             松手添加文件
           </div>
           <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>
-            支持图片和 Excel 表格
+            支持图片和 Excel（.xlsx / .xlsm）
           </div>
         </div>
       )}
@@ -4854,7 +4943,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           type="file"
           ref={fileInputRef}
           onChange={handleFileSelect}
-          accept="image/*,.csv,.xlsx,.xls"
+          accept="image/*,.xlsx,.xlsm"
           multiple
           style={{ display: 'none' }}
         />
@@ -6319,7 +6408,12 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
   }, [isLoading, templateFields]);
 
   const handleSmartDistribute = React.useCallback(async (file, filename) => {
-    setMessages(msgs => [...msgs, { who: 'user', type: 'file-attach', text: filename, file: filename }]);
+    const pendingId = 'smart-distribute-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    setMessages(msgs => [
+      ...msgs,
+      { who: 'user', type: 'file-attach', text: filename, file: filename },
+      { who: 'ai', type: 'smart-distribute-loading', id: pendingId, fileName: filename, meta: '智能铺货', startedAt: Date.now() }
+    ]);
     setIsLoading(true);
     try {
       const result = await window.API.smartDistribute(file);
@@ -6330,25 +6424,35 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
           mode: result.mode,
           source: result.source,
           defaults: result.defaults,
+          summary: job.summary || {},
           jobs: [job],
         };
         var str = '';
         try { str = JSON.stringify(single, null, 2); } catch(e) { str = ''; }
         return str;
       });
-      if (jobJsons.length > 0 && jobJsons[0] && navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(jobJsons[0]).catch(function() {});
+      var autoCopied = false;
+      if (jobJsons.length > 0 && jobJsons[0]) {
+        try {
+          autoCopied = await copyTextToClipboard(jobJsons[0]);
+        } catch(e) {
+          autoCopied = false;
+        }
       }
-      setMessages(msgs => [...msgs, {
-        who: 'ai',
-        type: 'smart-distribute',
-        data: result,
-        jobJsons: jobJsons,
-        meta: '智能铺货',
-        copied: jobJsons.length > 0 && !!(navigator.clipboard && window.isSecureContext),
-      }]);
+      setMessages(msgs => msgs.map(function(m) {
+        return m.id === pendingId ? {
+          who: 'ai',
+          type: 'smart-distribute',
+          data: result,
+          jobJsons: jobJsons,
+          meta: '智能铺货',
+          copied: autoCopied,
+        } : m;
+      }));
     } catch (e) {
-      setMessages(msgs => [...msgs, { who: 'ai', text: '解析错误: ' + (e.message || '未知错误'), meta: '错误' }]);
+      setMessages(msgs => msgs.map(function(m) {
+        return m.id === pendingId ? { who: 'ai', text: '解析错误: ' + (e.message || '未知错误'), meta: '错误' } : m;
+      }));
     }
     setIsLoading(false);
   }, [isLoading]);

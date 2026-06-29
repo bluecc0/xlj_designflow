@@ -195,22 +195,38 @@ var CopyButton2 = function(props) {
   var _useState = React.useState(false);
   var copied = _useState[0];
   var setCopied = _useState[1];
+  var _errorState = React.useState(false);
+  var copyFailed = _errorState[0];
+  var setCopyFailed = _errorState[1];
+  var value = String(props.jsonStr || '');
   return React.createElement('button', {
-    onClick: function() {
+    type: 'button',
+    disabled: !value,
+    onClick: async function(e) {
+      e.preventDefault();
+      e.stopPropagation();
       try {
-        navigator.clipboard.writeText(props.jsonStr);
+        var ok = await copyTextToClipboard(value);
+        if (!ok) throw new Error('copy_failed');
+        setCopyFailed(false);
         setCopied(true);
         setTimeout(function() { setCopied(false); }, 2000);
-      } catch(e) {}
+      } catch(err) {
+        console.warn('copy json failed', err);
+        setCopied(false);
+        setCopyFailed(true);
+        setTimeout(function() { setCopyFailed(false); }, 2000);
+      }
     },
     style: {
       fontSize: 11, padding: '5px 14px', borderRadius: 5,
-      background: copied ? 'var(--ok)' : 'var(--ink)',
+      background: copyFailed ? 'var(--warn)' : (copied ? 'var(--ok)' : 'var(--ink)'),
       color: 'white', border: 'none',
-      cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4,
+      cursor: value ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: 4,
+      opacity: value ? 1 : 0.45,
       transition: 'background 200ms',
     }
-  }, React.createElement(copied ? I.check : I.copy, { size: 10 }), copied ? ('已复制 ' + (props.label || '')) : ('复制 ' + (props.label || 'JSON')));
+  }, React.createElement(copied ? I.check : I.copy, { size: 10 }), copyFailed ? '复制失败' : (copied ? ('已复制 ' + (props.label || '')) : ('复制 ' + (props.label || 'JSON'))));
 };
 
 const FileCard = ({ name, size, type }) => (
@@ -4134,8 +4150,13 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         try { str = JSON.stringify(single, null, 2); } catch(e) { str = ''; }
         return str;
       });
-      if (jobJsons.length > 0 && jobJsons[0] && navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(jobJsons[0]).catch(function() {});
+      var autoCopied = false;
+      if (jobJsons.length > 0 && jobJsons[0]) {
+        try {
+          autoCopied = await copyTextToClipboard(jobJsons[0]);
+        } catch(e) {
+          autoCopied = false;
+        }
       }
       setMessages(msgs => msgs.map(function(m) {
         return m.id === pendingId ? {
@@ -4144,7 +4165,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
           data: result,
           jobJsons: jobJsons,
           meta: '智能铺货',
-          copied: jobJsons.length > 0 && !!(navigator.clipboard && window.isSecureContext),
+          copied: autoCopied,
         } : m;
       }));
     } catch (e) {
