@@ -21,7 +21,9 @@ import {
   type TLImageShape,
   type TLShape,
   type TLTextShape,
+  TldrawUiButtonIcon,
   TldrawUiContextualToolbar,
+  TldrawUiToolbarButton,
   useEditor,
   useValue,
 } from 'tldraw'
@@ -318,44 +320,23 @@ function DesignflowImageToolbar() {
       getSelectionBounds={getSelectionBounds}
       label="高清放大"
     >
-      <button
-        type="button"
+      <TldrawUiToolbarButton
+        type="icon"
         title="下载原图"
         data-testid="tool.image-download-original"
         onClick={handleDownloadOriginal}
-        className="tlui-button tlui-button__icon designflow-image-tool"
       >
-        <svg className="designflow-image-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 4v11" />
-          <path d="M7 10l5 5 5-5" />
-          <path d="M5 20h14" />
-        </svg>
-      </button>
-      <button
-        type="button"
+        <TldrawUiButtonIcon small icon="download" />
+      </TldrawUiToolbarButton>
+      <TldrawUiToolbarButton
+        type="icon"
         title={upscaleState.loading ? '正在高清放大' : '高清放大'}
         data-testid="tool.image-upscale"
         onClick={handleUpscaleSelectedImage}
         disabled={upscaleState.loading}
-        className="tlui-button tlui-button__icon designflow-image-tool designflow-upscale-tool"
       >
-        <svg className="designflow-image-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-          {upscaleState.loading ? (
-            <>
-              <circle cx="12" cy="12" r="7" />
-              <path d="M12 5v4" />
-            </>
-          ) : (
-            <>
-              <path d="M8 16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2" />
-              <path d="M10 10l4-4" />
-              <path d="M11 6h3v3" />
-              <path d="M14 14h6" />
-              <path d="M17 11v6" />
-            </>
-          )}
-        </svg>
-      </button>
+        <TldrawUiButtonIcon small icon={upscaleState.loading ? 'reset-zoom' : 'zoom-in'} />
+      </TldrawUiToolbarButton>
       {upscaleState.message && <span className="designflow-upscale-status">{upscaleState.message}</span>}
     </TldrawUiContextualToolbar>
   )
