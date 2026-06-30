@@ -102,6 +102,16 @@
         body: JSON.stringify({ job_id: jobId, session_id: sessionId }),
       });
     },
+    upscaleImage: function(imageUrl, scale) {
+      return request('/ai-image/upscale', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_url: imageUrl, scale: scale || 2 }),
+      });
+    },
+    getAiImageJob: function(jobId) {
+      return request('/ai-image/' + encodeURIComponent(jobId));
+    },
     publishInspiration: function(payload) {
       // payload: { job_id } 或 { image_url }（用于从历史消息中发布时拿不到 job_id）
       var body = {};

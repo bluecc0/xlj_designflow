@@ -491,3 +491,34 @@ input {
 .tlui-main-toolbar__mobile-style-panel {
   display: none !important;
 }
+
+.designflow-image-tool {
+  flex: 0 0 auto;
+}
+
+.designflow-upscale-tool:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.designflow-image-tool-icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.designflow-upscale-status {
+  max-width: 180px;
+  padding: 0 8px 0 2px;
+  color: var(--tl-color-text-3);
+  font-size: 12px;
+  line-height: 32px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

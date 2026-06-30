@@ -17,6 +17,8 @@ import base64
 import json
 import logging
 import re
+import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -186,6 +188,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Design Tool API", version="0.1.0", lifespan=lifespan)
 
+
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 开发阶段全开，生产改为具体域名
@@ -250,7 +261,7 @@ _editor_beta_dist = Path(__file__).parent.parent / "editor-lab-tldraw" / "dist"
 if _editor_beta_dist.exists():
     app.mount(
         "/editor-beta",
-        StaticFiles(directory=str(_editor_beta_dist), html=True),
+        NoCacheStaticFiles(directory=str(_editor_beta_dist), html=True),
         name="editor-beta",
     )
 
@@ -421,6 +432,162 @@ def _normalize_public_asset_url(raw_url: str | None) -> str:
         except Exception:
             return value
     return value
+
+
+def _resolve_public_asset_path(raw_url: str | None) -> Path:
+    """只把站内公开资源 URL 解析成本地文件，避免任意路径/外链读取。"""
+    url = _normalize_public_asset_url(raw_url)
+    try:
+        parsed = urlsplit(url)
+        path = parsed.path or url
+    except Exception:
+        path = url
+    path = str(path or "").strip()
+    if not path:
+        raise HTTPException(400, "图片地址不能为空")
+
+    roots: list[tuple[str, Path]] = [
+        ("/ai-images/", settings.output_path / "ai-images"),
+        ("/results/", settings.output_path / "results"),
+        ("/output/", settings.output_path),
+    ]
+    for prefix, root in roots:
+        if not path.startswith(prefix):
+            continue
+        rel = path[len(prefix):].lstrip("/")
+        candidate = (root / rel).resolve()
+        root_resolved = root.resolve()
+        if root_resolved not in candidate.parents and candidate != root_resolved:
+            raise HTTPException(400, "图片路径不合法")
+        if not candidate.exists() or not candidate.is_file():
+            raise HTTPException(404, "图片文件不存在")
+        return candidate
+    raise HTTPException(400, "只支持站内图片资源放大")
+
+
+def _find_latest_image_file(folder: Path, after_ts: float) -> Path | None:
+    exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
+    candidates = []
+    if not folder.exists():
+        return None
+    for item in folder.iterdir():
+        try:
+            if item.is_file() and item.suffix.lower() in exts and item.stat().st_mtime >= after_ts - 1:
+                candidates.append(item)
+        except OSError:
+            continue
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item.stat().st_mtime)
+
+
+def _pil_upscale_image(src_path: Path, out_path: Path, scale: int) -> tuple[int, int]:
+    from PIL import Image
+    with Image.open(src_path) as im:
+        if im.mode in ("RGBA", "LA", "P"):
+            im = im.convert("RGBA")
+        else:
+            im = im.convert("RGB")
+        new_size = (max(1, int(im.width * scale)), max(1, int(im.height * scale)))
+        out = im.resize(new_size, Image.Resampling.LANCZOS)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out.save(out_path, "PNG", optimize=True)
+    return new_size
+
+
+def _run_local_upscale(src_path: Path, out_path: Path, scale: int) -> tuple[int, int, str]:
+    scale = max(1, min(int(scale or 2), 4))
+    cli_path = settings.upscale_cli_path.strip()
+    if cli_path:
+        exe = Path(cli_path)
+        executable = str(exe) if exe.exists() else cli_path
+        output_dir = out_path.parent / (out_path.stem + "_gigapixel")
+        if output_dir.exists():
+            shutil.rmtree(output_dir, ignore_errors=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            executable,
+            "-i", str(src_path),
+            "-o", str(output_dir),
+            "--scale", str(scale),
+            "--cf",
+            "--suffix", "_upscaled",
+            "-f", "png",
+        ]
+        if settings.upscale_cli_model:
+            cmd[1:1] = ["-m", settings.upscale_cli_model]
+        started = time.time()
+        proc = subprocess.run(
+            cmd,
+            cwd=str(exe.parent) if exe.exists() else None,
+            capture_output=True,
+            text=True,
+            timeout=max(30, int(settings.upscale_cli_timeout_seconds or 900)),
+            check=False,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()[:800]
+            raise RuntimeError(f"Gigapixel CLI 执行失败: {detail or proc.returncode}")
+        generated = _find_latest_image_file(output_dir, started)
+        if not generated:
+            raise RuntimeError("Gigapixel CLI 未输出图片")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(generated, out_path)
+        try:
+            from PIL import Image
+            with Image.open(out_path) as im:
+                return im.width, im.height, "gigapixel"
+        except Exception:
+            return 0, 0, "gigapixel"
+
+    width, height = _pil_upscale_image(src_path, out_path, scale)
+    return width, height, "pillow"
+
+
+async def _run_upscale_background(job_id: str, user: dict, src_path: Path, scale: int, created_at: float) -> None:
+    prompt = f"local upscale x{scale}"
+    out_dir = settings.output_path / "ai-images" / user["id"] / "upscaled"
+    out_path = out_dir / f"{job_id}.png"
+    try:
+        save_ai_image_job(
+            job_id=job_id, user_id=user["id"], status="processing",
+            model="local-upscale", prompt=prompt, size="",
+            original_prompt=prompt, resolved_prompt=prompt,
+            has_reference=True, progress=15, created_at=created_at,
+        )
+        width, height, method = await asyncio.to_thread(_run_local_upscale, src_path, out_path, scale)
+        image_url = f"/ai-images/{quote(user['id'])}/upscaled/{quote(out_path.name)}"
+        save_ai_image_job(
+            job_id=job_id, user_id=user["id"], status="done",
+            model=f"local-upscale:{method}", prompt=prompt, size=f"{width}x{height}" if width and height else "",
+            original_prompt=prompt, resolved_prompt=prompt, image_url=image_url,
+            has_reference=True, progress=100, created_at=created_at,
+        )
+        try:
+            generate_inspiration_thumb(image_url, user["id"], job_id)
+        except Exception:
+            pass
+        log_operation(
+            user_id=user["id"], username=user.get("username", ""),
+            action="ai_image_upscale",
+            detail=f"job={job_id[:8]} scale={scale} method={method} result=done",
+            payload=json.dumps({"job_id": job_id, "image_url": image_url, "scale": scale, "method": method}, ensure_ascii=False),
+            created_at=created_at,
+        )
+    except Exception as exc:
+        save_ai_image_job(
+            job_id=job_id, user_id=user["id"], status="failed",
+            model="local-upscale", prompt=prompt, size="",
+            original_prompt=prompt, resolved_prompt=prompt,
+            has_reference=True, error=str(exc), progress=100, created_at=created_at,
+        )
+        log_operation(
+            user_id=user["id"], username=user.get("username", ""),
+            action="ai_image_upscale",
+            detail=f"job={job_id[:8]} scale={scale} result=failed",
+            payload=json.dumps({"job_id": job_id, "scale": scale, "error": str(exc)}, ensure_ascii=False),
+            created_at=created_at,
+        )
 
 
 def _normalize_ai_chat_messages_for_api(messages: list[dict]) -> list[dict]:
@@ -2643,6 +2810,32 @@ async def _run_ai_image_background(
             },
             created_at=time.time(),
         )
+
+
+@app.post("/ai-image/upscale")
+async def ai_image_upscale(request: Request):
+    """对站内图片执行本地高清放大，返回可轮询的 ai-image job。"""
+    body = await request.json()
+    image_url = str(body.get("image_url") or "").strip()
+    try:
+        scale = int(body.get("scale") or settings.upscale_cli_scale or 2)
+    except Exception:
+        scale = settings.upscale_cli_scale or 2
+    scale = max(1, min(scale, 4))
+    src_path = _resolve_public_asset_path(image_url)
+
+    user = _current_user(request)
+    job_id = uuid.uuid4().hex
+    created_at = time.time()
+    prompt = f"local upscale x{scale}"
+    save_ai_image_job(
+        job_id=job_id, user_id=user["id"], status="processing",
+        model="local-upscale", prompt=prompt, size="",
+        original_prompt=prompt, resolved_prompt=prompt,
+        has_reference=True, progress=0, created_at=created_at,
+    )
+    asyncio.create_task(_run_upscale_background(job_id, dict(user), src_path, scale, created_at))
+    return {"job_id": job_id, "status": "processing", "progress": 0}
 
 
 @app.get("/ai-image/{job_id}")

@@ -9,6 +9,7 @@ import {
   DefaultTextAlignStyle,
   DefaultVerticalAlignStyle,
   AssetRecordType,
+  Box,
   Tldraw,
   createShapeId,
   iconTypes,
@@ -20,6 +21,7 @@ import {
   type TLImageShape,
   type TLShape,
   type TLTextShape,
+  TldrawUiContextualToolbar,
   useEditor,
   useValue,
 } from 'tldraw'
@@ -112,6 +114,253 @@ function PropertySelect({
   )
 }
 
+function formatUpscaleError(error: any) {
+  const raw = String(error?.message || error || '高清放大失败').trim()
+  if (!raw) return '高清放大失败'
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed?.detail) return String(parsed.detail)
+  } catch {}
+  return raw.replace(/^\{\"detail\":\"?|\"?\}$/g, '').slice(0, 32)
+}
+
+function useUpscaleSelectedImage() {
+  const editor = useEditor()
+  const [upscaleState, setUpscaleState] = React.useState<{ loading: boolean; message: string }>({ loading: false, message: '' })
+  const clearTimerRef = React.useRef<number | null>(null)
+
+  const setTemporaryMessage = React.useCallback((message: string, delay = 3200) => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+    }
+    setUpscaleState({ loading: false, message })
+    clearTimerRef.current = window.setTimeout(() => {
+      setUpscaleState((prev) => (prev.loading ? prev : { loading: false, message: '' }))
+      clearTimerRef.current = null
+    }, delay)
+  }, [])
+
+  const clearMessage = React.useCallback(() => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+      clearTimerRef.current = null
+    }
+    setUpscaleState((prev) => (prev.loading ? prev : { loading: false, message: '' }))
+  }, [])
+
+  React.useEffect(() => {
+    return () => {
+      if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
+    }
+  }, [])
+
+  const handleUpscaleSelectedImage = React.useCallback(async () => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+      clearTimerRef.current = null
+    }
+    const shape = editor.getOnlySelectedShape()
+    if (!shape || shape.type !== 'image') return
+    const asset = editor.getAsset((shape.props as any).assetId)
+    const src = normalizeDesignflowAssetUrl(String((asset?.props as any)?.src || '').trim())
+    if (!src) {
+      setTemporaryMessage('没有找到图片地址')
+      return
+    }
+
+    setUpscaleState({ loading: true, message: '正在提交高清放大…' })
+    try {
+      const createResp = await fetch('/ai-image/upscale', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_url: src, scale: 2 }),
+      })
+      if (!createResp.ok) {
+        const text = await createResp.text()
+        throw new Error(text || `HTTP ${createResp.status}`)
+      }
+      const created = await createResp.json()
+      const jobId = created.job_id
+      if (!jobId) throw new Error('没有返回任务 ID')
+
+      let result: any = null
+      for (let i = 0; i < 180; i++) {
+        setUpscaleState({ loading: true, message: i < 2 ? '正在高清放大…' : `正在高清放大… ${i}s` })
+        await new Promise((resolve) => window.setTimeout(resolve, 1000))
+        const statusResp = await fetch(`/ai-image/${encodeURIComponent(jobId)}`, { credentials: 'include' })
+        if (!statusResp.ok) {
+          const text = await statusResp.text()
+          throw new Error(text || `HTTP ${statusResp.status}`)
+        }
+        result = await statusResp.json()
+        if (result.status === 'done') break
+        if (result.status === 'failed') throw new Error(result.error || '高清放大失败')
+      }
+      if (!result || result.status !== 'done' || !result.image_url) {
+        throw new Error('高清放大超时')
+      }
+
+      const imageUrl = normalizeDesignflowAssetUrl(result.image_url)
+      const file = await fetchImageAsFile(imageUrl, 'upscaled.png')
+      const previewUrl = window.URL.createObjectURL(file)
+      let size: { w: number; h: number }
+      try {
+        size = await getImageSize(previewUrl)
+      } finally {
+        window.URL.revokeObjectURL(previewUrl)
+      }
+      const viewport = editor.getViewportPageBounds()
+      const assetId = AssetRecordType.createId()
+      const shapeId = createShapeId() as TLImageShape['id']
+      const assetRecord: TLImageAsset = {
+        id: assetId,
+        typeName: 'asset',
+        type: 'image',
+        props: {
+          w: size.w,
+          h: size.h,
+          name: file.name || 'upscaled.png',
+          isAnimated: false,
+          mimeType: file.type || 'image/png',
+          src: imageUrl,
+          fileSize: file.size,
+        },
+        meta: { upscaledFrom: src },
+      }
+      editor.markHistoryStoppingPoint('insert-upscaled-image')
+      editor.createAssets([assetRecord])
+      editor.createShape({
+        id: shapeId,
+        type: 'image',
+        x: viewport.center.x - size.w / 2,
+        y: viewport.center.y - size.h / 2,
+        props: {
+          w: size.w,
+          h: size.h,
+          assetId,
+          playing: true,
+          url: '',
+          crop: null,
+          flipX: false,
+          flipY: false,
+          altText: file.name || 'upscaled.png',
+        },
+        meta: { designflowInserted: true, upscaledFrom: src },
+      })
+      editor.bringToFront([shapeId])
+      editor.setSelectedShapes([shapeId])
+      setTemporaryMessage('高清放大完成，已插入画布', 2600)
+    } catch (error: any) {
+      setTemporaryMessage(formatUpscaleError(error))
+    }
+  }, [editor, setTemporaryMessage])
+
+  return { upscaleState, handleUpscaleSelectedImage, clearMessage }
+}
+
+
+
+function DesignflowImageToolbar() {
+  const editor = useEditor()
+  const imageShapeId = useValue(
+    'designflow-upscale-toolbar-shape',
+    () => {
+      const onlySelectedShape = editor.getOnlySelectedShape()
+      if (!onlySelectedShape || onlySelectedShape.type !== 'image') return null
+      return onlySelectedShape.id as TLImageShape['id']
+    },
+    [editor]
+  )
+  const showToolbar = useValue(
+    'designflow-upscale-toolbar-visible',
+    () => editor.isInAny('select.idle', 'select.pointing_shape'),
+    [editor]
+  )
+  const isLocked = useValue(
+    'designflow-upscale-toolbar-locked',
+    () => (imageShapeId ? editor.getShape<TLImageShape>(imageShapeId)?.isLocked : false),
+    [editor, imageShapeId]
+  )
+  const { upscaleState, handleUpscaleSelectedImage, clearMessage } = useUpscaleSelectedImage()
+
+  React.useEffect(() => {
+    clearMessage()
+  }, [clearMessage, imageShapeId])
+
+  const handleDownloadOriginal = React.useCallback(() => {
+    if (!imageShapeId) return
+    const shape = editor.getShape<TLImageShape>(imageShapeId)
+    if (!shape) return
+    if (!shape.props.assetId) return
+    const asset = editor.getAsset(shape.props.assetId)
+    const src = String((asset?.props as any)?.src || '').trim()
+    if (!src) return
+    const link = document.createElement('a')
+    link.href = src
+    link.download = String((asset?.props as any)?.name || shape.props.altText || 'image.png')
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    link.click()
+  }, [editor, imageShapeId])
+
+  const getSelectionBounds = React.useCallback(() => {
+    const fullBounds = editor.getSelectionScreenBounds()
+    if (!fullBounds) return undefined
+    return new Box(fullBounds.x, fullBounds.y, fullBounds.width, 0)
+  }, [editor])
+
+  if (!imageShapeId || !showToolbar || isLocked) return null
+
+  return (
+    <TldrawUiContextualToolbar
+      className="tlui-media__toolbar tlui-image__toolbar designflow-upscale-toolbar"
+      getSelectionBounds={getSelectionBounds}
+      label="高清放大"
+    >
+      <button
+        type="button"
+        title="下载原图"
+        data-testid="tool.image-download-original"
+        onClick={handleDownloadOriginal}
+        className="tlui-button tlui-button__icon designflow-image-tool"
+      >
+        <svg className="designflow-image-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 4v11" />
+          <path d="M7 10l5 5 5-5" />
+          <path d="M5 20h14" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        title={upscaleState.loading ? '正在高清放大' : '高清放大'}
+        data-testid="tool.image-upscale"
+        onClick={handleUpscaleSelectedImage}
+        disabled={upscaleState.loading}
+        className="tlui-button tlui-button__icon designflow-image-tool designflow-upscale-tool"
+      >
+        <svg className="designflow-image-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+          {upscaleState.loading ? (
+            <>
+              <circle cx="12" cy="12" r="7" />
+              <path d="M12 5v4" />
+            </>
+          ) : (
+            <>
+              <path d="M8 16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2" />
+              <path d="M10 10l4-4" />
+              <path d="M11 6h3v3" />
+              <path d="M14 14h6" />
+              <path d="M17 11v6" />
+            </>
+          )}
+        </svg>
+      </button>
+      {upscaleState.message && <span className="designflow-upscale-status">{upscaleState.message}</span>}
+    </TldrawUiContextualToolbar>
+  )
+}
+
 function TldrawPropertiesPanel() {
   const editor = useEditor()
   const selectedShape = useValue('only-selected-shape', () => editor.getOnlySelectedShape(), [editor])
@@ -121,7 +370,6 @@ function TldrawPropertiesPanel() {
     return editor.getSelectedShapeIds().filter((id) => editor.getShape(id)?.type === 'image').length
   }, [editor])
   const [textValue, setTextValue] = React.useState('')
-  const replaceImageInputRef = React.useRef<HTMLInputElement | null>(null)
 
   React.useEffect(() => {
     if (isTextShape(selectedShape)) {
@@ -220,25 +468,6 @@ function TldrawPropertiesPanel() {
       '*'
     )
   }, [getSelectedImageAssets, selectedIds])
-
-  const handleReplaceImage = React.useCallback(
-    async (event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0]
-      const shape = editor.getOnlySelectedShape()
-      if (!file || !shape || shape.type !== 'image') return
-      editor.markHistoryStoppingPoint('replace-image')
-      await editor.replaceExternalContent({
-        type: 'file-replace',
-        file,
-        shapeId: shape.id,
-        isImage: true,
-      })
-      if (replaceImageInputRef.current) {
-        replaceImageInputRef.current.value = ''
-      }
-    },
-    [editor]
-  )
 
   const textShape = isTextShape(selectedShape) ? selectedShape : null
   const geoShape = isGeoShape(selectedShape) ? selectedShape : null
@@ -412,32 +641,6 @@ function TldrawPropertiesPanel() {
 
           <div className="lab-sidepanel-note">
             文本内容支持直接在这里改，也可以双击画布上的对象继续编辑。常用字体、颜色、对齐会实时生效。
-          </div>
-        </div>
-      )}
-
-      {isImageShape && selectedCount === 1 && (
-        <div className="lab-sidepanel-body">
-          <div className="lab-sidepanel-section">
-            <div className="lab-sidepanel-section-title">图片</div>
-            <div className="lab-sidepanel-empty-copy">
-              可以替换图片内容，位置、缩放和旋转继续直接在画布上完成。
-            </div>
-            <div className="lab-sidepanel-actions">
-              <button type="button" className="lab-sidebtn" onClick={() => replaceImageInputRef.current?.click()}>
-                替换图片
-              </button>
-              <button type="button" className="lab-sidebtn" onClick={handleDuplicate}>
-                复制对象
-              </button>
-              <button type="button" className="lab-sidebtn" onClick={handleDownloadImages}>
-                下载图片
-              </button>
-              <button type="button" className="lab-sidebtn lab-sidebtn-danger" onClick={handleDelete}>
-                删除对象
-              </button>
-            </div>
-            <input ref={replaceImageInputRef} type="file" accept="image/*" hidden onChange={handleReplaceImage} />
           </div>
         </div>
       )}
@@ -960,6 +1163,7 @@ export default function App() {
     () => ({
       HelperButtons: null,
       StylePanel: null,
+      ImageToolbar: DesignflowImageToolbar,
     }),
     []
   )
