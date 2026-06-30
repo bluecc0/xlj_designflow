@@ -465,6 +465,33 @@ def _resolve_public_asset_path(raw_url: str | None) -> Path:
     raise HTTPException(400, "只支持站内图片资源放大")
 
 
+def _persist_data_url_image(raw_url: str, *, user_id: str, job_id: str) -> Path:
+    value = str(raw_url or "").strip()
+    match = re.match(r"^data:(image/[^;,]+);base64,(.+)$", value, flags=re.I | re.S)
+    if not match:
+        raise HTTPException(400, "仅支持图片 data URL 放大")
+    mime = match.group(1).lower()
+    encoded = match.group(2).strip()
+    suffix_map = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/webp": ".webp",
+    }
+    suffix = suffix_map.get(mime)
+    if not suffix:
+        raise HTTPException(400, f"暂不支持该图片格式放大: {mime}")
+    try:
+        payload = base64.b64decode(encoded, validate=True)
+    except Exception as exc:
+        raise HTTPException(400, "data URL 图片内容无效") from exc
+    src_dir = settings.output_path / "ai-images" / user_id / "_upscale_sources"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    src_path = src_dir / f"{job_id}{suffix}"
+    src_path.write_bytes(payload)
+    return src_path
+
+
 def _find_latest_image_file(folder: Path, after_ts: float) -> Path | None:
     exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
     candidates = []
@@ -510,6 +537,9 @@ def _run_local_upscale(src_path: Path, out_path: Path, scale: int) -> tuple[int,
             "-i", str(src_path),
             "-o", str(output_dir),
             "--scale", str(scale),
+            "--dt", "12",
+            "--sh", "8",
+            "--dn", "2",
             "--cf",
             "--suffix", "_upscaled",
             "-f", "png",
@@ -572,7 +602,6 @@ async def _run_upscale_background(job_id: str, user: dict, src_path: Path, scale
             action="ai_image_upscale",
             detail=f"job={job_id[:8]} scale={scale} method={method} result=done",
             payload=json.dumps({"job_id": job_id, "image_url": image_url, "scale": scale, "method": method}, ensure_ascii=False),
-            created_at=created_at,
         )
     except Exception as exc:
         save_ai_image_job(
@@ -586,7 +615,6 @@ async def _run_upscale_background(job_id: str, user: dict, src_path: Path, scale
             action="ai_image_upscale",
             detail=f"job={job_id[:8]} scale={scale} result=failed",
             payload=json.dumps({"job_id": job_id, "scale": scale, "error": str(exc)}, ensure_ascii=False),
-            created_at=created_at,
         )
 
 
@@ -2821,11 +2849,13 @@ async def ai_image_upscale(request: Request):
         scale = int(body.get("scale") or settings.upscale_cli_scale or 2)
     except Exception:
         scale = settings.upscale_cli_scale or 2
-    scale = max(1, min(scale, 4))
-    src_path = _resolve_public_asset_path(image_url)
-
     user = _current_user(request)
     job_id = uuid.uuid4().hex
+    scale = max(1, min(scale, 4))
+    if image_url.startswith("data:image/"):
+        src_path = _persist_data_url_image(image_url, user_id=user["id"], job_id=job_id)
+    else:
+        src_path = _resolve_public_asset_path(image_url)
     created_at = time.time()
     prompt = f"local upscale x{scale}"
     save_ai_image_job(

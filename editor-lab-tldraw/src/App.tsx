@@ -126,6 +126,33 @@ function formatUpscaleError(error: any) {
   return raw.replace(/^\{\"detail\":\"?|\"?\}$/g, '').slice(0, 32)
 }
 
+async function blobUrlToDataUrl(url: string): Promise<string> {
+  const resp = await fetch(url)
+  if (!resp.ok) throw new Error(`Failed to read local image: HTTP ${resp.status}`)
+  const blob = await resp.blob()
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('Failed to read local image'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+async function resolveUpscaleSourceUrl(rawUrl: string) {
+  const normalized = normalizeDesignflowAssetUrl(rawUrl)
+  if (!normalized) return ''
+  if (normalized.startsWith('/')) return normalized
+  if (normalized.startsWith('data:image/')) return normalized
+  if (normalized.startsWith('blob:')) return await blobUrlToDataUrl(normalized)
+  try {
+    const parsed = new URL(normalized, window.location.origin)
+    if (parsed.origin === window.location.origin) {
+      return parsed.pathname + parsed.search + parsed.hash
+    }
+  } catch {}
+  return normalized
+}
+
 function useUpscaleSelectedImage() {
   const editor = useEditor()
   const [upscaleState, setUpscaleState] = React.useState<{ loading: boolean; message: string }>({ loading: false, message: '' })
@@ -164,7 +191,7 @@ function useUpscaleSelectedImage() {
     const shape = editor.getOnlySelectedShape()
     if (!shape || shape.type !== 'image') return
     const asset = editor.getAsset((shape.props as any).assetId)
-    const src = normalizeDesignflowAssetUrl(String((asset?.props as any)?.src || '').trim())
+    const src = await resolveUpscaleSourceUrl(String((asset?.props as any)?.src || '').trim())
     if (!src) {
       setTemporaryMessage('没有找到图片地址')
       return
@@ -212,7 +239,8 @@ function useUpscaleSelectedImage() {
       } finally {
         window.URL.revokeObjectURL(previewUrl)
       }
-      const viewport = editor.getViewportPageBounds()
+      const sourceShape = editor.getOnlySelectedShape()
+      const sourceBounds = sourceShape ? editor.getShapePageBounds(sourceShape.id) : null
       const assetId = AssetRecordType.createId()
       const shapeId = createShapeId() as TLImageShape['id']
       const assetRecord: TLImageAsset = {
@@ -235,8 +263,8 @@ function useUpscaleSelectedImage() {
       editor.createShape({
         id: shapeId,
         type: 'image',
-        x: viewport.center.x - size.w / 2,
-        y: viewport.center.y - size.h / 2,
+        x: sourceBounds ? sourceBounds.maxX + 40 : 0,
+        y: sourceBounds ? sourceBounds.minY : 0,
         props: {
           w: size.w,
           h: size.h,
@@ -309,7 +337,7 @@ function DesignflowImageToolbar() {
   const getSelectionBounds = React.useCallback(() => {
     const fullBounds = editor.getSelectionScreenBounds()
     if (!fullBounds) return undefined
-    return new Box(fullBounds.x, fullBounds.y, fullBounds.width, 0)
+    return new Box(fullBounds.x, fullBounds.y, fullBounds.width, fullBounds.height)
   }, [editor])
 
   if (!imageShapeId || !showToolbar || isLocked) return null
@@ -852,6 +880,8 @@ function TldrawHostBridge() {
   const insertImage = React.useCallback(
     async ({ url, mode, name }: { url: string; mode?: 'image' | 'background'; name?: string }) => {
       url = normalizeDesignflowAssetUrl(url)
+      const sourceShape = editor.getOnlySelectedShape()
+      const sourceBounds = sourceShape ? editor.getShapePageBounds(sourceShape.id) : null
       const viewport = editor.getViewportPageBounds()
 
       const file = await fetchImageAsFile(url, name)
@@ -883,8 +913,8 @@ function TldrawHostBridge() {
       editor.createShape({
         id: shapeId,
         type: 'image',
-        x: viewport.center.x - size.w / 2,
-        y: viewport.center.y - size.h / 2,
+        x: sourceBounds ? sourceBounds.maxX + 40 : viewport.center.x - size.w / 2,
+        y: sourceBounds ? sourceBounds.minY : viewport.center.y - size.h / 2,
         props: {
           w: size.w,
           h: size.h,
