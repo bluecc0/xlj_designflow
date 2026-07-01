@@ -80,6 +80,8 @@ const App = () => {
   const [inspirationOpen, setInspirationOpen] = React.useState(false);
   const [seedPrompt, setSeedPrompt] = React.useState('');
   const [canvasReferenceSelection, setCanvasReferenceSelection] = React.useState(null);
+  const [templatePanelCollapsed, setTemplatePanelCollapsed] = React.useState(true);
+  const [templateRevealHovered, setTemplateRevealHovered] = React.useState(false);
 
   const handleUseInspirationPrompt = React.useCallback(function(post) {
     setInspirationOpen(false);
@@ -329,12 +331,67 @@ const App = () => {
       {currentUser && !showAdmin && (
         <>
           <TopBar user={currentUser} onSwitchUser={handleSwitchUser} currentView="workbench" onNavigate={navigateTo} onOpenInspiration={function() { setInspirationOpen(function(v) { return !v; }); }} inspirationOpen={inspirationOpen} />
-          <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '260px minmax(0, 1fr) 360px', gridTemplateRows: 'minmax(0, 1fr)', minHeight: 0 }}>
+          <div style={{
+            flex: 1,
+            position: 'relative',
+            display: 'grid',
+            gridTemplateColumns: templatePanelCollapsed ? '0px minmax(0, 1fr) 360px' : '260px minmax(0, 1fr) 360px',
+            gridTemplateRows: 'minmax(0, 1fr)',
+            minHeight: 0,
+            transition: 'grid-template-columns 180ms ease',
+          }}>
             <TemplatePanel
               key={'templates:' + currentUser.id}
               activeId={activeTemplate ? (activeTemplate.file_id || '') + ':' + (activeTemplate.group_name || activeTemplate.id) : null}
               onSelect={selectTemplate}
+              collapsed={templatePanelCollapsed}
+              onCollapse={function() { setTemplatePanelCollapsed(true); }}
             />
+            {templatePanelCollapsed && (
+              <div
+                onMouseEnter={function() { setTemplateRevealHovered(true); }}
+                onMouseLeave={function() { setTemplateRevealHovered(false); }}
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: 14,
+                  zIndex: 30,
+                  pointerEvents: 'auto',
+                }}
+              >
+                <button
+                  title="展开模板栏"
+                  onClick={function() { setTemplatePanelCollapsed(false); }}
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    width: 26,
+                    height: 76,
+                    borderRadius: '0 999px 999px 0',
+                    border: '1px solid rgba(20,22,40,0.08)',
+                    borderLeft: 'none',
+                    background: templateRevealHovered ? 'rgba(255,255,255,0.88)' : 'rgba(255,255,255,0.54)',
+                    boxShadow: templateRevealHovered ? '0 10px 28px rgba(20,22,40,0.14), inset 1px 0 0 rgba(255,255,255,0.75)' : '0 4px 14px rgba(20,22,40,0.06)',
+                    color: 'var(--ink-2)',
+                    cursor: 'pointer',
+                    opacity: templateRevealHovered ? 0.38 : 0,
+                    transition: 'opacity 160ms ease, background 160ms ease, box-shadow 160ms ease',
+                    backdropFilter: 'blur(10px)',
+                    display: 'grid',
+                    placeItems: 'center',
+                    fontSize: 18,
+                    fontWeight: 500,
+                    lineHeight: 1,
+                  }}
+                >
+                  <span style={{ transform: 'translateX(-1px)', opacity: templateRevealHovered ? 0.9 : 0.55 }}>›</span>
+                </button>
+              </div>
+            )}
             <Canvas
               template={activeTemplate}
               resultTemplate={resultTemplate}

@@ -115,7 +115,7 @@ var PANEL_TABS = [
 ];
 
 var TemplatePanel = function(_ref2) {
-  var activeId = _ref2.activeId, onSelect = _ref2.onSelect;
+  var activeId = _ref2.activeId, onSelect = _ref2.onSelect, collapsed = _ref2.collapsed, onCollapse = _ref2.onCollapse;
   var _useState = React.useState('templates'), tab = _useState[0], setTab = _useState[1];
   var _useState2 = React.useState({ general: true, special: true }), collapsedSections = _useState2[0], setCollapsedSections = _useState2[1];
   var _useState3 = React.useState(''), q = _useState3[0], setQ = _useState3[1];
@@ -221,7 +221,19 @@ var TemplatePanel = function(_ref2) {
   var isCollapsed = function(key) { return !!collapsedSections[key]; };
 
   return (
-    React.createElement('div', { style: { position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--panel)', borderRight: '1px solid var(--line)' } },
+    React.createElement('div', { style: {
+      position: 'relative',
+      width: 260,
+      flex: '0 0 260px',
+      minHeight: 0,
+      display: 'flex',
+      flexDirection: 'column',
+      background: 'var(--panel)',
+      borderRight: '1px solid var(--line)',
+      transform: collapsed ? 'translateX(-260px)' : 'translateX(0)',
+      transition: 'transform 180ms ease',
+      pointerEvents: collapsed ? 'none' : 'auto',
+    } },
       React.createElement('div', { style: { display: 'flex', flexShrink: 0, height: 44, borderBottom: '1px solid var(--line)', padding: '0 10px', gap: 2, alignItems: 'center' } },
         PANEL_TABS.map(function(t) {
           return React.createElement('button', {
@@ -242,7 +254,36 @@ var TemplatePanel = function(_ref2) {
             className: 'mono',
             style: { fontSize: 8, padding: '1px 4px', borderRadius: 3, background: 'var(--panel-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', letterSpacing: '0.03em' }
           }, 'soon'));
-        })
+        }),
+        React.createElement('button', {
+          title: '收起模板栏',
+          onClick: onCollapse,
+          style: {
+            marginLeft: 'auto',
+            width: 28,
+            height: 28,
+            borderRadius: 7,
+            border: '1px solid transparent',
+            background: 'transparent',
+            color: 'var(--ink-3)',
+            cursor: 'pointer',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 16,
+            lineHeight: 1,
+            transition: 'background 120ms, color 120ms, border-color 120ms',
+          },
+          onMouseEnter: function(e) {
+            e.currentTarget.style.background = 'var(--panel-2)';
+            e.currentTarget.style.color = 'var(--ink)';
+            e.currentTarget.style.borderColor = 'var(--line)';
+          },
+          onMouseLeave: function(e) {
+            e.currentTarget.style.background = 'transparent';
+            e.currentTarget.style.color = 'var(--ink-3)';
+            e.currentTarget.style.borderColor = 'transparent';
+          },
+        }, '‹')
       ),
       tab === 'templates' && React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
         React.createElement('div', { style: { padding: '10px 14px 8px', flexShrink: 0 } },
@@ -452,13 +493,13 @@ var TemplatePanel = function(_ref2) {
           })
         )
       ),
-      React.createElement(StatusFooter, { count: templates.length })
+      React.createElement(StatusFooter, { count: templates.length, collapsed: collapsed })
     )
   );
 };
 
 var StatusFooter = function(_ref3) {
-  var count = _ref3.count;
+  var count = _ref3.count, collapsed = _ref3.collapsed;
   return React.createElement('div', {
     style: {
       position: 'fixed',
@@ -466,6 +507,9 @@ var StatusFooter = function(_ref3) {
       left: 0,
       width: 260,
       zIndex: 100,
+      transform: collapsed ? 'translateX(-260px)' : 'translateX(0)',
+      transition: 'transform 180ms ease',
+      pointerEvents: collapsed ? 'none' : 'auto',
       borderTop: '1px solid var(--line)',
       background: 'var(--panel-2)',
       padding: '8px 10px',
