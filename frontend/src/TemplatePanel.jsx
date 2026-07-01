@@ -115,7 +115,7 @@ var PANEL_TABS = [
 ];
 
 var TemplatePanel = function(_ref2) {
-  var activeId = _ref2.activeId, onSelect = _ref2.onSelect, collapsed = _ref2.collapsed, onCollapse = _ref2.onCollapse;
+  var activeId = _ref2.activeId, onSelect = _ref2.onSelect, collapsed = _ref2.collapsed;
   var _useState = React.useState('templates'), tab = _useState[0], setTab = _useState[1];
   var _useState2 = React.useState({ general: true, special: true }), collapsedSections = _useState2[0], setCollapsedSections = _useState2[1];
   var _useState3 = React.useState(''), q = _useState3[0], setQ = _useState3[1];
@@ -254,36 +254,7 @@ var TemplatePanel = function(_ref2) {
             className: 'mono',
             style: { fontSize: 8, padding: '1px 4px', borderRadius: 3, background: 'var(--panel-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', letterSpacing: '0.03em' }
           }, 'soon'));
-        }),
-        React.createElement('button', {
-          title: '收起模板栏',
-          onClick: onCollapse,
-          style: {
-            marginLeft: 'auto',
-            width: 28,
-            height: 28,
-            borderRadius: 7,
-            border: '1px solid transparent',
-            background: 'transparent',
-            color: 'var(--ink-3)',
-            cursor: 'pointer',
-            display: 'grid',
-            placeItems: 'center',
-            fontSize: 16,
-            lineHeight: 1,
-            transition: 'background 120ms, color 120ms, border-color 120ms',
-          },
-          onMouseEnter: function(e) {
-            e.currentTarget.style.background = 'var(--panel-2)';
-            e.currentTarget.style.color = 'var(--ink)';
-            e.currentTarget.style.borderColor = 'var(--line)';
-          },
-          onMouseLeave: function(e) {
-            e.currentTarget.style.background = 'transparent';
-            e.currentTarget.style.color = 'var(--ink-3)';
-            e.currentTarget.style.borderColor = 'transparent';
-          },
-        }, '‹')
+        })
       ),
       tab === 'templates' && React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
         React.createElement('div', { style: { padding: '10px 14px 8px', flexShrink: 0 } },
