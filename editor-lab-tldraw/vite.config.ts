@@ -7,11 +7,11 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        entryFileNames: 'assets/index-CjBiBHkT.js',
-        chunkFileNames: 'assets/[name].js',
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: (assetInfo) => {
           const name = assetInfo.names?.[0] || assetInfo.name || ''
-          if (name.endsWith('.css')) return 'assets/index-CDJ2U3B7.css'
+          if (name.endsWith('.css')) return 'assets/[name]-[hash][extname]'
           if (name === 'instrument-serif-2.woff2') return 'assets/instrument-serif-2-DGrY7Whw.woff2'
           if (name === 'inter-7.woff2') return 'assets/inter-7-8kRkwJBP.woff2'
           if (name === 'jetbrains-mono-6.woff2') return 'assets/jetbrains-mono-6-Db4Uuiha.woff2'

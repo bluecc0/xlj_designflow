@@ -253,7 +253,7 @@ _frontend_dist = Path(__file__).parent.parent / "frontend"
 if _frontend_dist.exists():
     app.mount(
         "/ui",
-        StaticFiles(directory=str(_frontend_dist), html=True),
+        NoCacheStaticFiles(directory=str(_frontend_dist), html=True),
         name="frontend",
     )
 
@@ -434,7 +434,7 @@ def _normalize_public_asset_url(raw_url: str | None) -> str:
     return value
 
 
-def _resolve_public_asset_path(raw_url: str | None) -> Path:
+def _resolve_public_asset_path(raw_url: str | None, user: dict | None = None) -> Path:
     """只把站内公开资源 URL 解析成本地文件，避免任意路径/外链读取。"""
     url = _normalize_public_asset_url(raw_url)
     try:
@@ -446,10 +446,44 @@ def _resolve_public_asset_path(raw_url: str | None) -> Path:
     if not path:
         raise HTTPException(400, "图片地址不能为空")
 
+    compose_match = re.match(r"^/compose/([^/]+)/image/?$", path)
+    if compose_match:
+        job_id = compose_match.group(1)
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+        if not job:
+            job = load_job(job_id)
+        if not job:
+            raise HTTPException(404, "图片文件不存在")
+        if user is not None:
+            _assert_job_owner(job.user_id, user)
+        if job.status != ComposeStatus.done or not job.result_path:
+            raise HTTPException(400, "合成任务尚未完成")
+        candidate = Path(job.result_path).resolve()
+        output_root = settings.output_path.resolve()
+        if output_root not in candidate.parents and candidate != output_root:
+            raise HTTPException(400, "图片路径不合法")
+        if not candidate.exists() or not candidate.is_file():
+            raise HTTPException(404, "图片文件不存在")
+        return candidate
+
+    grid_match = re.match(r"^/export/grid/([^/]+)/(\d+)/?$", path)
+    if grid_match:
+        job_id = grid_match.group(1)
+        index = int(grid_match.group(2))
+        candidate = (settings.output_path / f"{job_id}_grid_{index:02d}.png").resolve()
+        output_root = settings.output_path.resolve()
+        if output_root not in candidate.parents and candidate != output_root:
+            raise HTTPException(400, "图片路径不合法")
+        if not candidate.exists() or not candidate.is_file():
+            raise HTTPException(404, "图片文件不存在")
+        return candidate
+
     roots: list[tuple[str, Path]] = [
         ("/ai-images/", settings.output_path / "ai-images"),
         ("/results/", settings.output_path / "results"),
         ("/output/", settings.output_path),
+        ("/avatars/", Path(__file__).parent.parent / "avatars"),
     ]
     for prefix, root in roots:
         if not path.startswith(prefix):
@@ -2843,19 +2877,19 @@ async def _run_ai_image_background(
 @app.post("/ai-image/upscale")
 async def ai_image_upscale(request: Request):
     """对站内图片执行本地高清放大，返回可轮询的 ai-image job。"""
+    user = _current_user(request)
     body = await request.json()
     image_url = str(body.get("image_url") or "").strip()
     try:
         scale = int(body.get("scale") or settings.upscale_cli_scale or 2)
     except Exception:
         scale = settings.upscale_cli_scale or 2
-    user = _current_user(request)
     job_id = uuid.uuid4().hex
     scale = max(1, min(scale, 4))
     if image_url.startswith("data:image/"):
         src_path = _persist_data_url_image(image_url, user_id=user["id"], job_id=job_id)
     else:
-        src_path = _resolve_public_asset_path(image_url)
+        src_path = _resolve_public_asset_path(image_url, user)
     created_at = time.time()
     prompt = f"local upscale x{scale}"
     save_ai_image_job(

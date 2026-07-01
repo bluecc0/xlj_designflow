@@ -8,6 +8,7 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages 
   const pendingMessageRef = React.useRef(null);
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
+  const editorSrc = React.useMemo(() => `/editor-beta/index.html?v=${Date.now()}`, []);
 
   const postToEditor = React.useCallback((message) => {
     const win = iframeRef.current && iframeRef.current.contentWindow;
@@ -182,7 +183,7 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages 
         <iframe
           key={iframeNonce}
           ref={iframeRef}
-          src="/editor-beta/index.html"
+          src={editorSrc}
           title="Designflow Editor"
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', background: 'transparent' }}
         />
