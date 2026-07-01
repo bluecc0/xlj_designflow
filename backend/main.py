@@ -19,6 +19,7 @@ import logging
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -562,41 +563,35 @@ def _run_local_upscale(src_path: Path, out_path: Path, scale: int) -> tuple[int,
     if cli_path:
         exe = Path(cli_path)
         executable = str(exe) if exe.exists() else cli_path
-        output_dir = out_path.parent / (out_path.stem + "_gigapixel")
-        if output_dir.exists():
-            shutil.rmtree(output_dir, ignore_errors=True)
-        output_dir.mkdir(parents=True, exist_ok=True)
         cmd = [
-            executable,
-            "-i", str(src_path),
-            "-o", str(output_dir),
+            sys.executable,
+            "-m", "backend.upscale_worker",
+            "--exe", executable,
+            "--src", str(src_path),
+            "--out", str(out_path),
             "--scale", str(scale),
-            "--dt", "12",
-            "--sh", "8",
-            "--dn", "2",
-            "--cf",
-            "--suffix", "_upscaled",
-            "-f", "png",
+            "--timeout", str(max(30, int(settings.upscale_cli_timeout_seconds or 900))),
         ]
         if settings.upscale_cli_model:
-            cmd[1:1] = ["-m", settings.upscale_cli_model]
-        started = time.time()
+            cmd.extend(["--model", settings.upscale_cli_model])
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         proc = subprocess.run(
             cmd,
-            cwd=str(exe.parent) if exe.exists() else None,
+            cwd=str(settings.root_dir),
             capture_output=True,
             text=True,
-            timeout=max(30, int(settings.upscale_cli_timeout_seconds or 900)),
+            timeout=max(45, int(settings.upscale_cli_timeout_seconds or 900) + 15),
             check=False,
         )
         if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "").strip()[:800]
+            try:
+                payload = json.loads((proc.stdout or "").strip().splitlines()[-1])
+                detail = str(payload.get("error") or "")
+            except Exception:
+                detail = (proc.stderr or proc.stdout or "").strip()[-800:]
             raise RuntimeError(f"Gigapixel CLI 执行失败: {detail or proc.returncode}")
-        generated = _find_latest_image_file(output_dir, started)
-        if not generated:
+        if not out_path.exists():
             raise RuntimeError("Gigapixel CLI 未输出图片")
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(generated, out_path)
         try:
             from PIL import Image
             with Image.open(out_path) as im:
