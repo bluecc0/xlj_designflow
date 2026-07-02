@@ -499,21 +499,17 @@ input {
   padding-right: 4px;
 }
 
-.designflow-upscale-status {
-  flex: 0 1 auto;
-  max-width: 168px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 32px;
-  padding: 0 10px;
+.designflow-upscale-spinner {
+  width: 14px;
+  height: 14px;
   border-radius: 999px;
-  background: rgba(248, 250, 252, 0.96);
-  border: 1px solid rgba(17, 24, 39, 0.08);
-  color: var(--tl-color-text-3);
-  font-size: 12px;
-  line-height: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: designflow-upscale-spin 0.8s linear infinite;
+}
+
+@keyframes designflow-upscale-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

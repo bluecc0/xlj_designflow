@@ -155,16 +155,16 @@ async function resolveUpscaleSourceUrl(rawUrl: string) {
 
 function useUpscaleSelectedImage() {
   const editor = useEditor()
-  const [upscaleState, setUpscaleState] = React.useState<{ loading: boolean; message: string }>({ loading: false, message: '' })
+  const [upscaleState, setUpscaleState] = React.useState<{ loading: boolean; status: 'idle' | 'done' | 'error'; message: string }>({ loading: false, status: 'idle', message: '' })
   const clearTimerRef = React.useRef<number | null>(null)
 
-  const setTemporaryMessage = React.useCallback((message: string, delay = 3200) => {
+  const setTemporaryState = React.useCallback((status: 'done' | 'error', message: string, delay = 2600) => {
     if (clearTimerRef.current) {
       window.clearTimeout(clearTimerRef.current)
     }
-    setUpscaleState({ loading: false, message })
+    setUpscaleState({ loading: false, status, message })
     clearTimerRef.current = window.setTimeout(() => {
-      setUpscaleState((prev) => (prev.loading ? prev : { loading: false, message: '' }))
+      setUpscaleState((prev) => (prev.loading ? prev : { loading: false, status: 'idle', message: '' }))
       clearTimerRef.current = null
     }, delay)
   }, [])
@@ -174,7 +174,7 @@ function useUpscaleSelectedImage() {
       window.clearTimeout(clearTimerRef.current)
       clearTimerRef.current = null
     }
-    setUpscaleState((prev) => (prev.loading ? prev : { loading: false, message: '' }))
+    setUpscaleState((prev) => (prev.loading ? prev : { loading: false, status: 'idle', message: '' }))
   }, [])
 
   React.useEffect(() => {
@@ -193,11 +193,11 @@ function useUpscaleSelectedImage() {
     const asset = editor.getAsset((shape.props as any).assetId)
     const src = await resolveUpscaleSourceUrl(String((asset?.props as any)?.src || '').trim())
     if (!src) {
-      setTemporaryMessage('没有找到图片地址')
+      setTemporaryState('error', '没有找到图片地址')
       return
     }
 
-    setUpscaleState({ loading: true, message: '正在提交高清放大…' })
+    setUpscaleState({ loading: true, status: 'idle', message: '正在高清放大' })
     try {
       const createResp = await fetch('/ai-image/upscale', {
         method: 'POST',
@@ -215,7 +215,6 @@ function useUpscaleSelectedImage() {
 
       let result: any = null
       for (let i = 0; i < 180; i++) {
-        setUpscaleState({ loading: true, message: i < 2 ? '正在高清放大…' : `正在高清放大… ${i}s` })
         await new Promise((resolve) => window.setTimeout(resolve, 1000))
         const statusResp = await fetch(`/ai-image/${encodeURIComponent(jobId)}`, { credentials: 'include' })
         if (!statusResp.ok) {
@@ -280,11 +279,11 @@ function useUpscaleSelectedImage() {
       })
       editor.bringToFront([shapeId])
       editor.setSelectedShapes([shapeId])
-      setTemporaryMessage('高清放大完成，已插入画布', 2600)
+      setTemporaryState('done', '已插入高清图', 2200)
     } catch (error: any) {
-      setTemporaryMessage(formatUpscaleError(error))
+      setTemporaryState('error', formatUpscaleError(error))
     }
-  }, [editor, setTemporaryMessage])
+  }, [editor, setTemporaryState])
 
   return { upscaleState, handleUpscaleSelectedImage, clearMessage }
 }
@@ -358,14 +357,17 @@ function DesignflowImageToolbar() {
       </TldrawUiToolbarButton>
       <TldrawUiToolbarButton
         type="icon"
-        title={upscaleState.loading ? '正在高清放大' : '高清放大'}
+        title={upscaleState.loading ? '正在高清放大' : (upscaleState.message || '高清放大')}
         data-testid="tool.image-upscale"
         onClick={handleUpscaleSelectedImage}
         disabled={upscaleState.loading}
       >
-        <TldrawUiButtonIcon small icon={upscaleState.loading ? 'reset-zoom' : 'zoom-in'} />
+        {upscaleState.loading ? (
+          <span className="designflow-upscale-spinner" />
+        ) : (
+          <TldrawUiButtonIcon small icon="zoom-in" />
+        )}
       </TldrawUiToolbarButton>
-      {upscaleState.message && <span className="designflow-upscale-status">{upscaleState.message}</span>}
     </TldrawUiContextualToolbar>
   )
 }
