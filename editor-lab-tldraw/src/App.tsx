@@ -1120,7 +1120,6 @@ function TldrawHostBridge() {
             editor.loadSnapshot(normalizedSnapshot)
             window.setTimeout(() => {
               normalizeCurrentAssetUrls()
-              reflowDesignflowImages()
               doSave()
             }, 0)
           }
@@ -1149,7 +1148,7 @@ function TldrawHostBridge() {
       if (saveTimer) clearTimeout(saveTimer)
       window.removeEventListener('beforeunload', doSaveSync)
     }
-  }, [editor, normalizeCurrentAssetUrls, reflowDesignflowImages])
+  }, [editor, normalizeCurrentAssetUrls])
 
   return null
 }

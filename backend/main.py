@@ -543,64 +543,49 @@ def _find_latest_image_file(folder: Path, after_ts: float) -> Path | None:
     return max(candidates, key=lambda item: item.stat().st_mtime)
 
 
-def _pil_upscale_image(src_path: Path, out_path: Path, scale: int) -> tuple[int, int]:
-    from PIL import Image
-    with Image.open(src_path) as im:
-        if im.mode in ("RGBA", "LA", "P"):
-            im = im.convert("RGBA")
-        else:
-            im = im.convert("RGB")
-        new_size = (max(1, int(im.width * scale)), max(1, int(im.height * scale)))
-        out = im.resize(new_size, Image.Resampling.LANCZOS)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out.save(out_path, "PNG", optimize=True)
-    return new_size
-
-
 def _run_local_upscale(src_path: Path, out_path: Path, scale: int) -> tuple[int, int, str]:
     scale = max(1, min(int(scale or 2), 4))
     cli_path = settings.upscale_cli_path.strip()
-    if cli_path:
-        exe = Path(cli_path)
-        executable = str(exe) if exe.exists() else cli_path
-        cmd = [
-            sys.executable,
-            "-m", "backend.upscale_worker",
-            "--exe", executable,
-            "--src", str(src_path),
-            "--out", str(out_path),
-            "--scale", str(scale),
-            "--timeout", str(max(30, int(settings.upscale_cli_timeout_seconds or 900))),
-        ]
-        if settings.upscale_cli_model:
-            cmd.extend(["--model", settings.upscale_cli_model])
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        proc = subprocess.run(
-            cmd,
-            cwd=str(settings.root_dir),
-            capture_output=True,
-            text=True,
-            timeout=max(45, int(settings.upscale_cli_timeout_seconds or 900) + 15),
-            check=False,
-        )
-        if proc.returncode != 0:
-            try:
-                payload = json.loads((proc.stdout or "").strip().splitlines()[-1])
-                detail = str(payload.get("error") or "")
-            except Exception:
-                detail = (proc.stderr or proc.stdout or "").strip()[-800:]
-            raise RuntimeError(f"Gigapixel CLI 执行失败: {detail or proc.returncode}")
-        if not out_path.exists():
-            raise RuntimeError("Gigapixel CLI 未输出图片")
-        try:
-            from PIL import Image
-            with Image.open(out_path) as im:
-                return im.width, im.height, "gigapixel"
-        except Exception:
-            return 0, 0, "gigapixel"
+    if not cli_path:
+        raise RuntimeError("本机未配置高清放大工具，请先配置 UPSCALE_CLI_PATH")
 
-    width, height = _pil_upscale_image(src_path, out_path, scale)
-    return width, height, "pillow"
+    exe = Path(cli_path)
+    executable = str(exe) if exe.exists() else cli_path
+    cmd = [
+        sys.executable,
+        "-m", "backend.upscale_worker",
+        "--exe", executable,
+        "--src", str(src_path),
+        "--out", str(out_path),
+        "--scale", str(scale),
+        "--timeout", str(max(30, int(settings.upscale_cli_timeout_seconds or 900))),
+    ]
+    if settings.upscale_cli_model:
+        cmd.extend(["--model", settings.upscale_cli_model])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        cmd,
+        cwd=str(settings.root_dir),
+        capture_output=True,
+        text=True,
+        timeout=max(45, int(settings.upscale_cli_timeout_seconds or 900) + 15),
+        check=False,
+    )
+    if proc.returncode != 0:
+        try:
+            payload = json.loads((proc.stdout or "").strip().splitlines()[-1])
+            detail = str(payload.get("error") or "")
+        except Exception:
+            detail = (proc.stderr or proc.stdout or "").strip()[-800:]
+        raise RuntimeError(f"Gigapixel CLI 执行失败: {detail or proc.returncode}")
+    if not out_path.exists():
+        raise RuntimeError("Gigapixel CLI 未输出图片")
+    try:
+        from PIL import Image
+        with Image.open(out_path) as im:
+            return im.width, im.height, "gigapixel"
+    except Exception:
+        return 0, 0, "gigapixel"
 
 
 async def _run_upscale_background(job_id: str, user: dict, src_path: Path, scale: int, created_at: float) -> None:

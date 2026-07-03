@@ -105,7 +105,7 @@ class Settings:
     proxy_download_request_timeout_seconds: int = int(os.getenv("PROXY_DOWNLOAD_REQUEST_TIMEOUT_SECONDS", "180"))
     proxy_download_navigation_timeout_ms: int = int(os.getenv("PROXY_DOWNLOAD_NAVIGATION_TIMEOUT_MS", "30000"))
 
-    # 本地高清放大 CLI（可选）。填 gigapixel-beta.exe 路径后使用真实超分；留空则用 Pillow 兜底放大。
+    # 本地高清放大 CLI。必须配置 gigapixel-beta.exe 路径；留空则高清放大不可用。
     upscale_cli_path: str = os.getenv("UPSCALE_CLI_PATH", "").strip()
     upscale_cli_model: str = os.getenv("UPSCALE_CLI_MODEL", "").strip()
     upscale_cli_scale: int = int(os.getenv("UPSCALE_CLI_SCALE", "2"))
