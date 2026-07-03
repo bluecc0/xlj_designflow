@@ -1010,16 +1010,15 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     flexShrink: 0,
                   }}/>
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 12.5, color: 'var(--ink)', fontWeight: 600 }}>正在解析表格</div>
+                    <div style={{ fontSize: 12.5, color: 'var(--ink)', fontWeight: 600 }}>{m.modeLabel || '智能铺货'}</div>
                     <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 2 }}>
-                      {m.fileName ? ('已接收 ' + m.fileName + '，正在识别 sheet、标黄区域和替换字段…') : '正在识别 sheet、标黄区域和替换字段…'}
+                      {m.fileName ? ('已接收 ' + m.fileName + '，正在解析 sheet 和替换字段…') : '正在解析 sheet 和替换字段…'}
                     </div>
                   </div>
                   {m.startedAt ? <ChatTimer startedAt={m.startedAt}/> : null}
                 </div>
               ) : m.type === 'smart-distribute' ? (() => {
                 const data = m.data;
-                const modeLabel = data.mode === 'patch' ? 'patch（增量）' : 'full（全量）';
                 const totalJobs = (data.jobs || []).length;
                 const totalSlots = (data.jobs || []).reduce(function(acc, j) {
                   return acc + (j.modules || []).reduce(function(a, m) {
@@ -1042,92 +1041,76 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   + (summary.totalSlots || totalSlots) + ' 个槽位'
                   + (specialText ? '，特殊标记：' + specialText : '')
                   + (skippedText ? '，' + skippedText : '');
-                var jsonStr = '';
-                try { jsonStr = JSON.stringify(data, null, 2); } catch(e) { jsonStr = ''; }
                 return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + summaryText + '。' + (m.copied ? (data.mode === 'patch' ? 'JSON 已自动复制到剪贴板' : '已自动复制第 1 个模板 JSON') : 'JSON 已生成')),
+                  React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + summaryText + '。' + (m.copied ? '已自动复制第 1 个 JSON' : 'JSON 已生成')),
                   data.warnings && data.warnings.length > 0 ? React.createElement('div', {
                     style: { padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }
                   }, data.warnings.map(function(w, wi) { return React.createElement('div', { key: wi }, '⚠ ' + w); })) : null,
-                  data.mode === 'patch'
-                    ? React.createElement('div', { style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden', marginTop: 4 } },
+                  React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                    (data.jobs || []).map(function(job, ji) {
+                      var sheetJson = (m.jobJsons && m.jobJsons[ji]) || '';
+                      if (!sheetJson) {
+                        try {
+                          var source = Object.assign({}, data.source || {});
+                          if (job.batchType) source.batchType = job.batchType;
+                          if (job.batchLabel) source.batchLabel = job.batchLabel;
+                          sheetJson = JSON.stringify({
+                            schemaVersion: data.schemaVersion,
+                            mode: data.mode,
+                            source: source,
+                            defaults: data.defaults,
+                            summary: job.summary || {},
+                            jobs: [job],
+                          }, null, 2);
+                        } catch(e) { sheetJson = ''; }
+                      }
+                      var jobSlots = (job.modules || []).reduce(function(a, mod) {
+                        return a + (mod.values || mod.patches || []).length;
+                      }, 0);
+                      var jobModules = (job.modules || []).length;
+                      var jobSummary = job.summary || {};
+                      var jobSpecialText = formatCountMap(jobSummary.typeCounts || {}, { exclude: ['海报'] });
+                      var jobSkippedText = jobSummary.skippedRows ? ('跳过 ' + jobSummary.skippedRows + ' 行' + ((jobSummary.typeCounts || {}).海报 ? '（海报 ' + (jobSummary.typeCounts || {}).海报 + '）' : '')) : '';
+                      var jobSummaryText = jobModules + ' 个模块 · '
+                        + (jobSummary.skuCount || 0) + ' 个 SKU × ' + (jobSummary.fieldCount || 0) + ' 个字段 · '
+                        + (jobSummary.totalSlots || jobSlots) + ' 个槽位'
+                        + (jobSpecialText ? ' · 特殊标记：' + jobSpecialText : '')
+                        + (jobSkippedText ? ' · ' + jobSkippedText : '');
+                      var batchLabel = job.batchLabel || (data.mode === 'patch' ? '增量' : '全量');
+                      var title = (data.mode === 'patch' ? batchLabel + ' - ' : '') + (job.sheetName || job.templateName || ('Sheet ' + (ji + 1)));
+                      var badgeStyle = job.batchType === 'red'
+                        ? { background: 'rgba(180,35,24,0.08)', color: 'var(--warn)' }
+                        : job.batchType === 'yellow'
+                          ? { background: 'var(--warn-soft)', color: 'var(--warn)' }
+                          : { background: 'var(--accent-soft)', color: 'var(--accent-ink)' };
+                      return React.createElement('div', {
+                        key: (job.batchType || 'full') + ':' + (job.sheetName || ji),
+                        style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden' }
+                      },
                         React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
-                          React.createElement('div', { style: { width: 20, height: 20, borderRadius: 5, background: 'var(--warn-soft)', color: 'var(--warn)', display: 'grid', placeItems: 'center' } },
+                          React.createElement('div', { style: Object.assign({ width: 20, height: 20, borderRadius: 5, display: 'grid', placeItems: 'center' }, badgeStyle) },
                             React.createElement(I.file, { size: 11 })
                           ),
-                          React.createElement('div', { style: { flex: 1 } },
-                            React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' } }, '增量修改（patch）'),
-                            React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)' } }, totalSlots + ' 个标黄槽位')
+                          React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                            React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, title),
+                            React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)', lineHeight: 1.45 } }, jobSummaryText)
                           )
                         ),
                         React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
-                          React.createElement(CopyButton2, { jsonStr: jsonStr })
+                          React.createElement(CopyButton2, { jsonStr: sheetJson })
                         ),
                         React.createElement('pre', {
                           style: {
                             margin: 0, padding: '10px 12px', fontSize: 10,
-                            color: 'var(--ink-2)', overflow: 'auto', maxHeight: 250,
+                            color: 'var(--ink-2)', overflow: 'auto', maxHeight: 180,
                             borderTop: '1px solid var(--line-2)',
                             whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                             fontFamily: 'Menlo, Monaco, monospace',
                           }
-                        }, jsonStr.slice(0, 2500) + (jsonStr.length > 2500 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
-                      )
-                    : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-                        (data.jobs || []).map(function(job, ji) {
-                          var sheetJson = (m.jobJsons && m.jobJsons[ji]) || '';
-                          if (!sheetJson) {
-                            try {
-                              sheetJson = JSON.stringify({
-                                schemaVersion: data.schemaVersion,
-                                mode: data.mode,
-                                source: data.source,
-                                defaults: data.defaults,
-                                summary: job.summary || {},
-                                jobs: [job],
-                              }, null, 2);
-                            } catch(e) { sheetJson = ''; }
-                          }
-                          var jobSlots = (job.modules || []).reduce(function(a, mod) {
-                            return a + (mod.values || mod.patches || []).length;
-                          }, 0);
-                          var jobModules = (job.modules || []).length;
-                          var jobSummary = job.summary || {};
-                          var jobSpecialText = formatCountMap(jobSummary.typeCounts || {}, { exclude: ['海报'] });
-                          var jobSkippedText = jobSummary.skippedRows ? ('跳过 ' + jobSummary.skippedRows + ' 行' + ((jobSummary.typeCounts || {}).海报 ? '（海报 ' + (jobSummary.typeCounts || {}).海报 + '）' : '')) : '';
-                          var jobSummaryText = jobModules + ' 个模块 · '
-                            + (jobSummary.skuCount || 0) + ' 个 SKU × ' + (jobSummary.fieldCount || 0) + ' 个字段 · '
-                            + (jobSummary.totalSlots || jobSlots) + ' 个槽位'
-                            + (jobSpecialText ? ' · 特殊标记：' + jobSpecialText : '')
-                            + (jobSkippedText ? ' · ' + jobSkippedText : '');
-                          return React.createElement('div', {
-                            key: job.sheetName || ji,
-                            style: { width: '100%', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', overflow: 'hidden' }
-                          },
-                            React.createElement('div', { style: { padding: '9px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 } },
-                              React.createElement('div', { style: { width: 20, height: 20, borderRadius: 5, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' } },
-                                React.createElement(I.file, { size: 11 })
-                              ),
-                              React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-                                React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, job.sheetName || job.templateName || ('Sheet ' + (ji + 1))),
-                                React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)', lineHeight: 1.45 } }, jobSummaryText)
-                              )
-                            ),
-                            React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
-                              React.createElement(CopyButton2, { jsonStr: sheetJson })
-                            ),
-                            React.createElement('pre', {
-                              style: {
-                                margin: 0, padding: '10px 12px', fontSize: 10,
-                                color: 'var(--ink-2)', overflow: 'auto', maxHeight: 180,
-                                borderTop: '1px solid var(--line-2)',
-                                whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-                                fontFamily: 'Menlo, Monaco, monospace',
-                              }
-                            }, sheetJson.slice(0, 1400) + (sheetJson.length > 1400 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
-                          );
-                        })
-                      )
+                        }, sheetJson.slice(0, 1400) + (sheetJson.length > 1400 ? '\n/* ... 截断，完整 JSON 请复制 */' : ''))
+                      );
+                    })
+                  )
                 );
               })() : m.type === 'generating' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1388,6 +1371,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const [aiQuality, setAiQuality] = React.useState('1K');
   const [aiProvider, setAiProvider] = React.useState('apimart');
   const [aiBatchCount, setAiBatchCount] = React.useState('1');
+  const [smartDistributeMode, setSmartDistributeMode] = React.useState('full');
   const [manualRefImages, setManualRefImages] = React.useState([]);
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
@@ -1750,6 +1734,16 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
 
   const handleSend = () => {
     const body = text.trim();
+    const smartFile = files.find(function(item) { return item.kind === 'smart-distribute' && item.file; });
+    if (smartFile) {
+      if (isLoading) return;
+      if (onSmartDistribute) {
+        onSmartDistribute(smartFile.file, smartFile.name, smartDistributeMode).catch(function(err) { console.error('Smart distribute send error:', err); });
+      }
+      setFiles(function(prev) { return prev.filter(function(item) { return item !== smartFile; }); });
+      setText('');
+      return;
+    }
     const message = lockedCommand ? (lockedCommand + (body ? ' ' + body : '')) : body;
     if (!message || isLoading) return;
     const imagesToSend = [...refImages];
@@ -1892,10 +1886,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     if (images.length) addImageFiles(images);
     if (others.length && !agentEnabled) {
       const file = others[0];
-      if (selectedWorkflow === 'distribute') {
-        if (onSmartDistribute) {
-          onSmartDistribute(file, file.name).catch(err => console.error('Smart distribute error:', err));
-        }
+      if (selectedWorkflow === 'distribute' && isSmartDistributeFile(file)) {
+        addSmartDistributeFile(file);
       } else {
         const fileObj = { name: file.name, size: formatFileSize(file.size), file, imageType };
         setFiles(prev => [...prev, fileObj]);
@@ -1915,12 +1907,10 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     const files = fileItems.map(it => it.getAsFile()).filter(Boolean);
     const images = files.filter(f => f && f.type.startsWith('image/'));
     const excels = files.filter(f => f && /\.(xlsx|xlsm)$/i.test(f.name));
-    if (excels.length && selectedWorkflow === 'distribute' && onSmartDistribute) {
-      onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute paste error:', err); });
+    if (excels.length && selectedWorkflow === 'distribute') {
+      addSmartDistributeFile(excels[0]);
     } else if (images.length) {
       addImageFiles(images);
-    } else if (excels.length && onSmartDistribute) {
-      onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute paste error:', err); });
     }
   };
 
@@ -2005,8 +1995,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       var excels = Array.from(files || []).filter(function(f) {
         return /\.(xlsx|xlsm)$/i.test(f.name);
       });
-      if (excels.length && onSmartDistribute) {
-        onSmartDistribute(excels[0], excels[0].name).catch(function(err) { console.error('Smart distribute drop error:', err); });
+      if (excels.length) {
+        addSmartDistributeFile(excels[0]);
       } else {
         if (files && files.length) addImageFiles(files);
       }
@@ -2031,6 +2021,17 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+  const isSmartDistributeFile = function(file) {
+    return file && /\.(xlsx|xlsm)$/i.test(file.name || '');
+  };
+  const addSmartDistributeFile = function(file) {
+    if (!isSmartDistributeFile(file)) return false;
+    const fileObj = { name: file.name, size: formatFileSize(file.size), file, kind: 'smart-distribute' };
+    setFiles(function(prev) {
+      return prev.filter(function(item) { return item.kind !== 'smart-distribute'; }).concat(fileObj);
+    });
+    return true;
   };
   const canSend = Boolean((lockedCommand ? (lockedCommand + ' ' + text.trim()).trim() : text.trim()) || files.length) && !isLoading;
   const getTaskDefinitions = React.useCallback(function() {
@@ -2091,7 +2092,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
         : selectedWorkflow === 'compose'
           ? (imageType ? ('素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType)) : '')
           : selectedWorkflow === 'distribute'
-            ? ''
+            ? (smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量')
             : '';
   const selectedSettingBits = [
     agentEnabled ? 'Agent' : activeTaskLabel,
@@ -2114,13 +2115,14 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           : selectedWorkflow === 'compose'
             ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁'
             : selectedWorkflow === 'distribute'
-              ? '上传或拖入 Excel（.xlsx / .xlsm），自动解析为铺货 JSON'
+              ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON'
               : selectedWorkflow === 'download'
               ? '输入花瓣项目 ID 或链接，格式会自动识别'
               : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(
     text.trim() ||
     lockedCommand ||
+    modeParamLabel ||
     refImages.length > 0 ||
     files.length > 0 ||
     (!agentEnabled && prototypePanel)
@@ -2284,7 +2286,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       const isImageParams = activeMode === 'ai-image';
       const isSpecialParams = activeMode === 'special' || activeMode === 'special_full';
       const isComposeParams = activeMode === 'compose';
-      const paramsTitle = isImageParams ? '生图参数' : isSpecialParams ? '特殊品参数' : isComposeParams ? '合成参数' : '问答参数';
+      const isDistributeParams = activeMode === 'distribute';
+      const paramsTitle = isImageParams ? '生图参数' : isSpecialParams ? '特殊品参数' : isComposeParams ? '合成参数' : isDistributeParams ? '铺货参数' : '问答参数';
       const providerItems = [
         activeAiModel !== 'nano-banana-pro' ? {
           key: 'sub2api',
@@ -2437,6 +2440,41 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
             lineHeight: 1.5,
           }
         }, '问答模式暂无额外参数，直接输入问题即可。'),
+        isDistributeParams && React.createElement(React.Fragment, null,
+          protoSectionLabel('铺货方式'),
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } },
+            [
+              { key: 'full', label: '全量', desc: '按 Sheet 依次返回' },
+              { key: 'patch', label: '增量', desc: '仅黄/红标记内容' },
+            ].map(function(item) {
+              const active = smartDistributeMode === item.key;
+              return React.createElement('button', {
+                key: item.key,
+                type: 'button',
+                onClick: function() { setSmartDistributeMode(item.key); },
+                style: {
+                  cursor: 'pointer',
+                  minHeight: 44,
+                  padding: '8px 10px',
+                  borderRadius: 12,
+                  border: '1px solid ' + (active ? 'var(--ink)' : 'var(--line-2)'),
+                  background: active ? 'var(--ink)' : 'var(--panel)',
+                  color: active ? 'var(--panel)' : 'var(--ink)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  justifyContent: 'center',
+                  gap: 2,
+                  textAlign: 'left',
+                  boxShadow: 'none',
+                }
+              },
+                React.createElement('span', { style: { fontSize: 12, fontWeight: 700, lineHeight: 1.1 } }, item.label),
+                React.createElement('span', { style: { fontSize: 10.5, lineHeight: 1.2, color: active ? 'rgba(255,255,255,0.68)' : 'var(--ink-3)', fontWeight: 500 } }, item.desc)
+              );
+            })
+          )
+        ),
         isSpecialParams && React.createElement(React.Fragment, null,
           protoSectionLabel('模板线路'),
           React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 } },
@@ -2469,7 +2507,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
             })
           )
         ),
-        !isImageParams && !isSpecialParams && activeMode !== 'chat' && React.createElement(React.Fragment, null,
+        !isImageParams && !isSpecialParams && !isDistributeParams && activeMode !== 'chat' && React.createElement(React.Fragment, null,
           protoSectionLabel(isSpecialParams ? '特殊品输入' : '素材类型'),
           React.createElement('div', { style: { display: 'flex', gap: 7, flexWrap: 'wrap' } },
             IMAGE_TYPES.map(function(t) {
@@ -2690,6 +2728,47 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
               </div>
             ))}
             <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{refImages.length}/{MAX_REFERENCE_IMAGES}</span>
+          </div>
+        )}
+
+        {files.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            {files.map(function(item, idx) {
+              return (
+                <div key={idx} style={{
+                  minWidth: 0,
+                  maxWidth: '100%',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  padding: '6px 8px',
+                  borderRadius: 10,
+                  border: '1px solid var(--line)',
+                  background: 'var(--panel-2)',
+                  color: 'var(--ink)',
+                }}>
+                  <I.file size={13}/>
+                  <span style={{ fontSize: 12, fontWeight: 600, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
+                  <span style={{ fontSize: 10.5, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{item.kind === 'smart-distribute' ? '待铺货' : item.size}</span>
+                  <button
+                    type="button"
+                    onClick={function() { setFiles(function(prev) { return prev.filter(function(_, i) { return i !== idx; }); }); }}
+                    style={{
+                      width: 16,
+                      height: 16,
+                      borderRadius: 999,
+                      background: 'transparent',
+                      color: 'var(--ink-3)',
+                      display: 'grid',
+                      placeItems: 'center',
+                      fontSize: 12,
+                      lineHeight: 1,
+                      cursor: 'pointer',
+                    }}
+                  >×</button>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -4126,22 +4205,27 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     setIsLoading(false);
   }, [isLoading, templateFields]);
 
-  const handleSmartDistribute = React.useCallback(async (file, filename) => {
+  const handleSmartDistribute = React.useCallback(async (file, filename, mode) => {
+    const distributeMode = mode === 'patch' ? 'patch' : 'full';
+    const modeLabel = distributeMode === 'patch' ? '增量铺货' : '全量铺货';
     const pendingId = 'smart-distribute-' + Date.now() + '-' + Math.random().toString(36).slice(2);
     setMessages(msgs => [
       ...msgs,
       { who: 'user', type: 'file-attach', text: filename, file: filename },
-      { who: 'ai', type: 'smart-distribute-loading', id: pendingId, fileName: filename, meta: '智能铺货', startedAt: Date.now() }
+      { who: 'ai', type: 'smart-distribute-loading', id: pendingId, fileName: filename, meta: modeLabel, modeLabel: modeLabel, startedAt: Date.now() }
     ]);
     setIsLoading(true);
     try {
-      const result = await window.API.smartDistribute(file);
+      const result = await window.API.smartDistribute(file, { mode: distributeMode });
       // 每个 job 组装独立 JSON（只包该 job），自动复制第一个
       var jobJsons = (result.jobs || []).map(function(job) {
+        var source = Object.assign({}, result.source || {});
+        if (job.batchType) source.batchType = job.batchType;
+        if (job.batchLabel) source.batchLabel = job.batchLabel;
         var single = {
           schemaVersion: result.schemaVersion,
           mode: result.mode,
-          source: result.source,
+          source: source,
           defaults: result.defaults,
           summary: job.summary || {},
           jobs: [job],

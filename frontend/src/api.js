@@ -43,9 +43,11 @@
     });
   }
 
-  function smartDistribute(file) {
+  function smartDistribute(file, options) {
+    options = options || {};
     var form = new FormData();
     form.append('file', file);
+    form.append('mode', options.mode || 'full');
     return fetch(BASE + '/smart-distribute', { method: 'POST', body: form, credentials: 'include' }).then(function(resp) {
       if (!resp.ok) {
         return resp.text().then(function(text) {

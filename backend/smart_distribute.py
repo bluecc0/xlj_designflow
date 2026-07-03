@@ -23,6 +23,8 @@ from openpyxl.utils import get_column_letter
 from .models import SmartDistributeResponse
 
 _YELLOW_HEXES = {"FFFF00", "FFF2CC", "FFEB9C", "FFE066", "FFD700"}
+_RED_HEXES = {"FF0000", "C00000", "E06666", "F4CCCC", "EA9999"}
+_MARK_LABELS = {"yellow": "黄色增量", "red": "红色增量"}
 _MODULE_COL_KEYWORDS = ["模块", "分类", "品类", "分组"]
 _IMAGE_FIELD_KEYWORDS = ["sku", "SKU", "货号", "商品编码", "款号", "图片", "素材"]
 _EXCLUDED_FIELD_NAMES = {"序号", "库存", "是否下架", "是否上架", "主推款", "SPU", "spu", "吊牌价", "划线价", "零售价"}
@@ -58,37 +60,96 @@ _SKIP_TYPE_KEYS = {_norm(v) for v in _SKIP_TYPE_VALUES}
 _TYPE_SUFFIX_KEYS = {_norm(k): v for k, v in _TYPE_SUFFIX_MAP.items()}
 
 
-def _is_yellow(cell) -> bool:
-    """判断单元格是否为手动设置的黄色填充。"""
+def _dimension_hidden(dim) -> bool:
+    if dim is None:
+        return False
+    if getattr(dim, "hidden", False):
+        return True
+    size = getattr(dim, "width", None)
+    if size is None:
+        size = getattr(dim, "height", None)
+    return size is not None and float(size) <= 0.1
+
+
+def _is_row_hidden(ws, row: int) -> bool:
+    return _dimension_hidden(ws.row_dimensions.get(row))
+
+
+def _is_col_hidden(ws, col: int) -> bool:
+    letter = get_column_letter(col)
+    if _dimension_hidden(ws.column_dimensions.get(letter)):
+        return True
+    for dim in ws.column_dimensions.values():
+        min_col = getattr(dim, "min", None)
+        max_col = getattr(dim, "max", None)
+        if min_col and max_col and min_col <= col <= max_col and _dimension_hidden(dim):
+            return True
+    return False
+
+
+def _visible_cell_value(ws, row: int, col: int) -> str:
+    if _is_row_hidden(ws, row) or _is_col_hidden(ws, col):
+        return ""
+    merged = _get_merged_range(ws, row, col)
+    if merged is not None:
+        return merged
+    return _cell_str(ws.cell(row=row, column=col))
+
+
+def _color_hex(cell) -> Optional[str]:
     fill = cell.fill
     if not fill or fill.fill_type != "solid":
-        return False
+        return None
     fg = fill.fgColor
-    if fg is None or fg.type != "rgb" or not fg.rgb:
-        return False
-    raw = str(fg.rgb).upper()
-    if raw in ("0", "00000000", "FFFFFF", "FFFFFFFF"):
-        return False
-    hex_val = raw[2:] if len(raw) == 8 else raw
-    return hex_val in _YELLOW_HEXES
+    if fg is None:
+        return None
+    if fg.type == "rgb" and fg.rgb:
+        raw = str(fg.rgb).upper()
+        if raw in ("0", "00000000", "FFFFFF", "FFFFFFFF"):
+            return None
+        return raw[-6:]
+    if fg.type == "indexed" and fg.indexed is not None:
+        indexed = int(fg.indexed)
+        colors = getattr(openpyxl.styles.colors, "COLOR_INDEX", ())
+        if 0 <= indexed < len(colors):
+            raw = str(colors[indexed] or "").upper()
+            return raw[-6:] if raw else None
+    if fg.type == "theme" and fg.tint is not None:
+        return None
+    return None
+
+
+def _detect_mark_color(cell) -> Optional[str]:
+    hex_val = _color_hex(cell)
+    if not hex_val or len(hex_val) != 6:
+        return None
+    if hex_val in _YELLOW_HEXES:
+        return "yellow"
+    if hex_val in _RED_HEXES:
+        return "red"
+    try:
+        r = int(hex_val[0:2], 16)
+        g = int(hex_val[2:4], 16)
+        b = int(hex_val[4:6], 16)
+    except ValueError:
+        return None
+    if r >= 210 and g >= 170 and b <= 120:
+        return "yellow"
+    if r >= 180 and g <= 140 and b <= 140 and r >= g + 50:
+        return "red"
+    return None
 
 
 def _get_merged_range(ws, row: int, col: int) -> Optional[str]:
     for rng in ws.merged_cells.ranges:
         if rng.min_row <= row <= rng.max_row and rng.min_col <= col <= rng.max_col:
+            if _is_row_hidden(ws, row) or _is_col_hidden(ws, col):
+                return None
+            if _is_row_hidden(ws, rng.min_row) or _is_col_hidden(ws, rng.min_col):
+                return None
             cell = ws.cell(row=rng.min_row, column=rng.min_col)
             return str(cell.value or "").strip() if cell.value is not None else None
     return None
-
-
-def _is_row_hidden(ws, row: int) -> bool:
-    rd = ws.row_dimensions.get(row)
-    return rd is not None and rd.hidden
-
-
-def _is_col_hidden(ws, col: int) -> bool:
-    cd = ws.column_dimensions.get(get_column_letter(col))
-    return cd is not None and cd.hidden
 
 
 def _cell_str(cell) -> str:
@@ -128,12 +189,12 @@ def _with_type_suffix(value: str, suffix: str) -> str:
 class SmartDistributor:
     """智能铺货核心处理类。"""
 
-    def process(self, file_bytes: bytes, filename: str) -> SmartDistributeResponse:
+    def process(self, file_bytes: bytes, filename: str, mode: str = "full") -> SmartDistributeResponse:
+        mode = "patch" if str(mode or "full").lower() == "patch" else "full"
         wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, keep_links=False)
         warnings: list[str] = []
         sheets: list[dict] = []
         visible_count = 0
-        has_yellow = False
 
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
@@ -141,20 +202,26 @@ class SmartDistributor:
                 continue
             visible_count += 1
             parsed = self._parse_sheet(ws, sheet_name, warnings)
-            if not parsed:
-                continue
-            has_yellow = has_yellow or parsed["hasYellow"]
-            sheets.append(parsed)
+            if parsed:
+                sheets.append(parsed)
 
         if visible_count == 0:
             warnings.append("未检测到可处理的可见 Sheet，请检查表格是否隐藏了工作表。")
 
-        mode = "patch" if has_yellow else "full"
         jobs: list[dict] = []
-        for sheet in sheets:
-            job = self._build_sheet_job(sheet, patch_mode=has_yellow)
-            if job and job.get("modules"):
-                jobs.append(job)
+        if mode == "patch":
+            for sheet in sheets:
+                for mark_type in ("yellow", "red"):
+                    job = self._build_sheet_job(sheet, patch_mode=True, mark_type=mark_type)
+                    if job and job.get("modules"):
+                        jobs.append(job)
+            if not jobs:
+                warnings.append("增量模式未检测到黄色或红色标记，请检查表格标记。")
+        else:
+            for sheet in sheets:
+                job = self._build_sheet_job(sheet, patch_mode=False)
+                if job and job.get("modules"):
+                    jobs.append(job)
 
         if not jobs:
             warnings.append("未生成任何铺货任务，请检查表格内容")
@@ -195,7 +262,7 @@ class SmartDistributor:
         last_row = self._find_last_data_row(ws, header_row, headers)
         submodule_col_idx = self._find_submodule_col(ws, header_row, last_row, excluded_cols)
         modules = self._detect_modules(ws, header_row, module_col_idx, submodule_col_idx, last_row)
-        rows_data, yellow_cells, skipped_rows, skipped_type_counts = self._read_rows(
+        rows_data, marked_cells, skipped_rows, skipped_type_counts = self._read_rows(
             ws, header_row, headers, image_field, last_row, type_col_idx
         )
         if not rows_data:
@@ -209,18 +276,32 @@ class SmartDistributor:
             "fieldOrder": field_order,
             "imageField": image_field,
             "modules": module_groups,
-            "yellowCells": yellow_cells,
+            "markedCells": marked_cells,
             "skippedRows": skipped_rows,
             "skippedTypeCounts": skipped_type_counts,
-            "hasYellow": bool(yellow_cells),
         }
 
     def _find_header_row(self, ws) -> Optional[int]:
-        for row_idx in range(1, min(ws.max_row + 1, 20)):
-            count = 0
+        candidates: list[tuple[int, int]] = []
+        for row_idx in range(1, min(ws.max_row + 1, 21)):
+            visible_values = []
+            module_col = None
             for col in range(1, ws.max_column + 1):
-                if not _is_col_hidden(ws, col) and _cell_str(ws.cell(row=row_idx, column=col)):
-                    count += 1
+                value = _visible_cell_value(ws, row_idx, col)
+                if not value:
+                    continue
+                visible_values.append(value)
+                if _is_module_col(value):
+                    module_col = col
+            if module_col is not None:
+                return row_idx
+            if any(any(_norm(keyword) in _norm(value) for keyword in _IMAGE_FIELD_KEYWORDS) for value in visible_values):
+                candidates.append((row_idx, len(visible_values)))
+        for row_idx, count in candidates:
+            if count >= 2:
+                return row_idx
+        for row_idx in range(1, min(ws.max_row + 1, 21)):
+            count = sum(1 for col in range(1, ws.max_column + 1) if _visible_cell_value(ws, row_idx, col))
             if count >= 2:
                 return row_idx
         return None
@@ -231,9 +312,13 @@ class SmartDistributor:
         module_col_idx = None
         type_col_idx = None
         for col_idx in range(1, ws.max_column + 1):
-            if _is_col_hidden(ws, col_idx):
-                continue
-            raw = _cell_str(ws.cell(row=header_row, column=col_idx))
+            raw = _visible_cell_value(ws, header_row, col_idx)
+            if raw and _is_module_col(raw):
+                module_col_idx = col_idx
+                break
+        start_col = module_col_idx or 1
+        for col_idx in range(start_col, ws.max_column + 1):
+            raw = _visible_cell_value(ws, header_row, col_idx)
             if not raw:
                 continue
             if _is_module_col(raw):
@@ -263,7 +348,7 @@ class SmartDistributor:
         for row_idx in range(header_row + 1, ws.max_row + 1):
             if _is_row_hidden(ws, row_idx):
                 continue
-            has_any = any(_cell_str(ws.cell(row=row_idx, column=col_idx)) for col_idx in headers)
+            has_any = any(_visible_cell_value(ws, row_idx, col_idx) for col_idx in headers)
             if has_any:
                 blank_run = 0
                 last_row = row_idx
@@ -274,9 +359,9 @@ class SmartDistributor:
         return last_row
 
     def _read_rows(self, ws, header_row: int, headers: dict[int, str], image_field: str,
-                   last_row: int, type_col_idx: Optional[int]) -> tuple[list[dict], set, set, dict[str, int]]:
+                   last_row: int, type_col_idx: Optional[int]) -> tuple[list[dict], dict[str, set], set, dict[str, int]]:
         rows_data = []
-        yellow_cells = set()
+        marked_cells = {"yellow": set(), "red": set()}
         skipped_rows = set()
         skipped_type_counts: dict[str, int] = {}
         image_col = next((col for col, field in headers.items() if field == image_field), min(headers.keys()))
@@ -285,9 +370,7 @@ class SmartDistributor:
                 continue
             type_value = ""
             if type_col_idx is not None:
-                type_value = _get_merged_range(ws, row_idx, type_col_idx) or _cell_str(
-                    ws.cell(row=row_idx, column=type_col_idx)
-                )
+                type_value = _visible_cell_value(ws, row_idx, type_col_idx)
             type_key = _norm(type_value)
             if type_key in _SKIP_TYPE_KEYS:
                 skipped_rows.add(row_idx)
@@ -297,7 +380,7 @@ class SmartDistributor:
             suffix = _TYPE_SUFFIX_KEYS.get(type_key)
             suffix_label = _TYPE_SUFFIX_LABELS.get(suffix or "", type_value)
             image_cell = ws.cell(row=row_idx, column=image_col)
-            image_value = _cell_str(image_cell)
+            image_value = _visible_cell_value(ws, row_idx, image_col)
             if image_value and image_cell.font and image_cell.font.italic:
                 skipped_rows.add(row_idx)
                 continue
@@ -311,9 +394,10 @@ class SmartDistributor:
             has_error = False
             for col_idx, field_name in headers.items():
                 cell = ws.cell(row=row_idx, column=col_idx)
-                val = _cell_str(cell)
-                if _is_yellow(cell):
-                    yellow_cells.add((row_idx, field_name))
+                val = _visible_cell_value(ws, row_idx, col_idx)
+                mark = _detect_mark_color(cell)
+                if mark:
+                    marked_cells[mark].add((row_idx, field_name))
                 if field_name == image_field and suffix:
                     val = _with_type_suffix(val, suffix)
                     image_value = val
@@ -323,7 +407,7 @@ class SmartDistributor:
             if not has_any or not image_value or _is_na(image_value) or has_error:
                 continue
             rows_data.append(row_values)
-        return rows_data, yellow_cells, skipped_rows, skipped_type_counts
+        return rows_data, marked_cells, skipped_rows, skipped_type_counts
 
     def _find_submodule_col(self, ws, header_row: int, last_row: int, excluded_cols: dict[int, str]) -> Optional[int]:
         """在被排除列里识别“二级模块”列，避免把它误当替换字段。"""
@@ -337,7 +421,7 @@ class SmartDistributor:
                     continue
                 if rng.max_row - rng.min_row + 1 < 2:
                     continue
-                value = _cell_str(ws.cell(row=rng.min_row, column=rng.min_col))
+                value = _visible_cell_value(ws, rng.min_row, rng.min_col)
                 if value and not _is_numeric_like(value):
                     return col_idx
         return None
@@ -355,10 +439,10 @@ class SmartDistributor:
                 continue
             parent = ""
             if module_col_idx is not None:
-                parent = _get_merged_range(ws, row_idx, module_col_idx) or _cell_str(ws.cell(row=row_idx, column=module_col_idx))
+                parent = _visible_cell_value(ws, row_idx, module_col_idx)
             submodule = ""
             if submodule_col_idx is not None:
-                submodule = _get_merged_range(ws, row_idx, submodule_col_idx) or _cell_str(ws.cell(row=row_idx, column=submodule_col_idx))
+                submodule = _visible_cell_value(ws, row_idx, submodule_col_idx)
             if not parent and not submodule:
                 continue
             module_name = "/".join(part for part in (parent, submodule) if part) or "默认"
@@ -458,14 +542,14 @@ class SmartDistributor:
                 summary["suffixCounts"][key] = summary["suffixCounts"].get(key, 0) + value
         return summary
 
-    def _build_sheet_job(self, sheet: dict, patch_mode: bool) -> Optional[dict]:
+    def _build_sheet_job(self, sheet: dict, patch_mode: bool, mark_type: Optional[str] = None) -> Optional[dict]:
         modules = []
         sheet_type_counts: dict[str, int] = {}
         sheet_suffix_counts: dict[str, int] = {}
         sheet_sku_count = 0
         sheet_slot_count = 0
         for mod in sheet["modules"]:
-            entries = self._build_entries(sheet, mod, patch_mode)
+            entries = self._build_entries(sheet, mod, patch_mode, mark_type)
             if patch_mode and not entries:
                 continue
             row_summary = self._summarize_rows(mod["rows"])
@@ -513,7 +597,7 @@ class SmartDistributor:
             "typeCounts": sheet_type_counts,
             "suffixCounts": sheet_suffix_counts,
         }
-        return {
+        job = {
             "sheetName": sheet["sheetName"],
             "templateName": sheet["templateName"],
             "fieldOrder": sheet["fieldOrder"],
@@ -521,16 +605,20 @@ class SmartDistributor:
             "skippedRows": skipped_rows,
             "modules": modules,
         }
+        if patch_mode and mark_type:
+            job["batchType"] = mark_type
+            job["batchLabel"] = _MARK_LABELS.get(mark_type, mark_type)
+        return job
 
-    def _build_entries(self, sheet: dict, mod: dict, patch_mode: bool) -> list[dict]:
+    def _build_entries(self, sheet: dict, mod: dict, patch_mode: bool, mark_type: Optional[str] = None) -> list[dict]:
         items = []
         field_order = sheet["fieldOrder"]
         image_field = sheet["imageField"]
-        yellow_cells = sheet["yellowCells"]
+        marked_cells = (sheet.get("markedCells") or {}).get(mark_type or "", set())
         for ri, row_data in enumerate(mod["rows"]):
             for fi, field_name in enumerate(field_order):
                 row_idx = row_data["_row"]
-                if patch_mode and (row_idx, field_name) not in yellow_cells:
+                if patch_mode and (row_idx, field_name) not in marked_cells:
                     continue
                 entry = {
                     "slotIndex": ri * len(field_order) + fi + 1,
@@ -541,5 +629,7 @@ class SmartDistributor:
                     "sourceRow": row_idx,
                     "changed": patch_mode,
                 }
+                if patch_mode and mark_type:
+                    entry["markType"] = mark_type
                 items.append(entry)
         return items

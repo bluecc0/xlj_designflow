@@ -1571,7 +1571,7 @@ async def parse_table_endpoint(
 
 
 @app.post("/smart-distribute")
-async def smart_distribute_endpoint(file: UploadFile = File(...)):
+async def smart_distribute_endpoint(file: UploadFile = File(...), mode: str = Form("full")):
     """
     上传 Excel，解析为「铺货 JSON」。
     用 openpyxl 读取单元格 + 模板规则库，不调用 AI。
@@ -1583,11 +1583,14 @@ async def smart_distribute_endpoint(file: UploadFile = File(...)):
     lowered = filename.lower()
     if not (lowered.endswith(".xlsx") or lowered.endswith(".xlsm")):
         raise HTTPException(400, "智能铺货当前仅支持 .xlsx / .xlsm 文件")
+    normalized_mode = str(mode or "full").lower()
+    if normalized_mode not in {"full", "patch"}:
+        raise HTTPException(400, "智能铺货模式仅支持 full / patch")
 
     content = await file.read()
     try:
         distributor = SmartDistributor()
-        result = distributor.process(content, filename)
+        result = distributor.process(content, filename, mode=normalized_mode)
         return result
     except Exception as e:
         raise HTTPException(500, f"智能铺货解析失败: {e}")
