@@ -324,6 +324,7 @@ REFINE_PATTERNS = (
 
 class AgentChatRequest(pydantic.BaseModel):
     message: str
+    skill: str | None = None
 
 
 class AgentCompletenessResult(pydantic.BaseModel):
@@ -1673,6 +1674,7 @@ async def call_agent_llm(
     state: dict[str, Any],
     recent_messages: list[dict[str, Any]],
     reference_context: str = "",
+    skill_context: str = "",
     *,
     on_chunk: Callable[[str], None] | None = None,
     on_think: Callable[[str], None] | None = None,
@@ -1727,6 +1729,9 @@ async def call_agent_llm(
 
 参考图分析：
 {reference_context or "（无）"}
+
+当前启用 Skill：
+{skill_context or "（无）"}
 
 用户这次说：
 {user_message}

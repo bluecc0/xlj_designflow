@@ -165,6 +165,63 @@
     getLayeredPsd: function(jobId) {
       return request('/psd/layered/' + encodeURIComponent(jobId));
     },
+    listAgentSkills: function() {
+      return request('/agent-skills').then(function(res) { return res.skills || []; });
+    },
+    streamSkillPlan: function(skillName, prompt, handlers) {
+      handlers = handlers || {};
+      return fetch(BASE + '/agent-skills/' + encodeURIComponent(skillName) + '/plan/stream', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: prompt || '' }),
+      }).then(function(resp) {
+        if (!resp.ok) {
+          return resp.text().then(function(text) {
+            throw new Error('HTTP ' + resp.status + ': ' + text.slice(0, 200));
+          });
+        }
+        if (!resp.body) throw new Error('SSE body not available');
+        var reader = resp.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = '';
+
+        function dispatchBlock(block) {
+          var eventName = 'message';
+          var dataLines = [];
+          block.split('\n').forEach(function(line) {
+            if (!line) return;
+            if (line.indexOf('event:') === 0) eventName = line.slice(6).trim();
+            if (line.indexOf('data:') === 0) dataLines.push(line.slice(5).trim());
+          });
+          if (!dataLines.length) return;
+          var payloadText = dataLines.join('\n');
+          var payload = null;
+          try { payload = JSON.parse(payloadText); } catch (e) { payload = { raw: payloadText }; }
+          if (handlers.onEvent) handlers.onEvent(eventName, payload);
+          if (eventName === 'delta' && handlers.onDelta) handlers.onDelta(payload);
+          if (eventName === 'done' && handlers.onDone) handlers.onDone(payload);
+          if (eventName === 'error' && handlers.onError) handlers.onError(payload);
+        }
+
+        function pump() {
+          return reader.read().then(function(result) {
+            if (result.done) {
+              if (buffer.trim()) dispatchBlock(buffer.trim());
+              if (handlers.onClose) handlers.onClose();
+              return;
+            }
+            buffer += decoder.decode(result.value, { stream: true });
+            var parts = buffer.split('\n\n');
+            buffer = parts.pop() || '';
+            parts.forEach(function(part) { dispatchBlock(part.trim()); });
+            return pump();
+          });
+        }
+
+        return pump();
+      });
+    },
     getImageUrl: function(jobId) { return BASE + '/compose/' + jobId + '/image'; },
     exportGrid: function(jobId, rows, cols) {
       return request('/export/grid', {
@@ -233,8 +290,9 @@
     listAgentProjectImages: function(projectId) {
       return request('/api/projects/' + encodeURIComponent(projectId) + '/images').then(function(res) { return res.data || []; });
     },
-    streamAgentChat: function(projectId, message, handlers, refImages) {
+    streamAgentChat: function(projectId, message, handlers, refImages, options) {
       handlers = handlers || {};
+      options = options || {};
       var hasRefs = Array.isArray(refImages) && refImages.length > 0;
       var init = {
         method: 'POST',
@@ -243,13 +301,14 @@
       if (hasRefs) {
         var form = new FormData();
         form.append('message', message);
+        if (options.skill) form.append('skill', options.skill);
         refImages.forEach(function(item) {
           if (item && item.file) form.append('image', item.file);
         });
         init.body = form;
       } else {
         init.headers = { 'Content-Type': 'application/json' };
-        init.body = JSON.stringify({ message: message });
+        init.body = JSON.stringify({ message: message, skill: options.skill || '' });
       }
       return fetch(BASE + '/api/projects/' + encodeURIComponent(projectId) + '/chat', init).then(function(resp) {
         if (!resp.ok) {

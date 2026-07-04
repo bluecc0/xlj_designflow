@@ -88,6 +88,7 @@ from .psd_layered import create_layered_psd_from_image
 from .special_compose_full import run_special_full_compose
 from .compose import get_client, run_compose
 from .config import settings
+from .agent_skill_loader import build_skill_context, list_agent_skills, load_agent_skill
 from .job_store import (
     append_ai_chat_message,
     create_ai_chat_session,
@@ -2262,11 +2263,13 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
     if not project:
         raise HTTPException(404, "项目不存在")
     message = ""
+    active_skill_name = ""
     reference_images: list[tuple[bytes, str]] = []
     content_type = (request.headers.get("content-type") or "").lower()
     if "multipart/form-data" in content_type:
         form = await request.form()
         message = str(form.get("message") or "").strip()
+        active_skill_name = str(form.get("skill") or "").strip()
         for item in form.getlist("image"):
             if not hasattr(item, "read"):
                 continue
@@ -2277,14 +2280,21 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
     else:
         payload = AgentChatRequest(**(await request.json()))
         message = (payload.message or "").strip()
+        active_skill_name = (payload.skill or "").strip()
     if not message:
         raise HTTPException(400, "message 不能为空")
+    active_skill_context = ""
+    active_skill_meta = None
+    if active_skill_name:
+        active_skill_context, active_skill_meta = _load_active_skill_context(active_skill_name, include_references=False)
 
     async def event_stream():
         try:
             state = normalize_project_state(project)
             recent_messages = load_agent_messages(project_id, user_id=user["id"], limit=12)
             user_payload = {}
+            if active_skill_meta:
+                user_payload["active_skill"] = active_skill_meta
             metadata = dict(state.get("metadata") or {})
             state["metadata"] = metadata
             cached_reference = dict(metadata.get("referenceContext") or {})
@@ -2378,6 +2388,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                 nonlocal agent_reply, intent_patch
                 agent_reply, intent_patch = await call_agent_llm(
                     message, state, recent_messages, reference_context,
+                    skill_context=active_skill_context,
                     on_chunk=_on_llm_chunk,
                     on_think=_on_llm_think,
                 )
@@ -2610,10 +2621,116 @@ class ChatContext(pydantic.BaseModel):
     productCount: Optional[int] = None
     jobStatus: Optional[str] = None
     hasResult: Optional[bool] = None
+    skill: Optional[str] = None
 
 class ChatRequest(pydantic.BaseModel):
     messages: list[ChatMessage]
     context: ChatContext = pydantic.Field(default_factory=ChatContext)
+
+
+def _load_active_skill_context(skill_name: str | None, *, include_references: bool = False) -> tuple[str, dict | None]:
+    clean = str(skill_name or "").strip()
+    if not clean:
+        return "", None
+    skill = load_agent_skill(settings.agent_skill_paths, settings.root_dir, clean)
+    if not skill:
+        raise HTTPException(404, f"Skill 不存在: {clean}")
+    return build_skill_context(skill, include_references=include_references), {
+        "name": skill.name,
+        "title": skill.title,
+        "description": skill.description,
+        "type": skill.type,
+        "references": skill.references,
+    }
+
+
+@app.get("/agent-skills")
+async def agent_skills_endpoint(request: Request):
+    _current_user(request)
+    return {"skills": list_agent_skills(settings.agent_skill_paths, settings.root_dir)}
+
+
+@app.post("/agent-skills/{skill_name}/plan/stream")
+async def agent_skill_plan_stream_endpoint(request: Request, skill_name: str):
+    """Stream Skill planner output so the UI can show live reasoning/progress."""
+    _current_user(request)
+    body = await request.json()
+    user_prompt = str((body or {}).get("prompt") or "").strip()
+    if not user_prompt:
+        raise HTTPException(400, "prompt 不能为空")
+    skill_context, skill_meta = _load_active_skill_context(skill_name, include_references=False)
+    if not skill_context:
+        raise HTTPException(404, f"未找到 Skill: {skill_name}")
+
+    async def event_stream():
+        skill_label = (skill_meta or {}).get("name") or skill_name
+        if not settings.skill_llm_api_key or not settings.skill_llm_base_url:
+            final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context)
+            yield make_sse("delta", {"text": json.dumps(trace, ensure_ascii=False), "mode": "fallback"})
+            yield make_sse("done", {"final_prompt": final_prompt, "prompt_trace": json.dumps(trace, ensure_ascii=False), "trace": trace})
+            return
+
+        endpoint = _skill_llm_endpoint()
+        planner_prompt = _build_skill_planner_prompt(user_prompt, skill_label, skill_context)
+        raw_parts: list[str] = []
+        try:
+            async with httpx.AsyncClient(timeout=settings.skill_llm_timeout_seconds, trust_env=False) as client:
+                async with client.stream(
+                    "POST",
+                    endpoint,
+                    headers={
+                        "Authorization": f"Bearer {settings.skill_llm_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": settings.skill_llm_model,
+                        "messages": [{"role": "user", "content": planner_prompt}],
+                        "max_tokens": 1400,
+                        "temperature": 0.25,
+                        "stream": True,
+                    },
+                ) as resp:
+                    if resp.status_code != 200:
+                        body_text = (await resp.aread()).decode("utf-8", errors="ignore")
+                        raise RuntimeError(f"Skill planner HTTP {resp.status_code}: {body_text[:240]}")
+                    async for line in resp.aiter_lines():
+                        line = (line or "").strip()
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            continue
+                        try:
+                            chunk = json.loads(data)
+                        except Exception:
+                            continue
+                        choice = (chunk.get("choices") or [{}])[0]
+                        delta = choice.get("delta") or {}
+                        message = choice.get("message") or {}
+                        content = delta.get("content")
+                        if content is None:
+                            content = message.get("content")
+                        if content:
+                            text = str(content)
+                            raw_parts.append(text)
+                            yield make_sse("delta", {"text": text, "mode": "llm", "model": settings.skill_llm_model})
+
+            raw = "".join(raw_parts).strip()
+            trace = _extract_json_object(raw)
+            final_prompt = str(trace.get("final_prompt") or "").strip()
+            if not final_prompt:
+                final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context)
+            trace.setdefault("skill", skill_label)
+            trace.setdefault("mode", "llm")
+            trace.setdefault("model", settings.skill_llm_model)
+            yield make_sse("done", {"final_prompt": final_prompt, "prompt_trace": json.dumps(trace, ensure_ascii=False), "trace": trace})
+        except Exception as exc:
+            logger.exception("Skill planner stream failed: %s", skill_name)
+            final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context)
+            trace["stream_error"] = str(exc)
+            yield make_sse("error", {"message": str(exc), "fallback_prompt": final_prompt, "prompt_trace": json.dumps(trace, ensure_ascii=False), "trace": trace})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 async def _build_context_aware_prompt(
@@ -2691,6 +2808,132 @@ def _build_ai_chat_title(prompt: str) -> str:
     return clean[:28] or "未命名对话"
 
 
+def _extract_json_object(text: str) -> dict:
+    raw = (text or "").strip()
+    if not raw:
+        return {}
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.I).strip()
+    raw = re.sub(r"\s*```$", "", raw).strip()
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(raw[start:end + 1])
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _fallback_skill_plan(user_prompt: str, skill_name: str, skill_context: str) -> tuple[str, dict]:
+    final_prompt = f"""{user_prompt}
+
+请严格按 ${skill_name} 的中文艺术字设计规范执行：先判断用户意图和文字主体，再选择合适的字形、笔画、材质、构图、负面约束；画面重点服务于中文标题字本身，避免把说明文字或 Skill 文档内容画进图里。""".strip()
+    trace = {
+        "mode": "fallback",
+        "skill": skill_name,
+        "steps": [
+            "识别到用户显式调用 Skill，进入中文艺术字/标题字生图链路。",
+            "读取 SKILL.md 的适用场景、风格判断和生成约束。",
+            "将用户原始需求转换为 Image 2 可执行的最终生图 prompt。",
+        ],
+        "applied_rules": [
+            "中文文字是画面主体，优先保证可读性和视觉风格一致。",
+            "按用户主题推导字形、材质、氛围和构图，不展示 Skill 文档。",
+        ],
+        "final_prompt": final_prompt,
+        "negative_prompt": "不要生成英文主体字、不要把说明文档画进图里、不要低清晰度、不要乱码、不要多余水印。",
+    }
+    return final_prompt, trace
+
+
+def _skill_llm_endpoint() -> str:
+    base_url = settings.skill_llm_base_url.rstrip("/")
+    if base_url.endswith("/chat/completions"):
+        return base_url
+    if base_url.endswith("/v1"):
+        return f"{base_url}/chat/completions"
+    return f"{base_url}/v1/chat/completions"
+
+
+def _build_skill_planner_prompt(user_prompt: str, skill_name: str, skill_context: str) -> str:
+    return f"""你是 DesignFlow 的 Skill Planner。你的任务不是直接聊天，而是读取用户显式调用的 Codex-style SKILL.md，并把它转换为一次可执行的生图请求。
+
+必须输出严格 JSON，不要 Markdown，不要代码块。字段：
+{{
+  "steps": ["你如何理解用户需求", "你从 Skill 中采用哪些规则", "你如何转换给生图模型"],
+  "applied_rules": ["具体采用的 Skill 规则，3-6 条"],
+  "final_prompt": "最终传给 gpt-image-2 的完整生图 prompt，要求具体、可执行、不要提到 SKILL.md 文件名或文档本身",
+  "negative_prompt": "需要避免的画面问题"
+}}
+
+约束：
+1. final_prompt 必须围绕用户需求，不要泛化成模板说明。
+2. 如果是中文艺术字/标题字，必须明确主体文字、字体气质、笔画/材质/构图/背景/质量要求。
+3. 不要把“请遵守 Skill”这类元指令写进 final_prompt，要把规则消化成具体画面语言。
+4. 不要编造用户没说的品牌名、日期、价格。
+
+[用户需求]
+{user_prompt}
+
+[启用 Skill: {skill_name}]
+{skill_context}
+"""
+
+
+async def _plan_skill_image_prompt(user_prompt: str, skill_name: str, skill_context: str) -> tuple[str, dict]:
+    """让 LLM 显式解读 Skill，并产出可展示的解析过程与最终生图 prompt。"""
+    if not skill_context:
+        return user_prompt, {}
+    if not settings.skill_llm_api_key or not settings.skill_llm_base_url:
+        return _fallback_skill_plan(user_prompt, skill_name, skill_context)
+
+    endpoint = _skill_llm_endpoint()
+    planner_prompt = _build_skill_planner_prompt(user_prompt, skill_name, skill_context)
+    try:
+        async with httpx.AsyncClient(timeout=settings.skill_llm_timeout_seconds, trust_env=False) as client:
+            resp = await client.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {settings.skill_llm_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.skill_llm_model,
+                    "messages": [{"role": "user", "content": planner_prompt}],
+                    "max_tokens": 1400,
+                    "temperature": 0.25,
+                },
+            )
+        if resp.status_code != 200:
+            logger.warning(
+                "Skill planner LLM error model=%s endpoint=%s status=%s body=%s",
+                settings.skill_llm_model,
+                endpoint,
+                resp.status_code,
+                resp.text[:240],
+            )
+            return _fallback_skill_plan(user_prompt, skill_name, skill_context)
+        data = resp.json()
+        content = (((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        trace = _extract_json_object(content)
+        final_prompt = str(trace.get("final_prompt") or "").strip()
+        if not final_prompt:
+            return _fallback_skill_plan(user_prompt, skill_name, skill_context)
+        trace.setdefault("skill", skill_name)
+        trace.setdefault("mode", "llm")
+        trace.setdefault("model", settings.skill_llm_model)
+        return final_prompt, trace
+    except Exception:
+        logger.exception("Skill planner failed, falling back to deterministic plan")
+        return _fallback_skill_plan(user_prompt, skill_name, skill_context)
+
+
 @app.get("/history/ai-chats")
 def history_ai_chats(request: Request, limit: int = 30):
     user = _current_user(request)
@@ -2732,6 +2975,7 @@ async def _run_ai_image_background(
     created_at: float,
     original_prompt: str = "",
     resolved_prompt: str = "",
+    prompt_trace: str = "",
     ref_previews: list[str] | None = None,
 ):
     """后台异步生图：轮询进度 → 更新 DB → 下载结果 → 写聊天记录"""
@@ -2749,6 +2993,7 @@ async def _run_ai_image_background(
                 job_id=job_id, user_id=user_id, status=db_status,
                 model=model, prompt=prompt, size=size,
                 original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
+                prompt_trace=prompt_trace,
                 progress=pct, has_reference=has_reference, created_at=created_at,
             )
         except Exception:
@@ -2785,6 +3030,7 @@ async def _run_ai_image_background(
             job_id=job_id, user_id=user_id, status="done",
             model=model, prompt=prompt, size=size,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
+            prompt_trace=prompt_trace,
             image_url=result.get("url"), task_id=result.get("task_id"),
             progress=100, has_reference=has_reference, created_at=created_at,
         )
@@ -2812,6 +3058,8 @@ async def _run_ai_image_background(
             meta={
                 "job_id": job_id,
                 "model": model, "prompt": prompt,
+                "resolvedPrompt": resolved_prompt or prompt,
+                "promptTrace": prompt_trace,
                 "provider": provider,
                 "size": size, "resolution": resolution,
                 "status": "done",
@@ -2827,12 +3075,47 @@ async def _run_ai_image_background(
             cleanup_user_refs(user_id, job_id)
         except Exception:
             pass
+    except asyncio.CancelledError:
+        # Uvicorn reload / server shutdown can cancel in-flight background tasks.
+        # Without explicitly persisting this, the UI keeps polling a permanent
+        # "processing" job that will never be resumed.
+        error_msg = "生图任务被服务重载或关闭中断，请重新提交"
+        logger.warning("ai_image background task cancelled: job_id=%s", job_id)
+        save_ai_image_job(
+            job_id=job_id, user_id=user_id, status="failed",
+            model=model, prompt=prompt, size=size,
+            original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
+            prompt_trace=prompt_trace,
+            has_reference=has_reference, error=error_msg, created_at=created_at,
+        )
+        log_operation(
+            user_id=user_id, username=username,
+            action="ai_image",
+            detail=f"job={job_id[:8]} model={model} size={size} result=cancelled",
+            payload=json.dumps({"job_id": job_id, "model": model, "size": size, "result": "cancelled", "error": error_msg}, ensure_ascii=False),
+        )
+        append_ai_chat_message(
+            session_id=session_id, user_id=user_id,
+            role="ai", type="ai_image_result",
+            text=prompt, image_url=None,
+            meta={
+                "job_id": job_id,
+                "model": model, "prompt": prompt,
+                "provider": provider,
+                "status": "failed", "error": error_msg,
+                "hasReference": has_reference,
+                "refCount": len(refs),
+            },
+            created_at=time.time(),
+        )
+        raise
     except Exception as e:
         logger.exception("ai_image background task failed: job_id=%s", job_id)
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="failed",
             model=model, prompt=prompt, size=size,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
+            prompt_trace=prompt_trace,
             has_reference=has_reference, error=str(e), created_at=created_at,
         )
         log_operation(
@@ -2894,6 +3177,20 @@ def ai_image_status(request: Request, job_id: str):
         raise HTTPException(404, "任务不存在")
     if not _is_admin(user) and job.get("user_id") != user["id"]:
         raise HTTPException(404, "任务不存在")
+    if job.get("status") in {"queued", "processing"}:
+        age_seconds = time.time() - float(job.get("created_at") or 0)
+        timeout_seconds = max(60, int(settings.ai_image_job_timeout_seconds or 600))
+        if age_seconds > timeout_seconds:
+            error_msg = f"生图任务超时：超过 {timeout_seconds} 秒没有返回结果，请稍后重试"
+            save_ai_image_job(
+                job_id=job["id"], user_id=job.get("user_id") or user["id"], status="failed",
+                model=job.get("model") or "", prompt=job.get("prompt") or "", size=job.get("size") or "",
+                original_prompt=job.get("original_prompt") or job.get("prompt") or "",
+                resolved_prompt=job.get("resolved_prompt") or job.get("prompt") or "",
+                prompt_trace=job.get("prompt_trace") or "",
+                has_reference=bool(job.get("has_reference")), error=error_msg, created_at=job.get("created_at") or time.time(),
+            )
+            job = load_ai_image_job(job_id) or job
     image_url = job.get("image_url")
     preview_url = ""
     if image_url:
@@ -2909,6 +3206,9 @@ def ai_image_status(request: Request, job_id: str):
         # 统一返回站内相对路径，避免公网域名 / 内网 IP / 代理 Host 混用时把结果图指到错误主机。
         "image_url": image_url or None,
         "preview_url": preview_url or None,
+        "original_prompt": job.get("original_prompt") or job.get("prompt") or "",
+        "resolved_prompt": job.get("resolved_prompt") or job.get("prompt") or "",
+        "prompt_trace": job.get("prompt_trace") or "",
         "task_id": job.get("task_id"),
         "error": job.get("error"),
     }
@@ -3415,6 +3715,9 @@ async def ai_image_endpoint(
     prompt: str = Form(...),
     size: str = Form("1024x1024"),
     resolution: str = Form(""),
+    skill: str = Form(""),
+    planned_prompt: str = Form(""),
+    prompt_trace: str = Form(""),
     chat_session_id: str = Form(""),
     image: List[UploadFile] = File(default=[]),
     ref_previews: str = Form(""),
@@ -3451,6 +3754,11 @@ async def ai_image_endpoint(
         resolved_provider = normalize_provider(provider)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    active_skill_name = (skill or "").strip()
+    active_skill_context = ""
+    active_skill_meta = None
+    if active_skill_name:
+        active_skill_context, active_skill_meta = _load_active_skill_context(active_skill_name, include_references=False)
     user = _current_user(request)
     job_id = uuid.uuid4().hex
     session_id = (chat_session_id or "").strip()
@@ -3467,12 +3775,14 @@ async def ai_image_endpoint(
         role="user",
         type="user_text",
         text=original_prompt,
-        meta={"model": resolved, "size": size, "resolution": resolution, "refPreviews": ref_previews_list, "batchCount": batch_count},
+        meta={"model": resolved, "size": size, "resolution": resolution, "refPreviews": ref_previews_list, "batchCount": batch_count, "skill": active_skill_name},
         created_at=created_at,
     )
     try:
         # —— 上下文注入（对用户透明）——
         enriched_prompt = original_prompt
+        prompt_trace_payload: dict = {}
+        prompt_trace_text = (prompt_trace or "").strip()
         context_ref_bytes: list[tuple[bytes, str]] = []
 
         # 1. LLM 根据历史改写 prompt
@@ -3481,6 +3791,23 @@ async def ai_image_endpoint(
                 session_id=session_id,
                 user_id=user["id"],
                 current_prompt=original_prompt,
+            )
+
+        if planned_prompt.strip():
+            enriched_prompt = planned_prompt.strip()
+            if prompt_trace_text:
+                try:
+                    parsed_trace = json.loads(prompt_trace_text)
+                    if isinstance(parsed_trace, dict):
+                        prompt_trace_payload = parsed_trace
+                except Exception:
+                    prompt_trace_payload = {"mode": "stream", "raw": prompt_trace_text}
+        elif active_skill_context:
+            skill_label = (active_skill_meta or {}).get("name") or active_skill_name
+            enriched_prompt, prompt_trace_payload = await _plan_skill_image_prompt(
+                enriched_prompt,
+                skill_label,
+                active_skill_context,
             )
 
         # 2. 取上一张生成的图片作为参考图
@@ -3526,6 +3853,7 @@ async def ai_image_endpoint(
                 size=size,
                 original_prompt=original_prompt,
                 resolved_prompt=original_prompt,
+                prompt_trace=json.dumps(prompt_trace_payload, ensure_ascii=False) if prompt_trace_payload else prompt_trace_text,
                 has_reference=has_reference,
                 created_at=created_at,
             )
@@ -3533,7 +3861,7 @@ async def ai_image_endpoint(
                 user_id=user["id"], username=user["username"],
                 action="ai_image",
                 detail=f"job={jid[:8]} model={resolved} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(all_refs_batch)} batch={batch_count}",
-                payload=json.dumps({"job_id": jid, "model": resolved, "size": size, "prompt": original_prompt[:200], "refs": len(all_refs_batch), "provider": resolved_provider, "batch_count": batch_count}, ensure_ascii=False),
+                payload=json.dumps({"job_id": jid, "model": resolved, "size": size, "prompt": original_prompt[:200], "refs": len(all_refs_batch), "provider": resolved_provider, "batch_count": batch_count, "skill": active_skill_name}, ensure_ascii=False),
             )
             asyncio.create_task(
                 _run_ai_image_background(
@@ -3544,12 +3872,25 @@ async def ai_image_endpoint(
                     size=size, resolution=resolution,
                     refs=all_refs_batch, has_reference=has_reference, created_at=created_at,
                     original_prompt=original_prompt, resolved_prompt=enriched_prompt,
+                    prompt_trace=json.dumps(prompt_trace_payload, ensure_ascii=False) if prompt_trace_payload else prompt_trace_text,
                     ref_previews=ref_previews_list,
                 )
             )
         if batch_count == 1:
-            return {"job_id": job_ids[0], "chat_session_id": session_id, "status": "processing"}
-        return {"job_ids": job_ids, "chat_session_id": session_id, "status": "processing"}
+            return {
+                "job_id": job_ids[0],
+                "chat_session_id": session_id,
+                "status": "processing",
+                "resolved_prompt": enriched_prompt,
+                "prompt_trace": json.dumps(prompt_trace_payload, ensure_ascii=False) if prompt_trace_payload else prompt_trace_text,
+            }
+        return {
+            "job_ids": job_ids,
+            "chat_session_id": session_id,
+            "status": "processing",
+            "resolved_prompt": enriched_prompt,
+            "prompt_trace": json.dumps(prompt_trace_payload, ensure_ascii=False) if prompt_trace_payload else prompt_trace_text,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -3731,6 +4072,20 @@ async def chat_endpoint(req: ChatRequest):
 
 ---
 {knowledge_block}
+---"""
+
+    skill_context = ""
+    skill_meta = None
+    if ctx.skill:
+        skill_context, skill_meta = _load_active_skill_context(ctx.skill, include_references=False)
+    if skill_context:
+        system_prompt += f"""
+
+当前用户显式启用了 Skill：{skill_meta.get('name') if skill_meta else ctx.skill}
+以下是该 Skill 的完整说明。你必须优先遵守它，但不要声称读取了未提供的 reference 文件，也不要执行任何脚本：
+
+---
+{skill_context}
 ---"""
 
     system_prompt += """

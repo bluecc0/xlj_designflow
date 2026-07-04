@@ -95,6 +95,16 @@ const renderMarkdown = (text) => {
 
 const TextBubble = ({ who, children, markdown }) => {
   const content = markdown && who === 'ai' ? renderMarkdown(children) : children;
+  const renderUserSkillText = function(value) {
+    const raw = String(value || '');
+    const match = raw.match(/^(\$[A-Za-z0-9_-]+)(\s+)([\s\S]*)$/);
+    if (!match) return raw;
+    return React.createElement(React.Fragment, null,
+      React.createElement('span', { style: { color: 'oklch(0.72 0.16 255)', fontWeight: 750 } }, match[1]),
+      match[2],
+      React.createElement('span', null, match[3])
+    );
+  };
   return (
     <div style={{
       fontSize: 12.5, lineHeight: 1.55,
@@ -107,7 +117,7 @@ const TextBubble = ({ who, children, markdown }) => {
       {who === 'ai' && markdown ? (
         <div dangerouslySetInnerHTML={{ __html: content }}/>
       ) : (
-        content
+        who === 'user' ? renderUserSkillText(content) : content
       )}
     </div>
   );
@@ -578,6 +588,70 @@ const ThinkingBlock = ({ text }) => {
   );
 };
 
+const PromptTraceBlock = ({ title, text }) => {
+  var _s = React.useState(false);
+  var open = _s[0]; var setOpen = _s[1];
+  if (!text || !String(text).trim()) return null;
+  let parsed = null;
+  try { parsed = JSON.parse(String(text)); } catch (e) { parsed = null; }
+  const steps = parsed && Array.isArray(parsed.steps) ? parsed.steps : [];
+  const rules = parsed && Array.isArray(parsed.applied_rules) ? parsed.applied_rules : [];
+  const finalPrompt = parsed && parsed.final_prompt ? String(parsed.final_prompt) : String(text);
+  const negativePrompt = parsed && parsed.negative_prompt ? String(parsed.negative_prompt) : '';
+  return (
+    <div style={{ borderRadius: 8, border: '1px solid var(--line-2)', background: 'var(--panel-2)', overflow: 'hidden', marginBottom: 6 }}>
+      <div
+        onClick={function() { setOpen(!open); }}
+        style={{
+          padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 6,
+          cursor: 'pointer', userSelect: 'none',
+          borderBottom: open ? '1px solid var(--line-2)' : 'none',
+        }}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--ink-3)" strokeWidth="2" strokeLinecap="round" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 200ms' }}>
+          <path d="m9 18 6-6-6-6"/>
+        </svg>
+        <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{title || '生图 Prompt'}</span>
+      </div>
+      {open && (
+        <div style={{
+          padding: '10px 12px', fontSize: 11.5, lineHeight: 1.6,
+          color: 'var(--ink-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          maxHeight: 240, overflowY: 'auto',
+        }}>
+          {parsed ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {steps.length > 0 ? <div>
+                <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginBottom: 4 }}>解读步骤</div>
+                {steps.map(function(step, idx) {
+                  return <div key={idx} style={{ display: 'flex', gap: 7, padding: '2px 0' }}>
+                    <span className="mono" style={{ color: 'var(--ink-3)', minWidth: 14 }}>{idx + 1}</span>
+                    <span>{step}</span>
+                  </div>;
+                })}
+              </div> : null}
+              {rules.length > 0 ? <div>
+                <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginBottom: 4 }}>采用规则</div>
+                {rules.map(function(rule, idx) {
+                  return <div key={idx} style={{ padding: '2px 0' }}>- {rule}</div>;
+                })}
+              </div> : null}
+              <div>
+                <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginBottom: 4 }}>最终传递给生图</div>
+                <div>{finalPrompt}</div>
+              </div>
+              {negativePrompt ? <div>
+                <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginBottom: 4 }}>避免</div>
+                <div>{negativePrompt}</div>
+              </div> : null}
+            </div>
+          ) : String(text)}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const getThinkingPreview = (message) => {
   return String(message || '').trim() || '正在连接 Agent...';
 };
@@ -799,6 +873,9 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
             const promptParams = promptPayload && promptPayload.parameters ? promptPayload.parameters : null;
             const promptConstraints = promptPayload && promptPayload.constraints ? promptPayload.constraints : null;
             const promptReasoning = promptPayload && promptPayload.reasoningForUser ? promptPayload.reasoningForUser : '';
+            const resolvedPromptText = m.resolvedPrompt || '';
+            const promptTraceText = m.promptTrace || '';
+            const showPromptTrace = promptTraceText || (resolvedPromptText && resolvedPromptText !== m.prompt);
             const fullImageUrl = m.imageUrl || '';
             const displayImageUrlRaw = m.previewUrl || m.imagePreviewUrl || m.imageUrl || '';
             const displayImageUrl = displayImageUrlRaw && displayImageUrlRaw.startsWith('/')
@@ -814,7 +891,10 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: 'var(--ink)' } },
                   m.status === 'done' ? '生图完成'
                   : m.status === 'failed' ? '生图失败'
+                  : m.status === 'skill-planning' ? '正在执行 Skill：$' + m.activeSkill + '…'
+                  : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 Image 2…'
                   : m.status === 'queued' ? '正在提交到「' + (m.model || 'AI') + '」…'
+                  : m.activeSkill && !m.promptTrace && (m.progress || 0) < 20 ? '正在解读需求并整理生图 Prompt…'
                   : (m.progress || 0) < 20 ? '「' + (m.model || 'AI') + '」正在处理…'
                   : (m.progress || 0) < 90 ? '「' + (m.model || 'AI') + '」生成中 ' + (m.progress || 0) + '%'
                   : '处理完成，正在下载…'
@@ -826,6 +906,10 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     : null
               ),
               m.status !== 'failed' && m.status !== 'done' && React.createElement(InlineRefStrip, { items: m.refPreviews }),
+              showPromptTrace && React.createElement(PromptTraceBlock, {
+                title: m.activeSkill ? ('Skill 解析 · $' + m.activeSkill) : '生图 Prompt',
+                text: promptTraceText || resolvedPromptText,
+              }),
               agentEnabled && promptInstruction && React.createElement('div', {
                 style: {
                   padding: '9px 10px',
@@ -1376,6 +1460,9 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
   const [selectedWorkflow, setSelectedWorkflow] = React.useState('chat');
+  const [agentSkills, setAgentSkills] = React.useState([]);
+  const [selectedSkill, setSelectedSkill] = React.useState('');
+  const [skillMenuDismissed, setSkillMenuDismissed] = React.useState(false);
   const taRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
   const [composerHeight, setComposerHeight] = React.useState(null); // null = 默认自动高度
@@ -1406,7 +1493,93 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     return Math.max(1, Math.min(4, parsed));
   }, []);
 
+  const parseSkillInvocation = React.useCallback(function(value) {
+    const original = String(value || '');
+    const trimmedLeft = original.trimStart();
+    const match = trimmedLeft.match(/^\$([A-Za-z0-9_-]+)(?:\s+([\s\S]*))?$/);
+    if (!match) return { skill: '', prompt: original };
+    return { skill: match[1], prompt: String(match[2] || '').trimStart() };
+  }, []);
+
+  const activeSkillInfo = React.useMemo(function() {
+    const parsed = parseSkillInvocation(text);
+    const skillName = selectedSkill || parsed.skill;
+    if (!skillName) return null;
+    const found = agentSkills.find(function(skill) { return skill && skill.name === skillName; });
+    return found || { name: skillName, title: skillName, description: '' };
+  }, [agentSkills, parseSkillInvocation, selectedSkill, text]);
+
+  const skillSearch = React.useMemo(function() {
+    const raw = String(text || '').trimStart();
+    if (!raw.startsWith('$')) return '';
+    return raw.slice(1).split(/\s+/)[0].toLowerCase();
+  }, [text]);
+
+  const isTypingSkillName = React.useMemo(function() {
+    const raw = String(text || '').trimStart();
+    return raw === '$' || /^\$[^\s]*$/.test(raw);
+  }, [text]);
+
+  const skillMenuOpen = Boolean(
+    (isTypingSkillName && !skillMenuDismissed) ||
+    prototypePanel === 'skills'
+  );
+
+  const filteredAgentSkills = React.useMemo(function() {
+    const q = skillSearch;
+    return agentSkills.filter(function(skill) {
+      if (!skill || !skill.name) return false;
+      if (!q) return true;
+      return String(skill.name).toLowerCase().indexOf(q) >= 0 ||
+        String(skill.title || '').toLowerCase().indexOf(q) >= 0 ||
+        String(skill.description || '').toLowerCase().indexOf(q) >= 0;
+    }).slice(0, 8);
+  }, [agentSkills, skillSearch]);
+
+  const skillCardDescription = React.useCallback(function(skill) {
+    if (skill && skill.name === 'text-art-design') return '创意中文字体设计';
+    return String((skill && skill.description) || '').trim();
+  }, []);
+
+  const truncateSkillText = React.useCallback(function(value, maxLength) {
+    const chars = Array.from(String(value || '').trim());
+    if (chars.length <= maxLength) return chars.join('');
+    return chars.slice(0, Math.max(0, maxLength - 1)).join('') + '…';
+  }, []);
+
+  const selectAgentSkill = React.useCallback(function(skill) {
+    if (!skill || !skill.name) return;
+    setSelectedSkill(skill.name);
+    setSkillMenuDismissed(true);
+    setText(function(prev) {
+      const raw = String(prev || '');
+      if (!raw.trimStart().startsWith('$')) return raw;
+      const parsed = parseSkillInvocation(raw);
+      return parsed.skill === skill.name ? parsed.prompt : '';
+    });
+    setPrototypePanel('');
+    setTimeout(function() {
+      const el = taRef.current;
+      if (!el) return;
+      el.focus();
+      const len = el.value.length;
+      el.setSelectionRange(len, len);
+    }, 0);
+  }, [parseSkillInvocation]);
+
   const [taskDefsKey, setTaskDefsKey] = React.useState(0);
+
+  React.useEffect(() => {
+    let alive = true;
+    if (!window.API || !window.API.listAgentSkills) return function() { alive = false; };
+    window.API.listAgentSkills()
+      .then(function(skills) {
+        if (!alive) return;
+        setAgentSkills(Array.isArray(skills) ? skills : []);
+      })
+      .catch(function(err) { console.warn('Load agent skills failed:', err); });
+    return function() { alive = false; };
+  }, []);
 
   // 检测花瓣登录状态，未登录则禁用 /花瓣下载 指令
   React.useEffect(() => {
@@ -1426,6 +1599,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   React.useEffect(() => {
     if (!resetKey) return;
     setText('');
+    setSelectedSkill('');
     setLockedCommand('');
     setSelectedWorkflow('chat');
     setFiles([]);
@@ -1536,18 +1710,19 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   }, []);
 
   React.useEffect(() => {
-    if (!prototypePanel) return;
+    if (!prototypePanel && !skillMenuOpen) return;
     const onPointerDown = function(e) {
       if (!composerRef.current) return;
       if (!composerRef.current.contains(e.target)) {
         setPrototypePanel('');
+        if (skillMenuOpen) setSkillMenuDismissed(true);
       }
     };
     document.addEventListener('mousedown', onPointerDown);
     return function() {
       document.removeEventListener('mousedown', onPointerDown);
     };
-  }, [prototypePanel]);
+  }, [prototypePanel, skillMenuOpen]);
 
   // 外部触发 slash 命令（选中特殊品模板时）
   React.useEffect(() => {
@@ -1565,6 +1740,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     }
     const nextCmd = '/' + slashTrigger.cmd;
     setLockedCommand(nextCmd);
+    setSelectedSkill('');
     setSelectedWorkflow(cmdToWorkflow(nextCmd));
     setPrototypePanel('');
     setText('');
@@ -1580,6 +1756,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   React.useEffect(() => {
     if (!seedPrompt) return;
     setLockedCommand('/Gpt image 2');
+    setSelectedSkill('');
     setSelectedWorkflow('ai-image');
     setPrototypePanel('');
     setText(String(seedPrompt));
@@ -1595,6 +1772,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   React.useEffect(() => {
     if (agentEnabled) {
       setLockedCommand('');
+      setSelectedSkill('');
       setSelectedWorkflow('chat');
       }
   }, [agentEnabled]);
@@ -1690,6 +1868,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     const cmd = next && next.cmd ? next.cmd : '';
     if (cmd) {
       setLockedCommand(cmd);
+      setSelectedSkill('');
       setSelectedWorkflow(cmdToWorkflow(cmd));
         setPrototypePanel('');
       setTimeout(() => {
@@ -1701,6 +1880,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       return;
     }
     setLockedCommand('');
+    setSelectedSkill('');
     setSelectedWorkflow(next && next.workflow ? next.workflow : 'chat');
     setPrototypePanel('');
     setTimeout(() => {
@@ -1716,10 +1896,18 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     });
     if (matched) {
       setLockedCommand(matched);
+      setSelectedSkill('');
       setSelectedWorkflow(cmdToWorkflow(matched));
       setText(raw.slice(matched.length).trimStart());
+    } else if (raw.trimStart().startsWith('$')) {
+      const parsed = parseSkillInvocation(raw);
+      setLockedCommand('');
+      setSelectedWorkflow('chat');
+      setSelectedSkill(parsed.skill || '');
+      setText(parsed.prompt || '');
     } else {
       setLockedCommand('');
+      setSelectedSkill('');
       setSelectedWorkflow('chat');
       setText(raw);
     }
@@ -1730,7 +1918,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       const len = el.value.length;
       el.setSelectionRange(len, len);
     }, 0);
-  }, [COMMANDS, cmdToWorkflow]);
+  }, [COMMANDS, cmdToWorkflow, parseSkillInvocation]);
 
   const handleSend = () => {
     const body = text.trim();
@@ -1744,21 +1932,29 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       setText('');
       return;
     }
-    const message = lockedCommand ? (lockedCommand + (body ? ' ' + body : '')) : body;
-    if (!message || isLoading) return;
+    const message = selectedSkill
+      ? ('$' + selectedSkill + (body ? ' ' + body : ''))
+      : (lockedCommand ? (lockedCommand + (body ? ' ' + body : '')) : body);
+    const skillInvocation = parseSkillInvocation(message);
+    const sendMessage = message;
+    const executionMessage = skillInvocation.skill ? skillInvocation.prompt : message;
+    if (!executionMessage || isLoading) return;
     const imagesToSend = [...refImages];
     const normalizedBatchCount = normalizeBatchCount(aiBatchCount);
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
-    onSend(message, imagesToSend, {
+    onSend(sendMessage, imagesToSend, {
       size: aiImageSize,
       resolution: aiQuality,
       provider: aiProvider,
       workflow: selectedWorkflow,
       lockedCommand: lockedCommand,
       batchCount: selectedWorkflow === 'ai-image' ? normalizedBatchCount : 1,
+      skill: skillInvocation.skill || '',
+      skillPrompt: executionMessage,
     });
     setAiBatchCount(String(normalizedBatchCount));
     setText('');
+    setSelectedSkill('');
     clearRefImages();
   };
 
@@ -1767,6 +1963,36 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     const start = el ? el.selectionStart : 0;
     const end = el ? el.selectionEnd : 0;
     const currentMessage = lockedCommand ? (text.trim() || lockedCommand) : text.trim();
+    if (e.key === 'Escape' && skillMenuOpen) {
+      e.preventDefault();
+      setPrototypePanel('');
+      setSkillMenuDismissed(true);
+      return;
+    }
+    if (
+      e.key === 'Backspace' &&
+      String(text || '').trimStart().startsWith('$') &&
+      start <= String(text || '').indexOf('$') + 1 &&
+      end <= String(text || '').indexOf('$') + 1
+    ) {
+      e.preventDefault();
+      setText('');
+      setSelectedSkill('');
+      setSkillMenuDismissed(true);
+      setPrototypePanel('');
+      return;
+    }
+    if (
+      e.key === 'Backspace' &&
+      activeSkillInfo &&
+      start === 0 &&
+      end === 0
+    ) {
+      e.preventDefault();
+      setSelectedSkill('');
+      setSkillMenuDismissed(true);
+      return;
+    }
     if (
       e.key === 'ArrowDown' &&
       files.length === 0 &&
@@ -1840,6 +2066,20 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
 
   const handleTextChange = (e) => {
     const next = e.target.value;
+    if (selectedSkill) {
+      setPrototypePanel('');
+      setSkillMenuDismissed(true);
+      const parsed = parseSkillInvocation(next);
+      setText(parsed.skill ? parsed.prompt : next);
+      return;
+    }
+    if (next.trimStart().startsWith('$')) {
+      setPrototypePanel('');
+      setSelectedSkill('');
+      setSkillMenuDismissed(false);
+    } else {
+      setSkillMenuDismissed(false);
+    }
     if (agentEnabled) {
       setText(next);
       return;
@@ -2007,6 +2247,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
 
   const clearComposer = React.useCallback(() => {
     setText('');
+    setSelectedSkill('');
     setLockedCommand('');
     setSelectedWorkflow('chat');
     setFiles([]);
@@ -2095,7 +2336,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
             ? (smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量')
             : '';
   const selectedSettingBits = [
-    agentEnabled ? 'Agent' : activeTaskLabel,
+    activeSkillInfo ? ('$' + activeSkillInfo.name) : '',
+    activeSkillInfo ? '' : (agentEnabled ? 'Agent' : activeTaskLabel),
     agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? providerLabel : ''),
     agentEnabled ? '' : modeParamLabel,
     (activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1) ? ('x' + normalizeBatchCount(aiBatchCount)) : '',
@@ -2125,6 +2367,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     modeParamLabel ||
     refImages.length > 0 ||
     files.length > 0 ||
+    activeSkillInfo ||
+    skillMenuOpen ||
     (!agentEnabled && prototypePanel)
   );
   const minComposerHeight = statusBarVisible ? STATUS_COMPOSER_HEIGHT : COLLAPSED_COMPOSER_HEIGHT;
@@ -2153,6 +2397,85 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
         flexShrink: 0,
       }, options || {})
     }), icon, label ? React.createElement('span', { style: { fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' } }, label) : null);
+  };
+  const renderSkillMenu = function() {
+    if (!skillMenuOpen || !agentSkills.length) return null;
+    return React.createElement('div', {
+      style: {
+        position: 'absolute',
+        left: 12,
+        right: 12,
+        bottom: 92,
+        zIndex: 20,
+        border: 'none',
+        borderRadius: 16,
+        background: 'color-mix(in oklab, var(--panel) 96%, transparent)',
+        boxShadow: '0 18px 42px rgba(15, 23, 42, 0.07)',
+        padding: 6,
+        display: 'grid',
+        gap: 6,
+        maxHeight: 248,
+        overflow: 'auto',
+        backdropFilter: 'blur(14px)',
+      }
+    },
+      filteredAgentSkills.length ? filteredAgentSkills.map(function(skill) {
+        const active = activeSkillInfo && activeSkillInfo.name === skill.name;
+        const cardDescription = skillCardDescription(skill);
+        return React.createElement('button', {
+          key: skill.name,
+          type: 'button',
+          onMouseDown: function(e) {
+            e.preventDefault();
+            selectAgentSkill(skill);
+          },
+          onClick: function(e) { e.preventDefault(); },
+          style: {
+            border: '1px solid ' + (active ? 'var(--accent)' : 'var(--line-2)'),
+            background: active ? 'color-mix(in oklab, var(--accent) 10%, var(--panel))' : 'var(--panel)',
+            borderRadius: 14,
+            padding: '9px 11px',
+            textAlign: 'left',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            minWidth: 0,
+            position: 'relative',
+            boxShadow: 'none',
+            transition: 'background 140ms, border-color 140ms, transform 140ms',
+          }
+        },
+          React.createElement('span', {
+            style: {
+              width: 18,
+              height: 18,
+              borderRadius: 7,
+              border: '1px solid var(--line-2)',
+              color: 'var(--accent)',
+              fontSize: 12,
+              fontWeight: 800,
+              lineHeight: '17px',
+              textAlign: 'center',
+              flexShrink: 0,
+              background: 'var(--panel-2)',
+            }
+          }, '✦'),
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 750, color: 'var(--ink)', flexShrink: 0, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, truncateSkillText(skill.name, 24)),
+          cardDescription ? React.createElement('span', {
+            style: {
+              fontSize: 11,
+              color: 'var(--ink-3)',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            },
+            title: cardDescription,
+          }, truncateSkillText(cardDescription, 18)) : null
+        );
+      }) : React.createElement('div', { style: { padding: 12, fontSize: 12, color: 'var(--ink-3)' } }, '没有匹配的 Skill')
+    );
   };
   const protoChipStyle = function(active) {
     return {
@@ -2488,6 +2811,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
                 type: 'button',
                 onClick: function() {
                   setLockedCommand(item.cmd);
+                  setSelectedSkill('');
                   setSelectedWorkflow(cmdToWorkflow(item.cmd));
                   if (onRequestSpecialTemplate) {
                     onRequestSpecialTemplate(item.cmd === '/特殊品（完整）' ? 'full' : 'normal');
@@ -2627,11 +2951,12 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           overflow: 'hidden',
         }}>
           {selectedSettingBits.map(function(bit, idx) {
+            const isSkillBit = typeof bit === 'string' && bit.startsWith('$');
             return (
               <span key={idx} style={{
                 fontSize: 12,
-                fontWeight: idx === 0 ? 600 : 400,
-                color: idx === 0 ? 'var(--ink)' : 'var(--ink-3)',
+                fontWeight: isSkillBit ? 750 : (idx === 0 ? 600 : 400),
+                color: isSkillBit ? 'var(--accent)' : (idx === 0 ? 'var(--ink)' : 'var(--ink-3)'),
                 whiteSpace: 'nowrap',
               }}>
                 {bit}
@@ -2653,40 +2978,52 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
         position: 'relative',
       }}>
         {renderPrototypePanel()}
+        {renderSkillMenu()}
 
-        <textarea
-          className="composer-textarea"
-          ref={taRef}
-          value={displayValue}
-          onChange={handleTextChange}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          onClick={clampSelection}
-          onSelect={clampSelection}
-          onFocus={clampSelection}
-          placeholder={composerPlaceholder}
-          rows={2}
-          style={{
-            width: '100%',
-            flex: composerHeight ? 1 : undefined,
-            minHeight: composerHeight ? 56 : 92,
-            maxHeight: composerHeight ? undefined : 180,
-            boxSizing: 'border-box',
-            fontSize: 13,
-            lineHeight: 1.45,
-            fontFamily: 'inherit',
-            color: 'var(--ink)',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            border: 'none',
-            outline: 'none',
-            resize: 'none',
-            overflowY: 'auto',
-            background: 'transparent',
-            margin: 0,
-            padding: '2px 2px 0',
-          }}
-        />
+        <div style={{
+          position: 'relative',
+          width: '100%',
+          flex: composerHeight ? 1 : undefined,
+          minHeight: composerHeight ? 56 : 92,
+          maxHeight: composerHeight ? undefined : 180,
+        }}>
+          <textarea
+            className="composer-textarea"
+            ref={taRef}
+            value={displayValue}
+            onChange={handleTextChange}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            onClick={clampSelection}
+            onSelect={clampSelection}
+            onFocus={clampSelection}
+            placeholder={composerPlaceholder}
+            rows={2}
+            style={{
+              width: '100%',
+              height: '100%',
+              minHeight: 'inherit',
+              maxHeight: 'inherit',
+              boxSizing: 'border-box',
+              fontSize: 13,
+              lineHeight: 1.45,
+              fontFamily: 'inherit',
+              color: 'var(--ink)',
+              caretColor: 'var(--ink)',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              border: 'none',
+              outline: 'none',
+              resize: 'none',
+              overflowY: 'auto',
+              background: 'transparent',
+              margin: 0,
+              padding: '2px 2px 0',
+              position: 'relative',
+              zIndex: 1,
+            }}
+          />
+        </div>
         <style>{`
           .composer-textarea::placeholder {
             color: oklch(0.62 0.02 80);
@@ -3457,6 +3794,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     var lastSize = aiOptions.size || '1024x1024';
     var lastResolution = aiOptions.resolution || '1K';
     var provider = aiOptions.provider || 'apimart';
+    var activeSkill = String(aiOptions.skill || '').trim();
+    var plannedPrompt = String(aiOptions.plannedPrompt || '').trim();
+    var plannedPromptTrace = String(aiOptions.promptTrace || '').trim();
 
     // 预解析 product refs（一次，多 job 共享）
     try {
@@ -3482,6 +3822,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         who: 'ai', type: 'ai-image-generating',
         model, provider, prompt, size: lastSize, resolution: lastResolution,
         status: 'failed', error: e.message, finalElapsed: 0, startedAt: failedAt,
+        activeSkill: activeSkill,
         meta: 'Loom', hasReference: refImages.length > 0, refCount: refImages.length, refPreviews: [],
       }]);
       setIsLoading(false);
@@ -3497,11 +3838,67 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       setMessages(msgs => [...msgs, {
         who: 'ai', type: 'ai-image-generating',
         model, provider, prompt, size: lastSize, resolution: lastResolution,
-        status: 'running', startedAt: slotAt, progress: 0,
+        status: activeSkill ? 'skill-planning' : 'running', startedAt: slotAt, progress: 0,
+        activeSkill: activeSkill,
         meta: batchCount > 1 ? 'Loom · ' + (i + 1) + '/' + batchCount : 'Loom',
         hasReference: refImages.length > 0, refCount: refImages.length, refPreviews: [],
         batchIndex: i, batchCount: batchCount,
       }]);
+    }
+
+    if (activeSkill && !plannedPrompt && window.API && window.API.streamSkillPlan) {
+      const primarySlotAt = slots[0];
+      var streamedTrace = '';
+      try {
+        await window.API.streamSkillPlan(activeSkill, finalPrompt, {
+          onDelta: function(payload) {
+            var delta = String((payload && payload.text) || '');
+            if (!delta) return;
+            streamedTrace += delta;
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === primarySlotAt
+                ? Object.assign({}, m, {
+                    status: 'skill-planning',
+                    promptTrace: streamedTrace,
+                    progress: Math.max(m.progress || 0, 8),
+                  })
+                : m
+            ));
+          },
+          onDone: function(payload) {
+            plannedPrompt = String((payload && payload.final_prompt) || '').trim();
+            plannedPromptTrace = String((payload && payload.prompt_trace) || streamedTrace || '').trim();
+            if (plannedPrompt) finalPrompt = plannedPrompt;
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === primarySlotAt
+                ? Object.assign({}, m, {
+                    status: 'skill-parsed',
+                    resolvedPrompt: plannedPrompt || m.resolvedPrompt,
+                    promptTrace: plannedPromptTrace || m.promptTrace,
+                    progress: Math.max(m.progress || 0, 15),
+                  })
+                : m
+            ));
+          },
+          onError: function(payload) {
+            plannedPrompt = String((payload && payload.fallback_prompt) || '').trim();
+            plannedPromptTrace = String((payload && payload.prompt_trace) || streamedTrace || '').trim();
+            if (plannedPrompt) finalPrompt = plannedPrompt;
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === primarySlotAt
+                ? Object.assign({}, m, {
+                    status: 'skill-parsed',
+                    resolvedPrompt: plannedPrompt || m.resolvedPrompt,
+                    promptTrace: plannedPromptTrace || m.promptTrace,
+                    progress: Math.max(m.progress || 0, 15),
+                  })
+                : m
+            ));
+          },
+        });
+      } catch (e) {
+        console.warn('Skill planner stream failed, falling back to backend planner:', e);
+      }
     }
 
     const apiBase = window.API_BASE || window.location.origin;
@@ -3522,6 +3919,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         fd.append('prompt', finalPrompt);
         fd.append('size', aiOptions.size || '1024x1024');
         fd.append('resolution', aiOptions.resolution || '1K');
+        if (activeSkill) fd.append('skill', activeSkill);
+        if (plannedPrompt) fd.append('planned_prompt', plannedPrompt);
+        if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
         if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
         fd.append('ref_previews', JSON.stringify(refPreviews));
         finalRefImages.forEach(r => fd.append('image', r.file));
@@ -3541,7 +3941,12 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
             if (!jobId) { tryFlushCollected(); resolve(); return; }
             setMessages(msgs => msgs.map(m =>
               m.type === 'ai-image-generating' && m.startedAt === slotAt
-                ? Object.assign({}, m, { jobId })
+                ? Object.assign({}, m, {
+                    jobId,
+                    status: activeSkill ? 'skill-parsed' : m.status,
+                    resolvedPrompt: data.resolved_prompt || m.resolvedPrompt,
+                    promptTrace: data.prompt_trace || m.promptTrace,
+                  })
                 : m
             ));
             const pollInterval = setInterval(function() {
@@ -3551,7 +3956,13 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                   if (!statusData) return;
                   setMessages(msgs => msgs.map(m =>
                     m.type === 'ai-image-generating' && m.startedAt === slotAt
-                      ? Object.assign({}, m, { status: statusData.status, progress: statusData.progress || m.progress })
+                      ? Object.assign({}, m, {
+                          status: statusData.status,
+                          progress: statusData.progress || m.progress,
+                          originalPrompt: statusData.original_prompt || m.originalPrompt,
+                          resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt,
+                          promptTrace: statusData.prompt_trace || m.promptTrace,
+                        })
                       : m
                   ));
                   if (statusData.status === 'done' && statusData.image_url) {
@@ -3559,7 +3970,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                     const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
                     setMessages(msgs => msgs.map(m =>
                       m.type === 'ai-image-generating' && m.startedAt === slotAt
-                        ? Object.assign({}, m, { status: 'done', imageUrl: statusData.image_url, previewUrl: statusData.preview_url || statusData.image_url, finalElapsed, progress: 100, refPreviews: refPreviews.length ? refPreviews : m.refPreviews })
+                        ? Object.assign({}, m, { status: 'done', imageUrl: statusData.image_url, previewUrl: statusData.preview_url || statusData.image_url, finalElapsed, progress: 100, refPreviews: refPreviews.length ? refPreviews : m.refPreviews, originalPrompt: statusData.original_prompt || m.originalPrompt, resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt, promptTrace: statusData.prompt_trace || m.promptTrace })
                         : m
                     ));
                     loadAiChatHistory();
@@ -3604,6 +4015,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
 
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
     if (!text.trim() || isLoading) return;
+    const activeSkill = String(aiOptions.skill || '').trim();
+    const executionText = String(aiOptions.skillPrompt || text).trim();
     setLastSubmittedMessage(text);
     refImages = await materializeReferenceImages(refImages);
 
@@ -3653,13 +4066,13 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       setMessages(function(msgs) {
         assistantIdx = msgs.length + 1;
         return msgs.concat([
-          { who: 'user', text: text, refPreviews: userRefPreviews, refMeta: userRefMeta },
+          { who: 'user', text: text, refPreviews: userRefPreviews, refMeta: userRefMeta, activeSkill: activeSkill },
           { who: 'ai', type: 'thinking', text: '正在连接 Agent...', thinkingStatus: thinkingStatus, meta: 'Agent' },
         ]);
       });
       try {
         projectId = await ensureAgentProject();
-        await window.API.streamAgentChat(projectId, text, {
+        await window.API.streamAgentChat(projectId, executionText, {
           onEvent: function(eventName, payload) {
             if (eventName === 'agent_thinking') {
               var thinkingPatch = applyThinkingEvent(payload || {});
@@ -3834,7 +4247,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
           onClose: function() {
             setIsLoading(false);
           },
-        }, refImages);
+        }, refImages, { skill: activeSkill });
       } catch (e) {
         setMessages(function(msgs) {
           return msgs.map(function(m, i) {
@@ -3998,6 +4411,19 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       ? Object.assign({}, lockedAiCmd, { implicit: true, fromLockedCommand: true })
       : (textAiCmd ? Object.assign({}, textAiCmd, { implicit: true, fromLockedCommand: false }) : null);
 
+    if (activeSkill && !aiCmd && aiOptions.workflow !== 'download') {
+      const skillImageOptions = Object.assign({}, aiOptions, {
+        provider: 'sub2api',
+        size: 'auto',
+        resolution: aiOptions.resolution || '1K',
+        batchCount: 1,
+        skill: activeSkill,
+      });
+      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta, activeSkill: activeSkill }]);
+      await runAiImageGeneration('gpt-image-2', executionText, text.trim(), refImages, skillImageOptions);
+      return;
+    }
+
     // 检测"重新生成"关键词
     const rawPrompt = text.trim();
     const freshMatch = FRESH_KEYWORDS.find(kw => rawPrompt.startsWith(kw));
@@ -4160,14 +4586,14 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     setMessages(msgs => {
       thinkingIdx = msgs.length + 1; // +1 跳过用户消息，定位到 thinking 占位
       return [...msgs,
-        { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta },
+        { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta, activeSkill: activeSkill },
         { who: 'ai', type: 'thinking', text: '...' },
       ];
     });
     try {
       const reply = await window.API.chatWithAI(
-        [{ role: 'user', content: text }],
-        {}
+        [{ role: 'user', content: executionText }],
+        { skill: activeSkill }
       );
       setMessages(msgs => msgs.map((m, i) =>
         i === thinkingIdx ? { who: 'ai', text: reply || '...', meta: 'Loom' } : m

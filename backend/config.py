@@ -54,6 +54,7 @@ class Settings:
     ai_image_provider: str = os.getenv("AI_IMAGE_PROVIDER", "apimart")
     ai_image_base_url: str = os.getenv("AI_IMAGE_BASE_URL", "https://api.apimart.ai")
     ai_image_api_key: str = os.getenv("AI_IMAGE_API_KEY", "")
+    ai_image_job_timeout_seconds: int = int(os.getenv("AI_IMAGE_JOB_TIMEOUT_SECONDS", "600"))
 
     # AI 生图 API（ZenMux，多模型备用线路；API key 留空则禁用）
     zenmux_base_url: str = os.getenv("ZENMUX_BASE_URL", "https://zenmux.ai/api/v1")
@@ -92,6 +93,16 @@ class Settings:
     agent_vlm_base_url: str = os.getenv("AGENT_VLM_BASE_URL", "") or vlm_base_url
     agent_vlm_api_key: str = os.getenv("AGENT_VLM_API_KEY", "") or vlm_api_key
     agent_vlm_timeout_seconds: int = int(os.getenv("AGENT_VLM_TIMEOUT_SECONDS", "60"))
+
+    # Codex-style instruction skills. Use os.pathsep to separate multiple roots.
+    agent_skill_paths: str = os.getenv("AGENT_SKILL_PATHS", "./skills")
+
+    # Skill planner LLM. Defaults to the subscription OpenAI-compatible line so
+    # SKILL.md interpretation can use a stronger model without affecting chat.
+    skill_llm_model: str = os.getenv("SKILL_LLM_MODEL", "gpt-5.5")
+    skill_llm_base_url: str = os.getenv("SKILL_LLM_BASE_URL", "") or cliproxy_base_url
+    skill_llm_api_key: str = os.getenv("SKILL_LLM_API_KEY", "") or cliproxy_api_key
+    skill_llm_timeout_seconds: int = int(os.getenv("SKILL_LLM_TIMEOUT_SECONDS", "60"))
 
     # 工作目录（始终指向 design-tool/）
     # proxy_download relay
@@ -134,7 +145,7 @@ class Settings:
         self.allowed_login_users = self._load_login_users()
 
         # 统一补协议前缀，避免 ai_image_base_url 等配置没有 http://
-        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "zenmux_base_url", "cliproxy_base_url"):
+        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "zenmux_base_url", "cliproxy_base_url", "skill_llm_base_url"):
             _val = getattr(self, _key, "")
             if _val and not _val.startswith("http"):
                 setattr(self, _key, "https://" + _val)

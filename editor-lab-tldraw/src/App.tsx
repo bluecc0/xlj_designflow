@@ -278,7 +278,6 @@ function useUpscaleSelectedImage() {
         meta: { designflowInserted: true, upscaledFrom: src },
       })
       editor.bringToFront([shapeId])
-      editor.setSelectedShapes([shapeId])
       setTemporaryState('done', '已插入高清图', 2200)
     } catch (error: any) {
       setTemporaryState('error', formatUpscaleError(error))
@@ -822,7 +821,7 @@ function TldrawHostBridge() {
   )
 
   const reflowDesignflowImages = React.useCallback(
-    (selectedIds: string[] = []) => {
+    () => {
       const shapes = editor.getCurrentPageShapes().filter(isDesignflowImageShape)
       if (!shapes.length) return
 
@@ -871,9 +870,6 @@ function TldrawHostBridge() {
         })
       )
 
-      if (selectedIds.length) {
-        ;(editor as any).setSelectedShapes(selectedIds)
-      }
       editor.zoomToFit({ animation: { duration: 0 } })
     },
     [editor, isDesignflowImageShape]
@@ -932,12 +928,11 @@ function TldrawHostBridge() {
           designflowInserted: true,
         },
       })
-      editor.setSelectedShapes([shapeId])
       const insertedIds = [shapeId]
 
       if (mode === 'background') {
-        const shape = editor.getOnlySelectedShape()
-        if (!shape || shape.type !== 'image') return
+        const shape = editor.getShape<TLImageShape>(shapeId)
+        if (!shape || shape.type !== 'image') return shapeId
         const viewport = editor.getViewportPageBounds()
         editor.updateShapes([
           {
@@ -958,8 +953,10 @@ function TldrawHostBridge() {
         editor.selectNone()
       } else {
         editor.bringToFront(insertedIds)
-        reflowDesignflowImages(insertedIds)
+        reflowDesignflowImages()
+        editor.selectNone()
       }
+      return shapeId
     },
     [editor, reflowDesignflowImages]
   )
@@ -984,18 +981,17 @@ function TldrawHostBridge() {
 
       const insertedShapeIds: string[] = []
       for (let i = 0; i < cleanUrls.length; i++) {
-        await insertImage({
+        const shapeId = await insertImage({
           url: cleanUrls[i],
           mode: 'image',
           name: cleanUrls.length > 1 ? `${name || '生成结果'} ${i + 1}` : name,
         })
-        const ids = editor.getSelectedShapeIds()
-        if (ids.length) insertedShapeIds.push(ids[0])
+        if (shapeId) insertedShapeIds.push(shapeId)
       }
 
       if (insertedShapeIds.length) {
-        ;(editor as any).setSelectedShapes(insertedShapeIds)
         editor.zoomToFit({ animation: { duration: 0 } })
+        editor.selectNone()
       }
     },
     [editor, insertImage]

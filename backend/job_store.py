@@ -103,6 +103,7 @@ def init_db() -> None:
                 prompt           TEXT NOT NULL,
                 original_prompt  TEXT NOT NULL DEFAULT '',
                 resolved_prompt  TEXT NOT NULL DEFAULT '',
+                prompt_trace     TEXT NOT NULL DEFAULT '',
                 size             TEXT NOT NULL,
                 image_url        TEXT,
                 has_reference    INTEGER NOT NULL DEFAULT 0,
@@ -118,6 +119,7 @@ def init_db() -> None:
             ("progress", "INTEGER NOT NULL DEFAULT 0"),
             ("original_prompt", "TEXT NOT NULL DEFAULT ''"),
             ("resolved_prompt", "TEXT NOT NULL DEFAULT ''"),
+            ("prompt_trace", "TEXT NOT NULL DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE ai_image_jobs ADD COLUMN {col} {col_def}")
@@ -608,6 +610,7 @@ def save_ai_image_job(
     size: str,
     original_prompt: str | None = None,
     resolved_prompt: str | None = None,
+    prompt_trace: str | None = None,
     image_url: str | None = None,
     has_reference: bool = False,
     error: str | None = None,
@@ -620,8 +623,8 @@ def save_ai_image_job(
         conn.execute(
             """
             INSERT INTO ai_image_jobs
-              (id, user_id, status, model, prompt, original_prompt, resolved_prompt, size, image_url, has_reference, error, task_id, progress, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (id, user_id, status, model, prompt, original_prompt, resolved_prompt, prompt_trace, size, image_url, has_reference, error, task_id, progress, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 user_id = excluded.user_id,
                 status = excluded.status,
@@ -629,6 +632,7 @@ def save_ai_image_job(
                 prompt = excluded.prompt,
                 original_prompt = excluded.original_prompt,
                 resolved_prompt = excluded.resolved_prompt,
+                prompt_trace = excluded.prompt_trace,
                 size = excluded.size,
                 image_url = excluded.image_url,
                 has_reference = excluded.has_reference,
@@ -644,6 +648,7 @@ def save_ai_image_job(
                 prompt,
                 original_prompt or "",
                 resolved_prompt or prompt or "",
+                prompt_trace or "",
                 size,
                 image_url,
                 1 if has_reference else 0,
@@ -703,6 +708,7 @@ def load_ai_image_job(job_id: str) -> dict | None:
         "prompt": row["prompt"],
         "original_prompt": row["original_prompt"] if "original_prompt" in row.keys() else "",
         "resolved_prompt": row["resolved_prompt"] if "resolved_prompt" in row.keys() else "",
+        "prompt_trace": row["prompt_trace"] if "prompt_trace" in row.keys() else "",
         "size": row["size"],
         "image_url": row["image_url"],
         "has_reference": bool(row["has_reference"]),
