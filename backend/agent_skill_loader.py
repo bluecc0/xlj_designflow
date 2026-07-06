@@ -175,9 +175,36 @@ def load_agent_skill(raw_paths: str | None, root_dir: Path, name: str) -> AgentS
     return None
 
 
-def build_skill_context(skill: AgentSkill, include_references: bool = False, max_chars: int = 28000) -> str:
+def load_reference_text(skill: AgentSkill, rel_path: str) -> str | None:
+    """读取 skill 下指定 reference 文件的文本，路径越界或不存在返回 None。"""
+    rel = (rel_path or "").strip().lstrip("/")
+    if not rel:
+        return None
+    ref_path = (skill.source_path / rel).resolve()
+    try:
+        ref_path.relative_to(skill.source_path.resolve())
+    except ValueError:
+        return None
+    try:
+        return ref_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def build_skill_context(
+    skill: AgentSkill,
+    include_references: bool = False,
+    max_chars: int = 28000,
+    references_subset: list[str] | None = None,
+) -> str:
     parts = [f"# Active Skill: {skill.name}\n", skill.content]
-    if include_references:
+    if references_subset is not None:
+        for rel in references_subset:
+            text = load_reference_text(skill, rel)
+            if text is None:
+                continue
+            parts.append(f"\n\n# Reference: {rel.lstrip('/')}\n{text}")
+    elif include_references:
         for rel in skill.references:
             ref_path = (skill.source_path / rel).resolve()
             try:

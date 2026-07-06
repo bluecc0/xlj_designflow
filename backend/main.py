@@ -55,6 +55,7 @@ from .ai_image import (
     load_user_refs,
     normalize_provider,
     save_user_refs,
+    compress_image_to_data_url,
     SLASH_MODEL_MAP,
 )
 from .agent_mode import (
@@ -121,6 +122,7 @@ from .job_store import (
     append_agent_message,
     save_job,
     save_ai_image_job,
+    mark_ai_image_job_provider_switched,
     save_editor_snapshot,
     load_editor_snapshot,
     save_special_job,
@@ -2628,14 +2630,23 @@ class ChatRequest(pydantic.BaseModel):
     context: ChatContext = pydantic.Field(default_factory=ChatContext)
 
 
-def _load_active_skill_context(skill_name: str | None, *, include_references: bool = False) -> tuple[str, dict | None]:
+def _load_active_skill_context(
+    skill_name: str | None,
+    *,
+    include_references: bool = False,
+    references_subset: list[str] | None = None,
+) -> tuple[str, dict | None]:
     clean = str(skill_name or "").strip()
     if not clean:
         return "", None
     skill = load_agent_skill(settings.agent_skill_paths, settings.root_dir, clean)
     if not skill:
         raise HTTPException(404, f"Skill 不存在: {clean}")
-    return build_skill_context(skill, include_references=include_references), {
+    return build_skill_context(
+        skill,
+        include_references=include_references,
+        references_subset=references_subset,
+    ), {
         "name": skill.name,
         "title": skill.title,
         "description": skill.description,
@@ -2651,27 +2662,54 @@ async def agent_skills_endpoint(request: Request):
 
 
 @app.post("/agent-skills/{skill_name}/plan/stream")
-async def agent_skill_plan_stream_endpoint(request: Request, skill_name: str):
-    """Stream Skill planner output so the UI can show live reasoning/progress."""
+async def agent_skill_plan_stream_endpoint(
+    request: Request,
+    skill_name: str,
+    prompt: str = Form(...),
+    image: list[UploadFile] = File(default=[]),
+):
+    """Stream Skill planner output so the UI can show live reasoning/progress.
+
+    支持多模态：上传参考图时压缩后随 SKILL.md + reference-image-analysis.md
+    一起发给 skill LLM，planner 真正看图分析并产出带风格转移指令的 final_prompt。
+    """
     _current_user(request)
-    body = await request.json()
-    user_prompt = str((body or {}).get("prompt") or "").strip()
+    user_prompt = (prompt or "").strip()
     if not user_prompt:
         raise HTTPException(400, "prompt 不能为空")
-    skill_context, skill_meta = _load_active_skill_context(skill_name, include_references=False)
+
+    # 取前 3 张参考图，压成长边 1024 的 webp data_url
+    ref_data_urls: list[str] = []
+    for f in (image or [])[:3]:
+        try:
+            raw = await f.read()
+            if raw:
+                ref_data_urls.append(compress_image_to_data_url(raw, 1024))
+        except Exception:
+            logger.warning("Failed to compress skill planner reference image", exc_info=True)
+    has_reference = bool(ref_data_urls)
+
+    subset = ["references/reference-image-analysis.md"] if has_reference else None
+    skill_context, skill_meta = _load_active_skill_context(skill_name, references_subset=subset)
     if not skill_context:
         raise HTTPException(404, f"未找到 Skill: {skill_name}")
 
     async def event_stream():
         skill_label = (skill_meta or {}).get("name") or skill_name
         if not settings.skill_llm_api_key or not settings.skill_llm_base_url:
-            final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context)
+            final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context, has_reference=has_reference)
             yield make_sse("delta", {"text": json.dumps(trace, ensure_ascii=False), "mode": "fallback"})
             yield make_sse("done", {"final_prompt": final_prompt, "prompt_trace": json.dumps(trace, ensure_ascii=False), "trace": trace})
             return
 
         endpoint = _skill_llm_endpoint()
-        planner_prompt = _build_skill_planner_prompt(user_prompt, skill_label, skill_context)
+        planner_prompt = _build_skill_planner_prompt(user_prompt, skill_label, skill_context, has_reference=has_reference)
+        if has_reference:
+            user_content: Any = [{"type": "text", "text": planner_prompt}]
+            for url in ref_data_urls:
+                user_content.append({"type": "image_url", "image_url": {"url": url}})
+        else:
+            user_content = planner_prompt
         raw_parts: list[str] = []
         try:
             async with httpx.AsyncClient(timeout=settings.skill_llm_timeout_seconds, trust_env=False) as client:
@@ -2684,7 +2722,7 @@ async def agent_skill_plan_stream_endpoint(request: Request, skill_name: str):
                     },
                     json={
                         "model": settings.skill_llm_model,
-                        "messages": [{"role": "user", "content": planner_prompt}],
+                        "messages": [{"role": "user", "content": user_content}],
                         "max_tokens": 1400,
                         "temperature": 0.25,
                         "stream": True,
@@ -2719,14 +2757,16 @@ async def agent_skill_plan_stream_endpoint(request: Request, skill_name: str):
             trace = _extract_json_object(raw)
             final_prompt = str(trace.get("final_prompt") or "").strip()
             if not final_prompt:
-                final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context)
+                final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context, has_reference=has_reference)
             trace.setdefault("skill", skill_label)
             trace.setdefault("mode", "llm")
             trace.setdefault("model", settings.skill_llm_model)
+            if has_reference:
+                trace.setdefault("used_reference_images", True)
             yield make_sse("done", {"final_prompt": final_prompt, "prompt_trace": json.dumps(trace, ensure_ascii=False), "trace": trace})
         except Exception as exc:
             logger.exception("Skill planner stream failed: %s", skill_name)
-            final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context)
+            final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context, has_reference=has_reference)
             trace["stream_error"] = str(exc)
             yield make_sse("error", {"message": str(exc), "fallback_prompt": final_prompt, "prompt_trace": json.dumps(trace, ensure_ascii=False), "trace": trace})
 
@@ -2830,25 +2870,42 @@ def _extract_json_object(text: str) -> dict:
     return {}
 
 
-def _fallback_skill_plan(user_prompt: str, skill_name: str, skill_context: str) -> tuple[str, dict]:
-    final_prompt = f"""{user_prompt}
+def _fallback_skill_plan(
+    user_prompt: str,
+    skill_name: str,
+    skill_context: str,
+    *,
+    has_reference: bool = False,
+) -> tuple[str, dict]:
+    base = f"""{user_prompt}
 
 请严格按 ${skill_name} 的中文艺术字设计规范执行：先判断用户意图和文字主体，再选择合适的字形、笔画、材质、构图、负面约束；画面重点服务于中文标题字本身，避免把说明文字或 Skill 文档内容画进图里。""".strip()
+    ref_suffix = ""
+    applied_rules = [
+        "中文文字是画面主体，优先保证可读性和视觉风格一致。",
+        "按用户主题推导字形、材质、氛围和构图，不展示 Skill 文档。",
+    ]
+    if has_reference:
+        ref_suffix = "\n\n用户已上传参考图，请从参考图中提取字形结构、笔画形态、材质、边缘处理、色彩分布、装饰体系与构图特征，将其作为风格转移约束转移到目标中文文字上；不要复制参考图里的文字内容或无关装饰。"
+        applied_rules.append("参考图控制视觉风格(字形/笔画/材质/色彩/构图)，不复制其文字内容。")
+    final_prompt = (base + ref_suffix).strip()
+    steps = [
+        "识别到用户显式调用 Skill，进入中文艺术字/标题字生图链路。",
+        "读取 SKILL.md 的适用场景、风格判断和生成约束。",
+        "将用户原始需求转换为 Image 2 可执行的最终生图 prompt。",
+    ]
+    if has_reference:
+        steps.insert(1, "结合用户上传的参考图，提取风格特征并约束风格转移。")
     trace = {
         "mode": "fallback",
         "skill": skill_name,
-        "steps": [
-            "识别到用户显式调用 Skill，进入中文艺术字/标题字生图链路。",
-            "读取 SKILL.md 的适用场景、风格判断和生成约束。",
-            "将用户原始需求转换为 Image 2 可执行的最终生图 prompt。",
-        ],
-        "applied_rules": [
-            "中文文字是画面主体，优先保证可读性和视觉风格一致。",
-            "按用户主题推导字形、材质、氛围和构图，不展示 Skill 文档。",
-        ],
+        "steps": steps,
+        "applied_rules": applied_rules,
         "final_prompt": final_prompt,
         "negative_prompt": "不要生成英文主体字、不要把说明文档画进图里、不要低清晰度、不要乱码、不要多余水印。",
     }
+    if has_reference:
+        trace["used_reference_images"] = True
     return final_prompt, trace
 
 
@@ -2861,7 +2918,22 @@ def _skill_llm_endpoint() -> str:
     return f"{base_url}/v1/chat/completions"
 
 
-def _build_skill_planner_prompt(user_prompt: str, skill_name: str, skill_context: str) -> str:
+def _build_skill_planner_prompt(
+    user_prompt: str,
+    skill_name: str,
+    skill_context: str,
+    *,
+    has_reference: bool = False,
+) -> str:
+    ref_section = ""
+    if has_reference:
+        ref_section = """
+
+[用户已上传参考图]
+请按 reference-image-analysis 的维度分析附图：字形结构、笔画形态、材质、边缘处理、色彩分布、装饰体系、构图。
+在 final_prompt 中给出具体的、可执行的风格转移指令：从参考图提取哪些特征、如何转移到目标中文文字上。
+不要复制参考图里的文字内容、品牌名或无关装饰；转移的是风格原理，不是内容。
+"""
     return f"""你是 DesignFlow 的 Skill Planner。你的任务不是直接聊天，而是读取用户显式调用的 Codex-style SKILL.md，并把它转换为一次可执行的生图请求。
 
 必须输出严格 JSON，不要 Markdown，不要代码块。字段：
@@ -2877,7 +2949,7 @@ def _build_skill_planner_prompt(user_prompt: str, skill_name: str, skill_context
 2. 如果是中文艺术字/标题字，必须明确主体文字、字体气质、笔画/材质/构图/背景/质量要求。
 3. 不要把“请遵守 Skill”这类元指令写进 final_prompt，要把规则消化成具体画面语言。
 4. 不要编造用户没说的品牌名、日期、价格。
-
+{ref_section}
 [用户需求]
 {user_prompt}
 
@@ -2999,14 +3071,31 @@ async def _run_ai_image_background(
         except Exception:
             pass
 
+    provider_switched = False
     try:
         if provider == PROVIDER_SUB2API:
-            result = await generate_sub2api_async(
-                model=model, prompt=prompt,
-                images=refs if refs else None,
-                size=size, resolution=resolution, user_id=user_id,
-                on_progress=on_progress,
-            )
+            try:
+                result = await generate_sub2api_async(
+                    model=model, prompt=prompt,
+                    images=refs if refs else None,
+                    size=size, resolution=resolution, user_id=user_id,
+                    on_progress=on_progress,
+                )
+            except Exception as sub_exc:
+                logger.warning("sub2api failed, falling back to zenmux: %s", sub_exc)
+                if on_progress:
+                    on_progress(30, "订阅线路失败，已切换到官方线路重试")
+                provider = PROVIDER_ZENMUX
+                provider_switched = True
+                try:
+                    mark_ai_image_job_provider_switched(job_id, True)
+                except Exception:
+                    pass
+                result = await generate_image_zenmux_async(
+                    model=model, prompt=prompt, images=refs,
+                    size=size, resolution=resolution, user_id=user_id,
+                    on_progress=on_progress,
+                )
         elif provider == PROVIDER_ZENMUX:
             result = await generate_image_zenmux_async(
                 model=model, prompt=prompt,
@@ -3061,6 +3150,7 @@ async def _run_ai_image_background(
                 "resolvedPrompt": resolved_prompt or prompt,
                 "promptTrace": prompt_trace,
                 "provider": provider,
+                "providerSwitched": provider_switched,
                 "size": size, "resolution": resolution,
                 "status": "done",
                 "hasReference": has_reference,
@@ -3211,6 +3301,7 @@ def ai_image_status(request: Request, job_id: str):
         "prompt_trace": job.get("prompt_trace") or "",
         "task_id": job.get("task_id"),
         "error": job.get("error"),
+        "providerSwitched": bool(job.get("provider_switched")),
     }
 
 

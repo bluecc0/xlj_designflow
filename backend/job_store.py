@@ -120,6 +120,7 @@ def init_db() -> None:
             ("original_prompt", "TEXT NOT NULL DEFAULT ''"),
             ("resolved_prompt", "TEXT NOT NULL DEFAULT ''"),
             ("prompt_trace", "TEXT NOT NULL DEFAULT ''"),
+            ("provider_switched", "INTEGER NOT NULL DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE ai_image_jobs ADD COLUMN {col} {col_def}")
@@ -716,8 +717,19 @@ def load_ai_image_job(job_id: str) -> dict | None:
         "task_id": row["task_id"],
         "progress": int(row["progress"] or 0),
         "resolution": row["resolution"] if "resolution" in row.keys() else "",
+        "provider_switched": bool(row["provider_switched"]) if "provider_switched" in row.keys() else False,
         "created_at": row["created_at"],
     }
+
+
+def mark_ai_image_job_provider_switched(job_id: str, switched: bool = True) -> None:
+    """标记生图 job发生过 provider 兜底切换。独立函数，避免动 save_ai_image_job 签名。"""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE ai_image_jobs SET provider_switched = ? WHERE id = ?",
+            (1 if switched else 0, job_id),
+        )
+        conn.commit()
 
 
 def load_ai_image_job_by_image_url(image_url: str, user_id: str | None = None) -> dict | None:
@@ -937,6 +949,8 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 "refCount": int(meta.get("refCount") or 0),
                 "refPreviews": meta.get("refPreviews") or [],
                 "finalElapsed": meta.get("finalElapsed"),
+                "provider": meta.get("provider"),
+                "providerSwitched": bool(meta.get("providerSwitched")),
                 "meta": "Loom",
                 "createdAt": row["created_at"],
             })

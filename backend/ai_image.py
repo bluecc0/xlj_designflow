@@ -10,6 +10,7 @@ Flow:
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import re
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import httpx
+from PIL import Image
 
 from .config import settings
 
@@ -1393,3 +1395,21 @@ async def generate_sub2api_async(
         "usage": usage if isinstance(usage, dict) else None,
         "revised_prompt": item.get("revised_prompt") if isinstance(item, dict) else None,
     }
+
+
+def compress_image_to_data_url(image_bytes: bytes, max_long_side: int = 1024) -> str:
+    """把任意图片压成长边 ≤ max_long_side 的 webp data_url，供多模态 LLM 消费。
+
+    alpha 通道合成白底，避免 webp 黑底；只缩小不放大。不拒绝大图。
+    """
+    src = io.BytesIO(image_bytes)
+    with Image.open(src) as img:
+        img = img.convert("RGBA")
+        rgb = Image.new("RGB", img.size, (255, 255, 255))
+        rgb.paste(img, mask=img.getchannel("A"))
+        if max(rgb.size) > max_long_side:
+            rgb.thumbnail((max_long_side, max_long_side), Image.LANCZOS)
+        out = io.BytesIO()
+        rgb.save(out, format="WEBP", quality=82, method=4)
+        encoded = base64.b64encode(out.getvalue()).decode("ascii")
+        return f"data:image/webp;base64,{encoded}"

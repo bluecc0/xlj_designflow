@@ -168,13 +168,15 @@
     listAgentSkills: function() {
       return request('/agent-skills').then(function(res) { return res.skills || []; });
     },
-    streamSkillPlan: function(skillName, prompt, handlers) {
+    streamSkillPlan: function(skillName, prompt, refImages, handlers) {
       handlers = handlers || {};
+      var form = new FormData();
+      form.append('prompt', prompt || '');
+      (refImages || []).slice(0, 3).forEach(function(f) { form.append('image', f); });
       return fetch(BASE + '/agent-skills/' + encodeURIComponent(skillName) + '/plan/stream', {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt || '' }),
+        body: form,
       }).then(function(resp) {
         if (!resp.ok) {
           return resp.text().then(function(text) {
