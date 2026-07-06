@@ -288,6 +288,146 @@ function useUpscaleSelectedImage() {
 }
 
 
+function useVectorizeSelectedImage() {
+  const editor = useEditor()
+  const [vectorizeState, setVectorizeState] = React.useState<{ loading: boolean; status: 'idle' | 'done' | 'error'; message: string }>({ loading: false, status: 'idle', message: '' })
+  const clearTimerRef = React.useRef<number | null>(null)
+
+  const setTemporaryState = React.useCallback((status: 'done' | 'error', message: string, delay = 2600) => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+    }
+    setVectorizeState({ loading: false, status, message })
+    clearTimerRef.current = window.setTimeout(() => {
+      setVectorizeState((prev) => (prev.loading ? prev : { loading: false, status: 'idle', message: '' }))
+      clearTimerRef.current = null
+    }, delay)
+  }, [])
+
+  const clearMessage = React.useCallback(() => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+      clearTimerRef.current = null
+    }
+    setVectorizeState((prev) => (prev.loading ? prev : { loading: false, status: 'idle', message: '' }))
+  }, [])
+
+  React.useEffect(() => {
+    return () => {
+      if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
+    }
+  }, [])
+
+  const handleVectorizeSelectedImage = React.useCallback(async () => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+      clearTimerRef.current = null
+    }
+    const shape = editor.getOnlySelectedShape()
+    if (!shape || shape.type !== 'image') return
+    const asset = editor.getAsset((shape.props as any).assetId)
+    const assetMime = String((asset?.props as any)?.mimeType || '').toLowerCase()
+    if (assetMime === 'image/svg+xml') {
+      setTemporaryState('error', '当前图片已经是 SVG')
+      return
+    }
+    const src = await resolveUpscaleSourceUrl(String((asset?.props as any)?.src || '').trim())
+    if (!src) {
+      setTemporaryState('error', '没有找到图片地址')
+      return
+    }
+
+    setVectorizeState({ loading: true, status: 'idle', message: '正在转为 SVG' })
+    try {
+      const createResp = await fetch('/ai-image/vectorize', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_url: src }),
+      })
+      if (!createResp.ok) {
+        const text = await createResp.text()
+        throw new Error(text || `HTTP ${createResp.status}`)
+      }
+      const created = await createResp.json()
+      const jobId = created.job_id
+      if (!jobId) throw new Error('没有返回任务 ID')
+
+      let result: any = null
+      for (let i = 0; i < 180; i++) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000))
+        const statusResp = await fetch(`/ai-image/${encodeURIComponent(jobId)}`, { credentials: 'include' })
+        if (!statusResp.ok) {
+          const text = await statusResp.text()
+          throw new Error(text || `HTTP ${statusResp.status}`)
+        }
+        result = await statusResp.json()
+        if (result.status === 'done') break
+        if (result.status === 'failed') throw new Error(result.error || '矢量化失败')
+      }
+      if (!result || result.status !== 'done' || !result.image_url) {
+        throw new Error('矢量化超时')
+      }
+
+      const imageUrl = normalizeDesignflowAssetUrl(result.image_url)
+      const file = await fetchImageAsFile(imageUrl, 'vectorized.svg')
+      const previewUrl = window.URL.createObjectURL(file)
+      let size: { w: number; h: number }
+      try {
+        size = await getImageSize(previewUrl)
+      } finally {
+        window.URL.revokeObjectURL(previewUrl)
+      }
+      const sourceShape = editor.getOnlySelectedShape()
+      const sourceBounds = sourceShape ? editor.getShapePageBounds(sourceShape.id) : null
+      const assetId = AssetRecordType.createId()
+      const shapeId = createShapeId() as TLImageShape['id']
+      const assetRecord: TLImageAsset = {
+        id: assetId,
+        typeName: 'asset',
+        type: 'image',
+        props: {
+          w: size.w,
+          h: size.h,
+          name: 'vectorized.svg',
+          isAnimated: false,
+          mimeType: 'image/svg+xml',
+          src: imageUrl,
+          fileSize: file.size,
+        },
+        meta: { vectorizedFrom: src },
+      }
+      editor.markHistoryStoppingPoint('insert-vectorized-image')
+      editor.createAssets([assetRecord])
+      editor.createShape({
+        id: shapeId,
+        type: 'image',
+        x: sourceBounds ? sourceBounds.maxX + 40 : 0,
+        y: sourceBounds ? sourceBounds.minY : 0,
+        props: {
+          w: size.w,
+          h: size.h,
+          assetId,
+          playing: false,
+          url: '',
+          crop: null,
+          flipX: false,
+          flipY: false,
+          altText: 'vectorized svg',
+        },
+        meta: { designflowInserted: true, vectorizedFrom: src },
+      })
+      editor.bringToFront([shapeId])
+      setTemporaryState('done', '已插入 SVG', 2200)
+    } catch (error: any) {
+      setTemporaryState('error', formatUpscaleError(error))
+    }
+  }, [editor, setTemporaryState])
+
+  return { vectorizeState, handleVectorizeSelectedImage, clearMessage: clearMessage }
+}
+
+
 
 function DesignflowImageToolbar() {
   const editor = useEditor()
@@ -311,10 +451,12 @@ function DesignflowImageToolbar() {
     [editor, imageShapeId]
   )
   const { upscaleState, handleUpscaleSelectedImage, clearMessage } = useUpscaleSelectedImage()
+  const { vectorizeState, handleVectorizeSelectedImage, clearMessage: clearVectorizeMessage } = useVectorizeSelectedImage()
 
   React.useEffect(() => {
     clearMessage()
-  }, [clearMessage, imageShapeId])
+    clearVectorizeMessage()
+  }, [clearMessage, clearVectorizeMessage, imageShapeId])
 
   const handleDownloadOriginal = React.useCallback(() => {
     if (!imageShapeId) return
@@ -359,12 +501,25 @@ function DesignflowImageToolbar() {
         title={upscaleState.loading ? '正在高清放大' : (upscaleState.message || '高清放大')}
         data-testid="tool.image-upscale"
         onClick={handleUpscaleSelectedImage}
-        disabled={upscaleState.loading}
+        disabled={upscaleState.loading || vectorizeState.loading}
       >
         {upscaleState.loading ? (
           <span className="designflow-upscale-spinner" />
         ) : (
           <TldrawUiButtonIcon small icon="zoom-in" />
+        )}
+      </TldrawUiToolbarButton>
+      <TldrawUiToolbarButton
+        type="icon"
+        title={vectorizeState.loading ? '正在转为 SVG' : (vectorizeState.message || '转为 SVG')}
+        data-testid="tool.image-vectorize"
+        onClick={handleVectorizeSelectedImage}
+        disabled={vectorizeState.loading || upscaleState.loading}
+      >
+        {vectorizeState.loading ? (
+          <span className="designflow-upscale-spinner" />
+        ) : (
+          <TldrawUiButtonIcon small icon="spline-cubic" />
         )}
       </TldrawUiToolbarButton>
     </TldrawUiContextualToolbar>

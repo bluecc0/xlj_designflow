@@ -635,6 +635,73 @@ async def _run_upscale_background(job_id: str, user: dict, src_path: Path, scale
         )
 
 
+def _run_local_vectorize(src_path: Path, out_path: Path) -> tuple[int, int]:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        "-m", "backend.vectorize_worker",
+        "--src", str(src_path),
+        "--out", str(out_path),
+    ]
+    proc = subprocess.run(
+        cmd,
+        cwd=str(settings.root_dir),
+        capture_output=True,
+        text=True,
+        timeout=max(60, int(settings.ai_image_job_timeout_seconds or 600) + 15),
+        check=False,
+    )
+    try:
+        payload = json.loads((proc.stdout or "").strip().splitlines()[-1])
+    except Exception:
+        payload = {}
+    if proc.returncode != 0 or not payload.get("ok"):
+        detail = str(payload.get("error") or (proc.stderr or proc.stdout or "").strip()[-800:])
+        raise RuntimeError(detail or f"vtracer 子进程退出码 {proc.returncode}")
+    return int(payload.get("width") or 0), int(payload.get("height") or 0)
+
+
+async def _run_vectorize_background(job_id: str, user: dict, src_path: Path, created_at: float) -> None:
+    prompt = "local vectorize to svg"
+    out_dir = settings.output_path / "ai-images" / user["id"] / "vectorized"
+    out_path = out_dir / f"{job_id}.svg"
+    try:
+        save_ai_image_job(
+            job_id=job_id, user_id=user["id"], status="processing",
+            model="local-vectorize", prompt=prompt, size="",
+            original_prompt=prompt, resolved_prompt=prompt,
+            has_reference=True, progress=15, created_at=created_at,
+        )
+        width, height = await asyncio.to_thread(_run_local_vectorize, src_path, out_path)
+        image_url = f"/ai-images/{quote(user['id'])}/vectorized/{quote(out_path.name)}"
+        save_ai_image_job(
+            job_id=job_id, user_id=user["id"], status="done",
+            model="local-vectorize", prompt=prompt,
+            size=f"{width}x{height}" if width and height else "",
+            original_prompt=prompt, resolved_prompt=prompt, image_url=image_url,
+            has_reference=True, progress=100, created_at=created_at,
+        )
+        log_operation(
+            user_id=user["id"], username=user.get("username", ""),
+            action="ai_image_vectorize",
+            detail=f"job={job_id[:8]} result=done",
+            payload=json.dumps({"job_id": job_id, "image_url": image_url}, ensure_ascii=False),
+        )
+    except Exception as exc:
+        save_ai_image_job(
+            job_id=job_id, user_id=user["id"], status="failed",
+            model="local-vectorize", prompt=prompt, size="",
+            original_prompt=prompt, resolved_prompt=prompt,
+            has_reference=True, error=str(exc), progress=100, created_at=created_at,
+        )
+        log_operation(
+            user_id=user["id"], username=user.get("username", ""),
+            action="ai_image_vectorize",
+            detail=f"job={job_id[:8]} result=failed",
+            payload=json.dumps({"job_id": job_id, "error": str(exc)}, ensure_ascii=False),
+        )
+
+
 def _normalize_ai_chat_messages_for_api(messages: list[dict]) -> list[dict]:
     normalized: list[dict] = []
     for item in messages or []:
@@ -3255,6 +3322,29 @@ async def ai_image_upscale(request: Request):
         has_reference=True, progress=0, created_at=created_at,
     )
     asyncio.create_task(_run_upscale_background(job_id, dict(user), src_path, scale, created_at))
+    return {"job_id": job_id, "status": "processing", "progress": 0}
+
+
+@app.post("/ai-image/vectorize")
+async def ai_image_vectorize(request: Request):
+    """对站内图片执行 vtracer 矢量化，返回可轮询的 ai-image job。"""
+    user = _current_user(request)
+    body = await request.json()
+    image_url = str(body.get("image_url") or "").strip()
+    job_id = uuid.uuid4().hex
+    created_at = time.time()
+    if image_url.startswith("data:image/"):
+        src_path = _persist_data_url_image(image_url, user_id=user["id"], job_id=job_id)
+    else:
+        src_path = _resolve_public_asset_path(image_url, user)
+    prompt = "local vectorize to svg"
+    save_ai_image_job(
+        job_id=job_id, user_id=user["id"], status="processing",
+        model="local-vectorize", prompt=prompt, size="",
+        original_prompt=prompt, resolved_prompt=prompt,
+        has_reference=True, progress=0, created_at=created_at,
+    )
+    asyncio.create_task(_run_vectorize_background(job_id, dict(user), src_path, created_at))
     return {"job_id": job_id, "status": "processing", "progress": 0}
 
 
