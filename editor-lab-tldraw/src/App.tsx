@@ -428,6 +428,190 @@ function useVectorizeSelectedImage() {
 }
 
 
+function useLayerExtractSelectedImage() {
+  const editor = useEditor()
+  const [layerExtractState, setLayerExtractState] = React.useState<{ loading: boolean; status: 'idle' | 'done' | 'error'; message: string }>({ loading: false, status: 'idle', message: '' })
+  const clearTimerRef = React.useRef<number | null>(null)
+
+  const setTemporaryState = React.useCallback((status: 'done' | 'error', message: string, delay = 2600) => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+    }
+    setLayerExtractState({ loading: false, status, message })
+    clearTimerRef.current = window.setTimeout(() => {
+      setLayerExtractState((prev) => (prev.loading ? prev : { loading: false, status: 'idle', message: '' }))
+      clearTimerRef.current = null
+    }, delay)
+  }, [])
+
+  const clearMessage = React.useCallback(() => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+      clearTimerRef.current = null
+    }
+    setLayerExtractState((prev) => (prev.loading ? prev : { loading: false, status: 'idle', message: '' }))
+  }, [])
+
+  React.useEffect(() => {
+    return () => {
+      if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
+    }
+  }, [])
+
+  const handleLayerExtractSelectedImage = React.useCallback(async () => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+      clearTimerRef.current = null
+    }
+    const shape = editor.getOnlySelectedShape()
+    if (!shape || shape.type !== 'image') return
+    const asset = editor.getAsset((shape.props as any).assetId)
+    const assetMime = String((asset?.props as any)?.mimeType || '').toLowerCase()
+    if (assetMime === 'image/svg+xml') {
+      setTemporaryState('error', 'SVG 无法转 PSD')
+      return
+    }
+    const src = await resolveUpscaleSourceUrl(String((asset?.props as any)?.src || '').trim())
+    if (!src) {
+      setTemporaryState('error', '没有找到图片地址')
+      return
+    }
+
+    setLayerExtractState({ loading: true, status: 'idle', message: '正在转分层 PSD' })
+    try {
+      const createResp = await fetch('/ai-image/layer-extract', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_url: src }),
+      })
+      if (!createResp.ok) {
+        const text = await createResp.text()
+        throw new Error(text || `HTTP ${createResp.status}`)
+      }
+      const created = await createResp.json()
+      const jobId = created.job_id
+      if (!jobId) throw new Error('没有返回任务 ID')
+
+      let result: any = null
+      for (let i = 0; i < 600; i++) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000))
+        const statusResp = await fetch(`/ai-image/${encodeURIComponent(jobId)}`, { credentials: 'include' })
+        if (!statusResp.ok) {
+          const text = await statusResp.text()
+          throw new Error(text || `HTTP ${statusResp.status}`)
+        }
+        result = await statusResp.json()
+        if (result.status === 'done') break
+        if (result.status === 'failed') throw new Error(result.error || '转 PSD 失败')
+      }
+      if (!result || result.status !== 'done') {
+        throw new Error('转 PSD 超时（超过 10 分钟）')
+      }
+      const extra = result.layer_extract
+      if (!extra || !extra.psd_url || !extra.layers) {
+        throw new Error('转 PSD 结果异常')
+      }
+
+      // 1. 自动下载 PSD
+      const psdUrl = normalizeDesignflowAssetUrl(extra.psd_url)
+      const psdLink = document.createElement('a')
+      psdLink.href = psdUrl
+      psdLink.download = 'layered.psd'
+      psdLink.target = '_blank'
+      psdLink.rel = 'noopener noreferrer'
+      document.body.appendChild(psdLink)
+      psdLink.click()
+      document.body.removeChild(psdLink)
+
+      // 2. 把每个 layer 作为独立 image shape 插入到源图右侧，按原 bbox 相对位置排列
+      const sourceShape = editor.getOnlySelectedShape()
+      const sourceBounds = sourceShape ? editor.getShapePageBounds(sourceShape.id) : null
+      const sourceSize: [number, number] = extra.source_size || [0, 0]
+      const layers: any[] = extra.layers
+      const layersUrlPrefix = normalizeDesignflowAssetUrl(extra.layers_url_prefix || '')
+
+      // 源图在画布上的尺寸 → 计算 layer bbox 到画布坐标的缩放比
+      const scale = sourceBounds && sourceSize[0] ? sourceBounds.width / sourceSize[0] : 1
+      const groupOffsetX = sourceBounds ? sourceBounds.maxX + 40 : 0
+      const groupOriginY = sourceBounds ? sourceBounds.minY : 0
+
+      const assetRecords: TLImageAsset[] = []
+      const shapeCreations: any[] = []
+      for (const layer of layers) {
+        const layerUrl = `${layersUrlPrefix}/${layer.path}`
+        const file = await fetchImageAsFile(layerUrl, layer.path.split('/').pop() || 'layer.png')
+        const previewUrl = window.URL.createObjectURL(file)
+        let size: { w: number; h: number }
+        try {
+          size = await getImageSize(previewUrl)
+        } finally {
+          window.URL.revokeObjectURL(previewUrl)
+        }
+        const assetId = AssetRecordType.createId()
+        const shapeId = createShapeId() as TLImageShape['id']
+        assetRecords.push({
+          id: assetId,
+          typeName: 'asset',
+          type: 'image',
+          props: {
+            w: size.w,
+            h: size.h,
+            name: layer.path.split('/').pop() || 'layer.png',
+            isAnimated: false,
+            mimeType: 'image/png',
+            src: layerUrl,
+            fileSize: file.size,
+          },
+          meta: { layerExtractFrom: src, layerIndex: layer.index },
+        })
+        const layerX = groupOffsetX + (layer.x || 0) * scale
+        const layerY = groupOriginY + (layer.y || 0) * scale
+        shapeCreations.push({
+          id: shapeId,
+          type: 'image',
+          x: layerX,
+          y: layerY,
+          props: {
+            w: size.w * scale,
+            h: size.h * scale,
+            assetId,
+            playing: false,
+            url: '',
+            crop: null,
+            flipX: false,
+            flipY: false,
+            altText: layer.name || 'layer',
+          },
+          meta: { designflowInserted: true, layerExtractFrom: src, layerIndex: layer.index },
+        })
+      }
+
+      editor.markHistoryStoppingPoint('insert-layer-extract')
+      if (assetRecords.length) editor.createAssets(assetRecords)
+      for (const creation of shapeCreations) {
+        editor.createShape(creation)
+      }
+      if (shapeCreations.length) {
+        editor.bringToFront(shapeCreations.map((c) => c.id))
+      }
+
+      const layerCount = layers.length
+      setTemporaryState('done', layerCount > 0 ? `已转 ${layerCount} 层并下载 PSD` : '已生成 PSD', 3200)
+    } catch (error: any) {
+      // 错误持久显示在按钮旁，不自动消失（用户可能离开页面很久才回来）
+      if (clearTimerRef.current) {
+        window.clearTimeout(clearTimerRef.current)
+        clearTimerRef.current = null
+      }
+      setLayerExtractState({ loading: false, status: 'error', message: formatUpscaleError(error) })
+    }
+  }, [editor, setTemporaryState])
+
+  return { layerExtractState, handleLayerExtractSelectedImage, clearMessage }
+}
+
+
 
 function DesignflowImageToolbar() {
   const editor = useEditor()
@@ -452,11 +636,13 @@ function DesignflowImageToolbar() {
   )
   const { upscaleState, handleUpscaleSelectedImage, clearMessage } = useUpscaleSelectedImage()
   const { vectorizeState, handleVectorizeSelectedImage, clearMessage: clearVectorizeMessage } = useVectorizeSelectedImage()
+  const { layerExtractState, handleLayerExtractSelectedImage, clearMessage: clearLayerExtractMessage } = useLayerExtractSelectedImage()
 
   React.useEffect(() => {
     clearMessage()
     clearVectorizeMessage()
-  }, [clearMessage, clearVectorizeMessage, imageShapeId])
+    clearLayerExtractMessage()
+  }, [clearMessage, clearVectorizeMessage, clearLayerExtractMessage, imageShapeId])
 
   const handleDownloadOriginal = React.useCallback(() => {
     if (!imageShapeId) return
@@ -501,7 +687,7 @@ function DesignflowImageToolbar() {
         title={upscaleState.loading ? '正在高清放大' : (upscaleState.message || '高清放大')}
         data-testid="tool.image-upscale"
         onClick={handleUpscaleSelectedImage}
-        disabled={upscaleState.loading || vectorizeState.loading}
+        disabled={upscaleState.loading || vectorizeState.loading || layerExtractState.loading}
       >
         {upscaleState.loading ? (
           <span className="designflow-upscale-spinner" />
@@ -514,7 +700,7 @@ function DesignflowImageToolbar() {
         title={vectorizeState.loading ? '正在转为 SVG' : (vectorizeState.message || '转为 SVG')}
         data-testid="tool.image-vectorize"
         onClick={handleVectorizeSelectedImage}
-        disabled={vectorizeState.loading || upscaleState.loading}
+        disabled={vectorizeState.loading || upscaleState.loading || layerExtractState.loading}
       >
         {vectorizeState.loading ? (
           <span className="designflow-upscale-spinner" />
@@ -522,6 +708,24 @@ function DesignflowImageToolbar() {
           <TldrawUiButtonIcon small icon="spline-cubic" />
         )}
       </TldrawUiToolbarButton>
+      <TldrawUiToolbarButton
+        type="icon"
+        title={layerExtractState.loading ? '正在转分层 PSD' : (layerExtractState.message || '转 PSD')}
+        data-testid="tool.image-layer-extract"
+        onClick={handleLayerExtractSelectedImage}
+        disabled={layerExtractState.loading || upscaleState.loading || vectorizeState.loading}
+      >
+        {layerExtractState.loading ? (
+          <span className="designflow-upscale-spinner" />
+        ) : (
+          <TldrawUiButtonIcon small icon="stack-vertical" />
+        )}
+      </TldrawUiToolbarButton>
+      {layerExtractState.status === 'error' && layerExtractState.message && (
+        <span className="designflow-layer-extract-error" title={layerExtractState.message}>
+          {layerExtractState.message}
+        </span>
+      )}
     </TldrawUiContextualToolbar>
   )
 }

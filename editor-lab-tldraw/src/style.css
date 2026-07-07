@@ -513,3 +513,15 @@ input {
     transform: rotate(360deg);
   }
 }
+
+.designflow-layer-extract-error {
+  color: #e5484d;
+  font-size: 11px;
+  line-height: 1.2;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 6px;
+  user-select: text;
+}

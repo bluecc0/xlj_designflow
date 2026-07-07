@@ -702,6 +702,104 @@ async def _run_vectorize_background(job_id: str, user: dict, src_path: Path, cre
         )
 
 
+def _run_local_layer_extract(src_path: Path, out_dir: Path, user_id: str) -> dict:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        "-m", "backend.layer_extract_worker",
+        "--src", str(src_path),
+        "--out-dir", str(out_dir),
+        "--user-id", user_id,
+    ]
+    proc = subprocess.run(
+        cmd,
+        cwd=str(settings.root_dir),
+        capture_output=True,
+        text=True,
+        timeout=max(120, int(settings.ai_image_job_timeout_seconds or 600) + 30),
+        check=False,
+    )
+    try:
+        payload = json.loads((proc.stdout or "").strip().splitlines()[-1])
+    except Exception:
+        payload = {}
+    if proc.returncode != 0 or not payload.get("ok"):
+        detail = str(payload.get("error") or (proc.stderr or proc.stdout or "").strip()[-1200:])
+        raise RuntimeError(detail or f"layer-extract 子进程退出码 {proc.returncode}")
+    return payload
+
+
+async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path, created_at: float) -> None:
+    prompt = "image to layered psd"
+    out_dir = settings.output_path / "ai-images" / user["id"] / "layer-extract" / job_id
+    try:
+        save_ai_image_job(
+            job_id=job_id, user_id=user["id"], status="processing",
+            model="layer-extract", prompt=prompt, size="",
+            original_prompt=prompt, resolved_prompt=prompt,
+            has_reference=True, progress=15, created_at=created_at,
+        )
+        payload = await asyncio.to_thread(_run_local_layer_extract, src_path, out_dir, user["id"])
+        psd_path = Path(payload["psd_path"])
+        # PSD 落在 out_dir 下，对外暴露 /ai-images/{user}/layer-extract/{job}/{name}.psd
+        rel = psd_path.relative_to(settings.output_path / "ai-images")
+        psd_url = f"/ai-images/{quote(rel.as_posix())}"
+        # manifest 同理
+        manifest_path = Path(payload["manifest_path"])
+        manifest_rel = manifest_path.relative_to(settings.output_path / "ai-images")
+        manifest_url = f"/ai-images/{quote(manifest_rel.as_posix())}"
+        # 图层 PNG 目录对外 URL 前缀（job 目录 URL，前端拼 prefix + '/' + layer.path）
+        layers_url_prefix = f"/ai-images/{quote((out_dir.relative_to(settings.output_path / 'ai-images')).as_posix())}"
+        # 写一份精简 manifest 到 job 表（前端轮询用），并保存 PSD 下载 URL 到 image_url 字段
+        save_ai_image_job(
+            job_id=job_id, user_id=user["id"], status="done",
+            model="layer-extract", prompt=prompt,
+            size=f"{payload['source_size'][0]}x{payload['source_size'][1]}",
+            original_prompt=prompt, resolved_prompt=prompt, image_url=psd_url,
+            has_reference=True, progress=100, created_at=created_at,
+        )
+        # 把 manifest URL / layers 信息存到 job 的 prompt_trace 字段（复用字段做扩展数据）
+        try:
+            job = load_ai_image_job(job_id) or {}
+            extra = {
+                "psd_url": psd_url,
+                "manifest_url": manifest_url,
+                "layers_url_prefix": layers_url_prefix,
+                "segmentation_url": payload.get("segmentation_url", ""),
+                "layers": payload.get("layers", []),
+                "source_size": payload.get("source_size", []),
+            }
+            save_ai_image_job(
+                job_id=job_id, user_id=user["id"], status="done",
+                model="layer-extract", prompt=prompt,
+                size=job.get("size") or "",
+                original_prompt=prompt, resolved_prompt=prompt,
+                image_url=psd_url, prompt_trace=json.dumps(extra, ensure_ascii=False),
+                has_reference=True, progress=100, created_at=created_at,
+            )
+        except Exception:
+            pass
+        log_operation(
+            user_id=user["id"], username=user.get("username", ""),
+            action="ai_image_layer_extract",
+            detail=f"job={job_id[:8]} result=done layers={len(payload.get('layers', []))}",
+            payload=json.dumps({"job_id": job_id, "psd_url": psd_url}, ensure_ascii=False),
+        )
+    except Exception as exc:
+        save_ai_image_job(
+            job_id=job_id, user_id=user["id"], status="failed",
+            model="layer-extract", prompt=prompt, size="",
+            original_prompt=prompt, resolved_prompt=prompt,
+            has_reference=True, error=str(exc), progress=100, created_at=created_at,
+        )
+        log_operation(
+            user_id=user["id"], username=user.get("username", ""),
+            action="ai_image_layer_extract",
+            detail=f"job={job_id[:8]} result=failed",
+            payload=json.dumps({"job_id": job_id, "error": str(exc)}, ensure_ascii=False),
+        )
+
+
 def _normalize_ai_chat_messages_for_api(messages: list[dict]) -> list[dict]:
     normalized: list[dict] = []
     for item in messages or []:
@@ -3348,6 +3446,29 @@ async def ai_image_vectorize(request: Request):
     return {"job_id": job_id, "status": "processing", "progress": 0}
 
 
+@app.post("/ai-image/layer-extract")
+async def ai_image_layer_extract(request: Request):
+    """对站内图片执行"转分层 PSD"：gpt-image-2 分割 → 本地切层 → PSD 导出。返回可轮询的 ai-image job。"""
+    user = _current_user(request)
+    body = await request.json()
+    image_url = str(body.get("image_url") or "").strip()
+    job_id = uuid.uuid4().hex
+    created_at = time.time()
+    if image_url.startswith("data:image/"):
+        src_path = _persist_data_url_image(image_url, user_id=user["id"], job_id=job_id)
+    else:
+        src_path = _resolve_public_asset_path(image_url, user)
+    prompt = "image to layered psd"
+    save_ai_image_job(
+        job_id=job_id, user_id=user["id"], status="processing",
+        model="layer-extract", prompt=prompt, size="",
+        original_prompt=prompt, resolved_prompt=prompt,
+        has_reference=True, progress=0, created_at=created_at,
+    )
+    asyncio.create_task(_run_layer_extract_background(job_id, dict(user), src_path, created_at))
+    return {"job_id": job_id, "status": "processing", "progress": 0}
+
+
 @app.get("/ai-image/{job_id}")
 def ai_image_status(request: Request, job_id: str):
     """查询生图任务状态，前端轮询此接口获取进度"""
@@ -3379,6 +3500,12 @@ def ai_image_status(request: Request, job_id: str):
             job.get("user_id") or user["id"],
             job["id"],
         )
+    layer_extract = None
+    if job.get("model") == "layer-extract" and job.get("prompt_trace"):
+        try:
+            layer_extract = json.loads(job["prompt_trace"])
+        except Exception:
+            layer_extract = None
     return {
         "job_id": job["id"],
         "status": job["status"],
@@ -3392,6 +3519,7 @@ def ai_image_status(request: Request, job_id: str):
         "task_id": job.get("task_id"),
         "error": job.get("error"),
         "providerSwitched": bool(job.get("provider_switched")),
+        "layer_extract": layer_extract,
     }
 
 
