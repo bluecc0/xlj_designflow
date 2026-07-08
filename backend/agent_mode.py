@@ -1741,9 +1741,9 @@ async def call_agent_llm(
 
     use_stream = on_chunk is not None
 
-    # R1/QwQ 原生 reasoning，不需要 enable_thinking；V3.2/Qwen3 等需要
+    # R1/QwQ 原生 reasoning，不需要 enable_thinking；GPT 系列也不需要
     model_lower = (settings.agent_llm_model or "").lower()
-    needs_thinking_param = not any(k in model_lower for k in ("r1", "qwq", "reasoning"))
+    needs_thinking_param = not any(k in model_lower for k in ("r1", "qwq", "reasoning", "gpt"))
 
     payload: dict[str, Any] = {
         "model": settings.agent_llm_model,

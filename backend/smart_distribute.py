@@ -30,10 +30,13 @@ _IMAGE_FIELD_KEYWORDS = ["sku", "SKU", "货号", "商品编码", "款号", "图�
 _EXCLUDED_FIELD_NAMES = {"序号", "库存", "是否下架", "是否上架", "主推款", "SPU", "spu", "吊牌价", "划线价", "零售价"}
 _SUBMODULE_HEADER_KEYWORDS = {"序号", "子模块", "二级模块", "二级分类"}
 _TYPE_HEADER_NAMES = {"类型"}
-_SKIP_TYPE_VALUES = {"海报"}
+_SKIP_TYPE_VALUES = {"海报", "海报图", "海报款"}
 _TYPE_SUFFIX_MAP = {
     "模特": "-M",
     "模特图": "-M",
+    "人模": "-M",
+    "人物": "-M",
+    "人像": "-M",
     "PNG": "-P",
     "PNG带阴影": "-S",
     "PNG 带阴影": "-S",
@@ -41,6 +44,7 @@ _TYPE_SUFFIX_MAP = {
     "阴影": "-S",
     "白底": "-W",
     "白底图": "-W",
+    "白图": "-W",
     "一双鞋": "-X2",
 }
 _TYPE_SUFFIX_LABELS = {
@@ -372,20 +376,23 @@ class SmartDistributor:
             if type_col_idx is not None:
                 type_value = _visible_cell_value(ws, row_idx, type_col_idx)
             type_key = _norm(type_value)
+            skip_image = False
             if type_key in _SKIP_TYPE_KEYS:
+                skip_image = True
                 skipped_rows.add(row_idx)
                 label = type_value or "跳过"
                 skipped_type_counts[label] = skipped_type_counts.get(label, 0) + 1
-                continue
-            suffix = _TYPE_SUFFIX_KEYS.get(type_key)
+            suffix = None if skip_image else _TYPE_SUFFIX_KEYS.get(type_key)
             suffix_label = _TYPE_SUFFIX_LABELS.get(suffix or "", type_value)
             image_cell = ws.cell(row=row_idx, column=image_col)
             image_value = _visible_cell_value(ws, row_idx, image_col)
             if image_value and image_cell.font and image_cell.font.italic:
+                skip_image = True
                 skipped_rows.add(row_idx)
-                continue
 
             row_values = {"_row": row_idx}
+            if skip_image:
+                row_values["_skipImage"] = True
             if suffix:
                 row_values["_typeValue"] = type_value
                 row_values["_typeSuffix"] = suffix
@@ -398,13 +405,18 @@ class SmartDistributor:
                 mark = _detect_mark_color(cell)
                 if mark:
                     marked_cells[mark].add((row_idx, field_name))
-                if field_name == image_field and suffix:
-                    val = _with_type_suffix(val, suffix)
-                    image_value = val
+                if field_name == image_field:
+                    if skip_image:
+                        val = ""
+                        image_value = ""
+                    elif suffix:
+                        val = _with_type_suffix(val, suffix)
+                        image_value = val
                 row_values[field_name] = val
                 has_any = has_any or bool(val)
-                has_error = has_error or _is_na(val)
-            if not has_any or not image_value or _is_na(image_value) or has_error:
+                if not (skip_image and field_name == image_field):
+                    has_error = has_error or _is_na(val)
+            if not has_any or (not skip_image and not image_value) or has_error:
                 continue
             rows_data.append(row_values)
         return rows_data, marked_cells, skipped_rows, skipped_type_counts
@@ -564,7 +576,7 @@ class SmartDistributor:
                 "targetGroup": mod["moduleName"],
                 "excelRange": mod["excelRange"],
                 "rowCount": mod["rowCount"],
-                "expectedLayerCount": mod["rowCount"] * len(sheet["fieldOrder"]),
+                "expectedLayerCount": len(entries),
                 "exportName": f"{sheet['sheetName']}_{_safe_name(mod['moduleName'])}",
                 "summary": module_summary,
             }
@@ -591,7 +603,7 @@ class SmartDistributor:
             "skuCount": sheet_sku_count,
             "fieldCount": len(sheet["fieldOrder"]),
             "totalSlots": sheet_slot_count,
-            "expectedLayerCount": sheet_sku_count * len(sheet["fieldOrder"]),
+            "expectedLayerCount": sheet_slot_count,
             "skippedRows": len(skipped_rows),
             "specialMarkedCount": sum(sheet_suffix_counts.values()),
             "typeCounts": sheet_type_counts,
@@ -616,12 +628,15 @@ class SmartDistributor:
         image_field = sheet["imageField"]
         marked_cells = (sheet.get("markedCells") or {}).get(mark_type or "", set())
         for ri, row_data in enumerate(mod["rows"]):
-            for fi, field_name in enumerate(field_order):
+            skip_image = bool(row_data.get("_skipImage"))
+            for field_name in field_order:
                 row_idx = row_data["_row"]
+                if skip_image and field_name == image_field:
+                    continue
                 if patch_mode and (row_idx, field_name) not in marked_cells:
                     continue
                 entry = {
-                    "slotIndex": ri * len(field_order) + fi + 1,
+                    "slotIndex": len(items) + 1,
                     "field": field_name,
                     "type": "image" if field_name == image_field else "text",
                     "value": row_data.get(field_name, ""),

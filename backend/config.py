@@ -45,7 +45,13 @@ class Settings:
     # 导出结果目录
     output_path: Path = Path(os.getenv("OUTPUT_PATH", "./output"))
 
-    # 硅基流动 API（用于表格解析，OpenAI 兼容）
+    # 默认对话 LLM：优先使用订阅 OpenAI-compatible line，SiliconFlow Qwen 作为兜底
+    chat_llm_model: str = os.getenv("CHAT_LLM_MODEL", "") or "gpt-5.5"
+    chat_llm_base_url: str = os.getenv("CHAT_LLM_BASE_URL", "") or cliproxy_base_url
+    chat_llm_api_key: str = os.getenv("CHAT_LLM_API_KEY", "") or cliproxy_api_key
+    chat_llm_timeout_seconds: int = int(os.getenv("CHAT_LLM_TIMEOUT_SECONDS", "30"))
+
+    # 硅基流动 API（默认对话兜底 / 旧表格解析，OpenAI 兼容）
     siliconflow_api_key: str = os.getenv("SILICONFLOW_API_KEY", "")
     siliconflow_model: str = os.getenv("SILICONFLOW_MODEL", "Qwen/Qwen2.5-72B-Instruct")
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
@@ -79,9 +85,9 @@ class Settings:
     vlm_api_key: str = os.getenv("VLM_API_KEY", "") or ai_image_api_key
 
     # agent mode
-    agent_llm_model: str = os.getenv("AGENT_LLM_MODEL", "") or siliconflow_model
-    agent_llm_base_url: str = os.getenv("AGENT_LLM_BASE_URL", "") or siliconflow_base_url
-    agent_llm_api_key: str = os.getenv("AGENT_LLM_API_KEY", "") or siliconflow_api_key
+    agent_llm_model: str = os.getenv("AGENT_LLM_MODEL", "") or "gpt-5.5"
+    agent_llm_base_url: str = os.getenv("AGENT_LLM_BASE_URL", "") or cliproxy_base_url
+    agent_llm_api_key: str = os.getenv("AGENT_LLM_API_KEY", "") or cliproxy_api_key
     agent_llm_timeout_seconds: int = int(os.getenv("AGENT_LLM_TIMEOUT_SECONDS", "60"))
 
     agent_image_model: str = os.getenv("AGENT_IMAGE_MODEL", "gpt image 2")
@@ -145,7 +151,7 @@ class Settings:
         self.allowed_login_users = self._load_login_users()
 
         # 统一补协议前缀，避免 ai_image_base_url 等配置没有 http://
-        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "zenmux_base_url", "cliproxy_base_url", "skill_llm_base_url"):
+        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "zenmux_base_url", "cliproxy_base_url", "chat_llm_base_url", "skill_llm_base_url"):
             _val = getattr(self, _key, "")
             if _val and not _val.startswith("http"):
                 setattr(self, _key, "https://" + _val)

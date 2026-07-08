@@ -56,20 +56,24 @@ Output only the segmentation map as a PNG.
 """
 
 # 方案 §7.3 背景补全 prompt 模板
-BACKGROUND_COMPLETION_PROMPT = """You are completing the background layer for a PSD-like layer extraction workflow.
+BACKGROUND_COMPLETION_PROMPT = """You are repairing the background plate for a layered PSD export.
 
-Attached image 1 is the original source image.
-Attached image 2 is the locally extracted residual background layer with transparent holes where foreground objects and text were removed.
+Inputs:
+- Image 1: the original source image. Use it only as reference for lighting, perspective, colors, shadows, texture direction, and scene context.
+- Image 2: the residual background plate after foreground objects/text were removed. This is the target image to repair.
 
-Task:
-Create one clean full-frame background image.
+Goal:
+Return one full-frame clean background plate that looks like image 2 after all transparent, blank, cut-out, or damaged regions have been inpainted.
 
-Rules:
-1. Fill only the transparent or missing regions from image 2 using visual context from image 1.
-2. Remove foreground objects, products, badges, props, logos, and readable text that belong to separated layers.
-3. Preserve the source aspect ratio, canvas size, perspective, lighting, color palette, background style, and design intent.
-4. Do not add borders, labels, legends, segmentation colors, or side-by-side comparisons.
-5. Output a single full-frame PNG.
+Critical rules:
+1. Treat image 2 as the main canvas. Preserve every valid pixel from image 2 as much as possible.
+2. Repair only missing/transparent/blank/cut-out/damaged regions in image 2.
+3. Do not restore removed foreground objects, products, people, hands, props, badges, labels, logos, icons, readable text, or product shadows that should belong to separate layers.
+4. Continue the surrounding background naturally: match texture, gradients, fabric/wood/paper patterns, lighting, perspective, blur, grain, and color temperature.
+5. If a removed object left a hole over a complex surface, synthesize the hidden background surface, not the object.
+6. The result must be a single flattened RGB/RGBA background image with no alpha holes.
+7. Keep the same composition, aspect ratio, and full-frame canvas. Do not crop, zoom, rotate, add borders, add captions, or create side-by-side comparisons.
+8. Output only the repaired background plate as a PNG.
 """
 
 # 候选 ratio 及其数值宽高比，用于匹配原图

@@ -766,6 +766,7 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
                 "manifest_url": manifest_url,
                 "layers_url_prefix": layers_url_prefix,
                 "segmentation_url": payload.get("segmentation_url", ""),
+                "background_status": payload.get("background_status", ""),
                 "layers": payload.get("layers", []),
                 "source_size": payload.get("source_size", []),
             }
@@ -4331,8 +4332,8 @@ async def chat_endpoint(req: ChatRequest):
     """
     AI 对话接口：透传到 SiliconFlow，注入平台上下文和用户当前工作台状态。
     """
-    if not settings.siliconflow_api_key:
-        raise HTTPException(500, "未配置 SILICONFLOW_API_KEY")
+    if not ((settings.chat_llm_api_key and settings.chat_llm_base_url) or settings.siliconflow_api_key):
+        raise HTTPException(500, "未配置 CHAT_LLM_API_KEY 或 SILICONFLOW_API_KEY")
 
     import httpx
 
@@ -4411,20 +4412,49 @@ async def chat_endpoint(req: ChatRequest):
     messages = [{"role": "system", "content": system_prompt}]
     messages += [{"role": m.role, "content": m.content} for m in req.messages]
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            f"{settings.siliconflow_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.siliconflow_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": settings.siliconflow_model,
-                "messages": messages,
-                "max_tokens": 2048,
-                "temperature": 0.8,
-            },
+    async def call_chat_model(*, base_url: str, api_key: str, model: str, timeout: int):
+        endpoint = _chat_completions_endpoint(base_url)
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            return await client.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": 2048,
+                    "temperature": 0.8,
+                },
+            )
+
+    resp = None
+    primary_error = ""
+    if settings.chat_llm_api_key and settings.chat_llm_base_url:
+        try:
+            resp = await call_chat_model(
+                base_url=settings.chat_llm_base_url,
+                api_key=settings.chat_llm_api_key,
+                model=settings.chat_llm_model,
+                timeout=settings.chat_llm_timeout_seconds,
+            )
+            if resp.status_code != 200:
+                primary_error = resp.text[:200]
+                resp = None
+        except Exception as exc:
+            primary_error = f"{type(exc).__name__}: {exc}"
+
+    if resp is None and settings.siliconflow_api_key:
+        resp = await call_chat_model(
+            base_url=settings.siliconflow_base_url,
+            api_key=settings.siliconflow_api_key,
+            model=settings.siliconflow_model,
+            timeout=30,
         )
+
+    if resp is None:
+        raise HTTPException(500, f"AI 服务不可用: {primary_error or '主线路与兜底线路均未配置'}")
     if resp.status_code != 200:
         raise HTTPException(500, f"AI 服务返回错误: {resp.text[:200]}")
 
