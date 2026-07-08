@@ -716,7 +716,7 @@ def _run_local_layer_extract(src_path: Path, out_dir: Path, user_id: str) -> dic
         cwd=str(settings.root_dir),
         capture_output=True,
         text=True,
-        timeout=max(120, int(settings.ai_image_job_timeout_seconds or 600) + 30),
+        timeout=max(120, int(settings.ai_image_job_timeout_seconds or 600)),
         check=False,
     )
     try:

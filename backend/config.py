@@ -45,6 +45,12 @@ class Settings:
     # 导出结果目录
     output_path: Path = Path(os.getenv("OUTPUT_PATH", "./output"))
 
+    # AI 生图 API（订阅线路；CLIProxyAPI 优先，兼容旧 SUB2API_* 环境变量）
+    sub2api_base_url: str = os.getenv("SUB2API_BASE_URL", "")
+    sub2api_api_key: str = os.getenv("SUB2API_API_KEY", "")
+    cliproxy_base_url: str = os.getenv("CLIPROXY_BASE_URL", "") or sub2api_base_url
+    cliproxy_api_key: str = os.getenv("CLIPROXY_API_KEY", "") or sub2api_api_key
+
     # 默认对话 LLM：优先使用订阅 OpenAI-compatible line，SiliconFlow Qwen 作为兜底
     chat_llm_model: str = os.getenv("CHAT_LLM_MODEL", "") or "gpt-5.5"
     chat_llm_base_url: str = os.getenv("CHAT_LLM_BASE_URL", "") or cliproxy_base_url
@@ -68,12 +74,6 @@ class Settings:
     zenmux_management_api_key: str = os.getenv("ZENMUX_MANAGEMENT_API_KEY", "")
     zenmux_gpt_image_model: str = os.getenv("ZENMUX_GPT_IMAGE_MODEL", "openai/gpt-image-2")
     zenmux_nano_banana_model: str = os.getenv("ZENMUX_NANO_BANANA_MODEL", "google/gemini-3-pro-image-preview")
-
-    # AI 生图 API（订阅线路；CLIProxyAPI 优先，兼容旧 SUB2API_* 环境变量）
-    sub2api_base_url: str = os.getenv("SUB2API_BASE_URL", "")
-    sub2api_api_key: str = os.getenv("SUB2API_API_KEY", "")
-    cliproxy_base_url: str = os.getenv("CLIPROXY_BASE_URL", "") or sub2api_base_url
-    cliproxy_api_key: str = os.getenv("CLIPROXY_API_KEY", "") or sub2api_api_key
 
     # AI 生图 API（可选的单独图生图配置；留空则复用上面的 APIMart 配置）
     nano_banana_base_url: str = os.getenv("NANO_BANANA_BASE_URL", "")
