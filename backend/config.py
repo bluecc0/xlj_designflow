@@ -50,6 +50,7 @@ class Settings:
     sub2api_api_key: str = os.getenv("SUB2API_API_KEY", "")
     cliproxy_base_url: str = os.getenv("CLIPROXY_BASE_URL", "") or sub2api_base_url
     cliproxy_api_key: str = os.getenv("CLIPROXY_API_KEY", "") or sub2api_api_key
+    cliproxy_proxy_url: str = os.getenv("CLIPROXY_PROXY_URL", "").strip()
 
     # 默认对话 LLM：优先使用订阅 OpenAI-compatible line，SiliconFlow Qwen 作为兜底
     chat_llm_model: str = os.getenv("CHAT_LLM_MODEL", "") or "gpt-5.5"

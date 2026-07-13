@@ -1270,7 +1270,10 @@ async def _download_cliproxy_image(
     api_key: str,
 ) -> str:
     timeout = httpx.Timeout(300.0, connect=30.0)
-    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+    client_kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False}
+    if settings.cliproxy_proxy_url:
+        client_kwargs["proxy"] = settings.cliproxy_proxy_url
+    async with httpx.AsyncClient(**client_kwargs) as client:
         resp = await client.get(image_url)
         if resp.status_code in (401, 403):
             resp = await client.get(image_url, headers=_cliproxy_headers(api_key))
@@ -1332,7 +1335,10 @@ async def generate_sub2api_async(
         on_progress(10, "submitted")
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        client_kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False}
+        if settings.cliproxy_proxy_url:
+            client_kwargs["proxy"] = settings.cliproxy_proxy_url
+        async with httpx.AsyncClient(**client_kwargs) as client:
             if refs:
                 data = {
                     "model": model_name,

@@ -913,7 +913,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
               m.status !== 'failed' && m.status !== 'done' && React.createElement(InlineRefStrip, { items: m.refPreviews }),
               m.providerSwitched && React.createElement('div', {
                 style: { padding: '6px 10px', borderRadius: 6, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)', marginBottom: 6 }
-              }, '订阅线路失败，已切换到官方线路重试'),
+              }, '订阅线路失败，可手动切换到官方线路重试'),
               showPromptTrace && React.createElement(PromptTraceBlock, {
                 title: m.activeSkill ? ('Skill 解析 · $' + m.activeSkill) : '生图 Prompt',
                 text: promptTraceText || resolvedPromptText,

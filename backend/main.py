@@ -122,7 +122,6 @@ from .job_store import (
     append_agent_message,
     save_job,
     save_ai_image_job,
-    mark_ai_image_job_provider_switched,
     save_editor_snapshot,
     load_editor_snapshot,
     save_special_job,
@@ -3237,31 +3236,14 @@ async def _run_ai_image_background(
         except Exception:
             pass
 
-    provider_switched = False
     try:
         if provider == PROVIDER_SUB2API:
-            try:
-                result = await generate_sub2api_async(
-                    model=model, prompt=prompt,
-                    images=refs if refs else None,
-                    size=size, resolution=resolution, user_id=user_id,
-                    on_progress=on_progress,
-                )
-            except Exception as sub_exc:
-                logger.warning("sub2api failed, falling back to zenmux: %s", sub_exc)
-                if on_progress:
-                    on_progress(30, "订阅线路失败，已切换到官方线路重试")
-                provider = PROVIDER_ZENMUX
-                provider_switched = True
-                try:
-                    mark_ai_image_job_provider_switched(job_id, True)
-                except Exception:
-                    pass
-                result = await generate_image_zenmux_async(
-                    model=model, prompt=prompt, images=refs,
-                    size=size, resolution=resolution, user_id=user_id,
-                    on_progress=on_progress,
-                )
+            result = await generate_sub2api_async(
+                model=model, prompt=prompt,
+                images=refs if refs else None,
+                size=size, resolution=resolution, user_id=user_id,
+                on_progress=on_progress,
+            )
         elif provider == PROVIDER_ZENMUX:
             result = await generate_image_zenmux_async(
                 model=model, prompt=prompt,
@@ -3316,7 +3298,6 @@ async def _run_ai_image_background(
                 "resolvedPrompt": resolved_prompt or prompt,
                 "promptTrace": prompt_trace,
                 "provider": provider,
-                "providerSwitched": provider_switched,
                 "size": size, "resolution": resolution,
                 "status": "done",
                 "hasReference": has_reference,
