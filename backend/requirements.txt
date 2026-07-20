@@ -13,3 +13,4 @@ Pillow>=10.0.0
 vtracer>=0.6.15
 psd-tools>=1.17.4
 python-multipart>=0.0.9
+bcrypt>=4.0.0

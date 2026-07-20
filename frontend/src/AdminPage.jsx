@@ -79,7 +79,7 @@ var UserManagement = function(props) {
   var _l = _useState([]);
   var users = _l[0]; var setUsers = _l[1];
 
-  var _f = _useState({ username: '', role: 'user' });
+  var _f = _useState({ username: '', role: 'user', password: '' });
   var form = _f[0]; var setForm = _f[1];
 
   var _e = _useState('');
@@ -96,14 +96,23 @@ var UserManagement = function(props) {
   _useEffect(function() { load(); }, [load]);
 
   var handleCreate = function() {
-    if (!form.username.trim() || busy) return;
+    if (!form.username.trim() || !form.password.trim() || busy) return;
     setBusy(true); setError('');
-    window.API.createAdminUser(form.username.trim(), form.role)
+    window.API.createAdminUser(form.username.trim(), form.role, form.password.trim())
       .then(function() {
-        setForm({ username: '', role: 'user' });
+        setForm({ username: '', role: 'user', password: '' });
         load(); if (onChanged) onChanged();
       })
       .catch(function(e) { setError(e.message || '创建失败'); })
+      .finally(function() { setBusy(false); });
+  };
+
+  var handleResetPassword = function(uid, username) {
+    if (!window.confirm('确定重置「' + username + '」的密码？\n该用户下次登录时第一次输入的密码将成为新密码。')) return;
+    setBusy(true); setError('');
+    window.API.resetAdminUserPassword(uid)
+      .then(function() { setError(''); })
+      .catch(function(e) { setError(e.message || '重置失败'); })
       .finally(function() { setBusy(false); });
   };
 
@@ -136,18 +145,30 @@ var UserManagement = function(props) {
         <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             value={form.username}
-            onChange={function(e) { setForm({ username: e.target.value, role: form.role }); }}
+            onChange={function(e) { setForm({ username: e.target.value, role: form.role, password: form.password }); }}
             placeholder="用户名"
             disabled={busy}
             style={{
-              flex: '1 1 160px', height: 30, padding: '0 10px', borderRadius: 6,
+              flex: '1 1 120px', height: 30, padding: '0 10px', borderRadius: 6,
+              border: '1px solid var(--line-2)', background: 'var(--panel-2)',
+              color: 'var(--ink)', fontSize: 12, outline: 'none',
+            }}
+          />
+          <input
+            type="password"
+            value={form.password}
+            onChange={function(e) { setForm({ username: form.username, role: form.role, password: e.target.value }); }}
+            placeholder="初始密码"
+            disabled={busy}
+            style={{
+              flex: '1 1 120px', height: 30, padding: '0 10px', borderRadius: 6,
               border: '1px solid var(--line-2)', background: 'var(--panel-2)',
               color: 'var(--ink)', fontSize: 12, outline: 'none',
             }}
           />
           <select
             value={form.role}
-            onChange={function(e) { setForm({ username: form.username, role: e.target.value }); }}
+            onChange={function(e) { setForm({ username: form.username, role: e.target.value, password: form.password }); }}
             disabled={busy}
             style={{
               height: 30, padding: '0 8px', borderRadius: 6, border: '1px solid var(--line-2)',
@@ -159,12 +180,12 @@ var UserManagement = function(props) {
           </select>
           <button
             onClick={handleCreate}
-            disabled={busy || !form.username.trim()}
+            disabled={busy || !form.username.trim() || !form.password.trim()}
             style={{
               height: 30, padding: '0 14px', borderRadius: 6, border: 'none',
-              background: busy || !form.username.trim() ? 'var(--line)' : 'var(--ink)',
-              color: busy || !form.username.trim() ? 'var(--ink-3)' : 'white',
-              fontSize: 12, cursor: busy || !form.username.trim() ? 'default' : 'pointer',
+              background: busy || !form.username.trim() || !form.password.trim() ? 'var(--line)' : 'var(--ink)',
+              color: busy || !form.username.trim() || !form.password.trim() ? 'var(--ink-3)' : 'white',
+              fontSize: 12, cursor: busy || !form.username.trim() || !form.password.trim() ? 'default' : 'pointer',
             }}
           >+ 新增</button>
         </div>
@@ -198,6 +219,15 @@ var UserManagement = function(props) {
                     color: 'var(--ink-2)', cursor: 'pointer',
                   }}
                 >切角色</button>
+                <button
+                  onClick={function() { handleResetPassword(u.id, u.username); }}
+                  disabled={busy}
+                  style={{
+                    height: 24, padding: '0 8px', borderRadius: 4, fontSize: 11,
+                    background: 'var(--panel)', border: '1px solid var(--line-2)',
+                    color: 'var(--ink-2)', cursor: 'pointer',
+                  }}
+                >重置密码</button>
                 <button
                   onClick={function() { handleDelete(u.id); }}
                   disabled={busy || isSelf}

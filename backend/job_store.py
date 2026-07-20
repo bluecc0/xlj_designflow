@@ -16,6 +16,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+import bcrypt
+
 from .config import settings
 from .models import ComposeJob, ComposeRequest, ComposeStatus
 
@@ -87,6 +89,10 @@ def init_db() -> None:
                 created_at       REAL NOT NULL
             )
         """)
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+        except sqlite3.OperationalError:
+            pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id               TEXT PRIMARY KEY,
@@ -491,7 +497,22 @@ def load_special_jobs(limit: int = 50, user_id: Optional[str] = None) -> list[di
     return results
 
 
-def get_or_create_user(username: str) -> dict:
+def hash_password(plain: str) -> str:
+    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(plain.encode(), hashed.encode())
+    except Exception:
+        return False
+
+
+def get_or_create_user(username: str, password: str | None = None) -> dict:
+    """校验用户名+密码并返回用户信息。
+
+    password=None 仅用于内部调用（如 session 恢复），外部登录必须传密码。
+    """
     now = time.time()
     clean = " ".join((username or "").strip().split())
     if not clean:
@@ -500,15 +521,35 @@ def get_or_create_user(username: str) -> dict:
         str(item.get("username", "")).strip(): {
             "id": str(item.get("id", "")).strip(),
             "role": str(item.get("role", "user")).strip() or "user",
+            "password_hash": str(item.get("password_hash", "")).strip(),
         }
         for item in settings.allowed_login_users
         if str(item.get("username", "")).strip() and str(item.get("id", "")).strip()
     }
     if clean not in allowed:
         raise ValueError("username not allowed")
+
+    cfg = allowed[clean]
+    fixed_id = cfg["id"]
+    role = cfg["role"]
+    cfg_hash = cfg["password_hash"]
+
+    # 密码校验：有配置 hash 则必须校验，无 hash 则拒绝登录（提示管理员设置密码）
+    if password is not None:
+        if not cfg_hash:
+            # 首次登录，自动设置密码
+            new_hash = hash_password(password)
+            users = list(settings.allowed_login_users)
+            for u in users:
+                if u.get("id") == fixed_id:
+                    u["password_hash"] = new_hash
+                    break
+            settings.save_login_users(users)
+            cfg_hash = new_hash
+        if not verify_password(password, cfg_hash):
+            raise ValueError("wrong password")
+
     key = clean.casefold()
-    fixed_id = allowed[clean]["id"]
-    role = allowed[clean]["role"]
     with _lock, _connect() as conn:
         row = conn.execute(
             "SELECT id, username, created_at FROM users WHERE username_key = ?",

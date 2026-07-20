@@ -4,6 +4,7 @@ const LAST_USERNAME_KEY = 'designflow_last_username';
 
 const LiteLoginGate = ({ onLogin, loading, error, initialName }) => {
   const [name, setName] = React.useState(initialName || '');
+  const [password, setPassword] = React.useState('');
 
   React.useEffect(() => {
     setName(initialName || '');
@@ -11,8 +12,15 @@ const LiteLoginGate = ({ onLogin, loading, error, initialName }) => {
 
   const submit = async () => {
     const clean = name.trim();
-    if (!clean || loading) return;
-    await onLogin(clean);
+    if (!clean || !password.trim() || loading) return;
+    await onLogin(clean, password.trim());
+  };
+
+  const inputStyle = {
+    width: '100%', boxSizing: 'border-box',
+    borderRadius: 8, border: '1px solid var(--line)',
+    background: 'var(--panel-2)', color: 'var(--ink)',
+    padding: '10px 12px', fontSize: 13, outline: 'none',
   };
 
   return (
@@ -32,31 +40,34 @@ const LiteLoginGate = ({ onLogin, loading, error, initialName }) => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div className="serif" style={{ fontSize: 21, color: 'var(--ink)' }}>进入 Designflow</div>
           <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5 }}>
-            请输入用户名登录。
+            请输入用户名和密码登录。
           </div>
         </div>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
-          placeholder="请输入身份名称"
+          placeholder="用户名"
           autoFocus
-          style={{
-            width: '100%', boxSizing: 'border-box',
-            borderRadius: 8, border: '1px solid var(--line)',
-            background: 'var(--panel-2)', color: 'var(--ink)',
-            padding: '10px 12px', fontSize: 13, outline: 'none',
-          }}
+          style={inputStyle}
+        />
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+          placeholder="密码"
+          style={inputStyle}
         />
         {error && <div style={{ fontSize: 11.5, color: 'var(--warn)' }}>{error}</div>}
         <button
           onClick={submit}
-          disabled={!name.trim() || loading}
+          disabled={!name.trim() || !password.trim() || loading}
           style={{
             height: 36, borderRadius: 8,
-            background: !name.trim() || loading ? 'var(--line)' : 'var(--ink)',
+            background: !name.trim() || !password.trim() || loading ? 'var(--line)' : 'var(--ink)',
             color: 'white', fontSize: 12.5, fontWeight: 500,
-            cursor: !name.trim() || loading ? 'default' : 'pointer',
+            cursor: !name.trim() || !password.trim() || loading ? 'default' : 'pointer',
           }}
         >
           {loading ? '进入中...' : '进入工作台'}
@@ -271,11 +282,11 @@ const App = () => {
     return () => { alive = false; };
   }, [rememberUser]);
 
-  const handleLogin = React.useCallback(async (username) => {
+  const handleLogin = React.useCallback(async (username, password) => {
     setAuthLoading(true);
     setAuthError('');
     try {
-      const user = await window.API.loginLite(username);
+      const user = await window.API.loginLite(username, password);
       rememberUser(user);
       setResultTemplate(null);
     } catch (err) {

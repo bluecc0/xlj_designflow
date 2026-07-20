@@ -201,8 +201,9 @@ class Settings:
                 username = str(item.get("username", "")).strip()
                 user_id = str(item.get("id", "")).strip() or username.casefold().replace(" ", "_")
                 role = str(item.get("role", "user")).strip() or "user"
+                password_hash = str(item.get("password_hash", "")).strip()
                 if username and user_id:
-                    users.append({"id": user_id, "username": username, "role": role})
+                    users.append({"id": user_id, "username": username, "role": role, "password_hash": password_hash})
         return users or default_users
 
     def reload_login_users(self) -> list[dict[str, str]]:
