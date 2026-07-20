@@ -66,11 +66,11 @@
     getLoginUsers: function() {
       return request('/auth/options').then(function(res) { return res.users || []; });
     },
-    loginLite: function(username) {
+    loginLite: function(username, password) {
       return request('/auth/login-lite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username }),
+        body: JSON.stringify({ username: username, password: password }),
       }).then(function(res) { return res.user; });
     },
     logout: function() {
@@ -369,11 +369,11 @@
     getAdminUsers: function() {
       return request('/admin/users');
     },
-    createAdminUser: function(username, role) {
+    createAdminUser: function(username, role, password) {
       return request('/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username, role: role }),
+        body: JSON.stringify({ username: username, role: role, password: password }),
       });
     },
     updateAdminUser: function(userId, updates) {
@@ -386,6 +386,11 @@
     deleteAdminUser: function(userId) {
       return request('/admin/users/' + encodeURIComponent(userId), {
         method: 'DELETE',
+      });
+    },
+    resetAdminUserPassword: function(userId) {
+      return request('/admin/users/' + encodeURIComponent(userId) + '/reset-password', {
+        method: 'POST',
       });
     },
     getAdminOperations: function(limit, offset, action, userId) {

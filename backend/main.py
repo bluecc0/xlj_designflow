@@ -103,6 +103,7 @@ from .job_store import (
     get_ai_chat_session,
     get_or_create_user,
     get_user_by_session,
+    hash_password,
     init_db,
     list_agent_images,
     list_agent_projects,
@@ -376,6 +377,7 @@ def _download_format_matches(filename: str, requested_format: str | None) -> boo
 
 class LiteLoginRequest(pydantic.BaseModel):
     username: str
+    password: str
 
 
 def _public_agent_project(project: dict, *, messages: Optional[list[dict]] = None, images: Optional[list[dict]] = None) -> dict:
@@ -410,6 +412,14 @@ def _current_user(request: Request) -> dict:
 
 def _is_admin(user: Optional[dict]) -> bool:
     return bool(user and user.get("role") == "admin")
+
+
+def _public_login_user(user: dict) -> dict:
+    return {
+        "id": user.get("id", ""),
+        "username": user.get("username", ""),
+        "role": user.get("role", "user"),
+    }
 
 
 def _is_public_asset_path(path: str) -> bool:
@@ -1163,14 +1173,20 @@ async def proxy_download_download(body: ProxyDownloadRequest, request: Request):
 @app.post("/auth/login-lite")
 def auth_login_lite(body: LiteLoginRequest, response: Response):
     username = " ".join((body.username or "").strip().split())
+    password = (body.password or "").strip()
     if not username:
         raise HTTPException(400, "名字不能为空")
     if len(username) > 40:
         raise HTTPException(400, "名字不能超过 40 个字符")
+    if not password:
+        raise HTTPException(400, "密码不能为空")
     try:
-        user = get_or_create_user(username)
-    except ValueError:
-        raise HTTPException(400, "该身份不在可用名单里")
+        user = get_or_create_user(username, password)
+    except ValueError as e:
+        msg = str(e)
+        if msg == "username not allowed":
+            raise HTTPException(400, "该身份不在可用名单里")
+        raise HTTPException(401, "用户名或密码错误")
     session_id = create_session(user["id"])
     log_operation(user_id=user["id"], username=user["username"], action="login",
                   payload=json.dumps({"username": user["username"]}, ensure_ascii=False))
@@ -1232,7 +1248,7 @@ def auth_me(request: Request):
 
 @app.get("/auth/options")
 def auth_options():
-    return {"users": settings.allowed_login_users}
+    return {"users": [{"username": u["username"]} for u in settings.allowed_login_users]}
 
 
 @app.get("/history/ai-images")
@@ -4497,16 +4513,19 @@ def admin_create_user(request: Request, body: dict):
         raise HTTPException(403, "需要管理员权限")
     username = (body.get("username") or "").strip()
     role = (body.get("role") or "user").strip()
+    password = (body.get("password") or "").strip()
     if not username:
         raise HTTPException(400, "username 不能为空")
     if role not in ("admin", "user"):
         raise HTTPException(400, "role 必须是 admin 或 user")
+    if not password:
+        raise HTTPException(400, "password 不能为空")
     new_id = username.casefold().replace(" ", "_")
     if any(u["id"] == new_id for u in settings.allowed_login_users):
         raise HTTPException(409, f"用户 {new_id} 已存在")
-    new_user = {"id": new_id, "username": username, "role": role}
+    new_user = {"id": new_id, "username": username, "role": role, "password_hash": hash_password(password)}
     settings.save_login_users(list(settings.allowed_login_users) + [new_user])
-    return {"user": new_user}
+    return {"user": {"id": new_id, "username": username, "role": role}}
 
 
 @app.put("/admin/users/{user_id}")
@@ -4528,7 +4547,22 @@ def admin_update_user(request: Request, user_id: str, body: dict):
         raise HTTPException(400, "至少需要 role 或 username 字段")
     users[idx].update(updates)
     settings.save_login_users(users)
-    return {"user": users[idx]}
+    return {"user": _public_login_user(users[idx])}
+
+
+@app.post("/admin/users/{user_id}/reset-password")
+def admin_reset_password(request: Request, user_id: str):
+    """重置用户密码为未设置状态（仅管理员）"""
+    admin = _current_user(request)
+    if not _is_admin(admin):
+        raise HTTPException(403, "需要管理员权限")
+    users = list(settings.allowed_login_users)
+    idx = next((i for i, u in enumerate(users) if u["id"] == user_id), None)
+    if idx is None:
+        raise HTTPException(404, f"用户 {user_id} 不存在")
+    users[idx]["password_hash"] = ""
+    settings.save_login_users(users)
+    return {"ok": True}
 
 
 @app.delete("/admin/users/{user_id}")
@@ -4546,7 +4580,7 @@ def admin_delete_user(request: Request, user_id: str):
         return {"deleted": {"id": user_id, "note": "不在认证列表中，无需删除"}}
     deleted = users.pop(idx)
     settings.save_login_users(users)
-    return {"deleted": deleted}
+    return {"deleted": _public_login_user(deleted)}
 
 
 @app.get("/admin/operations")
