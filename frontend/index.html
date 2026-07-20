@@ -8936,7 +8936,7 @@ const App = () => {
       setCurrentUser(null);
       setResultTemplate(null);
       setAuthLoading(false);
-      setAuthError('登录状态已失效，请重新输入身份名称。');
+      setAuthError('登录状态已失效，请重新输入用户名和密码。');
     };
     window.addEventListener('designflow-auth-required', handleAuthRequired);
     return () => window.removeEventListener('designflow-auth-required', handleAuthRequired);

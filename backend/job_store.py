@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
@@ -100,6 +101,10 @@ def init_db() -> None:
                 created_at       REAL NOT NULL
             )
         """)
+        try:
+            conn.execute("ALTER TABLE sessions ADD COLUMN password_marker TEXT")
+        except sqlite3.OperationalError:
+            pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS ai_image_jobs (
                 id               TEXT PRIMARY KEY,
@@ -603,12 +608,21 @@ def get_or_create_user(username: str, password: str | None = None) -> dict:
         return {"id": fixed_id, "username": clean, "created_at": now, "role": role}
 
 
+def _password_marker(password_hash: str) -> str:
+    return hashlib.sha256(password_hash.encode()).hexdigest()
+
+
 def create_session(user_id: str) -> str:
     token = uuid.uuid4().hex
+    password_hash = ""
+    for item in settings.allowed_login_users:
+        if str(item.get("id", "")).strip() == user_id:
+            password_hash = str(item.get("password_hash", "")).strip()
+            break
     with _lock, _connect() as conn:
         conn.execute(
-            "INSERT INTO sessions (id, user_id, created_at) VALUES (?, ?, ?)",
-            (token, user_id, time.time()),
+            "INSERT INTO sessions (id, user_id, created_at, password_marker) VALUES (?, ?, ?, ?)",
+            (token, user_id, time.time(), _password_marker(password_hash)),
         )
         conn.commit()
     return token
@@ -619,18 +633,23 @@ def get_user_by_session(session_id: str | None) -> Optional[dict]:
         return None
     with _connect() as conn:
         row = conn.execute("""
-            SELECT u.id, u.username, u.created_at
+            SELECT s.password_marker, u.id, u.username, u.created_at
             FROM sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.id = ?
         """, (session_id,)).fetchone()
     if not row:
         return None
+    password_hash = ""
     role = "user"
     for item in settings.allowed_login_users:
         if str(item.get("id", "")).strip() == row["id"]:
+            password_hash = str(item.get("password_hash", "")).strip()
             role = str(item.get("role", "user")).strip() or "user"
             break
+    if row["password_marker"] != _password_marker(password_hash):
+        delete_session(session_id)
+        return None
     return {"id": row["id"], "username": row["username"], "created_at": row["created_at"], "role": role}
 
 
