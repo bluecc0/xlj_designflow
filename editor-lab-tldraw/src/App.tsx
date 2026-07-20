@@ -240,6 +240,7 @@ function useUpscaleSelectedImage() {
       }
       const sourceShape = editor.getOnlySelectedShape()
       const sourceBounds = sourceShape ? editor.getShapePageBounds(sourceShape.id) : null
+      const layout = getSequentialLayoutContext(editor)
       const assetId = AssetRecordType.createId()
       const shapeId = createShapeId() as TLImageShape['id']
       const assetRecord: TLImageAsset = {
@@ -275,7 +276,15 @@ function useUpscaleSelectedImage() {
           flipY: false,
           altText: file.name || 'upscaled.png',
         },
-        meta: { designflowInserted: true, upscaledFrom: src },
+        meta: {
+          designflowInserted: true,
+          designflowLayoutOrder: layout.nextOrder,
+          designflowLayoutAnchorX: layout.anchorX,
+          designflowLayoutAnchorY: layout.anchorY,
+          designflowOriginalWidth: size.w,
+          designflowOriginalHeight: size.h,
+          upscaledFrom: src,
+        },
       })
       editor.bringToFront([shapeId])
       setTemporaryState('done', '已插入高清图', 2200)
@@ -380,6 +389,7 @@ function useVectorizeSelectedImage() {
       }
       const sourceShape = editor.getOnlySelectedShape()
       const sourceBounds = sourceShape ? editor.getShapePageBounds(sourceShape.id) : null
+      const layout = getSequentialLayoutContext(editor)
       const assetId = AssetRecordType.createId()
       const shapeId = createShapeId() as TLImageShape['id']
       const assetRecord: TLImageAsset = {
@@ -415,7 +425,15 @@ function useVectorizeSelectedImage() {
           flipY: false,
           altText: 'vectorized svg',
         },
-        meta: { designflowInserted: true, vectorizedFrom: src },
+        meta: {
+          designflowInserted: true,
+          designflowLayoutOrder: layout.nextOrder,
+          designflowLayoutAnchorX: layout.anchorX,
+          designflowLayoutAnchorY: layout.anchorY,
+          designflowOriginalWidth: size.w,
+          designflowOriginalHeight: size.h,
+          vectorizedFrom: src,
+        },
       })
       editor.bringToFront([shapeId])
       setTemporaryState('done', '已插入 SVG', 2200)
@@ -583,7 +601,12 @@ function useLayerExtractSelectedImage() {
             flipY: false,
             altText: layer.name || 'layer',
           },
-          meta: { designflowInserted: true, layerExtractFrom: src, layerIndex: layer.index },
+          meta: {
+            designflowInserted: true,
+            designflowLayoutExcluded: true,
+            layerExtractFrom: src,
+            layerIndex: layer.index,
+          },
         })
       }
 
@@ -1063,6 +1086,128 @@ function getImageSize(src: string) {
   })
 }
 
+const DESIGNFLOW_GRID_COLUMNS = 4
+const DESIGNFLOW_GRID_ROWS_PER_BLOCK = 20
+const DESIGNFLOW_GRID_CELL_WIDTH = 420
+const DESIGNFLOW_GRID_CELL_HEIGHT = 560
+const DESIGNFLOW_GRID_GAP = 40
+
+function isSequentialLayoutImage(editor: Editor, shape: TLShape): shape is TLImageShape {
+  if (shape.type !== 'image' || shape.isLocked || shape.parentId !== editor.getCurrentPageId()) return false
+  const meta = (shape.meta || {}) as any
+  // Layer extraction pieces intentionally overlap to reconstruct the source image.
+  return !meta.designflowLayoutExcluded && !meta.layerExtractFrom
+}
+
+function getVisualImageOrder(editor: Editor, shapes: TLImageShape[]) {
+  return shapes.slice().sort((a, b) => {
+    const aBounds = editor.getShapePageBounds(a.id)
+    const bBounds = editor.getShapePageBounds(b.id)
+    const yDiff = Number(aBounds?.minY || 0) - Number(bBounds?.minY || 0)
+    if (Math.abs(yDiff) > 1) return yDiff
+    const xDiff = Number(aBounds?.minX || 0) - Number(bBounds?.minX || 0)
+    if (Math.abs(xDiff) > 1) return xDiff
+    return String(a.id).localeCompare(String(b.id))
+  })
+}
+
+function getSequentialLayoutContext(editor: Editor) {
+  const shapes = editor.getCurrentPageShapes().filter((shape) => isSequentialLayoutImage(editor, shape))
+  const visualOrder = getVisualImageOrder(editor, shapes)
+  const ordered = shapes.slice().sort((a, b) => {
+    const aOrder = Number((a.meta as any)?.designflowLayoutOrder)
+    const bOrder = Number((b.meta as any)?.designflowLayoutOrder)
+    const aValid = Number.isFinite(aOrder) && aOrder > 0
+    const bValid = Number.isFinite(bOrder) && bOrder > 0
+    if (aValid && bValid && aOrder !== bOrder) return aOrder - bOrder
+    if (aValid !== bValid) return aValid ? -1 : 1
+    return visualOrder.indexOf(a) - visualOrder.indexOf(b)
+  })
+
+  const first = ordered[0]
+  const firstMeta = (first?.meta || {}) as any
+  let anchorX = Number(firstMeta.designflowLayoutAnchorX)
+  let anchorY = Number(firstMeta.designflowLayoutAnchorY)
+  if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY)) {
+    const firstBounds = first ? editor.getShapePageBounds(first.id) : null
+    if (firstBounds) {
+      anchorX = firstBounds.minX - (DESIGNFLOW_GRID_CELL_WIDTH - Math.min(firstBounds.width, DESIGNFLOW_GRID_CELL_WIDTH)) / 2
+      anchorY = firstBounds.minY
+    } else {
+      const viewport = editor.getViewportPageBounds()
+      anchorX = viewport.center.x - DESIGNFLOW_GRID_CELL_WIDTH / 2
+      anchorY = viewport.center.y - DESIGNFLOW_GRID_CELL_HEIGHT / 2
+    }
+  }
+
+  return {
+    anchorX,
+    anchorY,
+    nextOrder: ordered.reduce((max, shape) => {
+      const order = Number((shape.meta as any)?.designflowLayoutOrder)
+      return Number.isFinite(order) && order > max ? order : max
+    }, 0) + 1,
+  }
+}
+
+function reflowSequentialImages(editor: Editor) {
+  const shapes = editor.getCurrentPageShapes().filter((shape) => isSequentialLayoutImage(editor, shape))
+  if (!shapes.length) return
+
+  const visualOrder = getVisualImageOrder(editor, shapes)
+  const ordered = shapes.slice().sort((a, b) => {
+    const aOrder = Number((a.meta as any)?.designflowLayoutOrder)
+    const bOrder = Number((b.meta as any)?.designflowLayoutOrder)
+    const aValid = Number.isFinite(aOrder) && aOrder > 0
+    const bValid = Number.isFinite(bOrder) && bOrder > 0
+    if (aValid && bValid && aOrder !== bOrder) return aOrder - bOrder
+    if (aValid !== bValid) return aValid ? -1 : 1
+    return visualOrder.indexOf(a) - visualOrder.indexOf(b)
+  })
+
+  const context = getSequentialLayoutContext(editor)
+  editor.updateShapes(
+    ordered.map((shape, index) => {
+      const meta = (shape.meta || {}) as any
+      const rawW = Math.max(1, Number(meta.designflowOriginalWidth || (shape.props as any).w || 1))
+      const rawH = Math.max(1, Number(meta.designflowOriginalHeight || (shape.props as any).h || 1))
+      const scale = Math.min(1, DESIGNFLOW_GRID_CELL_WIDTH / rawW, DESIGNFLOW_GRID_CELL_HEIGHT / rawH)
+      const width = Math.max(1, Math.round(rawW * scale))
+      const height = Math.max(1, Math.round(rawH * scale))
+      const itemsPerBlock = DESIGNFLOW_GRID_COLUMNS * DESIGNFLOW_GRID_ROWS_PER_BLOCK
+      const block = Math.floor(index / itemsPerBlock)
+      const indexInBlock = index % itemsPerBlock
+      const col = indexInBlock % DESIGNFLOW_GRID_COLUMNS
+      const row = Math.floor(indexInBlock / DESIGNFLOW_GRID_COLUMNS)
+      const blockWidth = DESIGNFLOW_GRID_COLUMNS * (DESIGNFLOW_GRID_CELL_WIDTH + DESIGNFLOW_GRID_GAP)
+      return {
+        id: shape.id,
+        type: shape.type,
+        x:
+          context.anchorX +
+          block * blockWidth +
+          col * (DESIGNFLOW_GRID_CELL_WIDTH + DESIGNFLOW_GRID_GAP) +
+          (DESIGNFLOW_GRID_CELL_WIDTH - width) / 2,
+        y: context.anchorY + row * (DESIGNFLOW_GRID_CELL_HEIGHT + DESIGNFLOW_GRID_GAP),
+        props: {
+          ...(shape.props as any),
+          w: width,
+          h: height,
+        },
+        meta: {
+          ...meta,
+          designflowLayoutOrder: index + 1,
+          designflowLayoutAnchorX: context.anchorX,
+          designflowLayoutAnchorY: context.anchorY,
+          designflowOriginalWidth: rawW,
+          designflowOriginalHeight: rawH,
+          designflowLayoutDeferred: false,
+        },
+      } as any
+    })
+  )
+}
+
 function normalizeImageShapesInSnapshot(snapshot: any) {
   const store = snapshot?.store || snapshot?.document?.store
   if (!store || typeof store !== 'object') return snapshot
@@ -1141,6 +1286,53 @@ function TldrawHostBridge() {
   )
 
   const recentInsertsRef = React.useRef<Record<string, number>>({})
+  const sequentialLayoutTimerRef = React.useRef<number | null>(null)
+
+  React.useEffect(() => {
+    const scheduleReflow = () => {
+      if (sequentialLayoutTimerRef.current) {
+        window.clearTimeout(sequentialLayoutTimerRef.current)
+      }
+      sequentialLayoutTimerRef.current = window.setTimeout(() => {
+        sequentialLayoutTimerRef.current = null
+        reflowSequentialImages(editor)
+        editor.zoomToFit({ animation: { duration: 0 } })
+      }, 0)
+    }
+
+    const disposeBeforeCreate = editor.sideEffects.registerBeforeCreateHandler('shape', (shape: any, source) => {
+      if (source !== 'user') return shape
+      if (!isSequentialLayoutImage(editor, shape)) return shape
+      const meta = (shape.meta || {}) as any
+      const layout = getSequentialLayoutContext(editor)
+      return {
+        ...shape,
+        meta: {
+          ...meta,
+          designflowLayoutOrder: layout.nextOrder,
+          designflowLayoutAnchorX: layout.anchorX,
+          designflowLayoutAnchorY: layout.anchorY,
+          designflowOriginalWidth: Math.max(1, Number(meta.designflowOriginalWidth || shape.props?.w || 1)),
+          designflowOriginalHeight: Math.max(1, Number(meta.designflowOriginalHeight || shape.props?.h || 1)),
+        },
+      }
+    })
+
+    const disposeAfterCreate = editor.sideEffects.registerAfterCreateHandler('shape', (shape: any, source) => {
+      if (source === 'user' && isSequentialLayoutImage(editor, shape) && !(shape.meta as any)?.designflowLayoutDeferred) {
+        scheduleReflow()
+      }
+    })
+
+    return () => {
+      disposeBeforeCreate()
+      disposeAfterCreate()
+      if (sequentialLayoutTimerRef.current) {
+        window.clearTimeout(sequentialLayoutTimerRef.current)
+        sequentialLayoutTimerRef.current = null
+      }
+    }
+  }, [editor])
 
   const normalizeCurrentAssetUrls = React.useCallback(() => {
     try {
@@ -1168,77 +1360,12 @@ function TldrawHostBridge() {
     }
   }, [editor])
 
-  const isDesignflowImageShape = React.useCallback(
-    (shape: TLShape) => {
-      if (shape.type !== 'image' || shape.isLocked) return false
-      const assetId = (shape.props as any).assetId
-      const asset = assetId ? editor.getAsset(assetId) : null
-      const src = String((asset as any)?.props?.src || '')
-      return src.startsWith('/ai-images/') || src.startsWith('/results/') || src.includes('/ai-images/') || src.includes('/results/')
-    },
-    [editor]
-  )
-
-  const reflowDesignflowImages = React.useCallback(
-    () => {
-      const shapes = editor.getCurrentPageShapes().filter(isDesignflowImageShape)
-      if (!shapes.length) return
-
-      const viewport = editor.getViewportPageBounds()
-      const spacing = 40
-      const maxW = 420
-      const maxH = 560
-      const normalized = shapes.map((shape) => {
-        const props = shape.props as any
-        const rawW = Number(props.w || 1)
-        const rawH = Number(props.h || 1)
-        const scale = Math.min(1, maxW / rawW, maxH / rawH)
-        return {
-          shape,
-          w: Math.max(1, Math.round(rawW * scale)),
-          h: Math.max(1, Math.round(rawH * scale)),
-        }
-      })
-
-      const cellW = Math.max(...normalized.map((item) => item.w))
-      const cellH = Math.max(...normalized.map((item) => item.h))
-      const maxCols = 4
-      const availableCols = Math.max(1, Math.floor((viewport.width + spacing) / (cellW + spacing)))
-      const cols = Math.min(maxCols, availableCols, normalized.length)
-      const totalW = cols * cellW + (cols - 1) * spacing
-      const originX = viewport.center.x - totalW / 2
-      const originY = viewport.minY + spacing
-
-      editor.updateShapes(
-        normalized.map((item, index) => {
-          const col = index % cols
-          const row = Math.floor(index / cols)
-          const x = originX + col * (cellW + spacing) + (cellW - item.w) / 2
-          const y = originY + row * (cellH + spacing)
-          return {
-            id: item.shape.id,
-            type: item.shape.type,
-            x,
-            y,
-            props: {
-              ...(item.shape.props as any),
-              w: item.w,
-              h: item.h,
-            },
-          } as any
-        })
-      )
-
-      editor.zoomToFit({ animation: { duration: 0 } })
-    },
-    [editor, isDesignflowImageShape]
-  )
-
   const insertImage = React.useCallback(
-    async ({ url, mode, name }: { url: string; mode?: 'image' | 'background'; name?: string }) => {
+    async ({ url, mode, name, deferLayout = false }: { url: string; mode?: 'image' | 'background'; name?: string; deferLayout?: boolean }) => {
       url = normalizeDesignflowAssetUrl(url)
       const sourceShape = editor.getOnlySelectedShape()
       const sourceBounds = sourceShape ? editor.getShapePageBounds(sourceShape.id) : null
+      const layout = getSequentialLayoutContext(editor)
       const viewport = editor.getViewportPageBounds()
 
       const file = await fetchImageAsFile(url, name)
@@ -1285,6 +1412,13 @@ function TldrawHostBridge() {
         },
         meta: {
           designflowInserted: true,
+          designflowLayoutExcluded: mode === 'background',
+          designflowLayoutOrder: mode === 'background' ? undefined : layout.nextOrder,
+          designflowLayoutAnchorX: layout.anchorX,
+          designflowLayoutAnchorY: layout.anchorY,
+          designflowOriginalWidth: size.w,
+          designflowOriginalHeight: size.h,
+          designflowLayoutDeferred: deferLayout,
         },
       })
       const insertedIds = [shapeId]
@@ -1312,12 +1446,11 @@ function TldrawHostBridge() {
         editor.selectNone()
       } else {
         editor.bringToFront(insertedIds)
-        reflowDesignflowImages()
         editor.selectNone()
       }
       return shapeId
     },
-    [editor, reflowDesignflowImages]
+    [editor]
   )
 
   const insertImages = React.useCallback(
@@ -1344,11 +1477,13 @@ function TldrawHostBridge() {
           url: cleanUrls[i],
           mode: 'image',
           name: cleanUrls.length > 1 ? `${name || '生成结果'} ${i + 1}` : name,
+          deferLayout: true,
         })
         if (shapeId) insertedShapeIds.push(shapeId)
       }
 
       if (insertedShapeIds.length) {
+        reflowSequentialImages(editor)
         editor.zoomToFit({ animation: { duration: 0 } })
         editor.selectNone()
       }
@@ -1475,6 +1610,8 @@ function TldrawHostBridge() {
             editor.loadSnapshot(normalizedSnapshot)
             window.setTimeout(() => {
               normalizeCurrentAssetUrls()
+              reflowSequentialImages(editor)
+              editor.zoomToFit({ animation: { duration: 0 } })
               doSave()
             }, 0)
           }
