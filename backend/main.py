@@ -414,6 +414,14 @@ def _is_admin(user: Optional[dict]) -> bool:
     return bool(user and user.get("role") == "admin")
 
 
+def _public_login_user(user: dict) -> dict:
+    return {
+        "id": user.get("id", ""),
+        "username": user.get("username", ""),
+        "role": user.get("role", "user"),
+    }
+
+
 def _is_public_asset_path(path: str) -> bool:
     safe_prefixes = ("/ai-images/", "/results/", "/output/", "/avatars/")
     return (
@@ -4539,7 +4547,7 @@ def admin_update_user(request: Request, user_id: str, body: dict):
         raise HTTPException(400, "至少需要 role 或 username 字段")
     users[idx].update(updates)
     settings.save_login_users(users)
-    return {"user": users[idx]}
+    return {"user": _public_login_user(users[idx])}
 
 
 @app.post("/admin/users/{user_id}/reset-password")
@@ -4572,7 +4580,7 @@ def admin_delete_user(request: Request, user_id: str):
         return {"deleted": {"id": user_id, "note": "不在认证列表中，无需删除"}}
     deleted = users.pop(idx)
     settings.save_login_users(users)
-    return {"deleted": deleted}
+    return {"deleted": _public_login_user(deleted)}
 
 
 @app.get("/admin/operations")
