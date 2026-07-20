@@ -1240,7 +1240,7 @@ def auth_me(request: Request):
 
 @app.get("/auth/options")
 def auth_options():
-    return {"users": settings.allowed_login_users}
+    return {"users": [{"username": u["username"]} for u in settings.allowed_login_users]}
 
 
 @app.get("/history/ai-images")
