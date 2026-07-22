@@ -1055,9 +1055,60 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
     return result
 
 
+def _editor_snapshot_stats(snapshot_json: str) -> dict[str, int]:
+    try:
+        snapshot = json.loads(snapshot_json)
+    except Exception:
+        return {"json_len": len(snapshot_json), "pages": 0, "shapes": 0, "assets": 0}
+    store = {}
+    if isinstance(snapshot, dict):
+        document = snapshot.get("document")
+        if isinstance(document, dict) and isinstance(document.get("store"), dict):
+            store = document["store"]
+        elif isinstance(snapshot.get("store"), dict):
+            store = snapshot["store"]
+    pages = shapes = assets = 0
+    for record in store.values():
+        if not isinstance(record, dict):
+            continue
+        type_name = record.get("typeName")
+        if type_name == "page":
+            pages += 1
+        elif type_name == "shape":
+            shapes += 1
+        elif type_name == "asset":
+            assets += 1
+    return {"json_len": len(snapshot_json), "pages": pages, "shapes": shapes, "assets": assets}
+
+
+def _should_reject_editor_snapshot_overwrite(old_json: str | None, new_json: str) -> bool:
+    if not old_json:
+        return False
+    old = _editor_snapshot_stats(old_json)
+    new = _editor_snapshot_stats(new_json)
+    if old["assets"] < 20 and old["shapes"] < 20 and old["pages"] < 2:
+        return False
+    if new["assets"] <= max(3, old["assets"] // 5) and new["shapes"] <= max(3, old["shapes"] // 5):
+        return True
+    if old["pages"] > 1 and new["pages"] < old["pages"] and new["json_len"] < old["json_len"] // 4:
+        return True
+    return False
+
+
 def save_editor_snapshot(user_id: str, snapshot_json: str) -> None:
     now = time.time()
     with _lock, _connect() as conn:
+        existing = conn.execute(
+            "SELECT snapshot_json FROM editor_snapshots WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        old_json = existing["snapshot_json"] if existing else None
+        if _should_reject_editor_snapshot_overwrite(old_json, snapshot_json):
+            reject_dir = settings.root_dir / "output" / "editor-snapshot-rejected"
+            reject_dir.mkdir(parents=True, exist_ok=True)
+            reject_path = reject_dir / f"{user_id}-{int(now)}.json"
+            reject_path.write_text(snapshot_json, encoding="utf-8")
+            return
         conn.execute(
             """
             INSERT INTO editor_snapshots (user_id, snapshot_json, updated_at)

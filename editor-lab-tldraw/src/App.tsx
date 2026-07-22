@@ -1269,24 +1269,11 @@ function normalizeDesignflowAssetUrlsInSnapshot(snapshot: any) {
 function TldrawHostBridge() {
   const editor = useEditor()
 
-  const clearCanvas = React.useCallback(
-    (pageName?: string) => {
-      const ids = editor.getCurrentPageShapes().map((shape) => shape.id)
-      if (ids.length) {
-        editor.deleteShapes(ids)
-      }
-      editor.selectNone()
-      const page = editor.getCurrentPage()
-      if (page && pageName) {
-        editor.renamePage(page.id, pageName)
-      }
-      editor.zoomToFit({ animation: { duration: 0 } })
-    },
-    [editor]
-  )
-
   const recentInsertsRef = React.useRef<Record<string, number>>({})
   const sequentialLayoutTimerRef = React.useRef<number | null>(null)
+  const snapshotHydratedRef = React.useRef(false)
+  const queuedHostMessagesRef = React.useRef<any[]>([])
+  const notifyReadyRef = React.useRef<() => void>(() => {})
 
   React.useEffect(() => {
     const scheduleReflow = () => {
@@ -1491,22 +1478,8 @@ function TldrawHostBridge() {
     [editor, insertImage]
   )
 
-  React.useEffect(() => {
-    const notifyReady = () => {
-      try {
-        window.parent.postMessage({ type: 'designflow:editor-ready' }, '*')
-      } catch (error) {}
-    }
-
-    const handleMessage = async (event: MessageEvent) => {
-      const data = event.data
-      if (!data || typeof data !== 'object') return
-
-      if (data.type === 'designflow:ping') {
-        notifyReady()
-        return
-      }
-
+  const handleHostMessage = React.useCallback(
+    async (data: any) => {
       if (data.type === 'designflow:new-canvas') {
         const pageName = data.pageName || '画板 1'
         const existing = editor.getPages().find(p => p.name === pageName)
@@ -1550,12 +1523,40 @@ function TldrawHostBridge() {
           window.parent.postMessage({ type: 'designflow:editor-error', message: error?.message || 'insert_failed' }, '*')
         }
       }
+    },
+    [editor, insertImages]
+  )
+
+  React.useEffect(() => {
+    const notifyReady = () => {
+      if (!snapshotHydratedRef.current) return
+      try {
+        window.parent.postMessage({ type: 'designflow:editor-ready' }, '*')
+      } catch (error) {}
+    }
+    notifyReadyRef.current = notifyReady
+
+    const handleMessage = async (event: MessageEvent) => {
+      const data = event.data
+      if (!data || typeof data !== 'object') return
+
+      if (data.type === 'designflow:ping') {
+        notifyReady()
+        return
+      }
+
+      if (String(data.type || '').startsWith('designflow:') && !snapshotHydratedRef.current) {
+        queuedHostMessagesRef.current.push(data)
+        return
+      }
+
+      await handleHostMessage(data)
     }
 
     notifyReady()
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [clearCanvas, editor, insertImages])
+  }, [handleHostMessage])
 
   // —— 画布持久化（自动保存 & 恢复）——
   React.useEffect(() => {
@@ -1564,6 +1565,7 @@ function TldrawHostBridge() {
 
     const doSave = () => {
       try {
+        if (!snapshotHydratedRef.current) return
         const snapshot = editor.getSnapshot() as any
         const store = snapshot.store || snapshot.document?.store
         if (!store || typeof store !== 'object' || Object.keys(store).length === 0) return
@@ -1581,6 +1583,7 @@ function TldrawHostBridge() {
 
     const doSaveSync = () => {
       try {
+        if (!snapshotHydratedRef.current) return
         const snapshot = editor.getSnapshot() as any
         const store = snapshot.store || snapshot.document?.store
         if (!store || typeof store !== 'object' || Object.keys(store).length === 0) return
@@ -1616,7 +1619,15 @@ function TldrawHostBridge() {
             }, 0)
           }
         }
-      } catch (e) {}
+      } catch (e) {
+      } finally {
+        snapshotHydratedRef.current = true
+        notifyReadyRef.current()
+        const queued = queuedHostMessagesRef.current.splice(0)
+        queued.reduce((promise, message) => {
+          return promise.then(() => handleHostMessage(message))
+        }, Promise.resolve()).catch(() => {})
+      }
     }
 
     loadSnapshot()
@@ -1628,6 +1639,7 @@ function TldrawHostBridge() {
 
     // 监听用户变更，debounce 2 秒后自动保存（source: 'user' 过滤掉 loadSnapshot 触发的变更）
     const unlisten = editor.store.listen(() => {
+      if (!snapshotHydratedRef.current) return
       if (saveTimer) clearTimeout(saveTimer)
       saveTimer = window.setTimeout(doSave, 2000)
     }, { source: 'user' })
@@ -1640,7 +1652,7 @@ function TldrawHostBridge() {
       if (saveTimer) clearTimeout(saveTimer)
       window.removeEventListener('beforeunload', doSaveSync)
     }
-  }, [editor, normalizeCurrentAssetUrls])
+  }, [editor, handleHostMessage, normalizeCurrentAssetUrls])
 
   return null
 }

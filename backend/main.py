@@ -161,29 +161,36 @@ from .slot_schema import schema as slot_schema
 from .special_compose import parse_special_command, run_special_compose
 from .proxy_download_relay import inspect_url as proxy_download_inspect_url, download_url as proxy_download_download_url, stop as proxy_download_stop, check_login_status as proxy_download_check_login, login_shell as proxy_download_login_shell
 
+
+def _migrate_inspiration_thumbnails() -> None:
+    """Backfill inspiration metadata without blocking the FastAPI event loop."""
+    try:
+        rows = list_inspiration_posts(limit=10000, offset=0)
+        pending = [
+            row
+            for row in rows
+            if not row.get("thumb_url") or not row.get("image_width") or not row.get("image_height")
+        ]
+        for row in pending:
+            try:
+                thumb, width, height = generate_inspiration_thumb(
+                    row["image_url"], row["user_id"], row["job_id"]
+                )
+                update_inspiration_thumb_url(row["id"], thumb)
+                if width and height:
+                    update_inspiration_dimensions(row["id"], width, height)
+            except Exception:
+                logger.exception("Failed to migrate inspiration thumbnail: %s", row.get("id"))
+    except Exception:
+        logger.exception("Failed to scan inspiration thumbnails for migration")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    # 启动时迁移：给没有 thumb_url / image_width / image_height 的旧记录回填
-    try:
-        rows = list_inspiration_posts(limit=10000, offset=0)
-        pending = [r for r in rows if not r.get("thumb_url") or not r.get("image_width") or not r.get("image_height")]
-        if pending:
-            import asyncio
-            async def _migrate():
-                for r in pending:
-                    try:
-                        thumb, tw, th = generate_inspiration_thumb(
-                            r["image_url"], r["user_id"], r["job_id"]
-                        )
-                        update_inspiration_thumb_url(r["id"], thumb)
-                        if tw and th:
-                            update_inspiration_dimensions(r["id"], tw, th)
-                    except Exception:
-                        pass
-            asyncio.create_task(_migrate())
-    except Exception:
-        pass
+    app.state.inspiration_migration_task = asyncio.create_task(
+        asyncio.to_thread(_migrate_inspiration_thumbnails)
+    )
     try:
         yield
     finally:
@@ -193,12 +200,16 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Design Tool API", version="0.1.0", lifespan=lifespan)
 
 
-class NoCacheStaticFiles(StaticFiles):
+class CacheAwareStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
         response = await super().get_response(path, scope)
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
+        normalized_path = path.replace("\\", "/")
+        if normalized_path.startswith(("assets/", "compiled/")):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif normalized_path.startswith(("vendor/", "fonts/")):
+            response.headers["Cache-Control"] = "public, max-age=604800"
+        else:
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
 
 app.add_middleware(
@@ -257,7 +268,7 @@ _frontend_dist = Path(__file__).parent.parent / "frontend"
 if _frontend_dist.exists():
     app.mount(
         "/ui",
-        NoCacheStaticFiles(directory=str(_frontend_dist), html=True),
+        CacheAwareStaticFiles(directory=str(_frontend_dist), html=True),
         name="frontend",
     )
 
@@ -265,7 +276,7 @@ _editor_beta_dist = Path(__file__).parent.parent / "editor-lab-tldraw" / "dist"
 if _editor_beta_dist.exists():
     app.mount(
         "/editor-beta",
-        NoCacheStaticFiles(directory=str(_editor_beta_dist), html=True),
+        CacheAwareStaticFiles(directory=str(_editor_beta_dist), html=True),
         name="editor-beta",
     )
 
@@ -888,106 +899,139 @@ async def root_ui():
         html = index_file.read_text(encoding="utf-8")
         if '<base href="/ui/">' not in html:
             html = html.replace("<head>", '<head><base href="/ui/">', 1)
-        return HTMLResponse(content=html)
+        return HTMLResponse(
+            content=html,
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
     return {"detail": "Not found"}
 
 
-@app.get("/health")
-async def health():
+def _local_health_payload() -> dict:
     library_path = settings.product_library_path
     library_ok = library_path.exists()
     folders_found = []
     if library_ok:
-        for key, folder in settings.IMAGE_TYPE_FOLDERS.items():
+        for folder in settings.IMAGE_TYPE_FOLDERS.values():
             if (library_path / folder).exists():
                 folders_found.append(folder)
 
-    # Penpot 连通性探测（3 秒超时，不影响主服务）
-    penpot_ok = False
-    try:
-        async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
-            r = await client.get(settings.penpot_base_url)
-            penpot_ok = r.status_code < 500
-    except Exception:
-        penpot_ok = False
+    return {
+        "status": "ok",
+        "version": "team-scan-v2",
+        "library": {
+            "connected": library_ok,
+            "path": str(library_path),
+            "folders": folders_found,
+        },
+    }
 
-    # APIMart 真实状态探测：查询账户余额，不消耗生图额度
-    ai_provider = {
+
+async def _probe_penpot(client: httpx.AsyncClient) -> bool:
+    try:
+        response = await client.get(settings.penpot_base_url)
+        return response.status_code < 500
+    except Exception:
+        return False
+
+
+async def _probe_apimart(client: httpx.AsyncClient) -> dict:
+    status = {
         "connected": False,
         "configured": bool(settings.ai_image_api_key),
         "provider": "APIMart",
         "url": settings.ai_image_base_url,
     }
+    if not settings.ai_image_api_key:
+        return status
 
-
-    if settings.ai_image_api_key:
-        balance_base = settings.ai_image_base_url.rstrip("/")
-        if not balance_base.startswith("http"):
-            balance_base = "https://" + balance_base
-        if not balance_base.endswith("/v1"):
-            balance_url = balance_base + "/v1/user/balance"
+    balance_base = settings.ai_image_base_url.rstrip("/")
+    if not balance_base.startswith("http"):
+        balance_base = "https://" + balance_base
+    balance_url = (
+        balance_base + "/user/balance"
+        if balance_base.endswith("/v1")
+        else balance_base + "/v1/user/balance"
+    )
+    try:
+        response = await client.get(
+            balance_url,
+            headers={"Authorization": f"Bearer {settings.ai_image_api_key}"},
+        )
+        status["status_code"] = response.status_code
+        if response.status_code == 200:
+            payload = response.json()
+            status["connected"] = bool(payload.get("success"))
+            for key in ("remain_balance", "used_balance", "unlimited_quota"):
+                if key in payload:
+                    status[key] = payload.get(key)
+            if payload.get("message"):
+                status["message"] = payload.get("message")
         else:
-            balance_url = balance_base + "/user/balance"
-        try:
-            async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
-                r = await client.get(
-                    balance_url,
-                    headers={"Authorization": f"Bearer {settings.ai_image_api_key}"},
-                )
-            ai_provider["status_code"] = r.status_code
-            if r.status_code == 200:
-                payload = r.json()
-                ai_provider["connected"] = bool(payload.get("success"))
-                if "remain_balance" in payload:
-                    ai_provider["remain_balance"] = payload.get("remain_balance")
-                if "used_balance" in payload:
-                    ai_provider["used_balance"] = payload.get("used_balance")
-                if "unlimited_quota" in payload:
-                    ai_provider["unlimited_quota"] = payload.get("unlimited_quota")
-                if payload.get("message"):
-                    ai_provider["message"] = payload.get("message")
-            else:
-                ai_provider["message"] = r.text[:200]
-        except Exception as e:
-            ai_provider["message"] = str(e)
+            status["message"] = response.text[:200]
+    except Exception as exc:
+        status["message"] = str(exc)
+    return status
 
-    zenmux_status = {
+
+async def _probe_zenmux(client: httpx.AsyncClient) -> dict:
+    status = {
         "connected": False,
         "configured": bool(settings.zenmux_api_key),
         "provider": "ZenMux",
         "url": settings.zenmux_base_url,
     }
-    # 用生图 API Key 测试实际接口连通性（GET /models，不消耗额度）
-    if settings.zenmux_api_key:
-        try:
-            async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
-                r = await client.get(
-                    f"{settings.zenmux_base_url}/models",
-                    headers={"Authorization": f"Bearer {settings.zenmux_api_key}"},
-                )
-            zenmux_status["status_code"] = r.status_code
-            zenmux_status["connected"] = r.status_code < 500
-            if r.status_code >= 500:
-                zenmux_status["message"] = r.text[:200]
-        except Exception as e:
-            zenmux_status["message"] = str(e)
 
-    # 查询 PAYG 余额（Management API）
-    if settings.zenmux_management_api_key:
+    async def probe_models() -> None:
+        if not settings.zenmux_api_key:
+            return
         try:
-            async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
-                r = await client.get(
-                    "https://zenmux.ai/api/v1/management/payg/balance",
-                    headers={"Authorization": f"Bearer {settings.zenmux_management_api_key}"},
-                )
-            if r.status_code == 200:
-                payload = r.json()
+            response = await client.get(
+                f"{settings.zenmux_base_url}/models",
+                headers={"Authorization": f"Bearer {settings.zenmux_api_key}"},
+            )
+            status["status_code"] = response.status_code
+            status["connected"] = response.status_code < 500
+            if response.status_code >= 500:
+                status["message"] = response.text[:200]
+        except Exception as exc:
+            status["message"] = str(exc)
+
+    async def probe_balance() -> None:
+        if not settings.zenmux_management_api_key:
+            return
+        try:
+            response = await client.get(
+                "https://zenmux.ai/api/v1/management/payg/balance",
+                headers={"Authorization": f"Bearer {settings.zenmux_management_api_key}"},
+            )
+            if response.status_code == 200:
+                payload = response.json()
                 data = payload.get("data") if isinstance(payload, dict) else {}
-                zenmux_status["total_credits"] = data.get("total_credits")
-                zenmux_status["top_up_credits"] = data.get("top_up_credits")
-                zenmux_status["bonus_credits"] = data.get("bonus_credits")
+                status["total_credits"] = data.get("total_credits")
+                status["top_up_credits"] = data.get("top_up_credits")
+                status["bonus_credits"] = data.get("bonus_credits")
         except Exception:
             pass
+
+    await asyncio.gather(probe_models(), probe_balance())
+    return status
+
+
+@app.get("/health")
+async def health():
+    return _local_health_payload()
+
+
+@app.get("/health/deep")
+async def health_deep():
+    local_health = _local_health_payload()
+    async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
+        penpot_ok, ai_provider, zenmux_status = await asyncio.gather(
+            _probe_penpot(client),
+            _probe_apimart(client),
+            _probe_zenmux(client),
+        )
+
     ai_provider["zenmux"] = zenmux_status
     ai_provider["connected"] = bool(ai_provider.get("connected") or zenmux_status.get("connected"))
     ai_provider["configured"] = bool(ai_provider.get("configured") or zenmux_status.get("configured"))
@@ -1006,13 +1050,7 @@ async def health():
     ai_provider["configured"] = bool(ai_provider.get("configured") or sub2api_status.get("configured"))
 
     return {
-        "status": "ok",
-        "version": "team-scan-v2",
-        "library": {
-            "connected": library_ok,
-            "path": str(library_path),
-            "folders": folders_found,
-        },
+        **local_health,
         "penpot": {
             "connected": penpot_ok,
             "url": settings.penpot_base_url,

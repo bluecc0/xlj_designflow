@@ -24,8 +24,7 @@ const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail, placemen
         if (okKey) {
           setStatus(data[okKey]?.connected ? 'ok' : 'err');
         } else {
-          const ok = data.status === 'ok' && data.penpot?.connected;
-          setStatus(ok ? 'ok' : 'err');
+          setStatus(data.status === 'ok' ? 'ok' : 'err');
         }
       } catch {
         if (alive) {
