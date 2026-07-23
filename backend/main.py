@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import json
 import logging
 import re
@@ -4227,7 +4228,70 @@ def editor_load_snapshot(request: Request):
         return {"snapshot": None}
 
 
+# ─── /ai-image 提交幂等去重 ──────────────────────────────────────────────────
+# 前端对网络失败 / 120s 超时 / 502-504 会带同一 client_request_id 自动重试；
+# 首次请求可能已被受理（如 prompt 改写耗时超过客户端超时后服务端仍继续执行），
+# 不去重会重复建 job、重复消耗上游生图额度。单进程内存表（与 compose 串行锁同假设）。
+_AI_IMAGE_SUBMIT_DEDUP_TTL = 600.0  # 秒；覆盖前端两轮 120s 超时 + 重试间隔，留足余量
+_ai_image_submits: dict[str, tuple[float, asyncio.Future]] = {}
+
+
+def _ai_image_submit_dedup(func):
+    """按 client_request_id 去重 /ai-image 提交。
+
+    首个请求注册 Future 并真正执行；相同编号的重复请求（含首次仍在处理中的在途
+    重复）等待该 Future，原样复用首次的响应或异常，不重复建 job / 写聊天记录。
+    未带编号的请求直接放行，行为不变。
+    """
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        request: Request = kwargs["request"]
+        client_req = (
+            (kwargs.get("client_request_id") or "").strip()
+            or (request.headers.get("x-client-request-id") or "").strip()
+        )
+        if not client_req:
+            return await func(*args, **kwargs)
+
+        now = time.time()
+        for key in [
+            k for k, (ts, f) in _ai_image_submits.items()
+            if f.done() and now - ts > _AI_IMAGE_SUBMIT_DEDUP_TTL
+        ]:
+            _ai_image_submits.pop(key, None)
+
+        existing = _ai_image_submits.get(client_req)
+        if existing is not None:
+            first_ts, first_fut = existing
+            logger.warning(
+                "ai_image_submit_dedup client=%s first_age_ms=%.0f in_flight=%s",
+                client_req, (now - first_ts) * 1000, not first_fut.done(),
+            )
+            outcome = await first_fut
+            if outcome["ok"]:
+                return outcome["response"]
+            raise outcome["error"]
+
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        _ai_image_submits[client_req] = (now, fut)
+        try:
+            response = await func(*args, **kwargs)
+        except asyncio.CancelledError:
+            # 服务重载/关闭中断首次请求：给等待方一个明确错误，自身照常传播取消
+            fut.set_result({"ok": False, "error": HTTPException(503, "提交处理被中断（服务重启或关闭），请重试")})
+            raise
+        except BaseException as exc:
+            fut.set_result({"ok": False, "error": exc})
+            raise
+        else:
+            fut.set_result({"ok": True, "response": response})
+            return response
+
+    return wrapper
+
+
 @app.post("/ai-image")
+@_ai_image_submit_dedup
 async def ai_image_endpoint(
     request: Request,
     model: str = Form(...),
