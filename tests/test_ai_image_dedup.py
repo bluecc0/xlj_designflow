@@ -221,7 +221,8 @@ def test_client_event_log_injection_sanitized():
     try:
         client = TestClient(m.app)
         r = client.post("/ai-image/client-event", json={
-            "type": "x\nFAKE-LOG-LINE user=admin action=login",
+            "type": "x\nFAKE-LOG-LINE user=admin action=login"
+                    "\u0085NEXT-LINE\u2028LINE-SEPARATOR\u2029PARAGRAPH-SEPARATOR",
             "phase": "p\r\ninjected",
             "error": "err\n2026-01-01 ERROR forged line",
             "clientRequestId": "c\nid\ttab",
@@ -235,6 +236,7 @@ def test_client_event_log_injection_sanitized():
         for rec in evs:
             msg = rec.getMessage()
             assert "\n" not in msg and "\r" not in msg and "\t" not in msg, repr(msg)
+            assert len(msg.splitlines()) == 1, repr(msg)
         assert any("FAKE-LOG-LINE" in rec.getMessage() for rec in evs), "内容应保留（仅去控制字符）"
     finally:
         m._get_session_user = original

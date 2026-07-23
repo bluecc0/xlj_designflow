@@ -3591,12 +3591,10 @@ async def ai_image_layer_extract(request: Request):
     return {"job_id": job_id, "status": "processing", "progress": 0}
 
 
-_LOG_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]+")
-
-
 def _sanitize_log_field(value, limit: int) -> str:
-    """外部输入进日志前的防注入清洗：去除 CR/LF/TAB 等控制字符并截断。"""
-    return _LOG_CTRL_RE.sub(" ", str(value if value is not None else ""))[:limit]
+    """外部输入进日志前的防注入清洗：替换 Unicode 不可打印字符并截断。"""
+    raw = str(value if value is not None else "")
+    return "".join(char if char.isprintable() else " " for char in raw)[:limit]
 
 
 _CLIENT_EVENT_MAX_BODY = 16 * 1024
