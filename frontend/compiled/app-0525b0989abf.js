@@ -3108,6 +3108,300 @@ window.CommandEcho = CommandEcho;
 
 // ---------- Sub-components ----------
 
+// 生图失败：用户可读原因
+function formatAiImageError(raw, jobId, extras) {
+  var msg = (raw == null ? '' : String(raw)).trim();
+  if (!msg) {
+    msg = '生成失败，没有返回具体原因，请稍后重试。';
+  }
+  // 去掉开发向尾巴
+  msg = msg.replace(/请查后端日志[^\s。]*/g, '').replace(/请打开控制台[^\s。]*/g, '').replace(/并用 client 号对照后端日志[。]?/g, '').replace(/请复制反馈信息发给管理员[。]?/g, '').replace(/点下方「复制反馈信息」[^\s。]*/g, '').replace(/若多次失败，请复制反馈信息发给管理员[。]?/g, '').replace(/若反复出现，请复制反馈信息发给管理员[。]?/g, '').replace(/\s{2,}/g, ' ').replace(/[；;]\s*[。.]?\s*$/g, '。').trim();
+  return msg || '生成失败，请稍后重试。';
+}
+
+// 出错直接弹窗，只显示错误本身
+function alertAiImageError(raw, extras) {
+  extras = extras || {};
+  var msg = formatAiImageError(raw, extras.jobId, extras);
+  var lines = ['生图失败', msg];
+  if (extras.phaseLabel) lines.push('环节：' + extras.phaseLabel);
+  if (extras.clientRequestId) lines.push('编号：' + extras.clientRequestId);
+  if (extras.jobId) lines.push('任务：' + extras.jobId);
+  try {
+    window.alert(lines.join('\n'));
+  } catch (_e) {}
+}
+function describeAiImageFailPhase(phase) {
+  var map = {
+    prepare: '提交前准备（素材/参考图）',
+    network: '网络连接',
+    timeout: '等待超时',
+    submit: '提交任务',
+    http: '服务响应',
+    parse: '服务响应异常',
+    poll: '查询进度',
+    generate: '图片生成',
+    download: '下载结果',
+    poll_or_job: '生成或查询进度'
+  };
+  var key = String(phase || '').trim();
+  return map[key] || (key ? key : '');
+}
+
+// 更新消息补丁：目标带 batchImageIndex 时落到批量卡对应那张图上，否则落到消息本身
+function patchMessageOrImage(msgs, target, patch) {
+  return msgs.map(function (m) {
+    if (m.startedAt !== target.startedAt) return m;
+    if (target.batchImageIndex == null || !Array.isArray(m.images)) return Object.assign({}, m, patch);
+    return Object.assign({}, m, {
+      images: m.images.map(function (im, i) {
+        return i === target.batchImageIndex ? Object.assign({}, im, patch) : im;
+      })
+    });
+  });
+}
+
+// 判断是否是「请求根本没到后端应用」类错误（浏览器网络层 / 连接被掐）
+function isLikelyUnreachedServerError(err) {
+  var name = err && err.name || '';
+  var msg = String(err && err.message || err || '');
+  if (name === 'AbortError') return true;
+  if (err && err.phase === 'network') return true;
+  if (err && err.unreached) return true;
+  return /Failed to fetch|NetworkError|Load failed|network connection was lost|Internet connection appears to be offline|Could not connect|ECONNREFUSED|ENOTFOUND|ERR_CONNECTION|ERR_NETWORK|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|The request timed out|NS_ERROR_FAILURE|Network request failed/i.test(msg);
+}
+
+// 把 fetch/提交异常翻译成用户可读中文（技术细节进反馈包，不堆在主文案）
+function classifyAiImageSubmitError(err, meta) {
+  meta = meta || {};
+  var attempt = meta.attempt || 1;
+  var online = typeof navigator !== 'undefined' ? navigator.onLine : true;
+  var name = err && err.name || '';
+  var raw = String(err && err.message || err || '').trim() || '网络异常';
+  var retryHint = attempt > 1 ? '（已自动重试）' : '';
+
+  // 服务端已返回 HTTP（有 status）
+  if (err && err.httpStatus) {
+    var status = err.httpStatus;
+    if (status === 401) {
+      return '登录已失效，请重新登录后再试。';
+    }
+    if (status === 413) {
+      return '参考图或请求内容过大，请压缩图片后再试。';
+    }
+    if (status === 502 || status === 503 || status === 504) {
+      return '服务暂时繁忙或维护中' + retryHint + '，请稍后再试。';
+    }
+    // 业务错误原文通常已是中文，直接展示
+    if (raw && !/^HTTP\s*\d+/i.test(raw) && raw.length > 2) {
+      return raw;
+    }
+    return '提交失败（错误码 ' + status + '），请稍后重试。';
+  }
+
+  // JSON 解析失败
+  if (/Unexpected token|JSON\.parse|is not valid JSON|Failed to execute 'json'/i.test(raw)) {
+    return '服务返回异常，请稍后重试。';
+  }
+
+  // 客户端超时
+  if (name === 'AbortError' || /aborted|超时|timed out/i.test(raw)) {
+    return '提交超时' + retryHint + '。可能是网络较慢或参考图较大，请检查网络后重试。';
+  }
+
+  // 典型「请求未到达」
+  if (isLikelyUnreachedServerError(err)) {
+    if (!online) {
+      return '当前网络似乎已断开，请连上网络后重试。';
+    }
+    return '网络不稳定，请求可能没有成功发出' + retryHint + '。请检查网络后重试。';
+  }
+  return raw.indexOf('提交') === 0 || raw.indexOf('生成') === 0 || raw.indexOf('网络') === 0 ? raw : '提交失败：' + raw;
+}
+function newClientRequestId() {
+  return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+var AI_IMAGE_CLIENT_EVENT_KEY = 'designflow.aiImageClientEvents';
+var AI_IMAGE_CLIENT_EVENT_MAX = 30;
+function readAiImageClientEvents() {
+  try {
+    var raw = sessionStorage.getItem(AI_IMAGE_CLIENT_EVENT_KEY);
+    var list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list : [];
+  } catch (_e) {
+    return [];
+  }
+}
+function pushAiImageClientEvent(event) {
+  var entry = Object.assign({
+    ts: new Date().toISOString(),
+    online: typeof navigator !== 'undefined' ? navigator.onLine : null,
+    href: typeof location !== 'undefined' ? location.href : '',
+    apiBase: typeof window !== 'undefined' ? window.API_BASE || window.location.origin : '',
+    ua: typeof navigator !== 'undefined' ? String(navigator.userAgent || '').slice(0, 160) : ''
+  }, event || {});
+  try {
+    var list = readAiImageClientEvents();
+    list.push(entry);
+    while (list.length > AI_IMAGE_CLIENT_EVENT_MAX) list.shift();
+    sessionStorage.setItem(AI_IMAGE_CLIENT_EVENT_KEY, JSON.stringify(list));
+  } catch (_e) {}
+  try {
+    console.info('[ai-image-event]', entry);
+  } catch (_e2) {}
+  return entry;
+}
+
+// 主请求失败时尽力上报一条轻量事件（主 POST 没到时，这条小 JSON 可能仍能到）
+function reportAiImageClientEvent(event) {
+  var entry = pushAiImageClientEvent(event);
+  var apiBase = (typeof window !== 'undefined' ? window.API_BASE || window.location.origin : '') || '';
+  var url = String(apiBase).replace(/\/$/, '') + '/ai-image/client-event';
+  var body = JSON.stringify(entry);
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+      var blob = new Blob([body], {
+        type: 'application/json'
+      });
+      var ok = navigator.sendBeacon(url, blob);
+      if (ok) return entry;
+    }
+  } catch (_e) {}
+  try {
+    fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Client-Request-Id': entry.clientRequestId || entry.client || ''
+      },
+      body: body,
+      keepalive: true
+    }).catch(function () {});
+  } catch (_e2) {}
+  return entry;
+}
+
+// POST /ai-image：带 client 请求号、超时、网络失败自动重试 1 次
+function postAiImageForm(apiBase, formData, options) {
+  options = options || {};
+  var maxAttempts = options.maxAttempts == null ? 2 : options.maxAttempts;
+  var timeoutMs = options.timeoutMs || 120000;
+  var clientRequestId = options.clientRequestId || newClientRequestId();
+  var url = String(apiBase || '').replace(/\/$/, '') + '/ai-image';
+  var attemptOnce = function (attempt) {
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = null;
+    if (controller) {
+      timer = setTimeout(function () {
+        try {
+          controller.abort();
+        } catch (_e) {}
+      }, timeoutMs);
+    }
+    var headers = {
+      'X-Client-Request-Id': clientRequestId
+    };
+    if (attempt > 1) headers['X-Client-Retry'] = String(attempt - 1);
+    return fetch(url, {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+      signal: controller ? controller.signal : undefined,
+      headers: headers
+    }).then(function (res) {
+      if (timer) clearTimeout(timer);
+      if (!res.ok) {
+        return res.json().catch(function () {
+          return {};
+        }).then(function (errBody) {
+          var detail = errBody && (errBody.detail || errBody.message || errBody.error);
+          if (detail && typeof detail === 'object') {
+            detail = detail.message || detail.error || JSON.stringify(detail);
+          }
+          var e = new Error(detail || 'HTTP ' + res.status);
+          e.httpStatus = res.status;
+          e.phase = 'http';
+          e.clientRequestId = clientRequestId;
+          e.body = errBody;
+          throw e;
+        });
+      }
+      return res.json().then(function (data) {
+        if (data && typeof data === 'object') {
+          data._clientRequestId = clientRequestId;
+        }
+        return data;
+      }).catch(function (parseErr) {
+        var e = new Error(parseErr && parseErr.message || '响应 JSON 解析失败');
+        e.phase = 'parse';
+        e.clientRequestId = clientRequestId;
+        e.httpStatus = res.status;
+        throw e;
+      });
+    }).catch(function (err) {
+      if (timer) clearTimeout(timer);
+      // 已经是我们包装过的 HTTP/解析错误：补中文分类后抛出（不重试业务错误）
+      if (err && (err.httpStatus || err.phase === 'parse' || err.phase === 'http')) {
+        err.clientRequestId = err.clientRequestId || clientRequestId;
+        err.attempt = attempt;
+        // 502/503/504 可视为瞬时故障，重试 1 次
+        if (attempt < maxAttempts && err.httpStatus && [502, 503, 504].indexOf(err.httpStatus) >= 0) {
+          console.warn('[ai-image] submit gateway fail, retry', {
+            clientRequestId: clientRequestId,
+            attempt: attempt,
+            status: err.httpStatus
+          });
+          return new Promise(function (r) {
+            setTimeout(r, 700 + Math.floor(Math.random() * 500));
+          }).then(function () {
+            return attemptOnce(attempt + 1);
+          });
+        }
+        err.message = classifyAiImageSubmitError(err, {
+          apiBase: apiBase,
+          clientRequestId: clientRequestId,
+          attempt: attempt
+        });
+        throw err;
+      }
+      var wrapped = err instanceof Error ? err : new Error(String(err || '网络错误'));
+      if (wrapped.name === 'AbortError') {
+        wrapped.phase = 'timeout';
+        wrapped.unreached = true;
+      } else if (!wrapped.phase) {
+        wrapped.phase = 'network';
+        wrapped.unreached = isLikelyUnreachedServerError(wrapped);
+      }
+      wrapped.clientRequestId = clientRequestId;
+      wrapped.attempt = attempt;
+
+      // 纯网络失败 / 超时：自动再试 1 次（FormData 可被多次序列化发送）
+      if (attempt < maxAttempts && isLikelyUnreachedServerError(wrapped)) {
+        console.warn('[ai-image] submit network fail, retry', {
+          clientRequestId: clientRequestId,
+          attempt: attempt,
+          error: wrapped.message,
+          apiBase: apiBase,
+          online: typeof navigator !== 'undefined' ? navigator.onLine : null
+        });
+        return new Promise(function (r) {
+          setTimeout(r, 600 + Math.floor(Math.random() * 400));
+        }).then(function () {
+          return attemptOnce(attempt + 1);
+        });
+      }
+      wrapped.message = classifyAiImageSubmitError(wrapped, {
+        apiBase: apiBase,
+        clientRequestId: clientRequestId,
+        attempt: attempt
+      });
+      throw wrapped;
+    });
+  };
+  return attemptOnce(1);
+}
+
 // 生成耗时计时器，每秒刷新
 const ChatTimer = ({
   startedAt
@@ -4575,6 +4869,10 @@ const ChatReturned = ({
     const fullImageUrl = m.imageUrl || '';
     const displayImageUrlRaw = m.previewUrl || m.imagePreviewUrl || m.imageUrl || '';
     const displayImageUrl = displayImageUrlRaw && displayImageUrlRaw.startsWith('/') ? (window.API_BASE || window.location.origin) + displayImageUrlRaw : displayImageUrlRaw;
+    const batchImages = Array.isArray(m.images) && m.images.length > 0 ? m.images : null;
+    const batchOkCount = batchImages ? batchImages.filter(function (im) {
+      return im.status === 'done' && (im.url || im.previewUrl);
+    }).length : 0;
     return React.createElement('div', {
       style: {
         display: 'flex',
@@ -4619,7 +4917,7 @@ const ChatReturned = ({
         fontWeight: 500,
         color: 'var(--ink)'
       }
-    }, m.status === 'done' ? '生图完成' : m.status === 'failed' ? '生图失败' : m.status === 'skill-planning' ? '正在执行 Skill：$' + m.activeSkill + '…' : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 Image 2…' : m.status === 'queued' ? '正在提交到「' + (m.model || 'AI') + '」…' : m.activeSkill && !m.promptTrace && (m.progress || 0) < 20 ? '正在解读需求并整理生图 Prompt…' : (m.progress || 0) < 20 ? '「' + (m.model || 'AI') + '」正在处理…' : (m.progress || 0) < 90 ? '「' + (m.model || 'AI') + '」生成中 ' + (m.progress || 0) + '%' : '处理完成，正在下载…'), m.finalElapsed != null ? React.createElement('span', {
+    }, m.status === 'done' ? batchImages && batchOkCount < batchImages.length ? '生图完成（' + batchOkCount + '/' + batchImages.length + ' 成功）' : '生图完成' : m.status === 'failed' ? '生图失败' : m.status === 'skill-planning' ? '正在执行 Skill：$' + m.activeSkill + '…' : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 Image 2…' : m.status === 'queued' ? '正在提交到「' + (m.model || 'AI') + '」…' : m.activeSkill && !m.promptTrace && (m.progress || 0) < 20 ? '正在解读需求并整理生图 Prompt…' : (m.progress || 0) < 20 ? '「' + (m.model || 'AI') + '」正在处理…' : (m.progress || 0) < 90 ? '「' + (m.model || 'AI') + '」生成中 ' + (m.progress || 0) + '%' : '处理完成，正在下载…'), m.finalElapsed != null ? React.createElement('span', {
       className: 'mono',
       style: {
         fontSize: 10,
@@ -4696,7 +4994,7 @@ const ChatReturned = ({
         fontSize: 10,
         color: 'var(--ink-3)'
       }
-    }, 'ratio=', promptParams.aspectRatio || promptParams.size || 'auto', ' · size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认') : null), m.status === 'done' && fullImageUrl && React.createElement('div', null, React.createElement('img', {
+    }, 'ratio=', promptParams.aspectRatio || promptParams.size || 'auto', ' · size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认') : null), m.status === 'done' && fullImageUrl && !batchImages && React.createElement('div', null, React.createElement('img', {
       src: displayImageUrl || fullImageUrl,
       alt: m.prompt,
       style: {
@@ -4766,7 +5064,181 @@ const ChatReturned = ({
       }
     }, React.createElement(I.sparkles, {
       size: 10
-    }), '发布到灵感'))), m.status === 'done' && m.vlmPending && React.createElement('div', {
+    }), '发布到灵感'))),
+    // 批量卡：n 张图的网格，生成中/失败/完成分别渲染
+    batchImages && React.createElement('div', {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 8
+      }
+    }, batchImages.map(function (im, bi) {
+      var imFull = im.url || '';
+      var imShownRaw = im.previewUrl || im.url || '';
+      var imShown = imShownRaw && imShownRaw.startsWith('/') ? (window.API_BASE || window.location.origin) + imShownRaw : imShownRaw;
+      if (im.status === 'done' && imFull) {
+        return React.createElement('div', {
+          key: im.jobId || bi,
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4
+          }
+        }, React.createElement('img', {
+          src: imShown || imFull,
+          alt: (m.prompt || '') + ' #' + (bi + 1),
+          style: {
+            width: '100%',
+            borderRadius: 8,
+            display: 'block',
+            border: '1px solid var(--line-2)',
+            cursor: 'pointer'
+          },
+          onClick: function () {
+            window.open(imFull, '_blank');
+          }
+        }), React.createElement('div', {
+          style: {
+            display: 'flex',
+            gap: 4,
+            flexWrap: 'wrap'
+          }
+        }, React.createElement('a', {
+          href: imFull,
+          download: true,
+          style: {
+            fontSize: 10,
+            padding: '3px 8px',
+            borderRadius: 5,
+            background: 'var(--ink)',
+            color: 'white',
+            textDecoration: 'none',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 3
+          }
+        }, React.createElement(I.download, {
+          size: 9
+        }), '下载'), im.inspirationPostId ? React.createElement('button', {
+          onClick: function () {
+            onUnpublishInspiration(Object.assign({}, m, {
+              jobId: im.jobId,
+              imageUrl: imFull,
+              inspirationPostId: im.inspirationPostId,
+              batchImageIndex: bi
+            }));
+          },
+          style: {
+            fontSize: 10,
+            padding: '3px 8px',
+            borderRadius: 5,
+            background: 'var(--panel)',
+            color: 'var(--ok)',
+            border: '1px solid var(--ok)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 3,
+            cursor: 'pointer'
+          }
+        }, React.createElement(I.check, {
+          size: 9
+        }), '已发布') : React.createElement('button', {
+          onClick: function () {
+            onPublishInspiration(Object.assign({}, m, {
+              jobId: im.jobId,
+              imageUrl: imFull,
+              previewUrl: im.previewUrl || imFull,
+              inspirationPostId: null,
+              batchImageIndex: bi
+            }));
+          },
+          style: {
+            fontSize: 10,
+            padding: '3px 8px',
+            borderRadius: 5,
+            background: 'var(--panel)',
+            color: 'var(--ink-2)',
+            border: '1px solid var(--line)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 3,
+            cursor: 'pointer'
+          }
+        }, React.createElement(I.sparkles, {
+          size: 9
+        }), '发布')));
+      }
+      if (im.status === 'failed') {
+        return React.createElement('div', {
+          key: im.jobId || bi,
+          style: {
+            minHeight: 110,
+            borderRadius: 8,
+            border: '1px solid var(--warn)',
+            background: 'var(--panel)',
+            padding: '8px 9px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            justifyContent: 'center'
+          }
+        }, React.createElement('div', {
+          style: {
+            fontSize: 10.5,
+            color: 'var(--warn)',
+            lineHeight: 1.4,
+            wordBreak: 'break-word'
+          }
+        }, '第 ' + (bi + 1) + ' 张失败：' + formatAiImageError(im.error, im.jobId)), m.provider !== 'zenmux' && im.jobId ? React.createElement('button', {
+          type: 'button',
+          onClick: function () {
+            onRetryWithZenmux(Object.assign({}, m, {
+              jobId: im.jobId,
+              status: 'failed'
+            }));
+          },
+          style: {
+            alignSelf: 'flex-start',
+            padding: '3px 8px',
+            borderRadius: 5,
+            fontSize: 10,
+            cursor: 'pointer',
+            border: '1px solid var(--accent)',
+            background: 'var(--panel)',
+            color: 'var(--accent)'
+          }
+        }, '换官方线路再试') : null);
+      }
+      return React.createElement('div', {
+        key: im.jobId || bi,
+        style: {
+          minHeight: 110,
+          borderRadius: 8,
+          border: '1px dashed var(--line-2)',
+          background: 'var(--panel)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 6
+        }
+      }, React.createElement('div', {
+        style: {
+          width: 14,
+          height: 14,
+          borderRadius: 99,
+          border: '2px solid var(--line-2)',
+          borderTopColor: 'var(--accent)',
+          animation: 'spin 0.8s linear infinite'
+        }
+      }), React.createElement('div', {
+        className: 'mono',
+        style: {
+          fontSize: 10,
+          color: 'var(--ink-3)'
+        }
+      }, (im.progress || 0) + '%'));
+    })), m.status === 'done' && m.vlmPending && React.createElement('div', {
       style: {
         marginTop: 8,
         padding: '10px 12px',
@@ -4856,30 +5328,34 @@ const ChatReturned = ({
         marginTop: 4,
         lineHeight: 1.5
       }
-    }, '建议: ' + m.vlm.nextStepSuggestion)), m.status === 'failed' && m.error && React.createElement('div', {
+    }, '建议: ' + m.vlm.nextStepSuggestion)), m.status === 'failed' && !batchImages && React.createElement('div', {
       style: {
         padding: '8px 10px',
         borderRadius: 6,
         background: 'var(--panel)',
         border: '1px solid var(--warn)',
         fontSize: 11,
-        color: 'var(--warn)'
+        color: 'var(--warn)',
+        lineHeight: 1.45,
+        wordBreak: 'break-word'
       }
-    }, m.error), m.status === 'failed' && m.provider !== 'zenmux' && React.createElement('button', {
+    }, formatAiImageError(m.error, m.jobId || m.job_id), m.provider !== 'zenmux' ? React.createElement('button', {
+      type: 'button',
       onClick: function () {
         onRetryWithZenmux(m);
       },
       style: {
-        marginTop: 6,
+        marginTop: 8,
         padding: '5px 12px',
         borderRadius: 6,
+        fontSize: 11,
+        cursor: 'pointer',
         border: '1px solid var(--accent)',
         background: 'var(--panel)',
         color: 'var(--accent)',
-        fontSize: 11,
-        cursor: 'pointer'
+        display: 'block'
       }
-    }, '切换到官方线路重试'));
+    }, '换官方线路再试') : null));
   })() : m.type === 'parse-result' ? (() => {
     const matchedCount = m.data.products.filter(p => p.image_path).length;
     return /*#__PURE__*/React.createElement("div", {
@@ -8118,17 +8594,48 @@ const Chat = ({
         ...m,
         jobId: newJobId
       } : m));
+      var retryPollFails = 0;
       const pollInterval = setInterval(async () => {
         try {
           const statusRes = await fetch(apiBase + '/ai-image/' + newJobId, {
             credentials: 'include'
           });
-          if (!statusRes.ok) return;
+          if (!statusRes.ok) {
+            retryPollFails += 1;
+            var errBody = {};
+            try {
+              errBody = await statusRes.json();
+            } catch (_e) {}
+            var detail = errBody && (errBody.detail || errBody.message || errBody.error) || '';
+            if (typeof detail === 'object' && detail) detail = detail.message || JSON.stringify(detail);
+            if (statusRes.status === 404 || retryPollFails >= 5) {
+              clearInterval(pollInterval);
+              const fe = Math.floor((Date.now() - startedAt) / 1000);
+              var retryQueryErr = formatAiImageError(detail || '查询重试任务失败 HTTP ' + statusRes.status, newJobId, {
+                httpStatus: statusRes.status
+              });
+              alertAiImageError(retryQueryErr, {
+                jobId: newJobId
+              });
+              setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
+                ...m,
+                status: 'failed',
+                error: retryQueryErr,
+                finalElapsed: fe,
+                jobId: newJobId
+              } : m));
+              loadAiChatHistory();
+            }
+            return;
+          }
+          retryPollFails = 0;
           const sd = await statusRes.json();
           setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
             ...m,
             status: sd.status,
-            progress: sd.progress || m.progress
+            progress: sd.progress || m.progress,
+            jobId: newJobId,
+            taskId: sd.task_id || m.taskId
           } : m));
           if (sd.status === 'done' && sd.image_url) {
             clearInterval(pollInterval);
@@ -8139,28 +8646,73 @@ const Chat = ({
               imageUrl: sd.image_url,
               previewUrl: sd.preview_url || sd.image_url,
               finalElapsed: fe,
-              progress: 100
+              progress: 100,
+              jobId: newJobId
+            } : m));
+            loadAiChatHistory();
+          } else if (sd.status === 'done' && !sd.image_url) {
+            clearInterval(pollInterval);
+            const fe = Math.floor((Date.now() - startedAt) / 1000);
+            var retryNoImgErr = formatAiImageError('重试完成但未返回图片地址', newJobId, {
+              taskId: sd.task_id
+            });
+            alertAiImageError(retryNoImgErr, {
+              jobId: newJobId
+            });
+            setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
+              ...m,
+              status: 'failed',
+              error: retryNoImgErr,
+              finalElapsed: fe,
+              jobId: newJobId
             } : m));
             loadAiChatHistory();
           } else if (sd.status === 'failed') {
             clearInterval(pollInterval);
             const fe = Math.floor((Date.now() - startedAt) / 1000);
+            var retryFailErr = formatAiImageError(sd.error || '重试失败', newJobId, {
+              taskId: sd.task_id
+            });
+            alertAiImageError(retryFailErr, {
+              jobId: newJobId
+            });
             setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
               ...m,
               status: 'failed',
-              error: sd.error || '重试失败',
-              finalElapsed: fe
+              error: retryFailErr,
+              finalElapsed: fe,
+              jobId: newJobId
             } : m));
             loadAiChatHistory();
           }
-        } catch (e) {/* ignore polling errors */}
+        } catch (e) {
+          retryPollFails += 1;
+          console.warn('ai-image retry poll error job=' + newJobId, e);
+          if (retryPollFails >= 5) {
+            clearInterval(pollInterval);
+            const fe = Math.floor((Date.now() - startedAt) / 1000);
+            var retryPollErr = formatAiImageError(e && e.message || '重试查询进度连续失败', newJobId);
+            alertAiImageError(retryPollErr, {
+              jobId: newJobId
+            });
+            setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
+              ...m,
+              status: 'failed',
+              error: retryPollErr,
+              finalElapsed: fe,
+              jobId: newJobId
+            } : m));
+          }
+        }
       }, 2000);
     } catch (e) {
       const fe = Math.floor((Date.now() - startedAt) / 1000);
+      var retryStartErr = formatAiImageError(e.message || '重试失败', null);
+      alertAiImageError(retryStartErr);
       setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
         ...m,
         status: 'failed',
-        error: e.message || '重试失败',
+        error: retryStartErr,
         finalElapsed: fe
       } : m));
     }
@@ -8199,32 +8751,26 @@ const Chat = ({
         submitting: true
       }) : prev;
     });
-    // 乐观更新
+    // 乐观更新（批量卡按 batchImageIndex 落到对应那张图）
     setMessages(function (msgs) {
-      return msgs.map(function (m) {
-        return m.startedAt === msg.startedAt ? Object.assign({}, m, {
-          inspirationPublishing: true
-        }) : m;
+      return patchMessageOrImage(msgs, msg, {
+        inspirationPublishing: true
       });
     });
     try {
       const res = await window.API.publishInspiration(payload);
       const post = res && res.post;
       setMessages(function (msgs) {
-        return msgs.map(function (m) {
-          return m.startedAt === msg.startedAt ? Object.assign({}, m, {
-            inspirationPostId: post ? post.id : null,
-            inspirationPublishing: false
-          }) : m;
+        return patchMessageOrImage(msgs, msg, {
+          inspirationPostId: post ? post.id : null,
+          inspirationPublishing: false
         });
       });
       setPublishDialog(null);
     } catch (e) {
       setMessages(function (msgs) {
-        return msgs.map(function (m) {
-          return m.startedAt === msg.startedAt ? Object.assign({}, m, {
-            inspirationPublishing: false
-          }) : m;
+        return patchMessageOrImage(msgs, msg, {
+          inspirationPublishing: false
         });
       });
       setPublishDialog(function (prev) {
@@ -8240,28 +8786,22 @@ const Chat = ({
     if (!window.confirm('下架这条灵感？')) return;
     const postId = msg.inspirationPostId;
     setMessages(function (msgs) {
-      return msgs.map(function (m) {
-        return m.startedAt === msg.startedAt ? Object.assign({}, m, {
-          inspirationPublishing: true
-        }) : m;
+      return patchMessageOrImage(msgs, msg, {
+        inspirationPublishing: true
       });
     });
     try {
       await window.API.unpublishInspiration(postId);
       setMessages(function (msgs) {
-        return msgs.map(function (m) {
-          return m.startedAt === msg.startedAt ? Object.assign({}, m, {
-            inspirationPostId: null,
-            inspirationPublishing: false
-          }) : m;
+        return patchMessageOrImage(msgs, msg, {
+          inspirationPostId: null,
+          inspirationPublishing: false
         });
       });
     } catch (e) {
       setMessages(function (msgs) {
-        return msgs.map(function (m) {
-          return m.startedAt === msg.startedAt ? Object.assign({}, m, {
-            inspirationPublishing: false
-          }) : m;
+        return patchMessageOrImage(msgs, msg, {
+          inspirationPublishing: false
         });
       });
       window.alert('下架失败：' + (e.message || '未知错误'));
@@ -8306,6 +8846,21 @@ const Chat = ({
       }
     } catch (e) {
       const failedAt = Date.now();
+      var prepClientId = newClientRequestId();
+      var prepErr = formatAiImageError('准备参考图/素材时出错：' + (e && e.message || '未知原因'), null);
+      reportAiImageClientEvent({
+        type: 'prepare_failed',
+        phase: 'prepare',
+        clientRequestId: prepClientId,
+        model: model,
+        provider: provider,
+        error: e && e.message || String(e || ''),
+        reachedServer: false
+      });
+      alertAiImageError(prepErr, {
+        phaseLabel: describeAiImageFailPhase('prepare'),
+        clientRequestId: prepClientId
+      });
       setMessages(msgs => [...msgs, {
         who: 'ai',
         type: 'ai-image-generating',
@@ -8315,7 +8870,9 @@ const Chat = ({
         size: lastSize,
         resolution: lastResolution,
         status: 'failed',
-        error: e.message,
+        failPhase: 'prepare',
+        clientRequestId: prepClientId,
+        error: prepErr,
         finalElapsed: 0,
         startedAt: failedAt,
         activeSkill: activeSkill,
@@ -8328,32 +8885,29 @@ const Chat = ({
       return;
     }
 
-    // 创建 N 个生成占位（每个 startedAt 独立）
+    // 批量也只建一张卡：n 张图渲染在这张卡的 images 网格里
     const slots = [];
     const baseAt = Date.now();
-    for (let i = 0; i < batchCount; i++) {
-      const slotAt = baseAt + i;
-      slots.push(slotAt);
-      setMessages(msgs => [...msgs, {
-        who: 'ai',
-        type: 'ai-image-generating',
-        model,
-        provider,
-        prompt,
-        size: lastSize,
-        resolution: lastResolution,
-        status: activeSkill ? 'skill-planning' : 'running',
-        startedAt: slotAt,
-        progress: 0,
-        activeSkill: activeSkill,
-        meta: batchCount > 1 ? 'Loom · ' + (i + 1) + '/' + batchCount : 'Loom',
-        hasReference: refImages.length > 0,
-        refCount: refImages.length,
-        refPreviews: [],
-        batchIndex: i,
-        batchCount: batchCount
-      }]);
-    }
+    slots.push(baseAt);
+    setMessages(msgs => [...msgs, {
+      who: 'ai',
+      type: 'ai-image-generating',
+      model,
+      provider,
+      prompt,
+      size: lastSize,
+      resolution: lastResolution,
+      status: activeSkill ? 'skill-planning' : 'running',
+      startedAt: baseAt,
+      progress: 0,
+      activeSkill: activeSkill,
+      meta: batchCount > 1 ? 'Loom · ×' + batchCount : 'Loom',
+      hasReference: refImages.length > 0,
+      refCount: refImages.length,
+      refPreviews: [],
+      batchCount: batchCount,
+      images: batchCount > 1 ? [] : undefined
+    }]);
     if (activeSkill && !plannedPrompt && window.API && window.API.streamSkillPlan) {
       const primarySlotAt = slots[0];
       var streamedTrace = '';
@@ -8415,6 +8969,13 @@ const Chat = ({
     };
     const submitOne = function (slotAt, index) {
       return new Promise(function (resolve) {
+        const clientRequestId = newClientRequestId();
+        // 提交前就把 client 号写到卡片上，即使请求没到后端也能对照控制台
+        setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
+          clientRequestId: clientRequestId,
+          status: m.status === 'skill-planning' ? m.status : 'queued',
+          progress: Math.max(m.progress || 0, 5)
+        }) : m));
         const fd = new FormData();
         fd.append('model', model);
         fd.append('provider', provider);
@@ -8426,49 +8987,140 @@ const Chat = ({
         if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
         if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
         fd.append('ref_previews', JSON.stringify(refPreviews));
+        fd.append('client_request_id', clientRequestId);
         finalRefImages.forEach(r => fd.append('image', r.file));
         fd.append('batch_count', '1');
-        fetch(apiBase + '/ai-image', {
-          method: 'POST',
-          body: fd,
-          credentials: 'include'
-        }).then(function (res) {
-          if (!res.ok) {
-            return res.json().catch(function () {
-              return {};
-            }).then(function (err) {
-              throw new Error((err && err.detail && typeof err.detail === 'object' ? err.detail.message : err && err.detail) || 'HTTP ' + res.status);
-            });
-          }
-          return res.json();
+        pushAiImageClientEvent({
+          type: 'submit_start',
+          phase: 'submit',
+          clientRequestId: clientRequestId,
+          model: model,
+          provider: provider,
+          refCount: finalRefImages.length
+        });
+        postAiImageForm(apiBase, fd, {
+          clientRequestId: clientRequestId,
+          maxAttempts: 2,
+          timeoutMs: 120000
         }).then(function (data) {
           if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
           const jobId = data.job_id;
           if (!jobId) {
+            const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+            var noJobErr = '服务器返回异常，没有生成任务编号，请稍后重试。';
+            reportAiImageClientEvent({
+              type: 'submit_no_job_id',
+              phase: 'submit',
+              clientRequestId: clientRequestId,
+              model: model,
+              provider: provider,
+              reachedServer: true,
+              error: 'response missing job_id'
+            });
+            alertAiImageError(noJobErr, {
+              phaseLabel: describeAiImageFailPhase('submit'),
+              clientRequestId: clientRequestId
+            });
+            setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
+              status: 'failed',
+              failPhase: 'submit',
+              error: formatAiImageError(noJobErr, null),
+              finalElapsed: finalElapsed,
+              clientRequestId: clientRequestId
+            }) : m));
             tryFlushCollected();
             resolve();
             return;
           }
+          pushAiImageClientEvent({
+            type: 'submit_accepted',
+            phase: 'submit',
+            clientRequestId: clientRequestId,
+            jobId: jobId,
+            reachedServer: true
+          });
           setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
-            jobId,
-            status: activeSkill ? 'skill-parsed' : m.status,
+            jobId: jobId,
+            clientRequestId: clientRequestId,
+            status: activeSkill ? 'skill-parsed' : 'processing',
             resolvedPrompt: data.resolved_prompt || m.resolvedPrompt,
-            promptTrace: data.prompt_trace || m.promptTrace
+            promptTrace: data.prompt_trace || m.promptTrace,
+            progress: Math.max(m.progress || 0, 12)
           }) : m));
+          var pollFails = 0;
+          const failSlot = function (errorText, extra) {
+            clearInterval(pollInterval);
+            const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+            var phase = extra && extra.phase || 'poll_or_job';
+            var errText = formatAiImageError(errorText, jobId, Object.assign({
+              clientRequestId: clientRequestId
+            }, extra || {}));
+            reportAiImageClientEvent({
+              type: 'job_failed',
+              phase: phase,
+              clientRequestId: clientRequestId,
+              jobId: jobId,
+              taskId: extra && extra.taskId,
+              httpStatus: extra && extra.httpStatus,
+              error: String(errorText || '').slice(0, 400),
+              reachedServer: true
+            });
+            alertAiImageError(errText, {
+              phaseLabel: describeAiImageFailPhase(phase),
+              clientRequestId: clientRequestId,
+              jobId: jobId
+            });
+            setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
+              status: 'failed',
+              failPhase: phase,
+              error: errText,
+              finalElapsed: finalElapsed,
+              jobId: jobId,
+              clientRequestId: clientRequestId,
+              taskId: extra && extra.taskId || m.taskId,
+              refPreviews: refPreviews.length ? refPreviews : m.refPreviews
+            }) : m));
+            loadAiChatHistory();
+            tryFlushCollected();
+            resolve();
+          };
           const pollInterval = setInterval(function () {
             fetch(apiBase + '/ai-image/' + jobId, {
-              credentials: 'include'
+              credentials: 'include',
+              headers: {
+                'X-Client-Request-Id': clientRequestId
+              }
             }).then(function (r) {
-              return r.ok ? r.json() : null;
+              if (!r.ok) {
+                pollFails += 1;
+                return r.json().catch(function () {
+                  return {};
+                }).then(function (errBody) {
+                  var detail = errBody && (errBody.detail || errBody.message || errBody.error) || '';
+                  if (typeof detail === 'object' && detail) detail = detail.message || JSON.stringify(detail);
+                  // 404：任务不存在，无需继续轮询；其它错误连续 5 次再失败
+                  if (r.status === 404 || pollFails >= 5) {
+                    failSlot(detail || '查询任务状态失败 HTTP ' + r.status, {
+                      httpStatus: r.status
+                    });
+                  }
+                  return null;
+                });
+              }
+              pollFails = 0;
+              return r.json();
             }).then(function (statusData) {
               if (!statusData) return;
               setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
-                status: statusData.status,
+                status: statusData.status === 'failed' || statusData.status === 'done' ? statusData.status : statusData.status || m.status,
                 progress: statusData.progress || m.progress,
                 originalPrompt: statusData.original_prompt || m.originalPrompt,
                 resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt,
                 promptTrace: statusData.prompt_trace || m.promptTrace,
-                providerSwitched: statusData.providerSwitched || m.providerSwitched
+                providerSwitched: statusData.providerSwitched || m.providerSwitched,
+                taskId: statusData.task_id || m.taskId,
+                jobId: jobId,
+                clientRequestId: clientRequestId
               }) : m));
               if (statusData.status === 'done' && statusData.image_url) {
                 clearInterval(pollInterval);
@@ -8477,12 +9129,15 @@ const Chat = ({
                   status: 'done',
                   imageUrl: statusData.image_url,
                   previewUrl: statusData.preview_url || statusData.image_url,
-                  finalElapsed,
+                  finalElapsed: finalElapsed,
                   progress: 100,
                   refPreviews: refPreviews.length ? refPreviews : m.refPreviews,
                   originalPrompt: statusData.original_prompt || m.originalPrompt,
                   resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt,
-                  promptTrace: statusData.prompt_trace || m.promptTrace
+                  promptTrace: statusData.prompt_trace || m.promptTrace,
+                  jobId: jobId,
+                  taskId: statusData.task_id || m.taskId,
+                  clientRequestId: clientRequestId
                 }) : m));
                 loadAiChatHistory();
                 collected.push({
@@ -8491,37 +9146,351 @@ const Chat = ({
                 });
                 tryFlushCollected();
                 resolve();
+              } else if (statusData.status === 'done' && !statusData.image_url) {
+                // done 但无图：当失败处理，避免卡片卡在完成态空白
+                failSlot('任务标记完成但未返回图片地址', {
+                  taskId: statusData.task_id,
+                  phase: 'download'
+                });
               } else if (statusData.status === 'failed') {
-                clearInterval(pollInterval);
-                const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
-                setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
-                  status: 'failed',
-                  error: statusData.error || '未知错误',
-                  finalElapsed,
-                  refPreviews: refPreviews.length ? refPreviews : m.refPreviews
-                }) : m));
-                loadAiChatHistory();
-                tryFlushCollected();
-                resolve();
+                failSlot(statusData.error, {
+                  taskId: statusData.task_id,
+                  phase: 'generate'
+                });
               }
-            }).catch(function () {});
+            }).catch(function (pollErr) {
+              pollFails += 1;
+              console.warn('[ai-image] poll error job=' + jobId + ' client=' + clientRequestId, pollErr);
+              if (pollFails >= 5) {
+                var pollMsg = isLikelyUnreachedServerError(pollErr) ? '查询进度时网络不稳定，任务可能仍在生成中，请稍后在历史记录中查看。' : pollErr && pollErr.message || '查询进度失败，请稍后重试。';
+                failSlot(pollMsg, {
+                  phase: 'poll'
+                });
+              }
+            });
           }, 2000);
         }).catch(function (err) {
           const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+          var failPhase = err && err.phase || (err && err.unreached ? 'network' : 'submit');
+          var submitErr = formatAiImageError(err && err.message || '提交失败', null, {
+            clientRequestId: clientRequestId,
+            httpStatus: err && err.httpStatus
+          });
+          reportAiImageClientEvent({
+            type: 'submit_failed',
+            phase: failPhase,
+            clientRequestId: clientRequestId,
+            model: model,
+            provider: provider,
+            httpStatus: err && err.httpStatus,
+            attempt: err && err.attempt,
+            unreached: !!(err && (err.unreached || isLikelyUnreachedServerError(err))),
+            reachedServer: !!(err && err.httpStatus),
+            error: String(err && err.message || '').slice(0, 500),
+            refCount: finalRefImages.length
+          });
+          alertAiImageError(submitErr, {
+            phaseLabel: describeAiImageFailPhase(failPhase),
+            clientRequestId: clientRequestId
+          });
           setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
             status: 'failed',
-            error: err.message,
-            finalElapsed
+            failPhase: failPhase,
+            error: submitErr,
+            finalElapsed: finalElapsed,
+            clientRequestId: clientRequestId
           }) : m));
           tryFlushCollected();
           resolve();
         });
       });
     };
+
+    // 批量提交：一次 POST batch_count=n（一条用户消息、一次改写、一个会话），
+    // 返回 n 个 job_id 后并行轮询，全部更新到同一张卡的 images 网格
+    const submitBatch = function (slotAt) {
+      return new Promise(function (resolve) {
+        const clientRequestId = newClientRequestId();
+        setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
+          clientRequestId: clientRequestId,
+          status: m.status === 'skill-planning' ? m.status : 'queued',
+          progress: Math.max(m.progress || 0, 5)
+        }) : m));
+        const fd = new FormData();
+        fd.append('model', model);
+        fd.append('provider', provider);
+        fd.append('prompt', finalPrompt);
+        fd.append('size', aiOptions.size || '1024x1024');
+        fd.append('resolution', aiOptions.resolution || '1K');
+        if (activeSkill) fd.append('skill', activeSkill);
+        if (plannedPrompt) fd.append('planned_prompt', plannedPrompt);
+        if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
+        if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
+        fd.append('ref_previews', JSON.stringify(refPreviews));
+        fd.append('client_request_id', clientRequestId);
+        finalRefImages.forEach(r => fd.append('image', r.file));
+        fd.append('batch_count', String(batchCount));
+        pushAiImageClientEvent({
+          type: 'submit_start',
+          phase: 'submit',
+          clientRequestId: clientRequestId,
+          model: model,
+          provider: provider,
+          refCount: finalRefImages.length,
+          batchCount: batchCount
+        });
+        postAiImageForm(apiBase, fd, {
+          clientRequestId: clientRequestId,
+          maxAttempts: 2,
+          timeoutMs: 120000
+        }).then(function (data) {
+          if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
+          var jobIds = Array.isArray(data.job_ids) && data.job_ids.length ? data.job_ids : data.job_id ? [data.job_id] : [];
+          if (!jobIds.length) {
+            const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+            var noJobErr = '服务器返回异常，没有生成任务编号，请稍后重试。';
+            reportAiImageClientEvent({
+              type: 'submit_no_job_id',
+              phase: 'submit',
+              clientRequestId: clientRequestId,
+              model: model,
+              provider: provider,
+              reachedServer: true,
+              error: 'response missing job_ids'
+            });
+            alertAiImageError(noJobErr, {
+              phaseLabel: describeAiImageFailPhase('submit'),
+              clientRequestId: clientRequestId
+            });
+            setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
+              status: 'failed',
+              failPhase: 'submit',
+              error: formatAiImageError(noJobErr, null),
+              finalElapsed: finalElapsed,
+              clientRequestId: clientRequestId
+            }) : m));
+            resolve();
+            return;
+          }
+          pushAiImageClientEvent({
+            type: 'submit_accepted',
+            phase: 'submit',
+            clientRequestId: clientRequestId,
+            jobId: jobIds.join(','),
+            reachedServer: true
+          });
+          setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
+            jobId: jobIds[0],
+            batchId: data.batch_id || '',
+            clientRequestId: clientRequestId,
+            status: activeSkill ? 'skill-parsed' : 'processing',
+            resolvedPrompt: data.resolved_prompt || m.resolvedPrompt,
+            promptTrace: data.prompt_trace || m.promptTrace,
+            progress: Math.max(m.progress || 0, 12),
+            refPreviews: refPreviews.length ? refPreviews : m.refPreviews,
+            images: jobIds.map(function (jid) {
+              return {
+                jobId: jid,
+                status: 'processing',
+                progress: 0
+              };
+            })
+          }) : m));
+          var terminal = {}; // jobId -> {status, url, previewUrl, error}
+          var pollFails = {}; // jobId -> 连续查询失败次数
+          var finished = false;
+          const patchImage = function (jid, patch) {
+            if (finished) return;
+            setMessages(msgs => msgs.map(m => {
+              if (!(m.type === 'ai-image-generating' && m.startedAt === slotAt)) return m;
+              var images = (m.images || []).map(function (im) {
+                return im.jobId === jid ? Object.assign({}, im, patch) : im;
+              });
+              var total = 0;
+              images.forEach(function (im) {
+                total += im.status === 'done' || im.status === 'failed' ? 100 : im.progress || 0;
+              });
+              var agg = images.length ? Math.floor(total / images.length) : m.progress || 0;
+              return Object.assign({}, m, {
+                images: images,
+                progress: Math.max(m.progress || 0, Math.min(agg, 99)),
+                status: m.status === 'skill-parsed' ? m.status : 'processing'
+              });
+            }));
+          };
+          const finishIfAllTerminal = function () {
+            if (finished) return;
+            if (jobIds.some(function (jid) {
+              return !terminal[jid];
+            })) return;
+            finished = true;
+            clearInterval(pollInterval);
+            const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+            var okOrdered = [];
+            jobIds.forEach(function (jid, i) {
+              var t = terminal[jid];
+              if (t.status === 'done' && t.url) okOrdered.push({
+                url: t.url,
+                index: i
+              });
+            });
+            var failCount = jobIds.length - okOrdered.length;
+            var firstErr = null;
+            jobIds.some(function (jid) {
+              var t = terminal[jid];
+              if (t.status === 'failed' && t.error) {
+                firstErr = t.error;
+                return true;
+              }
+              return false;
+            });
+            var cardStatus = okOrdered.length ? 'done' : 'failed';
+            setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
+              status: cardStatus,
+              progress: 100,
+              finalElapsed: finalElapsed,
+              error: cardStatus === 'failed' ? formatAiImageError(firstErr || '生图失败', jobIds[0]) : null,
+              imageUrl: okOrdered.length ? okOrdered[0].url : m.imageUrl
+            }) : m));
+            if (failCount > 0) {
+              var summary = okOrdered.length ? '本次 ' + jobIds.length + ' 张中有 ' + failCount + ' 张失败：' + formatAiImageError(firstErr || '未知原因', null) : formatAiImageError(firstErr || '生图失败', jobIds[0]);
+              reportAiImageClientEvent({
+                type: 'job_failed',
+                phase: 'generate',
+                clientRequestId: clientRequestId,
+                jobId: jobIds.join(','),
+                error: String(firstErr || '').slice(0, 400),
+                reachedServer: true
+              });
+              alertAiImageError(summary, {
+                phaseLabel: describeAiImageFailPhase('generate'),
+                clientRequestId: clientRequestId
+              });
+            }
+            loadAiChatHistory();
+            if (okOrdered.length && onComposeComplete) {
+              onComposeComplete(null, null, okOrdered.map(function (x) {
+                return x.url;
+              }), null);
+            }
+            resolve();
+          };
+          const markTerminal = function (jid, t) {
+            if (terminal[jid]) return;
+            terminal[jid] = t;
+            patchImage(jid, t.status === 'done' ? {
+              status: 'done',
+              url: t.url,
+              previewUrl: t.previewUrl,
+              progress: 100
+            } : {
+              status: 'failed',
+              error: t.error,
+              progress: 100
+            });
+            finishIfAllTerminal();
+          };
+          const pollInterval = setInterval(function () {
+            jobIds.forEach(function (jid) {
+              if (terminal[jid]) return;
+              fetch(apiBase + '/ai-image/' + jid, {
+                credentials: 'include',
+                headers: {
+                  'X-Client-Request-Id': clientRequestId
+                }
+              }).then(function (r) {
+                if (!r.ok) {
+                  pollFails[jid] = (pollFails[jid] || 0) + 1;
+                  return r.json().catch(function () {
+                    return {};
+                  }).then(function (errBody) {
+                    var detail = errBody && (errBody.detail || errBody.message || errBody.error) || '';
+                    if (typeof detail === 'object' && detail) detail = detail.message || JSON.stringify(detail);
+                    if (r.status === 404 || pollFails[jid] >= 5) {
+                      markTerminal(jid, {
+                        status: 'failed',
+                        error: formatAiImageError(detail || '查询任务状态失败 HTTP ' + r.status, jid)
+                      });
+                    }
+                    return null;
+                  });
+                }
+                pollFails[jid] = 0;
+                return r.json();
+              }).then(function (sd) {
+                if (!sd) return;
+                if (sd.status === 'done' && sd.image_url) {
+                  markTerminal(jid, {
+                    status: 'done',
+                    url: sd.image_url,
+                    previewUrl: sd.preview_url || sd.image_url
+                  });
+                } else if (sd.status === 'done' && !sd.image_url) {
+                  markTerminal(jid, {
+                    status: 'failed',
+                    error: formatAiImageError('任务标记完成但未返回图片地址', jid)
+                  });
+                } else if (sd.status === 'failed') {
+                  markTerminal(jid, {
+                    status: 'failed',
+                    error: formatAiImageError(sd.error || '生图失败', jid)
+                  });
+                } else {
+                  patchImage(jid, {
+                    progress: sd.progress || 0
+                  });
+                }
+              }).catch(function (pollErr) {
+                pollFails[jid] = (pollFails[jid] || 0) + 1;
+                console.warn('[ai-image] batch poll error job=' + jid + ' client=' + clientRequestId, pollErr);
+                if (pollFails[jid] >= 5) {
+                  var pollMsg = isLikelyUnreachedServerError(pollErr) ? '查询进度时网络不稳定，任务可能仍在生成中，请稍后在历史记录中查看。' : pollErr && pollErr.message || '查询进度失败，请稍后重试。';
+                  markTerminal(jid, {
+                    status: 'failed',
+                    error: formatAiImageError(pollMsg, jid)
+                  });
+                }
+              });
+            });
+          }, 2000);
+        }).catch(function (err) {
+          const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+          var failPhase = err && err.phase || (err && err.unreached ? 'network' : 'submit');
+          var submitErr = formatAiImageError(err && err.message || '提交失败', null, {
+            clientRequestId: clientRequestId,
+            httpStatus: err && err.httpStatus
+          });
+          reportAiImageClientEvent({
+            type: 'submit_failed',
+            phase: failPhase,
+            clientRequestId: clientRequestId,
+            model: model,
+            provider: provider,
+            httpStatus: err && err.httpStatus,
+            attempt: err && err.attempt,
+            unreached: !!(err && (err.unreached || isLikelyUnreachedServerError(err))),
+            reachedServer: !!(err && err.httpStatus),
+            error: String(err && err.message || '').slice(0, 500),
+            refCount: finalRefImages.length,
+            batchCount: batchCount
+          });
+          alertAiImageError(submitErr, {
+            phaseLabel: describeAiImageFailPhase(failPhase),
+            clientRequestId: clientRequestId
+          });
+          setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
+            status: 'failed',
+            failPhase: failPhase,
+            error: submitErr,
+            finalElapsed: finalElapsed,
+            clientRequestId: clientRequestId
+          }) : m));
+          resolve();
+        });
+      });
+    };
     try {
-      await Promise.all(slots.map(function (slotAt, i) {
-        return submitOne(slotAt, i);
-      }));
+      if (batchCount > 1) await submitBatch(slots[0]);else await submitOne(slots[0], 0);
     } finally {
       setIsLoading(false);
     }
