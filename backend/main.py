@@ -3312,6 +3312,9 @@ async def _run_ai_image_background(
     resolved_prompt: str = "",
     prompt_trace: str = "",
     ref_previews: list[str] | None = None,
+    batch_id: str = "",
+    batch_index: int = 0,
+    batch_count: int = 1,
 ):
     """后台异步生图：轮询进度 → 更新 DB → 下载结果 → 写聊天记录"""
     stage = "init"
@@ -3407,6 +3410,9 @@ async def _run_ai_image_background(
                 "refCount": len(refs),
                 "refPreviews": ref_previews or [],
                 "previewUrl": preview_url,
+                "batchId": batch_id,
+                "batchIndex": batch_index,
+                "batchCount": batch_count,
             },
             created_at=time.time(),
         )
@@ -3454,6 +3460,9 @@ async def _run_ai_image_background(
                 "hasReference": has_reference,
                 "refCount": len(refs),
                 "stage": stage,
+                "batchId": batch_id,
+                "batchIndex": batch_index,
+                "batchCount": batch_count,
             },
             created_at=time.time(),
         )
@@ -3500,6 +3509,9 @@ async def _run_ai_image_background(
                 "hasReference": has_reference,
                 "refCount": len(refs),
                 "stage": stage,
+                "batchId": batch_id,
+                "batchIndex": batch_index,
+                "batchCount": batch_count,
             },
             created_at=time.time(),
         )
@@ -4433,7 +4445,8 @@ async def ai_image_endpoint(
         ]
 
         has_reference = bool(images) or bool(context_ref_bytes)
-        # 批次模式：N 个独立 job 共享同样的 session/参数
+        # 批次模式：N 个独立 job 共享同样的 session/参数；batch_id 用于把 N 条结果聚合成一张多图卡
+        batch_id = uuid.uuid4().hex if batch_count > 1 else ""
         job_ids: list[str] = []
         for _idx in range(batch_count):
             jid = uuid.uuid4().hex
@@ -4480,6 +4493,7 @@ async def ai_image_endpoint(
                     original_prompt=original_prompt, resolved_prompt=enriched_prompt,
                     prompt_trace=json.dumps(prompt_trace_payload, ensure_ascii=False) if prompt_trace_payload else prompt_trace_text,
                     ref_previews=ref_previews_list,
+                    batch_id=batch_id, batch_index=_idx, batch_count=batch_count,
                 )
             )
         if batch_count == 1:
@@ -4493,6 +4507,7 @@ async def ai_image_endpoint(
             }
         return {
             "job_ids": job_ids,
+            "batch_id": batch_id,
             "chat_session_id": session_id,
             "status": "processing",
             "client_request_id": client_req,

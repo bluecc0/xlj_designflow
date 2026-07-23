@@ -996,6 +996,8 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
             ).fetchall()
     result = []
     job_id_to_idx = {}  # job_id -> result index (ai_image_result only)
+    batch_id_to_idx = {}  # batchId -> result index（批量多图消息）
+    batch_job_image = {}  # job_id -> 批量消息里对应的 image dict（灵感状态按图回填）
     for row in rows:
         meta = json.loads(row["meta_json"] or "{}")
         if row["type"] == "user_text":
@@ -1005,7 +1007,6 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 "createdAt": row["created_at"],
             })
         elif row["type"] == "ai_image_result":
-            idx = len(result)
             job_id = meta.get("job_id") or ""
             err_text = meta.get("error") or ""
             # 历史失败消息若 error 为空，给可排查兜底，避免前端只显示「未知错误」
@@ -1014,27 +1015,59 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                     f"生图失败但未记录错误详情"
                     f"{'（job=' + job_id[:8] + '）' if job_id else ''}，请查后端日志"
                 )
-            result.append({
-                "who": "ai",
-                "type": "ai-image-generating",
-                "model": meta.get("model"),
-                "prompt": meta.get("prompt") or (row["text"] or ""),
-                "status": meta.get("status") or "done",
-                "imageUrl": row["image_url"],
-                "previewUrl": meta.get("previewUrl") or "",
-                "error": err_text or None,
+            batch_id = str(meta.get("batchId") or "")
+            image_item = {
                 "jobId": job_id or None,
-                "hasReference": bool(meta.get("hasReference")),
-                "refCount": int(meta.get("refCount") or 0),
-                "refPreviews": meta.get("refPreviews") or [],
-                "finalElapsed": meta.get("finalElapsed"),
-                "provider": meta.get("provider"),
-                "providerSwitched": bool(meta.get("providerSwitched")),
-                "meta": "Loom",
-                "createdAt": row["created_at"],
-            })
+                "url": row["image_url"],
+                "previewUrl": meta.get("previewUrl") or "",
+                "status": meta.get("status") or "done",
+                "error": err_text or None,
+                "batchIndex": int(meta.get("batchIndex") or 0),
+            }
+            if batch_id and batch_id in batch_id_to_idx:
+                # 同一批次的后续结果并入已有多图消息，重算聚合状态
+                idx = batch_id_to_idx[batch_id]
+                msg = result[idx]
+                msg["images"].append(image_item)
+                msg["images"].sort(key=lambda im: im.get("batchIndex") or 0)
+                ok_imgs = [im for im in msg["images"] if im.get("status") == "done" and im.get("url")]
+                msg["status"] = "done" if ok_imgs else "failed"
+                msg["imageUrl"] = ok_imgs[0]["url"] if ok_imgs else None
+                msg["previewUrl"] = ok_imgs[0]["previewUrl"] if ok_imgs else ""
+                msg["error"] = None if ok_imgs else next(
+                    (im.get("error") for im in msg["images"] if im.get("error")), None
+                )
+            else:
+                idx = len(result)
+                msg = {
+                    "who": "ai",
+                    "type": "ai-image-generating",
+                    "model": meta.get("model"),
+                    "prompt": meta.get("prompt") or (row["text"] or ""),
+                    "status": meta.get("status") or "done",
+                    "imageUrl": row["image_url"],
+                    "previewUrl": meta.get("previewUrl") or "",
+                    "error": err_text or None,
+                    "jobId": job_id or None,
+                    "hasReference": bool(meta.get("hasReference")),
+                    "refCount": int(meta.get("refCount") or 0),
+                    "refPreviews": meta.get("refPreviews") or [],
+                    "finalElapsed": meta.get("finalElapsed"),
+                    "provider": meta.get("provider"),
+                    "providerSwitched": bool(meta.get("providerSwitched")),
+                    "meta": "Loom",
+                    "createdAt": row["created_at"],
+                }
+                if batch_id:
+                    msg["batchId"] = batch_id
+                    msg["batchCount"] = int(meta.get("batchCount") or 0) or None
+                    msg["images"] = [image_item]
+                    batch_id_to_idx[batch_id] = idx
+                result.append(msg)
             if job_id:
                 job_id_to_idx[job_id] = idx
+                if batch_id:
+                    batch_job_image[job_id] = image_item
         elif row["type"] == "ai_text":
             result.append({
                 "who": "ai",
@@ -1054,10 +1087,16 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
         for r in insp_rows:
             idx = job_id_to_idx.get(r["job_id"])
             if idx is not None:
-                result[idx]["inspirationPostId"] = r["id"]
-    # image_url 兜底 (兼容老消息没有 job_id)
+                img = batch_job_image.get(r["job_id"])
+                if img is not None:
+                    # 批量消息：发布状态挂在对应那张图上
+                    img["inspirationPostId"] = r["id"]
+                else:
+                    result[idx]["inspirationPostId"] = r["id"]
+    # image_url 兜底 (兼容老消息没有 job_id；批量消息不参与)
     img_msgs = {m.get("imageUrl"): idx for idx, m in enumerate(result)
-                if m.get("type") == "ai-image-generating" and not m.get("inspirationPostId") and m.get("imageUrl")}
+                if m.get("type") == "ai-image-generating" and not m.get("inspirationPostId")
+                and m.get("imageUrl") and not m.get("images")}
     if img_msgs:
         urls = list(img_msgs.keys())
         placeholders = ",".join("?" * len(urls))
