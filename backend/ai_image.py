@@ -109,6 +109,68 @@ def _api_error_msg(status: int, raw: str) -> str:
     return base
 
 
+def format_generation_error(
+    exc: BaseException | str | None,
+    *,
+    stage: str = "",
+    provider: str = "",
+    model: str = "",
+    job_id: str = "",
+    task_id: str = "",
+) -> str:
+    """把异常整理成可排查的用户可见错误文案，保证非空。"""
+    if isinstance(exc, BaseException):
+        raw = (str(exc) or "").strip() or type(exc).__name__
+        exc_name = type(exc).__name__
+    else:
+        raw = (str(exc) if exc is not None else "").strip()
+        exc_name = ""
+    if not raw:
+        raw = "未返回具体错误信息"
+
+    # 常见可操作提示（附加在原文后，不替换上游细节）
+    low = raw.lower()
+    tip = ""
+    if any(k in low for k in ("timeout", "timed out", "超时")):
+        tip = "可稍后重试，或换线路"
+    elif any(k in low for k in ("401", "api key", "unauthorized", "鉴权", "验证失败")):
+        tip = "请检查 API Key / 线路配置"
+    elif any(k in low for k in ("402", "403", "余额", "insufficient", "quota", "payment")):
+        tip = "请检查账户余额或权限"
+    elif any(k in low for k in ("429", "rate limit", "too many", "频繁")):
+        tip = "请求过频，请稍后再试"
+    elif any(k in low for k in ("502", "503", "504", "upstream", "disconnected", "connection", "network", "dns")):
+        tip = "上游服务或网络异常，可换线路重试"
+    elif any(k in low for k in ("content", "safety", "policy", "违规", "审核", "moderation", "blocked")):
+        tip = "可能触发内容安全策略，请调整提示词或参考图"
+    elif any(k in low for k in ("413", "too large", "过大")):
+        tip = "参考图可能过大，请压缩后重试"
+
+    # 避免重复堆叠元信息：若原文已含 job= 则不再附加
+    meta_parts: list[str] = []
+    if stage and f"阶段={stage}" not in raw and f"stage={stage}" not in low:
+        meta_parts.append(f"阶段={stage}")
+    if provider and f"线路={provider}" not in raw and provider not in raw:
+        meta_parts.append(f"线路={provider}")
+    if model and f"模型={model}" not in raw and model not in raw:
+        meta_parts.append(f"模型={model}")
+    if job_id and f"job={job_id[:8]}" not in raw and job_id not in raw:
+        meta_parts.append(f"job={job_id[:8]}")
+    if task_id and f"task={task_id}" not in raw and task_id not in raw:
+        meta_parts.append(f"task={task_id}")
+    if exc_name and exc_name not in raw and not raw.startswith(exc_name):
+        # 仅在原文太短/无类型信息时附加异常类名
+        if len(raw) < 24 or raw in {"Error", "Exception", "RuntimeError"}:
+            meta_parts.insert(0, exc_name)
+
+    msg = raw
+    if meta_parts:
+        msg = f"{raw}（{' · '.join(meta_parts)}）"
+    if tip and tip not in msg:
+        msg = f"{msg}。{tip}"
+    return msg[:800]
+
+
 def _ensure_user_output_dir(user_id: str) -> Path:
     safe_user_id = "".join(ch for ch in str(user_id or "").strip() if ch.isalnum() or ch in ("-", "_"))
     safe_user_id = safe_user_id or "anonymous"
@@ -705,14 +767,23 @@ async def _wait_for_task_result(
                 str(data)[:500],
             )
             if completed_without_url >= 10:
-                raise RuntimeError(f"任务已完成，但未拿到图片 URL: {str(data)[:500]}")
+                raise RuntimeError(
+                    f"任务已完成，但未拿到图片 URL（task_id={task_id}）: {str(data)[:500]}"
+                )
             await asyncio_sleep(1.5)
             continue
         if status in {"failed", "error", "cancelled", "canceled"}:
-            error_text = str(_extract_task_error(data) or data)[:240]
-            raise RuntimeError(f"生图任务失败: {error_text}")
+            extracted = _extract_task_error(data)
+            if extracted:
+                error_text = str(extracted)[:400]
+            else:
+                # 上游只回 status=failed 无 error 字段时，至少带上原始 payload 片段
+                error_text = f"上游状态={status}，详情={str(data)[:360]}"
+            raise RuntimeError(f"生图任务失败（task_id={task_id}）: {error_text}")
         await asyncio_sleep(poll_interval)
-    raise RuntimeError(f"生图任务超时，最后状态: {last_status}")
+    raise RuntimeError(
+        f"生图任务超时（task_id={task_id}），最后状态={last_status or 'unknown'}，进度={last_progress}%"
+    )
 
 
 async def asyncio_sleep(seconds: float) -> None:

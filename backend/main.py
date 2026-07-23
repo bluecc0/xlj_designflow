@@ -44,6 +44,7 @@ from .ai_image import (
     PROVIDER_SUB2API,
     PROVIDER_ZENMUX,
     cleanup_user_refs,
+    format_generation_error,
     generate_image,
     generate_image_with_reference,
     generate_image_async,
@@ -883,10 +884,52 @@ async def attach_user_context(request: Request, call_next):
     request.state.user = _get_session_user(request)
     path = request.url.path or "/"
     is_exempt = path in _AUTH_EXEMPT_EXACT_PATHS or any(path.startswith(prefix) for prefix in _AUTH_EXEMPT_PREFIXES)
+    # 生图相关请求：在应用层入口就打点，便于对照「前端失败但后端无业务日志」
+    # （哪怕 401 被中间件拦截、或 multipart 读 body 前就断开，至少 headers 到达时会有一条记录）
+    client_req_id = (
+        request.headers.get("x-client-request-id")
+        or request.headers.get("X-Client-Request-Id")
+        or ""
+    ).strip()
+    is_ai_image_path = path == "/ai-image" or path.startswith("/ai-image/")
+    t0 = time.monotonic()
+    if is_ai_image_path:
+        user = request.state.user or {}
+        logger.info(
+            "ai_image_access_in method=%s path=%s client=%s user=%s content_length=%s",
+            request.method,
+            path,
+            client_req_id or "-",
+            user.get("username") or user.get("id") or ("anon" if is_exempt else "no-session"),
+            request.headers.get("content-length") or "-",
+        )
     if not is_exempt:
         if request.state.user is None:
+            if is_ai_image_path:
+                logger.warning(
+                    "ai_image_access_out method=%s path=%s client=%s status=401 reason=no_session elapsed_ms=%.0f",
+                    request.method, path, client_req_id or "-", (time.monotonic() - t0) * 1000,
+                )
             return JSONResponse({"detail": "请先输入名字进入系统"}, status_code=401)
-    return await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        if is_ai_image_path:
+            logger.exception(
+                "ai_image_access_err method=%s path=%s client=%s elapsed_ms=%.0f",
+                request.method, path, client_req_id or "-", (time.monotonic() - t0) * 1000,
+            )
+        raise
+    if is_ai_image_path:
+        logger.info(
+            "ai_image_access_out method=%s path=%s client=%s status=%s elapsed_ms=%.0f",
+            request.method,
+            path,
+            client_req_id or "-",
+            getattr(response, "status_code", "?"),
+            (time.monotonic() - t0) * 1000,
+        )
+    return response
 
 
 # ─── 路由 ─────────────────────────────────────────────────────────────────────
@@ -3270,14 +3313,16 @@ async def _run_ai_image_background(
     ref_previews: list[str] | None = None,
 ):
     """后台异步生图：轮询进度 → 更新 DB → 下载结果 → 写聊天记录"""
+    stage = "init"
+    upstream_task_id = ""
+
     def on_progress(pct: int, api_status: str):
         try:
             # 基于进度和 API 状态综合判断
+            # 注意：进度回调不得把 status 写成终态 done（最终 done 由成功路径统一落库）
             api_status_lower = (api_status or "").lower()
-            if pct == 0:
+            if pct == 0 and api_status_lower in ("", "queued", "pending", "submitted"):
                 db_status = "queued"
-            elif api_status_lower in ("completed", "succeeded", "success", "done"):
-                db_status = "done"
             else:
                 db_status = "processing"
             save_ai_image_job(
@@ -3291,6 +3336,7 @@ async def _run_ai_image_background(
             pass
 
     try:
+        stage = "generate"
         if provider == PROVIDER_SUB2API:
             result = await generate_sub2api_async(
                 model=model, prompt=prompt,
@@ -3317,12 +3363,14 @@ async def _run_ai_image_background(
                 size=size, resolution=resolution, user_id=user_id,
                 on_progress=on_progress,
             )
+        upstream_task_id = str(result.get("task_id") or "")
+        stage = "persist"
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="done",
             model=model, prompt=prompt, size=size,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
-            image_url=result.get("url"), task_id=result.get("task_id"),
+            image_url=result.get("url"), task_id=upstream_task_id or None,
             progress=100, has_reference=has_reference, created_at=created_at,
         )
         cost_str = f" cost={result.get('cost')}" if result.get('cost') is not None else ""
@@ -3370,20 +3418,28 @@ async def _run_ai_image_background(
         # Uvicorn reload / server shutdown can cancel in-flight background tasks.
         # Without explicitly persisting this, the UI keeps polling a permanent
         # "processing" job that will never be resumed.
-        error_msg = "生图任务被服务重载或关闭中断，请重新提交"
-        logger.warning("ai_image background task cancelled: job_id=%s", job_id)
+        error_msg = format_generation_error(
+            "生图任务被服务重载或关闭中断，请重新提交",
+            stage=stage or "cancelled",
+            provider=provider,
+            model=model,
+            job_id=job_id,
+            task_id=upstream_task_id,
+        )
+        logger.warning("ai_image background task cancelled: job_id=%s stage=%s", job_id, stage)
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="failed",
             model=model, prompt=prompt, size=size,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
-            has_reference=has_reference, error=error_msg, created_at=created_at,
+            has_reference=has_reference, error=error_msg, task_id=upstream_task_id or None,
+            progress=100, created_at=created_at,
         )
         log_operation(
             user_id=user_id, username=username,
             action="ai_image",
-            detail=f"job={job_id[:8]} model={model} size={size} result=cancelled",
-            payload=json.dumps({"job_id": job_id, "model": model, "size": size, "result": "cancelled", "error": error_msg}, ensure_ascii=False),
+            detail=f"job={job_id[:8]} model={model} size={size} result=cancelled stage={stage}",
+            payload=json.dumps({"job_id": job_id, "model": model, "size": size, "result": "cancelled", "error": error_msg, "stage": stage}, ensure_ascii=False),
         )
         append_ai_chat_message(
             session_id=session_id, user_id=user_id,
@@ -3396,24 +3452,40 @@ async def _run_ai_image_background(
                 "status": "failed", "error": error_msg,
                 "hasReference": has_reference,
                 "refCount": len(refs),
+                "stage": stage,
             },
             created_at=time.time(),
         )
         raise
     except Exception as e:
-        logger.exception("ai_image background task failed: job_id=%s", job_id)
+        error_msg = format_generation_error(
+            e,
+            stage=stage or "generate",
+            provider=provider,
+            model=model,
+            job_id=job_id,
+            task_id=upstream_task_id,
+        )
+        logger.exception(
+            "ai_image background task failed: job_id=%s stage=%s provider=%s model=%s error=%s",
+            job_id, stage, provider, model, error_msg[:200],
+        )
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="failed",
             model=model, prompt=prompt, size=size,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
-            has_reference=has_reference, error=str(e), created_at=created_at,
+            has_reference=has_reference, error=error_msg, task_id=upstream_task_id or None,
+            progress=100, created_at=created_at,
         )
         log_operation(
             user_id=user_id, username=username,
             action="ai_image",
-            detail=f"job={job_id[:8]} model={model} size={size} result=failed error={str(e)[:80]}",
-            payload=json.dumps({"job_id": job_id, "model": model, "size": size, "result": "failed", "error": str(e)[:200]}, ensure_ascii=False),
+            detail=f"job={job_id[:8]} model={model} size={size} result=failed stage={stage} error={error_msg[:80]}",
+            payload=json.dumps({
+                "job_id": job_id, "model": model, "size": size, "result": "failed",
+                "error": error_msg[:500], "stage": stage, "provider": provider,
+            }, ensure_ascii=False),
         )
         append_ai_chat_message(
             session_id=session_id, user_id=user_id,
@@ -3423,9 +3495,10 @@ async def _run_ai_image_background(
                 "job_id": job_id,
                 "model": model, "prompt": prompt,
                 "provider": provider,
-                "status": "failed", "error": str(e),
+                "status": "failed", "error": error_msg,
                 "hasReference": has_reference,
                 "refCount": len(refs),
+                "stage": stage,
             },
             created_at=time.time(),
         )
@@ -3505,27 +3578,106 @@ async def ai_image_layer_extract(request: Request):
     return {"job_id": job_id, "status": "processing", "progress": 0}
 
 
+@app.post("/ai-image/client-event")
+async def ai_image_client_event(request: Request):
+    """接收前端生图链路事件（尤其是主请求未到达时的失败）。
+
+    仅写日志 + 操作流水，不创建 job。用于事后对照：
+    前端有失败卡片、但没有 ai_image_endpoint_enter / job 记录的情况。
+    """
+    user = getattr(request.state, "user", None)
+    # sendBeacon 在个别环境下可能不带 cookie：仍接收，记为 anon，避免丢失线索
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {"raw": str(body)[:500]}
+
+    client_req = (
+        str(body.get("clientRequestId") or body.get("client") or "").strip()
+        or (request.headers.get("x-client-request-id") or "").strip()
+        or "-"
+    )
+    event_type = str(body.get("type") or "unknown")[:64]
+    phase = str(body.get("phase") or "")[:32]
+    error = str(body.get("error") or "")[:500]
+    job_id = str(body.get("jobId") or body.get("job_id") or "")[:64]
+    unreached = bool(body.get("unreached") or body.get("reachedServer") is False)
+    online = body.get("online")
+    api_base = str(body.get("apiBase") or "")[:200]
+    username = (user or {}).get("username") or (user or {}).get("id") or "anon"
+
+    logger.warning(
+        "ai_image_client_event type=%s phase=%s client=%s job=%s unreached=%s online=%s user=%s error=%s apiBase=%s",
+        event_type,
+        phase or "-",
+        client_req,
+        job_id or "-",
+        unreached,
+        online,
+        username,
+        error[:200] if error else "-",
+        api_base or "-",
+    )
+    try:
+        if user and user.get("id"):
+            log_operation(
+                user_id=user["id"],
+                username=username,
+                action="ai_image_client_event",
+                detail=f"type={event_type} phase={phase or '-'} client={client_req} job={job_id or '-'} unreached={unreached}",
+                payload=json.dumps({
+                    "type": event_type,
+                    "phase": phase,
+                    "client_request_id": client_req,
+                    "job_id": job_id,
+                    "unreached": unreached,
+                    "online": online,
+                    "error": error[:300],
+                    "httpStatus": body.get("httpStatus"),
+                    "attempt": body.get("attempt"),
+                    "model": body.get("model"),
+                    "provider": body.get("provider"),
+                    "apiBase": api_base,
+                    "href": str(body.get("href") or "")[:200],
+                }, ensure_ascii=False)[:2000],
+            )
+    except Exception:
+        logger.exception("ai_image_client_event log_operation failed client=%s", client_req)
+
+    return {"ok": True, "client_request_id": client_req}
+
+
 @app.get("/ai-image/{job_id}")
 def ai_image_status(request: Request, job_id: str):
     """查询生图任务状态，前端轮询此接口获取进度"""
     user = _current_user(request)
     job = load_ai_image_job(job_id)
     if not job:
-        raise HTTPException(404, "任务不存在")
+        raise HTTPException(404, f"任务不存在（job={job_id[:8]}）")
     if not _is_admin(user) and job.get("user_id") != user["id"]:
-        raise HTTPException(404, "任务不存在")
+        raise HTTPException(404, f"任务不存在（job={job_id[:8]}）")
     if job.get("status") in {"queued", "processing"}:
         age_seconds = time.time() - float(job.get("created_at") or 0)
         timeout_seconds = max(60, int(settings.ai_image_job_timeout_seconds or 600))
         if age_seconds > timeout_seconds:
-            error_msg = f"生图任务超时：超过 {timeout_seconds} 秒没有返回结果，请稍后重试"
+            error_msg = format_generation_error(
+                f"生图任务超时：超过 {timeout_seconds} 秒没有返回结果，请稍后重试",
+                stage="timeout",
+                model=job.get("model") or "",
+                job_id=job["id"],
+                task_id=job.get("task_id") or "",
+            )
             save_ai_image_job(
                 job_id=job["id"], user_id=job.get("user_id") or user["id"], status="failed",
                 model=job.get("model") or "", prompt=job.get("prompt") or "", size=job.get("size") or "",
                 original_prompt=job.get("original_prompt") or job.get("prompt") or "",
                 resolved_prompt=job.get("resolved_prompt") or job.get("prompt") or "",
                 prompt_trace=job.get("prompt_trace") or "",
-                has_reference=bool(job.get("has_reference")), error=error_msg, created_at=job.get("created_at") or time.time(),
+                has_reference=bool(job.get("has_reference")), error=error_msg,
+                task_id=job.get("task_id"), progress=100,
+                created_at=job.get("created_at") or time.time(),
             )
             job = load_ai_image_job(job_id) or job
     image_url = job.get("image_url")
@@ -3542,6 +3694,28 @@ def ai_image_status(request: Request, job_id: str):
             layer_extract = json.loads(job["prompt_trace"])
         except Exception:
             layer_extract = None
+    error_text = job.get("error") or ""
+    # 历史脏数据：status=failed 但 error 为空，补一条可排查文案，避免前端「未知错误」
+    if job.get("status") == "failed" and not str(error_text).strip():
+        error_text = format_generation_error(
+            "生图失败但未记录错误详情（可能是旧任务或进程异常退出）",
+            model=job.get("model") or "",
+            job_id=job["id"],
+            task_id=job.get("task_id") or "",
+        )
+        try:
+            save_ai_image_job(
+                job_id=job["id"], user_id=job.get("user_id") or user["id"], status="failed",
+                model=job.get("model") or "", prompt=job.get("prompt") or "", size=job.get("size") or "",
+                original_prompt=job.get("original_prompt") or job.get("prompt") or "",
+                resolved_prompt=job.get("resolved_prompt") or job.get("prompt") or "",
+                prompt_trace=job.get("prompt_trace") or "",
+                has_reference=bool(job.get("has_reference")), error=error_text,
+                task_id=job.get("task_id"), progress=int(job.get("progress") or 100),
+                created_at=job.get("created_at") or time.time(),
+            )
+        except Exception:
+            pass
     return {
         "job_id": job["id"],
         "status": job["status"],
@@ -3553,7 +3727,8 @@ def ai_image_status(request: Request, job_id: str):
         "resolved_prompt": job.get("resolved_prompt") or job.get("prompt") or "",
         "prompt_trace": job.get("prompt_trace") or "",
         "task_id": job.get("task_id"),
-        "error": job.get("error"),
+        "model": job.get("model"),
+        "error": error_text or None,
         "providerSwitched": bool(job.get("provider_switched")),
         "layer_extract": layer_extract,
     }
@@ -4067,6 +4242,7 @@ async def ai_image_endpoint(
     image: List[UploadFile] = File(default=[]),
     ref_previews: str = Form(""),
     batch_count: int = Form(1),
+    client_request_id: str = Form(""),
 ):
     """
     AI 生图接口（异步）。支持文生图（无 image）和图生图（最多 9 张参考图）。
@@ -4075,6 +4251,23 @@ async def ai_image_endpoint(
     提交任务后立即返回 {job_id(s), chat_session_id, status: "processing"}，
     前端轮询 GET /ai-image/{job_id} 获取进度与结果。
     """
+    # Form 已解析完成才进入这里；若连这条日志都没有，说明请求卡在鉴权/body 上传阶段
+    client_req = (
+        (client_request_id or "").strip()
+        or (request.headers.get("x-client-request-id") or "").strip()
+        or "-"
+    )
+    user_early = getattr(request.state, "user", None) or {}
+    logger.info(
+        "ai_image_endpoint_enter client=%s model=%s provider=%s size=%s batch=%s refs=%s user=%s",
+        client_req,
+        model,
+        provider or "-",
+        size,
+        batch_count,
+        len(image or []),
+        user_early.get("username") or user_early.get("id") or "-",
+    )
     batch_count = max(1, min(int(batch_count or 1), 4))
     original_prompt = prompt.strip()
     ref_previews_list = []
@@ -4205,8 +4398,12 @@ async def ai_image_endpoint(
             log_operation(
                 user_id=user["id"], username=user["username"],
                 action="ai_image",
-                detail=f"job={jid[:8]} model={resolved} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(all_refs_batch)} batch={batch_count}",
-                payload=json.dumps({"job_id": jid, "model": resolved, "size": size, "prompt": original_prompt[:200], "refs": len(all_refs_batch), "provider": resolved_provider, "batch_count": batch_count, "skill": active_skill_name}, ensure_ascii=False),
+                detail=f"job={jid[:8]} client={client_req} model={resolved} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(all_refs_batch)} batch={batch_count}",
+                payload=json.dumps({
+                    "job_id": jid, "client_request_id": client_req, "model": resolved, "size": size,
+                    "prompt": original_prompt[:200], "refs": len(all_refs_batch),
+                    "provider": resolved_provider, "batch_count": batch_count, "skill": active_skill_name,
+                }, ensure_ascii=False),
             )
             asyncio.create_task(
                 _run_ai_image_background(
@@ -4226,6 +4423,7 @@ async def ai_image_endpoint(
                 "job_id": job_ids[0],
                 "chat_session_id": session_id,
                 "status": "processing",
+                "client_request_id": client_req,
                 "resolved_prompt": enriched_prompt,
                 "prompt_trace": json.dumps(prompt_trace_payload, ensure_ascii=False) if prompt_trace_payload else prompt_trace_text,
             }
@@ -4233,6 +4431,7 @@ async def ai_image_endpoint(
             "job_ids": job_ids,
             "chat_session_id": session_id,
             "status": "processing",
+            "client_request_id": client_req,
             "resolved_prompt": enriched_prompt,
             "prompt_trace": json.dumps(prompt_trace_payload, ensure_ascii=False) if prompt_trace_payload else prompt_trace_text,
         }
@@ -4242,6 +4441,16 @@ async def ai_image_endpoint(
         logger.exception("ai_image_endpoint error: model=%s size=%s", resolved, size)
         # 失败时给 batch_count 个失败 job，方便前端轮询看到状态
         failed_ids: list[str] = []
+        provider_for_err = ""
+        try:
+            provider_for_err = resolved_provider  # type: ignore[name-defined]
+        except Exception:
+            provider_for_err = (provider or "").strip()
+        has_ref_for_err = bool(images)
+        try:
+            has_ref_for_err = bool(images) or bool(context_ref_bytes)  # type: ignore[name-defined]
+        except Exception:
+            pass
         for _ in range(batch_count):
             fid = uuid.uuid4().hex
             failed_ids.append(fid)
@@ -4254,11 +4463,22 @@ async def ai_image_endpoint(
                 size=size,
                 original_prompt=original_prompt,
                 resolved_prompt=original_prompt,
-                has_reference=bool(images) or bool(context_ref_bytes),
-                error=str(e),
+                has_reference=has_ref_for_err,
+                error=format_generation_error(
+                    e, stage="submit", provider=provider_for_err, model=resolved, job_id=fid,
+                ),
+                progress=100,
                 created_at=created_at,
             )
-        raise HTTPException(502, {"message": f"{type(e).__name__}: {e}", "chat_session_id": session_id})
+        err_msg = format_generation_error(
+            e, stage="submit", provider=provider_for_err, model=resolved,
+        )
+        raise HTTPException(502, {
+            "message": err_msg,
+            "error": err_msg,
+            "chat_session_id": session_id,
+            "job_ids": failed_ids,
+        })
 
 
 @app.post("/psd/layered")

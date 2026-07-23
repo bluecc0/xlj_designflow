@@ -697,8 +697,18 @@ def save_ai_image_job(
                 size = excluded.size,
                 image_url = excluded.image_url,
                 has_reference = excluded.has_reference,
-                error = excluded.error,
-                task_id = excluded.task_id,
+                -- 进度轮询写入时 error 常为 NULL，不能覆盖已有失败原因；
+                -- 终态 done/failed 才以本次写入为准（done 可清空 error）。
+                error = CASE
+                    WHEN excluded.status IN ('done', 'failed') THEN excluded.error
+                    WHEN excluded.error IS NOT NULL AND excluded.error != '' THEN excluded.error
+                    ELSE ai_image_jobs.error
+                END,
+                -- task_id 同理：只在有新值时覆盖，避免进度更新冲掉已记录的上游任务号
+                task_id = CASE
+                    WHEN excluded.task_id IS NOT NULL AND excluded.task_id != '' THEN excluded.task_id
+                    ELSE ai_image_jobs.task_id
+                END,
                 progress = excluded.progress
             """,
             (
@@ -996,6 +1006,14 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
             })
         elif row["type"] == "ai_image_result":
             idx = len(result)
+            job_id = meta.get("job_id") or ""
+            err_text = meta.get("error") or ""
+            # 历史失败消息若 error 为空，给可排查兜底，避免前端只显示「未知错误」
+            if (meta.get("status") == "failed") and not str(err_text).strip():
+                err_text = (
+                    f"生图失败但未记录错误详情"
+                    f"{'（job=' + job_id[:8] + '）' if job_id else ''}，请查后端日志"
+                )
             result.append({
                 "who": "ai",
                 "type": "ai-image-generating",
@@ -1004,7 +1022,8 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 "status": meta.get("status") or "done",
                 "imageUrl": row["image_url"],
                 "previewUrl": meta.get("previewUrl") or "",
-                "error": meta.get("error"),
+                "error": err_text or None,
+                "jobId": job_id or None,
                 "hasReference": bool(meta.get("hasReference")),
                 "refCount": int(meta.get("refCount") or 0),
                 "refPreviews": meta.get("refPreviews") or [],
@@ -1014,7 +1033,6 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 "meta": "Loom",
                 "createdAt": row["created_at"],
             })
-            job_id = meta.get("job_id")
             if job_id:
                 job_id_to_idx[job_id] = idx
         elif row["type"] == "ai_text":
