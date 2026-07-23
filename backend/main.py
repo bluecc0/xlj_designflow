@@ -303,7 +303,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/redoc",
     "/openapi.json",
 )
-_AUTH_EXEMPT_EXACT_PATHS = {"/"}
+_AUTH_EXEMPT_EXACT_PATHS = {"/", "/ai-image/client-event"}
 
 
 class ProxyDownloadInspectRequest(pydantic.BaseModel):
@@ -3591,17 +3591,42 @@ async def ai_image_layer_extract(request: Request):
     return {"job_id": job_id, "status": "processing", "progress": 0}
 
 
+_CLIENT_EVENT_MAX_BODY = 16 * 1024
+_CLIENT_EVENT_RATE_LIMIT = 30  # 每 IP 每分钟
+_client_event_rate: dict[str, tuple[float, int]] = {}  # ip -> (窗口起点, 计数)
+
+
 @app.post("/ai-image/client-event")
 async def ai_image_client_event(request: Request):
     """接收前端生图链路事件（尤其是主请求未到达时的失败）。
 
     仅写日志 + 操作流水，不创建 job。用于事后对照：
     前端有失败卡片、但没有 ai_image_endpoint_enter / job 记录的情况。
+    路径已加入鉴权豁免（sendBeacon 可能不带 cookie），故做限流与体积限制防滥用。
     """
     user = getattr(request.state, "user", None)
-    # sendBeacon 在个别环境下可能不带 cookie：仍接收，记为 anon，避免丢失线索
+    # 匿名可达：每 IP 固定窗口限流
+    ip = (request.client.host if request.client else "") or "unknown"
+    now_ts = time.time()
+    win_start, win_count = _client_event_rate.get(ip, (now_ts, 0))
+    if now_ts - win_start >= 60:
+        win_start, win_count = now_ts, 0
+    win_count += 1
+    _client_event_rate[ip] = (win_start, win_count)
+    if len(_client_event_rate) > 4096:
+        for stale_ip in [k for k, (ws, _c) in _client_event_rate.items() if now_ts - ws >= 60]:
+            _client_event_rate.pop(stale_ip, None)
+    if win_count > _CLIENT_EVENT_RATE_LIMIT:
+        return {"ok": False, "rate_limited": True}
+
+    content_length = (request.headers.get("content-length") or "").strip()
+    if content_length.isdigit() and int(content_length) > _CLIENT_EVENT_MAX_BODY:
+        return {"ok": False, "detail": "payload too large"}
     try:
-        body = await request.json()
+        raw_body = await request.body()
+        if len(raw_body) > _CLIENT_EVENT_MAX_BODY:
+            return {"ok": False, "detail": "payload too large"}
+        body = json.loads(raw_body)
     except Exception:
         body = {}
     if not isinstance(body, dict):
@@ -4249,11 +4274,12 @@ _ai_image_submits: dict[str, tuple[float, asyncio.Future]] = {}
 
 
 def _ai_image_submit_dedup(func):
-    """按 client_request_id 去重 /ai-image 提交。
+    """按 (user_id, client_request_id) 去重 /ai-image 提交。
 
-    首个请求注册 Future 并真正执行；相同编号的重复请求（含首次仍在处理中的在途
+    首个请求注册 Future 并真正执行；同键的重复请求（含首次仍在处理中的在途
     重复）等待该 Future，原样复用首次的响应或异常，不重复建 job / 写聊天记录。
-    未带编号的请求直接放行，行为不变。
+    成功与 4xx 确定性失败在 TTL 内缓存重放；5xx / 中断等可重试失败完成后即清
+    缓存，让后续同键自动重试真正重新执行。未带编号的请求直接放行，行为不变。
     """
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
@@ -4261,9 +4287,13 @@ def _ai_image_submit_dedup(func):
         client_req = (
             (kwargs.get("client_request_id") or "").strip()
             or (request.headers.get("x-client-request-id") or "").strip()
-        )
+        )[:64]
         if not client_req:
             return await func(*args, **kwargs)
+        # 幂等键必须按用户隔离：client_request_id 由客户端提供，不同用户可能撞号，
+        # 全局键会让后来者拿到他人的 job_id/会话号且自己的任务不执行
+        user = getattr(request.state, "user", None) or {}
+        dedup_key = f"{user.get('id') or 'anon'}:{client_req}"
 
         now = time.time()
         for key in [
@@ -4272,11 +4302,12 @@ def _ai_image_submit_dedup(func):
         ]:
             _ai_image_submits.pop(key, None)
 
-        existing = _ai_image_submits.get(client_req)
+        existing = _ai_image_submits.get(dedup_key)
         if existing is not None:
             first_ts, first_fut = existing
             logger.warning(
-                "ai_image_submit_dedup client=%s first_age_ms=%.0f in_flight=%s",
+                "ai_image_submit_dedup user=%s client=%s first_age_ms=%.0f in_flight=%s",
+                user.get("username") or user.get("id") or "-",
                 client_req, (now - first_ts) * 1000, not first_fut.done(),
             )
             outcome = await first_fut
@@ -4285,15 +4316,22 @@ def _ai_image_submit_dedup(func):
             raise outcome["error"]
 
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        _ai_image_submits[client_req] = (now, fut)
+        _ai_image_submits[dedup_key] = (now, fut)
         try:
             response = await func(*args, **kwargs)
         except asyncio.CancelledError:
-            # 服务重载/关闭中断首次请求：给等待方一个明确错误，自身照常传播取消
+            # 服务重载/关闭中断首次请求：给等待方一个明确错误，自身照常传播取消；
+            # 属可重试失败，不保留缓存
             fut.set_result({"ok": False, "error": HTTPException(503, "提交处理被中断（服务重启或关闭），请重试")})
+            _ai_image_submits.pop(dedup_key, None)
             raise
         except BaseException as exc:
             fut.set_result({"ok": False, "error": exc})
+            # 5xx / 未知异常视为可重试：完成后即清缓存（在途等待方仍复用本次异常），
+            # 同键的下一次请求会真正重新执行；4xx 属确定性失败，保留重放
+            status = getattr(exc, "status_code", None)
+            if not isinstance(status, int) or status >= 500:
+                _ai_image_submits.pop(dedup_key, None)
             raise
         else:
             fut.set_result({"ok": True, "response": response})
