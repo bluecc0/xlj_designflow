@@ -3591,6 +3591,14 @@ async def ai_image_layer_extract(request: Request):
     return {"job_id": job_id, "status": "processing", "progress": 0}
 
 
+_LOG_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def _sanitize_log_field(value, limit: int) -> str:
+    """外部输入进日志前的防注入清洗：去除 CR/LF/TAB 等控制字符并截断。"""
+    return _LOG_CTRL_RE.sub(" ", str(value if value is not None else ""))[:limit]
+
+
 _CLIENT_EVENT_MAX_BODY = 16 * 1024
 _CLIENT_EVENT_RATE_LIMIT = 30  # 每 IP 每分钟
 _client_event_rate: dict[str, tuple[float, int]] = {}  # ip -> (窗口起点, 计数)
@@ -3632,18 +3640,19 @@ async def ai_image_client_event(request: Request):
     if not isinstance(body, dict):
         body = {"raw": str(body)[:500]}
 
-    client_req = (
+    client_req = _sanitize_log_field(
         str(body.get("clientRequestId") or body.get("client") or "").strip()
         or (request.headers.get("x-client-request-id") or "").strip()
-        or "-"
+        or "-",
+        64,
     )
-    event_type = str(body.get("type") or "unknown")[:64]
-    phase = str(body.get("phase") or "")[:32]
-    error = str(body.get("error") or "")[:500]
-    job_id = str(body.get("jobId") or body.get("job_id") or "")[:64]
+    event_type = _sanitize_log_field(body.get("type") or "unknown", 64)
+    phase = _sanitize_log_field(body.get("phase"), 32)
+    error = _sanitize_log_field(body.get("error"), 500)
+    job_id = _sanitize_log_field(body.get("jobId") or body.get("job_id"), 64)
     unreached = bool(body.get("unreached") or body.get("reachedServer") is False)
     online = body.get("online")
-    api_base = str(body.get("apiBase") or "")[:200]
+    api_base = _sanitize_log_field(body.get("apiBase"), 200)
     username = (user or {}).get("username") or (user or {}).get("id") or "anon"
 
     logger.warning(
@@ -3653,7 +3662,7 @@ async def ai_image_client_event(request: Request):
         client_req,
         job_id or "-",
         unreached,
-        online,
+        _sanitize_log_field(online, 32) or "-",
         username,
         error[:200] if error else "-",
         api_base or "-",
@@ -4270,7 +4279,7 @@ def editor_load_snapshot(request: Request):
 # 首次请求可能已被受理（如 prompt 改写耗时超过客户端超时后服务端仍继续执行），
 # 不去重会重复建 job、重复消耗上游生图额度。单进程内存表（与 compose 串行锁同假设）。
 _AI_IMAGE_SUBMIT_DEDUP_TTL = 600.0  # 秒；覆盖前端两轮 120s 超时 + 重试间隔，留足余量
-_ai_image_submits: dict[str, tuple[float, asyncio.Future]] = {}
+_ai_image_submits: dict[tuple[str, str], tuple[float, asyncio.Future]] = {}
 
 
 def _ai_image_submit_dedup(func):
@@ -4284,16 +4293,19 @@ def _ai_image_submit_dedup(func):
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
         request: Request = kwargs["request"]
-        client_req = (
+        client_req = _sanitize_log_field(
             (kwargs.get("client_request_id") or "").strip()
-            or (request.headers.get("x-client-request-id") or "").strip()
-        )[:64]
+            or (request.headers.get("x-client-request-id") or "").strip(),
+            64,
+        )
         if not client_req:
             return await func(*args, **kwargs)
         # 幂等键必须按用户隔离：client_request_id 由客户端提供，不同用户可能撞号，
-        # 全局键会让后来者拿到他人的 job_id/会话号且自己的任务不执行
+        # 全局键会让后来者拿到他人的 job_id/会话号且自己的任务不执行。
+        # 必须用元组而非分隔符拼接：用户 ID 来自配置、client 号来自客户端，
+        # 两者都可能含分隔符，字符串拼接会被构造出跨用户碰撞（"a"+"b:c" == "a:b"+"c"）
         user = getattr(request.state, "user", None) or {}
-        dedup_key = f"{user.get('id') or 'anon'}:{client_req}"
+        dedup_key = (str(user.get("id") or "anon"), client_req)
 
         now = time.time()
         for key in [
@@ -4366,10 +4378,11 @@ async def ai_image_endpoint(
     前端轮询 GET /ai-image/{job_id} 获取进度与结果。
     """
     # Form 已解析完成才进入这里；若连这条日志都没有，说明请求卡在鉴权/body 上传阶段
-    client_req = (
+    client_req = _sanitize_log_field(
         (client_request_id or "").strip()
         or (request.headers.get("x-client-request-id") or "").strip()
-        or "-"
+        or "-",
+        64,
     )
     user_early = getattr(request.state, "user", None) or {}
     logger.info(

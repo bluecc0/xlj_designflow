@@ -5,10 +5,12 @@
 
 覆盖：
 - 幂等键按用户隔离（不同用户同 client_request_id 互不串线）
+- 元组键防分隔符碰撞（ID 含冒号时不可构造跨用户串线）
 - 同用户在途/已完成去重
 - 5xx 可重试失败不永久缓存（自动重试真正重新执行）
 - 4xx 确定性失败缓存重放（不重复执行）
 - /ai-image/client-event 匿名可达、限流、体积上限
+- 匿名事件字段含换行/控制字符时日志仍为单行（防日志注入）
 """
 import asyncio
 import sys
@@ -175,13 +177,81 @@ def test_client_event_anonymous_and_limits():
     print("client-event anon + limits: OK")
 
 
+async def test_user_isolation_with_delimiter_chars():
+    """P1 二轮：ID 含冒号等分隔符时不得构造出跨用户碰撞。
+
+    字符串拼接键会让 ("a", "b:c") 与 ("a:b", "c") 撞成同一个键，
+    元组键必须让两者各自执行。
+    """
+    calls = []
+
+    @m._ai_image_submit_dedup
+    async def ep(**kwargs):
+        uid = kwargs["request"].state.user["id"]
+        calls.append(uid)
+        await asyncio.sleep(0.02)
+        return {"uid": uid}
+
+    r1, r2 = await asyncio.gather(
+        ep(request=_Req(_user("a")), client_request_id="b:c"),
+        ep(request=_Req(_user("a:b")), client_request_id="c"),
+    )
+    assert sorted(calls) == ["a", "a:b"], f"两个用户都应执行，实际 {calls}"
+    assert {r1["uid"], r2["uid"]} == {"a", "a:b"}, (r1, r2)
+    print("delimiter-char isolation: OK")
+
+
+def test_client_event_log_injection_sanitized():
+    """P2 二轮：匿名事件字段带换行/控制字符时，日志必须仍是单行。"""
+    import logging
+
+    from starlette.testclient import TestClient
+
+    records = []
+
+    class Cap(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    handler = Cap()
+    logging.getLogger().addHandler(handler)
+    logging.getLogger().setLevel(logging.INFO)
+    original = m._get_session_user
+    m._get_session_user = lambda request: None
+    try:
+        client = TestClient(m.app)
+        r = client.post("/ai-image/client-event", json={
+            "type": "x\nFAKE-LOG-LINE user=admin action=login",
+            "phase": "p\r\ninjected",
+            "error": "err\n2026-01-01 ERROR forged line",
+            "clientRequestId": "c\nid\ttab",
+            "jobId": "j\nid",
+            "apiBase": "http://x\n.evil",
+            "online": "yes\nno",
+        })
+        assert r.status_code == 200, r.text
+        evs = [rec for rec in records if "ai_image_client_event" in rec.getMessage()]
+        assert evs, "应有事件日志"
+        for rec in evs:
+            msg = rec.getMessage()
+            assert "\n" not in msg and "\r" not in msg and "\t" not in msg, repr(msg)
+        assert any("FAKE-LOG-LINE" in rec.getMessage() for rec in evs), "内容应保留（仅去控制字符）"
+    finally:
+        m._get_session_user = original
+        m._client_event_rate.clear()
+        logging.getLogger().removeHandler(handler)
+    print("log injection sanitized: OK")
+
+
 def main():
     asyncio.run(test_user_isolation())
+    asyncio.run(test_user_isolation_with_delimiter_chars())
     asyncio.run(test_same_user_inflight_and_replay())
     asyncio.run(test_retryable_error_reexecutes())
     asyncio.run(test_inflight_5xx_waiter_shares_error_then_next_reexecutes())
     asyncio.run(test_4xx_replayed_without_reexecution())
     test_client_event_anonymous_and_limits()
+    test_client_event_log_injection_sanitized()
     print("\nALL TESTS PASSED")
 
 
