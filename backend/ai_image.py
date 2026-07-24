@@ -5,7 +5,7 @@ Flow:
 1. Optionally upload reference images to the provider.
 2. Submit an async image generation task.
 3. Poll task status until completed.
-4. Download the final image into output/ai-images/{user_id}/.
+4. Download the final image into output/ai-images/{user_id}/{YYYY-MM-DD}/.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import re
 import random
 import time
 import uuid
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
@@ -171,12 +172,36 @@ def format_generation_error(
     return msg[:800]
 
 
+def _safe_user_id(user_id: str) -> str:
+    safe = "".join(ch for ch in str(user_id or "").strip() if ch.isalnum() or ch in ("-", "_"))
+    return safe or "anonymous"
+
+
 def _ensure_user_output_dir(user_id: str) -> Path:
-    safe_user_id = "".join(ch for ch in str(user_id or "").strip() if ch.isalnum() or ch in ("-", "_"))
-    safe_user_id = safe_user_id or "anonymous"
-    out_dir = _OUTPUT_DIR / safe_user_id
+    """用户根目录：output/ai-images/{user_id}/（refs/thumbs 等仍挂在这里）"""
+    out_dir = _OUTPUT_DIR / _safe_user_id(user_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
+
+
+def _ensure_user_dated_output_dir(user_id: str, day: date | None = None) -> Path:
+    """按日期拆分的成图目录：output/ai-images/{user_id}/{YYYY-MM-DD}/"""
+    day_key = (day or date.today()).isoformat()  # YYYY-MM-DD
+    out_dir = _ensure_user_output_dir(user_id) / day_key
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+
+def _ai_image_public_url(path: Path) -> str:
+    """磁盘路径 → 对外 URL /ai-images/...（支持任意嵌套子目录）"""
+    resolved = path.resolve()
+    root = _OUTPUT_DIR.resolve()
+    try:
+        rel = resolved.relative_to(root)
+    except ValueError:
+        # 兜底：不应发生；至少返回文件名以免写库失败
+        return f"/ai-images/{path.name}"
+    return f"/ai-images/{rel.as_posix()}"
 
 
 def generate_inspiration_thumb(image_url: str, user_id: str, job_id: str, max_width: int = 480) -> tuple[str, int, int]:
@@ -484,10 +509,11 @@ def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "zenmux")
         raise RuntimeError("ZenMux 返回的图片 base64 解码失败") from exc
     if not content:
         raise RuntimeError("ZenMux 返回的图片内容为空")
-    out_dir = _ensure_user_output_dir(user_id)
+    out_dir = _ensure_user_dated_output_dir(user_id)
     filename = f"{prefix}_{uuid.uuid4().hex}{_extension_from_mime(mime_type)}"
-    (out_dir / filename).write_bytes(content)
-    return f"/ai-images/{out_dir.name}/{filename}"
+    out_path = out_dir / filename
+    out_path.write_bytes(content)
+    return _ai_image_public_url(out_path)
 
 
 def _extract_vertex_image_data_url(payload: Any) -> str | None:
@@ -802,10 +828,10 @@ async def _download_final_image(
     if not resp.is_success:
         raise RuntimeError(f"下载结果图片失败：HTTP {resp.status_code}")
     filename = f"{uuid.uuid4().hex}.png"
-    out_dir = _ensure_user_output_dir(user_id)
+    out_dir = _ensure_user_dated_output_dir(user_id)
     out_path = out_dir / filename
     out_path.write_bytes(resp.content)
-    return f"/ai-images/{out_dir.name}/{filename}"
+    return _ai_image_public_url(out_path)
 
 
 async def _generate_image_zenmux_vertex_async(
@@ -1328,10 +1354,10 @@ def _save_base64_image(b64_value: str, *, user_id: str) -> str:
     if not image_bytes:
         raise RuntimeError("CLIProxyAPI 返回的 base64 图片为空")
     filename = f"{uuid.uuid4().hex}.png"
-    out_dir = _ensure_user_output_dir(user_id)
+    out_dir = _ensure_user_dated_output_dir(user_id)
     out_path = out_dir / filename
     out_path.write_bytes(image_bytes)
-    return f"/ai-images/{out_dir.name}/{filename}"
+    return _ai_image_public_url(out_path)
 
 
 async def _download_cliproxy_image(
@@ -1351,10 +1377,10 @@ async def _download_cliproxy_image(
         if not resp.is_success:
             raise RuntimeError(f"下载 CLIProxyAPI 结果图片失败：HTTP {resp.status_code}")
         filename = f"{uuid.uuid4().hex}.png"
-        out_dir = _ensure_user_output_dir(user_id)
+        out_dir = _ensure_user_dated_output_dir(user_id)
         out_path = out_dir / filename
         out_path.write_bytes(resp.content)
-        return f"/ai-images/{out_dir.name}/{filename}"
+        return _ai_image_public_url(out_path)
 
 
 async def _save_cliproxy_response_image(data: dict[str, Any], *, user_id: str, api_key: str) -> tuple[str, dict[str, Any]]:

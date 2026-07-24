@@ -397,6 +397,22 @@ input {
   border-color: rgba(17, 24, 39, 0.2);
 }
 
+.designflow-batch-download-status {
+  max-width: 120px;
+  margin-left: 4px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: #5b6472;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lab-sidebtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .lab-sidebtn-danger {
   color: #b42318;
   border-color: rgba(180, 35, 24, 0.18);

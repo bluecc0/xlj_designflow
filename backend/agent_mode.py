@@ -2289,7 +2289,7 @@ async def _resolve_image_data_url(image_url: str) -> str:
     image_bytes: bytes | None = None
     mime_type = "image/png"
 
-    # 本地路径：/ai-images/{user_id}/{filename}.png
+    # 本地路径：/ai-images/{user_id}/... 或 /ai-images/{user_id}/{YYYY-MM-DD}/...
     if image_url.startswith("/ai-images/") or image_url.startswith("/results/"):
         local_path = settings.output_path / image_url.lstrip("/")
         if local_path.exists():

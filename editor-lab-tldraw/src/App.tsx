@@ -638,50 +638,87 @@ function useLayerExtractSelectedImage() {
 
 function DesignflowImageToolbar() {
   const editor = useEditor()
-  const imageShapeId = useValue(
-    'designflow-upscale-toolbar-shape',
-    () => {
-      const onlySelectedShape = editor.getOnlySelectedShape()
-      if (!onlySelectedShape || onlySelectedShape.type !== 'image') return null
-      return onlySelectedShape.id as TLImageShape['id']
-    },
+  const selectedImageIds = useValue(
+    'designflow-selected-image-ids',
+    () =>
+      editor
+        .getSelectedShapeIds()
+        .filter((id) => editor.getShape(id)?.type === 'image') as TLImageShape['id'][],
     [editor]
   )
+  const imageShapeId = selectedImageIds.length === 1 ? selectedImageIds[0] : null
+  const multiImageCount = selectedImageIds.length
   const showToolbar = useValue(
     'designflow-upscale-toolbar-visible',
-    () => editor.isInAny('select.idle', 'select.pointing_shape'),
+    () => editor.isInAny('select.idle', 'select.pointing_shape', 'select.brushing', 'select.idle'),
     [editor]
   )
   const isLocked = useValue(
     'designflow-upscale-toolbar-locked',
-    () => (imageShapeId ? editor.getShape<TLImageShape>(imageShapeId)?.isLocked : false),
-    [editor, imageShapeId]
+    () => {
+      if (selectedImageIds.length === 0) return true
+      // 多选时只要有一张未锁就允许批量下载
+      if (selectedImageIds.length > 1) {
+        return selectedImageIds.every((id) => editor.getShape<TLImageShape>(id)?.isLocked)
+      }
+      return !!editor.getShape<TLImageShape>(selectedImageIds[0])?.isLocked
+    },
+    [editor, selectedImageIds]
   )
   const { upscaleState, handleUpscaleSelectedImage, clearMessage } = useUpscaleSelectedImage()
   const { vectorizeState, handleVectorizeSelectedImage, clearMessage: clearVectorizeMessage } = useVectorizeSelectedImage()
   const { layerExtractState, handleLayerExtractSelectedImage, clearMessage: clearLayerExtractMessage } = useLayerExtractSelectedImage()
+  const [batchDownloadState, setBatchDownloadState] = React.useState<{
+    loading: boolean
+    message: string
+  }>({ loading: false, message: '' })
 
   React.useEffect(() => {
     clearMessage()
     clearVectorizeMessage()
     clearLayerExtractMessage()
-  }, [clearMessage, clearVectorizeMessage, clearLayerExtractMessage, imageShapeId])
+    setBatchDownloadState({ loading: false, message: '' })
+  }, [clearMessage, clearVectorizeMessage, clearLayerExtractMessage, selectedImageIds.join('|')])
 
-  const handleDownloadOriginal = React.useCallback(() => {
+  const handleDownloadOriginal = React.useCallback(async () => {
     if (!imageShapeId) return
-    const shape = editor.getShape<TLImageShape>(imageShapeId)
-    if (!shape) return
-    if (!shape.props.assetId) return
-    const asset = editor.getAsset(shape.props.assetId)
-    const src = String((asset?.props as any)?.src || '').trim()
-    if (!src) return
-    const link = document.createElement('a')
-    link.href = src
-    link.download = String((asset?.props as any)?.name || shape.props.altText || 'image.png')
-    link.target = '_blank'
-    link.rel = 'noopener noreferrer'
-    link.click()
+    const items = collectImageAssetsFromShapeIds(editor, [imageShapeId])
+    if (!items.length) {
+      window.alert('无法下载：当前图片没有可用地址')
+      return
+    }
+    try {
+      await downloadOneImage(items[0])
+    } catch (error: any) {
+      window.alert(String(error?.message || error || '下载失败'))
+    }
   }, [editor, imageShapeId])
+
+  const handleBatchDownload = React.useCallback(async () => {
+    if (selectedImageIds.length === 0 || batchDownloadState.loading) return
+    const items = collectImageAssetsFromShapeIds(editor, selectedImageIds)
+    if (!items.length) {
+      window.alert('无法下载：选中的图片没有可用地址')
+      return
+    }
+    setBatchDownloadState({ loading: true, message: `下载中 0/${items.length}` })
+    try {
+      await downloadImagesSequential(items, (done, total) => {
+        setBatchDownloadState({
+          loading: done < total,
+          message: done < total ? `下载中 ${done + 1}/${total}` : `已下载 ${total} 张`,
+        })
+      })
+      setBatchDownloadState({ loading: false, message: `已下载 ${items.length} 张` })
+      window.setTimeout(() => {
+        setBatchDownloadState((prev) => (prev.loading ? prev : { loading: false, message: '' }))
+      }, 2200)
+    } catch (error: any) {
+      const msg = String(error?.message || error || '批量下载失败')
+      setBatchDownloadState({ loading: false, message: msg })
+      window.alert(msg)
+    }
+  }, [batchDownloadState.loading, editor, selectedImageIds])
 
   const getSelectionBounds = React.useCallback(() => {
     const fullBounds = editor.getSelectionScreenBounds()
@@ -689,7 +726,41 @@ function DesignflowImageToolbar() {
     return new Box(fullBounds.x, fullBounds.y, fullBounds.width, fullBounds.height)
   }, [editor])
 
-  if (!imageShapeId || !showToolbar || isLocked) return null
+  if (multiImageCount === 0 || !showToolbar || isLocked) return null
+
+  // 多选图片：只提供批量下载，避免误触单图处理工具
+  if (multiImageCount > 1) {
+    return (
+      <TldrawUiContextualToolbar
+        className="tlui-media__toolbar tlui-image__toolbar designflow-upscale-toolbar"
+        getSelectionBounds={getSelectionBounds}
+        label={`批量下载 ${multiImageCount} 张`}
+      >
+        <TldrawUiToolbarButton
+          type="icon"
+          title={
+            batchDownloadState.loading
+              ? batchDownloadState.message || '批量下载中'
+              : batchDownloadState.message || `批量下载 ${multiImageCount} 张图片`
+          }
+          data-testid="tool.image-batch-download"
+          onClick={handleBatchDownload}
+          disabled={batchDownloadState.loading}
+        >
+          {batchDownloadState.loading ? (
+            <span className="designflow-upscale-spinner" />
+          ) : (
+            <TldrawUiButtonIcon small icon="download" />
+          )}
+        </TldrawUiToolbarButton>
+        {batchDownloadState.message && !batchDownloadState.loading && (
+          <span className="designflow-batch-download-status" title={batchDownloadState.message}>
+            {batchDownloadState.message}
+          </span>
+        )}
+      </TldrawUiContextualToolbar>
+    )
+  }
 
   return (
     <TldrawUiContextualToolbar
@@ -810,44 +881,42 @@ function TldrawPropertiesPanel() {
     editor.deleteShapes(ids)
   }, [editor])
 
-  const handleDownloadImages = React.useCallback(() => {
-    const ids = editor.getSelectedShapeIds()
-    const imageIds = ids.filter((id) => editor.getShape(id)?.type === 'image')
-    if (!imageIds.length) return
-    imageIds.forEach((id) => {
-      const shape = editor.getShape(id)
-      if (!shape) return
-      const asset = editor.getAsset((shape.props as any).assetId)
-      if (!asset) return
-      const src = (asset.props as any).src
-      if (!src) return
-      const a = document.createElement('a')
-      a.href = src
-      a.download = (asset.props as any).name || 'image.png'
-      a.target = '_blank'
-      a.click()
-    })
-  }, [editor])
+  const [batchDownloadState, setBatchDownloadState] = React.useState<{
+    loading: boolean
+    message: string
+  }>({ loading: false, message: '' })
+
+  const handleDownloadImages = React.useCallback(async () => {
+    if (batchDownloadState.loading) return
+    const items = collectImageAssetsFromShapeIds(editor, editor.getSelectedShapeIds())
+    if (!items.length) {
+      window.alert('没有可下载的图片')
+      return
+    }
+    setBatchDownloadState({ loading: true, message: `下载中 0/${items.length}` })
+    try {
+      await downloadImagesSequential(items, (done, total) => {
+        setBatchDownloadState({
+          loading: done < total,
+          message: done < total ? `下载中 ${done + 1}/${total}` : `已下载 ${total} 张`,
+        })
+      })
+      setBatchDownloadState({ loading: false, message: `已下载 ${items.length} 张` })
+      window.setTimeout(() => {
+        setBatchDownloadState((prev) => (prev.loading ? prev : { loading: false, message: '' }))
+      }, 2200)
+    } catch (error: any) {
+      const msg = String(error?.message || error || '批量下载失败')
+      setBatchDownloadState({ loading: false, message: msg })
+      window.alert(msg)
+    }
+  }, [batchDownloadState.loading, editor])
 
   const getSelectedImageAssets = React.useCallback(() => {
-    const ids = editor.getSelectedShapeIds()
-    const imageIds = ids.filter((id) => editor.getShape(id)?.type === 'image')
-    const seen = new Set<string>()
-    return imageIds
-      .map((id) => {
-        const shape = editor.getShape(id)
-        if (!shape) return null
-        const asset = editor.getAsset((shape.props as any).assetId)
-        if (!asset) return null
-        const src = String((asset.props as any).src || '').trim()
-        if (!src || seen.has(src)) return null
-        seen.add(src)
-        return {
-          src,
-          name: String((asset.props as any).name || `reference-${seen.size}.png`),
-        }
-      })
-      .filter(Boolean) as Array<{ src: string; name: string }>
+    return collectImageAssetsFromShapeIds(editor, editor.getSelectedShapeIds()).map((item, index) => ({
+      src: item.src,
+      name: item.name || `reference-${index + 1}.png`,
+    }))
   }, [editor])
 
   React.useEffect(() => {
@@ -906,9 +975,19 @@ function TldrawPropertiesPanel() {
               复制所选
             </button>
             {selectedImageCount > 0 && (
-              <button type="button" className="lab-sidebtn" onClick={handleDownloadImages}>
-                下载图片 ({selectedImageCount})
+              <button
+                type="button"
+                className="lab-sidebtn"
+                onClick={handleDownloadImages}
+                disabled={batchDownloadState.loading}
+              >
+                {batchDownloadState.loading
+                  ? batchDownloadState.message || '下载中…'
+                  : `批量下载图片 (${selectedImageCount})`}
               </button>
+            )}
+            {batchDownloadState.message && !batchDownloadState.loading && (
+              <div className="lab-sidepanel-note">{batchDownloadState.message}</div>
             )}
             <button type="button" className="lab-sidebtn lab-sidebtn-danger" onClick={handleDelete}>
               删除所选
@@ -938,6 +1017,18 @@ function TldrawPropertiesPanel() {
               </span>
             </div>
           </div>
+          {isImageShape && (
+            <div className="lab-sidepanel-actions" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="lab-sidebtn"
+                onClick={handleDownloadImages}
+                disabled={batchDownloadState.loading}
+              >
+                {batchDownloadState.loading ? batchDownloadState.message || '下载中…' : '下载图片'}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1075,6 +1166,117 @@ async function fetchImageAsFile(url: string, nameHint?: string) {
   const ext = mime.split('/')[1] || 'png'
   const fileName = (nameHint || `designflow-${Date.now()}.${ext}`).replace(/[\\/:*?"<>|]+/g, '_')
   return new File([blob], fileName, { type: mime })
+}
+
+type DownloadableImage = { src: string; name: string }
+
+function sleepMs(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+}
+
+function sanitizeDownloadFileName(name: string, fallback = 'image.png') {
+  let clean = String(name || '')
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, ' ')
+  if (!clean) clean = fallback
+  if (!/\.[a-z0-9]{1,8}$/i.test(clean)) clean = `${clean}.png`
+  return clean.slice(0, 120)
+}
+
+function withUniqueDownloadNames(items: DownloadableImage[]): DownloadableImage[] {
+  const used = new Map<string, number>()
+  return items.map((item, index) => {
+    const base = sanitizeDownloadFileName(item.name, `image-${index + 1}.png`)
+    const count = used.get(base) || 0
+    used.set(base, count + 1)
+    if (count === 0) return { src: item.src, name: base }
+    const match = base.match(/^(.*?)(\.[^.]+)?$/)
+    const stem = match?.[1] || base
+    const ext = match?.[2] || '.png'
+    return { src: item.src, name: `${stem}-${count + 1}${ext}` }
+  })
+}
+
+function collectImageAssetsFromShapeIds(editor: Editor, shapeIds: readonly string[]): DownloadableImage[] {
+  const seen = new Set<string>()
+  const items: DownloadableImage[] = []
+  shapeIds.forEach((id, index) => {
+    const shape = editor.getShape(id as TLImageShape['id'])
+    if (!shape || shape.type !== 'image') return
+    const assetId = (shape.props as any)?.assetId
+    if (!assetId) return
+    const asset = editor.getAsset(assetId)
+    if (!asset) return
+    const rawSrc = String((asset.props as any)?.src || '').trim()
+    const src = normalizeDesignflowAssetUrl(rawSrc) || rawSrc
+    if (!src || seen.has(src)) return
+    seen.add(src)
+    items.push({
+      src,
+      name: String((asset.props as any)?.name || (shape.props as any)?.altText || `image-${index + 1}.png`),
+    })
+  })
+  return withUniqueDownloadNames(items)
+}
+
+/** 单张：优先 blob 本地下载；失败再打开原链 */
+async function downloadOneImage(item: DownloadableImage) {
+  const src = item.src
+  const fileName = sanitizeDownloadFileName(item.name)
+  // data URL 直接挂载
+  if (src.startsWith('data:')) {
+    const link = document.createElement('a')
+    link.href = src
+    link.download = fileName
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    return
+  }
+  try {
+    const file = await fetchImageAsFile(src, fileName)
+    const objectUrl = URL.createObjectURL(file)
+    try {
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = file.name || fileName
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } finally {
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500)
+    }
+    return
+  } catch {
+    // 跨域或读失败：新窗口打开，用户可另存
+    const link = document.createElement('a')
+    link.href = src
+    link.download = fileName
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+}
+
+/** 批量顺序下载，避免浏览器一次拦截多个下载 */
+async function downloadImagesSequential(
+  items: DownloadableImage[],
+  onProgress?: (done: number, total: number) => void
+) {
+  const list = withUniqueDownloadNames(items)
+  if (!list.length) throw new Error('没有可下载的图片')
+  for (let i = 0; i < list.length; i++) {
+    onProgress?.(i, list.length)
+    await downloadOneImage(list[i])
+    // 给浏览器留出接受下载的间隙
+    if (i < list.length - 1) await sleepMs(280)
+  }
+  onProgress?.(list.length, list.length)
 }
 
 function getImageSize(src: string) {
