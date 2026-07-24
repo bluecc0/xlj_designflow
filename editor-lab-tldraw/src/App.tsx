@@ -1210,6 +1210,28 @@ function EditorSurface() {
   )
 }
 
+class DownloadCancelledError extends Error {
+  constructor() {
+    super('DOWNLOAD_CANCELLED')
+    this.name = 'DownloadCancelledError'
+  }
+}
+
+function isDownloadCancelledError(error: unknown) {
+  // 只认主动取消；内部 30s 超时的 AbortError 不能算取消
+  if (!error) return false
+  return (
+    error instanceof DownloadCancelledError ||
+    (error as any).name === 'DownloadCancelledError'
+  )
+}
+
+function throwIfDownloadCancelled(options?: { signal?: AbortSignal; isCancelled?: () => boolean }) {
+  if (options?.isCancelled?.() || options?.signal?.aborted) {
+    throw new DownloadCancelledError()
+  }
+}
+
 async function fetchImageAsFile(
   url: string,
   nameHint?: string,
@@ -1217,7 +1239,11 @@ async function fetchImageAsFile(
 ) {
   const timeoutMs = options?.timeoutMs ?? 30000
   const timeoutController = new AbortController()
-  const timer = window.setTimeout(() => timeoutController.abort(), timeoutMs)
+  let timedOut = false
+  const timer = window.setTimeout(() => {
+    timedOut = true
+    timeoutController.abort()
+  }, timeoutMs)
   const external = options?.signal
   // 合并超时与外部取消：任一 abort 都中止 fetch
   if (external) {
@@ -1227,15 +1253,25 @@ async function fetchImageAsFile(
       external.addEventListener('abort', () => timeoutController.abort(), { once: true })
     }
   }
-let response: Response
+  let response: Response
   try {
-    response = await fetch(url, { credentials: 'include', signal: timeoutController.signal })
-    if (external?.aborted) throw new DOMException('Aborted', 'AbortError')
+    try {
+      response = await fetch(url, { credentials: 'include', signal: timeoutController.signal })
+    } catch (error) {
+      // 外部主动取消优先
+      if (external?.aborted) throw new DownloadCancelledError()
+      // 内部超时 → 普通错误，供外层清理 loading 并提示用户
+      if (timedOut || (error as any)?.name === 'AbortError') {
+        throw new Error(timedOut ? '图片读取超时，请稍后重试' : '图片读取已中断')
+      }
+      throw error
+    }
+    if (external?.aborted) throw new DownloadCancelledError()
     if (!response.ok) {
       throw new Error(`图片读取失败: HTTP ${response.status}`)
     }
     const blob = await response.blob()
-    if (external?.aborted) throw new DOMException('Aborted', 'AbortError')
+    if (external?.aborted) throw new DownloadCancelledError()
     const mime = blob.type || 'image/png'
     const ext = mime.split('/')[1] || 'png'
     const fileName = (nameHint || `designflow-${Date.now()}.${ext}`).replace(/[\\/:*?"<>|]+/g, '_')
@@ -1250,14 +1286,14 @@ type DownloadableImage = { src: string; name: string }
 function sleepMs(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new DOMException('Aborted', 'AbortError'))
+      reject(new DownloadCancelledError())
       return
     }
     const timer = window.setTimeout(() => resolve(), ms)
     if (!signal) return
     const onAbort = () => {
       window.clearTimeout(timer)
-      reject(new DOMException('Aborted', 'AbortError'))
+      reject(new DownloadCancelledError())
     }
     signal.addEventListener('abort', onAbort, { once: true })
   })
@@ -1309,29 +1345,6 @@ function collectImageAssetsFromShapeIds(editor: Editor, shapeIds: readonly strin
   return withUniqueDownloadNames(items)
 }
 
-class DownloadCancelledError extends Error {
-  constructor() {
-    super('DOWNLOAD_CANCELLED')
-    this.name = 'DownloadCancelledError'
-  }
-}
-
-function isDownloadCancelledError(error: unknown) {
-  if (!error) return false
-  const name = (error as any).name
-  return (
-    error instanceof DownloadCancelledError ||
-    name === 'DownloadCancelledError' ||
-    name === 'AbortError'
-  )
-}
-
-function throwIfDownloadCancelled(options?: { signal?: AbortSignal; isCancelled?: () => boolean }) {
-  if (options?.isCancelled?.() || options?.signal?.aborted) {
-    throw new DownloadCancelledError()
-  }
-}
-
 /** 单张：优先 blob 本地下载；失败再打开原链。可传入 signal 立即中止 fetch */
 async function downloadOneImage(
   item: DownloadableImage,
@@ -1369,9 +1382,16 @@ async function downloadOneImage(
     }
     return
   } catch (error) {
-    if (isDownloadCancelledError(error)) throw new DownloadCancelledError()
-    throwIfDownloadCancelled(options)
-    // 跨域或读失败：新窗口打开，用户可另存
+    // 主动取消：上抛让批量任务安静退出
+    if (isDownloadCancelledError(error)) throw error
+    // 超时/读取失败等：若此时用户也取消了，优先当取消
+    if (options?.isCancelled?.() || options?.signal?.aborted) throw new DownloadCancelledError()
+    // 读取超时等真实错误：继续抛出，不要静默 fallback 到新窗口（超时打开新页无意义）
+    const msg = String((error as any)?.message || error || '')
+    if (/超时|timeout|读取失败|HTTP\s*\d+/i.test(msg)) {
+      throw error instanceof Error ? error : new Error(msg)
+    }
+    // 跨域或其它读失败：新窗口打开，用户可另存
     const link = document.createElement('a')
     link.href = src
     link.download = fileName
