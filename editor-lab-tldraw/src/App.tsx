@@ -1245,7 +1245,7 @@ async function fetchImageAsFile(
     timeoutController.abort()
   }, timeoutMs)
   const external = options?.signal
-  // 合并超时与外部取消：任一 abort 都中止 fetch
+  // 合并超时与外部取消：任一 abort 都中止 fetch / 正文读取
   if (external) {
     if (external.aborted) {
       timeoutController.abort()
@@ -1253,29 +1253,36 @@ async function fetchImageAsFile(
       external.addEventListener('abort', () => timeoutController.abort(), { once: true })
     }
   }
-  let response: Response
+
   try {
-    try {
-      response = await fetch(url, { credentials: 'include', signal: timeoutController.signal })
-    } catch (error) {
-      // 外部主动取消优先
-      if (external?.aborted) throw new DownloadCancelledError()
-      // 内部超时 → 普通错误，供外层清理 loading 并提示用户
-      if (timedOut || (error as any)?.name === 'AbortError') {
-        throw new Error(timedOut ? '图片读取超时，请稍后重试' : '图片读取已中断')
-      }
-      throw error
-    }
+    // 整段覆盖 fetch + response.blob()，超时/取消在任一阶段都要正确转换
+    const response = await fetch(url, { credentials: 'include', signal: timeoutController.signal })
     if (external?.aborted) throw new DownloadCancelledError()
+    if (timedOut) throw new Error('图片读取超时，请稍后重试')
     if (!response.ok) {
       throw new Error(`图片读取失败: HTTP ${response.status}`)
     }
     const blob = await response.blob()
     if (external?.aborted) throw new DownloadCancelledError()
+    if (timedOut) throw new Error('图片读取超时，请稍后重试')
     const mime = blob.type || 'image/png'
     const ext = mime.split('/')[1] || 'png'
     const fileName = (nameHint || `designflow-${Date.now()}.${ext}`).replace(/[\\/:*?"<>|]+/g, '_')
     return new File([blob], fileName, { type: mime })
+  } catch (error) {
+    if (isDownloadCancelledError(error)) throw error
+    // 已是可读业务错误（含我们主动抛的超时）
+    if (error instanceof Error && /图片读取超时|图片读取失败|图片读取已中断/.test(error.message)) {
+      throw error
+    }
+    // 外部主动取消优先（含 blob 阶段被 abort 的 AbortError）
+    if (external?.aborted) throw new DownloadCancelledError()
+    // 内部超时（可能发生在 fetch 或 response.blob 阶段）
+    if (timedOut) throw new Error('图片读取超时，请稍后重试')
+    if ((error as any)?.name === 'AbortError') {
+      throw new Error('图片读取已中断')
+    }
+    throw error
   } finally {
     window.clearTimeout(timer)
   }
