@@ -1924,23 +1924,70 @@ function TldrawHostBridge() {
   React.useEffect(() => {
     let saveTimer: number | null = null
     let lastRaw = ''
+    let revisionRef = { current: 0 }
+    let isSavingRef = { current: false }
+    let hasPendingSaveRef = { current: false }
+    let pendingIntentRef = { current: 'update' }
 
-    const doSave = () => {
+    const scheduleSave = (delay = 500) => {
+      if (saveTimer) clearTimeout(saveTimer)
+      saveTimer = window.setTimeout(doSave, delay)
+    }
+
+    const doSave = async () => {
+      if (!snapshotHydratedRef.current) return
+      if (isSavingRef.current) {
+        hasPendingSaveRef.current = true
+        return
+      }
+
       try {
-        if (!snapshotHydratedRef.current) return
         const snapshot = editor.getSnapshot() as any
         const store = snapshot.store || snapshot.document?.store
         if (!store || typeof store !== 'object' || Object.keys(store).length === 0) return
-        const raw = JSON.stringify(snapshot)
-        if (raw === lastRaw) return
-        lastRaw = raw
-        fetch('/editor/snapshot', {
+        const currentRaw = JSON.stringify(snapshot)
+        if (currentRaw === lastRaw) return
+
+        isSavingRef.current = true
+        hasPendingSaveRef.current = false
+        const currentIntent = pendingIntentRef.current
+
+        const payload = {
+          snapshot,
+          base_revision: revisionRef.current,
+          intent: currentIntent,
+        }
+
+        const res = await fetch('/editor/snapshot', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ snapshot }),
+          body: JSON.stringify(payload),
           credentials: 'include',
-        }).catch(() => {})
-      } catch (e) {}
+        })
+
+        if (res.ok) {
+          const data = await res.json()
+          if (data && data.saved && typeof data.revision === 'number') {
+            lastRaw = currentRaw
+            revisionRef.current = data.revision
+            pendingIntentRef.current = 'update'
+          }
+        } else if (res.status === 409) {
+          const errData = await res.json().catch(() => ({}))
+          const detail = errData.detail || errData
+          if (typeof detail?.current_revision === 'number') {
+            revisionRef.current = detail.current_revision
+          }
+          scheduleSave(100)
+        }
+      } catch (e) {
+      } finally {
+        isSavingRef.current = false
+        if (hasPendingSaveRef.current) {
+          hasPendingSaveRef.current = false
+          scheduleSave(100)
+        }
+      }
     }
 
     const doSaveSync = () => {
@@ -1949,13 +1996,23 @@ function TldrawHostBridge() {
         const snapshot = editor.getSnapshot() as any
         const store = snapshot.store || snapshot.document?.store
         if (!store || typeof store !== 'object' || Object.keys(store).length === 0) return
-        const raw = JSON.stringify(snapshot)
-        if (raw === lastRaw) return
-        lastRaw = raw
+        const currentRaw = JSON.stringify(snapshot)
+        if (currentRaw === lastRaw) return
+
+        const payload = {
+          snapshot,
+          base_revision: revisionRef.current,
+          intent: pendingIntentRef.current,
+        }
+        const bodyStr = JSON.stringify(payload)
+        if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+          const blob = new Blob([bodyStr], { type: 'application/json' })
+          navigator.sendBeacon('/editor/snapshot', blob)
+        }
         fetch('/editor/snapshot', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ snapshot }),
+          body: bodyStr,
           credentials: 'include',
           keepalive: true,
         }).catch(() => {})
@@ -1967,6 +2024,9 @@ function TldrawHostBridge() {
       try {
         const res = await fetch('/editor/snapshot', { credentials: 'include' })
         const data = await res.json()
+        if (typeof data.revision === 'number') {
+          revisionRef.current = data.revision
+        }
         if (data.snapshot) {
           // 验证快照有效：store 至少有一个 page 记录
           const normalizedSnapshot = normalizeDesignflowAssetUrlsInSnapshot(normalizeImageShapesInSnapshot(data.snapshot))
@@ -1999,20 +2059,32 @@ function TldrawHostBridge() {
       }
     }, 500)
 
-    // 监听用户变更，debounce 2 秒后自动保存（source: 'user' 过滤掉 loadSnapshot 触发的变更）
-    const unlisten = editor.store.listen(() => {
+    // 监听用户变更，识别删除动作，自动串行化保存
+    const unlisten = editor.store.listen((entry: any) => {
       if (!snapshotHydratedRef.current) return
-      if (saveTimer) clearTimeout(saveTimer)
-      saveTimer = window.setTimeout(doSave, 2000)
-    }, { source: 'user' })
+      try {
+        const removed = entry?.changes?.removed || {}
+        const hasRemovedShapesOrPages = Object.values(removed).some((record: any) => {
+          const typeName = record?.typeName
+          return typeName === 'shape' || typeName === 'page'
+        })
+        if (hasRemovedShapesOrPages) {
+          pendingIntentRef.current = 'user_delete'
+        }
+      } catch (e) {}
 
-    // 页面关闭/刷新前立即保存，避免 debounce 未触发的修改丢失
+      scheduleSave(500)
+    })
+
+    // 页面关闭/刷新/切换前立即保存，避免 debounce 未触发的修改丢失
     window.addEventListener('beforeunload', doSaveSync)
+    window.addEventListener('pagehide', doSaveSync)
 
     return () => {
       unlisten()
       if (saveTimer) clearTimeout(saveTimer)
       window.removeEventListener('beforeunload', doSaveSync)
+      window.removeEventListener('pagehide', doSaveSync)
     }
   }, [editor, handleHostMessage, normalizeCurrentAssetUrls])
 

@@ -143,9 +143,14 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS editor_snapshots (
                 user_id          TEXT PRIMARY KEY,
                 snapshot_json    TEXT NOT NULL,
-                updated_at       REAL NOT NULL
+                updated_at       REAL NOT NULL,
+                revision         INTEGER NOT NULL DEFAULT 1
             )
         """)
+        try:
+            conn.execute("ALTER TABLE editor_snapshots ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS ai_chat_sessions (
                 id               TEXT PRIMARY KEY,
@@ -1143,49 +1148,112 @@ def _should_reject_editor_snapshot_overwrite(old_json: str | None, new_json: str
         return False
     old = _editor_snapshot_stats(old_json)
     new = _editor_snapshot_stats(new_json)
-    if old["assets"] < 20 and old["shapes"] < 20 and old["pages"] < 2:
-        return False
-    if new["assets"] <= max(3, old["assets"] // 5) and new["shapes"] <= max(3, old["shapes"] // 5):
+
+    # 1. 结构无效保护：新快照没有任何 page (pages == 0)
+    if new["pages"] == 0:
         return True
-    if old["pages"] > 1 and new["pages"] < old["pages"] and new["json_len"] < old["json_len"] // 4:
+
+    # 2. 初始空画板覆盖保护（加载失败/崩溃时产生的默认单页 0 图快照覆盖原有有效数据）：
+    if (old["shapes"] >= 3 or old["pages"] > 1) and new["shapes"] == 0:
         return True
+
+    # 3. 多页画板丢失/崩溃折叠保护：
+    # 旧快照包含多页 (pages > 1)，而新快照画板数减少 (pages < old.pages)，且内容严重缩减
+    if old["pages"] > 1 and new["pages"] < old["pages"]:
+        if new["shapes"] <= old["shapes"] // 2 or new["json_len"] < old["json_len"] // 3:
+            return True
+
     return False
 
 
-def save_editor_snapshot(user_id: str, snapshot_json: str) -> None:
+def save_editor_snapshot(
+    user_id: str,
+    snapshot_json: str,
+    base_revision: int | None = None,
+    intent: str | None = None,
+) -> tuple[bool, int, str | None]:
     now = time.time()
     with _lock, _connect() as conn:
+        try:
+            conn.execute("ALTER TABLE editor_snapshots ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass
         existing = conn.execute(
-            "SELECT snapshot_json FROM editor_snapshots WHERE user_id = ?",
+            "SELECT snapshot_json, revision FROM editor_snapshots WHERE user_id = ?",
             (user_id,),
         ).fetchone()
-        old_json = existing["snapshot_json"] if existing else None
+
+        if not existing:
+            conn.execute(
+                """
+                INSERT INTO editor_snapshots (user_id, snapshot_json, updated_at, revision)
+                VALUES (?, ?, ?, 1)
+                """,
+                (user_id, snapshot_json, now),
+            )
+            conn.commit()
+            return True, 1, None
+
+        old_json = existing["snapshot_json"]
+        old_revision = int(existing["revision"] or 1)
+        new_stats = _editor_snapshot_stats(snapshot_json)
+
+        # 1. 无效结构拦截
+        if new_stats["pages"] == 0:
+            return False, old_revision, "invalid_snapshot_structure"
+
+        # 2. 如果客户端显式提供了 base_revision：必须与当前数据库里的 old_revision 完全一致
+        if base_revision is not None:
+            if int(base_revision) != old_revision:
+                # 严格拒绝所有过期的 stale 提交，不给机会溜到后面的覆盖分支！
+                return False, old_revision, "stale_revision"
+
+            new_revision = old_revision + 1
+            conn.execute(
+                """
+                UPDATE editor_snapshots
+                SET snapshot_json = ?, updated_at = ?, revision = ?
+                WHERE user_id = ?
+                """,
+                (snapshot_json, now, new_revision, user_id),
+            )
+            conn.commit()
+            return True, new_revision, None
+
+        # 3. 只有未提供 base_revision 的旧客户端，才走回退防护规则
         if _should_reject_editor_snapshot_overwrite(old_json, snapshot_json):
             reject_dir = settings.root_dir / "output" / "editor-snapshot-rejected"
             reject_dir.mkdir(parents=True, exist_ok=True)
             reject_path = reject_dir / f"{user_id}-{int(now)}.json"
             reject_path.write_text(snapshot_json, encoding="utf-8")
-            return
+            return False, old_revision, "stale_revision_or_uninitialized"
+
+        new_revision = old_revision + 1
         conn.execute(
             """
-            INSERT INTO editor_snapshots (user_id, snapshot_json, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                snapshot_json = excluded.snapshot_json,
-                updated_at = excluded.updated_at
+            UPDATE editor_snapshots
+            SET snapshot_json = ?, updated_at = ?, revision = ?
+            WHERE user_id = ?
             """,
-            (user_id, snapshot_json, now),
+            (snapshot_json, now, new_revision, user_id),
         )
         conn.commit()
+        return True, new_revision, None
 
 
-def load_editor_snapshot(user_id: str) -> str | None:
+def load_editor_snapshot(user_id: str) -> tuple[str | None, int]:
     with _connect() as conn:
+        try:
+            conn.execute("ALTER TABLE editor_snapshots ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass
         row = conn.execute(
-            "SELECT snapshot_json FROM editor_snapshots WHERE user_id = ?",
+            "SELECT snapshot_json, revision FROM editor_snapshots WHERE user_id = ?",
             (user_id,),
         ).fetchone()
-    return row["snapshot_json"] if row else None
+    if not row:
+        return None, 0
+    return row["snapshot_json"], int(row["revision"] or 1)
 
 
 def create_agent_project(

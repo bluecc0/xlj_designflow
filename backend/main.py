@@ -4250,26 +4250,37 @@ async def describe_inspiration(request: Request, post_id: str):
 async def editor_save_snapshot(request: Request):
     """保存画布快照"""
     user = _current_user(request)
-    body = await request.json()
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     snapshot = body.get("snapshot") if isinstance(body, dict) else None
     if not snapshot:
         raise HTTPException(400, "snapshot 不能为空")
+    base_revision = body.get("base_revision") if isinstance(body, dict) else None
+    intent = body.get("intent") if isinstance(body, dict) else None
+
     raw = json.dumps(snapshot, ensure_ascii=False) if not isinstance(snapshot, str) else snapshot
-    save_editor_snapshot(user["id"], raw)
-    return {"saved": True}
+    ok, rev, reason = save_editor_snapshot(user["id"], raw, base_revision=base_revision, intent=intent)
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail={"saved": False, "reason": reason or "snapshot_rejected", "current_revision": rev},
+        )
+    return {"saved": True, "revision": rev}
 
 
 @app.get("/editor/snapshot")
 def editor_load_snapshot(request: Request):
     """加载画布快照"""
     user = _current_user(request)
-    raw = load_editor_snapshot(user["id"])
+    raw, rev = load_editor_snapshot(user["id"])
     if raw is None:
-        return {"snapshot": None}
+        return {"snapshot": None, "revision": 0}
     try:
-        return {"snapshot": _normalize_editor_snapshot_assets(json.loads(raw))}
+        return {
+            "snapshot": _normalize_editor_snapshot_assets(json.loads(raw)),
+            "revision": rev,
+        }
     except Exception:
-        return {"snapshot": None}
+        return {"snapshot": None, "revision": 0}
 
 
 # ─── /ai-image 提交幂等去重 ──────────────────────────────────────────────────
