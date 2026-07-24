@@ -681,10 +681,13 @@ function DesignflowImageToolbar() {
     message: string
   }>({ loading: false, message: '' })
   const downloadTokenRef = React.useRef(0)
+  const downloadAbortRef = React.useRef<AbortController | null>(null)
 
   React.useEffect(() => {
-    // 选区变化：作废进行中的批量下载，避免状态锁被清掉但旧任务仍在跑
+    // 选区变化：作废 token 并 abort 当前 fetch，真正中止进行中的单张下载
     downloadTokenRef.current += 1
+    downloadAbortRef.current?.abort()
+    downloadAbortRef.current = null
     clearMessage()
     clearVectorizeMessage()
     clearLayerExtractMessage()
@@ -701,6 +704,7 @@ function DesignflowImageToolbar() {
     try {
       await downloadOneImage(items[0])
     } catch (error: any) {
+      if (isDownloadCancelledError(error)) return
       window.alert(String(error?.message || error || '下载失败'))
     }
   }, [editor, imageShapeId])
@@ -712,8 +716,12 @@ function DesignflowImageToolbar() {
       window.alert('无法下载：选中的图片没有可用地址')
       return
     }
+    // 新任务开始前中止旧 controller（若有）
+    downloadAbortRef.current?.abort()
+    const ac = new AbortController()
+    downloadAbortRef.current = ac
     const token = ++downloadTokenRef.current
-    const isCancelled = () => downloadTokenRef.current !== token
+    const isCancelled = () => downloadTokenRef.current !== token || ac.signal.aborted
     setBatchDownloadState({ loading: true, message: `下载中 0/${items.length}` })
     try {
       await downloadImagesSequential(
@@ -725,7 +733,7 @@ function DesignflowImageToolbar() {
             message: done < total ? `下载中 ${done + 1}/${total}` : `已下载 ${total} 张`,
           })
         },
-        { isCancelled }
+        { isCancelled, signal: ac.signal }
       )
       if (isCancelled()) return
       setBatchDownloadState({ loading: false, message: `已下载 ${items.length} 张` })
@@ -741,6 +749,8 @@ function DesignflowImageToolbar() {
       const msg = String(error?.message || error || '批量下载失败')
       setBatchDownloadState({ loading: false, message: msg })
       window.alert(msg)
+    } finally {
+      if (downloadAbortRef.current === ac) downloadAbortRef.current = null
     }
   }, [batchDownloadState.loading, editor, imageCount, selectedImageIds])
 
@@ -911,11 +921,14 @@ function TldrawPropertiesPanel() {
     message: string
   }>({ loading: false, message: '' })
   const panelDownloadTokenRef = React.useRef(0)
+  const panelDownloadAbortRef = React.useRef<AbortController | null>(null)
   const selectionKey = selectedIds.slice().map(String).sort().join('|')
 
   React.useEffect(() => {
-    // 选区变化作废侧栏批量下载任务，防止旧循环与新状态打架
+    // 选区变化：token 作废 + abort 当前 fetch
     panelDownloadTokenRef.current += 1
+    panelDownloadAbortRef.current?.abort()
+    panelDownloadAbortRef.current = null
     setBatchDownloadState({ loading: false, message: '' })
   }, [selectionKey])
 
@@ -926,8 +939,11 @@ function TldrawPropertiesPanel() {
       window.alert('没有可下载的图片')
       return
     }
+    panelDownloadAbortRef.current?.abort()
+    const ac = new AbortController()
+    panelDownloadAbortRef.current = ac
     const token = ++panelDownloadTokenRef.current
-    const isCancelled = () => panelDownloadTokenRef.current !== token
+    const isCancelled = () => panelDownloadTokenRef.current !== token || ac.signal.aborted
     setBatchDownloadState({ loading: true, message: `下载中 0/${items.length}` })
     try {
       await downloadImagesSequential(
@@ -939,7 +955,7 @@ function TldrawPropertiesPanel() {
             message: done < total ? `下载中 ${done + 1}/${total}` : `已下载 ${total} 张`,
           })
         },
-        { isCancelled }
+        { isCancelled, signal: ac.signal }
       )
       if (isCancelled()) return
       setBatchDownloadState({ loading: false, message: `已下载 ${items.length} 张` })
@@ -952,6 +968,8 @@ function TldrawPropertiesPanel() {
       const msg = String(error?.message || error || '批量下载失败')
       setBatchDownloadState({ loading: false, message: msg })
       window.alert(msg)
+    } finally {
+      if (panelDownloadAbortRef.current === ac) panelDownloadAbortRef.current = null
     }
   }, [batchDownloadState.loading, editor])
 
@@ -1192,30 +1210,56 @@ function EditorSurface() {
   )
 }
 
-async function fetchImageAsFile(url: string, nameHint?: string) {
-  const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), 30000)
-  let response: Response
+async function fetchImageAsFile(
+  url: string,
+  nameHint?: string,
+  options?: { signal?: AbortSignal; timeoutMs?: number }
+) {
+  const timeoutMs = options?.timeoutMs ?? 30000
+  const timeoutController = new AbortController()
+  const timer = window.setTimeout(() => timeoutController.abort(), timeoutMs)
+  const external = options?.signal
+  // 合并超时与外部取消：任一 abort 都中止 fetch
+  if (external) {
+    if (external.aborted) {
+      timeoutController.abort()
+    } else {
+      external.addEventListener('abort', () => timeoutController.abort(), { once: true })
+    }
+  }
+let response: Response
   try {
-    response = await fetch(url, { credentials: 'include', signal: controller.signal })
+    response = await fetch(url, { credentials: 'include', signal: timeoutController.signal })
+    if (external?.aborted) throw new DOMException('Aborted', 'AbortError')
+    if (!response.ok) {
+      throw new Error(`图片读取失败: HTTP ${response.status}`)
+    }
+    const blob = await response.blob()
+    if (external?.aborted) throw new DOMException('Aborted', 'AbortError')
+    const mime = blob.type || 'image/png'
+    const ext = mime.split('/')[1] || 'png'
+    const fileName = (nameHint || `designflow-${Date.now()}.${ext}`).replace(/[\\/:*?"<>|]+/g, '_')
+    return new File([blob], fileName, { type: mime })
   } finally {
     window.clearTimeout(timer)
   }
-  if (!response.ok) {
-    throw new Error(`图片读取失败: HTTP ${response.status}`)
-  }
-  const blob = await response.blob()
-  const mime = blob.type || 'image/png'
-  const ext = mime.split('/')[1] || 'png'
-  const fileName = (nameHint || `designflow-${Date.now()}.${ext}`).replace(/[\\/:*?"<>|]+/g, '_')
-  return new File([blob], fileName, { type: mime })
 }
 
 type DownloadableImage = { src: string; name: string }
 
-function sleepMs(ms: number) {
-  return new Promise<void>((resolve) => {
-    window.setTimeout(resolve, ms)
+function sleepMs(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'))
+      return
+    }
+    const timer = window.setTimeout(() => resolve(), ms)
+    if (!signal) return
+    const onAbort = () => {
+      window.clearTimeout(timer)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
   })
 }
 
@@ -1265,12 +1309,40 @@ function collectImageAssetsFromShapeIds(editor: Editor, shapeIds: readonly strin
   return withUniqueDownloadNames(items)
 }
 
-/** 单张：优先 blob 本地下载；失败再打开原链 */
-async function downloadOneImage(item: DownloadableImage) {
+class DownloadCancelledError extends Error {
+  constructor() {
+    super('DOWNLOAD_CANCELLED')
+    this.name = 'DownloadCancelledError'
+  }
+}
+
+function isDownloadCancelledError(error: unknown) {
+  if (!error) return false
+  const name = (error as any).name
+  return (
+    error instanceof DownloadCancelledError ||
+    name === 'DownloadCancelledError' ||
+    name === 'AbortError'
+  )
+}
+
+function throwIfDownloadCancelled(options?: { signal?: AbortSignal; isCancelled?: () => boolean }) {
+  if (options?.isCancelled?.() || options?.signal?.aborted) {
+    throw new DownloadCancelledError()
+  }
+}
+
+/** 单张：优先 blob 本地下载；失败再打开原链。可传入 signal 立即中止 fetch */
+async function downloadOneImage(
+  item: DownloadableImage,
+  options?: { signal?: AbortSignal; isCancelled?: () => boolean }
+) {
   const src = item.src
   const fileName = sanitizeDownloadFileName(item.name)
+  throwIfDownloadCancelled(options)
   // data URL 直接挂载
   if (src.startsWith('data:')) {
+    throwIfDownloadCancelled(options)
     const link = document.createElement('a')
     link.href = src
     link.download = fileName
@@ -1280,9 +1352,12 @@ async function downloadOneImage(item: DownloadableImage) {
     return
   }
   try {
-    const file = await fetchImageAsFile(src, fileName)
+    const file = await fetchImageAsFile(src, fileName, { signal: options?.signal })
+    // fetch 完成后、触发浏览器下载前再检查一次，避免取消后仍 link.click()
+    throwIfDownloadCancelled(options)
     const objectUrl = URL.createObjectURL(file)
     try {
+      throwIfDownloadCancelled(options)
       const link = document.createElement('a')
       link.href = objectUrl
       link.download = file.name || fileName
@@ -1293,7 +1368,9 @@ async function downloadOneImage(item: DownloadableImage) {
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500)
     }
     return
-  } catch {
+  } catch (error) {
+    if (isDownloadCancelledError(error)) throw new DownloadCancelledError()
+    throwIfDownloadCancelled(options)
     // 跨域或读失败：新窗口打开，用户可另存
     const link = document.createElement('a')
     link.href = src
@@ -1306,34 +1383,28 @@ async function downloadOneImage(item: DownloadableImage) {
   }
 }
 
-class DownloadCancelledError extends Error {
-  constructor() {
-    super('DOWNLOAD_CANCELLED')
-    this.name = 'DownloadCancelledError'
-  }
-}
-
-function isDownloadCancelledError(error: unknown) {
-  return error instanceof DownloadCancelledError || (error as any)?.name === 'DownloadCancelledError'
-}
-
-/** 批量顺序下载，避免浏览器一次拦截多个下载；可通过 isCancelled 中止 */
+/** 批量顺序下载，避免浏览器一次拦截多个下载；可通过 isCancelled / signal 中止 */
 async function downloadImagesSequential(
   items: DownloadableImage[],
   onProgress?: (done: number, total: number) => void,
-  options?: { isCancelled?: () => boolean }
+  options?: { isCancelled?: () => boolean; signal?: AbortSignal }
 ) {
   const list = withUniqueDownloadNames(items)
   if (!list.length) throw new Error('没有可下载的图片')
-  const cancelled = () => !!options?.isCancelled?.()
+  const cancelled = () => !!options?.isCancelled?.() || !!options?.signal?.aborted
   for (let i = 0; i < list.length; i++) {
     if (cancelled()) throw new DownloadCancelledError()
     onProgress?.(i, list.length)
-    await downloadOneImage(list[i])
+    await downloadOneImage(list[i], { signal: options?.signal, isCancelled: options?.isCancelled })
     if (cancelled()) throw new DownloadCancelledError()
     // 给浏览器留出接受下载的间隙
     if (i < list.length - 1) {
-      await sleepMs(280)
+      try {
+        await sleepMs(280, options?.signal)
+      } catch (error) {
+        if (isDownloadCancelledError(error) || cancelled()) throw new DownloadCancelledError()
+        throw error
+      }
       if (cancelled()) throw new DownloadCancelledError()
     }
   }
