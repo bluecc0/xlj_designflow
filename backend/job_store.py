@@ -1202,7 +1202,16 @@ def save_editor_snapshot(
         if new_stats["pages"] == 0:
             return False, old_revision, "invalid_snapshot_structure"
 
-        # 2. 如果客户端显式提供了 base_revision：必须与当前数据库里的 old_revision 完全一致
+        # 2. 覆盖防护拦截：若非用户明确发起的删除操作 (intent != 'user_delete')，
+        # 且符合异常清空/缩减特征（如默认单页空画板覆盖原有数据），一律拒绝覆盖！
+        if intent != "user_delete" and _should_reject_editor_snapshot_overwrite(old_json, snapshot_json):
+            reject_dir = settings.root_dir / "output" / "editor-snapshot-rejected"
+            reject_dir.mkdir(parents=True, exist_ok=True)
+            reject_path = reject_dir / f"{user_id}-{int(now)}.json"
+            reject_path.write_text(snapshot_json, encoding="utf-8")
+            return False, old_revision, "uninitialized_overwrite_rejected"
+
+        # 3. 如果客户端显式提供了 base_revision：必须与当前数据库里的 old_revision 完全一致
         if base_revision is not None:
             if int(base_revision) != old_revision:
                 # 严格拒绝所有过期的 stale 提交，不给机会溜到后面的覆盖分支！
