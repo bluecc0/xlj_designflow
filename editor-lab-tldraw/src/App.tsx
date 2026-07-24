@@ -1973,12 +1973,26 @@ function TldrawHostBridge() {
             pendingIntentRef.current = 'update'
           }
         } else if (res.status === 409) {
-          const errData = await res.json().catch(() => ({}))
-          const detail = errData.detail || errData
-          if (typeof detail?.current_revision === 'number') {
-            revisionRef.current = detail.current_revision
-          }
-          scheduleSave(100)
+          // 409 发生（stale revision 或拒绝覆盖）：绝不能盲目提升 revision 后重新保存！
+          // 应该从服务端重新拉取最新快照进行同步，避免无线循环重试或并发多标签页强行覆盖。
+          try {
+            const reloadRes = await fetch('/editor/snapshot', { credentials: 'include' })
+            if (reloadRes.ok) {
+              const reloadData = await reloadRes.json()
+              if (typeof reloadData.revision === 'number') {
+                revisionRef.current = reloadData.revision
+              }
+              if (reloadData.snapshot) {
+                const normalized = normalizeDesignflowAssetUrlsInSnapshot(normalizeImageShapesInSnapshot(reloadData.snapshot))
+                const store = normalized.store || normalized.document?.store
+                if (store && typeof store === 'object' && Object.keys(store).length > 0) {
+                  editor.loadSnapshot(normalized)
+                  lastRaw = JSON.stringify(normalized)
+                  pendingIntentRef.current = 'update'
+                }
+              }
+            }
+          } catch (reloadErr) {}
         }
       } catch (e) {
       } finally {
