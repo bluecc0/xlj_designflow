@@ -994,6 +994,7 @@ async def generate_image_zenmux_async(
 
     if refs:
         # 有参考图：multipart/form-data 不支持流式，保持原有逻辑
+        task_id = f"zenmux:{uuid.uuid4().hex}"
         endpoint = f"{base_url}/images/edits"
         form_data = {key: str(value) for key, value in payload.items()}
         files = [
@@ -1021,7 +1022,6 @@ async def generate_image_zenmux_async(
                 )
             if on_progress:
                 on_progress(100, "completed")
-        task_id = f"zenmux:{uuid.uuid4().hex}"
         usage = None
     else:
         # 无参考图：SSE 流式，获取进度事件 + token 用量
