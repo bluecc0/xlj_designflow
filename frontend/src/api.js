@@ -77,6 +77,7 @@
       return request('/auth/logout', { method: 'POST' });
     },
     fetchHealth: function() { return request('/health'); },
+    fetchDeepHealth: function() { return request('/health/deep'); },
     fetchTemplates: function(fileId) {
       var qs = fileId ? '?file_id=' + encodeURIComponent(fileId) : '';
       return request('/templates' + qs);
@@ -366,14 +367,39 @@
     getAdminStats: function() {
       return request('/admin/stats');
     },
+    getAdminOverview: function(hours) {
+      return request('/admin/overview?hours=' + encodeURIComponent(hours || 24));
+    },
+    acknowledgeAdminStaleAlert: function(fingerprint) {
+      return request('/admin/alerts/stale/acknowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fingerprint: fingerprint }),
+      });
+    },
+    getAdminTasks: function(options) {
+      options = options || {};
+      var qs = '?limit=' + encodeURIComponent(options.limit || 50)
+        + '&offset=' + encodeURIComponent(options.offset || 0);
+      if (options.status) qs += '&status=' + encodeURIComponent(options.status);
+      if (options.taskType) qs += '&task_type=' + encodeURIComponent(options.taskType);
+      if (options.userId) qs += '&user_id=' + encodeURIComponent(options.userId);
+      if (options.search) qs += '&search=' + encodeURIComponent(options.search);
+      if (options.provider) qs += '&provider=' + encodeURIComponent(options.provider);
+      if (options.reference) qs += '&reference=' + encodeURIComponent(options.reference);
+      return request('/admin/tasks' + qs);
+    },
+    getAdminTaskDetail: function(taskType, taskId) {
+      return request('/admin/tasks/' + encodeURIComponent(taskType) + '/' + encodeURIComponent(taskId));
+    },
     getAdminUsers: function() {
       return request('/admin/users');
     },
-    createAdminUser: function(username, role, password) {
+    createAdminUser: function(username, role, password, displayName) {
       return request('/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username, role: role, password: password }),
+        body: JSON.stringify({ username: username, role: role, password: password, display_name: displayName || '' }),
       });
     },
     updateAdminUser: function(userId, updates) {

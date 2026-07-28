@@ -51,6 +51,9 @@ class Settings:
     cliproxy_base_url: str = os.getenv("CLIPROXY_BASE_URL", "") or sub2api_base_url
     cliproxy_api_key: str = os.getenv("CLIPROXY_API_KEY", "") or sub2api_api_key
     cliproxy_proxy_url: str = os.getenv("CLIPROXY_PROXY_URL", "").strip()
+    sub2api_monitor_enabled: bool = os.getenv("SUB2API_MONITOR_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+    sub2api_monitor_timezone: str = os.getenv("SUB2API_MONITOR_TIMEZONE", "Asia/Shanghai").strip() or "Asia/Shanghai"
+    sub2api_monitor_timeout_seconds: int = int(os.getenv("SUB2API_MONITOR_TIMEOUT_SECONDS", "600"))
 
     # 默认对话 LLM：优先使用订阅 OpenAI-compatible line，SiliconFlow Qwen 作为兜底
     chat_llm_model: str = os.getenv("CHAT_LLM_MODEL", "") or "gpt-5.5"
@@ -202,8 +205,15 @@ class Settings:
                 user_id = str(item.get("id", "")).strip() or username.casefold().replace(" ", "_")
                 role = str(item.get("role", "user")).strip() or "user"
                 password_hash = str(item.get("password_hash", "")).strip()
+                display_name = str(item.get("display_name", "")).strip()
                 if username and user_id:
-                    users.append({"id": user_id, "username": username, "role": role, "password_hash": password_hash})
+                    users.append({
+                        "id": user_id,
+                        "username": username,
+                        "role": role,
+                        "password_hash": password_hash,
+                        "display_name": display_name,
+                    })
         return users or default_users
 
     def reload_login_users(self) -> list[dict[str, str]]:

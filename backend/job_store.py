@@ -14,8 +14,9 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 import bcrypt
 
@@ -27,10 +28,31 @@ _DB_PATH = settings.root_dir / "jobs.db"
 _lock = threading.Lock()
 
 
-def _connect() -> sqlite3.Connection:
+def _json_value(raw, fallback):
+    if raw in (None, ""):
+        return fallback
+    try:
+        return json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return raw
+
+
+def _json_object(raw) -> dict:
+    value = _json_value(raw, {})
+    return value if isinstance(value, dict) else {"raw": value}
+
+
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        # Preserve sqlite3's native commit/rollback behavior while still
+        # releasing the file handle deterministically on every platform.
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
@@ -111,17 +133,22 @@ def init_db() -> None:
                 user_id          TEXT NOT NULL,
                 status           TEXT NOT NULL,
                 model            TEXT NOT NULL,
+                provider         TEXT,
                 prompt           TEXT NOT NULL,
                 original_prompt  TEXT NOT NULL DEFAULT '',
                 resolved_prompt  TEXT NOT NULL DEFAULT '',
                 prompt_trace     TEXT NOT NULL DEFAULT '',
                 size             TEXT NOT NULL,
+                resolution       TEXT,
                 image_url        TEXT,
                 has_reference    INTEGER NOT NULL DEFAULT 0,
+                reference_count  INTEGER,
+                request_meta_json TEXT,
                 error            TEXT,
                 task_id          TEXT,
                 progress         INTEGER NOT NULL DEFAULT 0,
-                created_at       REAL NOT NULL
+                created_at       REAL NOT NULL,
+                updated_at       REAL
             )
         """)
         # 兼容旧表：添加可能缺失的列
@@ -132,6 +159,11 @@ def init_db() -> None:
             ("resolved_prompt", "TEXT NOT NULL DEFAULT ''"),
             ("prompt_trace", "TEXT NOT NULL DEFAULT ''"),
             ("provider_switched", "INTEGER NOT NULL DEFAULT 0"),
+            ("provider", "TEXT"),
+            ("resolution", "TEXT"),
+            ("reference_count", "INTEGER"),
+            ("request_meta_json", "TEXT"),
+            ("updated_at", "REAL"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE ai_image_jobs ADD COLUMN {col} {col_def}")
@@ -139,6 +171,9 @@ def init_db() -> None:
                 pass
         conn.execute("""
         """)
+        conn.execute(
+            "UPDATE ai_image_jobs SET updated_at = created_at WHERE updated_at IS NULL"
+        )
         conn.execute("""
             CREATE TABLE IF NOT EXISTS editor_snapshots (
                 user_id          TEXT PRIMARY KEY,
@@ -239,6 +274,54 @@ def init_db() -> None:
             pass
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_oplogs_ts ON operation_logs(created_at)
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_alert_acknowledgements (
+                alert_type       TEXT PRIMARY KEY,
+                fingerprint      TEXT NOT NULL,
+                acknowledged_by  TEXT NOT NULL,
+                acknowledged_at  REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS service_probes (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                service       TEXT NOT NULL,
+                scheduled_slot TEXT NOT NULL,
+                status        TEXT NOT NULL,
+                latency_ms    INTEGER,
+                result_json   TEXT NOT NULL DEFAULT '{}',
+                error         TEXT NOT NULL DEFAULT '',
+                created_at    REAL NOT NULL,
+                completed_at  REAL,
+                UNIQUE(service, scheduled_slot)
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_service_probes_latest
+            ON service_probes(service, created_at DESC)
+        """)
+        # Admin console reads these columns frequently. Additive indexes keep the
+        # operational views responsive without changing any task write path.
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_jobs_admin
+            ON jobs(created_at, status)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_special_jobs_admin
+            ON special_jobs(created_at, status)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ai_image_jobs_admin
+            ON ai_image_jobs(created_at, status)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ai_image_jobs_provider
+            ON ai_image_jobs(provider, created_at)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_agent_images_admin
+            ON agent_images(created_at, user_id)
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS inspiration_posts (
@@ -674,34 +757,51 @@ def save_ai_image_job(
     model: str,
     prompt: str,
     size: str,
+    provider: str | None = None,
+    resolution: str | None = None,
     original_prompt: str | None = None,
     resolved_prompt: str | None = None,
     prompt_trace: str | None = None,
     image_url: str | None = None,
     has_reference: bool = False,
+    reference_count: int | None = None,
+    request_meta: dict | str | None = None,
     error: str | None = None,
     task_id: str | None = None,
     progress: int = 0,
     created_at: float | None = None,
 ) -> None:
     now = created_at or time.time()
+    updated_at = time.time()
+    if isinstance(request_meta, dict):
+        request_meta_json = json.dumps(request_meta, ensure_ascii=False)
+    elif isinstance(request_meta, str):
+        request_meta_json = request_meta
+    else:
+        request_meta_json = None
     with _lock, _connect() as conn:
         conn.execute(
             """
             INSERT INTO ai_image_jobs
-              (id, user_id, status, model, prompt, original_prompt, resolved_prompt, prompt_trace, size, image_url, has_reference, error, task_id, progress, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (id, user_id, status, model, provider, prompt, original_prompt, resolved_prompt,
+               prompt_trace, size, resolution, image_url, has_reference, reference_count,
+               request_meta_json, error, task_id, progress, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 user_id = excluded.user_id,
                 status = excluded.status,
                 model = excluded.model,
+                provider = COALESCE(excluded.provider, ai_image_jobs.provider),
                 prompt = excluded.prompt,
                 original_prompt = excluded.original_prompt,
                 resolved_prompt = excluded.resolved_prompt,
                 prompt_trace = excluded.prompt_trace,
                 size = excluded.size,
+                resolution = COALESCE(excluded.resolution, ai_image_jobs.resolution),
                 image_url = excluded.image_url,
                 has_reference = excluded.has_reference,
+                reference_count = COALESCE(excluded.reference_count, ai_image_jobs.reference_count),
+                request_meta_json = COALESCE(excluded.request_meta_json, ai_image_jobs.request_meta_json),
                 -- 进度轮询写入时 error 常为 NULL，不能覆盖已有失败原因；
                 -- 终态 done/failed 才以本次写入为准（done 可清空 error）。
                 error = CASE
@@ -714,24 +814,30 @@ def save_ai_image_job(
                     WHEN excluded.task_id IS NOT NULL AND excluded.task_id != '' THEN excluded.task_id
                     ELSE ai_image_jobs.task_id
                 END,
-                progress = excluded.progress
+                progress = excluded.progress,
+                updated_at = excluded.updated_at
             """,
             (
                 job_id,
                 user_id,
                 status,
                 model,
+                provider,
                 prompt,
                 original_prompt or "",
                 resolved_prompt or prompt or "",
                 prompt_trace or "",
                 size,
+                resolution,
                 image_url,
                 1 if has_reference else 0,
+                reference_count,
+                request_meta_json,
                 error,
                 task_id,
                 progress,
                 now,
+                updated_at,
             ),
         )
         conn.commit()
@@ -755,16 +861,20 @@ def load_ai_image_jobs(limit: int = 50, user_id: Optional[str] = None) -> list[d
             "user_id": row["user_id"],
             "status": row["status"],
             "model": row["model"],
+            "provider": row["provider"] if "provider" in row.keys() else None,
             "prompt": row["prompt"],
             "original_prompt": row["original_prompt"] if "original_prompt" in row.keys() else "",
             "resolved_prompt": row["resolved_prompt"] if "resolved_prompt" in row.keys() else "",
             "size": row["size"],
+            "resolution": row["resolution"] if "resolution" in row.keys() else None,
             "image_url": row["image_url"],
             "has_reference": bool(row["has_reference"]),
+            "reference_count": row["reference_count"] if "reference_count" in row.keys() else None,
             "error": row["error"],
             "task_id": row["task_id"],
             "progress": row["progress"],
             "created_at": row["created_at"],
+            "updated_at": row["updated_at"] if "updated_at" in row.keys() else row["created_at"],
             "_type": "ai-image",
         }
         for row in rows
@@ -781,6 +891,7 @@ def load_ai_image_job(job_id: str) -> dict | None:
         "user_id": row["user_id"],
         "status": row["status"],
         "model": row["model"],
+        "provider": row["provider"] if "provider" in row.keys() else None,
         "prompt": row["prompt"],
         "original_prompt": row["original_prompt"] if "original_prompt" in row.keys() else "",
         "resolved_prompt": row["resolved_prompt"] if "resolved_prompt" in row.keys() else "",
@@ -788,12 +899,15 @@ def load_ai_image_job(job_id: str) -> dict | None:
         "size": row["size"],
         "image_url": row["image_url"],
         "has_reference": bool(row["has_reference"]),
+        "reference_count": row["reference_count"] if "reference_count" in row.keys() else None,
+        "request_meta": _json_object(row["request_meta_json"]) if "request_meta_json" in row.keys() else {},
         "error": row["error"],
         "task_id": row["task_id"],
         "progress": int(row["progress"] or 0),
         "resolution": row["resolution"] if "resolution" in row.keys() else "",
         "provider_switched": bool(row["provider_switched"]) if "provider_switched" in row.keys() else False,
         "created_at": row["created_at"],
+        "updated_at": row["updated_at"] if "updated_at" in row.keys() else row["created_at"],
     }
 
 
@@ -801,8 +915,8 @@ def mark_ai_image_job_provider_switched(job_id: str, switched: bool = True) -> N
     """标记生图 job发生过 provider 兜底切换。独立函数，避免动 save_ai_image_job 签名。"""
     with _lock, _connect() as conn:
         conn.execute(
-            "UPDATE ai_image_jobs SET provider_switched = ? WHERE id = ?",
-            (1 if switched else 0, job_id),
+            "UPDATE ai_image_jobs SET provider_switched = ?, updated_at = ? WHERE id = ?",
+            (1 if switched else 0, time.time(), job_id),
         )
         conn.commit()
 
@@ -1628,7 +1742,13 @@ def load_operation_logs(
             f"SELECT * FROM operation_logs{where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
             tuple(params),
         ).fetchall()
-    return [dict(r) for r in rows]
+    display_name_map = _admin_display_name_map()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["display_name"] = display_name_map.get(str(item.get("user_id") or ""), "")
+        result.append(item)
+    return result
 
 
 def count_operation_logs(
@@ -1685,6 +1805,686 @@ def load_admin_stats() -> dict:
     }
 
 
+_ADMIN_ACTIVE_STATUSES = {"pending", "queued", "processing", "running"}
+
+
+def _admin_display_name_map() -> dict[str, str]:
+    """Admin-only labels; authentication continues to use id/username unchanged."""
+    return {
+        str(item.get("id") or ""): str(item.get("display_name") or "").strip()
+        for item in settings.allowed_login_users
+        if str(item.get("id") or "").strip() and str(item.get("display_name") or "").strip()
+    }
+
+
+def _admin_task_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return a small normalized projection across every persisted task table."""
+    return conn.execute(
+        """
+        SELECT 'compose' AS task_type, id, user_id, status, created_at,
+               updated_at, error, '' AS model
+        FROM jobs
+        UNION ALL
+        SELECT 'special' AS task_type, id, user_id, status, created_at,
+               updated_at, error, '' AS model
+        FROM special_jobs
+        UNION ALL
+        SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
+               COALESCE(updated_at, created_at) AS updated_at, error, model
+        FROM ai_image_jobs
+        UNION ALL
+        SELECT 'agent_image' AS task_type, id, user_id, 'done' AS status, created_at,
+               created_at AS updated_at, '' AS error, model
+        FROM agent_images
+        """
+    ).fetchall()
+
+
+def _admin_failure_group(error: str) -> tuple[str, str]:
+    text = (error or "").casefold()
+    if any(token in text for token in ("timeout", "timed out", "超时")):
+        return "timeout", "请求超时"
+    if any(token in text for token in ("429", "rate limit", "too many request", "限流")):
+        return "rate_limit", "服务限流"
+    if any(token in text for token in ("401", "403", "unauthorized", "forbidden", "鉴权", "权限")):
+        return "auth", "鉴权失败"
+    if any(token in text for token in ("400", "invalid", "参数", "格式错误")):
+        return "request", "请求参数"
+    if any(
+        token in text
+        for token in (
+            "500",
+            "502",
+            "503",
+            "504",
+            "server disconnected",
+            "service unavailable",
+            "upstream",
+            "服务暂时不可用",
+        )
+    ):
+        return "upstream", "上游服务"
+    return "other", "其他错误"
+
+
+def acknowledge_admin_alert(alert_type: str, fingerprint: str, user_id: str) -> dict:
+    clean_type = str(alert_type or "").strip()
+    clean_fingerprint = str(fingerprint or "").strip()
+    if not clean_type or not clean_fingerprint:
+        raise ValueError("alert type and fingerprint required")
+    now = time.time()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO admin_alert_acknowledgements
+              (alert_type, fingerprint, acknowledged_by, acknowledged_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(alert_type) DO UPDATE SET
+              fingerprint = excluded.fingerprint,
+              acknowledged_by = excluded.acknowledged_by,
+              acknowledged_at = excluded.acknowledged_at
+            """,
+            (clean_type, clean_fingerprint, str(user_id or ""), now),
+        )
+        conn.commit()
+    return {
+        "alert_type": clean_type,
+        "fingerprint": clean_fingerprint,
+        "acknowledged_by": str(user_id or ""),
+        "acknowledged_at": now,
+    }
+
+
+def claim_service_probe(service: str, scheduled_slot: str) -> bool:
+    """Atomically claim one scheduled probe slot across restarts/processes."""
+    with _lock, _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO service_probes
+              (service, scheduled_slot, status, created_at)
+            VALUES (?, ?, 'running', ?)
+            """,
+            (str(service), str(scheduled_slot), time.time()),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def complete_service_probe(
+    service: str,
+    scheduled_slot: str,
+    *,
+    status: str,
+    latency_ms: int,
+    result: dict | None = None,
+    error: str = "",
+) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE service_probes
+            SET status = ?, latency_ms = ?, result_json = ?, error = ?, completed_at = ?
+            WHERE service = ? AND scheduled_slot = ?
+            """,
+            (
+                str(status),
+                max(0, int(latency_ms or 0)),
+                json.dumps(result or {}, ensure_ascii=False),
+                str(error or "")[:2000],
+                time.time(),
+                str(service),
+                str(scheduled_slot),
+            ),
+        )
+        conn.commit()
+
+
+def load_latest_service_probe(service: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM service_probes
+            WHERE service = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (str(service),),
+        ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    item["result"] = _json_object(item.pop("result_json", "{}"))
+    return item
+
+
+def load_latest_completed_service_probe(service: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM service_probes
+            WHERE service = ? AND status IN ('done', 'failed')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (str(service),),
+        ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    item["result"] = _json_object(item.pop("result_json", "{}"))
+    return item
+
+
+def load_admin_overview(hours: int = 24) -> dict:
+    """Operational overview for Admin; all calculations are read-only."""
+    safe_hours = max(1, min(int(hours or 24), 24 * 31))
+    now = time.time()
+    window_seconds = safe_hours * 3600
+    since = now - window_seconds
+    previous_since = since - window_seconds
+
+    with _connect() as conn:
+        rows = [dict(row) for row in _admin_task_rows(conn)]
+        active_user_rows = conn.execute(
+            """
+            SELECT COUNT(DISTINCT user_id) AS c
+            FROM operation_logs
+            WHERE created_at >= ?
+            """,
+            (since,),
+        ).fetchone()
+        user_rows = conn.execute("SELECT id, username FROM users").fetchall()
+        stale_ack = conn.execute(
+            "SELECT * FROM admin_alert_acknowledgements WHERE alert_type = 'stale_tasks'"
+        ).fetchone()
+
+    username_map = {str(row["id"]): str(row["username"]) for row in user_rows}
+    display_name_map = _admin_display_name_map()
+
+    current = [row for row in rows if float(row["created_at"] or 0) >= since]
+    previous = [
+        row
+        for row in rows
+        if previous_since <= float(row["created_at"] or 0) < since
+    ]
+
+    def summarize(items: list[dict]) -> dict:
+        done = sum(1 for item in items if item["status"] == "done")
+        failed = sum(1 for item in items if item["status"] == "failed")
+        active = sum(1 for item in items if item["status"] in _ADMIN_ACTIVE_STATUSES)
+        terminal = done + failed
+        return {
+            "total": len(items),
+            "done": done,
+            "failed": failed,
+            "active": active,
+            "success_rate": round(done * 100 / terminal, 1) if terminal else None,
+        }
+
+    current_summary = summarize(current)
+    previous_summary = summarize(previous)
+    current_summary["volume_change"] = (
+        round((current_summary["total"] - previous_summary["total"]) * 100 / previous_summary["total"], 1)
+        if previous_summary["total"]
+        else None
+    )
+    current_summary["success_rate_change"] = (
+        round(current_summary["success_rate"] - previous_summary["success_rate"], 1)
+        if current_summary["success_rate"] is not None and previous_summary["success_rate"] is not None
+        else None
+    )
+
+    breakdown = []
+    for task_type in ("ai_image", "agent_image", "compose", "special"):
+        summary = summarize([item for item in current if item["task_type"] == task_type])
+        summary["type"] = task_type
+        breakdown.append(summary)
+
+    bucket_count = 12
+    bucket_seconds = window_seconds / bucket_count
+    series = []
+    for index in range(bucket_count):
+        start = since + index * bucket_seconds
+        series.append(
+            {
+                "timestamp": start,
+                "total": 0,
+                "done": 0,
+                "failed": 0,
+                "ai_image": 0,
+                "agent_image": 0,
+                "compose": 0,
+                "special": 0,
+            }
+        )
+    for item in current:
+        index = int((float(item["created_at"] or 0) - since) / bucket_seconds)
+        index = max(0, min(bucket_count - 1, index))
+        bucket = series[index]
+        bucket["total"] += 1
+        if item["task_type"] in {"ai_image", "agent_image", "compose", "special"}:
+            bucket[item["task_type"]] += 1
+        if item["status"] == "done":
+            bucket["done"] += 1
+        elif item["status"] == "failed":
+            bucket["failed"] += 1
+
+    health_bucket_count = 72
+    health_bucket_seconds = window_seconds / health_bucket_count
+    health_timeline = []
+    for index in range(health_bucket_count):
+        start = since + index * health_bucket_seconds
+        health_timeline.append(
+            {
+                "timestamp": start,
+                "total": 0,
+                "done": 0,
+                "failed": 0,
+                "active": 0,
+                "state": "unknown",
+            }
+        )
+    for item in current:
+        index = int((float(item["created_at"] or 0) - since) / health_bucket_seconds)
+        index = max(0, min(health_bucket_count - 1, index))
+        bucket = health_timeline[index]
+        bucket["total"] += 1
+        if item["status"] == "done":
+            bucket["done"] += 1
+        elif item["status"] == "failed":
+            bucket["failed"] += 1
+        elif item["status"] in _ADMIN_ACTIVE_STATUSES:
+            bucket["active"] += 1
+    for bucket in health_timeline:
+        terminal = bucket["done"] + bucket["failed"]
+        if not bucket["total"]:
+            bucket["state"] = "unknown"
+        elif bucket["failed"]:
+            failure_rate = bucket["failed"] / max(1, terminal)
+            bucket["state"] = "warning" if failure_rate <= 0.2 else "degraded"
+        elif bucket["active"] and not terminal:
+            bucket["state"] = "warning"
+        else:
+            bucket["state"] = "healthy"
+
+    failure_counts: dict[str, dict] = {}
+    for item in current:
+        if item["status"] != "failed":
+            continue
+        key, label = _admin_failure_group(item.get("error") or "")
+        entry = failure_counts.setdefault(key, {"key": key, "label": label, "count": 0})
+        entry["count"] += 1
+
+    stale_threshold = now - 10 * 60
+    stale_tasks = [
+        {
+            "id": item["id"],
+            "type": item["task_type"],
+            "user_id": item["user_id"],
+            "status": item["status"],
+            "model": item["model"],
+            "created_at": item["created_at"],
+            "age_seconds": max(0, int(now - float(item["created_at"] or now))),
+        }
+        for item in rows
+        if item["status"] in _ADMIN_ACTIVE_STATUSES
+        and float(item["created_at"] or 0) < stale_threshold
+    ]
+    stale_tasks.sort(key=lambda item: item["created_at"])
+    stale_alert_key = ""
+    if stale_tasks:
+        stale_ids = "|".join(
+            sorted(f"{item['type']}:{item['id']}" for item in stale_tasks)
+        )
+        stale_alert_key = hashlib.sha256(stale_ids.encode("utf-8")).hexdigest()
+    stale_alert_acknowledged = bool(
+        stale_alert_key
+        and stale_ack
+        and str(stale_ack["fingerprint"]) == stale_alert_key
+    )
+
+    recent_failures = [
+        {
+            "id": item["id"],
+            "type": item["task_type"],
+            "user_id": item["user_id"],
+            "model": item["model"],
+            "error": item.get("error") or "未记录失败原因",
+            "created_at": item["created_at"],
+        }
+        for item in rows
+        if item["status"] == "failed"
+    ]
+    recent_failures.sort(key=lambda item: item["created_at"], reverse=True)
+
+    ranking_by_user: dict[str, dict] = {}
+    for item in current:
+        uid = str(item.get("user_id") or "")
+        if not uid:
+            continue
+        entry = ranking_by_user.setdefault(
+            uid,
+            {
+                "user_id": uid,
+                "username": username_map.get(uid) or uid,
+                "display_name": display_name_map.get(uid, ""),
+                "image_count": 0,
+                "compose_count": 0,
+                "total_count": 0,
+            },
+        )
+        entry["total_count"] += 1
+        if item["task_type"] in {"ai_image", "agent_image"}:
+            entry["image_count"] += 1
+        elif item["task_type"] in {"compose", "special"}:
+            entry["compose_count"] += 1
+    user_ranking = sorted(
+        (item for item in ranking_by_user.values() if item["image_count"] > 0),
+        key=lambda item: (-item["image_count"], -item["total_count"], item["user_id"]),
+    )[:5]
+
+    return {
+        "generated_at": now,
+        "range_hours": safe_hours,
+        "summary": current_summary,
+        "previous_summary": previous_summary,
+        "breakdown": breakdown,
+        "series": series,
+        "health_timeline": health_timeline,
+        "active_users": int(active_user_rows["c"] if active_user_rows else 0),
+        "stale_tasks": stale_tasks[:20],
+        "stale_alert_key": stale_alert_key,
+        "stale_alert_acknowledged": stale_alert_acknowledged,
+        "stale_alert_acknowledgement": dict(stale_ack) if stale_alert_acknowledged else None,
+        "recent_failures": recent_failures[:8],
+        "user_ranking": user_ranking,
+        "failure_reasons": sorted(
+            failure_counts.values(),
+            key=lambda item: item["count"],
+            reverse=True,
+        ),
+    }
+
+
+def load_admin_tasks(
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+    task_type: str | None = None,
+    user_id: str | None = None,
+    search: str | None = None,
+    provider: str | None = None,
+    reference: str | None = None,
+) -> tuple[list[dict], int]:
+    """Unified paginated task list used by the operations console."""
+    safe_limit = max(1, min(int(limit or 50), 200))
+    safe_offset = max(0, int(offset or 0))
+    clauses: list[str] = []
+    params: list = []
+    if status:
+        if status == "active":
+            clauses.append("status IN ('pending', 'queued', 'processing', 'running')")
+        else:
+            clauses.append("status = ?")
+            params.append(status)
+    if task_type:
+        clauses.append("task_type = ?")
+        params.append(task_type)
+    if user_id:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if provider:
+        clauses.append("provider = ?")
+        params.append(provider)
+    if reference == "yes":
+        clauses.append("has_reference = 1")
+    elif reference == "no":
+        clauses.append("has_reference = 0")
+    clean_search = (search or "").strip()
+    if clean_search:
+        clauses.append(
+            """
+            (
+                id LIKE ? OR user_id LIKE ? OR model LIKE ? OR
+                summary LIKE ? OR error LIKE ? OR
+                user_id IN (SELECT id FROM users WHERE username LIKE ?)
+            )
+            """
+        )
+        pattern = f"%{clean_search}%"
+        params.extend([pattern] * 6)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+    task_cte = """
+        WITH all_tasks AS (
+            SELECT 'compose' AS task_type, id, user_id, status, created_at,
+                   updated_at, error, '' AS model, request_json AS summary,
+                   0 AS progress, '' AS image_url, 'penpot' AS provider,
+                   0 AS has_reference, NULL AS reference_count, '' AS resolution
+            FROM jobs
+            UNION ALL
+            SELECT 'special' AS task_type, id, user_id, status, created_at,
+                   updated_at, error, '' AS model, sku AS summary,
+                   0 AS progress, '' AS image_url, 'penpot' AS provider,
+                   0 AS has_reference, NULL AS reference_count, '' AS resolution
+            FROM special_jobs
+            UNION ALL
+            SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
+                   COALESCE(updated_at, created_at) AS updated_at, error, model, prompt AS summary,
+                   progress, COALESCE(image_url, '') AS image_url, COALESCE(provider, '') AS provider,
+                   has_reference, reference_count, COALESCE(resolution, '') AS resolution
+            FROM ai_image_jobs
+            UNION ALL
+            SELECT 'agent_image' AS task_type, id, user_id, 'done' AS status, created_at,
+                   created_at AS updated_at, '' AS error, model, prompt_json AS summary,
+                   100 AS progress, COALESCE(image_url, '') AS image_url, COALESCE(provider, '') AS provider,
+                   CASE WHEN parent_image_id IS NULL THEN 0 ELSE 1 END AS has_reference,
+                   CASE WHEN parent_image_id IS NULL THEN 0 ELSE 1 END AS reference_count,
+                   '' AS resolution
+            FROM agent_images
+        )
+    """
+    with _connect() as conn:
+        total_row = conn.execute(
+            task_cte + f" SELECT COUNT(*) AS c FROM all_tasks{where}",
+            tuple(params),
+        ).fetchone()
+        rows = conn.execute(
+            task_cte
+            + f"""
+              SELECT filtered_tasks.*, users.username
+              FROM (
+                  SELECT * FROM all_tasks
+                  {where}
+              ) AS filtered_tasks
+              LEFT JOIN users ON users.id = filtered_tasks.user_id
+              ORDER BY filtered_tasks.created_at DESC
+              LIMIT ? OFFSET ?
+            """,
+            tuple(params + [safe_limit, safe_offset]),
+        ).fetchall()
+
+    tasks = []
+    display_name_map = _admin_display_name_map()
+    for row in rows:
+        item = dict(row)
+        summary = str(item.get("summary") or "").strip()
+        if item["task_type"] == "compose" and summary:
+            try:
+                payload = json.loads(summary)
+                slot_count = len(payload.get("slots") or {})
+                frame_id = str(payload.get("template_frame_id") or "")
+                summary = f"{slot_count} 个槽位 · 模板 {frame_id[:8]}" if slot_count else f"模板 {frame_id[:8]}"
+            except Exception:
+                summary = "模板合成"
+        elif item["task_type"] == "agent_image" and summary:
+            payload = _json_object(summary)
+            summary = str(
+                payload.get("positive_prompt")
+                or payload.get("prompt")
+                or payload.get("subject")
+                or "Agent 生图"
+            )
+        item["summary"] = summary[:240]
+        item["error"] = str(item.get("error") or "")[:500]
+        item["username"] = item.get("username") or item.get("user_id") or "未知用户"
+        item["display_name"] = display_name_map.get(str(item.get("user_id") or ""), "")
+        tasks.append(item)
+    return tasks, int(total_row["c"] if total_row else 0)
+
+
+def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
+    """Load the full persisted snapshot for one task without guessing missing fields."""
+    display_name_map = _admin_display_name_map()
+    with _connect() as conn:
+        if task_type == "compose":
+            row = conn.execute(
+                """
+                SELECT jobs.*, users.username
+                FROM jobs LEFT JOIN users ON users.id = jobs.user_id
+                WHERE jobs.id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return None
+            item = dict(row)
+            request = _json_object(item.pop("request_json", "{}"))
+            progress = _json_value(item.pop("progress_json", "[]"), [])
+            return {
+                **item,
+                "task_type": task_type,
+                "username": item.get("username") or item.get("user_id") or "未知用户",
+                "display_name": display_name_map.get(str(item.get("user_id") or ""), ""),
+                "request": request,
+                "progress_log": progress,
+                "slot_count": len(request.get("slots") or {}),
+                "provider": "penpot",
+                "result": {
+                    "result_path": item.get("result_path"),
+                    "penpot_file_id": item.get("penpot_file_id"),
+                    "penpot_edit_url": item.get("penpot_edit_url"),
+                },
+            }
+
+        if task_type == "special":
+            row = conn.execute(
+                """
+                SELECT special_jobs.*, users.username
+                FROM special_jobs LEFT JOIN users ON users.id = special_jobs.user_id
+                WHERE special_jobs.id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return None
+            item = dict(row)
+            request = _json_object(item.pop("request_json", "{}"))
+            progress = _json_value(item.pop("progress_json", "[]"), [])
+            result_paths = _json_value(item.pop("result_paths_json", "[]"), [])
+            result_frame_ids = _json_value(item.pop("result_frame_ids_json", "[]"), [])
+            return {
+                **item,
+                "task_type": task_type,
+                "username": item.get("username") or item.get("user_id") or "未知用户",
+                "display_name": display_name_map.get(str(item.get("user_id") or ""), ""),
+                "request": request,
+                "progress_log": progress,
+                "provider": "penpot",
+                "result": {
+                    "result_paths": result_paths,
+                    "result_frame_ids": result_frame_ids,
+                    "penpot_file_id": item.get("penpot_file_id"),
+                    "penpot_page_id": item.get("penpot_page_id"),
+                    "penpot_edit_url": item.get("penpot_edit_url"),
+                },
+            }
+
+        if task_type == "ai_image":
+            row = conn.execute(
+                """
+                SELECT ai_image_jobs.*, users.username
+                FROM ai_image_jobs LEFT JOIN users ON users.id = ai_image_jobs.user_id
+                WHERE ai_image_jobs.id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return None
+            item = dict(row)
+            trace_raw = item.get("prompt_trace") or ""
+            trace = _json_value(trace_raw, {})
+            request_meta = _json_object(item.pop("request_meta_json", None))
+            return {
+                **item,
+                "task_type": task_type,
+                "username": item.get("username") or item.get("user_id") or "未知用户",
+                "display_name": display_name_map.get(str(item.get("user_id") or ""), ""),
+                "has_reference": bool(item.get("has_reference")),
+                "provider_switched": bool(item.get("provider_switched")),
+                "reference_count": item.get("reference_count"),
+                "request": {
+                    **request_meta,
+                    "provider": item.get("provider"),
+                    "model": item.get("model"),
+                    "size": item.get("size"),
+                    "resolution": item.get("resolution"),
+                    "has_reference": bool(item.get("has_reference")),
+                    "reference_count": item.get("reference_count"),
+                },
+                "prompts": {
+                    "original": item.get("original_prompt") or item.get("prompt") or "",
+                    "resolved": item.get("resolved_prompt") or item.get("prompt") or "",
+                    "submitted": item.get("prompt") or "",
+                    "trace": trace,
+                },
+                "result": {
+                    "image_url": item.get("image_url"),
+                    "upstream_task_id": item.get("task_id"),
+                },
+            }
+
+        if task_type == "agent_image":
+            row = conn.execute(
+                """
+                SELECT agent_images.*, users.username
+                FROM agent_images LEFT JOIN users ON users.id = agent_images.user_id
+                WHERE agent_images.id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return None
+            item = dict(row)
+            prompt = _json_object(item.pop("prompt_json", "{}"))
+            vlm = _json_object(item.pop("vlm_analysis_json", "{}"))
+            return {
+                **item,
+                "task_type": task_type,
+                "status": "done",
+                "updated_at": item.get("created_at"),
+                "username": item.get("username") or item.get("user_id") or "未知用户",
+                "display_name": display_name_map.get(str(item.get("user_id") or ""), ""),
+                "has_reference": bool(item.get("parent_image_id")),
+                "reference_count": 1 if item.get("parent_image_id") else 0,
+                "request": {
+                    "provider": item.get("provider"),
+                    "model": item.get("model"),
+                    "project_id": item.get("project_id"),
+                    "parent_image_id": item.get("parent_image_id"),
+                    "iteration_number": item.get("iteration_number"),
+                },
+                "prompts": {"resolved": prompt},
+                "result": {
+                    "image_url": item.get("image_url"),
+                    "vlm_analysis": vlm,
+                },
+            }
+
+    return None
+
+
 def load_admin_users() -> list[dict]:
     """用户列表 + 每人活动统计"""
     with _connect() as conn:
@@ -1696,6 +2496,7 @@ def load_admin_users() -> list[dict]:
             job_c = conn.execute("SELECT COUNT(*) AS c FROM jobs WHERE user_id = ?", (uid,)).fetchone()["c"]
             special_c = conn.execute("SELECT COUNT(*) AS c FROM special_jobs WHERE user_id = ?", (uid,)).fetchone()["c"]
             ai_c = conn.execute("SELECT COUNT(*) AS c FROM ai_image_jobs WHERE user_id = ?", (uid,)).fetchone()["c"]
+            agent_image_c = conn.execute("SELECT COUNT(*) AS c FROM agent_images WHERE user_id = ?", (uid,)).fetchone()["c"]
             proj_c = conn.execute("SELECT COUNT(*) AS c FROM agent_projects WHERE user_id = ?", (uid,)).fetchone()["c"]
             op_c = conn.execute("SELECT COUNT(*) AS c FROM operation_logs WHERE user_id = ?", (uid,)).fetchone()["c"]
             last_op = conn.execute(
@@ -1708,7 +2509,7 @@ def load_admin_users() -> list[dict]:
             "created_at": row["created_at"],
             "total_jobs": job_c + special_c,
             "total_special_jobs": special_c,
-            "total_ai_images": ai_c,
+            "total_ai_images": ai_c + agent_image_c,
             "total_agent_projects": proj_c,
             "total_operations": op_c,
             "last_action": dict(last_op) if last_op else None,
