@@ -1977,34 +1977,46 @@ def load_latest_completed_service_probe(service: str) -> dict | None:
 
 def load_admin_overview(hours: int = 24) -> dict:
     """Operational overview for Admin; all calculations are read-only."""
-    safe_hours = max(1, min(int(hours or 24), 24 * 31))
+    requested_hours = int(hours)
+    all_time = requested_hours == 0
+    safe_hours = 0 if all_time else max(1, min(requested_hours, 24 * 31))
     now = time.time()
-    window_seconds = safe_hours * 3600
-    since = now - window_seconds
-    previous_since = since - window_seconds
 
     with _connect() as conn:
         rows = [dict(row) for row in _admin_task_rows(conn)]
-        active_user_rows = conn.execute(
-            """
-            SELECT COUNT(DISTINCT user_id) AS c
-            FROM operation_logs
-            WHERE created_at >= ?
-            """,
-            (since,),
-        ).fetchone()
+        if all_time:
+            active_user_rows = conn.execute(
+                "SELECT COUNT(DISTINCT user_id) AS c FROM operation_logs"
+            ).fetchone()
+        else:
+            active_user_rows = conn.execute(
+                """
+                SELECT COUNT(DISTINCT user_id) AS c
+                FROM operation_logs
+                WHERE created_at >= ?
+                """,
+                (now - safe_hours * 3600,),
+            ).fetchone()
         user_rows = conn.execute("SELECT id, username FROM users").fetchall()
         stale_ack = conn.execute(
             "SELECT * FROM admin_alert_acknowledgements WHERE alert_type = 'stale_tasks'"
         ).fetchone()
 
+    earliest_created_at = min(
+        (float(row.get("created_at") or now) for row in rows),
+        default=now,
+    )
+    since = earliest_created_at if all_time else now - safe_hours * 3600
+    window_seconds = max(3600, now - since) if all_time else safe_hours * 3600
+    previous_since = since - window_seconds
     username_map = {str(row["id"]): str(row["username"]) for row in user_rows}
     display_name_map = _admin_display_name_map()
 
-    current = [row for row in rows if float(row["created_at"] or 0) >= since]
-    previous = [
-        row
-        for row in rows
+    current = rows if all_time else [
+        row for row in rows if float(row["created_at"] or 0) >= since
+    ]
+    previous = [] if all_time else [
+        row for row in rows
         if previous_since <= float(row["created_at"] or 0) < since
     ]
 
