@@ -33,6 +33,14 @@ class TransientTaskStatusError(RuntimeError):
     pass
 
 
+class FinalImageDownloadError(RuntimeError):
+    stage = "download"
+
+    def __init__(self, message: str, *, task_id: str = "") -> None:
+        super().__init__(message)
+        self.task_id = task_id
+
+
 _TRANSIENT_TASK_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 523, 524}
 
 _HTTP_ERRORS: dict[int, str] = {
@@ -823,10 +831,53 @@ async def _download_final_image(
     *,
     image_url: str,
     user_id: str,
+    task_id: str = "",
 ) -> str:
-    resp = await client.get(image_url)
-    if not resp.is_success:
-        raise RuntimeError(f"下载结果图片失败：HTTP {resp.status_code}")
+    proxy_url = settings.ai_image_download_proxy_url
+    download_client = client
+    owned_client: httpx.AsyncClient | None = None
+    if proxy_url:
+        owned_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(180.0, connect=20.0),
+            trust_env=False,
+            proxy=proxy_url,
+            follow_redirects=True,
+        )
+        download_client = owned_client
+
+    resp: httpx.Response | None = None
+    last_error: BaseException | None = None
+    try:
+        for attempt in range(1, 4):
+            try:
+                resp = await download_client.get(image_url)
+                if resp.is_success:
+                    break
+                if resp.status_code not in _TRANSIENT_TASK_STATUS_CODES or attempt == 3:
+                    raise FinalImageDownloadError(
+                        f"下载结果图片失败：HTTP {resp.status_code}",
+                        task_id=task_id,
+                    )
+                last_error = RuntimeError(f"HTTP {resp.status_code}")
+            except FinalImageDownloadError:
+                raise
+            except httpx.RequestError as exc:
+                last_error = exc
+                if attempt == 3:
+                    raise FinalImageDownloadError(
+                        f"下载结果图片网络失败：{type(exc).__name__}: {exc}",
+                        task_id=task_id,
+                    ) from exc
+            await asyncio_sleep(float(attempt))
+    finally:
+        if owned_client is not None:
+            await owned_client.aclose()
+
+    if resp is None or not resp.is_success:
+        raise FinalImageDownloadError(
+            f"下载结果图片失败：{last_error or '未知错误'}",
+            task_id=task_id,
+        )
     filename = f"{uuid.uuid4().hex}.png"
     out_dir = _ensure_user_dated_output_dir(user_id)
     out_path = out_dir / filename
@@ -965,7 +1016,9 @@ async def generate_image_zenmux_async(
             if image_url.startswith("data:image/"):
                 local_url = _save_data_url_image(image_url, user_id=user_id)
             else:
-                local_url = await _download_final_image(client, image_url=image_url, user_id=user_id)
+                local_url = await _download_final_image(
+                    client, image_url=image_url, user_id=user_id, task_id=task_id
+                )
             if on_progress:
                 on_progress(100, "completed")
         task_id = f"zenmux:{uuid.uuid4().hex}"
@@ -1075,7 +1128,9 @@ async def generate_image(
             headers=headers,
             task_id=task_id,
         )
-        local_url = await _download_final_image(client, image_url=result_url, user_id=user_id)
+        local_url = await _download_final_image(
+            client, image_url=result_url, user_id=user_id, task_id=task_id
+        )
     return {
         "url": local_url,
         "model": model_name,
@@ -1126,7 +1181,9 @@ async def generate_image_with_reference(
             headers=headers,
             task_id=task_id,
         )
-        local_url = await _download_final_image(client, image_url=result_url, user_id=user_id)
+        local_url = await _download_final_image(
+            client, image_url=result_url, user_id=user_id, task_id=task_id
+        )
     return {
         "url": local_url,
         "model": model_name,
@@ -1173,7 +1230,9 @@ async def generate_image_async(
             task_id=task_id,
             on_progress=on_progress,
         )
-        local_url = await _download_final_image(client, image_url=result_url, user_id=user_id)
+        local_url = await _download_final_image(
+            client, image_url=result_url, user_id=user_id, task_id=task_id
+        )
     return {
         "url": local_url,
         "model": model_name,
@@ -1227,7 +1286,9 @@ async def generate_image_with_reference_async(
             task_id=task_id,
             on_progress=on_progress,
         )
-        local_url = await _download_final_image(client, image_url=result_url, user_id=user_id)
+        local_url = await _download_final_image(
+            client, image_url=result_url, user_id=user_id, task_id=task_id
+        )
     return {
         "url": local_url,
         "model": model_name,
