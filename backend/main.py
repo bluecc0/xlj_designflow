@@ -218,10 +218,7 @@ async def _run_sub2api_service_probe(scheduled_slot: str) -> None:
         result = await asyncio.wait_for(
             generate_sub2api_async(
                 model="gpt-image-2",
-                prompt=(
-                    "Service availability check image: a single solid green circle centered "
-                    "on a clean white background, no text, minimal composition."
-                ),
+                prompt="a cute cat",
                 images=None,
                 size="auto",
                 resolution="",
