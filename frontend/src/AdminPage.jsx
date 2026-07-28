@@ -189,12 +189,14 @@ const ADMIN_CSS = `
   .df-admin-baritem { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; gap: 6px; }
   .df-admin-bartrack { height: 158px; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; border-radius: 4px 4px 2px 2px; background: #f0f1ed; }
   .df-admin-bar { background: #20231f; transition: height 180ms; }
+  .df-admin-bar.is-agent { background: #5f6fe8; }
   .df-admin-bar.is-compose { background: #55bc91; }
   .df-admin-bar.is-special { background: #e7ad42; }
   .df-admin-barlabel { color: var(--admin-faint); text-align: center; font-size: 8.5px; white-space: nowrap; }
   .df-admin-legend { display: inline-flex; align-items: center; gap: 9px; }
   .df-admin-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   .df-admin-legend i { width: 5px; height: 5px; border-radius: 50%; background: #20231f; }
+  .df-admin-legend .is-agent i { background: #5f6fe8; }
   .df-admin-legend .is-compose i { background: #55bc91; }
   .df-admin-legend .is-special i { background: #e7ad42; }
   .df-admin-breakdown { padding: 7px 16px 13px; }
@@ -435,6 +437,7 @@ function AdminTrendChart({ series, hours }) {
     <div className="df-admin-chart">
       {list.map(function(item, index) {
         var imageHeight = Math.max(item.ai_image ? 3 : 0, Math.round((item.ai_image || 0) * 142 / max));
+        var agentHeight = Math.max(item.agent_image ? 3 : 0, Math.round((item.agent_image || 0) * 142 / max));
         var composeHeight = Math.max(item.compose ? 3 : 0, Math.round((item.compose || 0) * 142 / max));
         var specialHeight = Math.max(item.special ? 3 : 0, Math.round((item.special || 0) * 142 / max));
         var d = new Date(item.timestamp * 1000);
@@ -442,10 +445,11 @@ function AdminTrendChart({ series, hours }) {
           ? String(d.getHours()).padStart(2, '0') + ':00'
           : (d.getMonth() + 1) + '/' + d.getDate();
         return (
-          <div className="df-admin-baritem" key={index} title={'共 ' + item.total + ' · AI 生图 ' + item.ai_image + ' · 模板合成 ' + item.compose + ' · 特殊品 ' + item.special}>
+          <div className="df-admin-baritem" key={index} title={'共 ' + item.total + ' · AI 生图 ' + item.ai_image + ' · Agent 生图 ' + item.agent_image + ' · 模板合成 ' + item.compose + ' · 特殊品 ' + item.special}>
             <div className="df-admin-bartrack">
               <span className="df-admin-bar is-special" style={{ height: specialHeight }} />
               <span className="df-admin-bar is-compose" style={{ height: composeHeight }} />
+              <span className="df-admin-bar is-agent" style={{ height: agentHeight }} />
               <span className="df-admin-bar" style={{ height: imageHeight }} />
             </div>
             <div className="df-admin-barlabel">{label}</div>
@@ -526,8 +530,8 @@ function AdminUserRanking({ items, hours }) {
   );
 }
 
-function AdminServiceCard({ name, desc, connected, configured, detail, icon }) {
-  var stateClass = connected ? 'is-up' : (configured === false ? '' : 'is-down');
+function AdminServiceCard({ name, desc, connected, configured, probing, detail, icon }) {
+  var stateClass = connected ? 'is-up' : (probing || configured === false ? '' : 'is-down');
   return (
     <div className="df-admin-service">
       <div className="df-admin-servicetop">
@@ -539,7 +543,7 @@ function AdminServiceCard({ name, desc, connected, configured, detail, icon }) {
         <span className={'df-admin-servicestate ' + stateClass} />
       </div>
       <div className="df-admin-servicebody">
-        {configured === false ? '未配置' : (connected ? '运行正常' : '连接异常')}
+        {configured === false ? '未配置' : (probing ? '正在探测' : (connected ? '运行正常' : '连接异常'))}
         {detail ? <><br />{detail}</> : null}
       </div>
     </div>
@@ -924,7 +928,7 @@ function AdminPage({ user, onBack }) {
     { name: 'Penpot', desc: '模板与合成引擎', connected: !!(health && health.penpot && health.penpot.connected), detail: health && health.penpot && health.penpot.url, icon: <I.layers size={15} /> },
     { name: '产品素材库', desc: '本地产品图资源', connected: !!(health && health.library && health.library.connected), detail: health && health.library && ((health.library.folders || []).length + ' 个目录 · ' + health.library.path), icon: <I.folder size={15} /> },
     { name: '默认生图线路', desc: 'APIMart', connected: !!apimartProvider.connected, configured: !!apimartProvider.configured, detail: apimartProvider.message || apimartProvider.url, icon: <I.image size={15} /> },
-    { name: '订阅生图线路', desc: 'CLIProxyAPI · 每小时生图探测', connected: !!(aiProvider.sub2api && aiProvider.sub2api.connected), configured: !!(aiProvider.sub2api && aiProvider.sub2api.configured), detail: aiProvider.sub2api && (aiProvider.sub2api.message || aiProvider.sub2api.url), icon: <I.zap size={15} /> },
+    { name: '订阅生图线路', desc: 'CLIProxyAPI · 每小时生图探测', connected: !!(aiProvider.sub2api && aiProvider.sub2api.connected), configured: !!(aiProvider.sub2api && aiProvider.sub2api.configured), probing: !!(aiProvider.sub2api && aiProvider.sub2api.last_probe && aiProvider.sub2api.last_probe.status === 'running'), detail: aiProvider.sub2api && (aiProvider.sub2api.message || aiProvider.sub2api.url), icon: <I.zap size={15} /> },
     { name: '官方生图线路', desc: 'ZenMux', connected: !!(aiProvider.zenmux && aiProvider.zenmux.connected), configured: !!(aiProvider.zenmux && aiProvider.zenmux.configured), detail: aiProvider.zenmux && (aiProvider.zenmux.message || aiProvider.zenmux.url), icon: <I.sparkles size={15} /> },
   ];
 
@@ -970,7 +974,7 @@ function AdminPage({ user, onBack }) {
             <div className="df-admin-cardhead">
               <span className="df-admin-cardtitle">使用趋势</span>
               <span className="df-admin-cardmeta df-admin-legend">
-                <span><i />AI 生图</span><span className="is-compose"><i />模板合成</span><span className="is-special"><i />特殊品</span>
+                <span><i />AI 生图</span><span className="is-agent"><i />Agent</span><span className="is-compose"><i />模板合成</span><span className="is-special"><i />特殊品</span>
               </span>
             </div>
             <AdminTrendChart series={overview.series} hours={overview.range_hours} />
@@ -1019,7 +1023,7 @@ function AdminPage({ user, onBack }) {
               {services.slice(0, 5).map(function(item) {
                 return (
                   <div className="df-admin-breakrow" key={item.name}>
-                    <div className="df-admin-breaktop"><span>{item.name}</span><AdminStatusBadge status={item.connected ? 'done' : 'failed'} /></div>
+                    <div className="df-admin-breaktop"><span>{item.name}</span><AdminStatusBadge status={item.probing ? 'active' : (item.connected ? 'done' : 'failed')} /></div>
                   </div>
                 );
               })}

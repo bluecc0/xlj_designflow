@@ -130,14 +130,15 @@ class AdminConsoleStoreTest(unittest.TestCase):
         with patch("backend.job_store.time.time", return_value=self.now):
             overview = job_store.load_admin_overview(24)
 
-        self.assertEqual(overview["summary"]["total"], 4)
-        self.assertEqual(overview["summary"]["done"], 2)
+        self.assertEqual(overview["summary"]["total"], 5)
+        self.assertEqual(overview["summary"]["done"], 3)
         self.assertEqual(overview["summary"]["failed"], 1)
         self.assertEqual(overview["summary"]["active"], 1)
-        self.assertEqual(overview["summary"]["success_rate"], 66.7)
+        self.assertEqual(overview["summary"]["success_rate"], 75.0)
         self.assertEqual(overview["active_users"], 2)
         self.assertEqual(len(overview["series"]), 12)
         self.assertEqual(sum(item["ai_image"] for item in overview["series"]), 3)
+        self.assertEqual(sum(item["agent_image"] for item in overview["series"]), 1)
         self.assertEqual(sum(item["compose"] for item in overview["series"]), 1)
         self.assertEqual(sum(item["special"] for item in overview["series"]), 0)
         self.assertEqual(len(overview["health_timeline"]), 72)
@@ -148,7 +149,7 @@ class AdminConsoleStoreTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in overview["stale_tasks"]], ["ai-stale"])
         self.assertEqual(overview["failure_reasons"][0]["key"], "timeout")
         self.assertEqual(overview["user_ranking"][0]["display_name"], "李设计")
-        self.assertEqual(overview["user_ranking"][0]["image_count"], 2)
+        self.assertEqual(overview["user_ranking"][0]["image_count"], 3)
 
     def test_task_list_filters_and_formats_compose_summary(self) -> None:
         failed, failed_total = job_store.load_admin_tasks(status="failed")
@@ -288,6 +289,16 @@ class AdminConsoleStoreTest(unittest.TestCase):
         self.assertEqual(latest["status"], "done")
         self.assertEqual(latest["latency_ms"], 1234)
         self.assertEqual(latest["result"]["model"], "gpt-image-2")
+        completed = job_store.load_latest_completed_service_probe("sub2api")
+        self.assertEqual(completed["scheduled_slot"], slot)
+
+        running_slot = "2026-07-28T10:00+0800"
+        self.assertTrue(job_store.claim_service_probe("sub2api", running_slot))
+        self.assertEqual(job_store.load_latest_service_probe("sub2api")["status"], "running")
+        self.assertEqual(
+            job_store.load_latest_completed_service_probe("sub2api")["scheduled_slot"],
+            slot,
+        )
 
 
 if __name__ == "__main__":

@@ -120,6 +120,7 @@ from .job_store import (
     load_admin_users,
     claim_service_probe,
     complete_service_probe,
+    load_latest_completed_service_probe,
     load_latest_service_probe,
     load_ai_chat_messages,
     load_agent_messages,
@@ -1196,11 +1197,17 @@ async def health_deep():
     ai_provider["configured"] = bool(ai_provider.get("configured") or zenmux_status.get("configured"))
 
     latest_sub2api_probe = load_latest_service_probe("sub2api")
+    latest_completed_sub2api_probe = load_latest_completed_service_probe("sub2api")
     sub2api_configured = bool(settings.cliproxy_api_key and settings.cliproxy_base_url)
+    sub2api_availability_probe = (
+        latest_completed_sub2api_probe
+        if latest_sub2api_probe and latest_sub2api_probe.get("status") == "running"
+        else latest_sub2api_probe
+    )
     sub2api_connected = bool(
         sub2api_configured
-        and latest_sub2api_probe
-        and latest_sub2api_probe.get("status") == "done"
+        and sub2api_availability_probe
+        and sub2api_availability_probe.get("status") == "done"
     )
     public_sub2api_probe = None
     if latest_sub2api_probe:
@@ -1227,7 +1234,18 @@ async def health_deep():
     elif not latest_sub2api_probe:
         sub2api_status["message"] = "等待首次生图探测"
     elif latest_sub2api_probe.get("status") == "running":
-        sub2api_status["message"] = "生图探测进行中"
+        if not latest_completed_sub2api_probe:
+            sub2api_status["message"] = "生图探测进行中 · 尚无历史结果"
+        elif sub2api_connected:
+            sub2api_status["message"] = (
+                "生图探测进行中 · 上次成功 "
+                f"{latest_completed_sub2api_probe.get('latency_ms') or 0} ms"
+            )
+        else:
+            sub2api_status["message"] = (
+                "生图探测进行中 · 上次失败 "
+                + str(latest_completed_sub2api_probe.get("error") or "未知错误")[:120]
+            )
     elif sub2api_connected:
         sub2api_status["message"] = f"最近探测成功 · {latest_sub2api_probe.get('latency_ms') or 0} ms"
     else:

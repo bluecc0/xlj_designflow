@@ -14,8 +14,9 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 import bcrypt
 
@@ -41,10 +42,14 @@ def _json_object(raw) -> dict:
     return value if isinstance(value, dict) else {"raw": value}
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
@@ -1824,6 +1829,10 @@ def _admin_task_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
                COALESCE(updated_at, created_at) AS updated_at, error, model
         FROM ai_image_jobs
+        UNION ALL
+        SELECT 'agent_image' AS task_type, id, user_id, 'done' AS status, created_at,
+               created_at AS updated_at, '' AS error, model
+        FROM agent_images
         """
     ).fetchall()
 
@@ -1945,6 +1954,24 @@ def load_latest_service_probe(service: str) -> dict | None:
     return item
 
 
+def load_latest_completed_service_probe(service: str) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM service_probes
+            WHERE service = ? AND status IN ('done', 'failed')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (str(service),),
+        ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    item["result"] = _json_object(item.pop("result_json", "{}"))
+    return item
+
+
 def load_admin_overview(hours: int = 24) -> dict:
     """Operational overview for Admin; all calculations are read-only."""
     safe_hours = max(1, min(int(hours or 24), 24 * 31))
@@ -2005,7 +2032,7 @@ def load_admin_overview(hours: int = 24) -> dict:
     )
 
     breakdown = []
-    for task_type in ("ai_image", "compose", "special"):
+    for task_type in ("ai_image", "agent_image", "compose", "special"):
         summary = summarize([item for item in current if item["task_type"] == task_type])
         summary["type"] = task_type
         breakdown.append(summary)
@@ -2022,6 +2049,7 @@ def load_admin_overview(hours: int = 24) -> dict:
                 "done": 0,
                 "failed": 0,
                 "ai_image": 0,
+                "agent_image": 0,
                 "compose": 0,
                 "special": 0,
             }
@@ -2031,7 +2059,7 @@ def load_admin_overview(hours: int = 24) -> dict:
         index = max(0, min(bucket_count - 1, index))
         bucket = series[index]
         bucket["total"] += 1
-        if item["task_type"] in {"ai_image", "compose", "special"}:
+        if item["task_type"] in {"ai_image", "agent_image", "compose", "special"}:
             bucket[item["task_type"]] += 1
         if item["status"] == "done":
             bucket["done"] += 1
@@ -2143,7 +2171,7 @@ def load_admin_overview(hours: int = 24) -> dict:
             },
         )
         entry["total_count"] += 1
-        if item["task_type"] == "ai_image":
+        if item["task_type"] in {"ai_image", "agent_image"}:
             entry["image_count"] += 1
         elif item["task_type"] in {"compose", "special"}:
             entry["compose_count"] += 1

@@ -11228,12 +11228,14 @@ const ADMIN_CSS = `
   .df-admin-baritem { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; gap: 6px; }
   .df-admin-bartrack { height: 158px; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; border-radius: 4px 4px 2px 2px; background: #f0f1ed; }
   .df-admin-bar { background: #20231f; transition: height 180ms; }
+  .df-admin-bar.is-agent { background: #5f6fe8; }
   .df-admin-bar.is-compose { background: #55bc91; }
   .df-admin-bar.is-special { background: #e7ad42; }
   .df-admin-barlabel { color: var(--admin-faint); text-align: center; font-size: 8.5px; white-space: nowrap; }
   .df-admin-legend { display: inline-flex; align-items: center; gap: 9px; }
   .df-admin-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   .df-admin-legend i { width: 5px; height: 5px; border-radius: 50%; background: #20231f; }
+  .df-admin-legend .is-agent i { background: #5f6fe8; }
   .df-admin-legend .is-compose i { background: #55bc91; }
   .df-admin-legend .is-special i { background: #e7ad42; }
   .df-admin-breakdown { padding: 7px 16px 13px; }
@@ -11491,6 +11493,7 @@ function AdminTrendChart({
     className: "df-admin-chart"
   }, list.map(function (item, index) {
     var imageHeight = Math.max(item.ai_image ? 3 : 0, Math.round((item.ai_image || 0) * 142 / max));
+    var agentHeight = Math.max(item.agent_image ? 3 : 0, Math.round((item.agent_image || 0) * 142 / max));
     var composeHeight = Math.max(item.compose ? 3 : 0, Math.round((item.compose || 0) * 142 / max));
     var specialHeight = Math.max(item.special ? 3 : 0, Math.round((item.special || 0) * 142 / max));
     var d = new Date(item.timestamp * 1000);
@@ -11498,7 +11501,7 @@ function AdminTrendChart({
     return /*#__PURE__*/React.createElement("div", {
       className: "df-admin-baritem",
       key: index,
-      title: '共 ' + item.total + ' · AI 生图 ' + item.ai_image + ' · 模板合成 ' + item.compose + ' · 特殊品 ' + item.special
+      title: '共 ' + item.total + ' · AI 生图 ' + item.ai_image + ' · Agent 生图 ' + item.agent_image + ' · 模板合成 ' + item.compose + ' · 特殊品 ' + item.special
     }, /*#__PURE__*/React.createElement("div", {
       className: "df-admin-bartrack"
     }, /*#__PURE__*/React.createElement("span", {
@@ -11510,6 +11513,11 @@ function AdminTrendChart({
       className: "df-admin-bar is-compose",
       style: {
         height: composeHeight
+      }
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "df-admin-bar is-agent",
+      style: {
+        height: agentHeight
       }
     }), /*#__PURE__*/React.createElement("span", {
       className: "df-admin-bar",
@@ -11614,10 +11622,11 @@ function AdminServiceCard({
   desc,
   connected,
   configured,
+  probing,
   detail,
   icon
 }) {
-  var stateClass = connected ? 'is-up' : configured === false ? '' : 'is-down';
+  var stateClass = connected ? 'is-up' : probing || configured === false ? '' : 'is-down';
   return /*#__PURE__*/React.createElement("div", {
     className: "df-admin-service"
   }, /*#__PURE__*/React.createElement("div", {
@@ -11634,7 +11643,7 @@ function AdminServiceCard({
     className: 'df-admin-servicestate ' + stateClass
   })), /*#__PURE__*/React.createElement("div", {
     className: "df-admin-servicebody"
-  }, configured === false ? '未配置' : connected ? '运行正常' : '连接异常', detail ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), detail) : null));
+  }, configured === false ? '未配置' : probing ? '正在探测' : connected ? '运行正常' : '连接异常', detail ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), detail) : null));
 }
 function AdminUserManagement({
   currentUser,
@@ -12163,6 +12172,7 @@ function AdminPage({
     desc: 'CLIProxyAPI · 每小时生图探测',
     connected: !!(aiProvider.sub2api && aiProvider.sub2api.connected),
     configured: !!(aiProvider.sub2api && aiProvider.sub2api.configured),
+    probing: !!(aiProvider.sub2api && aiProvider.sub2api.last_probe && aiProvider.sub2api.last_probe.status === 'running'),
     detail: aiProvider.sub2api && (aiProvider.sub2api.message || aiProvider.sub2api.url),
     icon: /*#__PURE__*/React.createElement(I.zap, {
       size: 15
@@ -12252,6 +12262,8 @@ function AdminPage({
     }, "\u4F7F\u7528\u8D8B\u52BF"), /*#__PURE__*/React.createElement("span", {
       className: "df-admin-cardmeta df-admin-legend"
     }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("i", null), "AI \u751F\u56FE"), /*#__PURE__*/React.createElement("span", {
+      className: "is-agent"
+    }, /*#__PURE__*/React.createElement("i", null), "Agent"), /*#__PURE__*/React.createElement("span", {
       className: "is-compose"
     }, /*#__PURE__*/React.createElement("i", null), "\u6A21\u677F\u5408\u6210"), /*#__PURE__*/React.createElement("span", {
       className: "is-special"
@@ -12338,7 +12350,7 @@ function AdminPage({
       }, /*#__PURE__*/React.createElement("div", {
         className: "df-admin-breaktop"
       }, /*#__PURE__*/React.createElement("span", null, item.name), /*#__PURE__*/React.createElement(AdminStatusBadge, {
-        status: item.connected ? 'done' : 'failed'
+        status: item.probing ? 'active' : item.connected ? 'done' : 'failed'
       })));
     })))));
   };
