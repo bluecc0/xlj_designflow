@@ -153,12 +153,13 @@ const ADMIN_CSS = `
   }
   .df-admin-healthtop { display: flex; align-items: center; gap: 10px; }
   .df-admin-healthmark {
-    width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center;
-    border-radius: 50%; color: #fff; background: var(--admin-green); font-size: 13px; font-weight: 750;
+    width: 8px; height: 8px; flex: 0 0 auto;
+    border-radius: 50%; background: var(--admin-green);
+    box-shadow: 0 0 0 3px var(--admin-green-soft);
   }
-  .df-admin-healthmark.is-warning { background: var(--admin-amber); }
-  .df-admin-healthmark.is-degraded { background: var(--admin-red); }
-  .df-admin-healthmark.is-unknown { color: #747a70; background: #e6e8e3; }
+  .df-admin-healthmark.is-warning { background: var(--admin-amber); box-shadow: 0 0 0 3px var(--admin-amber-soft); }
+  .df-admin-healthmark.is-degraded { background: var(--admin-red); box-shadow: 0 0 0 3px var(--admin-red-soft); }
+  .df-admin-healthmark.is-unknown { background: #b9bdb6; box-shadow: 0 0 0 3px #f0f1ed; }
   .df-admin-healthname { font-size: 12px; font-weight: 650; }
   .df-admin-healthmeta { color: var(--admin-faint); font-size: 9.5px; }
   .df-admin-healthrate { margin-left: auto; color: var(--admin-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -381,7 +382,8 @@ function adminUserLabel(item) {
 }
 
 function adminRangeLabel(hours) {
-  if (Number(hours) <= 24) return '近 24 小时';
+  if (Number(hours) === 0) return '所有时间';
+  if (Number(hours) <= 24) return '1 天内';
   if (Number(hours) <= 168) return '近 7 天';
   return '近 30 天';
 }
@@ -441,7 +443,7 @@ function AdminTrendChart({ series, hours }) {
         var composeHeight = Math.max(item.compose ? 3 : 0, Math.round((item.compose || 0) * 142 / max));
         var specialHeight = Math.max(item.special ? 3 : 0, Math.round((item.special || 0) * 142 / max));
         var d = new Date(item.timestamp * 1000);
-        var label = hours <= 48
+        var label = hours !== 0 && hours <= 48
           ? String(d.getHours()).padStart(2, '0') + ':00'
           : (d.getMonth() + 1) + '/' + d.getDate();
         return (
@@ -470,14 +472,18 @@ function AdminHealthTimeline({ timeline, summary, breakdown, hours }) {
     else if (summary.failed > 0 || summary.active > 0) overallState = 'warning';
     else overallState = 'healthy';
   }
-  var start = new Date(Date.now() - Number(hours || 24) * 3600 * 1000);
+  var allTime = Number(hours) === 0;
+  var start = list.length
+    ? new Date(Number(list[0].timestamp) * 1000)
+    : new Date(Date.now() - Number(hours || 24) * 3600 * 1000);
   var end = new Date();
-  var dateLabel = (start.getMonth() + 1) + '月' + start.getDate() + '日 - '
+  var dateLabel = (allTime ? '全部历史 · ' : '')
+    + (start.getMonth() + 1) + '月' + start.getDate() + '日 - '
     + (end.getMonth() + 1) + '月' + end.getDate() + '日';
   return (
     <section className="df-admin-health">
       <div className="df-admin-healthtop">
-        <span className={'df-admin-healthmark is-' + overallState}>{overallState === 'healthy' ? '✓' : overallState === 'unknown' ? '–' : '!'}</span>
+        <span className={'df-admin-healthmark is-' + overallState} aria-label={'健康状态：' + overallState} />
         <span className="df-admin-healthname">任务健康轨迹</span>
         <span className="df-admin-healthmeta">{activeTypes} 类业务 · {dateLabel}</span>
         <span className="df-admin-healthrate">{rate == null ? '暂无已结束任务' : rate + '% 健康率'}</span>
@@ -1172,7 +1178,7 @@ function AdminPage({ user, onBack }) {
           <div className="df-admin-headtools">
             {view === 'overview' ? (
               <select className="df-admin-control" value={rangeHours} onChange={function(e) { setRangeHours(Number(e.target.value)); }}>
-                <option value="24">最近 24 小时</option><option value="168">最近 7 天</option><option value="720">最近 30 天</option>
+                <option value="24">1 天内</option><option value="168">最近 7 天</option><option value="720">最近 30 天</option><option value="0">所有时间</option>
               </select>
             ) : null}
             {updatedAt ? <span className="df-admin-updated">更新于 {new Date(updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span> : null}

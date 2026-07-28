@@ -151,6 +151,20 @@ class AdminConsoleStoreTest(unittest.TestCase):
         self.assertEqual(overview["user_ranking"][0]["display_name"], "李设计")
         self.assertEqual(overview["user_ranking"][0]["image_count"], 3)
 
+    def test_overview_supports_all_time_range(self) -> None:
+        with patch("backend.job_store.time.time", return_value=self.now):
+            overview = job_store.load_admin_overview(0)
+
+        self.assertEqual(overview["range_hours"], 0)
+        self.assertEqual(overview["summary"]["total"], 6)
+        self.assertEqual(overview["summary"]["failed"], 2)
+        self.assertIsNone(overview["summary"]["volume_change"])
+        self.assertEqual(
+            next(item for item in overview["breakdown"] if item["type"] == "special")["total"],
+            1,
+        )
+        self.assertEqual(sum(item["total"] for item in overview["series"]), 6)
+
     def test_task_list_filters_and_formats_compose_summary(self) -> None:
         failed, failed_total = job_store.load_admin_tasks(status="failed")
         self.assertEqual(failed_total, 2)

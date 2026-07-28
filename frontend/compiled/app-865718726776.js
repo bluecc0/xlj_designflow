@@ -11192,12 +11192,13 @@ const ADMIN_CSS = `
   }
   .df-admin-healthtop { display: flex; align-items: center; gap: 10px; }
   .df-admin-healthmark {
-    width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center;
-    border-radius: 50%; color: #fff; background: var(--admin-green); font-size: 13px; font-weight: 750;
+    width: 8px; height: 8px; flex: 0 0 auto;
+    border-radius: 50%; background: var(--admin-green);
+    box-shadow: 0 0 0 3px var(--admin-green-soft);
   }
-  .df-admin-healthmark.is-warning { background: var(--admin-amber); }
-  .df-admin-healthmark.is-degraded { background: var(--admin-red); }
-  .df-admin-healthmark.is-unknown { color: #747a70; background: #e6e8e3; }
+  .df-admin-healthmark.is-warning { background: var(--admin-amber); box-shadow: 0 0 0 3px var(--admin-amber-soft); }
+  .df-admin-healthmark.is-degraded { background: var(--admin-red); box-shadow: 0 0 0 3px var(--admin-red-soft); }
+  .df-admin-healthmark.is-unknown { background: #b9bdb6; box-shadow: 0 0 0 3px #f0f1ed; }
   .df-admin-healthname { font-size: 12px; font-weight: 650; }
   .df-admin-healthmeta { color: var(--admin-faint); font-size: 9.5px; }
   .df-admin-healthrate { margin-left: auto; color: var(--admin-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -11416,7 +11417,8 @@ function adminUserLabel(item) {
   return item && (item.display_name || item.username || item.user_id || item.id) || '未知用户';
 }
 function adminRangeLabel(hours) {
-  if (Number(hours) <= 24) return '近 24 小时';
+  if (Number(hours) === 0) return '所有时间';
+  if (Number(hours) <= 24) return '1 天内';
   if (Number(hours) <= 168) return '近 7 天';
   return '近 30 天';
 }
@@ -11497,7 +11499,7 @@ function AdminTrendChart({
     var composeHeight = Math.max(item.compose ? 3 : 0, Math.round((item.compose || 0) * 142 / max));
     var specialHeight = Math.max(item.special ? 3 : 0, Math.round((item.special || 0) * 142 / max));
     var d = new Date(item.timestamp * 1000);
-    var label = hours <= 48 ? String(d.getHours()).padStart(2, '0') + ':00' : d.getMonth() + 1 + '/' + d.getDate();
+    var label = hours !== 0 && hours <= 48 ? String(d.getHours()).padStart(2, '0') + ':00' : d.getMonth() + 1 + '/' + d.getDate();
     return /*#__PURE__*/React.createElement("div", {
       className: "df-admin-baritem",
       key: index,
@@ -11544,16 +11546,18 @@ function AdminHealthTimeline({
   if (summary && summary.total) {
     if (summary.failed > 0 && Number(rate || 0) < 90) overallState = 'degraded';else if (summary.failed > 0 || summary.active > 0) overallState = 'warning';else overallState = 'healthy';
   }
-  var start = new Date(Date.now() - Number(hours || 24) * 3600 * 1000);
+  var allTime = Number(hours) === 0;
+  var start = list.length ? new Date(Number(list[0].timestamp) * 1000) : new Date(Date.now() - Number(hours || 24) * 3600 * 1000);
   var end = new Date();
-  var dateLabel = start.getMonth() + 1 + '月' + start.getDate() + '日 - ' + (end.getMonth() + 1) + '月' + end.getDate() + '日';
+  var dateLabel = (allTime ? '全部历史 · ' : '') + (start.getMonth() + 1) + '月' + start.getDate() + '日 - ' + (end.getMonth() + 1) + '月' + end.getDate() + '日';
   return /*#__PURE__*/React.createElement("section", {
     className: "df-admin-health"
   }, /*#__PURE__*/React.createElement("div", {
     className: "df-admin-healthtop"
   }, /*#__PURE__*/React.createElement("span", {
-    className: 'df-admin-healthmark is-' + overallState
-  }, overallState === 'healthy' ? '✓' : overallState === 'unknown' ? '–' : '!'), /*#__PURE__*/React.createElement("span", {
+    className: 'df-admin-healthmark is-' + overallState,
+    "aria-label": '健康状态：' + overallState
+  }), /*#__PURE__*/React.createElement("span", {
     className: "df-admin-healthname"
   }, "\u4EFB\u52A1\u5065\u5EB7\u8F68\u8FF9"), /*#__PURE__*/React.createElement("span", {
     className: "df-admin-healthmeta"
@@ -12658,11 +12662,13 @@ function AdminPage({
     }
   }, /*#__PURE__*/React.createElement("option", {
     value: "24"
-  }, "\u6700\u8FD1 24 \u5C0F\u65F6"), /*#__PURE__*/React.createElement("option", {
+  }, "1 \u5929\u5185"), /*#__PURE__*/React.createElement("option", {
     value: "168"
   }, "\u6700\u8FD1 7 \u5929"), /*#__PURE__*/React.createElement("option", {
     value: "720"
-  }, "\u6700\u8FD1 30 \u5929")) : null, updatedAt ? /*#__PURE__*/React.createElement("span", {
+  }, "\u6700\u8FD1 30 \u5929"), /*#__PURE__*/React.createElement("option", {
+    value: "0"
+  }, "\u6240\u6709\u65F6\u95F4")) : null, updatedAt ? /*#__PURE__*/React.createElement("span", {
     className: "df-admin-updated"
   }, "\u66F4\u65B0\u4E8E ", new Date(updatedAt).toLocaleTimeString('zh-CN', {
     hour: '2-digit',

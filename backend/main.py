@@ -5107,7 +5107,8 @@ def admin_overview(request: Request, hours: int = 24):
     user = _current_user(request)
     if not _is_admin(user):
         raise HTTPException(403, "需要管理员权限")
-    return load_admin_overview(hours=max(1, min(hours, 24 * 31)))
+    safe_hours = 0 if hours == 0 else max(1, min(hours, 24 * 31))
+    return load_admin_overview(hours=safe_hours)
 
 
 @app.post("/admin/alerts/stale/acknowledge")

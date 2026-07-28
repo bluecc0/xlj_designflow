@@ -368,7 +368,8 @@
       return request('/admin/stats');
     },
     getAdminOverview: function(hours) {
-      return request('/admin/overview?hours=' + encodeURIComponent(hours || 24));
+      var rangeHours = hours == null ? 24 : hours;
+      return request('/admin/overview?hours=' + encodeURIComponent(rangeHours));
     },
     acknowledgeAdminStaleAlert: function(fingerprint) {
       return request('/admin/alerts/stale/acknowledge', {
