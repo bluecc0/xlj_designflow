@@ -51,6 +51,7 @@ class Settings:
     cliproxy_base_url: str = os.getenv("CLIPROXY_BASE_URL", "") or sub2api_base_url
     cliproxy_api_key: str = os.getenv("CLIPROXY_API_KEY", "") or sub2api_api_key
     cliproxy_proxy_url: str = os.getenv("CLIPROXY_PROXY_URL", "").strip()
+    ai_image_download_proxy_url: str = os.getenv("AI_IMAGE_DOWNLOAD_PROXY_URL", "").strip()
     sub2api_monitor_enabled: bool = os.getenv("SUB2API_MONITOR_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
     sub2api_monitor_timezone: str = os.getenv("SUB2API_MONITOR_TIMEZONE", "Asia/Shanghai").strip() or "Asia/Shanghai"
     sub2api_monitor_timeout_seconds: int = int(os.getenv("SUB2API_MONITOR_TIMEOUT_SECONDS", "600"))

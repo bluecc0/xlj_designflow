@@ -3638,6 +3638,8 @@ async def _run_ai_image_background(
         )
         raise
     except Exception as e:
+        stage = str(getattr(e, "stage", "") or stage or "generate")
+        upstream_task_id = str(getattr(e, "task_id", "") or upstream_task_id)
         error_msg = format_generation_error(
             e,
             stage=stage or "generate",
