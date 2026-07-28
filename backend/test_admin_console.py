@@ -296,7 +296,10 @@ class AdminConsoleStoreTest(unittest.TestCase):
             slot,
             status="done",
             latency_ms=1234,
-            result={"model": "gpt-image-2"},
+            result={
+                "model": "gpt-image-2",
+                "image_url": "/ai-images/_service-monitor/probe.png",
+            },
         )
         latest = job_store.load_latest_service_probe("sub2api")
         self.assertIsNotNone(latest)
@@ -313,6 +316,12 @@ class AdminConsoleStoreTest(unittest.TestCase):
             job_store.load_latest_completed_service_probe("sub2api")["scheduled_slot"],
             slot,
         )
+        history = job_store.load_service_probes("sub2api", limit=48)
+        self.assertEqual([item["scheduled_slot"] for item in history], [running_slot, slot])
+        self.assertEqual(history[1]["result"]["image_url"], "/ai-images/_service-monitor/probe.png")
+        expired_urls = job_store.prune_service_probes("sub2api", self.now + 1)
+        self.assertEqual(expired_urls, ["/ai-images/_service-monitor/probe.png"])
+        self.assertEqual(job_store.load_service_probes("sub2api"), [])
 
     def test_inspiration_writes_commit_before_connection_closes(self) -> None:
         post_id = "inspiration-commit"

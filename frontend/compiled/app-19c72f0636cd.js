@@ -11300,6 +11300,28 @@ const ADMIN_CSS = `
   .df-admin-servicestate.is-up { background: var(--admin-green); box-shadow: 0 0 0 4px var(--admin-green-soft); }
   .df-admin-servicestate.is-down { background: var(--admin-red); box-shadow: 0 0 0 4px var(--admin-red-soft); }
   .df-admin-servicebody { margin-top: 18px; color: var(--admin-muted); font-size: 9.5px; line-height: 1.65; word-break: break-all; }
+  .df-admin-probelist { max-height: 410px; overflow: auto; padding: 0 16px; }
+  .df-admin-probe {
+    min-height: 54px; display: grid; grid-template-columns: 10px minmax(120px, 1fr) 110px 82px 38px;
+    align-items: center; gap: 10px; border-bottom: 1px solid #eff0ec;
+  }
+  .df-admin-probe:last-child { border-bottom: 0; }
+  .df-admin-probedot { width: 7px; height: 7px; border-radius: 50%; background: #a7aba4; }
+  .df-admin-probedot.is-done { background: var(--admin-green); box-shadow: 0 0 0 3px var(--admin-green-soft); }
+  .df-admin-probedot.is-failed { background: var(--admin-red); box-shadow: 0 0 0 3px var(--admin-red-soft); }
+  .df-admin-probedot.is-running { background: var(--admin-amber); box-shadow: 0 0 0 3px var(--admin-amber-soft); }
+  .df-admin-probetime { font-size: 10.5px; font-weight: 610; font-variant-numeric: tabular-nums; }
+  .df-admin-probemeta { color: var(--admin-faint); font-size: 9px; font-variant-numeric: tabular-nums; }
+  .df-admin-probethumb {
+    width: 36px; height: 36px; display: block; overflow: hidden;
+    border: 1px solid var(--admin-line); border-radius: 6px; background: #eff0ec;
+  }
+  .df-admin-probethumb img { width: 100%; height: 100%; display: block; object-fit: cover; }
+  .df-admin-probenoimage { width: 36px; height: 36px; border-radius: 6px; background: #f1f2ee; }
+  .df-admin-probeerror {
+    margin-top: 3px; overflow: hidden; color: #a73535; font-size: 8.5px;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
   .df-admin-form {
     display: grid; grid-template-columns: 1fr 1fr 1fr 130px auto; gap: 8px;
     padding: 14px; border-bottom: 1px solid var(--admin-line); background: #fafaf8;
@@ -11367,6 +11389,8 @@ const ADMIN_CSS = `
     .df-admin-scroll { padding: 14px; }
     .df-admin-grid, .df-admin-split, .df-admin-overviewtriple { grid-template-columns: 1fr; }
     .df-admin-servicegrid { grid-template-columns: 1fr; }
+    .df-admin-probe { grid-template-columns: 10px minmax(100px, 1fr) 74px 38px; }
+    .df-admin-probecompleted { display: none; }
     .df-admin-form { grid-template-columns: 1fr; }
     .df-admin-toolbar { flex-wrap: wrap; }
     .df-admin-search { min-width: 100%; max-width: none; }
@@ -11454,6 +11478,9 @@ function AdminStatusBadge({
   return /*#__PURE__*/React.createElement("span", {
     className: 'df-admin-status is-' + meta[1]
   }, meta[0]);
+}
+function adminStatusText(status) {
+  return (ADMIN_STATUS[status] || [status || '未知'])[0];
 }
 function AdminMetric({
   label,
@@ -11972,6 +11999,7 @@ function AdminPage({
   var [rangeHours, setRangeHours] = React.useState(720);
   var [overview, setOverview] = React.useState(null);
   var [health, setHealth] = React.useState(null);
+  var [serviceProbes, setServiceProbes] = React.useState([]);
   var [users, setUsers] = React.useState([]);
   var [tasks, setTasks] = React.useState([]);
   var [taskTotal, setTaskTotal] = React.useState(0);
@@ -12020,6 +12048,13 @@ function AdminPage({
       if (!silent) setLoading(false);
     });
   }, [rangeHours]);
+  var loadServiceProbes = React.useCallback(function () {
+    return window.API.getAdminServiceProbes('sub2api', 48).then(function (data) {
+      setServiceProbes(data.probes || []);
+    }).catch(function (err) {
+      setError(err.message || '服务探测记录加载失败');
+    });
+  }, []);
   var loadTasks = React.useCallback(function () {
     setLoading(true);
     setError('');
@@ -12061,6 +12096,9 @@ function AdminPage({
   React.useEffect(function () {
     if (view === 'overview' || view === 'services') loadOverview(false);
   }, [view, loadOverview]);
+  React.useEffect(function () {
+    if (view === 'services') loadServiceProbes();
+  }, [view, loadServiceProbes]);
   React.useEffect(function () {
     if (view !== 'tasks') return;
     var timer = window.setTimeout(loadTasks, 220);
@@ -12122,6 +12160,7 @@ function AdminPage({
     if (view === 'tasks') return loadTasks();
     if (view === 'audit') return loadOperations();
     if (view === 'users') return loadUsers();
+    if (view === 'services') return Promise.all([loadOverview(false), loadServiceProbes()]);
     return loadOverview(false);
   };
   var summary = overview && overview.summary || {};
@@ -12495,6 +12534,51 @@ function AdminPage({
       return /*#__PURE__*/React.createElement(AdminServiceCard, _extends({
         key: item.name
       }, item));
+    })), /*#__PURE__*/React.createElement("section", {
+      className: "df-admin-card df-admin-section"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardhead"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "df-admin-cardtitle"
+    }, "\u8BA2\u9605\u7EBF\u8DEF\u63A2\u6D4B\u8BB0\u5F55"), /*#__PURE__*/React.createElement("span", {
+      className: "df-admin-cardmeta"
+    }, "\u6700\u8FD1 48 \u6B21 \xB7 \u6BCF\u5C0F\u65F6\u771F\u5B9E\u751F\u56FE")), serviceProbes.length ? /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-probelist"
+    }, serviceProbes.map(function (item) {
+      var result = item.result || {};
+      var imageUrl = result.image_url || '';
+      var scheduledLabel = String(item.scheduled_slot || '').slice(5, 16).replace('T', ' ');
+      return /*#__PURE__*/React.createElement("article", {
+        className: "df-admin-probe",
+        key: item.id || item.scheduled_slot
+      }, /*#__PURE__*/React.createElement("span", {
+        className: 'df-admin-probedot is-' + item.status,
+        title: adminStatusText(item.status)
+      }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+        className: "df-admin-probetime"
+      }, adminFormatTime(item.created_at, true), " \xB7 ", adminStatusText(item.status)), item.error ? /*#__PURE__*/React.createElement("div", {
+        className: "df-admin-probeerror",
+        title: item.error
+      }, item.error) : null), /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-probemeta df-admin-probecompleted"
+      }, item.completed_at ? adminFormatTime(item.completed_at, true) : '等待完成'), /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-probemeta"
+      }, item.latency_ms != null ? (Number(item.latency_ms) / 1000).toFixed(1) + ' 秒' : '—'), imageUrl ? /*#__PURE__*/React.createElement("a", {
+        className: "df-admin-probethumb",
+        href: imageUrl,
+        target: "_blank",
+        rel: "noreferrer",
+        title: "\u67E5\u770B\u6D4B\u8BD5\u7ED3\u679C"
+      }, /*#__PURE__*/React.createElement("img", {
+        src: imageUrl,
+        alt: '订阅线路探测 ' + scheduledLabel,
+        loading: "lazy"
+      })) : /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-probenoimage",
+        title: item.status === 'running' ? '正在生成测试图' : '没有返回图片'
+      }));
+    })) : /*#__PURE__*/React.createElement(AdminEmpty, {
+      text: "\u6682\u65E0\u8BA2\u9605\u7EBF\u8DEF\u63A2\u6D4B\u8BB0\u5F55"
     })), /*#__PURE__*/React.createElement("div", {
       className: "df-admin-card df-admin-section"
     }, /*#__PURE__*/React.createElement("div", {

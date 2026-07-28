@@ -54,6 +54,7 @@ class Settings:
     sub2api_monitor_enabled: bool = os.getenv("SUB2API_MONITOR_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
     sub2api_monitor_timezone: str = os.getenv("SUB2API_MONITOR_TIMEZONE", "Asia/Shanghai").strip() or "Asia/Shanghai"
     sub2api_monitor_timeout_seconds: int = int(os.getenv("SUB2API_MONITOR_TIMEOUT_SECONDS", "600"))
+    sub2api_monitor_retention_days: int = int(os.getenv("SUB2API_MONITOR_RETENTION_DAYS", "30"))
 
     # 默认对话 LLM：优先使用订阅 OpenAI-compatible line，SiliconFlow Qwen 作为兜底
     chat_llm_model: str = os.getenv("CHAT_LLM_MODEL", "") or "gpt-5.5"

@@ -122,6 +122,8 @@ from .job_store import (
     complete_service_probe,
     load_latest_completed_service_probe,
     load_latest_service_probe,
+    load_service_probes,
+    prune_service_probes,
     load_ai_chat_messages,
     load_agent_messages,
     load_ai_image_job,
@@ -238,6 +240,7 @@ async def _run_sub2api_service_probe(scheduled_slot: str) -> None:
                 "model": result.get("model"),
                 "size": result.get("size"),
                 "usage": result.get("usage"),
+                "image_url": image_url,
             },
         )
         logger.info("[service-probe:sub2api] success slot=%s", scheduled_slot)
@@ -264,8 +267,14 @@ async def _run_sub2api_service_probe(scheduled_slot: str) -> None:
             exc,
         )
     finally:
-        if image_url:
-            await asyncio.to_thread(_remove_service_probe_image, image_url)
+        retention_seconds = max(1, settings.sub2api_monitor_retention_days) * 86400
+        expired_urls = await asyncio.to_thread(
+            prune_service_probes,
+            "sub2api",
+            time.time() - retention_seconds,
+        )
+        for expired_url in expired_urls:
+            await asyncio.to_thread(_remove_service_probe_image, expired_url)
 
 
 async def _sub2api_service_monitor_loop() -> None:
@@ -5109,6 +5118,24 @@ def admin_overview(request: Request, hours: int = 24):
         raise HTTPException(403, "需要管理员权限")
     safe_hours = 0 if hours == 0 else max(1, min(hours, 24 * 31))
     return load_admin_overview(hours=safe_hours)
+
+
+@app.get("/admin/service-probes")
+def admin_service_probes(
+    request: Request,
+    service: str = "sub2api",
+    limit: int = 48,
+):
+    """Return persisted real-request service probes for operational diagnosis."""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    if service != "sub2api":
+        raise HTTPException(400, "不支持的服务探测类型")
+    return {
+        "service": service,
+        "probes": load_service_probes(service, limit=limit),
+    }
 
 
 @app.post("/admin/alerts/stale/acknowledge")

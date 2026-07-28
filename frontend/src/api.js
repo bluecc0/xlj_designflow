@@ -371,6 +371,10 @@
       var rangeHours = hours == null ? 24 : hours;
       return request('/admin/overview?hours=' + encodeURIComponent(rangeHours));
     },
+    getAdminServiceProbes: function(service, limit) {
+      return request('/admin/service-probes?service=' + encodeURIComponent(service || 'sub2api')
+        + '&limit=' + encodeURIComponent(limit || 48));
+    },
     acknowledgeAdminStaleAlert: function(fingerprint) {
       return request('/admin/alerts/stale/acknowledge', {
         method: 'POST',

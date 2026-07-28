@@ -1975,6 +1975,46 @@ def load_latest_completed_service_probe(service: str) -> dict | None:
     return item
 
 
+def load_service_probes(service: str, limit: int = 48) -> list[dict]:
+    safe_limit = max(1, min(int(limit or 48), 200))
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM service_probes
+            WHERE service = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (str(service), safe_limit),
+        ).fetchall()
+    probes = []
+    for row in rows:
+        item = dict(row)
+        item["result"] = _json_object(item.pop("result_json", "{}"))
+        probes.append(item)
+    return probes
+
+
+def prune_service_probes(service: str, before: float) -> list[str]:
+    """Delete expired probe rows and return their local image URLs for cleanup."""
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT result_json FROM service_probes WHERE service = ? AND created_at < ?",
+            (str(service), float(before)),
+        ).fetchall()
+        conn.execute(
+            "DELETE FROM service_probes WHERE service = ? AND created_at < ?",
+            (str(service), float(before)),
+        )
+    image_urls = []
+    for row in rows:
+        result = _json_object(row["result_json"])
+        image_url = str(result.get("image_url") or "")
+        if image_url:
+            image_urls.append(image_url)
+    return image_urls
+
+
 def load_admin_overview(hours: int = 24) -> dict:
     """Operational overview for Admin; all calculations are read-only."""
     requested_hours = int(hours)
