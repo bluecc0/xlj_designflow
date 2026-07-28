@@ -24,7 +24,9 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime
 from urllib.parse import quote, urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 from pathlib import Path
@@ -93,6 +95,7 @@ from .compose import get_client, run_compose
 from .config import settings
 from .agent_skill_loader import build_skill_context, list_agent_skills, load_agent_skill
 from .job_store import (
+    acknowledge_admin_alert,
     append_ai_chat_message,
     create_ai_chat_session,
     create_agent_image,
@@ -111,7 +114,13 @@ from .job_store import (
     list_agent_projects,
     list_ai_chat_sessions,
     load_admin_stats,
+    load_admin_overview,
+    load_admin_task_detail,
+    load_admin_tasks,
     load_admin_users,
+    claim_service_probe,
+    complete_service_probe,
+    load_latest_service_probe,
     load_ai_chat_messages,
     load_agent_messages,
     load_ai_image_job,
@@ -187,15 +196,117 @@ def _migrate_inspiration_thumbnails() -> None:
         logger.exception("Failed to scan inspiration thumbnails for migration")
 
 
+def _remove_service_probe_image(image_url: str) -> None:
+    if not image_url or not image_url.startswith("/ai-images/"):
+        return
+    try:
+        root = _ai_images_path.resolve()
+        path = (_ai_images_path / image_url.removeprefix("/ai-images/")).resolve()
+        if path.is_relative_to(root) and path.is_file():
+            path.unlink()
+    except Exception:
+        logger.warning("Failed to remove subscription probe image: %s", image_url, exc_info=True)
+
+
+async def _run_sub2api_service_probe(scheduled_slot: str) -> None:
+    started = time.perf_counter()
+    image_url = ""
+    try:
+        result = await asyncio.wait_for(
+            generate_sub2api_async(
+                model="gpt-image-2",
+                prompt=(
+                    "Service availability check image: a single solid green circle centered "
+                    "on a clean white background, no text, minimal composition."
+                ),
+                images=None,
+                size="auto",
+                resolution="",
+                user_id="_service-monitor",
+            ),
+            timeout=max(60, settings.sub2api_monitor_timeout_seconds),
+        )
+        image_url = str(result.get("url") or "")
+        complete_service_probe(
+            "sub2api",
+            scheduled_slot,
+            status="done",
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            result={
+                "provider": result.get("provider"),
+                "model": result.get("model"),
+                "size": result.get("size"),
+                "usage": result.get("usage"),
+            },
+        )
+        logger.info("[service-probe:sub2api] success slot=%s", scheduled_slot)
+    except asyncio.CancelledError:
+        complete_service_probe(
+            "sub2api",
+            scheduled_slot,
+            status="failed",
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            error="服务进程停止，探测已中断",
+        )
+        raise
+    except Exception as exc:
+        complete_service_probe(
+            "sub2api",
+            scheduled_slot,
+            status="failed",
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        logger.error(
+            "[service-probe:sub2api] failed slot=%s error=%s",
+            scheduled_slot,
+            exc,
+        )
+    finally:
+        if image_url:
+            await asyncio.to_thread(_remove_service_probe_image, image_url)
+
+
+async def _sub2api_service_monitor_loop() -> None:
+    try:
+        timezone = ZoneInfo(settings.sub2api_monitor_timezone)
+    except Exception:
+        logger.error(
+            "Invalid SUB2API_MONITOR_TIMEZONE=%s; falling back to Asia/Shanghai",
+            settings.sub2api_monitor_timezone,
+        )
+        timezone = ZoneInfo("Asia/Shanghai")
+    while True:
+        now = datetime.now(timezone)
+        if 9 <= now.hour <= 21:
+            scheduled_slot = now.strftime("%Y-%m-%dT%H:00%z")
+            if claim_service_probe("sub2api", scheduled_slot):
+                await _run_sub2api_service_probe(scheduled_slot)
+        await asyncio.sleep(30)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     app.state.inspiration_migration_task = asyncio.create_task(
         asyncio.to_thread(_migrate_inspiration_thumbnails)
     )
+    app.state.sub2api_monitor_task = None
+    if (
+        settings.sub2api_monitor_enabled
+        and settings.cliproxy_base_url
+        and settings.cliproxy_api_key
+    ):
+        app.state.sub2api_monitor_task = asyncio.create_task(
+            _sub2api_service_monitor_loop()
+        )
     try:
         yield
     finally:
+        monitor_task = app.state.sub2api_monitor_task
+        if monitor_task:
+            monitor_task.cancel()
+            await asyncio.gather(monitor_task, return_exceptions=True)
         await proxy_download_stop()
 
 
@@ -431,6 +542,7 @@ def _public_login_user(user: dict) -> dict:
     return {
         "id": user.get("id", ""),
         "username": user.get("username", ""),
+        "display_name": user.get("display_name", ""),
         "role": user.get("role", "user"),
     }
 
@@ -1076,19 +1188,52 @@ async def health_deep():
             _probe_zenmux(client),
         )
 
+    # Keep each provider's probe result independent. The top-level flags below
+    # remain the aggregate "at least one image provider is available" signal.
+    ai_provider["apimart"] = dict(ai_provider)
     ai_provider["zenmux"] = zenmux_status
     ai_provider["connected"] = bool(ai_provider.get("connected") or zenmux_status.get("connected"))
     ai_provider["configured"] = bool(ai_provider.get("configured") or zenmux_status.get("configured"))
 
-    # 订阅线路状态探测：CLIProxyAPI 没有稳定的 health endpoint，配置存在即认为可用。
+    latest_sub2api_probe = load_latest_service_probe("sub2api")
+    sub2api_configured = bool(settings.cliproxy_api_key and settings.cliproxy_base_url)
+    sub2api_connected = bool(
+        sub2api_configured
+        and latest_sub2api_probe
+        and latest_sub2api_probe.get("status") == "done"
+    )
+    public_sub2api_probe = None
+    if latest_sub2api_probe:
+        public_sub2api_probe = {
+            "status": latest_sub2api_probe.get("status"),
+            "scheduled_slot": latest_sub2api_probe.get("scheduled_slot"),
+            "latency_ms": latest_sub2api_probe.get("latency_ms"),
+            "created_at": latest_sub2api_probe.get("created_at"),
+            "completed_at": latest_sub2api_probe.get("completed_at"),
+            "error": str(latest_sub2api_probe.get("error") or "")[:160],
+        }
     sub2api_status = {
-        "connected": bool(settings.cliproxy_api_key and settings.cliproxy_base_url),
-        "configured": bool(settings.cliproxy_api_key and settings.cliproxy_base_url),
+        "connected": sub2api_connected,
+        "configured": sub2api_configured,
         "provider": "CLIProxyAPI",
         "url": settings.cliproxy_base_url,
+        "monitor_enabled": settings.sub2api_monitor_enabled,
+        "last_probe": public_sub2api_probe,
     }
-    if sub2api_status["configured"]:
-        sub2api_status["message"] = "configured"
+    if not sub2api_configured:
+        sub2api_status["message"] = "未配置订阅线路"
+    elif not settings.sub2api_monitor_enabled:
+        sub2api_status["message"] = "定时生图探测未启用"
+    elif not latest_sub2api_probe:
+        sub2api_status["message"] = "等待首次生图探测"
+    elif latest_sub2api_probe.get("status") == "running":
+        sub2api_status["message"] = "生图探测进行中"
+    elif sub2api_connected:
+        sub2api_status["message"] = f"最近探测成功 · {latest_sub2api_probe.get('latency_ms') or 0} ms"
+    else:
+        sub2api_status["message"] = (
+            "最近探测失败 · " + str(latest_sub2api_probe.get("error") or "未知错误")[:160]
+        )
     ai_provider["sub2api"] = sub2api_status
     ai_provider["connected"] = bool(ai_provider.get("connected") or sub2api_status.get("connected"))
     ai_provider["configured"] = bool(ai_provider.get("configured") or sub2api_status.get("configured"))
@@ -3312,6 +3457,7 @@ async def _run_ai_image_background(
     resolved_prompt: str = "",
     prompt_trace: str = "",
     ref_previews: list[str] | None = None,
+    request_meta: dict | None = None,
     batch_id: str = "",
     batch_index: int = 0,
     batch_count: int = 1,
@@ -3332,9 +3478,11 @@ async def _run_ai_image_background(
             save_ai_image_job(
                 job_id=job_id, user_id=user_id, status=db_status,
                 model=model, prompt=prompt, size=size,
+                provider=provider, resolution=resolution,
                 original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
                 prompt_trace=prompt_trace,
-                progress=pct, has_reference=has_reference, created_at=created_at,
+                progress=pct, has_reference=has_reference, reference_count=len(refs),
+                request_meta=request_meta, created_at=created_at,
             )
         except Exception:
             pass
@@ -3372,10 +3520,12 @@ async def _run_ai_image_background(
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="done",
             model=model, prompt=prompt, size=size,
+            provider=provider, resolution=resolution,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
             image_url=result.get("url"), task_id=upstream_task_id or None,
-            progress=100, has_reference=has_reference, created_at=created_at,
+            progress=100, has_reference=has_reference, reference_count=len(refs),
+            request_meta=request_meta, created_at=created_at,
         )
         cost_str = f" cost={result.get('cost')}" if result.get('cost') is not None else ""
         time_str = f" {result.get('actual_time') or result.get('estimated_time') or ''}s" if (result.get('actual_time') or result.get('estimated_time')) else ""
@@ -3437,9 +3587,11 @@ async def _run_ai_image_background(
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="failed",
             model=model, prompt=prompt, size=size,
+            provider=provider, resolution=resolution,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
             has_reference=has_reference, error=error_msg, task_id=upstream_task_id or None,
+            reference_count=len(refs), request_meta=request_meta,
             progress=100, created_at=created_at,
         )
         log_operation(
@@ -3483,9 +3635,11 @@ async def _run_ai_image_background(
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="failed",
             model=model, prompt=prompt, size=size,
+            provider=provider, resolution=resolution,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
             has_reference=has_reference, error=error_msg, task_id=upstream_task_id or None,
+            reference_count=len(refs), request_meta=request_meta,
             progress=100, created_at=created_at,
         )
         log_operation(
@@ -3538,6 +3692,8 @@ async def ai_image_upscale(request: Request):
     save_ai_image_job(
         job_id=job_id, user_id=user["id"], status="processing",
         model="local-upscale", prompt=prompt, size="",
+        provider="local", reference_count=1,
+        request_meta={"operation": "upscale", "scale": scale, "source_image_url": image_url},
         original_prompt=prompt, resolved_prompt=prompt,
         has_reference=True, progress=0, created_at=created_at,
     )
@@ -3561,6 +3717,8 @@ async def ai_image_vectorize(request: Request):
     save_ai_image_job(
         job_id=job_id, user_id=user["id"], status="processing",
         model="local-vectorize", prompt=prompt, size="",
+        provider="local", reference_count=1,
+        request_meta={"operation": "vectorize", "source_image_url": image_url},
         original_prompt=prompt, resolved_prompt=prompt,
         has_reference=True, progress=0, created_at=created_at,
     )
@@ -3584,6 +3742,8 @@ async def ai_image_layer_extract(request: Request):
     save_ai_image_job(
         job_id=job_id, user_id=user["id"], status="processing",
         model="layer-extract", prompt=prompt, size="",
+        provider="local", reference_count=1,
+        request_meta={"operation": "layer_extract", "source_image_url": image_url},
         original_prompt=prompt, resolved_prompt=prompt,
         has_reference=True, progress=0, created_at=created_at,
     )
@@ -3829,8 +3989,17 @@ async def ai_image_retry(request: Request):
     save_ai_image_job(
         job_id=new_job_id, user_id=user["id"], status="processing",
         model=model, prompt=prompt, size=size,
+        provider=PROVIDER_ZENMUX, resolution=resolution,
         original_prompt=original_prompt, resolved_prompt=resolved_prompt,
-        has_reference=has_reference, created_at=created_at,
+        has_reference=has_reference, reference_count=len(all_refs),
+        request_meta={
+            "chat_session_id": session_id,
+            "retry_from": job_id,
+            "manual_reference_count": len(user_refs),
+            "context_reference_count": len(context_ref_bytes),
+            "reference_names": [name for _content, name in all_refs],
+        },
+        created_at=created_at,
     )
     log_operation(
         user_id=user["id"], username=user["username"],
@@ -3849,6 +4018,13 @@ async def ai_image_retry(request: Request):
             refs=all_refs, has_reference=has_reference, created_at=created_at,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt,
             ref_previews=[],
+            request_meta={
+                "chat_session_id": session_id,
+                "retry_from": job_id,
+                "manual_reference_count": len(user_refs),
+                "context_reference_count": len(context_ref_bytes),
+                "reference_names": [name for _content, name in all_refs],
+            },
         )
     )
     return {"job_id": new_job_id, "status": "processing", "provider": PROVIDER_ZENMUX}
@@ -4519,6 +4695,22 @@ async def ai_image_endpoint(
                     logger.warning("Failed to save user refs for job %s", jid)
             all_refs_batch: list[tuple[bytes, str]] = context_ref_bytes + user_refs
             all_refs_batch = all_refs_batch[:9]  # 总共最多 9 张
+            request_meta = {
+                "client_request_id": client_req,
+                "chat_session_id": session_id,
+                "skill": active_skill_name,
+                "batch_id": batch_id,
+                "batch_index": _idx,
+                "batch_count": batch_count,
+                "manual_reference_count": len(user_refs),
+                "context_reference_count": len(context_ref_bytes),
+                "reference_names": [name for _content, name in all_refs_batch],
+                # data URL 缩略图体积很大，不写入任务库；站内 URL 可以安全保留用于排障。
+                "reference_previews": [
+                    preview for preview in ref_previews_list
+                    if isinstance(preview, str) and not preview.startswith("data:")
+                ],
+            }
             save_ai_image_job(
                 job_id=jid,
                 user_id=user["id"],
@@ -4526,10 +4718,14 @@ async def ai_image_endpoint(
                 model=resolved,
                 prompt=original_prompt,
                 size=size,
+                provider=resolved_provider,
+                resolution=resolution,
                 original_prompt=original_prompt,
                 resolved_prompt=original_prompt,
                 prompt_trace=json.dumps(prompt_trace_payload, ensure_ascii=False) if prompt_trace_payload else prompt_trace_text,
                 has_reference=has_reference,
+                reference_count=len(all_refs_batch),
+                request_meta=request_meta,
                 created_at=created_at,
             )
             log_operation(
@@ -4553,6 +4749,7 @@ async def ai_image_endpoint(
                     original_prompt=original_prompt, resolved_prompt=enriched_prompt,
                     prompt_trace=json.dumps(prompt_trace_payload, ensure_ascii=False) if prompt_trace_payload else prompt_trace_text,
                     ref_previews=ref_previews_list,
+                    request_meta=request_meta,
                     batch_id=batch_id, batch_index=_idx, batch_count=batch_count,
                 )
             )
@@ -4600,9 +4797,19 @@ async def ai_image_endpoint(
                 model=resolved,
                 prompt=original_prompt,
                 size=size,
+                provider=provider_for_err or None,
+                resolution=resolution,
                 original_prompt=original_prompt,
                 resolved_prompt=original_prompt,
                 has_reference=has_ref_for_err,
+                reference_count=len(images),
+                request_meta={
+                    "client_request_id": client_req,
+                    "chat_session_id": session_id,
+                    "skill": active_skill_name,
+                    "batch_count": batch_count,
+                    "stage": "submit",
+                },
                 error=format_generation_error(
                     e, stage="submit", provider=provider_for_err, model=resolved, job_id=fid,
                 ),
@@ -4876,6 +5083,101 @@ def admin_stats(request: Request):
     return load_admin_stats()
 
 
+@app.get("/admin/overview")
+def admin_overview(request: Request, hours: int = 24):
+    """运营概览与异常摘要（仅管理员，只读）。"""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    return load_admin_overview(hours=max(1, min(hours, 24 * 31)))
+
+
+@app.post("/admin/alerts/stale/acknowledge")
+def admin_acknowledge_stale_alert(request: Request, body: dict):
+    """Mark the currently visible stale-task alert as operationally handled."""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    fingerprint = str(body.get("fingerprint") or "").strip()
+    current = load_admin_overview(hours=24)
+    current_fingerprint = str(current.get("stale_alert_key") or "")
+    if not fingerprint or fingerprint != current_fingerprint:
+        raise HTTPException(409, "异常任务集合已经变化，请刷新后重新确认")
+    acknowledgement = acknowledge_admin_alert("stale_tasks", fingerprint, user["id"])
+    log_operation(
+        user_id=user["id"],
+        username=user["username"],
+        action="admin_alert_acknowledge",
+        detail=f"确认处理 {len(current.get('stale_tasks') or [])} 个超时任务",
+        payload=json.dumps(
+            {
+                "fingerprint": fingerprint,
+                "task_ids": [item.get("id") for item in current.get("stale_tasks") or []],
+            },
+            ensure_ascii=False,
+        ),
+    )
+    return {"acknowledgement": acknowledgement}
+
+
+@app.get("/admin/tasks")
+def admin_tasks(
+    request: Request,
+    limit: int = 50,
+    offset: int = 0,
+    status: str = "",
+    task_type: str = "",
+    user_id: str = "",
+    search: str = "",
+    provider: str = "",
+    reference: str = "",
+):
+    """统一任务中心（仅管理员，只读）。"""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    allowed_statuses = {"", "active", "pending", "queued", "processing", "running", "done", "failed"}
+    allowed_types = {"", "compose", "special", "ai_image", "agent_image"}
+    allowed_references = {"", "yes", "no"}
+    if status not in allowed_statuses:
+        raise HTTPException(400, "不支持的任务状态")
+    if task_type not in allowed_types:
+        raise HTTPException(400, "不支持的任务类型")
+    if reference not in allowed_references:
+        raise HTTPException(400, "不支持的参考图筛选条件")
+    tasks, total = load_admin_tasks(
+        limit=limit,
+        offset=offset,
+        status=status or None,
+        task_type=task_type or None,
+        user_id=user_id or None,
+        search=search or None,
+        provider=provider or None,
+        reference=reference or None,
+    )
+    return {
+        "tasks": tasks,
+        "total": total,
+        "limit": max(1, min(limit, 200)),
+        "offset": max(0, offset),
+    }
+
+
+@app.get("/admin/tasks/{task_type}/{task_id}")
+def admin_task_detail(request: Request, task_type: str, task_id: str):
+    """任务完整持久化快照（仅管理员，只读）。"""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    allowed_types = {"compose", "special", "ai_image", "agent_image"}
+    if task_type not in allowed_types:
+        raise HTTPException(400, "不支持的任务类型")
+    detail = load_admin_task_detail(task_type, task_id)
+    if not detail:
+        raise HTTPException(404, "任务不存在")
+    return {"task": detail}
+
+
 @app.get("/admin/users")
 def admin_users(request: Request):
     """用户列表 + 活动统计（仅管理员，以 login_users.json 为准，补充 DB 活动数据）"""
@@ -4890,6 +5192,7 @@ def admin_users(request: Request):
         merged.append({
             "id": u["id"],
             "username": u["username"],
+            "display_name": u.get("display_name", ""),
             "role": u.get("role", "user"),
             "created_at": stats.get("created_at"),
             "total_jobs": stats.get("total_jobs", 0),
@@ -4911,6 +5214,7 @@ def admin_create_user(request: Request, body: dict):
     username = (body.get("username") or "").strip()
     role = (body.get("role") or "user").strip()
     password = (body.get("password") or "").strip()
+    display_name = (body.get("display_name") or "").strip()
     if not username:
         raise HTTPException(400, "username 不能为空")
     if role not in ("admin", "user"):
@@ -4920,9 +5224,15 @@ def admin_create_user(request: Request, body: dict):
     new_id = username.casefold().replace(" ", "_")
     if any(u["id"] == new_id for u in settings.allowed_login_users):
         raise HTTPException(409, f"用户 {new_id} 已存在")
-    new_user = {"id": new_id, "username": username, "role": role, "password_hash": hash_password(password)}
+    new_user = {
+        "id": new_id,
+        "username": username,
+        "display_name": display_name[:40],
+        "role": role,
+        "password_hash": hash_password(password),
+    }
     settings.save_login_users(list(settings.allowed_login_users) + [new_user])
-    return {"user": {"id": new_id, "username": username, "role": role}}
+    return {"user": _public_login_user(new_user)}
 
 
 @app.put("/admin/users/{user_id}")
@@ -4940,8 +5250,10 @@ def admin_update_user(request: Request, user_id: str, body: dict):
         updates["role"] = body["role"]
     if "username" in body and body["username"].strip():
         updates["username"] = body["username"].strip()
+    if "display_name" in body:
+        updates["display_name"] = str(body.get("display_name") or "").strip()[:40]
     if not updates:
-        raise HTTPException(400, "至少需要 role 或 username 字段")
+        raise HTTPException(400, "至少需要 role、username 或 display_name 字段")
     users[idx].update(updates)
     settings.save_login_users(users)
     return {"user": _public_login_user(users[idx])}
