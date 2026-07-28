@@ -47,7 +47,10 @@ def _connect() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
-        yield conn
+        # Preserve sqlite3's native commit/rollback behavior while still
+        # releasing the file handle deterministically on every platform.
+        with conn:
+            yield conn
     finally:
         conn.close()
 

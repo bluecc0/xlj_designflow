@@ -300,6 +300,44 @@ class AdminConsoleStoreTest(unittest.TestCase):
             slot,
         )
 
+    def test_inspiration_writes_commit_before_connection_closes(self) -> None:
+        post_id = "inspiration-commit"
+        self.assertTrue(
+            job_store.create_inspiration_post(
+                post_id=post_id,
+                job_id="inspiration-job",
+                user_id="admin",
+                image_url="/ai-images/admin/source.png",
+                thumb_url="",
+                prompt="发布测试",
+                model="gpt-image-2",
+                size="1:1",
+                resolution="1K",
+                has_ref=False,
+                image_width=1024,
+                image_height=1024,
+                created_at=self.now,
+            )
+        )
+        self.assertIsNotNone(job_store.get_inspiration_post(post_id))
+
+        job_store.update_inspiration_thumb_url(post_id, "/thumbs/source.webp")
+        job_store.update_inspiration_dimensions(post_id, 800, 1200)
+        job_store.update_inspiration_vlm(post_id, "反推提示词", "图片描述")
+        updated = job_store.get_inspiration_post(post_id)
+        self.assertEqual(updated["thumb_url"], "/thumbs/source.webp")
+        self.assertEqual((updated["image_width"], updated["image_height"]), (800, 1200))
+        self.assertEqual(updated["vlm_prompt"], "反推提示词")
+        self.assertEqual(updated["vlm_description"], "图片描述")
+
+        self.assertTrue(job_store.set_inspiration_favorite(post_id, "designer", True))
+        self.assertTrue(job_store.is_inspiration_favorited(post_id, "designer"))
+        self.assertTrue(job_store.set_inspiration_favorite(post_id, "designer", False))
+        self.assertFalse(job_store.is_inspiration_favorited(post_id, "designer"))
+
+        self.assertTrue(job_store.delete_inspiration_post(post_id))
+        self.assertIsNone(job_store.get_inspiration_post(post_id))
+
 
 if __name__ == "__main__":
     unittest.main()
