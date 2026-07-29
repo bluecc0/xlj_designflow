@@ -1,6 +1,6 @@
 ﻿// Main canvas — now simplified to just show the selected template preview.
 
-const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages }) => {
+const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages, userId }) => {
   const t = template;
   const hasResult = resultTemplate != null;
   const iframeRef = React.useRef(null);
@@ -8,7 +8,11 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages 
   const pendingMessageRef = React.useRef(null);
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
-  const editorSrc = React.useMemo(() => `/editor-beta/index.html?v=${Date.now()}`, []);
+  const editorSrc = React.useMemo(() => {
+    const params = new URLSearchParams({ v: String(Date.now()) });
+    if (userId) params.set('user_id', String(userId));
+    return `/editor-beta/index.html?${params.toString()}`;
+  }, [userId]);
 
   const postToEditor = React.useCallback((message) => {
     const win = iframeRef.current && iframeRef.current.contentWindow;

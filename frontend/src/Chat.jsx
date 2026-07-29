@@ -77,6 +77,10 @@ function isLikelyUnreachedServerError(err) {
   return /Failed to fetch|NetworkError|Load failed|network connection was lost|Internet connection appears to be offline|Could not connect|ECONNREFUSED|ENOTFOUND|ERR_CONNECTION|ERR_NETWORK|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|The request timed out|NS_ERROR_FAILURE|Network request failed/i.test(msg);
 }
 
+function isTerminalAiImagePollStatus(status) {
+  return [400, 401, 403, 404].includes(Number(status));
+}
+
 // 把 fetch/提交异常翻译成用户可读中文（技术细节进反馈包，不堆在主文案）
 function classifyAiImageSubmitError(err, meta) {
   meta = meta || {};
@@ -4466,8 +4470,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                     return r.json().catch(function() { return {}; }).then(function(errBody) {
                       var detail = (errBody && (errBody.detail || errBody.message || errBody.error)) || '';
                       if (typeof detail === 'object' && detail) detail = detail.message || JSON.stringify(detail);
-                      // 404：任务不存在，无需继续轮询；其它错误连续 5 次再失败
-                      if (r.status === 404 || pollFails >= 5) {
+                      if (isTerminalAiImagePollStatus(r.status)) {
                         failSlot(detail || ('查询任务状态失败 HTTP ' + r.status), { httpStatus: r.status });
                       }
                       return null;
@@ -4515,12 +4518,6 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                 .catch(function(pollErr) {
                   pollFails += 1;
                   console.warn('[ai-image] poll error job=' + jobId + ' client=' + clientRequestId, pollErr);
-                  if (pollFails >= 5) {
-                    var pollMsg = isLikelyUnreachedServerError(pollErr)
-                      ? '查询进度时网络不稳定，任务可能仍在生成中，请稍后在历史记录中查看。'
-                      : ((pollErr && pollErr.message) || '查询进度失败，请稍后重试。');
-                    failSlot(pollMsg, { phase: 'poll' });
-                  }
                 });
             }, 2000);
           })
@@ -4764,7 +4761,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                       return r.json().catch(function() { return {}; }).then(function(errBody) {
                         var detail = (errBody && (errBody.detail || errBody.message || errBody.error)) || '';
                         if (typeof detail === 'object' && detail) detail = detail.message || JSON.stringify(detail);
-                        if (r.status === 404 || pollFails[jid] >= 5) {
+                        if (isTerminalAiImagePollStatus(r.status)) {
                           markTerminal(jid, { status: 'failed', error: formatAiImageError(detail || ('查询任务状态失败 HTTP ' + r.status), jid) });
                         }
                         return null;
@@ -4788,12 +4785,6 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                   .catch(function(pollErr) {
                     pollFails[jid] = (pollFails[jid] || 0) + 1;
                     console.warn('[ai-image] batch poll error job=' + jid + ' client=' + clientRequestId, pollErr);
-                    if (pollFails[jid] >= 5) {
-                      var pollMsg = isLikelyUnreachedServerError(pollErr)
-                        ? '查询进度时网络不稳定，任务可能仍在生成中，请稍后在历史记录中查看。'
-                        : ((pollErr && pollErr.message) || '查询进度失败，请稍后重试。');
-                      markTerminal(jid, { status: 'failed', error: formatAiImageError(pollMsg, jid) });
-                    }
                   });
               });
             }, 2000);

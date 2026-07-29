@@ -25,7 +25,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -4452,10 +4452,16 @@ async def describe_inspiration(request: Request, post_id: str):
 async def editor_save_snapshot(request: Request):
     """保存画布快照"""
     user = _current_user(request)
+    expected_user_id = str(request.query_params.get("user_id") or "").strip()
+    if not expected_user_id or expected_user_id != str(user["id"]):
+        raise HTTPException(409, "画板登录用户已变化，请刷新页面后重试")
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     snapshot = body.get("snapshot") if isinstance(body, dict) else None
     if not snapshot:
         raise HTTPException(400, "snapshot 不能为空")
+    foreign_assets = _editor_snapshot_foreign_asset_urls(snapshot, str(user["id"]))
+    if foreign_assets:
+        raise HTTPException(409, "画板包含其他用户的图片，已拒绝保存，请刷新页面")
     base_revision = body.get("base_revision") if isinstance(body, dict) else None
     intent = body.get("intent") if isinstance(body, dict) else None
 
@@ -4473,6 +4479,9 @@ async def editor_save_snapshot(request: Request):
 def editor_load_snapshot(request: Request):
     """加载画布快照"""
     user = _current_user(request)
+    expected_user_id = str(request.query_params.get("user_id") or "").strip()
+    if not expected_user_id or expected_user_id != str(user["id"]):
+        raise HTTPException(409, "画板登录用户已变化，请刷新页面后重试")
     raw, rev = load_editor_snapshot(user["id"])
     if raw is None:
         return {"snapshot": None, "revision": 0}
@@ -4483,6 +4492,35 @@ def editor_load_snapshot(request: Request):
         }
     except Exception:
         return {"snapshot": None, "revision": 0}
+
+
+def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[str]:
+    if not isinstance(snapshot, dict):
+        return []
+    store = snapshot.get("store")
+    document = snapshot.get("document")
+    if not isinstance(store, dict) and isinstance(document, dict):
+        store = document.get("store")
+    if not isinstance(store, dict):
+        return []
+
+    prefix = "/ai-images/"
+    foreign: list[str] = []
+    for record in store.values():
+        if not isinstance(record, dict) or record.get("typeName") != "asset":
+            continue
+        props = record.get("props")
+        src = str(props.get("src") or "") if isinstance(props, dict) else ""
+        try:
+            path = urlsplit(src).path if "://" in src else src.split("?", 1)[0]
+        except Exception:
+            path = src
+        if not path.startswith(prefix):
+            continue
+        owner = unquote(path[len(prefix):].split("/", 1)[0])
+        if owner and owner != user_id:
+            foreign.append(src)
+    return foreign
 
 
 # ─── /ai-image 提交幂等去重 ──────────────────────────────────────────────────

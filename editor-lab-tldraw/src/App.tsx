@@ -28,6 +28,9 @@ import {
   useValue,
 } from 'tldraw'
 
+const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
+const editorSnapshotUrl = `/editor/snapshot?user_id=${encodeURIComponent(editorUserId)}`
+
 const COLOR_OPTIONS = [
   { value: 'black', label: '黑色' },
   { value: 'grey', label: '灰色' },
@@ -1958,7 +1961,7 @@ function TldrawHostBridge() {
           intent: currentIntent,
         }
 
-        const res = await fetch('/editor/snapshot', {
+        const res = await fetch(editorSnapshotUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1976,7 +1979,7 @@ function TldrawHostBridge() {
           // 409 发生（stale revision 或拒绝覆盖）：绝不能盲目提升 revision 后重新保存！
           // 应该从服务端重新拉取最新快照进行同步，避免无线循环重试或并发多标签页强行覆盖。
           try {
-            const reloadRes = await fetch('/editor/snapshot', { credentials: 'include' })
+            const reloadRes = await fetch(editorSnapshotUrl, { credentials: 'include' })
             if (reloadRes.ok) {
               const reloadData = await reloadRes.json()
               if (typeof reloadData.revision === 'number') {
@@ -2021,9 +2024,9 @@ function TldrawHostBridge() {
         const bodyStr = JSON.stringify(payload)
         if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
           const blob = new Blob([bodyStr], { type: 'application/json' })
-          navigator.sendBeacon('/editor/snapshot', blob)
+          navigator.sendBeacon(editorSnapshotUrl, blob)
         }
-        fetch('/editor/snapshot', {
+        fetch(editorSnapshotUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: bodyStr,
@@ -2036,7 +2039,7 @@ function TldrawHostBridge() {
     // 加载已保存的快照
     const loadSnapshot = async () => {
       try {
-        const res = await fetch('/editor/snapshot', { credentials: 'include' })
+        const res = await fetch(editorSnapshotUrl, { credentials: 'include' })
         const data = await res.json()
         if (typeof data.revision === 'number') {
           revisionRef.current = data.revision

@@ -1782,7 +1782,8 @@ const Canvas = ({
   template,
   resultTemplate,
   editorCommand,
-  onUseReferenceImages
+  onUseReferenceImages,
+  userId
 }) => {
   const t = template;
   const hasResult = resultTemplate != null;
@@ -1791,7 +1792,13 @@ const Canvas = ({
   const pendingMessageRef = React.useRef(null);
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
-  const editorSrc = React.useMemo(() => `/editor-beta/index.html?v=${Date.now()}`, []);
+  const editorSrc = React.useMemo(() => {
+    const params = new URLSearchParams({
+      v: String(Date.now())
+    });
+    if (userId) params.set('user_id', String(userId));
+    return `/editor-beta/index.html?${params.toString()}`;
+  }, [userId]);
   const postToEditor = React.useCallback(message => {
     const win = iframeRef.current && iframeRef.current.contentWindow;
     if (!win) return false;
@@ -3169,6 +3176,9 @@ function isLikelyUnreachedServerError(err) {
   if (err && err.phase === 'network') return true;
   if (err && err.unreached) return true;
   return /Failed to fetch|NetworkError|Load failed|network connection was lost|Internet connection appears to be offline|Could not connect|ECONNREFUSED|ENOTFOUND|ERR_CONNECTION|ERR_NETWORK|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|The request timed out|NS_ERROR_FAILURE|Network request failed/i.test(msg);
+}
+function isTerminalAiImagePollStatus(status) {
+  return [400, 401, 403, 404].includes(Number(status));
 }
 
 // 把 fetch/提交异常翻译成用户可读中文（技术细节进反馈包，不堆在主文案）
@@ -9098,8 +9108,7 @@ const Chat = ({
                 }).then(function (errBody) {
                   var detail = errBody && (errBody.detail || errBody.message || errBody.error) || '';
                   if (typeof detail === 'object' && detail) detail = detail.message || JSON.stringify(detail);
-                  // 404：任务不存在，无需继续轮询；其它错误连续 5 次再失败
-                  if (r.status === 404 || pollFails >= 5) {
+                  if (isTerminalAiImagePollStatus(r.status)) {
                     failSlot(detail || '查询任务状态失败 HTTP ' + r.status, {
                       httpStatus: r.status
                     });
@@ -9161,12 +9170,6 @@ const Chat = ({
             }).catch(function (pollErr) {
               pollFails += 1;
               console.warn('[ai-image] poll error job=' + jobId + ' client=' + clientRequestId, pollErr);
-              if (pollFails >= 5) {
-                var pollMsg = isLikelyUnreachedServerError(pollErr) ? '查询进度时网络不稳定，任务可能仍在生成中，请稍后在历史记录中查看。' : pollErr && pollErr.message || '查询进度失败，请稍后重试。';
-                failSlot(pollMsg, {
-                  phase: 'poll'
-                });
-              }
             });
           }, 2000);
         }).catch(function (err) {
@@ -9406,7 +9409,7 @@ const Chat = ({
                   }).then(function (errBody) {
                     var detail = errBody && (errBody.detail || errBody.message || errBody.error) || '';
                     if (typeof detail === 'object' && detail) detail = detail.message || JSON.stringify(detail);
-                    if (r.status === 404 || pollFails[jid] >= 5) {
+                    if (isTerminalAiImagePollStatus(r.status)) {
                       markTerminal(jid, {
                         status: 'failed',
                         error: formatAiImageError(detail || '查询任务状态失败 HTTP ' + r.status, jid)
@@ -9443,13 +9446,6 @@ const Chat = ({
               }).catch(function (pollErr) {
                 pollFails[jid] = (pollFails[jid] || 0) + 1;
                 console.warn('[ai-image] batch poll error job=' + jid + ' client=' + clientRequestId, pollErr);
-                if (pollFails[jid] >= 5) {
-                  var pollMsg = isLikelyUnreachedServerError(pollErr) ? '查询进度时网络不稳定，任务可能仍在生成中，请稍后在历史记录中查看。' : pollErr && pollErr.message || '查询进度失败，请稍后重试。';
-                  markTerminal(jid, {
-                    status: 'failed',
-                    error: formatAiImageError(pollMsg, jid)
-                  });
-                }
               });
             });
           }, 2000);
@@ -13806,6 +13802,8 @@ const App = () => {
   const [editorCommand, setEditorCommand] = React.useState(null);
   const [slashTrigger, setSlashTrigger] = React.useState(null);
   const [currentUser, setCurrentUser] = React.useState(null);
+  const currentUserIdRef = React.useRef('');
+  currentUserIdRef.current = currentUser && currentUser.id ? String(currentUser.id) : '';
   const [authLoading, setAuthLoading] = React.useState(true);
   const [authError, setAuthError] = React.useState('');
   const [inspirationOpen, setInspirationOpen] = React.useState(false);
@@ -13890,7 +13888,8 @@ const App = () => {
       localStorage.setItem(LAST_USERNAME_KEY, username);
     } catch (e) {}
   }, []);
-  const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl) => {
+  const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl, sourceUserId) => {
+    if (!sourceUserId || String(sourceUserId) !== currentUserIdRef.current) return;
     const explicitClear = !jobId && !resultTpl && Array.isArray(directImageUrls) && directImageUrls.length === 0;
     const rawUrls = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : directImageUrls ? [directImageUrls] : [];
     const urls = (rawUrls.length ? rawUrls : jobId ? ['/compose/' + encodeURIComponent(jobId) + '/image'] : []).map(normalizeDesignflowAssetUrl).filter(Boolean);
@@ -14004,6 +14003,7 @@ const App = () => {
       const user = await window.API.loginLite(username, password);
       rememberUser(user);
       setResultTemplate(null);
+      setEditorCommand(null);
     } catch (err) {
       setAuthError(err && err.message ? err.message : '进入失败，请重试');
     } finally {
@@ -14016,6 +14016,7 @@ const App = () => {
     } catch (e) {}
     setCurrentUser(null);
     setResultTemplate(null);
+    setEditorCommand(null);
     setAuthError('');
   }, []);
   const selectTemplate = React.useCallback(t => {
@@ -14134,15 +14135,19 @@ const App = () => {
       opacity: templateRevealHovered ? 0.9 : 0.55
     }
   }, templatePanelCollapsed ? '›' : '‹'))), /*#__PURE__*/React.createElement(Canvas, {
+    key: 'canvas:' + currentUser.id,
     template: activeTemplate,
     resultTemplate: resultTemplate,
     editorCommand: editorCommand,
-    onUseReferenceImages: handleUseCanvasReferences
+    onUseReferenceImages: handleUseCanvasReferences,
+    userId: currentUser.id
   }), /*#__PURE__*/React.createElement(Chat, {
     key: 'chat:' + currentUser.id,
     state: tweaks.chatState,
     template: activeTemplate,
-    onComposeComplete: handleComposeComplete,
+    onComposeComplete: function (jobId, penpotEditUrl, directImageUrls, resultTpl) {
+      handleComposeComplete(jobId, penpotEditUrl, directImageUrls, resultTpl, currentUser.id);
+    },
     slashTrigger: slashTrigger,
     user: currentUser,
     onRequestSpecialTemplate: handleRequestSpecialTemplate,

@@ -86,6 +86,8 @@ const App = () => {
   const [editorCommand, setEditorCommand] = React.useState(null);
   const [slashTrigger, setSlashTrigger] = React.useState(null);
   const [currentUser, setCurrentUser] = React.useState(null);
+  const currentUserIdRef = React.useRef('');
+  currentUserIdRef.current = currentUser && currentUser.id ? String(currentUser.id) : '';
   const [authLoading, setAuthLoading] = React.useState(true);
   const [authError, setAuthError] = React.useState('');
   const [inspirationOpen, setInspirationOpen] = React.useState(false);
@@ -168,7 +170,8 @@ const App = () => {
     } catch (e) {}
   }, []);
 
-  const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl) => {
+  const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl, sourceUserId) => {
+    if (!sourceUserId || String(sourceUserId) !== currentUserIdRef.current) return;
     const explicitClear = !jobId && !resultTpl && Array.isArray(directImageUrls) && directImageUrls.length === 0;
     const rawUrls = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : (directImageUrls ? [directImageUrls] : []);
     const urls = (rawUrls.length ? rawUrls : (jobId ? ['/compose/' + encodeURIComponent(jobId) + '/image'] : []))
@@ -289,6 +292,7 @@ const App = () => {
       const user = await window.API.loginLite(username, password);
       rememberUser(user);
       setResultTemplate(null);
+      setEditorCommand(null);
     } catch (err) {
       setAuthError(err && err.message ? err.message : '进入失败，请重试');
     } finally {
@@ -302,6 +306,7 @@ const App = () => {
     } catch (e) {}
     setCurrentUser(null);
     setResultTemplate(null);
+    setEditorCommand(null);
     setAuthError('');
   }, []);
 
@@ -402,16 +407,20 @@ const App = () => {
               </button>
             </div>
             <Canvas
+              key={'canvas:' + currentUser.id}
               template={activeTemplate}
               resultTemplate={resultTemplate}
               editorCommand={editorCommand}
               onUseReferenceImages={handleUseCanvasReferences}
+              userId={currentUser.id}
             />
             <Chat
               key={'chat:' + currentUser.id}
               state={tweaks.chatState}
               template={activeTemplate}
-              onComposeComplete={handleComposeComplete}
+              onComposeComplete={function(jobId, penpotEditUrl, directImageUrls, resultTpl) {
+                handleComposeComplete(jobId, penpotEditUrl, directImageUrls, resultTpl, currentUser.id);
+              }}
               slashTrigger={slashTrigger}
               user={currentUser}
               onRequestSpecialTemplate={handleRequestSpecialTemplate}
