@@ -5383,6 +5383,8 @@ def admin_delete_user(request: Request, user_id: str):
         # 用户不在 login_users.json 中（可能已被删除或仅在 DB 中有记录），不算错误
         return {"deleted": {"id": user_id, "note": "不在认证列表中，无需删除"}}
     deleted = users.pop(idx)
+    if deleted.get("is_test"):
+        sync_user_test_status(user_id, True)
     settings.save_login_users(users)
     return {"deleted": _public_login_user(deleted)}
 

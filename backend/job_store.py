@@ -409,8 +409,12 @@ def init_db() -> None:
         """)
         conn.commit()
 
-
-# ─── 基本 CRUD ────────────────────────────────────────────────────────────────
+    try:
+        test_uids = settings.get_test_user_ids()
+        for uid in test_uids:
+            sync_user_test_status(uid, True)
+    except Exception:
+        pass
 
 def save_job(job: ComposeJob) -> None:
     """插入或更新 job 记录"""

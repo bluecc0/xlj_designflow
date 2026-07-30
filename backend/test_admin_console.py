@@ -367,8 +367,9 @@ class AdminConsoleStoreTest(unittest.TestCase):
         ]
         self.assertIn("test_bot", job_store.settings.get_test_user_ids())
 
-        # 持久化标记 sync 到 DB users 表
-        job_store.sync_user_test_status("test_bot", True)
+        # 模拟已有配置中存在测试账号的真实场景，调用 init_db() 触发自动全量同步持久化
+        job_store.init_db()
+        self.assertIn("test_bot", job_store._test_user_ids_set())
 
         # 模拟测试账号产生任务与日志
         with job_store._connect() as conn:
