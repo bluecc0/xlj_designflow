@@ -5322,6 +5322,7 @@ def admin_create_user(request: Request, body: dict):
         "password_hash": hash_password(password),
     }
     settings.save_login_users(list(settings.allowed_login_users) + [new_user])
+    sync_user_test_status(new_id, is_test)
     return {"user": _public_login_user(new_user)}
 
 
@@ -5348,6 +5349,8 @@ def admin_update_user(request: Request, user_id: str, body: dict):
         raise HTTPException(400, "至少需要 role、username、display_name 或 is_test 字段")
     users[idx].update(updates)
     settings.save_login_users(users)
+    if "is_test" in updates:
+        sync_user_test_status(user_id, updates["is_test"])
     return {"user": _public_login_user(users[idx])}
 
 

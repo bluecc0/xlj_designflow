@@ -116,6 +116,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
         except sqlite3.OperationalError:
             pass
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN is_test INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id               TEXT PRIMARY KEY,
@@ -1720,8 +1724,35 @@ def log_operation(*, user_id: str, username: str, action: str, detail: str = "",
         conn.commit()
 
 
+def sync_user_test_status(user_id: str, is_test: bool) -> None:
+    """持久化同步 DB users 表中的 is_test 标记"""
+    clean_id = str(user_id or "").strip()
+    if not clean_id:
+        return
+    val = 1 if is_test else 0
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT id FROM users WHERE id = ?", (clean_id,)).fetchone()
+        if row:
+            conn.execute("UPDATE users SET is_test = ? WHERE id = ?", (val, clean_id))
+        else:
+            conn.execute(
+                "INSERT INTO users (id, username, username_key, created_at, is_test) VALUES (?, ?, ?, ?, ?)",
+                (clean_id, clean_id, clean_id.casefold(), time.time(), val),
+            )
+        conn.commit()
+
+
 def _test_user_ids_set() -> set[str]:
-    return settings.get_test_user_ids()
+    uids = settings.get_test_user_ids()
+    try:
+        with _connect() as conn:
+            rows = conn.execute("SELECT id FROM users WHERE is_test = 1").fetchall()
+            for r in rows:
+                if r["id"]:
+                    uids.add(str(r["id"]))
+    except Exception:
+        pass
+    return uids
 
 
 def load_operation_logs(
@@ -2480,7 +2511,6 @@ def load_admin_tasks(
 def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
     """Load the full persisted snapshot for one task without guessing missing fields."""
     display_name_map = _admin_display_name_map()
-    test_uids = _test_user_ids_set()
     with _connect() as conn:
         if task_type == "compose":
             row = conn.execute(
@@ -2491,7 +2521,7 @@ def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
                 """,
                 (task_id,),
             ).fetchone()
-            if not row or str(row["user_id"] or "") in test_uids:
+            if not row:
                 return None
             item = dict(row)
             request = _json_object(item.pop("request_json", "{}"))
@@ -2521,7 +2551,7 @@ def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
                 """,
                 (task_id,),
             ).fetchone()
-            if not row or str(row["user_id"] or "") in test_uids:
+            if not row:
                 return None
             item = dict(row)
             request = _json_object(item.pop("request_json", "{}"))
@@ -2554,7 +2584,7 @@ def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
                 """,
                 (task_id,),
             ).fetchone()
-            if not row or str(row["user_id"] or "") in test_uids:
+            if not row:
                 return None
             item = dict(row)
             trace_raw = item.get("prompt_trace") or ""
@@ -2598,7 +2628,7 @@ def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
                 """,
                 (task_id,),
             ).fetchone()
-            if not row or str(row["user_id"] or "") in test_uids:
+            if not row:
                 return None
             item = dict(row)
             prompt = _json_object(item.pop("prompt_json", "{}"))

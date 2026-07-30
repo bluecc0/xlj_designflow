@@ -284,7 +284,7 @@ const ADMIN_CSS = `
     text-overflow: ellipsis; white-space: nowrap;
   }
   .df-admin-form {
-    display: grid; grid-template-columns: 1fr 1fr 1fr 130px auto; gap: 8px;
+    display: grid; grid-template-columns: 1fr 1fr 1fr 110px auto auto; gap: 8px; align-items: center;
     padding: 14px; border-bottom: 1px solid var(--admin-line); background: #fafaf8;
   }
   .df-admin-useridentity strong { display: block; font-size: 10.5px; }

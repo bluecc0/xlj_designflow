@@ -367,12 +367,11 @@ class AdminConsoleStoreTest(unittest.TestCase):
         ]
         self.assertIn("test_bot", job_store.settings.get_test_user_ids())
 
+        # 持久化标记 sync 到 DB users 表
+        job_store.sync_user_test_status("test_bot", True)
+
         # 模拟测试账号产生任务与日志
         with job_store._connect() as conn:
-            conn.execute(
-                "INSERT INTO users (id, username, username_key, created_at) VALUES (?, ?, ?, ?)",
-                ("test_bot", "测试账号", "test_bot", self.now),
-            )
             conn.execute(
                 """
                 INSERT INTO ai_image_jobs
@@ -401,20 +400,34 @@ class AdminConsoleStoreTest(unittest.TestCase):
         for task in overview.get("recent_failures", []):
             self.assertNotEqual(task.get("user_id"), "test_bot")
 
-        # 3. 验证 load_admin_tasks 默认不包含 test_bot 任务
+        # 3. 验证 load_admin_tasks 默认不包含 test_bot 任务，但显式指定 user_id 时可查出
         tasks, total = job_store.load_admin_tasks()
         task_user_ids = [t["user_id"] for t in tasks]
         self.assertNotIn("test_bot", task_user_ids)
 
-        # 4. 验证 load_admin_task_detail 对测试账号任务返回 None
-        detail = job_store.load_admin_task_detail("ai_image", "ai-test-user")
-        self.assertIsNone(detail)
+        test_tasks, _ = job_store.load_admin_tasks(user_id="test_bot")
+        self.assertEqual(len(test_tasks), 2)
 
-        # 5. 验证操作日志不包含 test_bot 的日志
+        # 4. 验证管理员可以显式查看特定测试任务的快照详情 (P2 修复验证)
+        detail = job_store.load_admin_task_detail("ai_image", "ai-test-user")
+        self.assertIsNotNone(detail)
+        self.assertEqual(detail["id"], "ai-test-user")
+
+        # 5. 验证操作日志默认不包含 test_bot 的日志
         logs = job_store.load_operation_logs()
         log_users = [l["user_id"] for l in logs]
         self.assertNotIn("test_bot", log_users)
-        self.assertEqual(job_store.count_operation_logs(user_id="test_bot"), 1)  # 显式查用户时仍能读出历史数据
+
+        # 6. 生命周期的后置验证 (P1 修复验证)：从 allowed_login_users 中删除该测试账号
+        job_store.settings.allowed_login_users = [
+            {"id": "admin", "username": "管理员", "display_name": "张运营", "role": "admin"},
+            {"id": "designer", "username": "设计师", "display_name": "李设计", "role": "user"},
+        ]
+        # 即使删除后，DB users 表中已记录 is_test = 1，其历史数据依然不能恢复污染正式统计
+        stats_after_delete = job_store.load_admin_stats()
+        self.assertEqual(stats_after_delete["users"], 2)
+        tasks_after_delete, _ = job_store.load_admin_tasks()
+        self.assertNotIn("test_bot", [t["user_id"] for t in tasks_after_delete])
 
 
 if __name__ == "__main__":
