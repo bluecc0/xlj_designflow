@@ -46,6 +46,7 @@ from fastapi.staticfiles import StaticFiles
 from .ai_image import (
     PROVIDER_SUB2API,
     PROVIDER_ADOBE2API,
+    PROVIDER_APIMART,
     PROVIDER_AUTO,
     cleanup_user_refs,
     format_generation_error,
@@ -1151,9 +1152,12 @@ async def _probe_adobe2api(client: httpx.AsyncClient) -> dict:
         status["message"] = "未配置 Adobe 线路"
         return status
 
+    # 与生图适配器一致：确保探测走 /v1 前缀，避免根路径 200 掩盖真实接口不可用
     base = settings.adobe2api_base_url.rstrip("/")
-    # 优先打 models 轻量端点；404/405 时继续尝试下一个地址
-    candidates = [f"{base}/models", base]
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    status["url"] = base
+    candidates = [f"{base}/models", f"{base}/chat/completions", base]
     last_error = ""
     for url in candidates:
         try:
@@ -1172,12 +1176,18 @@ async def _probe_adobe2api(client: httpx.AsyncClient) -> dict:
                 status["message"] = f"鉴权失败 HTTP {code}"
                 return status
             if code == 429:
-                # 可连通但受限
                 status["connected"] = True
                 status["throttled"] = True
                 status["message"] = "HTTP 429 限流"
                 return status
-            if code in (404, 405):
+            if code in (404, 405, 422):
+                # chat/completions 对 GET 常返回 405/422，说明路由存在，可视为连通
+                if url.rstrip("/").endswith("chat/completions") and code in (404, 405, 422):
+                    # 404 继续；405/422 表示端点存在
+                    if code in (405, 422):
+                        status["connected"] = True
+                        status["message"] = f"端点可达 HTTP {code}"
+                        return status
                 last_error = f"HTTP {code}"
                 continue
             if code >= 500:
@@ -3504,6 +3514,7 @@ async def _run_ai_image_background(
     """后台异步生图：轮询进度 → 更新 DB → 下载结果 → 写聊天记录"""
     stage = "init"
     upstream_task_id = ""
+    active_provider = provider
 
     def on_progress(pct: int, api_status: str):
         try:
@@ -3517,11 +3528,33 @@ async def _run_ai_image_background(
             save_ai_image_job(
                 job_id=job_id, user_id=user_id, status=db_status,
                 model=model, prompt=prompt, size=size,
-                provider=provider, resolution=resolution,
+                provider=active_provider or provider, resolution=resolution,
                 original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
                 prompt_trace=prompt_trace,
                 progress=pct, has_reference=has_reference, reference_count=len(refs),
                 request_meta=request_meta, created_at=created_at,
+                task_id=upstream_task_id or None,
+            )
+        except Exception:
+            pass
+
+    def on_accepted(accepted_provider: str = "", upstream_id: str = "") -> None:
+        """上游明确接受任务后立即落库 provider + task_id，便于失败后后台追踪。"""
+        nonlocal upstream_task_id, active_provider
+        if accepted_provider:
+            active_provider = accepted_provider
+        if upstream_id:
+            upstream_task_id = str(upstream_id)
+        try:
+            save_ai_image_job(
+                job_id=job_id, user_id=user_id, status="processing",
+                model=model, prompt=prompt, size=size,
+                provider=active_provider or provider, resolution=resolution,
+                original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
+                prompt_trace=prompt_trace,
+                progress=10, has_reference=has_reference, reference_count=len(refs),
+                request_meta=request_meta, created_at=created_at,
+                task_id=upstream_task_id or None,
             )
         except Exception:
             pass
@@ -3533,33 +3566,33 @@ async def _run_ai_image_background(
                 model=model, prompt=prompt,
                 images=refs if refs else None,
                 size=size, resolution=resolution, user_id=user_id,
-                on_progress=on_progress,
+                on_progress=on_progress, on_accepted=on_accepted,
             )
         elif provider == PROVIDER_SUB2API:
             result = await generate_sub2api_async(
                 model=model, prompt=prompt,
                 images=refs if refs else None,
                 size=size, resolution=resolution, user_id=user_id,
-                on_progress=on_progress,
+                on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_SUB2API, tid),
             )
         elif provider == PROVIDER_ADOBE2API:
             result = await generate_adobe2api_async(
                 model=model, prompt=prompt,
                 images=refs,
                 size=size, resolution=resolution, user_id=user_id,
-                on_progress=on_progress,
+                on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_ADOBE2API, tid),
             )
         elif refs:
             result = await generate_image_with_reference_async(
                 model=model, prompt=prompt, images=refs,
                 size=size, resolution=resolution, user_id=user_id,
-                on_progress=on_progress,
+                on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_APIMART, tid),
             )
         else:
             result = await generate_image_async(
                 model=model, prompt=prompt,
                 size=size, resolution=resolution, user_id=user_id,
-                on_progress=on_progress,
+                on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_APIMART, tid),
             )
         actual_provider = str(result.get("provider") or provider)
         provider_switched = bool(result.get("provider_switched"))
@@ -3672,22 +3705,23 @@ async def _run_ai_image_background(
     except Exception as e:
         stage = str(getattr(e, "stage", "") or stage or "generate")
         upstream_task_id = str(getattr(e, "task_id", "") or upstream_task_id)
+        fail_provider = str(getattr(e, "provider", "") or active_provider or provider)
         error_msg = format_generation_error(
             e,
             stage=stage or "generate",
-            provider=provider,
+            provider=fail_provider,
             model=model,
             job_id=job_id,
             task_id=upstream_task_id,
         )
         logger.exception(
             "ai_image background task failed: job_id=%s stage=%s provider=%s model=%s error=%s",
-            job_id, stage, provider, model, error_msg[:200],
+            job_id, stage, fail_provider, model, error_msg[:200],
         )
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="failed",
             model=model, prompt=prompt, size=size,
-            provider=provider, resolution=resolution,
+            provider=fail_provider, resolution=resolution,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
             has_reference=has_reference, error=error_msg, task_id=upstream_task_id or None,
@@ -3700,7 +3734,8 @@ async def _run_ai_image_background(
             detail=f"job={job_id[:8]} model={model} size={size} result=failed stage={stage} error={error_msg[:80]}",
             payload=json.dumps({
                 "job_id": job_id, "model": model, "size": size, "result": "failed",
-                "error": error_msg[:500], "stage": stage, "provider": provider,
+                "error": error_msg[:500], "stage": stage, "provider": fail_provider,
+                "upstream_task_id": upstream_task_id,
             }, ensure_ascii=False),
         )
         append_ai_chat_message(
@@ -3710,10 +3745,11 @@ async def _run_ai_image_background(
             meta={
                 "job_id": job_id,
                 "model": model, "prompt": prompt,
-                "provider": provider,
+                "provider": fail_provider,
                 "status": "failed", "error": error_msg,
                 "hasReference": has_reference,
                 "refCount": len(refs),
+                "taskId": upstream_task_id,
                 "stage": stage,
                 "batchId": batch_id,
                 "batchIndex": batch_index,

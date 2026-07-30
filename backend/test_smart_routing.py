@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
+
 from backend import ai_image, job_store
 
 
@@ -289,13 +291,15 @@ class AdobeHealthProbeTest(unittest.IsolatedAsyncioTestCase):
             c = Client([200])
             st = await _probe_adobe2api(c)
             self.assertTrue(st["connected"])
+            self.assertTrue(st["url"].endswith("/v1"))
 
             c = Client([401])
             st = await _probe_adobe2api(c)
             self.assertFalse(st["connected"])
             self.assertIn("401", st.get("message", ""))
 
-            c = Client([404, 200])
+            # /models 404 后继续探测，chat/completions 405 视为端点可达
+            c = Client([404, 405])
             st = await _probe_adobe2api(c)
             self.assertTrue(st["connected"])
             self.assertEqual(len(c.calls), 2)
@@ -304,6 +308,91 @@ class AdobeHealthProbeTest(unittest.IsolatedAsyncioTestCase):
             st = await _probe_adobe2api(c)
             self.assertTrue(st["connected"])
             self.assertTrue(st.get("throttled"))
+
+            # 未带 /v1 的 base 会被规范化
+            s.adobe2api_base_url = "http://adobe:6001"
+            c = Client([200])
+            st = await _probe_adobe2api(c)
+            self.assertTrue(st["url"].endswith("/v1"))
+            self.assertTrue(c.calls[0].startswith("http://adobe:6001/v1/"))
+
+
+class TimeoutClassificationTest(unittest.IsolatedAsyncioTestCase):
+    def test_classify_httpx_transport_error(self) -> None:
+        self.assertEqual(ai_image.classify_httpx_transport_error(httpx.ConnectTimeout("t")), "connect")
+        self.assertEqual(ai_image.classify_httpx_transport_error(httpx.ConnectError("refused")), "connect")
+        self.assertEqual(ai_image.classify_httpx_transport_error(httpx.ReadTimeout("rt")), "ambiguous")
+        self.assertEqual(ai_image.classify_httpx_transport_error(httpx.WriteTimeout("wt")), "ambiguous")
+
+    async def test_read_timeout_does_not_failover(self) -> None:
+        calls = {"sub": 0, "adobe": 0}
+
+        async def mock_sub2api(*args, **kwargs):
+            calls["sub"] += 1
+            raise ai_image.AmbiguousUpstreamError(
+                "CLIProxyAPI 请求可能已送达但响应超时/中断（状态不确定，不切换渠道）：ReadTimeout",
+                provider="sub2api",
+            )
+
+        async def mock_adobe(*args, **kwargs):
+            calls["adobe"] += 1
+            return {"url": "/x.png", "provider": "adobe2api"}
+
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
+             patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
+            with self.assertRaises(ai_image.AmbiguousUpstreamError):
+                await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                )
+        self.assertEqual(calls["sub"], 1)
+        self.assertEqual(calls["adobe"], 0)
+
+    async def test_connect_error_does_failover(self) -> None:
+        calls = {"sub": 0, "adobe": 0}
+
+        async def mock_sub2api(*args, **kwargs):
+            calls["sub"] += 1
+            raise RuntimeError("CLIProxyAPI 连接失败：Connection refused")
+
+        async def mock_adobe(*args, **kwargs):
+            calls["adobe"] += 1
+            return {"url": "/x.png", "provider": "adobe2api"}
+
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
+             patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
+            result = await ai_image.smart_generate_image_async(
+                model="gpt-image-2",
+                prompt="test",
+                user_id="u",
+            )
+        self.assertEqual(calls["sub"], 1)
+        self.assertEqual(calls["adobe"], 1)
+        self.assertEqual(result["provider"], "adobe2api")
+
+    async def test_on_accepted_outer_callback_receives_provider_and_task_id(self) -> None:
+        seen = []
+
+        async def mock_apimart(*args, **kwargs):
+            on_accepted = kwargs.get("on_accepted")
+            if on_accepted:
+                on_accepted("task-xyz")
+            raise RuntimeError("查询任务状态网络异常：timeout")
+
+        with patch.object(ai_image, "generate_image_async", side_effect=mock_apimart), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["apimart"]):
+            with self.assertRaises(RuntimeError) as ctx:
+                await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                    on_accepted=lambda provider, tid: seen.append((provider, tid)),
+                )
+        self.assertEqual(seen, [("apimart", "task-xyz")])
+        self.assertEqual(getattr(ctx.exception, "task_id", ""), "task-xyz")
 
 
 if __name__ == "__main__":

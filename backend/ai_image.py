@@ -41,6 +41,16 @@ class FinalImageDownloadError(RuntimeError):
         self.task_id = task_id
 
 
+class AmbiguousUpstreamError(RuntimeError):
+    """同步请求可能已送达上游（读超时/写超时/中途断连），状态不确定，禁止跨渠道重提。"""
+    stage = "ambiguous"
+
+    def __init__(self, message: str, *, task_id: str = "", provider: str = "") -> None:
+        super().__init__(message)
+        self.task_id = task_id
+        self.provider = provider
+
+
 _TRANSIENT_TASK_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 523, 524}
 
 _HTTP_ERRORS: dict[int, str] = {
@@ -1313,9 +1323,15 @@ async def generate_sub2api_async(
                 }
                 endpoint = f"{api_base}/images/generations"
                 resp = await client.post(endpoint, json=payload, headers=_cliproxy_headers(api_key, json_request=True))
-    except httpx.TimeoutException as exc:
-        raise RuntimeError("CLIProxyAPI 请求超时，请降低并发或稍后重试") from exc
     except httpx.RequestError as exc:
+        kind = classify_httpx_transport_error(exc)
+        if kind == "connect":
+            raise RuntimeError(f"CLIProxyAPI 连接失败：{exc}") from exc
+        if kind == "ambiguous":
+            raise AmbiguousUpstreamError(
+                f"CLIProxyAPI 请求可能已送达但响应超时/中断（状态不确定，不切换渠道）：{exc}",
+                provider=PROVIDER_SUB2API,
+            ) from exc
         raise RuntimeError(f"CLIProxyAPI 请求失败：{exc}") from exc
 
     raw_text = resp.text
@@ -1329,8 +1345,9 @@ async def generate_sub2api_async(
         raise RuntimeError(f"CLIProxyAPI 生图失败: {str(payload.get('error'))[:300]}")
 
     # 同步接口：HTTP 成功且无 error 即上游已接受/完成，后续下载失败不可再跨渠道重提
+    upstream_id = str((payload or {}).get("id") or "cliproxy-accepted")
     if on_accepted:
-        on_accepted(str((payload or {}).get("id") or "cliproxy-accepted"))
+        on_accepted(upstream_id)
     if on_progress:
         on_progress(85, "saving")
     local_url, item = await _save_cliproxy_response_image(payload, user_id=user_id, api_key=api_key)
@@ -1346,7 +1363,7 @@ async def generate_sub2api_async(
         "requested_size": size,
         "resolution": resolution,
         "provider": PROVIDER_SUB2API,
-        "task_id": None,
+        "task_id": upstream_id if upstream_id != "cliproxy-accepted" else None,
         "usage": usage if isinstance(usage, dict) else None,
         "revised_prompt": item.get("revised_prompt") if isinstance(item, dict) else None,
     }
@@ -1417,26 +1434,38 @@ async def generate_adobe2api_async(
         on_progress(5, "starting")
 
     timeout = httpx.Timeout(300.0, connect=30.0)
-    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-        resp = await client.post(api_endpoint, json=payload, headers=headers)
-        if not resp.is_success:
-            raise RuntimeError(f"adobe2api 请求失败: HTTP {resp.status_code} - {_extract_error_text(resp)}")
+    try:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            resp = await client.post(api_endpoint, json=payload, headers=headers)
+    except httpx.RequestError as exc:
+        kind = classify_httpx_transport_error(exc)
+        if kind == "connect":
+            raise RuntimeError(f"adobe2api 连接失败：{exc}") from exc
+        if kind == "ambiguous":
+            raise AmbiguousUpstreamError(
+                f"adobe2api 请求可能已送达但响应超时/中断（状态不确定，不切换渠道）：{exc}",
+                provider=PROVIDER_ADOBE2API,
+            ) from exc
+        raise RuntimeError(f"adobe2api 请求失败：{exc}") from exc
 
-        data = resp.json()
-        result_url = _extract_b64_or_image_url(data) or _extract_result_url(data)
-        if not result_url:
-            raise RuntimeError(f"adobe2api 未返回有效图片 URL 或 Base64: {str(data)[:200]}")
+    if not resp.is_success:
+        raise RuntimeError(f"adobe2api 请求失败: HTTP {resp.status_code} - {_extract_error_text(resp)}")
 
-        # 同步接口：拿到有效图片内容后才算上游已接受
-        if on_accepted:
-            on_accepted(str((data or {}).get("id") or "adobe2api-accepted"))
-        if on_progress:
-            on_progress(85, "saving")
+    data = resp.json()
+    result_url = _extract_b64_or_image_url(data) or _extract_result_url(data)
+    if not result_url:
+        raise RuntimeError(f"adobe2api 未返回有效图片 URL 或 Base64: {str(data)[:200]}")
 
-        if result_url.startswith("data:"):
-            local_url = _save_data_url_image(result_url, user_id=user_id, prefix="adobe2api")
-        else:
-            local_url = await _download_cliproxy_image(result_url, user_id=user_id, api_key=api_key)
+    # 同步接口：拿到有效图片内容后才算上游已接受
+    if on_accepted:
+        on_accepted(str((data or {}).get("id") or "adobe2api-accepted"))
+    if on_progress:
+        on_progress(85, "saving")
+
+    if result_url.startswith("data:"):
+        local_url = _save_data_url_image(result_url, user_id=user_id, prefix="adobe2api")
+    else:
+        local_url = await _download_cliproxy_image(result_url, user_id=user_id, api_key=api_key)
 
     if on_progress:
         on_progress(100, "done")
@@ -1448,6 +1477,7 @@ async def generate_adobe2api_async(
         "prompt": prompt,
         "size": size,
         "resolution": resolution,
+        "task_id": str((data or {}).get("id") or ""),
     }
 
 
@@ -1456,24 +1486,54 @@ async def generate_adobe2api_async(
 _NON_FAILOVER_HTTP_CODES = {400, 401, 402, 403, 404, 413, 422}
 
 
+def classify_httpx_transport_error(exc: BaseException) -> str:
+    """分类传输层错误：connect=可切换；ambiguous=可能已送达不可切换；other=其它。"""
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        return "connect"
+    if isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
+        return "ambiguous"
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return "ambiguous"
+    if isinstance(exc, httpx.TimeoutException):
+        # 未细分的 TimeoutException：同步接口保守视为可能已送达
+        return "ambiguous"
+    if isinstance(exc, httpx.RequestError):
+        msg = str(exc).lower()
+        if any(k in msg for k in (
+            "connect", "connection refused", "name or service not known",
+            "nodename nor servname", "dns", "getaddrinfo", "network is unreachable",
+        )):
+            return "connect"
+        return "ambiguous"
+    return "other"
+
+
 def is_transient_provider_error(exc: BaseException | str | None) -> bool:
     """仅对可恢复错误切换线路；参数/鉴权/内容审核等确定性失败不跨渠道重试。
 
-    已提交上游任务后的轮询/下载失败也不切换，避免重复计费与孤儿任务。
+    已提交上游任务后的轮询/下载失败、以及同步接口读/写超时（状态不确定）不切换。
     """
+    if isinstance(exc, AmbiguousUpstreamError):
+        return False
+
     raw = str(exc or "").strip()
     if not raw:
         return True
     low = raw.lower()
+
+    # 同步接口状态不确定：禁止切换，避免重复计费
+    if any(k in low for k in (
+        "请求可能已送达", "状态不确定", "read timeout", "write timeout",
+        "pool timeout", "响应超时", "中途断开", "remoteprotocol",
+    )):
+        return False
 
     # 任务已提交后的后半程失败：不跨渠道重提
     if any(k in low for k in (
         "下载结果", "下载 cli", "下载结果图片", "poll", "轮询",
         "saving", "task_id=", "task=",
     )) and any(k in low for k in ("timeout", "超时", "http ", "failed", "失败")):
-        # 若明确是提交阶段失败则仍可切换
         if "提交" not in low and "submit" not in low:
-            # 下载/轮询类：保守不切换
             if any(k in low for k in ("下载", "download", "poll", "轮询", "saving")):
                 return False
 
@@ -1489,18 +1549,21 @@ def is_transient_provider_error(exc: BaseException | str | None) -> bool:
 
     for code in _NON_FAILOVER_HTTP_CODES:
         if re.search(rf"\bHTTP\s*{code}\b", raw, re.IGNORECASE) or f" {code}" in raw or f":{code}" in low:
-            # 429 在下面按暂态处理
             if code != 429:
                 return False
 
-    # 暂态：超时 / 限流 / 5xx / 网络
+    # 明确的连接阶段失败 / 限流 / 5xx：可切换
     if any(k in low for k in (
-        "timeout", "timed out", "超时",
+        "connect", "connection refused", "连接超时", "连接失败",
         "429", "rate limit", "too many", "频繁",
         "502", "503", "504", "500", "520", "522", "523", "524",
-        "upstream", "disconnected", "connection", "network", "dns",
+        "dns", "name or service", "network is unreachable",
         "temporarily", "unavailable", "服务暂时",
     )):
+        return True
+
+    # 泛化 timeout 若未命中上面的“响应/读超时”否定项：仍允许切换（多为连接侧文案）
+    if any(k in low for k in ("timeout", "timed out", "超时")):
         return True
 
     # 默认：未知错误允许切换一次（保持可用性）
@@ -1596,11 +1659,12 @@ async def smart_generate_image_async(
     resolution: str = "",
     user_id: str = "anonymous",
     on_progress: Callable[[int, str], Any] | None = None,
+    on_accepted: Callable[[str, str], Any] | None = None,
 ) -> dict:
     """智能路由生图：按模型与配置选路，仅对暂态错误自动 Failover。
 
-    是否已提交上游由各 provider 的 on_accepted 明确信号决定，
-    不根据通用进度数字推断，避免假阳性/假阴性。
+    是否已提交上游由各 provider 的 on_accepted 明确信号决定。
+    外层 on_accepted(provider, upstream_id) 用于立即持久化任务号。
     """
     candidates = get_smart_route_candidates(model, resolution=resolution, size=size)
     logger.info("[smart-routing] Candidate providers for model=%s res=%s size=%s: %s",
@@ -1609,47 +1673,70 @@ async def smart_generate_image_async(
     errors: list[str] = []
     primary_provider = candidates[0]
     accepted: dict[str, str] = {}
+    last_provider = primary_provider
 
     def _make_on_accepted(provider_name: str):
         def _inner(upstream_id: str = "") -> None:
-            accepted[provider_name] = str(upstream_id or "accepted")
+            uid = str(upstream_id or "accepted")
+            accepted[provider_name] = uid
             logger.info(
                 "[smart-routing] Provider %s accepted by upstream id=%s",
-                provider_name, accepted[provider_name],
+                provider_name, uid,
             )
+            if on_accepted:
+                try:
+                    on_accepted(provider_name, uid)
+                except Exception as cb_exc:
+                    logger.warning("[smart-routing] on_accepted callback failed: %s", cb_exc)
         return _inner
 
+    def _raise_with_context(exc: BaseException, provider_name: str, err_msg: str) -> None:
+        task_id = accepted.get(provider_name) or getattr(exc, "task_id", "") or ""
+        if isinstance(exc, AmbiguousUpstreamError):
+            exc.task_id = str(task_id or exc.task_id or "")
+            exc.provider = provider_name
+            raise AmbiguousUpstreamError(err_msg, task_id=str(task_id or ""), provider=provider_name) from exc
+        # 包装为带 task_id 的 RuntimeError 子类信息，供 main 读取
+        wrapped = RuntimeError(err_msg)
+        wrapped.task_id = str(task_id or "")  # type: ignore[attr-defined]
+        wrapped.provider = provider_name  # type: ignore[attr-defined]
+        wrapped.stage = getattr(exc, "stage", "smart_route")  # type: ignore[attr-defined]
+        raise wrapped from exc
+
     for index, provider in enumerate(candidates):
-        on_accepted = _make_on_accepted(provider)
+        last_provider = provider
+        provider_on_accepted = _make_on_accepted(provider)
         try:
             logger.info("[smart-routing] Attempting provider %s (%d/%d)", provider, index + 1, len(candidates))
             if provider == PROVIDER_SUB2API:
                 result = await generate_sub2api_async(
                     model=model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
-                    on_progress=on_progress, on_accepted=on_accepted,
+                    on_progress=on_progress, on_accepted=provider_on_accepted,
                 )
             elif provider == PROVIDER_ADOBE2API:
                 result = await generate_adobe2api_async(
                     model=model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
-                    on_progress=on_progress, on_accepted=on_accepted,
+                    on_progress=on_progress, on_accepted=provider_on_accepted,
                 )
             else:  # APIMart
                 if images:
                     result = await generate_image_with_reference_async(
                         model=model, prompt=prompt, images=images,
                         size=size, resolution=resolution, user_id=user_id,
-                        on_progress=on_progress, on_accepted=on_accepted,
+                        on_progress=on_progress, on_accepted=provider_on_accepted,
                     )
                 else:
                     result = await generate_image_async(
                         model=model, prompt=prompt,
                         size=size, resolution=resolution, user_id=user_id,
-                        on_progress=on_progress, on_accepted=on_accepted,
+                        on_progress=on_progress, on_accepted=provider_on_accepted,
                     )
 
             result["provider"] = provider
+            if accepted.get(provider) and not result.get("task_id"):
+                result["task_id"] = accepted[provider]
             if provider != primary_provider:
                 result["provider_switched"] = True
                 logger.warning(
@@ -1666,22 +1753,28 @@ async def smart_generate_image_async(
             is_last = index >= len(candidates) - 1
             already_accepted = provider in accepted
             can_failover = is_transient_provider_error(exc) and not already_accepted and not is_last
-            if already_accepted:
-                logger.warning(
-                    "[smart-routing] Provider %s already accepted upstream (id=%s); skip failover to avoid duplicate billing",
-                    provider, accepted.get(provider),
-                )
-                raise RuntimeError(err_msg) from exc
-            if not can_failover:
-                if is_last:
-                    break
-                logger.warning(
-                    "[smart-routing] Provider %s error is non-transient; stop failover",
-                    provider,
-                )
-                raise RuntimeError(err_msg) from exc
+            if already_accepted or isinstance(exc, AmbiguousUpstreamError) or not can_failover:
+                if already_accepted:
+                    logger.warning(
+                        "[smart-routing] Provider %s already accepted upstream (id=%s); skip failover to avoid duplicate billing",
+                        provider, accepted.get(provider),
+                    )
+                elif isinstance(exc, AmbiguousUpstreamError):
+                    logger.warning(
+                        "[smart-routing] Provider %s ambiguous transport error; skip failover to avoid duplicate billing",
+                        provider,
+                    )
+                elif not is_last:
+                    logger.warning(
+                        "[smart-routing] Provider %s error is non-transient; stop failover",
+                        provider,
+                    )
+                _raise_with_context(exc, provider, err_msg)
 
-    raise RuntimeError(f"所有可用 AI 生图线路均尝试失败：{' | '.join(errors)}")
+    final = RuntimeError(f"所有可用 AI 生图线路均尝试失败：{' | '.join(errors)}")
+    final.provider = last_provider  # type: ignore[attr-defined]
+    final.task_id = accepted.get(last_provider, "")  # type: ignore[attr-defined]
+    raise final
 
 
 def compress_image_to_data_url(image_bytes: bytes, max_long_side: int = 1024) -> str:

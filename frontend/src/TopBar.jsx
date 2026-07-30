@@ -314,7 +314,11 @@ const renderAiProviderDetail = function(data) {
   const hasBalance = typeof apimart.remain_balance !== 'undefined';
   const line = function(name, node) {
     if (!node || (node.configured === false && !node.connected && !node.message)) return null;
-    const state = node.connected ? '正常' : (node.configured ? '异常' : '未配置');
+    let state = '未配置';
+    if (node.configured === false) state = '未配置';
+    else if (node.throttled) state = '受限';
+    else if (node.connected) state = '正常';
+    else state = '异常';
     return name + ' ' + state;
   };
   const parts = [

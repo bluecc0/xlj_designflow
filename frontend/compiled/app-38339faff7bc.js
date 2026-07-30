@@ -686,7 +686,8 @@ const TopBar = ({
     const hasBalance = typeof apimart.remain_balance !== 'undefined';
     const line = function (name, node) {
       if (!node || node.configured === false && !node.connected && !node.message) return null;
-      const state = node.connected ? '正常' : node.configured ? '异常' : '未配置';
+      let state = '未配置';
+      if (node.configured === false) state = '未配置';else if (node.throttled) state = '受限';else if (node.connected) state = '正常';else state = '异常';
       return name + ' ' + state;
     };
     const parts = [line('APIMart', apimart), line('订阅', sub2api), line('Adobe', adobe)].filter(Boolean);
@@ -11050,6 +11051,7 @@ const ADMIN_CSS = `
   .df-admin-servicestate { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: #a7aba4; }
   .df-admin-servicestate.is-up { background: var(--admin-green); box-shadow: 0 0 0 4px var(--admin-green-soft); }
   .df-admin-servicestate.is-down { background: var(--admin-red); box-shadow: 0 0 0 4px var(--admin-red-soft); }
+  .df-admin-servicestate.is-warn { background: var(--admin-amber); box-shadow: 0 0 0 4px var(--admin-amber-soft); }
   .df-admin-servicebody { margin-top: 18px; color: var(--admin-muted); font-size: 9.5px; line-height: 1.65; word-break: break-all; }
   .df-admin-probelist { max-height: 410px; overflow: auto; padding: 0 16px; }
   .df-admin-probe {
@@ -11405,10 +11407,28 @@ function AdminServiceCard({
   connected,
   configured,
   probing,
+  throttled,
   detail,
   icon
 }) {
-  var stateClass = connected ? 'is-up' : probing || configured === false ? '' : 'is-down';
+  var stateClass = '';
+  var stateText = '连接异常';
+  if (configured === false) {
+    stateClass = '';
+    stateText = '未配置';
+  } else if (probing) {
+    stateClass = '';
+    stateText = '正在探测';
+  } else if (throttled) {
+    stateClass = 'is-warn';
+    stateText = '受限/限流';
+  } else if (connected) {
+    stateClass = 'is-up';
+    stateText = '运行正常';
+  } else {
+    stateClass = 'is-down';
+    stateText = '连接异常';
+  }
   return /*#__PURE__*/React.createElement("div", {
     className: "df-admin-service"
   }, /*#__PURE__*/React.createElement("div", {
@@ -11425,7 +11445,7 @@ function AdminServiceCard({
     className: 'df-admin-servicestate ' + stateClass
   })), /*#__PURE__*/React.createElement("div", {
     className: "df-admin-servicebody"
-  }, configured === false ? '未配置' : probing ? '正在探测' : connected ? '运行正常' : '连接异常', detail ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), detail) : null));
+  }, stateText, detail ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), detail) : null));
 }
 function AdminUserManagement({
   currentUser,
@@ -12055,6 +12075,7 @@ function AdminPage({
     desc: 'adobe2api · Firefly',
     connected: !!(aiProvider.adobe2api && aiProvider.adobe2api.connected),
     configured: !!(aiProvider.adobe2api && aiProvider.adobe2api.configured),
+    throttled: !!(aiProvider.adobe2api && aiProvider.adobe2api.throttled),
     detail: aiProvider.adobe2api && (aiProvider.adobe2api.message || aiProvider.adobe2api.url),
     icon: /*#__PURE__*/React.createElement(I.image, {
       size: 15
