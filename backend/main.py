@@ -1140,6 +1140,40 @@ async def _probe_apimart(client: httpx.AsyncClient) -> dict:
     return status
 
 
+async def _probe_adobe2api(client: httpx.AsyncClient) -> dict:
+    status = {
+        "connected": False,
+        "configured": bool(settings.adobe2api_base_url and settings.adobe2api_api_key),
+        "provider": "adobe2api",
+        "url": settings.adobe2api_base_url,
+    }
+    if not status["configured"]:
+        status["message"] = "未配置 Adobe 线路"
+        return status
+
+    base = settings.adobe2api_base_url.rstrip("/")
+    # 优先打 models 轻量端点；不存在则回退根路径
+    candidates = [f"{base}/models", base]
+    last_error = ""
+    for url in candidates:
+        try:
+            response = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {settings.adobe2api_api_key}"},
+            )
+            status["status_code"] = response.status_code
+            if response.status_code < 500:
+                status["connected"] = True
+                if response.status_code >= 400:
+                    status["message"] = f"HTTP {response.status_code}"
+                return status
+            last_error = f"HTTP {response.status_code}"
+        except Exception as exc:
+            last_error = str(exc)
+    status["message"] = last_error or "探测失败"
+    return status
+
+
 @app.get("/health")
 async def health():
     return _local_health_payload()
@@ -1149,12 +1183,14 @@ async def health():
 async def health_deep():
     local_health = _local_health_payload()
     async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
-        penpot_ok, ai_provider = await asyncio.gather(
+        penpot_ok, ai_provider, adobe_provider = await asyncio.gather(
             _probe_penpot(client),
             _probe_apimart(client),
+            _probe_adobe2api(client),
         )
 
     ai_provider["apimart"] = dict(ai_provider)
+    ai_provider["adobe2api"] = adobe_provider
 
     latest_sub2api_probe = load_latest_service_probe("sub2api")
     latest_completed_sub2api_probe = load_latest_completed_service_probe("sub2api")
@@ -1213,8 +1249,16 @@ async def health_deep():
             "最近探测失败 · " + str(latest_sub2api_probe.get("error") or "未知错误")[:160]
         )
     ai_provider["sub2api"] = sub2api_status
-    ai_provider["connected"] = bool(ai_provider.get("connected") or sub2api_status.get("connected"))
-    ai_provider["configured"] = bool(ai_provider.get("configured") or sub2api_status.get("configured"))
+    ai_provider["connected"] = bool(
+        ai_provider.get("connected")
+        or sub2api_status.get("connected")
+        or adobe_provider.get("connected")
+    )
+    ai_provider["configured"] = bool(
+        ai_provider.get("configured")
+        or sub2api_status.get("configured")
+        or adobe_provider.get("configured")
+    )
 
     return {
         **local_health,

@@ -1011,6 +1011,7 @@ function AdminPage({ user, onBack }) {
     { name: '产品素材库', desc: '本地产品图资源', connected: !!(health && health.library && health.library.connected), detail: health && health.library && ((health.library.folders || []).length + ' 个目录 · ' + health.library.path), icon: <I.folder size={15} /> },
     { name: '默认生图线路', desc: 'APIMart', connected: !!apimartProvider.connected, configured: !!apimartProvider.configured, detail: apimartProvider.message || apimartProvider.url, icon: <I.image size={15} /> },
     { name: '订阅生图线路', desc: 'CLIProxyAPI · 每小时生图探测', connected: !!(aiProvider.sub2api && aiProvider.sub2api.connected), configured: !!(aiProvider.sub2api && aiProvider.sub2api.configured), probing: !!(aiProvider.sub2api && aiProvider.sub2api.last_probe && aiProvider.sub2api.last_probe.status === 'running'), detail: aiProvider.sub2api && (aiProvider.sub2api.message || aiProvider.sub2api.url), icon: <I.zap size={15} /> },
+    { name: 'Adobe 生图线路', desc: 'adobe2api · Firefly', connected: !!(aiProvider.adobe2api && aiProvider.adobe2api.connected), configured: !!(aiProvider.adobe2api && aiProvider.adobe2api.configured), detail: aiProvider.adobe2api && (aiProvider.adobe2api.message || aiProvider.adobe2api.url), icon: <I.image size={15} /> },
   ];
 
   var renderOverview = function() {

@@ -1810,7 +1810,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const [imageType, setImageType] = React.useState('png');
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
-  const [aiProvider, setAiProvider] = React.useState('apimart');
+  const [aiProvider, setAiProvider] = React.useState('auto');
   const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [smartDistributeMode, setSmartDistributeMode] = React.useState('full');
   const [manualRefImages, setManualRefImages] = React.useState([]);
@@ -2213,9 +2213,9 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       if (!AI_OPTIONS[aiRatio].qualities.includes(aiQuality)) {
         setAiQuality(AI_OPTIONS[aiRatio].qualities[0]);
       }
-      // Sub2API 不支持 Nano Banana，切换时自动回默认
-      if (activeAiModel === 'nano-banana-pro' && aiProvider === 'sub2api') {
-        setAiProvider('apimart');
+      // 渠道选择已移除，统一走智能路由
+      if (aiProvider !== 'auto') {
+        setAiProvider('auto');
       }
     }
   }, [activeAiModel, aiQuality, aiRatio, aiProvider]);
@@ -4008,7 +4008,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     var refPreviews = [];
     var lastSize = aiOptions.size || '1024x1024';
     var lastResolution = aiOptions.resolution || '1K';
-    var provider = aiOptions.provider || 'apimart';
+    var provider = aiOptions.provider || 'auto';
     var activeSkill = String(aiOptions.skill || '').trim();
     var plannedPrompt = String(aiOptions.plannedPrompt || '').trim();
     var plannedPromptTrace = String(aiOptions.promptTrace || '').trim();

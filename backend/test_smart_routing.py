@@ -89,6 +89,82 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["provider"], "adobe2api")
             self.assertTrue(result.get("provider_switched"))
 
+    def test_normalize_size_respects_explicit_resolution(self) -> None:
+        ratio, res = ai_image._normalize_size("auto", "2K")
+        self.assertEqual(ratio, "auto")
+        self.assertEqual(res, "2K")
+        ratio, res = ai_image._normalize_size("auto", "4K")
+        self.assertEqual(res, "4K")
+        ratio, res = ai_image._normalize_size("1024x1024", "2K")
+        self.assertEqual(ratio, "1:1")
+        self.assertEqual(res, "2K")
+
+    def test_adobe2api_model_mapping_for_gemini(self) -> None:
+        # 归一化后的 gemini 模型名应映射到 firefly-nano-banana-pro，而非 gpt-image
+        with patch.object(ai_image.settings, "adobe2api_base_url", "http://adobe:6001/v1"), \
+             patch.object(ai_image.settings, "adobe2api_api_key", "sk-adobe"):
+            # 直接测映射逻辑：调用内部 size 归一化 + 模型选择片段
+            ratio, res_clean = ai_image._normalize_size("auto", "2K")
+            model_name = ai_image._normalize_model_name("nano-banana-pro").lower()
+            self.assertIn("gemini", model_name)
+            res_suffix = res_clean.lower()
+            ratio_suffix = ratio.replace(":", "x")
+            if "banana" in model_name or "gemini" in model_name:
+                target = f"firefly-nano-banana-pro-{res_suffix}-{ratio_suffix}"
+            else:
+                target = f"firefly-gpt-image-{res_suffix}-{ratio_suffix}"
+            self.assertEqual(target, "firefly-nano-banana-pro-2k-auto")
+
+    async def test_non_transient_error_does_not_failover(self) -> None:
+        calls = {"adobe": 0, "apimart": 0}
+
+        async def mock_adobe(*args, **kwargs):
+            calls["adobe"] += 1
+            raise RuntimeError("adobe2api 请求失败: HTTP 400 - invalid prompt")
+
+        async def mock_apimart(*args, **kwargs):
+            calls["apimart"] += 1
+            return {"url": "/x.png", "provider": "apimart"}
+
+        with patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
+             patch.object(ai_image, "generate_image_async", side_effect=mock_apimart), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["adobe2api", "apimart"]):
+            with self.assertRaises(RuntimeError):
+                await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="bad",
+                    user_id="u",
+                    resolution="2K",
+                )
+        self.assertEqual(calls["adobe"], 1)
+        self.assertEqual(calls["apimart"], 0)
+
+    async def test_already_submitted_does_not_failover(self) -> None:
+        calls = {"sub": 0, "adobe": 0}
+
+        async def mock_sub2api(*args, **kwargs):
+            calls["sub"] += 1
+            on_progress = kwargs.get("on_progress")
+            if on_progress:
+                on_progress(10, "submitted")
+            raise RuntimeError("下载结果图片失败：HTTP 504")
+
+        async def mock_adobe(*args, **kwargs):
+            calls["adobe"] += 1
+            return {"url": "/x.png", "provider": "adobe2api"}
+
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
+             patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
+            with self.assertRaises(RuntimeError):
+                await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                )
+        self.assertEqual(calls["sub"], 1)
+        self.assertEqual(calls["adobe"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

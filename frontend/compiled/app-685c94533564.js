@@ -680,7 +680,16 @@ const TopBar = ({
   const renderAiProviderDetail = function (data) {
     const info = data && data.ai_provider;
     if (!info) return null;
-    const hasBalance = typeof info.remain_balance !== 'undefined';
+    const apimart = info.apimart || info;
+    const adobe = info.adobe2api || {};
+    const sub2api = info.sub2api || {};
+    const hasBalance = typeof apimart.remain_balance !== 'undefined';
+    const line = function (name, node) {
+      if (!node || node.configured === false && !node.connected && !node.message) return null;
+      const state = node.connected ? '正常' : node.configured ? '异常' : '未配置';
+      return name + ' ' + state;
+    };
+    const parts = [line('APIMart', apimart), line('订阅', sub2api), line('Adobe', adobe)].filter(Boolean);
     return /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
@@ -692,13 +701,13 @@ const TopBar = ({
         fontSize: 11,
         color: 'var(--ink-2)'
       }
-    }, "APIMart ", info.connected ? '正常' : info.configured ? '异常' : '未配置', hasBalance ? ` · 余额 $${fmtBalance(info.remain_balance)}` : ''), info.message && /*#__PURE__*/React.createElement("div", {
+    }, parts.length ? parts.join(' · ') : '智能路由', hasBalance ? ` · 余额 $${fmtBalance(apimart.remain_balance)}` : ''), (apimart.message || adobe.message || sub2api.message) && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 10.5,
         color: 'var(--ink-3)',
         lineHeight: 1.45
       }
-    }, String(info.message).slice(0, 120)));
+    }, String(apimart.message || adobe.message || sub2api.message).slice(0, 120)));
   };
   window.renderAiProviderDetail = renderAiProviderDetail;
   return /*#__PURE__*/React.createElement("div", {
@@ -6093,7 +6102,7 @@ const Composer = ({
   const [imageType, setImageType] = React.useState('png');
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
-  const [aiProvider, setAiProvider] = React.useState('apimart');
+  const [aiProvider, setAiProvider] = React.useState('auto');
   const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [smartDistributeMode, setSmartDistributeMode] = React.useState('full');
   const [manualRefImages, setManualRefImages] = React.useState([]);
@@ -6586,9 +6595,9 @@ const Composer = ({
       if (!AI_OPTIONS[aiRatio].qualities.includes(aiQuality)) {
         setAiQuality(AI_OPTIONS[aiRatio].qualities[0]);
       }
-      // Sub2API 不支持 Nano Banana，切换时自动回默认
-      if (activeAiModel === 'nano-banana-pro' && aiProvider === 'sub2api') {
-        setAiProvider('apimart');
+      // 渠道选择已移除，统一走智能路由
+      if (aiProvider !== 'auto') {
+        setAiProvider('auto');
       }
     }
   }, [activeAiModel, aiQuality, aiRatio, aiProvider]);
@@ -8574,7 +8583,7 @@ const Chat = ({
     var refPreviews = [];
     var lastSize = aiOptions.size || '1024x1024';
     var lastResolution = aiOptions.resolution || '1K';
-    var provider = aiOptions.provider || 'apimart';
+    var provider = aiOptions.provider || 'auto';
     var activeSkill = String(aiOptions.skill || '').trim();
     var plannedPrompt = String(aiOptions.plannedPrompt || '').trim();
     var plannedPromptTrace = String(aiOptions.promptTrace || '').trim();
@@ -12039,6 +12048,15 @@ function AdminPage({
     probing: !!(aiProvider.sub2api && aiProvider.sub2api.last_probe && aiProvider.sub2api.last_probe.status === 'running'),
     detail: aiProvider.sub2api && (aiProvider.sub2api.message || aiProvider.sub2api.url),
     icon: /*#__PURE__*/React.createElement(I.zap, {
+      size: 15
+    })
+  }, {
+    name: 'Adobe 生图线路',
+    desc: 'adobe2api · Firefly',
+    connected: !!(aiProvider.adobe2api && aiProvider.adobe2api.connected),
+    configured: !!(aiProvider.adobe2api && aiProvider.adobe2api.configured),
+    detail: aiProvider.adobe2api && (aiProvider.adobe2api.message || aiProvider.adobe2api.url),
+    icon: /*#__PURE__*/React.createElement(I.image, {
       size: 15
     })
   }];

@@ -314,12 +314,20 @@ def _normalize_model_name(model: str) -> str:
 
 def _normalize_size(size: str, resolution: str = "") -> tuple[str, str]:
     clean = (size or "").strip()
+    explicit_resolution = (resolution or "").strip().upper()
+    if explicit_resolution not in ("1K", "2K", "4K"):
+        explicit_resolution = ""
+
     if clean in _SIZE_MAP:
-        return _SIZE_MAP[clean]
-    clean_resolution = (resolution or "").strip().upper() or "1K"
+        mapped_ratio, mapped_resolution = _SIZE_MAP[clean]
+        # 像素尺寸命中时 ratio 以 map 为准；显式 resolution 覆盖 map 中的默认清晰度
+        # （例如 size=auto + resolution=2K 不能被 _SIZE_MAP["auto"] 的 1K 盖掉）
+        return mapped_ratio, explicit_resolution or mapped_resolution
+
+    clean_resolution = explicit_resolution or "1K"
     if clean in ("auto", "1:1", "3:4", "4:3", "5:4", "4:5", "9:16", "16:9", "2:3", "3:2"):
         return clean, clean_resolution
-    return "1:1", "1K"
+    return "1:1", clean_resolution
 
 
 def _extract_error_text(resp: httpx.Response) -> str:
@@ -1306,11 +1314,16 @@ async def generate_adobe2api_async(
     api_endpoint = f"{base_url}/chat/completions"
     ratio, res_clean = _normalize_size(size, resolution)
 
-    model_lower = model.lower()
+    model_name = _normalize_model_name(model).lower()
     ratio_suffix = ratio.replace(":", "x")
     res_suffix = res_clean.lower() or "1k"
 
-    if "banana" in model_lower:
+    # 归一化后的 gemini 模型名不含 banana，需一并识别，避免静默落到 GPT Image
+    if (
+        "banana" in model_name
+        or "gemini" in model_name
+        or model_name == "gemini-3-pro-image-preview"
+    ):
         target_model = f"firefly-nano-banana-pro-{res_suffix}-{ratio_suffix}"
     else:
         target_model = f"firefly-gpt-image-{res_suffix}-{ratio_suffix}"
@@ -1324,7 +1337,10 @@ async def generate_adobe2api_async(
 
     refs = images or []
     if refs:
-        for img_bytes, filename in refs[:3]:
+        # adobe2api / Firefly 侧可接受多图；与主链路一致最多 9 张
+        if len(refs) > 9:
+            logger.warning("[adobe2api] 参考图 %d 张，仅发送前 9 张", len(refs))
+        for img_bytes, filename in refs[:9]:
             data_url = _image_bytes_to_data_url(img_bytes, filename)
             content_list.append({
                 "type": "image_url",
@@ -1369,6 +1385,60 @@ async def generate_adobe2api_async(
 
 
 # ── 智能路由调度 (Smart Routing) ─────────────────────────────────────────────────────────────
+
+_NON_FAILOVER_HTTP_CODES = {400, 401, 402, 403, 404, 413, 422}
+
+
+def is_transient_provider_error(exc: BaseException | str | None) -> bool:
+    """仅对可恢复错误切换线路；参数/鉴权/内容审核等确定性失败不跨渠道重试。
+
+    已提交上游任务后的轮询/下载失败也不切换，避免重复计费与孤儿任务。
+    """
+    raw = str(exc or "").strip()
+    if not raw:
+        return True
+    low = raw.lower()
+
+    # 任务已提交后的后半程失败：不跨渠道重提
+    if any(k in low for k in (
+        "下载结果", "下载 cli", "下载结果图片", "poll", "轮询",
+        "saving", "task_id=", "task=",
+    )) and any(k in low for k in ("timeout", "超时", "http ", "failed", "失败")):
+        # 若明确是提交阶段失败则仍可切换
+        if "提交" not in low and "submit" not in low:
+            # 下载/轮询类：保守不切换
+            if any(k in low for k in ("下载", "download", "poll", "轮询", "saving")):
+                return False
+
+    # 确定性错误：不切换
+    if any(k in low for k in (
+        "content", "safety", "policy", "违规", "审核", "moderation", "blocked",
+        "invalid", "参数", "validation", "unprocessable",
+        "api key", "unauthorized", "鉴权", "验证失败",
+        "余额", "insufficient", "quota", "payment", "permission",
+        "not configured", "未配置",
+    )):
+        return False
+
+    for code in _NON_FAILOVER_HTTP_CODES:
+        if re.search(rf"\bHTTP\s*{code}\b", raw, re.IGNORECASE) or f" {code}" in raw or f":{code}" in low:
+            # 429 在下面按暂态处理
+            if code != 429:
+                return False
+
+    # 暂态：超时 / 限流 / 5xx / 网络
+    if any(k in low for k in (
+        "timeout", "timed out", "超时",
+        "429", "rate limit", "too many", "频繁",
+        "502", "503", "504", "500", "520", "522", "523", "524",
+        "upstream", "disconnected", "connection", "network", "dns",
+        "temporarily", "unavailable", "服务暂时",
+    )):
+        return True
+
+    # 默认：未知错误允许切换一次（保持可用性）
+    return True
+
 
 # 默认模型选路优先级表：映射标准模型名到首选/降级线路
 DEFAULT_MODEL_ROUTING_RULES: dict[str, list[str]] = {
@@ -1460,43 +1530,54 @@ async def smart_generate_image_async(
     user_id: str = "anonymous",
     on_progress: Callable[[int, str], Any] | None = None,
 ) -> dict:
-    """智能路由生图：按模型与配置选路，遇到暂态网络或卡额度异常时自动无感 Failover 降级重试。"""
+    """智能路由生图：按模型与配置选路，仅对暂态错误自动 Failover。"""
     candidates = get_smart_route_candidates(model, resolution=resolution, size=size)
-    logger.info("[smart-routing] Candidate providers for model=%s: %s", model, candidates)
+    logger.info("[smart-routing] Candidate providers for model=%s res=%s size=%s: %s",
+                model, resolution, size, candidates)
 
     errors: list[str] = []
     primary_provider = candidates[0]
+    submitted: dict[str, bool] = {}
+
+    def _track_progress(provider_name: str):
+        def _inner(progress: int, status: str = "") -> None:
+            status_l = str(status or "").lower()
+            if progress >= 10 or status_l in ("submitted", "processing", "running", "queued"):
+                submitted[provider_name] = True
+            if on_progress:
+                on_progress(progress, status)
+        return _inner
 
     for index, provider in enumerate(candidates):
+        progress_cb = _track_progress(provider)
         try:
             logger.info("[smart-routing] Attempting provider %s (%d/%d)", provider, index + 1, len(candidates))
             if provider == PROVIDER_SUB2API:
                 result = await generate_sub2api_async(
                     model=model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
-                    on_progress=on_progress,
+                    on_progress=progress_cb,
                 )
             elif provider == PROVIDER_ADOBE2API:
                 result = await generate_adobe2api_async(
                     model=model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
-                    on_progress=on_progress,
+                    on_progress=progress_cb,
                 )
             else:  # APIMart
                 if images:
                     result = await generate_image_with_reference_async(
                         model=model, prompt=prompt, images=images,
                         size=size, resolution=resolution, user_id=user_id,
-                        on_progress=on_progress,
+                        on_progress=progress_cb,
                     )
                 else:
                     result = await generate_image_async(
                         model=model, prompt=prompt,
                         size=size, resolution=resolution, user_id=user_id,
-                        on_progress=on_progress,
+                        on_progress=progress_cb,
                     )
 
-            # 标记实际发生的提供商与降级状态
             result["provider"] = provider
             if provider != primary_provider:
                 result["provider_switched"] = True
@@ -1510,6 +1591,24 @@ async def smart_generate_image_async(
             err_msg = format_generation_error(exc, stage="smart_route", provider=provider, model=model)
             logger.warning("[smart-routing] Provider %s failed: %s", provider, err_msg)
             errors.append(f"{provider}: {err_msg}")
+
+            is_last = index >= len(candidates) - 1
+            already_submitted = submitted.get(provider, False)
+            can_failover = is_transient_provider_error(exc) and not already_submitted and not is_last
+            if already_submitted:
+                logger.warning(
+                    "[smart-routing] Provider %s already submitted upstream; skip failover to avoid duplicate billing",
+                    provider,
+                )
+                raise RuntimeError(err_msg) from exc
+            if not can_failover:
+                if is_last:
+                    break
+                logger.warning(
+                    "[smart-routing] Provider %s error is non-transient; stop failover",
+                    provider,
+                )
+                raise RuntimeError(err_msg) from exc
 
     raise RuntimeError(f"所有可用 AI 生图线路均尝试失败：{' | '.join(errors)}")
 

@@ -308,14 +308,31 @@ const fmtBalance = (n) => {
 const renderAiProviderDetail = function(data) {
   const info = data && data.ai_provider;
   if (!info) return null;
-  const hasBalance = typeof info.remain_balance !== 'undefined';
+  const apimart = info.apimart || info;
+  const adobe = info.adobe2api || {};
+  const sub2api = info.sub2api || {};
+  const hasBalance = typeof apimart.remain_balance !== 'undefined';
+  const line = function(name, node) {
+    if (!node || (node.configured === false && !node.connected && !node.message)) return null;
+    const state = node.connected ? '正常' : (node.configured ? '异常' : '未配置');
+    return name + ' ' + state;
+  };
+  const parts = [
+    line('APIMart', apimart),
+    line('订阅', sub2api),
+    line('Adobe', adobe),
+  ].filter(Boolean);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div style={{ fontSize: 11, color: 'var(--ink-2)' }}>
-        APIMart {info.connected ? '正常' : (info.configured ? '异常' : '未配置')}
-        {hasBalance ? ` · 余额 $${fmtBalance(info.remain_balance)}` : ''}
+        {parts.length ? parts.join(' · ') : '智能路由'}
+        {hasBalance ? ` · 余额 $${fmtBalance(apimart.remain_balance)}` : ''}
       </div>
-      {info.message && <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>{String(info.message).slice(0, 120)}</div>}
+      {(apimart.message || adobe.message || sub2api.message) && (
+        <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>
+          {String(apimart.message || adobe.message || sub2api.message).slice(0, 120)}
+        </div>
+      )}
     </div>
   );
 };
