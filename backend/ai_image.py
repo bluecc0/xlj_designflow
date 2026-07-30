@@ -402,7 +402,41 @@ def _extract_result_url(payload: Any) -> str | None:
 
 
 def _extract_b64_or_image_url(payload: Any) -> str | None:
+    if isinstance(payload, str):
+        clean = payload.strip()
+        if clean.startswith("data:image/"):
+            return clean
+        if clean.startswith("http://") or clean.startswith("https://") or clean.startswith("/"):
+            return clean
+        return None
     if isinstance(payload, dict):
+        # OpenAI chat.completions 风格：choices[].message.content 可能是 data URL / 外链 / 多模态 list
+        choices = payload.get("choices")
+        if isinstance(choices, list):
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                message = choice.get("message") or {}
+                content = message.get("content") if isinstance(message, dict) else None
+                if isinstance(content, str):
+                    found = _extract_b64_or_image_url(content)
+                    if found:
+                        return found
+                elif isinstance(content, list):
+                    for part in content:
+                        if not isinstance(part, dict):
+                            continue
+                        if part.get("type") == "image_url":
+                            image_url = part.get("image_url")
+                            if isinstance(image_url, dict):
+                                found = _extract_b64_or_image_url(image_url.get("url"))
+                            else:
+                                found = _extract_b64_or_image_url(image_url)
+                            if found:
+                                return found
+                        found = _extract_b64_or_image_url(part.get("text") or part.get("url"))
+                        if found:
+                            return found
         data = payload.get("data")
         if isinstance(data, list):
             for item in data:
@@ -420,6 +454,11 @@ def _extract_b64_or_image_url(payload: Any) -> str | None:
                     if url:
                         return url
         return _extract_result_url(payload)
+    if isinstance(payload, list):
+        for item in payload:
+            found = _extract_b64_or_image_url(item)
+            if found:
+                return found
     return _extract_result_url(payload)
 
 
@@ -936,8 +975,13 @@ async def generate_image_async(
     resolution: str = "",
     user_id: str = "anonymous",
     on_progress: Callable[[int, str], Any] | None = None,
+    on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
-    """异步生图：提交任务 → 轮询进度 → 下载结果。on_progress(progress, api_status) 用于持久化进度。"""
+    """异步生图：提交任务 → 轮询进度 → 下载结果。
+
+    on_progress(progress, api_status) 用于 UI/持久化。
+    on_accepted(task_id) 仅在上游明确接受任务后触发（用于智能路由防重复计费）。
+    """
     model_name = _normalize_model_name(model)
     base_url, api_key = _model_credentials(model_name)
     headers = {
@@ -954,6 +998,10 @@ async def generate_image_async(
             size=size,
             resolution=resolution,
         )
+        if on_accepted:
+            on_accepted(str(task_id))
+        if on_progress:
+            on_progress(10, "submitted")
         result_url, _, _task_detail = await _wait_for_task_result(
             client,
             base_url=base_url,
@@ -985,6 +1033,7 @@ async def generate_image_with_reference_async(
     resolution: str = "",
     user_id: str = "anonymous",
     on_progress: Callable[[int], Any] | None = None,
+    on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
     """异步图生图：上传参考图 → 提交任务 → 轮询进度 → 下载结果。"""
     model_name = _normalize_model_name(model)
@@ -1010,6 +1059,13 @@ async def generate_image_with_reference_async(
             resolution=resolution,
             reference_urls=reference_urls,
         )
+        if on_accepted:
+            on_accepted(str(task_id))
+        if on_progress:
+            try:
+                on_progress(10, "submitted")  # type: ignore[misc]
+            except TypeError:
+                on_progress(10)
         result_url, _, _task_detail = await _wait_for_task_result(
             client,
             base_url=base_url,
@@ -1201,6 +1257,7 @@ async def generate_sub2api_async(
     resolution: str = "",
     user_id: str = "anonymous",
     on_progress: Callable[[int, str], Any] | None = None,
+    on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
     """订阅线路：通过 CLIProxyAPI 的 OpenAI Images 兼容接口生图。"""
     base_url = settings.cliproxy_base_url.rstrip("/")
@@ -1221,7 +1278,7 @@ async def generate_sub2api_async(
     timeout = httpx.Timeout(1800.0, connect=30.0)
 
     if on_progress:
-        on_progress(10, "submitted")
+        on_progress(5, "starting")
 
     try:
         client_kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False}
@@ -1271,6 +1328,9 @@ async def generate_sub2api_async(
     if isinstance(payload, dict) and payload.get("error"):
         raise RuntimeError(f"CLIProxyAPI 生图失败: {str(payload.get('error'))[:300]}")
 
+    # 同步接口：HTTP 成功且无 error 即上游已接受/完成，后续下载失败不可再跨渠道重提
+    if on_accepted:
+        on_accepted(str((payload or {}).get("id") or "cliproxy-accepted"))
     if on_progress:
         on_progress(85, "saving")
     local_url, item = await _save_cliproxy_response_image(payload, user_id=user_id, api_key=api_key)
@@ -1302,6 +1362,7 @@ async def generate_adobe2api_async(
     resolution: str = "",
     user_id: str = "anonymous",
     on_progress: Callable[[int, str], Any] | None = None,
+    on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
     """通过 adobe2api 服务生成/编辑图片 (OpenAI 兼容聊天/生图接口)"""
     base_url = settings.adobe2api_base_url.rstrip("/")
@@ -1353,7 +1414,7 @@ async def generate_adobe2api_async(
     }
 
     if on_progress:
-        on_progress(10, "submitted")
+        on_progress(5, "starting")
 
     timeout = httpx.Timeout(300.0, connect=30.0)
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
@@ -1365,6 +1426,12 @@ async def generate_adobe2api_async(
         result_url = _extract_b64_or_image_url(data) or _extract_result_url(data)
         if not result_url:
             raise RuntimeError(f"adobe2api 未返回有效图片 URL 或 Base64: {str(data)[:200]}")
+
+        # 同步接口：拿到有效图片内容后才算上游已接受
+        if on_accepted:
+            on_accepted(str((data or {}).get("id") or "adobe2api-accepted"))
+        if on_progress:
+            on_progress(85, "saving")
 
         if result_url.startswith("data:"):
             local_url = _save_data_url_image(result_url, user_id=user_id, prefix="adobe2api")
@@ -1530,52 +1597,56 @@ async def smart_generate_image_async(
     user_id: str = "anonymous",
     on_progress: Callable[[int, str], Any] | None = None,
 ) -> dict:
-    """智能路由生图：按模型与配置选路，仅对暂态错误自动 Failover。"""
+    """智能路由生图：按模型与配置选路，仅对暂态错误自动 Failover。
+
+    是否已提交上游由各 provider 的 on_accepted 明确信号决定，
+    不根据通用进度数字推断，避免假阳性/假阴性。
+    """
     candidates = get_smart_route_candidates(model, resolution=resolution, size=size)
     logger.info("[smart-routing] Candidate providers for model=%s res=%s size=%s: %s",
                 model, resolution, size, candidates)
 
     errors: list[str] = []
     primary_provider = candidates[0]
-    submitted: dict[str, bool] = {}
+    accepted: dict[str, str] = {}
 
-    def _track_progress(provider_name: str):
-        def _inner(progress: int, status: str = "") -> None:
-            status_l = str(status or "").lower()
-            if progress >= 10 or status_l in ("submitted", "processing", "running", "queued"):
-                submitted[provider_name] = True
-            if on_progress:
-                on_progress(progress, status)
+    def _make_on_accepted(provider_name: str):
+        def _inner(upstream_id: str = "") -> None:
+            accepted[provider_name] = str(upstream_id or "accepted")
+            logger.info(
+                "[smart-routing] Provider %s accepted by upstream id=%s",
+                provider_name, accepted[provider_name],
+            )
         return _inner
 
     for index, provider in enumerate(candidates):
-        progress_cb = _track_progress(provider)
+        on_accepted = _make_on_accepted(provider)
         try:
             logger.info("[smart-routing] Attempting provider %s (%d/%d)", provider, index + 1, len(candidates))
             if provider == PROVIDER_SUB2API:
                 result = await generate_sub2api_async(
                     model=model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
-                    on_progress=progress_cb,
+                    on_progress=on_progress, on_accepted=on_accepted,
                 )
             elif provider == PROVIDER_ADOBE2API:
                 result = await generate_adobe2api_async(
                     model=model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
-                    on_progress=progress_cb,
+                    on_progress=on_progress, on_accepted=on_accepted,
                 )
             else:  # APIMart
                 if images:
                     result = await generate_image_with_reference_async(
                         model=model, prompt=prompt, images=images,
                         size=size, resolution=resolution, user_id=user_id,
-                        on_progress=progress_cb,
+                        on_progress=on_progress, on_accepted=on_accepted,
                     )
                 else:
                     result = await generate_image_async(
                         model=model, prompt=prompt,
                         size=size, resolution=resolution, user_id=user_id,
-                        on_progress=progress_cb,
+                        on_progress=on_progress, on_accepted=on_accepted,
                     )
 
             result["provider"] = provider
@@ -1593,12 +1664,12 @@ async def smart_generate_image_async(
             errors.append(f"{provider}: {err_msg}")
 
             is_last = index >= len(candidates) - 1
-            already_submitted = submitted.get(provider, False)
-            can_failover = is_transient_provider_error(exc) and not already_submitted and not is_last
-            if already_submitted:
+            already_accepted = provider in accepted
+            can_failover = is_transient_provider_error(exc) and not already_accepted and not is_last
+            if already_accepted:
                 logger.warning(
-                    "[smart-routing] Provider %s already submitted upstream; skip failover to avoid duplicate billing",
-                    provider,
+                    "[smart-routing] Provider %s already accepted upstream (id=%s); skip failover to avoid duplicate billing",
+                    provider, accepted.get(provider),
                 )
                 raise RuntimeError(err_msg) from exc
             if not can_failover:

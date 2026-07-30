@@ -1152,7 +1152,7 @@ async def _probe_adobe2api(client: httpx.AsyncClient) -> dict:
         return status
 
     base = settings.adobe2api_base_url.rstrip("/")
-    # 优先打 models 轻量端点；不存在则回退根路径
+    # 优先打 models 轻量端点；404/405 时继续尝试下一个地址
     candidates = [f"{base}/models", base]
     last_error = ""
     for url in candidates:
@@ -1161,15 +1161,32 @@ async def _probe_adobe2api(client: httpx.AsyncClient) -> dict:
                 url,
                 headers={"Authorization": f"Bearer {settings.adobe2api_api_key}"},
             )
-            status["status_code"] = response.status_code
-            if response.status_code < 500:
+            code = response.status_code
+            status["status_code"] = code
+            if 200 <= code < 300:
                 status["connected"] = True
-                if response.status_code >= 400:
-                    status["message"] = f"HTTP {response.status_code}"
+                status.pop("message", None)
                 return status
-            last_error = f"HTTP {response.status_code}"
+            if code in (401, 403):
+                status["connected"] = False
+                status["message"] = f"鉴权失败 HTTP {code}"
+                return status
+            if code == 429:
+                # 可连通但受限
+                status["connected"] = True
+                status["throttled"] = True
+                status["message"] = "HTTP 429 限流"
+                return status
+            if code in (404, 405):
+                last_error = f"HTTP {code}"
+                continue
+            if code >= 500:
+                last_error = f"HTTP {code}"
+                continue
+            last_error = f"HTTP {code}"
         except Exception as exc:
             last_error = str(exc)
+    status["connected"] = False
     status["message"] = last_error or "探测失败"
     return status
 
