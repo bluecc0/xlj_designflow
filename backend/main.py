@@ -3658,19 +3658,23 @@ async def _run_ai_image_background(
         # Uvicorn reload / server shutdown can cancel in-flight background tasks.
         # Without explicitly persisting this, the UI keeps polling a permanent
         # "processing" job that will never be resumed.
+        cancel_provider = active_provider or provider
         error_msg = format_generation_error(
             "生图任务被服务重载或关闭中断，请重新提交",
             stage=stage or "cancelled",
-            provider=provider,
+            provider=cancel_provider,
             model=model,
             job_id=job_id,
             task_id=upstream_task_id,
         )
-        logger.warning("ai_image background task cancelled: job_id=%s stage=%s", job_id, stage)
+        logger.warning(
+            "ai_image background task cancelled: job_id=%s stage=%s provider=%s",
+            job_id, stage, cancel_provider,
+        )
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="failed",
             model=model, prompt=prompt, size=size,
-            provider=provider, resolution=resolution,
+            provider=cancel_provider, resolution=resolution,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
             has_reference=has_reference, error=error_msg, task_id=upstream_task_id or None,
@@ -3681,7 +3685,11 @@ async def _run_ai_image_background(
             user_id=user_id, username=username,
             action="ai_image",
             detail=f"job={job_id[:8]} model={model} size={size} result=cancelled stage={stage}",
-            payload=json.dumps({"job_id": job_id, "model": model, "size": size, "result": "cancelled", "error": error_msg, "stage": stage}, ensure_ascii=False),
+            payload=json.dumps({
+                "job_id": job_id, "model": model, "size": size, "result": "cancelled",
+                "error": error_msg, "stage": stage, "provider": cancel_provider,
+                "upstream_task_id": upstream_task_id,
+            }, ensure_ascii=False),
         )
         append_ai_chat_message(
             session_id=session_id, user_id=user_id,
@@ -3690,10 +3698,11 @@ async def _run_ai_image_background(
             meta={
                 "job_id": job_id,
                 "model": model, "prompt": prompt,
-                "provider": provider,
+                "provider": cancel_provider,
                 "status": "failed", "error": error_msg,
                 "hasReference": has_reference,
                 "refCount": len(refs),
+                "taskId": upstream_task_id,
                 "stage": stage,
                 "batchId": batch_id,
                 "batchIndex": batch_index,

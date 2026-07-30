@@ -323,6 +323,23 @@ class TimeoutClassificationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ai_image.classify_httpx_transport_error(httpx.ConnectError("refused")), "connect")
         self.assertEqual(ai_image.classify_httpx_transport_error(httpx.ReadTimeout("rt")), "ambiguous")
         self.assertEqual(ai_image.classify_httpx_transport_error(httpx.WriteTimeout("wt")), "ambiguous")
+        # Read/Write/CloseError 即使文案含 connection 也不得判为 connect
+        self.assertEqual(ai_image.classify_httpx_transport_error(httpx.ReadError("Connection reset by peer")), "ambiguous")
+        self.assertEqual(ai_image.classify_httpx_transport_error(httpx.WriteError("Connection reset by peer")), "ambiguous")
+        self.assertEqual(ai_image.classify_httpx_transport_error(httpx.CloseError("connection closed")), "ambiguous")
+        self.assertEqual(ai_image.classify_httpx_transport_error(httpx.RemoteProtocolError("server disconnected")), "ambiguous")
+
+    def test_ambiguous_error_message_does_not_suggest_switch_line(self) -> None:
+        msg = ai_image.format_generation_error(
+            ai_image.AmbiguousUpstreamError(
+                "CLIProxyAPI 请求可能已送达但响应超时/中断（状态不确定，不切换渠道）：ReadTimeout"
+            ),
+            stage="smart_route",
+            provider="sub2api",
+            model="gpt-image-2",
+        )
+        self.assertIn("状态暂时无法确认", msg)
+        self.assertNotIn("换线路", msg)
 
     async def test_read_timeout_does_not_failover(self) -> None:
         calls = {"sub": 0, "adobe": 0}
@@ -394,6 +411,37 @@ class TimeoutClassificationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, [("apimart", "task-xyz")])
         self.assertEqual(getattr(ctx.exception, "task_id", ""), "task-xyz")
 
+
+
+    async def test_accepted_without_real_task_id_still_blocks_failover(self) -> None:
+        """无真实上游 id 时仍标记 accepted，但 callback 收到空 task_id。"""
+        calls = {"sub": 0, "adobe": 0}
+        seen = []
+
+        async def mock_sub2api(*args, **kwargs):
+            calls["sub"] += 1
+            on_accepted = kwargs.get("on_accepted")
+            if on_accepted:
+                on_accepted("")  # 无真实 id
+            raise RuntimeError("下载结果图片失败：HTTP 504")
+
+        async def mock_adobe(*args, **kwargs):
+            calls["adobe"] += 1
+            return {"url": "/x.png", "provider": "adobe2api"}
+
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
+             patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
+            with self.assertRaises(RuntimeError):
+                await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                    on_accepted=lambda provider, tid: seen.append((provider, tid)),
+                )
+        self.assertEqual(calls["sub"], 1)
+        self.assertEqual(calls["adobe"], 0)
+        self.assertEqual(seen, [("sub2api", "")])
 
 if __name__ == "__main__":
     unittest.main()

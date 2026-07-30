@@ -138,7 +138,11 @@ def format_generation_error(
     # 常见可操作提示（附加在原文后，不替换上游细节）
     low = raw.lower()
     tip = ""
-    if any(k in low for k in ("timeout", "timed out", "超时")):
+    if isinstance(exc, AmbiguousUpstreamError) or any(k in low for k in (
+        "请求可能已送达", "状态不确定", "不切换渠道",
+    )):
+        tip = "请求状态暂时无法确认，请先在任务中心或服务商后台核对，避免立即重复提交"
+    elif any(k in low for k in ("timeout", "timed out", "超时")):
         tip = "可稍后重试，或换线路"
     elif any(k in low for k in ("401", "api key", "unauthorized", "鉴权", "验证失败")):
         tip = "请检查 API Key / 线路配置"
@@ -1344,8 +1348,8 @@ async def generate_sub2api_async(
     if isinstance(payload, dict) and payload.get("error"):
         raise RuntimeError(f"CLIProxyAPI 生图失败: {str(payload.get('error'))[:300]}")
 
-    # 同步接口：HTTP 成功且无 error 即上游已接受/完成，后续下载失败不可再跨渠道重提
-    upstream_id = str((payload or {}).get("id") or "cliproxy-accepted")
+    # 同步接口：HTTP 成功且无 error 即上游已接受/完成；无真实 id 时仍标记 accepted，但不写入哨兵 task_id
+    upstream_id = str((payload or {}).get("id") or "").strip()
     if on_accepted:
         on_accepted(upstream_id)
     if on_progress:
@@ -1363,7 +1367,7 @@ async def generate_sub2api_async(
         "requested_size": size,
         "resolution": resolution,
         "provider": PROVIDER_SUB2API,
-        "task_id": upstream_id if upstream_id != "cliproxy-accepted" else None,
+        "task_id": upstream_id or None,
         "usage": usage if isinstance(usage, dict) else None,
         "revised_prompt": item.get("revised_prompt") if isinstance(item, dict) else None,
     }
@@ -1456,9 +1460,10 @@ async def generate_adobe2api_async(
     if not result_url:
         raise RuntimeError(f"adobe2api 未返回有效图片 URL 或 Base64: {str(data)[:200]}")
 
-    # 同步接口：拿到有效图片内容后才算上游已接受
+    # 同步接口：拿到有效图片内容后才算上游已接受；无真实 id 时不写哨兵 task_id
+    upstream_id = str((data or {}).get("id") or "").strip()
     if on_accepted:
-        on_accepted(str((data or {}).get("id") or "adobe2api-accepted"))
+        on_accepted(upstream_id)
     if on_progress:
         on_progress(85, "saving")
 
@@ -1477,7 +1482,7 @@ async def generate_adobe2api_async(
         "prompt": prompt,
         "size": size,
         "resolution": resolution,
-        "task_id": str((data or {}).get("id") or ""),
+        "task_id": upstream_id or None,
     }
 
 
@@ -1487,23 +1492,25 @@ _NON_FAILOVER_HTTP_CODES = {400, 401, 402, 403, 404, 413, 422}
 
 
 def classify_httpx_transport_error(exc: BaseException) -> str:
-    """分类传输层错误：connect=可切换；ambiguous=可能已送达不可切换；other=其它。"""
+    """分类传输层错误：connect=可切换；ambiguous=可能已送达不可切换；other=其它。
+
+    仅 ConnectError/ConnectTimeout 视为请求尚未送达。
+    Read/Write/Close/RemoteProtocol 及通用 RequestError 一律 ambiguous，
+    禁止靠错误文案里的 "connection" 字符串推断（connection reset 常发生在响应阶段）。
+    """
     if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
         return "connect"
-    if isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
-        return "ambiguous"
-    if isinstance(exc, httpx.RemoteProtocolError):
-        return "ambiguous"
-    if isinstance(exc, httpx.TimeoutException):
-        # 未细分的 TimeoutException：同步接口保守视为可能已送达
-        return "ambiguous"
-    if isinstance(exc, httpx.RequestError):
-        msg = str(exc).lower()
-        if any(k in msg for k in (
-            "connect", "connection refused", "name or service not known",
-            "nodename nor servname", "dns", "getaddrinfo", "network is unreachable",
-        )):
-            return "connect"
+    if isinstance(exc, (
+        httpx.ReadTimeout,
+        httpx.WriteTimeout,
+        httpx.PoolTimeout,
+        httpx.ReadError,
+        httpx.WriteError,
+        httpx.CloseError,
+        httpx.RemoteProtocolError,
+        httpx.TimeoutException,
+        httpx.RequestError,
+    )):
         return "ambiguous"
     return "other"
 
@@ -1677,11 +1684,12 @@ async def smart_generate_image_async(
 
     def _make_on_accepted(provider_name: str):
         def _inner(upstream_id: str = "") -> None:
-            uid = str(upstream_id or "accepted")
+            # accepted 用 key 存在表示已接受；value 仅在有真实上游号时非空
+            uid = str(upstream_id or "").strip()
             accepted[provider_name] = uid
             logger.info(
                 "[smart-routing] Provider %s accepted by upstream id=%s",
-                provider_name, uid,
+                provider_name, uid or "(none)",
             )
             if on_accepted:
                 try:
@@ -1692,13 +1700,11 @@ async def smart_generate_image_async(
 
     def _raise_with_context(exc: BaseException, provider_name: str, err_msg: str) -> None:
         task_id = accepted.get(provider_name) or getattr(exc, "task_id", "") or ""
+        task_id = str(task_id or "").strip()
         if isinstance(exc, AmbiguousUpstreamError):
-            exc.task_id = str(task_id or exc.task_id or "")
-            exc.provider = provider_name
-            raise AmbiguousUpstreamError(err_msg, task_id=str(task_id or ""), provider=provider_name) from exc
-        # 包装为带 task_id 的 RuntimeError 子类信息，供 main 读取
+            raise AmbiguousUpstreamError(err_msg, task_id=task_id, provider=provider_name) from exc
         wrapped = RuntimeError(err_msg)
-        wrapped.task_id = str(task_id or "")  # type: ignore[attr-defined]
+        wrapped.task_id = task_id  # type: ignore[attr-defined]
         wrapped.provider = provider_name  # type: ignore[attr-defined]
         wrapped.stage = getattr(exc, "stage", "smart_route")  # type: ignore[attr-defined]
         raise wrapped from exc
@@ -1735,8 +1741,9 @@ async def smart_generate_image_async(
                     )
 
             result["provider"] = provider
-            if accepted.get(provider) and not result.get("task_id"):
-                result["task_id"] = accepted[provider]
+            accepted_tid = (accepted.get(provider) or "").strip()
+            if accepted_tid and not result.get("task_id"):
+                result["task_id"] = accepted_tid
             if provider != primary_provider:
                 result["provider_switched"] = True
                 logger.warning(
