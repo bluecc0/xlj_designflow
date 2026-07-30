@@ -180,7 +180,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls["apimart"], 0)
 
     async def test_already_accepted_does_not_failover(self) -> None:
-        """上游已 on_accepted 后，下载失败不得再切下一渠道。"""
+        """上游已 on_accepted 后，下载失败不得再切下一渠道，且不提示换线路。"""
         calls = {"sub": 0, "adobe": 0}
 
         async def mock_sub2api(*args, **kwargs):
@@ -197,10 +197,8 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             calls["adobe"] += 1
             return {"url": "/x.png", "provider": "adobe2api"}
 
-        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
-             patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
-             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
-            with self.assertRaises(RuntimeError):
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api),              patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe),              patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
+            with self.assertRaises(ai_image.AmbiguousUpstreamError) as ctx:
                 await ai_image.smart_generate_image_async(
                     model="gpt-image-2",
                     prompt="test",
@@ -208,6 +206,10 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(calls["sub"], 1)
         self.assertEqual(calls["adobe"], 0)
+        self.assertEqual(getattr(ctx.exception, "task_id", ""), "cliproxy-task-1")
+        msg = str(ctx.exception)
+        self.assertIn("状态暂时无法确认", msg)
+        self.assertNotIn("换线路", msg)
 
     async def test_pre_accept_progress_callback_still_allows_failover(self) -> None:
         """请求发出前的 starting/submitted 进度不得阻止 failover（修复假阳性）。"""

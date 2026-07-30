@@ -1698,10 +1698,17 @@ async def smart_generate_image_async(
                     logger.warning("[smart-routing] on_accepted callback failed: %s", cb_exc)
         return _inner
 
-    def _raise_with_context(exc: BaseException, provider_name: str, err_msg: str) -> None:
+    def _raise_with_context(
+        exc: BaseException,
+        provider_name: str,
+        err_msg: str,
+        *,
+        force_ambiguous: bool = False,
+    ) -> None:
         task_id = accepted.get(provider_name) or getattr(exc, "task_id", "") or ""
         task_id = str(task_id or "").strip()
-        if isinstance(exc, AmbiguousUpstreamError):
+        # 已接受后的失败 / 传输状态不确定：统一为 Ambiguous，避免提示“换线路”
+        if force_ambiguous or isinstance(exc, AmbiguousUpstreamError):
             raise AmbiguousUpstreamError(err_msg, task_id=task_id, provider=provider_name) from exc
         wrapped = RuntimeError(err_msg)
         wrapped.task_id = task_id  # type: ignore[attr-defined]
@@ -1753,12 +1760,21 @@ async def smart_generate_image_async(
             return result
 
         except Exception as exc:
+            already_accepted = provider in accepted
+            # 先按原始异常格式化，再在已接受场景统一抬升为 Ambiguous 文案
             err_msg = format_generation_error(exc, stage="smart_route", provider=provider, model=model)
+            if already_accepted or isinstance(exc, AmbiguousUpstreamError):
+                err_msg = format_generation_error(
+                    AmbiguousUpstreamError(str(exc), task_id=str(accepted.get(provider) or ""), provider=provider),
+                    stage="smart_route",
+                    provider=provider,
+                    model=model,
+                    task_id=str(accepted.get(provider) or ""),
+                )
             logger.warning("[smart-routing] Provider %s failed: %s", provider, err_msg)
             errors.append(f"{provider}: {err_msg}")
 
             is_last = index >= len(candidates) - 1
-            already_accepted = provider in accepted
             can_failover = is_transient_provider_error(exc) and not already_accepted and not is_last
             if already_accepted or isinstance(exc, AmbiguousUpstreamError) or not can_failover:
                 if already_accepted:
@@ -1776,7 +1792,12 @@ async def smart_generate_image_async(
                         "[smart-routing] Provider %s error is non-transient; stop failover",
                         provider,
                     )
-                _raise_with_context(exc, provider, err_msg)
+                _raise_with_context(
+                    exc,
+                    provider,
+                    err_msg,
+                    force_ambiguous=already_accepted or isinstance(exc, AmbiguousUpstreamError),
+                )
 
     final = RuntimeError(f"所有可用 AI 生图线路均尝试失败：{' | '.join(errors)}")
     final.provider = last_provider  # type: ignore[attr-defined]
