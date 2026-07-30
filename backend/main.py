@@ -141,6 +141,7 @@ from .job_store import (
     load_editor_snapshot,
     save_special_job,
     load_special_jobs,
+    sync_user_test_status,
     update_agent_project,
     create_inspiration_post,
     update_inspiration_thumb_url,

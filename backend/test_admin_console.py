@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend import job_store
+from backend import job_store, main
 
 
 class AdminConsoleStoreTest(unittest.TestCase):
@@ -429,6 +429,26 @@ class AdminConsoleStoreTest(unittest.TestCase):
         self.assertEqual(stats_after_delete["users"], 2)
         tasks_after_delete, _ = job_store.load_admin_tasks()
         self.assertNotIn("test_bot", [t["user_id"] for t in tasks_after_delete])
+
+    def test_admin_create_user_syncs_test_status(self) -> None:
+        body = {
+            "username": "route_test_user",
+            "display_name": "路由测试",
+            "role": "user",
+            "password": "temporary-password",
+            "is_test": True,
+        }
+        with (
+            patch("backend.main._current_user", return_value={"id": "admin", "role": "admin"}),
+            patch.object(main.settings, "save_login_users") as save_users,
+            patch("backend.main.hash_password", return_value="hashed-password"),
+            patch("backend.main.sync_user_test_status") as sync_test_status,
+        ):
+            result = main.admin_create_user(object(), body)
+
+        self.assertEqual(result["user"]["id"], "route_test_user")
+        save_users.assert_called_once()
+        sync_test_status.assert_called_once_with("route_test_user", True)
 
 
 if __name__ == "__main__":
