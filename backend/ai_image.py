@@ -46,7 +46,7 @@ _TRANSIENT_TASK_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522
 _HTTP_ERRORS: dict[int, str] = {
     400: "请求格式错误，可能是参数不合法",
     401: "API Key 验证失败，请检查配置",
-    402: "账户余额不足或需要充值，请检查 ZenMux/APIMart 账户",
+    402: "账户余额不足或需要充值，请检查 APIMart 账户",
     403: "账号无权限或余额不足",
     404: "接口路径不存在或模型不可用",
     413: "上传的参考图过大",
@@ -64,7 +64,7 @@ SLASH_MODEL_MAP: dict[str, str] = {
 }
 
 PROVIDER_APIMART = "apimart"
-PROVIDER_ZENMUX = "zenmux"
+PROVIDER_ADOBE2API = "adobe2api"
 
 _OUTPUT_DIR = settings.output_path / "ai-images"
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -82,18 +82,6 @@ _SIZE_MAP: dict[str, tuple[str, str]] = {
     "1080x1920": ("9:16", "1K"),
     "1152x2048": ("9:16", "2K"),
     "2160x3840": ("9:16", "4K"),
-}
-
-_ZENMUX_SIZE_MAP: dict[str, dict[str, str]] = {
-    "1:1": {"1K": "1024x1024", "2K": "1536x1536", "4K": "2048x2048"},
-    "3:4": {"1K": "1024x1536", "2K": "1536x2048", "4K": "1536x2048"},
-    "4:3": {"1K": "1536x1024", "2K": "2048x1536", "4K": "2048x1536"},
-    "5:4": {"1K": "1280x1024", "2K": "2560x2048", "4K": "2560x2048"},
-    "4:5": {"1K": "1024x1280", "2K": "2048x2560", "4K": "2048x2560"},
-    "16:9": {"1K": "1536x864", "2K": "2048x1152", "4K": "3840x2160"},
-    "9:16": {"1K": "864x1536", "2K": "1152x2048", "4K": "2160x3840"},
-    "2:3": {"1K": "1024x1536", "2K": "1360x2048", "4K": "1360x2048"},
-    "3:2": {"1K": "1536x1024", "2K": "2048x1360", "4K": "2048x1360"},
 }
 
 
@@ -301,46 +289,20 @@ def _model_credentials(model: str) -> tuple[str, str]:
     return base_url, api_key
 
 
+PROVIDER_AUTO = "auto"
+
+
 def normalize_provider(provider: str | None = None) -> str:
-    clean = (provider or settings.ai_image_provider or PROVIDER_APIMART).strip().casefold()
+    clean = (provider or settings.ai_image_provider or PROVIDER_AUTO).strip().casefold()
+    if clean in ("auto", "smart", "智能路由", "智能"):
+        return PROVIDER_AUTO
     if clean in ("apimart", "api-mart", "api_mart"):
         return PROVIDER_APIMART
-    if clean in ("zenmux", "zen-mux", "zen_mux"):
-        return PROVIDER_ZENMUX
     if clean in ("sub2api", "sub2-api", "sub_2api"):
         return PROVIDER_SUB2API
+    if clean in ("adobe2api", "adobe-2api", "adobe"):
+        return PROVIDER_ADOBE2API
     raise ValueError(f"未知生图线路: {provider}")
-
-
-def _zenmux_model_name(model: str) -> str:
-    model_name = _normalize_model_name(model)
-    if model_name == "gpt-image-2":
-        return settings.zenmux_gpt_image_model
-    if model_name == "gemini-3-pro-image-preview":
-        return settings.zenmux_nano_banana_model
-    return model_name
-
-
-def _is_zenmux_vertex_image_model(model_name: str) -> bool:
-    clean = str(model_name or "").strip().lower()
-    return clean.startswith("google/gemini-3-pro-image") or clean.startswith("gemini-3-pro-image")
-
-
-def _split_provider_model(model_name: str, default_provider: str = "google") -> tuple[str, str]:
-    clean = str(model_name or "").strip()
-    if "/" in clean:
-        provider, name = clean.split("/", 1)
-        return provider or default_provider, name or clean
-    return default_provider, clean
-
-
-def _zenmux_headers() -> dict[str, str]:
-    if not settings.zenmux_api_key:
-        raise ValueError("ZENMUX_API_KEY 未配置，请在 .env 中填写")
-    return {
-        "Authorization": f"Bearer {settings.zenmux_api_key}",
-        "Content-Type": "application/json",
-    }
 
 
 def _normalize_model_name(model: str) -> str:
@@ -358,31 +320,6 @@ def _normalize_size(size: str, resolution: str = "") -> tuple[str, str]:
     if clean in ("auto", "1:1", "3:4", "4:3", "5:4", "4:5", "9:16", "16:9", "2:3", "3:2"):
         return clean, clean_resolution
     return "1:1", "1K"
-
-
-def _normalize_zenmux_size(size: str, resolution: str = "") -> str:
-    clean = (size or "").strip()
-    clean_resolution = (resolution or "").strip().upper() or "1K"
-    if clean == "auto":
-        return "auto"
-    if re.fullmatch(r"\d+x\d+", clean):
-        return clean
-    if clean in _SIZE_MAP:
-        ratio, mapped_resolution = _SIZE_MAP[clean]
-        clean = ratio
-        clean_resolution = clean_resolution or mapped_resolution
-    ratio_map = _ZENMUX_SIZE_MAP.get(clean or "1:1") or _ZENMUX_SIZE_MAP["1:1"]
-    return ratio_map.get(clean_resolution) or ratio_map.get("1K") or "1024x1024"
-
-
-def _normalize_zenmux_vertex_image_config(size: str, resolution: str = "") -> dict[str, Any]:
-    ratio, clean_resolution = _normalize_size(size, resolution)
-    image_config: dict[str, Any] = {
-        "imageSize": clean_resolution if clean_resolution in {"1K", "2K", "4K"} else "1K",
-    }
-    if ratio and ratio != "auto":
-        image_config["aspectRatio"] = ratio
-    return image_config
 
 
 def _extract_error_text(resp: httpx.Response) -> str:
@@ -456,7 +393,7 @@ def _extract_result_url(payload: Any) -> str | None:
     return None
 
 
-def _extract_zenmux_image_url(payload: Any) -> str | None:
+def _extract_b64_or_image_url(payload: Any) -> str | None:
     if isinstance(payload, dict):
         data = payload.get("data")
         if isinstance(data, list):
@@ -506,17 +443,17 @@ def _image_bytes_to_data_url(image_bytes: bytes, filename: str) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
-def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "zenmux") -> str:
+def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "ai_image") -> str:
     match = re.match(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$", data_url or "", re.DOTALL)
     if not match:
-        raise RuntimeError("ZenMux 返回了无法识别的图片 data URL")
+        raise RuntimeError("返回了无法识别的图片 data URL")
     mime_type, raw_b64 = match.groups()
     try:
         content = base64.b64decode(raw_b64, validate=True)
     except Exception as exc:
-        raise RuntimeError("ZenMux 返回的图片 base64 解码失败") from exc
+        raise RuntimeError("图片 base64 解码失败") from exc
     if not content:
-        raise RuntimeError("ZenMux 返回的图片内容为空")
+        raise RuntimeError("图片内容为空")
     out_dir = _ensure_user_dated_output_dir(user_id)
     filename = f"{prefix}_{uuid.uuid4().hex}{_extension_from_mime(mime_type)}"
     out_path = out_dir / filename
@@ -883,220 +820,6 @@ async def _download_final_image(
     out_path = out_dir / filename
     out_path.write_bytes(resp.content)
     return _ai_image_public_url(out_path)
-
-
-async def _generate_image_zenmux_vertex_async(
-    *,
-    model_name: str,
-    prompt: str,
-    refs: list[tuple[bytes, str]],
-    size: str,
-    resolution: str,
-    user_id: str,
-    headers: dict[str, str],
-    on_progress: Callable[[int, str], Any] | None = None,
-) -> dict:
-    provider_name, short_model_name = _split_provider_model(model_name, default_provider="google")
-    base_url = settings.zenmux_base_url.rstrip("/")
-    vertex_base_url = re.sub(r"/api/v1/?$", "/api/vertex-ai/v1", base_url)
-    if vertex_base_url == base_url:
-        vertex_base_url = base_url.rstrip("/") + "/api/vertex-ai/v1"
-    endpoint = f"{vertex_base_url}/publishers/{provider_name}/models/{short_model_name}:generateContent"
-
-    parts: list[dict[str, Any]] = []
-    for image_bytes, filename in refs[:9]:
-        parts.append({
-            "inlineData": {
-                "mimeType": _mime_from_filename(filename),
-                "data": base64.b64encode(image_bytes).decode("ascii"),
-            }
-        })
-    parts.append({"text": prompt})
-
-    payload: dict[str, Any] = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": parts,
-            }
-        ],
-        "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
-            "imageConfig": _normalize_zenmux_vertex_image_config(size, resolution),
-        },
-    }
-
-    request_headers = {
-        "Authorization": headers["Authorization"],
-        "Content-Type": "application/json",
-    }
-    if on_progress:
-        on_progress(10, "processing")
-    async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
-        resp = await client.post(endpoint, json=payload, headers=request_headers)
-        if not resp.is_success:
-            raise RuntimeError(f"ZenMux 生图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
-        data = resp.json()
-        if on_progress:
-            on_progress(85, "processing")
-        image_data_url = _extract_vertex_image_data_url(data)
-        if not image_data_url:
-            raise RuntimeError(f"ZenMux Vertex 响应中没有图片: {str(data)[:240]}")
-        local_url = _save_data_url_image(image_data_url, user_id=user_id, prefix="zenmux")
-        if on_progress:
-            on_progress(100, "completed")
-
-    return {
-        "url": local_url,
-        "model": model_name,
-        "prompt": prompt,
-        "size": size,
-        "resolution": resolution,
-        "provider": PROVIDER_ZENMUX,
-        "reference": bool(refs),
-        "task_id": f"zenmux-vertex:{uuid.uuid4().hex}",
-        "usage": _extract_vertex_usage(data),
-    }
-
-
-async def generate_image_zenmux_async(
-    model: str,
-    prompt: str,
-    images: list[tuple[bytes, str]] | None = None,
-    size: str = "1024x1024",
-    resolution: str = "",
-    user_id: str = "anonymous",
-    on_progress: Callable[[int, str], Any] | None = None,
-) -> dict:
-    """ZenMux 生图：无参考图时使用 SSE 流式获取进度 + token 用量；有参考图时使用非流式"""
-    model_name = _zenmux_model_name(model)
-    headers = _zenmux_headers()
-    refs = images or []
-    if _is_zenmux_vertex_image_model(model_name):
-        return await _generate_image_zenmux_vertex_async(
-            model_name=model_name,
-            prompt=prompt,
-            refs=refs,
-            size=size,
-            resolution=resolution,
-            user_id=user_id,
-            headers=headers,
-            on_progress=on_progress,
-        )
-    base_url = settings.zenmux_base_url.rstrip("/")
-    zenmux_size = _normalize_zenmux_size(size, resolution)
-    payload: dict[str, Any] = {
-        "model": model_name,
-        "prompt": prompt,
-        "n": 1,
-        "size": zenmux_size,
-    }
-
-    if refs:
-        # 有参考图：multipart/form-data 不支持流式，保持原有逻辑
-        task_id = f"zenmux:{uuid.uuid4().hex}"
-        endpoint = f"{base_url}/images/edits"
-        form_data = {key: str(value) for key, value in payload.items()}
-        files = [
-            ("image[]", (filename or f"ref{i}.png", image_bytes, _mime_from_filename(filename)))
-            for i, (image_bytes, filename) in enumerate(refs[:9])
-        ]
-        if on_progress:
-            on_progress(10, "processing")
-        async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
-            multipart_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
-            resp = await client.post(endpoint, data=form_data, files=files, headers=multipart_headers)
-            if not resp.is_success:
-                raise RuntimeError(f"ZenMux 生图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
-            data = resp.json()
-            if on_progress:
-                on_progress(90, "processing")
-            image_url = _extract_zenmux_image_url(data)
-            if not image_url:
-                raise RuntimeError(f"ZenMux 响应中没有图片: {str(data)[:240]}")
-            if image_url.startswith("data:image/"):
-                local_url = _save_data_url_image(image_url, user_id=user_id)
-            else:
-                local_url = await _download_final_image(
-                    client, image_url=image_url, user_id=user_id, task_id=task_id
-                )
-            if on_progress:
-                on_progress(100, "completed")
-        usage = None
-    else:
-        # 无参考图：SSE 流式，获取进度事件 + token 用量
-        endpoint = f"{base_url}/images/generations"
-        payload["stream"] = True
-        last_b64 = None
-        usage: dict | None = None
-        output_format = "png"
-        partial_count = 0
-
-        async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
-            async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
-                if not resp.is_success:
-                    body = ""
-                    try:
-                        async for chunk in resp.aiter_bytes():
-                            body += chunk.decode(errors="replace")
-                            if len(body) > 500:
-                                break
-                    except Exception:
-                        pass
-                    raise RuntimeError(f"ZenMux 生图失败：{_api_error_msg(resp.status_code, body[:200])}")
-
-                current_event = ""
-                async for line in resp.aiter_lines():
-                    line = line.strip()
-                    if line.startswith("event: "):
-                        current_event = line[7:].strip()
-                    elif line.startswith("data: "):
-                        data_str = line[6:]
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            event = json.loads(data_str)
-                        except json.JSONDecodeError:
-                            continue
-                        etype = event.get("type") or current_event
-                        if etype == "image_generation.partial_image":
-                            partial_count += 1
-                            last_b64 = event.get("b64_json")
-                            output_format = event.get("output_format", "png")
-                            progress = min(partial_count * 15, 85)
-                            if on_progress:
-                                on_progress(progress, "processing")
-                        elif etype == "image_generation.completed":
-                            last_b64 = event.get("b64_json")
-                            output_format = event.get("output_format", "png")
-                            usage = event.get("usage")
-                            if on_progress:
-                                on_progress(100, "completed")
-                        elif etype in ("error", "image_generation.error"):
-                            err_msg = event.get("message") or event.get("error") or str(event)[:200]
-                            raise RuntimeError(f"ZenMux 生图错误: {err_msg}")
-
-        if not last_b64:
-            raise RuntimeError("ZenMux 流式响应中没有图片数据")
-
-        mime = "image/" + output_format
-        data_url = f"data:{mime};base64,{last_b64}"
-        local_url = _save_data_url_image(data_url, user_id=user_id, prefix="zenmux")
-        task_id = f"zenmux:{uuid.uuid4().hex}"
-
-    result: dict = {
-        "url": local_url,
-        "model": model_name,
-        "prompt": prompt,
-        "size": zenmux_size,
-        "resolution": resolution,
-        "provider": PROVIDER_ZENMUX,
-        "reference": bool(refs),
-        "task_id": task_id,
-    }
-    if usage:
-        result["usage"] = usage
-    return result
 
 
 async def generate_image(
@@ -1559,6 +1282,236 @@ async def generate_sub2api_async(
         "usage": usage if isinstance(usage, dict) else None,
         "revised_prompt": item.get("revised_prompt") if isinstance(item, dict) else None,
     }
+
+
+# ── adobe2api (Firefly / OpenAI 兼容接口) ───────────────────────────────────────────────
+
+async def generate_adobe2api_async(
+    model: str,
+    prompt: str,
+    images: list[tuple[bytes, str]] | None = None,
+    size: str = "1024x1024",
+    resolution: str = "",
+    user_id: str = "anonymous",
+    on_progress: Callable[[int, str], Any] | None = None,
+) -> dict:
+    """通过 adobe2api 服务生成/编辑图片 (OpenAI 兼容聊天/生图接口)"""
+    base_url = settings.adobe2api_base_url.rstrip("/")
+    if not base_url.endswith("/v1"):
+        base_url = f"{base_url}/v1"
+    api_key = settings.adobe2api_api_key
+    if not base_url or not api_key:
+        raise RuntimeError("adobe2api 未配置：请检查 ADOBE2API_BASE_URL/ADOBE2API_API_KEY")
+
+    api_endpoint = f"{base_url}/chat/completions"
+    ratio, res_clean = _normalize_size(size, resolution)
+
+    model_lower = model.lower()
+    ratio_suffix = ratio.replace(":", "x")
+    res_suffix = res_clean.lower() or "1k"
+
+    if "banana" in model_lower:
+        target_model = f"firefly-nano-banana-pro-{res_suffix}-{ratio_suffix}"
+    else:
+        target_model = f"firefly-gpt-image-{res_suffix}-{ratio_suffix}"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    content_list: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+
+    refs = images or []
+    if refs:
+        for img_bytes, filename in refs[:3]:
+            data_url = _image_bytes_to_data_url(img_bytes, filename)
+            content_list.append({
+                "type": "image_url",
+                "image_url": {"url": data_url},
+            })
+
+    payload = {
+        "model": target_model,
+        "messages": [{"role": "user", "content": content_list}],
+    }
+
+    if on_progress:
+        on_progress(10, "submitted")
+
+    timeout = httpx.Timeout(300.0, connect=30.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        resp = await client.post(api_endpoint, json=payload, headers=headers)
+        if not resp.is_success:
+            raise RuntimeError(f"adobe2api 请求失败: HTTP {resp.status_code} - {_extract_error_text(resp)}")
+
+        data = resp.json()
+        result_url = _extract_b64_or_image_url(data) or _extract_result_url(data)
+        if not result_url:
+            raise RuntimeError(f"adobe2api 未返回有效图片 URL 或 Base64: {str(data)[:200]}")
+
+        if result_url.startswith("data:"):
+            local_url = _save_data_url_image(result_url, user_id=user_id, prefix="adobe2api")
+        else:
+            local_url = await _download_cliproxy_image(result_url, user_id=user_id, api_key=api_key)
+
+    if on_progress:
+        on_progress(100, "done")
+
+    return {
+        "url": local_url,
+        "provider": PROVIDER_ADOBE2API,
+        "model": target_model,
+        "prompt": prompt,
+        "size": size,
+        "resolution": resolution,
+    }
+
+
+# ── 智能路由调度 (Smart Routing) ─────────────────────────────────────────────────────────────
+
+# 默认模型选路优先级表：映射标准模型名到首选/降级线路
+DEFAULT_MODEL_ROUTING_RULES: dict[str, list[str]] = {
+    "default": [PROVIDER_SUB2API, PROVIDER_ADOBE2API, PROVIDER_APIMART],
+}
+
+# 服务商能力集合：定义各线路真正支持的模型 (None/空集代表支持全量模型)
+PROVIDER_MODEL_CAPABILITIES: dict[str, set[str] | None] = {
+    PROVIDER_SUB2API: {"gpt-image-2"},  # Sub2API 当前仅支持 gpt-image-2
+    PROVIDER_ADOBE2API: {"gemini-3-pro-image-preview", "gpt-image-2"},
+    PROVIDER_APIMART: None,  # APIMart 适配通用架构，全支持
+}
+
+
+def _get_custom_rules() -> dict[str, list[str]]:
+    """读取自定义规则（在 .env 中填 SMART_ROUTING_RULES_JSON 覆写）"""
+    rules: dict[str, list[str]] = {}
+    raw_json = getattr(settings, "smart_routing_rules_json", "").strip()
+    if raw_json:
+        try:
+            parsed = json.loads(raw_json)
+            if isinstance(parsed, dict):
+                for k, v in parsed.items():
+                    if isinstance(v, list):
+                        rules[k.casefold()] = [str(item).strip().lower() for item in v if str(item).strip()]
+        except Exception as exc:
+            logger.warning("[smart-routing] 无法解析 SMART_ROUTING_RULES_JSON: %s", exc)
+    return rules
+
+
+def get_smart_route_candidates(model: str, resolution: str = "", size: str = "1024x1024") -> list[str]:
+    """根据请求模型、清晰度、能力表与静态 Key 配置，动态计算选路序列"""
+    model_name = _normalize_model_name(model).lower()
+    custom_rules = _get_custom_rules()
+
+    # 显式 resolution 优先；仅当未传时才从 size 像素串推断（_normalize_size 在命中 _SIZE_MAP 时会忽略 resolution）
+    res_upper = (resolution or "").strip().upper()
+    if not res_upper:
+        _ratio, res_clean = _normalize_size(size, resolution)
+        res_upper = res_clean.upper() if res_clean else "1K"
+
+    # 1. 根据模型与画质分辨率选择匹配规则（环境 JSON 显式规则优先）
+    if custom_rules and model_name in custom_rules:
+        preferred_order = custom_rules[model_name]
+    elif model_name == "gpt-image-2":
+        if res_upper in ("2K", "4K"):
+            preferred_order = [PROVIDER_ADOBE2API, PROVIDER_APIMART]
+        else:  # 1K 或 auto 默认为 1K
+            preferred_order = [PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_ADOBE2API]
+    elif "banana" in model_name or "gemini" in model_name:
+        preferred_order = [PROVIDER_APIMART, PROVIDER_ADOBE2API]
+    else:
+        preferred_order = (custom_rules and custom_rules.get("default")) or [PROVIDER_SUB2API, PROVIDER_ADOBE2API, PROVIDER_APIMART]
+
+    candidates: list[str] = []
+
+    # 2. 能力表 & 静态 Key 双重过滤
+    for provider in preferred_order:
+        # 校验 2.1: 线路是否支持该模型
+        supported = PROVIDER_MODEL_CAPABILITIES.get(provider)
+        if supported is not None and model_name not in supported:
+            logger.debug("[smart-routing] Provider %s skipped for model %s (not supported by capability matrix)", provider, model_name)
+            continue
+
+        # 校验 2.2: 线路是否有配置 Key
+        if provider == PROVIDER_SUB2API:
+            if settings.cliproxy_base_url and settings.cliproxy_api_key:
+                candidates.append(provider)
+        elif provider == PROVIDER_ADOBE2API:
+            if settings.adobe2api_base_url and settings.adobe2api_api_key:
+                candidates.append(provider)
+        elif provider == PROVIDER_APIMART:
+            if settings.ai_image_api_key:
+                candidates.append(provider)
+
+    # 兜底：若过滤后为空，回退使用 apimart / sub2api 暴露明细错误
+    if not candidates:
+        candidates = [PROVIDER_SUB2API, PROVIDER_APIMART]
+
+    return candidates
+
+
+async def smart_generate_image_async(
+    model: str,
+    prompt: str,
+    images: list[tuple[bytes, str]] | None = None,
+    size: str = "1024x1024",
+    resolution: str = "",
+    user_id: str = "anonymous",
+    on_progress: Callable[[int, str], Any] | None = None,
+) -> dict:
+    """智能路由生图：按模型与配置选路，遇到暂态网络或卡额度异常时自动无感 Failover 降级重试。"""
+    candidates = get_smart_route_candidates(model, resolution=resolution, size=size)
+    logger.info("[smart-routing] Candidate providers for model=%s: %s", model, candidates)
+
+    errors: list[str] = []
+    primary_provider = candidates[0]
+
+    for index, provider in enumerate(candidates):
+        try:
+            logger.info("[smart-routing] Attempting provider %s (%d/%d)", provider, index + 1, len(candidates))
+            if provider == PROVIDER_SUB2API:
+                result = await generate_sub2api_async(
+                    model=model, prompt=prompt, images=images,
+                    size=size, resolution=resolution, user_id=user_id,
+                    on_progress=on_progress,
+                )
+            elif provider == PROVIDER_ADOBE2API:
+                result = await generate_adobe2api_async(
+                    model=model, prompt=prompt, images=images,
+                    size=size, resolution=resolution, user_id=user_id,
+                    on_progress=on_progress,
+                )
+            else:  # APIMart
+                if images:
+                    result = await generate_image_with_reference_async(
+                        model=model, prompt=prompt, images=images,
+                        size=size, resolution=resolution, user_id=user_id,
+                        on_progress=on_progress,
+                    )
+                else:
+                    result = await generate_image_async(
+                        model=model, prompt=prompt,
+                        size=size, resolution=resolution, user_id=user_id,
+                        on_progress=on_progress,
+                    )
+
+            # 标记实际发生的提供商与降级状态
+            result["provider"] = provider
+            if provider != primary_provider:
+                result["provider_switched"] = True
+                logger.warning(
+                    "[smart-routing] Successfully failovered from %s to %s",
+                    primary_provider, provider
+                )
+            return result
+
+        except Exception as exc:
+            err_msg = format_generation_error(exc, stage="smart_route", provider=provider, model=model)
+            logger.warning("[smart-routing] Provider %s failed: %s", provider, err_msg)
+            errors.append(f"{provider}: {err_msg}")
+
+    raise RuntimeError(f"所有可用 AI 生图线路均尝试失败：{' | '.join(errors)}")
 
 
 def compress_image_to_data_url(image_bytes: bytes, max_long_side: int = 1024) -> str:

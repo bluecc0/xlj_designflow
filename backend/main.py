@@ -45,15 +45,17 @@ from fastapi.staticfiles import StaticFiles
 
 from .ai_image import (
     PROVIDER_SUB2API,
-    PROVIDER_ZENMUX,
+    PROVIDER_ADOBE2API,
+    PROVIDER_AUTO,
     cleanup_user_refs,
     format_generation_error,
     generate_image,
     generate_image_with_reference,
     generate_image_async,
-    generate_image_zenmux_async,
     generate_image_with_reference_async,
     generate_sub2api_async,
+    generate_adobe2api_async,
+    smart_generate_image_async,
     generate_inspiration_thumb,
     get_inspiration_thumb_url_if_exists,
     load_user_refs,
@@ -1138,50 +1140,6 @@ async def _probe_apimart(client: httpx.AsyncClient) -> dict:
     return status
 
 
-async def _probe_zenmux(client: httpx.AsyncClient) -> dict:
-    status = {
-        "connected": False,
-        "configured": bool(settings.zenmux_api_key),
-        "provider": "ZenMux",
-        "url": settings.zenmux_base_url,
-    }
-
-    async def probe_models() -> None:
-        if not settings.zenmux_api_key:
-            return
-        try:
-            response = await client.get(
-                f"{settings.zenmux_base_url}/models",
-                headers={"Authorization": f"Bearer {settings.zenmux_api_key}"},
-            )
-            status["status_code"] = response.status_code
-            status["connected"] = response.status_code < 500
-            if response.status_code >= 500:
-                status["message"] = response.text[:200]
-        except Exception as exc:
-            status["message"] = str(exc)
-
-    async def probe_balance() -> None:
-        if not settings.zenmux_management_api_key:
-            return
-        try:
-            response = await client.get(
-                "https://zenmux.ai/api/v1/management/payg/balance",
-                headers={"Authorization": f"Bearer {settings.zenmux_management_api_key}"},
-            )
-            if response.status_code == 200:
-                payload = response.json()
-                data = payload.get("data") if isinstance(payload, dict) else {}
-                status["total_credits"] = data.get("total_credits")
-                status["top_up_credits"] = data.get("top_up_credits")
-                status["bonus_credits"] = data.get("bonus_credits")
-        except Exception:
-            pass
-
-    await asyncio.gather(probe_models(), probe_balance())
-    return status
-
-
 @app.get("/health")
 async def health():
     return _local_health_payload()
@@ -1191,18 +1149,12 @@ async def health():
 async def health_deep():
     local_health = _local_health_payload()
     async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
-        penpot_ok, ai_provider, zenmux_status = await asyncio.gather(
+        penpot_ok, ai_provider = await asyncio.gather(
             _probe_penpot(client),
             _probe_apimart(client),
-            _probe_zenmux(client),
         )
 
-    # Keep each provider's probe result independent. The top-level flags below
-    # remain the aggregate "at least one image provider is available" signal.
     ai_provider["apimart"] = dict(ai_provider)
-    ai_provider["zenmux"] = zenmux_status
-    ai_provider["connected"] = bool(ai_provider.get("connected") or zenmux_status.get("connected"))
-    ai_provider["configured"] = bool(ai_provider.get("configured") or zenmux_status.get("configured"))
 
     latest_sub2api_probe = load_latest_service_probe("sub2api")
     latest_completed_sub2api_probe = load_latest_completed_service_probe("sub2api")
@@ -3515,15 +3467,22 @@ async def _run_ai_image_background(
 
     try:
         stage = "generate"
-        if provider == PROVIDER_SUB2API:
+        if provider == PROVIDER_AUTO or not provider:
+            result = await smart_generate_image_async(
+                model=model, prompt=prompt,
+                images=refs if refs else None,
+                size=size, resolution=resolution, user_id=user_id,
+                on_progress=on_progress,
+            )
+        elif provider == PROVIDER_SUB2API:
             result = await generate_sub2api_async(
                 model=model, prompt=prompt,
                 images=refs if refs else None,
                 size=size, resolution=resolution, user_id=user_id,
                 on_progress=on_progress,
             )
-        elif provider == PROVIDER_ZENMUX:
-            result = await generate_image_zenmux_async(
+        elif provider == PROVIDER_ADOBE2API:
+            result = await generate_adobe2api_async(
                 model=model, prompt=prompt,
                 images=refs,
                 size=size, resolution=resolution, user_id=user_id,
@@ -3541,18 +3500,22 @@ async def _run_ai_image_background(
                 size=size, resolution=resolution, user_id=user_id,
                 on_progress=on_progress,
             )
+        actual_provider = str(result.get("provider") or provider)
+        provider_switched = bool(result.get("provider_switched"))
         upstream_task_id = str(result.get("task_id") or "")
         stage = "persist"
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="done",
             model=model, prompt=prompt, size=size,
-            provider=provider, resolution=resolution,
+            provider=actual_provider, resolution=resolution,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
             image_url=result.get("url"), task_id=upstream_task_id or None,
             progress=100, has_reference=has_reference, reference_count=len(refs),
             request_meta=request_meta, created_at=created_at,
         )
+        if provider_switched:
+            mark_ai_image_job_provider_switched(job_id, True)
         cost_str = f" cost={result.get('cost')}" if result.get('cost') is not None else ""
         time_str = f" {result.get('actual_time') or result.get('estimated_time') or ''}s" if (result.get('actual_time') or result.get('estimated_time')) else ""
         usage = result.get("usage")
@@ -3969,7 +3932,7 @@ def ai_image_status(request: Request, job_id: str):
 
 @app.post("/ai-image/retry")
 async def ai_image_retry(request: Request):
-    """默认线路失败后，用官方线路重试。复用原 prompt + 磁盘参考图 + 上下文参考图。"""
+    """生图失败后触发智能重试。复用原 prompt + 磁盘参考图 + 上下文参考图。"""
     body = await request.json()
     job_id = (body.get("job_id") or "").strip()
     session_id = (body.get("session_id") or "").strip()
@@ -4017,7 +3980,7 @@ async def ai_image_retry(request: Request):
     save_ai_image_job(
         job_id=new_job_id, user_id=user["id"], status="processing",
         model=model, prompt=prompt, size=size,
-        provider=PROVIDER_ZENMUX, resolution=resolution,
+        provider=PROVIDER_AUTO, resolution=resolution,
         original_prompt=original_prompt, resolved_prompt=resolved_prompt,
         has_reference=has_reference, reference_count=len(all_refs),
         request_meta={
@@ -4032,15 +3995,15 @@ async def ai_image_retry(request: Request):
     log_operation(
         user_id=user["id"], username=user["username"],
         action="ai_image",
-        detail=f"job={new_job_id[:8]} model={model} size={size} result=retry_zenmux refs={len(all_refs)}",
-        payload=json.dumps({"job_id": new_job_id, "model": model, "size": size, "provider": PROVIDER_ZENMUX, "retry_from": job_id}, ensure_ascii=False),
+        detail=f"job={new_job_id[:8]} model={model} size={size} result=retry_auto refs={len(all_refs)}",
+        payload=json.dumps({"job_id": new_job_id, "model": model, "size": size, "provider": PROVIDER_AUTO, "retry_from": job_id}, ensure_ascii=False),
     )
     # 重试消息不重新写入聊天记录（不重复显示 prompt），后台任务完成/失败时会自动追加
     asyncio.create_task(
         _run_ai_image_background(
             job_id=new_job_id, user_id=user["id"], username=user["username"],
             session_id=session_id,
-            provider=PROVIDER_ZENMUX,
+            provider=PROVIDER_AUTO,
             model=model, prompt=prompt,
             size=size, resolution=resolution,
             refs=all_refs, has_reference=has_reference, created_at=created_at,
@@ -4055,7 +4018,7 @@ async def ai_image_retry(request: Request):
             },
         )
     )
-    return {"job_id": new_job_id, "status": "processing", "provider": PROVIDER_ZENMUX}
+    return {"job_id": new_job_id, "status": "processing", "provider": PROVIDER_AUTO}
 
 
 # ─── 灵感（inspiration） ──────────────────────────────────────────────────────
