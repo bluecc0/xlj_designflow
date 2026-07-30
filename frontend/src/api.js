@@ -397,14 +397,14 @@
     getAdminTaskDetail: function(taskType, taskId) {
       return request('/admin/tasks/' + encodeURIComponent(taskType) + '/' + encodeURIComponent(taskId));
     },
-    getAdminUsers: function() {
-      return request('/admin/users');
+    getAdminUsers: function(includeTest) {
+      return request('/admin/users' + (includeTest ? '?include_test=true' : ''));
     },
-    createAdminUser: function(username, role, password, displayName) {
+    createAdminUser: function(username, role, password, displayName, isTest) {
       return request('/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username, role: role, password: password, display_name: displayName || '' }),
+        body: JSON.stringify({ username: username, role: role, password: password, display_name: displayName || '', is_test: !!isTest }),
       });
     },
     updateAdminUser: function(userId, updates) {

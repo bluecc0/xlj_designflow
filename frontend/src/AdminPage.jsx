@@ -584,17 +584,17 @@ function AdminServiceCard({ name, desc, connected, configured, probing, detail, 
   );
 }
 
-function AdminUserManagement({ currentUser, users, onReload }) {
-  var [form, setForm] = React.useState({ username: '', displayName: '', role: 'user', password: '' });
+function AdminUserManagement({ currentUser, users, onReload, showTestUsers, onToggleShowTest }) {
+  var [form, setForm] = React.useState({ username: '', displayName: '', role: 'user', password: '', isTest: false });
   var [busy, setBusy] = React.useState(false);
   var [error, setError] = React.useState('');
 
   var createUser = function() {
     if (!form.username.trim() || !form.password.trim() || busy) return;
     setBusy(true); setError('');
-    window.API.createAdminUser(form.username.trim(), form.role, form.password.trim(), form.displayName.trim())
+    window.API.createAdminUser(form.username.trim(), form.role, form.password.trim(), form.displayName.trim(), form.isTest)
       .then(function() {
-        setForm({ username: '', displayName: '', role: 'user', password: '' });
+        setForm({ username: '', displayName: '', role: 'user', password: '', isTest: false });
         return onReload();
       })
       .catch(function(err) { setError(err.message || '创建失败'); })
@@ -609,6 +609,17 @@ function AdminUserManagement({ currentUser, users, onReload }) {
     window.API.updateAdminUser(item.id, { role: role })
       .then(onReload)
       .catch(function(err) { setError(err.message || '更新失败'); })
+      .finally(function() { setBusy(false); });
+  };
+
+  var toggleTestStatus = function(item) {
+    if (busy) return;
+    var nextState = !item.is_test;
+    if (!window.confirm('将「' + adminUserLabel(item) + '」' + (nextState ? '标记为测试账号（将不计入后台统计与任务列表）' : '恢复为正常账号（将计入后台统计与任务列表）') + '？')) return;
+    setBusy(true); setError('');
+    window.API.updateAdminUser(item.id, { is_test: nextState })
+      .then(onReload)
+      .catch(function(err) { setError(err.message || '测试标记更新失败'); })
       .finally(function() { setBusy(false); });
   };
 
@@ -648,7 +659,13 @@ function AdminUserManagement({ currentUser, users, onReload }) {
       <div className="df-admin-card">
         <div className="df-admin-cardhead">
           <span className="df-admin-cardtitle">账号与权限</span>
-          <span className="df-admin-cardmeta">{users.length} 个账号</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--admin-muted)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!showTestUsers} onChange={function(e) { if (onToggleShowTest) onToggleShowTest(e.target.checked); }} />
+              显示测试账号
+            </label>
+            <span className="df-admin-cardmeta">{users.length} 个账号</span>
+          </div>
         </div>
         <div className="df-admin-form">
           <input className="df-admin-control" value={form.username} placeholder="登录用户名"
@@ -662,11 +679,15 @@ function AdminUserManagement({ currentUser, users, onReload }) {
             <option value="user">普通用户</option>
             <option value="admin">管理员</option>
           </select>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--admin-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            <input type="checkbox" checked={form.isTest} onChange={function(e) { setForm(Object.assign({}, form, { isTest: e.target.checked })); }} />
+            测试账号（不入统计）
+          </label>
           <button className="df-admin-control df-admin-primary" disabled={busy} onClick={createUser}>新增账号</button>
         </div>
         <div className="df-admin-tablewrap">
           <table className="df-admin-table">
-            <thead><tr><th>展示名称</th><th>角色</th><th>任务</th><th>AI 生图</th><th>最近活动</th><th>加入时间</th><th>操作</th></tr></thead>
+            <thead><tr><th>展示名称</th><th>角色 / 标记</th><th>任务</th><th>AI 生图</th><th>最近活动</th><th>加入时间</th><th>操作</th></tr></thead>
             <tbody>
               {users.map(function(item) {
                 var isSelf = item.id === currentUser.id;
@@ -676,13 +697,19 @@ function AdminUserManagement({ currentUser, users, onReload }) {
                       <strong>{adminUserLabel(item)}{isSelf ? ' · 当前' : ''}</strong>
                       <span>{item.username} · {item.id}</span>
                     </td>
-                    <td>{item.role === 'admin' ? '管理员' : '普通用户'}</td>
+                    <td>
+                      {item.role === 'admin' ? '管理员' : '普通用户'}
+                      {item.is_test ? (
+                        <span style={{ marginLeft: '6px', color: '#d97706', background: '#fef3c7', padding: '1px 5px', borderRadius: '3px', fontSize: '10px', fontWeight: 600 }}>测试</span>
+                      ) : null}
+                    </td>
                     <td>{item.total_jobs || 0}</td>
                     <td>{item.total_ai_images || 0}</td>
                     <td className="df-admin-muted">{item.last_action ? adminActionMeta(item.last_action.action)[0] + ' · ' + adminFormatTime(item.last_action.created_at) : '-'}</td>
                     <td className="df-admin-muted">{adminFormatTime(item.created_at)}</td>
                     <td>
                       <button className="df-admin-linkbutton" disabled={busy} onClick={function() { updateDisplayName(item); }}>编辑名称</button>
+                      <button className="df-admin-linkbutton" disabled={isSelf || busy} onClick={function() { toggleTestStatus(item); }}>{item.is_test ? '设为正常' : '设为测试'}</button>
                       <button className="df-admin-linkbutton" disabled={isSelf || busy} onClick={function() { updateRole(item); }}>切角色</button>
                       <button className="df-admin-linkbutton" disabled={busy} onClick={function() { resetPassword(item); }}>重置密码</button>
                       <button className="df-admin-linkbutton df-admin-dangerbutton" disabled={isSelf || busy} onClick={function() { deleteUser(item); }}>删除</button>
@@ -821,12 +848,20 @@ function AdminPage({ user, onBack }) {
   var [error, setError] = React.useState('');
   var [updatedAt, setUpdatedAt] = React.useState(null);
 
-  var loadUsers = React.useCallback(function() {
-    return window.API.getAdminUsers().then(function(data) {
+  var [showTestUsers, setShowTestUsers] = React.useState(false);
+
+  var loadUsers = React.useCallback(function(includeTest) {
+    var queryInclude = includeTest !== undefined ? includeTest : showTestUsers;
+    return window.API.getAdminUsers(queryInclude).then(function(data) {
       setUsers(data.users || []);
       return data.users || [];
     });
-  }, []);
+  }, [showTestUsers]);
+
+  var handleToggleShowTestUsers = function(nextVal) {
+    setShowTestUsers(nextVal);
+    loadUsers(nextVal);
+  };
 
   var loadOverview = React.useCallback(function(silent) {
     if (!silent) setLoading(true);
@@ -1266,7 +1301,7 @@ function AdminPage({ user, onBack }) {
             {view === 'overview' ? renderOverview() : null}
             {view === 'tasks' ? renderTasks() : null}
             {view === 'services' ? renderServices() : null}
-            {view === 'users' ? <AdminUserManagement currentUser={user} users={users} onReload={loadUsers} /> : null}
+            {view === 'users' ? <AdminUserManagement currentUser={user} users={users} onReload={function() { return loadUsers(showTestUsers); }} showTestUsers={showTestUsers} onToggleShowTest={handleToggleShowTestUsers} /> : null}
             {view === 'audit' ? renderAudit() : null}
           </div>
         </div>

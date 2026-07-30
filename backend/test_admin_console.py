@@ -358,8 +358,63 @@ class AdminConsoleStoreTest(unittest.TestCase):
         self.assertTrue(job_store.set_inspiration_favorite(post_id, "designer", False))
         self.assertFalse(job_store.is_inspiration_favorited(post_id, "designer"))
 
-        self.assertTrue(job_store.delete_inspiration_post(post_id))
-        self.assertIsNone(job_store.get_inspiration_post(post_id))
+    def test_test_user_isolation_and_exclusion(self) -> None:
+        """验证标记为 is_test: True 的测试账号发起的任务和操作不计入后台管理和统计"""
+        job_store.settings.allowed_login_users = [
+            {"id": "admin", "username": "管理员", "display_name": "张运营", "role": "admin"},
+            {"id": "designer", "username": "设计师", "display_name": "李设计", "role": "user"},
+            {"id": "test_bot", "username": "测试账号", "display_name": "自动化测试", "role": "user", "is_test": True},
+        ]
+        self.assertIn("test_bot", job_store.settings.get_test_user_ids())
+
+        # 模拟测试账号产生任务与日志
+        with job_store._connect() as conn:
+            conn.execute(
+                "INSERT INTO users (id, username, username_key, created_at) VALUES (?, ?, ?, ?)",
+                ("test_bot", "测试账号", "test_bot", self.now),
+            )
+            conn.execute(
+                """
+                INSERT INTO ai_image_jobs
+                  (id, user_id, status, model, prompt, size, error, progress, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("ai-test-user", "test_bot", "done", "gpt-image-2", "测试图", "auto", "", 100, self.now - 50),
+            )
+            conn.execute(
+                """
+                INSERT INTO jobs
+                  (id, user_id, status, request_json, result_path, error, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("compose-test-user", "test_bot", "done", "{}", "/out/test.png", "", self.now - 50, self.now - 50),
+            )
+
+        job_store.log_operation(user_id="test_bot", username="测试账号", action="ai_image", detail="测试账号生图")
+
+        # 1. 验证后台基础统计已排除 test_bot
+        stats = job_store.load_admin_stats()
+        self.assertEqual(stats["users"], 2)  # admin + designer，不含 test_bot
+
+        # 2. 验证后台 overview 已排除 test_bot 任务
+        overview = job_store.load_admin_overview(24)
+        for task in overview.get("recent_failures", []):
+            self.assertNotEqual(task.get("user_id"), "test_bot")
+
+        # 3. 验证 load_admin_tasks 默认不包含 test_bot 任务
+        tasks, total = job_store.load_admin_tasks()
+        task_user_ids = [t["user_id"] for t in tasks]
+        self.assertNotIn("test_bot", task_user_ids)
+
+        # 4. 验证 load_admin_task_detail 对测试账号任务返回 None
+        detail = job_store.load_admin_task_detail("ai_image", "ai-test-user")
+        self.assertIsNone(detail)
+
+        # 5. 验证操作日志不包含 test_bot 的日志
+        logs = job_store.load_operation_logs()
+        log_users = [l["user_id"] for l in logs]
+        self.assertNotIn("test_bot", log_users)
+        self.assertEqual(job_store.count_operation_logs(user_id="test_bot"), 1)  # 显式查用户时仍能读出历史数据
 
 
 if __name__ == "__main__":

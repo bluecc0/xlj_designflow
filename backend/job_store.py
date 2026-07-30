@@ -1720,6 +1720,10 @@ def log_operation(*, user_id: str, username: str, action: str, detail: str = "",
         conn.commit()
 
 
+def _test_user_ids_set() -> set[str]:
+    return settings.get_test_user_ids()
+
+
 def load_operation_logs(
     limit: int = 50,
     offset: int = 0,
@@ -1735,6 +1739,12 @@ def load_operation_logs(
     if user_id:
         clauses.append("user_id = ?")
         params.append(user_id)
+    else:
+        test_uids = _test_user_ids_set()
+        if test_uids:
+            placeholders = ",".join("?" for _ in test_uids)
+            clauses.append(f"user_id NOT IN ({placeholders})")
+            params.extend(list(test_uids))
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     params.extend([limit, offset])
     with _connect() as conn:
@@ -1764,6 +1774,12 @@ def count_operation_logs(
     if user_id:
         clauses.append("user_id = ?")
         params.append(user_id)
+    else:
+        test_uids = _test_user_ids_set()
+        if test_uids:
+            placeholders = ",".join("?" for _ in test_uids)
+            clauses.append(f"user_id NOT IN ({placeholders})")
+            params.extend(list(test_uids))
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     with _connect() as conn:
         row = conn.execute(
@@ -1774,21 +1790,46 @@ def count_operation_logs(
 
 
 def load_admin_stats() -> dict:
-    """聚合统计信息（合成任务 = 普通合成 + 特殊品合成）"""
+    """聚合统计信息（合成任务 = 普通合成 + 特殊品合成，自动排除测试账号）"""
+    test_uids = _test_user_ids_set()
+    where_clause = ""
+    params: list = []
+    if test_uids:
+        placeholders = ",".join("?" for _ in test_uids)
+        where_clause = f" WHERE user_id NOT IN ({placeholders})"
+        params = list(test_uids)
+
     with _connect() as conn:
-        user_count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
-        job_total = conn.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()["c"]
-        job_done = conn.execute("SELECT COUNT(*) AS c FROM jobs WHERE status = 'done'").fetchone()["c"]
-        job_failed = conn.execute("SELECT COUNT(*) AS c FROM jobs WHERE status = 'failed'").fetchone()["c"]
-        special_total = conn.execute("SELECT COUNT(*) AS c FROM special_jobs").fetchone()["c"]
-        special_done = conn.execute("SELECT COUNT(*) AS c FROM special_jobs WHERE status = 'done'").fetchone()["c"]
-        special_failed = conn.execute("SELECT COUNT(*) AS c FROM special_jobs WHERE status = 'failed'").fetchone()["c"]
-        ai_total = conn.execute("SELECT COUNT(*) AS c FROM ai_image_jobs").fetchone()["c"]
-        ai_done = conn.execute("SELECT COUNT(*) AS c FROM ai_image_jobs WHERE status = 'done'").fetchone()["c"]
-        agent_total = conn.execute("SELECT COUNT(*) AS c FROM agent_projects").fetchone()["c"]
-        chat_total = conn.execute("SELECT COUNT(*) AS c FROM ai_chat_sessions").fetchone()["c"]
-        active_sessions = conn.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()["c"]
-        op_total = conn.execute("SELECT COUNT(*) AS c FROM operation_logs").fetchone()["c"]
+        all_users = settings.allowed_login_users
+        user_count = sum(1 for u in all_users if not u.get("is_test"))
+
+        def _count(table: str, extra_where: str = "") -> int:
+            if not where_clause and not extra_where:
+                sql = f"SELECT COUNT(*) AS c FROM {table}"
+                p: tuple = ()
+            elif where_clause and extra_where:
+                sql = f"SELECT COUNT(*) AS c FROM {table} {where_clause} AND ({extra_where})"
+                p = tuple(params)
+            elif where_clause:
+                sql = f"SELECT COUNT(*) AS c FROM {table} {where_clause}"
+                p = tuple(params)
+            else:
+                sql = f"SELECT COUNT(*) AS c FROM {table} WHERE {extra_where}"
+                p = ()
+            return conn.execute(sql, p).fetchone()["c"]
+
+        job_total = _count("jobs")
+        job_done = _count("jobs", "status = 'done'")
+        job_failed = _count("jobs", "status = 'failed'")
+        special_total = _count("special_jobs")
+        special_done = _count("special_jobs", "status = 'done'")
+        special_failed = _count("special_jobs", "status = 'failed'")
+        ai_total = _count("ai_image_jobs")
+        ai_done = _count("ai_image_jobs", "status = 'done'")
+        agent_total = _count("agent_projects")
+        chat_total = _count("ai_chat_sessions")
+        active_sessions = _count("sessions")
+        op_total = _count("operation_logs")
     return {
         "users": user_count,
         "jobs": {
@@ -1818,7 +1859,32 @@ def _admin_display_name_map() -> dict[str, str]:
 
 
 def _admin_task_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Return a small normalized projection across every persisted task table."""
+    """Return a small normalized projection across every persisted task table (excluding test users)."""
+    test_uids = _test_user_ids_set()
+    if test_uids:
+        placeholders = ",".join("?" for _ in test_uids)
+        where = f"WHERE user_id NOT IN ({placeholders})"
+        params = list(test_uids) * 4
+        return conn.execute(
+            f"""
+            SELECT 'compose' AS task_type, id, user_id, status, created_at,
+                   updated_at, error, '' AS model
+            FROM jobs {where}
+            UNION ALL
+            SELECT 'special' AS task_type, id, user_id, status, created_at,
+                   updated_at, error, '' AS model
+            FROM special_jobs {where}
+            UNION ALL
+            SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
+                   COALESCE(updated_at, created_at) AS updated_at, error, model
+            FROM ai_image_jobs {where}
+            UNION ALL
+            SELECT 'agent_image' AS task_type, id, user_id, 'done' AS status, created_at,
+                   created_at AS updated_at, '' AS error, model
+            FROM agent_images {where}
+            """,
+            tuple(params),
+        ).fetchall()
     return conn.execute(
         """
         SELECT 'compose' AS task_type, id, user_id, status, created_at,
@@ -2024,20 +2090,39 @@ def load_admin_overview(hours: int = 24) -> dict:
 
     with _connect() as conn:
         rows = [dict(row) for row in _admin_task_rows(conn)]
+        test_uids = _test_user_ids_set()
         if all_time:
-            active_user_rows = conn.execute(
-                "SELECT COUNT(DISTINCT user_id) AS c FROM operation_logs"
-            ).fetchone()
+            if test_uids:
+                placeholders = ",".join("?" for _ in test_uids)
+                active_user_rows = conn.execute(
+                    f"SELECT COUNT(DISTINCT user_id) AS c FROM operation_logs WHERE user_id NOT IN ({placeholders})",
+                    tuple(test_uids),
+                ).fetchone()
+            else:
+                active_user_rows = conn.execute(
+                    "SELECT COUNT(DISTINCT user_id) AS c FROM operation_logs"
+                ).fetchone()
         else:
-            active_user_rows = conn.execute(
-                """
-                SELECT COUNT(DISTINCT user_id) AS c
-                FROM operation_logs
-                WHERE created_at >= ?
-                """,
-                (now - safe_hours * 3600,),
-            ).fetchone()
-        user_rows = conn.execute("SELECT id, username FROM users").fetchall()
+            if test_uids:
+                placeholders = ",".join("?" for _ in test_uids)
+                active_user_rows = conn.execute(
+                    f"""
+                    SELECT COUNT(DISTINCT user_id) AS c
+                    FROM operation_logs
+                    WHERE created_at >= ? AND user_id NOT IN ({placeholders})
+                    """,
+                    (now - safe_hours * 3600, *test_uids),
+                ).fetchone()
+            else:
+                active_user_rows = conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT user_id) AS c
+                    FROM operation_logs
+                    WHERE created_at >= ?
+                    """,
+                    (now - safe_hours * 3600,),
+                ).fetchone()
+        user_rows = [row for row in conn.execute("SELECT id, username FROM users").fetchall() if row["id"] not in test_uids]
         stale_ack = conn.execute(
             "SELECT * FROM admin_alert_acknowledgements WHERE alert_type = 'stale_tasks'"
         ).fetchone()
@@ -2286,6 +2371,12 @@ def load_admin_tasks(
     if user_id:
         clauses.append("user_id = ?")
         params.append(user_id)
+    else:
+        test_uids = _test_user_ids_set()
+        if test_uids:
+            placeholders = ",".join("?" for _ in test_uids)
+            clauses.append(f"user_id NOT IN ({placeholders})")
+            params.extend(list(test_uids))
     if provider:
         clauses.append("provider = ?")
         params.append(provider)
@@ -2389,6 +2480,7 @@ def load_admin_tasks(
 def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
     """Load the full persisted snapshot for one task without guessing missing fields."""
     display_name_map = _admin_display_name_map()
+    test_uids = _test_user_ids_set()
     with _connect() as conn:
         if task_type == "compose":
             row = conn.execute(
@@ -2399,7 +2491,7 @@ def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
                 """,
                 (task_id,),
             ).fetchone()
-            if not row:
+            if not row or str(row["user_id"] or "") in test_uids:
                 return None
             item = dict(row)
             request = _json_object(item.pop("request_json", "{}"))
@@ -2429,7 +2521,7 @@ def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
                 """,
                 (task_id,),
             ).fetchone()
-            if not row:
+            if not row or str(row["user_id"] or "") in test_uids:
                 return None
             item = dict(row)
             request = _json_object(item.pop("request_json", "{}"))
@@ -2462,7 +2554,7 @@ def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
                 """,
                 (task_id,),
             ).fetchone()
-            if not row:
+            if not row or str(row["user_id"] or "") in test_uids:
                 return None
             item = dict(row)
             trace_raw = item.get("prompt_trace") or ""
@@ -2506,7 +2598,7 @@ def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
                 """,
                 (task_id,),
             ).fetchone()
-            if not row:
+            if not row or str(row["user_id"] or "") in test_uids:
                 return None
             item = dict(row)
             prompt = _json_object(item.pop("prompt_json", "{}"))

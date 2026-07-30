@@ -208,6 +208,7 @@ class Settings:
                 role = str(item.get("role", "user")).strip() or "user"
                 password_hash = str(item.get("password_hash", "")).strip()
                 display_name = str(item.get("display_name", "")).strip()
+                is_test = bool(item.get("is_test", False))
                 if username and user_id:
                     users.append({
                         "id": user_id,
@@ -215,6 +216,7 @@ class Settings:
                         "role": role,
                         "password_hash": password_hash,
                         "display_name": display_name,
+                        "is_test": is_test,
                     })
         return users or default_users
 
@@ -230,6 +232,14 @@ class Settings:
             encoding="utf-8",
         )
         self.reload_login_users()
+
+    def get_test_user_ids(self) -> set[str]:
+        """返回所有标为测试账号的用户 ID 集合。"""
+        return {
+            str(u.get("id") or "").strip()
+            for u in getattr(self, "allowed_login_users", [])
+            if u.get("is_test")
+        }
 
 
 settings = Settings()

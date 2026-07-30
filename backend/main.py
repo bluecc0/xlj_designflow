@@ -551,6 +551,7 @@ def _public_login_user(user: dict) -> dict:
         "username": user.get("username", ""),
         "display_name": user.get("display_name", ""),
         "role": user.get("role", "user"),
+        "is_test": bool(user.get("is_test", False)),
     }
 
 
@@ -5262,7 +5263,7 @@ def admin_task_detail(request: Request, task_type: str, task_id: str):
 
 
 @app.get("/admin/users")
-def admin_users(request: Request):
+def admin_users(request: Request, include_test: bool = False):
     """用户列表 + 活动统计（仅管理员，以 login_users.json 为准，补充 DB 活动数据）"""
     user = _current_user(request)
     if not _is_admin(user):
@@ -5271,12 +5272,16 @@ def admin_users(request: Request):
     db_by_id = {u["id"]: u for u in db_users}
     merged = []
     for u in settings.allowed_login_users:
+        is_test = bool(u.get("is_test", False))
+        if not include_test and is_test:
+            continue
         stats = db_by_id.get(u["id"], {})
         merged.append({
             "id": u["id"],
             "username": u["username"],
             "display_name": u.get("display_name", ""),
             "role": u.get("role", "user"),
+            "is_test": is_test,
             "created_at": stats.get("created_at"),
             "total_jobs": stats.get("total_jobs", 0),
             "total_special_jobs": stats.get("total_special_jobs", 0),
@@ -5298,6 +5303,7 @@ def admin_create_user(request: Request, body: dict):
     role = (body.get("role") or "user").strip()
     password = (body.get("password") or "").strip()
     display_name = (body.get("display_name") or "").strip()
+    is_test = bool(body.get("is_test", False))
     if not username:
         raise HTTPException(400, "username 不能为空")
     if role not in ("admin", "user"):
@@ -5312,6 +5318,7 @@ def admin_create_user(request: Request, body: dict):
         "username": username,
         "display_name": display_name[:40],
         "role": role,
+        "is_test": is_test,
         "password_hash": hash_password(password),
     }
     settings.save_login_users(list(settings.allowed_login_users) + [new_user])
@@ -5320,7 +5327,7 @@ def admin_create_user(request: Request, body: dict):
 
 @app.put("/admin/users/{user_id}")
 def admin_update_user(request: Request, user_id: str, body: dict):
-    """更新用户角色（仅管理员）"""
+    """更新用户角色 / 属性（仅管理员）"""
     admin = _current_user(request)
     if not _is_admin(admin):
         raise HTTPException(403, "需要管理员权限")
@@ -5335,8 +5342,10 @@ def admin_update_user(request: Request, user_id: str, body: dict):
         updates["username"] = body["username"].strip()
     if "display_name" in body:
         updates["display_name"] = str(body.get("display_name") or "").strip()[:40]
+    if "is_test" in body:
+        updates["is_test"] = bool(body["is_test"])
     if not updates:
-        raise HTTPException(400, "至少需要 role、username 或 display_name 字段")
+        raise HTTPException(400, "至少需要 role、username、display_name 或 is_test 字段")
     users[idx].update(updates)
     settings.save_login_users(users)
     return {"user": _public_login_user(users[idx])}
