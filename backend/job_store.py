@@ -1778,7 +1778,7 @@ def load_operation_logs(
         test_uids = _test_user_ids_set()
         if test_uids:
             placeholders = ",".join("?" for _ in test_uids)
-            clauses.append(f"user_id NOT IN ({placeholders})")
+            clauses.append(f"(user_id IS NULL OR user_id NOT IN ({placeholders}))")
             params.extend(list(test_uids))
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     params.extend([limit, offset])
@@ -1813,7 +1813,7 @@ def count_operation_logs(
         test_uids = _test_user_ids_set()
         if test_uids:
             placeholders = ",".join("?" for _ in test_uids)
-            clauses.append(f"user_id NOT IN ({placeholders})")
+            clauses.append(f"(user_id IS NULL OR user_id NOT IN ({placeholders}))")
             params.extend(list(test_uids))
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     with _connect() as conn:
@@ -1831,7 +1831,7 @@ def load_admin_stats() -> dict:
     params: list = []
     if test_uids:
         placeholders = ",".join("?" for _ in test_uids)
-        where_clause = f" WHERE user_id NOT IN ({placeholders})"
+        where_clause = f" WHERE (user_id IS NULL OR user_id NOT IN ({placeholders}))"
         params = list(test_uids)
 
     with _connect() as conn:
@@ -1898,7 +1898,7 @@ def _admin_task_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     test_uids = _test_user_ids_set()
     if test_uids:
         placeholders = ",".join("?" for _ in test_uids)
-        where = f"WHERE user_id NOT IN ({placeholders})"
+        where = f"WHERE (user_id IS NULL OR user_id NOT IN ({placeholders}))"
         params = list(test_uids) * 4
         return conn.execute(
             f"""
@@ -2130,7 +2130,7 @@ def load_admin_overview(hours: int = 24) -> dict:
             if test_uids:
                 placeholders = ",".join("?" for _ in test_uids)
                 active_user_rows = conn.execute(
-                    f"SELECT COUNT(DISTINCT user_id) AS c FROM operation_logs WHERE user_id NOT IN ({placeholders})",
+                    f"SELECT COUNT(DISTINCT user_id) AS c FROM operation_logs WHERE (user_id IS NULL OR user_id NOT IN ({placeholders}))",
                     tuple(test_uids),
                 ).fetchone()
             else:
@@ -2144,7 +2144,7 @@ def load_admin_overview(hours: int = 24) -> dict:
                     f"""
                     SELECT COUNT(DISTINCT user_id) AS c
                     FROM operation_logs
-                    WHERE created_at >= ? AND user_id NOT IN ({placeholders})
+                    WHERE created_at >= ? AND (user_id IS NULL OR user_id NOT IN ({placeholders}))
                     """,
                     (now - safe_hours * 3600, *test_uids),
                 ).fetchone()
@@ -2410,7 +2410,7 @@ def load_admin_tasks(
         test_uids = _test_user_ids_set()
         if test_uids:
             placeholders = ",".join("?" for _ in test_uids)
-            clauses.append(f"user_id NOT IN ({placeholders})")
+            clauses.append(f"(user_id IS NULL OR user_id NOT IN ({placeholders}))")
             params.extend(list(test_uids))
     if provider:
         clauses.append("provider = ?")

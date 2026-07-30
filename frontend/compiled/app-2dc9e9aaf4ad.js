@@ -11319,7 +11319,7 @@ const ADMIN_CSS = `
     text-overflow: ellipsis; white-space: nowrap;
   }
   .df-admin-form {
-    display: grid; grid-template-columns: 1fr 1fr 1fr 130px auto; gap: 8px;
+    display: grid; grid-template-columns: 1fr 1fr 1fr 110px auto auto; gap: 8px; align-items: center;
     padding: 14px; border-bottom: 1px solid var(--admin-line); background: #fafaf8;
   }
   .df-admin-useridentity strong { display: block; font-size: 10.5px; }
@@ -11675,13 +11675,16 @@ function AdminServiceCard({
 function AdminUserManagement({
   currentUser,
   users,
-  onReload
+  onReload,
+  showTestUsers,
+  onToggleShowTest
 }) {
   var [form, setForm] = React.useState({
     username: '',
     displayName: '',
     role: 'user',
-    password: ''
+    password: '',
+    isTest: false
   });
   var [busy, setBusy] = React.useState(false);
   var [error, setError] = React.useState('');
@@ -11689,12 +11692,13 @@ function AdminUserManagement({
     if (!form.username.trim() || !form.password.trim() || busy) return;
     setBusy(true);
     setError('');
-    window.API.createAdminUser(form.username.trim(), form.role, form.password.trim(), form.displayName.trim()).then(function () {
+    window.API.createAdminUser(form.username.trim(), form.role, form.password.trim(), form.displayName.trim(), form.isTest).then(function () {
       setForm({
         username: '',
         displayName: '',
         role: 'user',
-        password: ''
+        password: '',
+        isTest: false
       });
       return onReload();
     }).catch(function (err) {
@@ -11713,6 +11717,20 @@ function AdminUserManagement({
       role: role
     }).then(onReload).catch(function (err) {
       setError(err.message || '更新失败');
+    }).finally(function () {
+      setBusy(false);
+    });
+  };
+  var toggleTestStatus = function (item) {
+    if (busy) return;
+    var nextState = !item.is_test;
+    if (!window.confirm('将「' + adminUserLabel(item) + '」' + (nextState ? '标记为测试账号（将不计入后台统计与任务列表）' : '恢复为正常账号（将计入后台统计与任务列表）') + '？')) return;
+    setBusy(true);
+    setError('');
+    window.API.updateAdminUser(item.id, {
+      is_test: nextState
+    }).then(onReload).catch(function (err) {
+      setError(err.message || '测试标记更新失败');
     }).finally(function () {
       setBusy(false);
     });
@@ -11762,9 +11780,30 @@ function AdminUserManagement({
     className: "df-admin-cardhead"
   }, /*#__PURE__*/React.createElement("span", {
     className: "df-admin-cardtitle"
-  }, "\u8D26\u53F7\u4E0E\u6743\u9650"), /*#__PURE__*/React.createElement("span", {
+  }, "\u8D26\u53F7\u4E0E\u6743\u9650"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '14px'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '5px',
+      fontSize: '11px',
+      color: 'var(--admin-muted)',
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: !!showTestUsers,
+    onChange: function (e) {
+      if (onToggleShowTest) onToggleShowTest(e.target.checked);
+    }
+  }), "\u663E\u793A\u6D4B\u8BD5\u8D26\u53F7"), /*#__PURE__*/React.createElement("span", {
     className: "df-admin-cardmeta"
-  }, users.length, " \u4E2A\u8D26\u53F7")), /*#__PURE__*/React.createElement("div", {
+  }, users.length, " \u4E2A\u8D26\u53F7"))), /*#__PURE__*/React.createElement("div", {
     className: "df-admin-form"
   }, /*#__PURE__*/React.createElement("input", {
     className: "df-admin-control",
@@ -11806,7 +11845,25 @@ function AdminUserManagement({
     value: "user"
   }, "\u666E\u901A\u7528\u6237"), /*#__PURE__*/React.createElement("option", {
     value: "admin"
-  }, "\u7BA1\u7406\u5458")), /*#__PURE__*/React.createElement("button", {
+  }, "\u7BA1\u7406\u5458")), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '5px',
+      fontSize: '11px',
+      color: 'var(--admin-muted)',
+      cursor: 'pointer',
+      whiteSpace: 'nowrap'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: form.isTest,
+    onChange: function (e) {
+      setForm(Object.assign({}, form, {
+        isTest: e.target.checked
+      }));
+    }
+  }), "\u6D4B\u8BD5\u8D26\u53F7\uFF08\u4E0D\u5165\u7EDF\u8BA1\uFF09"), /*#__PURE__*/React.createElement("button", {
     className: "df-admin-control df-admin-primary",
     disabled: busy,
     onClick: createUser
@@ -11814,13 +11871,23 @@ function AdminUserManagement({
     className: "df-admin-tablewrap"
   }, /*#__PURE__*/React.createElement("table", {
     className: "df-admin-table"
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\u5C55\u793A\u540D\u79F0"), /*#__PURE__*/React.createElement("th", null, "\u89D2\u8272"), /*#__PURE__*/React.createElement("th", null, "\u4EFB\u52A1"), /*#__PURE__*/React.createElement("th", null, "AI \u751F\u56FE"), /*#__PURE__*/React.createElement("th", null, "\u6700\u8FD1\u6D3B\u52A8"), /*#__PURE__*/React.createElement("th", null, "\u52A0\u5165\u65F6\u95F4"), /*#__PURE__*/React.createElement("th", null, "\u64CD\u4F5C"))), /*#__PURE__*/React.createElement("tbody", null, users.map(function (item) {
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\u5C55\u793A\u540D\u79F0"), /*#__PURE__*/React.createElement("th", null, "\u89D2\u8272 / \u6807\u8BB0"), /*#__PURE__*/React.createElement("th", null, "\u4EFB\u52A1"), /*#__PURE__*/React.createElement("th", null, "AI \u751F\u56FE"), /*#__PURE__*/React.createElement("th", null, "\u6700\u8FD1\u6D3B\u52A8"), /*#__PURE__*/React.createElement("th", null, "\u52A0\u5165\u65F6\u95F4"), /*#__PURE__*/React.createElement("th", null, "\u64CD\u4F5C"))), /*#__PURE__*/React.createElement("tbody", null, users.map(function (item) {
     var isSelf = item.id === currentUser.id;
     return /*#__PURE__*/React.createElement("tr", {
       key: item.id
     }, /*#__PURE__*/React.createElement("td", {
       className: "df-admin-useridentity"
-    }, /*#__PURE__*/React.createElement("strong", null, adminUserLabel(item), isSelf ? ' · 当前' : ''), /*#__PURE__*/React.createElement("span", null, item.username, " \xB7 ", item.id)), /*#__PURE__*/React.createElement("td", null, item.role === 'admin' ? '管理员' : '普通用户'), /*#__PURE__*/React.createElement("td", null, item.total_jobs || 0), /*#__PURE__*/React.createElement("td", null, item.total_ai_images || 0), /*#__PURE__*/React.createElement("td", {
+    }, /*#__PURE__*/React.createElement("strong", null, adminUserLabel(item), isSelf ? ' · 当前' : ''), /*#__PURE__*/React.createElement("span", null, item.username, " \xB7 ", item.id)), /*#__PURE__*/React.createElement("td", null, item.role === 'admin' ? '管理员' : '普通用户', item.is_test ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginLeft: '6px',
+        color: '#d97706',
+        background: '#fef3c7',
+        padding: '1px 5px',
+        borderRadius: '3px',
+        fontSize: '10px',
+        fontWeight: 600
+      }
+    }, "\u6D4B\u8BD5") : null), /*#__PURE__*/React.createElement("td", null, item.total_jobs || 0), /*#__PURE__*/React.createElement("td", null, item.total_ai_images || 0), /*#__PURE__*/React.createElement("td", {
       className: "df-admin-muted"
     }, item.last_action ? adminActionMeta(item.last_action.action)[0] + ' · ' + adminFormatTime(item.last_action.created_at) : '-'), /*#__PURE__*/React.createElement("td", {
       className: "df-admin-muted"
@@ -11831,6 +11898,12 @@ function AdminUserManagement({
         updateDisplayName(item);
       }
     }, "\u7F16\u8F91\u540D\u79F0"), /*#__PURE__*/React.createElement("button", {
+      className: "df-admin-linkbutton",
+      disabled: isSelf || busy,
+      onClick: function () {
+        toggleTestStatus(item);
+      }
+    }, item.is_test ? '设为正常' : '设为测试'), /*#__PURE__*/React.createElement("button", {
       className: "df-admin-linkbutton",
       disabled: isSelf || busy,
       onClick: function () {
@@ -12023,12 +12096,18 @@ function AdminPage({
   var [loading, setLoading] = React.useState(false);
   var [error, setError] = React.useState('');
   var [updatedAt, setUpdatedAt] = React.useState(null);
-  var loadUsers = React.useCallback(function () {
-    return window.API.getAdminUsers().then(function (data) {
+  var [showTestUsers, setShowTestUsers] = React.useState(false);
+  var loadUsers = React.useCallback(function (includeTest) {
+    var queryInclude = includeTest !== undefined ? includeTest : showTestUsers;
+    return window.API.getAdminUsers(queryInclude).then(function (data) {
       setUsers(data.users || []);
       return data.users || [];
     });
-  }, []);
+  }, [showTestUsers]);
+  var handleToggleShowTestUsers = function (nextVal) {
+    setShowTestUsers(nextVal);
+    loadUsers(nextVal);
+  };
   var loadOverview = React.useCallback(function (silent) {
     if (!silent) setLoading(true);
     setError('');
@@ -12768,7 +12847,11 @@ function AdminPage({
   }, error) : null, view === 'overview' ? renderOverview() : null, view === 'tasks' ? renderTasks() : null, view === 'services' ? renderServices() : null, view === 'users' ? /*#__PURE__*/React.createElement(AdminUserManagement, {
     currentUser: user,
     users: users,
-    onReload: loadUsers
+    onReload: function () {
+      return loadUsers(showTestUsers);
+    },
+    showTestUsers: showTestUsers,
+    onToggleShowTest: handleToggleShowTestUsers
   }) : null, view === 'audit' ? renderAudit() : null))), /*#__PURE__*/React.createElement(AdminTaskDrawer, {
     task: selectedTask,
     detail: taskDetail,
