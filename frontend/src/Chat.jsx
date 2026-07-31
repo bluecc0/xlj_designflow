@@ -2363,22 +2363,23 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       const isTag = /^([@＃#](?:图片|图)?\d+|(?:图|图片)\d+)$/.test(part);
       if (isTag) {
         return (
-          <span
+          <mark
             key={i}
             style={{
-              padding: '1px 3px',
-              borderRadius: 4,
               background: 'rgba(99, 102, 241, 0.12)',
-              color: '#4f46e5',
-              fontWeight: 600,
-              fontSize: 13,
+              color: 'transparent',
+              borderRadius: 3,
+              boxShadow: '0 0 0 2px rgba(99, 102, 241, 0.12)',
+              padding: 0,
+              margin: 0,
+              font: 'inherit',
             }}
           >
             {part}
-          </span>
+          </mark>
         );
       }
-      return <span key={i} style={{ color: 'var(--ink)' }}>{part}</span>;
+      return <span key={i} style={{ color: 'transparent' }}>{part}</span>;
     });
   }, []);
 
@@ -3562,7 +3563,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
               fontSize: 13,
               lineHeight: 1.45,
               fontFamily: 'inherit',
-              color: hasRefTag ? 'transparent' : 'var(--ink)',
+              color: 'var(--ink)',
               caretColor: 'var(--ink)',
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
