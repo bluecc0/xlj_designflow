@@ -2366,18 +2366,12 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           <span
             key={i}
             style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              padding: '0px 5px',
-              margin: '0 1px',
-              borderRadius: 6,
-              background: 'var(--accent-soft)',
-              color: 'var(--accent-ink)',
-              border: '1px solid rgba(99, 102, 241, 0.35)',
-              fontWeight: 650,
-              fontSize: 12,
-              lineHeight: 1.3,
-              verticalAlign: 'baseline',
+              padding: '1px 3px',
+              borderRadius: 4,
+              background: 'rgba(99, 102, 241, 0.12)',
+              color: '#4f46e5',
+              fontWeight: 600,
+              fontSize: 13,
             }}
           >
             {part}
