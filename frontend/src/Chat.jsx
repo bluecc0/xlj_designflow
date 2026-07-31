@@ -2208,7 +2208,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
 
   // 从文本内容检测当前模式
   // trimmed = 用户实际打的内容（剥去 lockedCommand 锁定的前缀）
-  const activeCommandChip = lockedCommand || (selectedSkill ? ('$' + selectedSkill) : '');
   const _t = (() => {
     const raw = String(text || '').trimStart();
     if (lockedCommand && raw.toLowerCase().startsWith(lockedCommand.toLowerCase())) {
@@ -2347,6 +2346,40 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     clearRefImages();
   };
 
+  const overlayRef = React.useRef(null);
+  const handleScrollSync = React.useCallback((e) => {
+    if (overlayRef.current) {
+      overlayRef.current.scrollTop = e.target.scrollTop;
+    }
+  }, []);
+
+  const renderFormattedOverlayText = React.useCallback(function(rawText) {
+    if (!rawText) return null;
+    const regex = /([@＃#](?:图片|图)?\d+|(?:图|图片)\d+)/g;
+    const parts = String(rawText).split(regex);
+    return parts.map(function(part, i) {
+      const isTag = /^([@＃#](?:图片|图)?\d+|(?:图|图片)\d+)$/.test(part);
+      if (isTag) {
+        return (
+          <span
+            key={i}
+            style={{
+              borderRadius: 5,
+              background: 'var(--accent-soft)',
+              color: 'transparent',
+              border: '1px solid rgba(99, 102, 241, 0.35)',
+              padding: '0 3px',
+              fontWeight: 600,
+            }}
+          >
+            {part}
+          </span>
+        );
+      }
+      return <span key={i} style={{ color: 'transparent' }}>{part}</span>;
+    });
+  }, []);
+
   const insertRefTag = React.useCallback((idx) => {
     const tag = `@图片${idx + 1} `;
     setText(function(prev) {
@@ -2376,6 +2409,30 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       setPrototypePanel('');
       setSkillMenuDismissed(true);
       return;
+    }
+    if (
+      e.key === 'Backspace' &&
+      start === end
+    ) {
+      const rawText = String(text || '');
+      const regex = /([@＃#](?:图片|图)?\d+|(?:图|图片)\d+)/g;
+      let match;
+      while ((match = regex.exec(rawText)) !== null) {
+        const mStart = match.index;
+        const mEnd = match.index + match[0].length;
+        if (start > mStart && start <= mEnd) {
+          e.preventDefault();
+          const nextText = rawText.slice(0, mStart) + rawText.slice(mEnd);
+          setText(nextText);
+          setTimeout(() => {
+            if (taRef.current) {
+              taRef.current.focus();
+              taRef.current.setSelectionRange(mStart, mStart);
+            }
+          }, 0);
+          return;
+        }
+      }
     }
     if (
       e.key === 'Backspace' &&
@@ -2425,45 +2482,10 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       return;
     }
     if (lockedCommand) {
-      const hasSelectionInPrefix = start < lockedPrefixLength || end < lockedPrefixLength;
-      if (
-        e.key === 'ArrowUp' &&
-        !text.trim() &&
-        files.length === 0 &&
-        refImages.length === 0 &&
-        lastSubmittedMessage
-      ) {
+      if (e.key === 'ArrowUp' && !text.trim() && files.length === 0 && refImages.length === 0 && lastSubmittedMessage) {
         e.preventDefault();
         restoreMessage(lastSubmittedMessage);
         return;
-      }
-      if (e.key === 'Backspace' && !text && start <= lockedPrefixLength && end <= lockedPrefixLength) {
-        e.preventDefault();
-        setLockedCommand('');
-        setSelectedWorkflow('chat');
-        return;
-      }
-      if (hasSelectionInPrefix) {
-        if (
-          e.key === 'Backspace' || e.key === 'Delete' ||
-          e.key === 'Enter' || e.key === 'Tab' ||
-          (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey)
-        ) {
-          e.preventDefault();
-          requestAnimationFrame(() => {
-            const input = taRef.current;
-            if (input) input.setSelectionRange(lockedPrefixLength, lockedPrefixLength);
-          });
-          return;
-        }
-        if (e.key === 'Home' || e.key === 'ArrowLeft') {
-          e.preventDefault();
-          requestAnimationFrame(() => {
-            const input = taRef.current;
-            if (input) input.setSelectionRange(lockedPrefixLength, lockedPrefixLength);
-          });
-          return;
-        }
       }
     }
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -2497,12 +2519,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
         setText(next.slice(lockedCommand.length).trimStart());
         return;
       }
-      if (next === lockedCommand || next === lockedCommand + '') {
+      if (next === lockedCommand) {
         setText('');
-        return;
-      }
-      if (next.startsWith(lockedCommand)) {
-        setText(next.slice(lockedCommand.length).replace(/^\s+/, ''));
         return;
       }
       setText(next);
@@ -3497,52 +3515,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           flex: composerHeight ? 1 : undefined,
           minHeight: composerHeight ? 56 : 92,
           maxHeight: composerHeight ? undefined : 180,
-          display: 'flex',
-          flexDirection: 'column',
         }}>
-          {activeCommandChip && (
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6, userSelect: 'none' }}>
-              <span style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                padding: '3px 8px',
-                borderRadius: 6,
-                background: selectedSkill ? 'var(--accent-soft)' : 'var(--panel-2)',
-                border: '1px solid ' + (selectedSkill ? 'var(--accent)' : 'var(--line)'),
-                color: selectedSkill ? 'var(--accent-ink)' : 'var(--ink)',
-                fontSize: 11.5,
-                fontWeight: 650,
-                lineHeight: 1.2,
-                letterSpacing: '-0.01em',
-              }}>
-                <span>{activeCommandChip}</span>
-                <button
-                  type="button"
-                  onClick={function() {
-                    setLockedCommand('');
-                    setSelectedSkill('');
-                    setSelectedWorkflow('chat');
-                    if (taRef.current) taRef.current.focus();
-                  }}
-                  title="移除指令标记"
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'inherit',
-                    opacity: 0.6,
-                    cursor: 'pointer',
-                    fontSize: 12,
-                    lineHeight: 1,
-                    padding: 0,
-                    marginRight: -2,
-                    display: 'grid',
-                    placeItems: 'center',
-                  }}
-                >×</button>
-              </span>
-            </div>
-          )}
           <textarea
             className="composer-textarea"
             ref={taRef}
