@@ -2787,7 +2787,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const selectedSettingBits = [
     activeSkillInfo ? ('$' + activeSkillInfo.name) : '',
     activeSkillInfo ? '' : (agentEnabled ? 'Agent' : activeTaskLabel),
-    agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? '⚡ 智能路由' : ''),
+    agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? '⚡ 智能' : ''),
     agentEnabled ? '' : modeParamLabel,
     (activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1) ? ('x' + normalizeBatchCount(aiBatchCount)) : '',
     refImages.length > 0 ? ('ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES) : '',
