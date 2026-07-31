@@ -443,10 +443,43 @@ def _extract_result_url(payload: Any) -> str | None:
 def _extract_b64_or_image_url(payload: Any) -> str | None:
     if isinstance(payload, str):
         clean = payload.strip()
+        if clean.startswith("{") or clean.startswith("["):
+            try:
+                found = _extract_b64_or_image_url(json.loads(clean))
+                if found:
+                    return found
+            except Exception:
+                pass
         if clean.startswith("data:image/"):
             return clean
         if clean.startswith("http://") or clean.startswith("https://") or clean.startswith("/"):
             return clean
+
+        # 部分 OpenAI-compatible 生图服务会在 content 中返回说明文字或 Markdown，
+        # 例如「图片已生成：![result](https://.../image.png)」。
+        data_match = re.search(
+            r"data:image/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=_-]+",
+            clean,
+        )
+        if data_match:
+            return data_match.group(0)
+        markdown_match = re.search(
+            r"!\[[^\]]*\]\(\s*<?((?:https?://|/)[^>\s)]+)>?(?:\s+['\"][^'\"]*['\"])?\s*\)",
+            clean,
+            re.IGNORECASE,
+        )
+        if markdown_match:
+            return markdown_match.group(1)
+        html_match = re.search(
+            r"<img\b[^>]*\bsrc\s*=\s*['\"]((?:https?://|/)[^'\"]+)['\"]",
+            clean,
+            re.IGNORECASE,
+        )
+        if html_match:
+            return html_match.group(1)
+        url_match = re.search(r"https?://[^\s<>\"'\])}]+", clean, re.IGNORECASE)
+        if url_match:
+            return url_match.group(0).rstrip(".,;")
         return None
     if isinstance(payload, dict):
         # OpenAI chat.completions 风格：choices[].message.content 可能是 data URL / 外链 / 多模态 list
@@ -476,6 +509,10 @@ def _extract_b64_or_image_url(payload: Any) -> str | None:
                         found = _extract_b64_or_image_url(part.get("text") or part.get("url"))
                         if found:
                             return found
+                elif isinstance(content, dict):
+                    found = _extract_b64_or_image_url(content)
+                    if found:
+                        return found
         data = payload.get("data")
         if isinstance(data, list):
             for item in data:
@@ -1527,7 +1564,19 @@ async def generate_adobe2api_async(
     if result_url.startswith("data:"):
         local_url = _save_data_url_image(result_url, user_id=user_id, prefix="adobe2api")
     else:
-        local_url = await _download_cliproxy_image(result_url, user_id=user_id, api_key=api_key)
+        # Adobe 的结果 CDN 在当前网络下可能需要下载代理。统一走结果下载器，
+        # 复用 AI_IMAGE_DOWNLOAD_PROXY_URL、重试逻辑并在失败时保留 completion id。
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(180.0, connect=20.0),
+            trust_env=False,
+            follow_redirects=True,
+        ) as download_client:
+            local_url = await _download_final_image(
+                download_client,
+                image_url=result_url,
+                user_id=user_id,
+                task_id=upstream_id,
+            )
 
     if on_progress:
         on_progress(100, "done")

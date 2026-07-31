@@ -441,6 +441,86 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(content[0]["type"], "text")
         self.assertEqual(sum(1 for c in content if c.get("type") == "image_url"), 9)
 
+    def test_adobe2api_extracts_markdown_wrapped_image_url(self) -> None:
+        image_url = "https://cdn.example.com/generated/result.png?token=abc"
+        payload = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": f"图片已生成：\n![result]({image_url})",
+                },
+            }],
+        }
+
+        self.assertEqual(ai_image._extract_b64_or_image_url(payload), image_url)
+
+    def test_adobe2api_extracts_image_from_json_string_content(self) -> None:
+        image_url = "https://cdn.example.com/generated/result.webp"
+        payload = {
+            "choices": [{
+                "message": {
+                    "content": '{"type":"image_url","image_url":{"url":"' + image_url + '"}}',
+                },
+            }],
+        }
+
+        self.assertEqual(ai_image._extract_b64_or_image_url(payload), image_url)
+
+    async def test_adobe2api_url_result_uses_shared_download_pipeline(self) -> None:
+        image_url = "https://cdn.example.com/generated/result.png"
+
+        class FakeResponse:
+            is_success = True
+            status_code = 200
+
+            def json(self):
+                return {
+                    "id": "chatcmpl-adobe-result",
+                    "choices": [{
+                        "message": {
+                            "content": f"图片已生成：![result]({image_url})",
+                        },
+                    }],
+                }
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, *args, **kwargs):
+                return FakeResponse()
+
+        async def fake_download(client, *, image_url, user_id, task_id=""):
+            self.assertEqual(image_url, "https://cdn.example.com/generated/result.png")
+            self.assertEqual(user_id, "u1")
+            self.assertEqual(task_id, "chatcmpl-adobe-result")
+            return "/ai-images/u1/result.png"
+
+        with patch.object(ai_image.settings, "adobe2api_base_url", "http://adobe:6001/v1"), \
+             patch.object(ai_image.settings, "adobe2api_api_key", "sk-adobe"), \
+             patch.object(ai_image.httpx, "AsyncClient", FakeClient), \
+             patch.object(ai_image, "_download_final_image", side_effect=fake_download) as download_mock:
+            result = await ai_image.generate_adobe2api_async(
+                model="gpt-image-2",
+                prompt="create a poster",
+                size="16:9",
+                resolution="2K",
+                user_id="u1",
+            )
+
+        self.assertEqual(result["url"], "/ai-images/u1/result.png")
+        self.assertEqual(result["model"], "firefly-gpt-image-2k-16x9")
+        self.assertEqual(result["task_id"], "chatcmpl-adobe-result")
+        download_mock.assert_awaited_once()
+
     async def test_non_transient_error_does_not_failover(self) -> None:
         calls = {"adobe": 0, "apimart": 0}
 
