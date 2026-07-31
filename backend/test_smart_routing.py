@@ -60,8 +60,10 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(candidates, ["adobe2api", "sub2api"])
 
     async def test_smart_generate_image_failover(self) -> None:
+        attempts = []
+
         async def mock_sub2api(*args, **kwargs):
-            raise RuntimeError("sub2api timeout")
+            raise RuntimeError("CLIProxyAPI 连接失败：ConnectError")
 
         async def mock_adobe2api(*args, **kwargs):
             return {
@@ -80,10 +82,178 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                 model="gpt-image-2",
                 prompt="test prompt",
                 user_id="test_user",
+                on_attempt=attempts.append,
             )
 
             self.assertEqual(result["provider"], "adobe2api")
             self.assertTrue(result.get("provider_switched"))
+            self.assertEqual(attempts, ["sub2api", "adobe2api"])
+
+    def test_empty_candidates_are_not_repopulated(self) -> None:
+        with patch.object(ai_image.settings, "smart_routing_rules_json", ""), \
+             patch.object(ai_image.settings, "cliproxy_base_url", ""), \
+             patch.object(ai_image.settings, "cliproxy_api_key", ""), \
+             patch.object(ai_image.settings, "adobe2api_base_url", ""), \
+             patch.object(ai_image.settings, "adobe2api_api_key", ""), \
+             patch.object(ai_image.settings, "ai_image_api_key", ""):
+            self.assertEqual(
+                ai_image.get_smart_route_candidates("gpt-image-2", resolution="1K"),
+                [],
+            )
+
+    async def test_smart_route_rejects_empty_candidates_before_dispatch(self) -> None:
+        with patch.object(ai_image, "get_smart_route_candidates", return_value=[]):
+            with self.assertRaisesRegex(RuntimeError, "没有已配置且支持模型"):
+                await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                )
+
+    async def test_http_504_before_accepted_does_not_failover(self) -> None:
+        calls = {"sub": 0, "adobe": 0}
+
+        async def mock_sub2api(*args, **kwargs):
+            calls["sub"] += 1
+            raise RuntimeError("CLIProxyAPI 生图失败：HTTP 504")
+
+        async def mock_adobe(*args, **kwargs):
+            calls["adobe"] += 1
+            return {"url": "/x.png", "provider": "adobe2api"}
+
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
+             patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
+            with self.assertRaises(RuntimeError):
+                await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                )
+        self.assertEqual(calls, {"sub": 1, "adobe": 0})
+
+    async def test_sub2api_malformed_200_is_ambiguous(self) -> None:
+        adobe_calls = 0
+
+        class FakeResponse:
+            is_success = True
+            status_code = 200
+            text = "<html>bad gateway body</html>"
+
+            def json(self):
+                raise ValueError("not json")
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, *args, **kwargs):
+                return FakeResponse()
+
+        async def mock_adobe(*args, **kwargs):
+            nonlocal adobe_calls
+            adobe_calls += 1
+            return {"url": "/x.png", "provider": "adobe2api"}
+
+        with patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api:8080"), \
+             patch.object(ai_image.settings, "cliproxy_api_key", "sk-sub2api"), \
+             patch.object(ai_image.httpx, "AsyncClient", FakeClient), \
+             patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
+            with self.assertRaises(ai_image.AmbiguousUpstreamError):
+                await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                )
+        self.assertEqual(adobe_calls, 0)
+
+    async def test_apimart_submit_504_is_ambiguous(self) -> None:
+        class FakeResponse:
+            is_success = False
+            status_code = 504
+            text = '{"error":"gateway timeout"}'
+
+            def json(self):
+                return {"error": "gateway timeout"}
+
+        class FakeClient:
+            async def post(self, *args, **kwargs):
+                return FakeResponse()
+
+        with self.assertRaises(ai_image.AmbiguousUpstreamError):
+            await ai_image._submit_generation_task(
+                FakeClient(),
+                base_url="http://apimart",
+                headers={"Authorization": "Bearer test"},
+                model="gpt-image-2",
+                prompt="test",
+                size="auto",
+            )
+
+    def test_skill_generation_uses_smart_routing(self) -> None:
+        chat_source = (
+            Path(__file__).resolve().parents[1] / "frontend" / "src" / "Chat.jsx"
+        ).read_text(encoding="utf-8")
+        branch_start = chat_source.index(
+            "if (activeSkill && !aiCmd && aiOptions.workflow !== 'download')"
+        )
+        branch_end = chat_source.index("// 检测\"重新生成\"关键词", branch_start)
+        skill_branch = chat_source[branch_start:branch_end]
+        self.assertIn("provider: 'auto'", skill_branch)
+        self.assertNotIn("provider: 'sub2api'", skill_branch)
+
+    def test_batch_history_keeps_actual_failover_provider(self) -> None:
+        session = job_store.create_ai_chat_session(user_id="u", title="batch")
+        common_meta = {
+            "model": "gpt-image-2",
+            "prompt": "test",
+            "status": "done",
+            "batchId": "batch-1",
+            "batchCount": 2,
+        }
+        job_store.append_ai_chat_message(
+            session_id=session["id"],
+            user_id="u",
+            role="ai",
+            type="ai_image_result",
+            text="test",
+            image_url="/first.png",
+            meta={
+                **common_meta,
+                "job_id": "job-1",
+                "batchIndex": 0,
+                "provider": "sub2api",
+                "providerSwitched": False,
+            },
+        )
+        job_store.append_ai_chat_message(
+            session_id=session["id"],
+            user_id="u",
+            role="ai",
+            type="ai_image_result",
+            text="test",
+            image_url="/second.png",
+            meta={
+                **common_meta,
+                "job_id": "job-2",
+                "batchIndex": 1,
+                "provider": "adobe2api",
+                "providerSwitched": True,
+            },
+        )
+
+        messages = job_store.load_ai_chat_messages(session["id"], user_id="u")
+        self.assertEqual(len(messages), 1)
+        self.assertTrue(messages[0]["providerSwitched"])
+        self.assertEqual(messages[0]["provider"], "adobe2api")
+        self.assertEqual(messages[0]["images"][1]["provider"], "adobe2api")
 
     def test_normalize_size_respects_explicit_resolution(self) -> None:
         ratio, res = ai_image._normalize_size("auto", "2K")
@@ -197,7 +367,9 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             calls["adobe"] += 1
             return {"url": "/x.png", "provider": "adobe2api"}
 
-        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api),              patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe),              patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
+             patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
             with self.assertRaises(ai_image.AmbiguousUpstreamError) as ctx:
                 await ai_image.smart_generate_image_async(
                     model="gpt-image-2",

@@ -3559,6 +3559,24 @@ async def _run_ai_image_background(
         except Exception:
             pass
 
+    def on_attempt(attempt_provider: str) -> None:
+        """每次发起 POST 前记录真实渠道；accepted 只负责补充上游任务号。"""
+        nonlocal active_provider
+        active_provider = attempt_provider or active_provider
+        try:
+            save_ai_image_job(
+                job_id=job_id, user_id=user_id, status="processing",
+                model=model, prompt=prompt, size=size,
+                provider=active_provider or provider, resolution=resolution,
+                original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
+                prompt_trace=prompt_trace,
+                progress=0, has_reference=has_reference, reference_count=len(refs),
+                request_meta=request_meta, created_at=created_at,
+                task_id=upstream_task_id or None,
+            )
+        except Exception:
+            pass
+
     try:
         stage = "generate"
         if provider == PROVIDER_AUTO or not provider:
@@ -3566,7 +3584,7 @@ async def _run_ai_image_background(
                 model=model, prompt=prompt,
                 images=refs if refs else None,
                 size=size, resolution=resolution, user_id=user_id,
-                on_progress=on_progress, on_accepted=on_accepted,
+                on_progress=on_progress, on_attempt=on_attempt, on_accepted=on_accepted,
             )
         elif provider == PROVIDER_SUB2API:
             result = await generate_sub2api_async(
@@ -3625,7 +3643,12 @@ async def _run_ai_image_background(
             user_id=user_id, username=username,
             action="ai_image",
             detail=f"job={job_id[:8]} model={model} size={size} result=done{cost_str}{time_str}{usage_str} image={result.get('url', '?')[:60]}",
-            payload=json.dumps({"job_id": job_id, "model": model, "size": size, "result": "done", "image_url": result.get("url", ""), "cost": result.get("cost"), "usage": usage}, ensure_ascii=False),
+            payload=json.dumps({
+                "job_id": job_id, "model": model, "size": size, "result": "done",
+                "image_url": result.get("url", ""), "cost": result.get("cost"), "usage": usage,
+                "provider": actual_provider, "provider_switched": provider_switched,
+                "upstream_task_id": upstream_task_id,
+            }, ensure_ascii=False),
         )
         append_ai_chat_message(
             session_id=session_id, user_id=user_id,
@@ -3636,7 +3659,9 @@ async def _run_ai_image_background(
                 "model": model, "prompt": prompt,
                 "resolvedPrompt": resolved_prompt or prompt,
                 "promptTrace": prompt_trace,
-                "provider": provider,
+                "provider": actual_provider,
+                "providerSwitched": provider_switched,
+                "taskId": upstream_task_id,
                 "size": size, "resolution": resolution,
                 "status": "done",
                 "hasReference": has_reference,
@@ -4030,6 +4055,7 @@ def ai_image_status(request: Request, job_id: str):
         "prompt_trace": job.get("prompt_trace") or "",
         "task_id": job.get("task_id"),
         "model": job.get("model"),
+        "provider": job.get("provider"),
         "error": error_text or None,
         "providerSwitched": bool(job.get("provider_switched")),
         "layer_extract": layer_extract,

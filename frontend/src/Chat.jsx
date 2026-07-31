@@ -1219,7 +1219,11 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
               m.status !== 'failed' && m.status !== 'done' && React.createElement(InlineRefStrip, { items: m.refPreviews }),
               m.providerSwitched && React.createElement('div', {
                 style: { padding: '6px 10px', borderRadius: 6, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)', marginBottom: 6 }
-              }, '订阅线路失败，可手动切换到官方线路重试'),
+              }, '已自动切换到「' + ({
+                sub2api: '订阅',
+                adobe2api: 'Adobe',
+                apimart: 'APIMart',
+              }[m.provider] || m.provider || '备用') + '」线路'),
               showPromptTrace && React.createElement(PromptTraceBlock, {
                 title: m.activeSkill ? ('Skill 解析 · $' + m.activeSkill) : '生图 Prompt',
                 text: promptTraceText || resolvedPromptText,
@@ -4307,6 +4311,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                           originalPrompt: statusData.original_prompt || m.originalPrompt,
                           resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt,
                           promptTrace: statusData.prompt_trace || m.promptTrace,
+                          provider: statusData.provider || m.provider,
                           providerSwitched: statusData.providerSwitched || m.providerSwitched,
                           taskId: statusData.task_id || m.taskId,
                           jobId: jobId,
@@ -4499,6 +4504,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                   images: images,
                   progress: Math.max(m.progress || 0, Math.min(agg, 99)),
                   status: m.status === 'skill-parsed' ? m.status : 'processing',
+                  provider: patch.provider || m.provider,
+                  providerSwitched: patch.providerSwitched || m.providerSwitched,
                 });
               }));
             };
@@ -4561,8 +4568,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
               if (terminal[jid]) return;
               terminal[jid] = t;
               patchImage(jid, t.status === 'done'
-                ? { status: 'done', url: t.url, previewUrl: t.previewUrl, progress: 100 }
-                : { status: 'failed', error: t.error, progress: 100 });
+                ? { status: 'done', url: t.url, previewUrl: t.previewUrl, progress: 100, provider: t.provider, providerSwitched: t.providerSwitched }
+                : { status: 'failed', error: t.error, progress: 100, provider: t.provider, providerSwitched: t.providerSwitched });
               finishIfAllTerminal();
             };
 
@@ -4591,13 +4598,13 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                   .then(function(sd) {
                     if (!sd) return;
                     if (sd.status === 'done' && sd.image_url) {
-                      markTerminal(jid, { status: 'done', url: sd.image_url, previewUrl: sd.preview_url || sd.image_url });
+                      markTerminal(jid, { status: 'done', url: sd.image_url, previewUrl: sd.preview_url || sd.image_url, provider: sd.provider, providerSwitched: sd.providerSwitched });
                     } else if (sd.status === 'done' && !sd.image_url) {
-                      markTerminal(jid, { status: 'failed', error: formatAiImageError('任务标记完成但未返回图片地址', jid) });
+                      markTerminal(jid, { status: 'failed', error: formatAiImageError('任务标记完成但未返回图片地址', jid), provider: sd.provider, providerSwitched: sd.providerSwitched });
                     } else if (sd.status === 'failed') {
-                      markTerminal(jid, { status: 'failed', error: formatAiImageError(sd.error || '生图失败', jid) });
+                      markTerminal(jid, { status: 'failed', error: formatAiImageError(sd.error || '生图失败', jid), provider: sd.provider, providerSwitched: sd.providerSwitched });
                     } else {
-                      patchImage(jid, { progress: sd.progress || 0 });
+                      patchImage(jid, { progress: sd.progress || 0, provider: sd.provider, providerSwitched: sd.providerSwitched });
                     }
                   })
                   .catch(function(pollErr) {
@@ -5057,7 +5064,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
 
     if (activeSkill && !aiCmd && aiOptions.workflow !== 'download') {
       const skillImageOptions = Object.assign({}, aiOptions, {
-        provider: 'sub2api',
+        provider: 'auto',
         size: 'auto',
         resolution: aiOptions.resolution || '1K',
         batchCount: 1,

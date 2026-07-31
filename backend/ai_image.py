@@ -709,11 +709,26 @@ async def _submit_generation_task(
     endpoint = f"{base_url}/v1/images/generations"
     resp = await client.post(endpoint, json=payload, headers=headers)
     if not resp.is_success:
+        if resp.status_code >= 500:
+            raise AmbiguousUpstreamError(
+                f"APIMart POST 后返回 HTTP {resp.status_code}，上游是否已创建任务无法确认："
+                f"{_api_error_msg(resp.status_code, _extract_error_text(resp))}",
+                provider=PROVIDER_APIMART,
+            )
         raise RuntimeError(f"提交生图任务失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
-    data = resp.json()
+    try:
+        data = resp.json()
+    except Exception as exc:
+        raise AmbiguousUpstreamError(
+            f"APIMart POST 成功但返回不是 JSON，上游状态无法确认：{resp.text[:300]}",
+            provider=PROVIDER_APIMART,
+        ) from exc
     task_id = _extract_task_id(data)
     if not task_id:
-        raise RuntimeError(f"提交生图任务成功，但未返回 task_id: {str(data)[:200]}")
+        raise AmbiguousUpstreamError(
+            f"APIMart POST 成功但未返回 task_id，上游状态无法确认：{str(data)[:200]}",
+            provider=PROVIDER_APIMART,
+        )
     return str(task_id)
 
 
@@ -1340,11 +1355,20 @@ async def generate_sub2api_async(
 
     raw_text = resp.text
     if not resp.is_success:
+        if resp.status_code >= 500:
+            raise AmbiguousUpstreamError(
+                f"CLIProxyAPI POST 后返回 HTTP {resp.status_code}，上游是否已受理无法确认："
+                f"{_api_error_msg(resp.status_code, raw_text[:500])}",
+                provider=PROVIDER_SUB2API,
+            )
         raise RuntimeError(f"CLIProxyAPI 生图失败：{_api_error_msg(resp.status_code, raw_text[:500])}")
     try:
         payload = resp.json()
     except Exception as exc:
-        raise RuntimeError(f"CLIProxyAPI 返回不是 JSON: {raw_text[:300]}") from exc
+        raise AmbiguousUpstreamError(
+            f"CLIProxyAPI POST 成功但返回不是 JSON，上游状态无法确认：{raw_text[:300]}",
+            provider=PROVIDER_SUB2API,
+        ) from exc
     if isinstance(payload, dict) and payload.get("error"):
         raise RuntimeError(f"CLIProxyAPI 生图失败: {str(payload.get('error'))[:300]}")
 
@@ -1453,9 +1477,21 @@ async def generate_adobe2api_async(
         raise RuntimeError(f"adobe2api 请求失败：{exc}") from exc
 
     if not resp.is_success:
+        if resp.status_code >= 500:
+            raise AmbiguousUpstreamError(
+                f"adobe2api POST 后返回 HTTP {resp.status_code}，上游是否已受理无法确认："
+                f"{_extract_error_text(resp)}",
+                provider=PROVIDER_ADOBE2API,
+            )
         raise RuntimeError(f"adobe2api 请求失败: HTTP {resp.status_code} - {_extract_error_text(resp)}")
 
-    data = resp.json()
+    try:
+        data = resp.json()
+    except Exception as exc:
+        raise AmbiguousUpstreamError(
+            f"adobe2api POST 成功但返回不是 JSON，上游状态无法确认：{resp.text[:300]}",
+            provider=PROVIDER_ADOBE2API,
+        ) from exc
     result_url = _extract_b64_or_image_url(data) or _extract_result_url(data)
     if not result_url:
         raise RuntimeError(f"adobe2api 未返回有效图片 URL 或 Base64: {str(data)[:200]}")
@@ -1488,9 +1524,6 @@ async def generate_adobe2api_async(
 
 # ── 智能路由调度 (Smart Routing) ─────────────────────────────────────────────────────────────
 
-_NON_FAILOVER_HTTP_CODES = {400, 401, 402, 403, 404, 413, 422}
-
-
 def classify_httpx_transport_error(exc: BaseException) -> str:
     """分类传输层错误：connect=可切换；ambiguous=可能已送达不可切换；other=其它。
 
@@ -1516,65 +1549,36 @@ def classify_httpx_transport_error(exc: BaseException) -> str:
 
 
 def is_transient_provider_error(exc: BaseException | str | None) -> bool:
-    """仅对可恢复错误切换线路；参数/鉴权/内容审核等确定性失败不跨渠道重试。
+    """仅在能确认请求尚未受理时切换线路。
 
-    已提交上游任务后的轮询/下载失败、以及同步接口读/写超时（状态不确定）不切换。
+    白名单只有连接阶段失败和服务商明确拒绝受理的限流；任何 POST 后响应、
+    解析或未知异常都不切换，避免重复生成与重复计费。
     """
     if isinstance(exc, AmbiguousUpstreamError):
         return False
+    if isinstance(exc, httpx.RequestError):
+        return classify_httpx_transport_error(exc) == "connect"
 
     raw = str(exc or "").strip()
     if not raw:
-        return True
+        return False
     low = raw.lower()
 
-    # 同步接口状态不确定：禁止切换，避免重复计费
-    if any(k in low for k in (
-        "请求可能已送达", "状态不确定", "read timeout", "write timeout",
-        "pool timeout", "响应超时", "中途断开", "remoteprotocol",
-    )):
-        return False
+    # HTTP 429 明确表示本次请求被拒绝受理，可以安全切线。
+    if re.search(r"\bHTTP\s*429\b", raw, re.IGNORECASE) or any(
+        k in low for k in ("rate limit", "too many requests", "请求过于频繁")
+    ):
+        return True
 
-    # 任务已提交后的后半程失败：不跨渠道重提
+    # Provider 适配器仅在 ConnectError/ConnectTimeout 时生成这些连接阶段文案。
     if any(k in low for k in (
-        "下载结果", "下载 cli", "下载结果图片", "poll", "轮询",
-        "saving", "task_id=", "task=",
-    )) and any(k in low for k in ("timeout", "超时", "http ", "failed", "失败")):
-        if "提交" not in low and "submit" not in low:
-            if any(k in low for k in ("下载", "download", "poll", "轮询", "saving")):
-                return False
-
-    # 确定性错误：不切换
-    if any(k in low for k in (
-        "content", "safety", "policy", "违规", "审核", "moderation", "blocked",
-        "invalid", "参数", "validation", "unprocessable",
-        "api key", "unauthorized", "鉴权", "验证失败",
-        "余额", "insufficient", "quota", "payment", "permission",
-        "not configured", "未配置",
-    )):
-        return False
-
-    for code in _NON_FAILOVER_HTTP_CODES:
-        if re.search(rf"\bHTTP\s*{code}\b", raw, re.IGNORECASE) or f" {code}" in raw or f":{code}" in low:
-            if code != 429:
-                return False
-
-    # 明确的连接阶段失败 / 限流 / 5xx：可切换
-    if any(k in low for k in (
-        "connect", "connection refused", "连接超时", "连接失败",
-        "429", "rate limit", "too many", "频繁",
-        "502", "503", "504", "500", "520", "522", "523", "524",
-        "dns", "name or service", "network is unreachable",
-        "temporarily", "unavailable", "服务暂时",
+        "连接失败", "connecterror", "connecttimeout", "connection refused",
+        "dns", "name or service not known", "nodename nor servname",
+        "network is unreachable", "getaddrinfo",
     )):
         return True
 
-    # 泛化 timeout 若未命中上面的“响应/读超时”否定项：仍允许切换（多为连接侧文案）
-    if any(k in low for k in ("timeout", "timed out", "超时")):
-        return True
-
-    # 默认：未知错误允许切换一次（保持可用性）
-    return True
+    return False
 
 
 # 默认模型选路优先级表：映射标准模型名到首选/降级线路
@@ -1651,10 +1655,6 @@ def get_smart_route_candidates(model: str, resolution: str = "", size: str = "10
             if settings.ai_image_api_key:
                 candidates.append(provider)
 
-    # 兜底：若过滤后为空，回退使用 apimart / sub2api 暴露明细错误
-    if not candidates:
-        candidates = [PROVIDER_SUB2API, PROVIDER_APIMART]
-
     return candidates
 
 
@@ -1666,6 +1666,7 @@ async def smart_generate_image_async(
     resolution: str = "",
     user_id: str = "anonymous",
     on_progress: Callable[[int, str], Any] | None = None,
+    on_attempt: Callable[[str], Any] | None = None,
     on_accepted: Callable[[str, str], Any] | None = None,
 ) -> dict:
     """智能路由生图：按模型与配置选路，仅对暂态错误自动 Failover。
@@ -1676,6 +1677,11 @@ async def smart_generate_image_async(
     candidates = get_smart_route_candidates(model, resolution=resolution, size=size)
     logger.info("[smart-routing] Candidate providers for model=%s res=%s size=%s: %s",
                 model, resolution, size, candidates)
+    if not candidates:
+        raise RuntimeError(
+            f"没有已配置且支持模型 {_normalize_model_name(model)} "
+            f"（清晰度 {resolution or '默认'}）的生图线路"
+        )
 
     errors: list[str] = []
     primary_provider = candidates[0]
@@ -1720,6 +1726,11 @@ async def smart_generate_image_async(
         last_provider = provider
         provider_on_accepted = _make_on_accepted(provider)
         try:
+            if on_attempt:
+                try:
+                    on_attempt(provider)
+                except Exception as cb_exc:
+                    logger.warning("[smart-routing] on_attempt callback failed: %s", cb_exc)
             logger.info("[smart-routing] Attempting provider %s (%d/%d)", provider, index + 1, len(candidates))
             if provider == PROVIDER_SUB2API:
                 result = await generate_sub2api_async(
