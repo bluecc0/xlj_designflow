@@ -4950,7 +4950,11 @@ const ChatReturned = ({
         color: 'var(--warn)',
         marginBottom: 6
       }
-    }, '订阅线路失败，可手动切换到官方线路重试'), showPromptTrace && React.createElement(PromptTraceBlock, {
+    }, '已自动切换到「' + ({
+      sub2api: '订阅',
+      adobe2api: 'Adobe',
+      apimart: 'APIMart'
+    }[m.provider] || m.provider || '备用') + '」线路'), showPromptTrace && React.createElement(PromptTraceBlock, {
       title: m.activeSkill ? 'Skill 解析 · $' + m.activeSkill : '生图 Prompt',
       text: promptTraceText || resolvedPromptText
     }), agentEnabled && promptInstruction && React.createElement('div', {
@@ -7211,9 +7215,14 @@ const Composer = ({
     };
   };
   const protoPanelShell = function (children, width) {
+    // width:
+    // - 'fluid'  → 贴父容器左右，略缩进
+    // - 'fill'   → 贴满父容器内容区（用于生图参数，对齐输入框）
+    // - number   → 固定宽度
     const fluid = width === 'fluid';
+    const fill = width === 'fill';
     return React.createElement(React.Fragment, null,
-    // 透明 backdrop：点击面板外任意位置自动关闭提交
+    // 透明 backdrop：点击面板外任意位置自动关闭
     React.createElement('div', {
       key: 'backdrop',
       onClick: function () {
@@ -7228,18 +7237,19 @@ const Composer = ({
       key: 'panel',
       style: {
         position: 'absolute',
-        left: fluid ? 8 : 0,
-        right: fluid ? 8 : 'auto',
+        left: fill ? 0 : fluid ? 8 : 0,
+        right: fill ? 0 : fluid ? 8 : 'auto',
         bottom: 58,
-        width: fluid ? 'auto' : width || 360,
-        maxWidth: fluid ? 'none' : 'calc(100vw - 36px)',
+        width: fill || fluid ? 'auto' : width || 360,
+        maxWidth: fill || fluid ? 'none' : 'calc(100vw - 36px)',
         borderRadius: 14,
         border: '1px solid var(--line)',
         background: 'var(--panel)',
         boxShadow: '0 12px 28px rgba(25,24,20,0.08)',
-        padding: 14,
+        padding: fill ? '12px 12px 10px' : 14,
         zIndex: 20,
-        overflow: 'hidden'
+        overflow: 'hidden',
+        boxSizing: 'border-box'
       }
     }, children));
   };
@@ -7353,30 +7363,60 @@ const Composer = ({
       }))), 344);
     }
     if (prototypePanel === 'params') {
-      const sizeItems = [['auto', 'auto'], ['1:1', '1:1'], ['3:2', '3:2'], ['2:3', '2:3'], ['4:3', '4:3'], ['3:4', '3:4'], ['5:4', '5:4'], ['16:9', '16:9'], ['9:16', '9:16']];
+      const sizeItems = [['auto', '自动'], ['1:1', '1:1'], ['3:2', '3:2'], ['2:3', '2:3'], ['4:3', '4:3'], ['3:4', '3:4'], ['5:4', '5:4'], ['16:9', '16:9'], ['9:16', '9:16']];
+      const ratioIconSize = function (key) {
+        const base = 10;
+        if (key === 'auto') return {
+          w: base,
+          h: base
+        };
+        const parts = String(key).split(':');
+        const rw = parseFloat(parts[0]) || 1;
+        const rh = parseFloat(parts[1]) || 1;
+        if (rw >= rh) {
+          return {
+            w: base + 3,
+            h: Math.max(6, Math.round((base + 3) * rh / rw))
+          };
+        }
+        return {
+          w: Math.max(6, Math.round((base + 3) * rw / rh)),
+          h: base + 3
+        };
+      };
       const isImageParams = activeMode === 'ai-image';
       const isSpecialParams = activeMode === 'special' || activeMode === 'special_full';
       const isComposeParams = activeMode === 'compose';
       const isDistributeParams = activeMode === 'distribute';
       const paramsTitle = isImageParams ? '生图参数' : isSpecialParams ? '特殊品参数' : isComposeParams ? '合成参数' : isDistributeParams ? '铺货参数' : '问答参数';
-      return protoPanelShell(React.createElement(React.Fragment, null, React.createElement('div', {
+      const batchCountValue = normalizeBatchCount(aiBatchCount);
+      const imageFieldLabel = function (text, extraStyle) {
+        return React.createElement('div', {
+          style: Object.assign({
+            fontSize: 12,
+            fontWeight: 500,
+            color: 'var(--ink-2)',
+            letterSpacing: '-0.01em',
+            marginBottom: 8
+          }, extraStyle || {})
+        }, text);
+      };
+      return protoPanelShell(React.createElement(React.Fragment, null, !isImageParams && React.createElement('div', {
         style: {
           fontSize: 16,
           fontWeight: 700,
           letterSpacing: '-0.01em',
           color: 'var(--ink)'
         }
-      }, paramsTitle), isImageParams && React.createElement(React.Fragment, null, protoSectionLabel('尺寸'), React.createElement('div', {
+      }, paramsTitle), isImageParams && React.createElement(React.Fragment, null, imageFieldLabel('尺寸'), React.createElement('div', {
         style: {
           display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-          gap: 7,
-          padding: 9,
-          borderRadius: 15,
-          background: 'var(--panel-2)'
+          gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+          gap: 6
         }
       }, sizeItems.map(function (item) {
         const active = aiRatio === item[0];
+        const dims = ratioIconSize(item[0]);
         return React.createElement('button', {
           key: item[0],
           type: 'button',
@@ -7384,42 +7424,78 @@ const Composer = ({
             setAiRatio(item[0]);
           },
           style: {
-            width: '100%',
-            minHeight: 58,
-            borderRadius: 12,
-            background: active ? 'white' : 'transparent',
-            border: '1px solid ' + (active ? 'var(--line)' : 'transparent'),
-            boxShadow: 'none',
-            display: 'flex',
-            flexDirection: 'column',
+            display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
             gap: 5,
-            cursor: 'pointer'
-          }
-        }, React.createElement('div', {
-          style: {
-            width: item[0] === '16:9' ? 22 : item[0] === '9:16' ? 10 : 16,
-            height: item[0] === '9:16' ? 22 : item[0] === '16:9' ? 10 : 16,
-            border: '2px dashed ' + (active ? 'var(--ink)' : 'var(--ink-3)'),
-            borderRadius: 4
-          }
-        }), React.createElement('div', {
-          style: {
+            width: '100%',
+            height: 30,
+            padding: '0 4px',
+            borderRadius: 9,
+            background: active ? 'var(--accent-soft)' : 'var(--panel)',
+            border: '1px solid ' + (active ? 'color-mix(in oklch, var(--accent) 45%, white)' : 'var(--line)'),
+            color: active ? 'var(--accent-ink)' : 'var(--ink-2)',
+            boxShadow: 'none',
+            cursor: 'pointer',
             fontSize: 11.5,
-            color: active ? 'var(--ink)' : 'var(--ink-3)',
-            fontWeight: active ? 700 : 500
+            fontWeight: active ? 650 : 500,
+            letterSpacing: '-0.01em',
+            minWidth: 0
+          }
+        }, item[0] === 'auto' ? active ? React.createElement(I.check, {
+          size: 12,
+          stroke: 2.2
+        }) : React.createElement('div', {
+          style: {
+            width: 10,
+            height: 10,
+            borderRadius: 2.5,
+            border: '1.5px solid currentColor',
+            opacity: 0.7,
+            flexShrink: 0
+          }
+        }) : React.createElement('div', {
+          style: {
+            width: dims.w,
+            height: dims.h,
+            borderRadius: 2,
+            border: '1.5px solid currentColor',
+            opacity: active ? 0.95 : 0.7,
+            flexShrink: 0
+          }
+        }), React.createElement('span', {
+          style: {
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
           }
         }, item[1]));
-      })), protoSectionLabel('清晰度'), React.createElement('div', {
+      })), React.createElement('div', {
         style: {
-          flex: 1,
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-          gap: 4
+          height: 1,
+          background: 'var(--line)',
+          margin: '12px 0 12px'
         }
-      }, ['1K', '2K', '4K'].map(function (q) {
+      }), React.createElement('div', {
+        style: {
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 16,
+          alignItems: 'start'
+        }
+      }, React.createElement('div', null, imageFieldLabel('清晰度'), React.createElement('div', {
+        style: {
+          display: 'flex',
+          width: '100%',
+          alignItems: 'stretch',
+          border: '1px solid var(--line)',
+          borderRadius: 9,
+          overflow: 'hidden',
+          background: 'var(--panel)'
+        }
+      }, ['1K', '2K', '4K'].map(function (q, idx) {
         const disabled = !allowedAiQualities.includes(q);
+        const active = aiQuality === q;
         return React.createElement('button', {
           key: q,
           type: 'button',
@@ -7427,51 +7503,82 @@ const Composer = ({
           onClick: function () {
             if (!disabled) setAiQuality(q);
           },
-          style: Object.assign({}, protoChipStyle(aiQuality === q), {
-            width: '100%',
-            minWidth: 0,
+          style: {
+            flex: 1,
+            height: 30,
+            padding: 0,
+            border: 'none',
+            borderLeft: idx === 0 ? 'none' : '1px solid var(--line)',
+            background: active ? 'var(--ink)' : 'transparent',
+            color: active ? 'var(--panel)' : 'var(--ink-2)',
+            fontSize: 12,
+            fontWeight: active ? 700 : 550,
             cursor: disabled ? 'not-allowed' : 'pointer',
-            opacity: disabled ? 0.45 : 1
-          })
+            opacity: disabled ? 0.4 : 1,
+            letterSpacing: '-0.01em'
+          }
         }, q);
-      }))), isImageParams && React.createElement('div', {
+      }))), React.createElement('div', null, imageFieldLabel('并发数 1-4 张'), React.createElement('div', {
         style: {
           display: 'flex',
+          width: '100%',
           alignItems: 'center',
-          gap: 8,
-          marginTop: 8,
-          fontSize: 11.5,
-          color: 'var(--ink-3)',
-          flexWrap: 'nowrap'
-        }
-      }, React.createElement('span', null, '并发数'), React.createElement('input', {
-        type: 'text',
-        inputMode: 'numeric',
-        pattern: '[1-4]*',
-        value: aiBatchCount,
-        onChange: function (e) {
-          const raw = String(e.target.value || '').replace(/\D+/g, '').slice(0, 2);
-          setAiBatchCount(raw);
-        },
-        onBlur: function () {
-          setAiBatchCount(String(normalizeBatchCount(aiBatchCount)));
-        },
-        style: {
-          width: 38,
-          padding: '4px 6px',
+          height: 30,
           border: '1px solid var(--line)',
-          borderRadius: 6,
-          fontSize: 12,
-          color: 'var(--ink)',
-          background: 'var(--panel)',
-          textAlign: 'center'
+          borderRadius: 9,
+          overflow: 'hidden',
+          background: 'var(--panel)'
         }
-      }), React.createElement('span', {
+      }, React.createElement('button', {
+        type: 'button',
+        disabled: batchCountValue <= 1,
+        onClick: function () {
+          setAiBatchCount(String(Math.max(1, batchCountValue - 1)));
+        },
         style: {
-          fontSize: 10.5,
-          color: 'var(--ink-3)'
+          width: 34,
+          height: '100%',
+          display: 'grid',
+          placeItems: 'center',
+          color: batchCountValue <= 1 ? 'var(--ink-3)' : 'var(--ink-2)',
+          cursor: batchCountValue <= 1 ? 'not-allowed' : 'pointer',
+          fontSize: 15,
+          fontWeight: 500,
+          lineHeight: 1,
+          borderRight: '1px solid var(--line)',
+          background: 'transparent',
+          flexShrink: 0
         }
-      }, '张 (1-4)')), activeMode === 'chat' && React.createElement('div', {
+      }, '−'), React.createElement('div', {
+        style: {
+          flex: 1,
+          textAlign: 'center',
+          fontSize: 12.5,
+          fontWeight: 650,
+          color: 'var(--ink)',
+          letterSpacing: '-0.01em'
+        }
+      }, String(batchCountValue)), React.createElement('button', {
+        type: 'button',
+        disabled: batchCountValue >= 4,
+        onClick: function () {
+          setAiBatchCount(String(Math.min(4, batchCountValue + 1)));
+        },
+        style: {
+          width: 34,
+          height: '100%',
+          display: 'grid',
+          placeItems: 'center',
+          color: batchCountValue >= 4 ? 'var(--ink-3)' : 'var(--ink-2)',
+          cursor: batchCountValue >= 4 ? 'not-allowed' : 'pointer',
+          fontSize: 15,
+          fontWeight: 500,
+          lineHeight: 1,
+          borderLeft: '1px solid var(--line)',
+          background: 'transparent',
+          flexShrink: 0
+        }
+      }, '+'))))), activeMode === 'chat' && React.createElement('div', {
         style: {
           marginTop: 12,
           padding: '12px',
@@ -7596,7 +7703,7 @@ const Composer = ({
         style: protoChipStyle(true)
       }, '当前模板'), React.createElement('div', {
         style: protoChipStyle(false)
-      }, '自动匹配素材')))), 'fluid');
+      }, '自动匹配素材')))), isImageParams ? 'fill' : 'fluid');
     }
     return null;
   };
@@ -8883,6 +8990,7 @@ const Chat = ({
                 originalPrompt: statusData.original_prompt || m.originalPrompt,
                 resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt,
                 promptTrace: statusData.prompt_trace || m.promptTrace,
+                provider: statusData.provider || m.provider,
                 providerSwitched: statusData.providerSwitched || m.providerSwitched,
                 taskId: statusData.task_id || m.taskId,
                 jobId: jobId,
@@ -9074,7 +9182,9 @@ const Chat = ({
               return Object.assign({}, m, {
                 images: images,
                 progress: Math.max(m.progress || 0, Math.min(agg, 99)),
-                status: m.status === 'skill-parsed' ? m.status : 'processing'
+                status: m.status === 'skill-parsed' ? m.status : 'processing',
+                provider: patch.provider || m.provider,
+                providerSwitched: patch.providerSwitched || m.providerSwitched
               });
             }));
           };
@@ -9142,11 +9252,15 @@ const Chat = ({
               status: 'done',
               url: t.url,
               previewUrl: t.previewUrl,
-              progress: 100
+              progress: 100,
+              provider: t.provider,
+              providerSwitched: t.providerSwitched
             } : {
               status: 'failed',
               error: t.error,
-              progress: 100
+              progress: 100,
+              provider: t.provider,
+              providerSwitched: t.providerSwitched
             });
             finishIfAllTerminal();
           };
@@ -9183,21 +9297,29 @@ const Chat = ({
                   markTerminal(jid, {
                     status: 'done',
                     url: sd.image_url,
-                    previewUrl: sd.preview_url || sd.image_url
+                    previewUrl: sd.preview_url || sd.image_url,
+                    provider: sd.provider,
+                    providerSwitched: sd.providerSwitched
                   });
                 } else if (sd.status === 'done' && !sd.image_url) {
                   markTerminal(jid, {
                     status: 'failed',
-                    error: formatAiImageError('任务标记完成但未返回图片地址', jid)
+                    error: formatAiImageError('任务标记完成但未返回图片地址', jid),
+                    provider: sd.provider,
+                    providerSwitched: sd.providerSwitched
                   });
                 } else if (sd.status === 'failed') {
                   markTerminal(jid, {
                     status: 'failed',
-                    error: formatAiImageError(sd.error || '生图失败', jid)
+                    error: formatAiImageError(sd.error || '生图失败', jid),
+                    provider: sd.provider,
+                    providerSwitched: sd.providerSwitched
                   });
                 } else {
                   patchImage(jid, {
-                    progress: sd.progress || 0
+                    progress: sd.progress || 0,
+                    provider: sd.provider,
+                    providerSwitched: sd.providerSwitched
                   });
                 }
               }).catch(function (pollErr) {
@@ -9739,7 +9861,7 @@ const Chat = ({
     }) : null;
     if (activeSkill && !aiCmd && aiOptions.workflow !== 'download') {
       const skillImageOptions = Object.assign({}, aiOptions, {
-        provider: 'sub2api',
+        provider: 'auto',
         size: 'auto',
         resolution: aiOptions.resolution || '1K',
         batchCount: 1,
