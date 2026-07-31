@@ -249,6 +249,70 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.get("provider"), "adobe2api")
         self.assertTrue(result.get("provider_switched"))
 
+    async def test_two_round_cycle_recovers_on_second_pass(self) -> None:
+        """线路 1→2→3 全失败后，第二轮回到线路 1 成功，用户无感。"""
+        calls = {"sub": 0, "adobe": 0, "api": 0}
+
+        async def mock_sub2api(*args, **kwargs):
+            calls["sub"] += 1
+            if calls["sub"] == 1:
+                raise RuntimeError("CLIProxyAPI 生图失败：HTTP 500")
+            return {"url": "/ok.png", "provider": "sub2api"}
+
+        async def mock_adobe(*args, **kwargs):
+            calls["adobe"] += 1
+            raise RuntimeError("adobe2api 请求失败: HTTP 503 - unavailable")
+
+        async def mock_apimart(*args, **kwargs):
+            calls["api"] += 1
+            raise RuntimeError("提交生图任务失败：HTTP 502 - bad gateway")
+
+        attempts: list[str] = []
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
+             patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
+             patch.object(ai_image, "generate_image_async", side_effect=mock_apimart), \
+             patch.object(
+                 ai_image,
+                 "get_smart_route_candidates",
+                 return_value=["sub2api", "adobe2api", "apimart"],
+             ):
+            result = await ai_image.smart_generate_image_async(
+                model="gpt-image-2",
+                prompt="test",
+                user_id="u",
+                on_attempt=attempts.append,
+            )
+
+        self.assertEqual(calls, {"sub": 2, "adobe": 1, "api": 1})
+        self.assertEqual(attempts, ["sub2api", "adobe2api", "apimart", "sub2api"])
+        self.assertEqual(result.get("provider"), "sub2api")
+        self.assertTrue(result.get("provider_switched"))
+
+    async def test_two_round_all_fail_raises_after_full_cycle(self) -> None:
+        """两轮全部暂态失败后才抛错。"""
+        calls = {"sub": 0, "adobe": 0}
+
+        async def mock_sub2api(*args, **kwargs):
+            calls["sub"] += 1
+            raise RuntimeError("CLIProxyAPI 生图失败：HTTP 500")
+
+        async def mock_adobe(*args, **kwargs):
+            calls["adobe"] += 1
+            raise RuntimeError("adobe2api 请求失败: HTTP 503 - unavailable")
+
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
+             patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
+            with self.assertRaises(RuntimeError) as ctx:
+                await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                )
+
+        self.assertEqual(calls, {"sub": 2, "adobe": 2})
+        self.assertIn("2 轮", str(ctx.exception))
+
     def test_skill_generation_uses_smart_routing(self) -> None:
         chat_source = (
             Path(__file__).resolve().parents[1] / "frontend" / "src" / "Chat.jsx"

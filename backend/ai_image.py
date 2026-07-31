@@ -1688,6 +1688,10 @@ def get_smart_route_candidates(model: str, resolution: str = "", size: str = "10
     return candidates
 
 
+# 智能路由：候选线路完整轮询轮数。1→2→3 后再 1→2→3，都失败才抛错。
+SMART_ROUTE_ROUNDS = 2
+
+
 async def smart_generate_image_async(
     model: str,
     prompt: str,
@@ -1699,10 +1703,14 @@ async def smart_generate_image_async(
     on_attempt: Callable[[str], Any] | None = None,
     on_accepted: Callable[[str, str], Any] | None = None,
 ) -> dict:
-    """智能路由生图：按模型与配置选路，仅对暂态错误自动 Failover。
+    """智能路由生图：按模型与配置选路，暂态错误自动 Failover 并循环两轮。
+
+    用户无感：线路 1 失败 → 线路 2 → 线路 3（如有）→ 再回到线路 1…共两轮；
+    全部失败才把错误抛给用户。
 
     是否已提交上游由各 provider 的 on_accepted 明确信号决定。
     外层 on_accepted(provider, upstream_id) 用于立即持久化任务号。
+    已接受 / 状态不确定(ambiguous) 仍立即停止，避免重复计费。
     """
     candidates = get_smart_route_candidates(model, resolution=resolution, size=size)
     logger.info("[smart-routing] Candidate providers for model=%s res=%s size=%s: %s",
@@ -1713,10 +1721,18 @@ async def smart_generate_image_async(
             f"（清晰度 {resolution or '默认'}）的生图线路"
         )
 
+    # 展开为两轮轮询序列： [a,b,c] → [a,b,c,a,b,c]
+    schedule: list[tuple[int, str]] = [
+        (round_idx + 1, provider)
+        for round_idx in range(SMART_ROUTE_ROUNDS)
+        for provider in candidates
+    ]
+
     errors: list[str] = []
     primary_provider = candidates[0]
     accepted: dict[str, str] = {}
     last_provider = primary_provider
+    attempt_count = 0
 
     def _make_on_accepted(provider_name: str):
         def _inner(upstream_id: str = "") -> None:
@@ -1752,8 +1768,16 @@ async def smart_generate_image_async(
         wrapped.stage = getattr(exc, "stage", "smart_route")  # type: ignore[attr-defined]
         raise wrapped from exc
 
-    for index, provider in enumerate(candidates):
+    for index, (round_no, provider) in enumerate(schedule):
         last_provider = provider
+        # 同一线路若上一轮已 accepted，绝不再重试，避免重复计费
+        if provider in accepted:
+            logger.warning(
+                "[smart-routing] Skip provider %s on round %d: already accepted upstream",
+                provider, round_no,
+            )
+            continue
+
         provider_on_accepted = _make_on_accepted(provider)
         try:
             if on_attempt:
@@ -1761,7 +1785,11 @@ async def smart_generate_image_async(
                     on_attempt(provider)
                 except Exception as cb_exc:
                     logger.warning("[smart-routing] on_attempt callback failed: %s", cb_exc)
-            logger.info("[smart-routing] Attempting provider %s (%d/%d)", provider, index + 1, len(candidates))
+            attempt_count += 1
+            logger.info(
+                "[smart-routing] Attempting provider %s (round %d/%d, step %d/%d)",
+                provider, round_no, SMART_ROUTE_ROUNDS, index + 1, len(schedule),
+            )
             if provider == PROVIDER_SUB2API:
                 result = await generate_sub2api_async(
                     model=model, prompt=prompt, images=images,
@@ -1792,11 +1820,12 @@ async def smart_generate_image_async(
             accepted_tid = (accepted.get(provider) or "").strip()
             if accepted_tid and not result.get("task_id"):
                 result["task_id"] = accepted_tid
-            if provider != primary_provider:
+            # 首次首选线路成功且未经历过失败：不标记切换；否则用户无感的静默切换
+            if attempt_count > 1 or provider != primary_provider or round_no > 1:
                 result["provider_switched"] = True
                 logger.warning(
-                    "[smart-routing] Successfully failovered from %s to %s",
-                    primary_provider, provider
+                    "[smart-routing] Successfully failovered to %s (round %d, after %d attempts; primary=%s)",
+                    provider, round_no, attempt_count, primary_provider,
                 )
             return result
 
@@ -1812,35 +1841,54 @@ async def smart_generate_image_async(
                     model=model,
                     task_id=str(accepted.get(provider) or ""),
                 )
-            logger.warning("[smart-routing] Provider %s failed: %s", provider, err_msg)
-            errors.append(f"{provider}: {err_msg}")
+            logger.warning(
+                "[smart-routing] Provider %s failed (round %d): %s",
+                provider, round_no, err_msg,
+            )
+            errors.append(f"R{round_no}/{provider}: {err_msg}")
 
-            is_last = index >= len(candidates) - 1
+            is_last = index >= len(schedule) - 1
             can_failover = is_transient_provider_error(exc) and not already_accepted and not is_last
-            if already_accepted or isinstance(exc, AmbiguousUpstreamError) or not can_failover:
+
+            # 已接受 / 状态不确定：立即停，绝不继续轮询
+            if already_accepted or isinstance(exc, AmbiguousUpstreamError):
                 if already_accepted:
                     logger.warning(
-                        "[smart-routing] Provider %s already accepted upstream (id=%s); skip failover to avoid duplicate billing",
+                        "[smart-routing] Provider %s already accepted upstream (id=%s); stop to avoid duplicate billing",
                         provider, accepted.get(provider),
                     )
-                elif isinstance(exc, AmbiguousUpstreamError):
+                else:
                     logger.warning(
-                        "[smart-routing] Provider %s ambiguous transport error; skip failover to avoid duplicate billing",
-                        provider,
-                    )
-                elif not is_last:
-                    logger.warning(
-                        "[smart-routing] Provider %s error is non-transient; stop failover",
+                        "[smart-routing] Provider %s ambiguous transport error; stop to avoid duplicate billing",
                         provider,
                     )
                 _raise_with_context(
                     exc,
                     provider,
                     err_msg,
-                    force_ambiguous=already_accepted or isinstance(exc, AmbiguousUpstreamError),
+                    force_ambiguous=True,
                 )
 
-    final = RuntimeError(f"所有可用 AI 生图线路均尝试失败：{' | '.join(errors)}")
+            # 业务性硬失败（如 400）：继续换线也救不了同一 prompt，立即停
+            if not is_transient_provider_error(exc):
+                if not is_last:
+                    logger.warning(
+                        "[smart-routing] Provider %s error is non-transient; stop failover",
+                        provider,
+                    )
+                _raise_with_context(exc, provider, err_msg, force_ambiguous=False)
+
+            # 暂态错误且还有后续步骤：静默继续（含第二轮回到线路 1）
+            if can_failover:
+                logger.info(
+                    "[smart-routing] Transient failure on %s; continue schedule (%d/%d)",
+                    provider, index + 1, len(schedule),
+                )
+                continue
+
+    final = RuntimeError(
+        f"所有可用 AI 生图线路均尝试失败（{SMART_ROUTE_ROUNDS} 轮）：{' | '.join(errors)}"
+    )
     final.provider = last_provider  # type: ignore[attr-defined]
     final.task_id = accepted.get(last_provider, "")  # type: ignore[attr-defined]
     raise final
