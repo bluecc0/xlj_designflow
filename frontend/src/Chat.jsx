@@ -2347,6 +2347,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   };
 
   const overlayRef = React.useRef(null);
+  const hasRefTag = React.useMemo(() => /([@＃#](?:图片|图)?\d+|(?:图|图片)\d+)/.test(text), [text]);
+
   const handleScrollSync = React.useCallback((e) => {
     if (overlayRef.current) {
       overlayRef.current.scrollTop = e.target.scrollTop;
@@ -2364,19 +2366,25 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           <span
             key={i}
             style={{
-              borderRadius: 5,
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: '0px 5px',
+              margin: '0 1px',
+              borderRadius: 6,
               background: 'var(--accent-soft)',
-              color: 'transparent',
+              color: 'var(--accent-ink)',
               border: '1px solid rgba(99, 102, 241, 0.35)',
-              padding: '0 3px',
-              fontWeight: 600,
+              fontWeight: 650,
+              fontSize: 12,
+              lineHeight: 1.3,
+              verticalAlign: 'baseline',
             }}
           >
             {part}
           </span>
         );
       }
-      return <span key={i} style={{ color: 'transparent' }}>{part}</span>;
+      return <span key={i} style={{ color: 'var(--ink)' }}>{part}</span>;
     });
   }, []);
 
@@ -3516,12 +3524,35 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           minHeight: composerHeight ? 56 : 92,
           maxHeight: composerHeight ? undefined : 180,
         }}>
+          {hasRefTag && (
+            <div
+              ref={overlayRef}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                boxSizing: 'border-box',
+                fontSize: 13,
+                lineHeight: 1.45,
+                fontFamily: 'inherit',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                margin: 0,
+                padding: '2px 2px 0',
+                pointerEvents: 'none',
+                overflowY: 'auto',
+                zIndex: 0,
+              }}
+            >
+              {renderFormattedOverlayText(displayValue)}
+            </div>
+          )}
           <textarea
             className="composer-textarea"
             ref={taRef}
             value={displayValue}
             onChange={handleTextChange}
             onKeyDown={handleKeyDown}
+            onScroll={handleScrollSync}
             onPaste={handlePaste}
             onClick={clampSelection}
             onSelect={clampSelection}
@@ -3537,7 +3568,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
               fontSize: 13,
               lineHeight: 1.45,
               fontFamily: 'inherit',
-              color: 'var(--ink)',
+              color: hasRefTag ? 'transparent' : 'var(--ink)',
               caretColor: 'var(--ink)',
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
