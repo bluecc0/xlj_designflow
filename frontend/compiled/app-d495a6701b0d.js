@@ -4950,7 +4950,11 @@ const ChatReturned = ({
         color: 'var(--warn)',
         marginBottom: 6
       }
-    }, '订阅线路失败，可手动切换到官方线路重试'), showPromptTrace && React.createElement(PromptTraceBlock, {
+    }, '已自动切换到「' + ({
+      sub2api: '订阅',
+      adobe2api: 'Adobe',
+      apimart: 'APIMart'
+    }[m.provider] || m.provider || '备用') + '」线路'), showPromptTrace && React.createElement(PromptTraceBlock, {
       title: m.activeSkill ? 'Skill 解析 · $' + m.activeSkill : '生图 Prompt',
       text: promptTraceText || resolvedPromptText
     }), agentEnabled && promptInstruction && React.createElement('div', {
@@ -6044,6 +6048,7 @@ const normalizeReferenceUrl = function (rawUrl) {
   }
 };
 const MAX_REFERENCE_IMAGES = 9;
+const MAX_REFERENCE_IMAGE_BYTES = 5 * 1024 * 1024; // 单张参考图硬限制 5MB
 const CHAT_INSPIRATION_CATEGORIES = [{
   id: 'share_card',
   label: '分享卡片'
@@ -6300,6 +6305,13 @@ const Composer = ({
           });
           if (!response.ok) throw new Error('load_reference_failed');
           const blob = await response.blob();
+          if (blob.size > MAX_REFERENCE_IMAGE_BYTES) {
+            const err = new Error('reference_too_large');
+            err.fileName = item.name;
+            err.sourceUrl = item.sourceUrl;
+            err.fileSize = blob.size;
+            throw err;
+          }
           const ext = blob.type && blob.type.indexOf('/') > -1 ? blob.type.split('/')[1] : 'png';
           const safeName = item.name && /\.[a-z0-9]+$/i.test(item.name) ? item.name : (item.name || 'reference') + '.' + ext;
           const file = new File([blob], safeName, {
@@ -6313,6 +6325,15 @@ const Composer = ({
         if (!alive) {
           return;
         }
+        const oversizedNames = [];
+        loaded.forEach(function (result) {
+          if (result && result.status === 'rejected' && result.reason && result.reason.message === 'reference_too_large') {
+            oversizedNames.push(result.reason.fileName || '参考图');
+          }
+        });
+        if (oversizedNames.length) {
+          window.alert('以下参考图超过 5MB，已跳过：\n' + oversizedNames.slice(0, 5).join('\n') + (oversizedNames.length > 5 ? '\n…共 ' + oversizedNames.length + ' 张' : ''));
+        }
         setCanvasRefImages(function (prev) {
           return prev.map(function (entry) {
             if (!entry || !entry.sourceUrl) return entry;
@@ -6320,10 +6341,14 @@ const Composer = ({
               return result && result.status === 'fulfilled' && result.value && result.value.sourceUrl === entry.sourceUrl;
             });
             if (match && match.status === 'fulfilled') return match.value;
+            const oversized = loaded.find(function (result) {
+              return result && result.status === 'rejected' && result.reason && result.reason.message === 'reference_too_large' && result.reason.sourceUrl === entry.sourceUrl;
+            });
+            if (oversized) return null;
             return Object.assign({}, entry, {
               pending: false
             });
-          });
+          }).filter(Boolean);
         });
       } catch (err) {
         console.error('Load canvas reference images failed:', err);
@@ -6700,6 +6725,59 @@ const Composer = ({
     setSelectedSkill('');
     clearRefImages();
   };
+  const overlayRef = React.useRef(null);
+  const hasRefTag = React.useMemo(() => /([@＃#](?:图片|图)?\d+|(?:图|图片)\d+)/.test(text), [text]);
+  const handleScrollSync = React.useCallback(e => {
+    if (overlayRef.current) {
+      overlayRef.current.scrollTop = e.target.scrollTop;
+    }
+  }, []);
+  const renderFormattedOverlayText = React.useCallback(function (rawText) {
+    if (!rawText) return null;
+    const regex = /([@＃#](?:图片|图)?\d+|(?:图|图片)\d+)/g;
+    const parts = String(rawText).split(regex);
+    return parts.map(function (part, i) {
+      const isTag = /^([@＃#](?:图片|图)?\d+|(?:图|图片)\d+)$/.test(part);
+      if (isTag) {
+        return /*#__PURE__*/React.createElement("mark", {
+          key: i,
+          style: {
+            background: 'rgba(99, 102, 241, 0.12)',
+            color: 'transparent',
+            borderRadius: 3,
+            boxShadow: '0 0 0 2px rgba(99, 102, 241, 0.12)',
+            padding: 0,
+            margin: 0,
+            font: 'inherit'
+          }
+        }, part);
+      }
+      return /*#__PURE__*/React.createElement("span", {
+        key: i,
+        style: {
+          color: 'transparent'
+        }
+      }, part);
+    });
+  }, []);
+  const insertRefTag = React.useCallback(idx => {
+    const tag = `@图片${idx + 1} `;
+    setText(function (prev) {
+      const current = String(prev || '');
+      const input = taRef.current;
+      if (!input) return current + tag;
+      const start = input.selectionStart ?? current.length;
+      const end = input.selectionEnd ?? current.length;
+      const next = current.slice(0, start) + tag + current.slice(end);
+      setTimeout(function () {
+        if (!taRef.current) return;
+        taRef.current.focus();
+        const newPos = start + tag.length;
+        taRef.current.setSelectionRange(newPos, newPos);
+      }, 0);
+      return next;
+    });
+  }, []);
   const handleKeyDown = e => {
     const el = taRef.current;
     const start = el ? el.selectionStart : 0;
@@ -6710,6 +6788,27 @@ const Composer = ({
       setPrototypePanel('');
       setSkillMenuDismissed(true);
       return;
+    }
+    if (e.key === 'Backspace' && start === end) {
+      const rawText = String(text || '');
+      const regex = /([@＃#](?:图片|图)?\d+|(?:图|图片)\d+)/g;
+      let match;
+      while ((match = regex.exec(rawText)) !== null) {
+        const mStart = match.index;
+        const mEnd = match.index + match[0].length;
+        if (start > mStart && start <= mEnd) {
+          e.preventDefault();
+          const nextText = rawText.slice(0, mStart) + rawText.slice(mEnd);
+          setText(nextText);
+          setTimeout(() => {
+            if (taRef.current) {
+              taRef.current.focus();
+              taRef.current.setSelectionRange(mStart, mStart);
+            }
+          }, 0);
+          return;
+        }
+      }
     }
     if (e.key === 'Backspace' && String(text || '').trimStart().startsWith('$') && start <= String(text || '').indexOf('$') + 1 && end <= String(text || '').indexOf('$') + 1) {
       e.preventDefault();
@@ -6736,35 +6835,10 @@ const Composer = ({
       return;
     }
     if (lockedCommand) {
-      const hasSelectionInPrefix = start < lockedPrefixLength || end < lockedPrefixLength;
       if (e.key === 'ArrowUp' && !text.trim() && files.length === 0 && refImages.length === 0 && lastSubmittedMessage) {
         e.preventDefault();
         restoreMessage(lastSubmittedMessage);
         return;
-      }
-      if (e.key === 'Backspace' && !text && start <= lockedPrefixLength && end <= lockedPrefixLength) {
-        e.preventDefault();
-        setLockedCommand('');
-        setSelectedWorkflow('chat');
-        return;
-      }
-      if (hasSelectionInPrefix) {
-        if (e.key === 'Backspace' || e.key === 'Delete' || e.key === 'Enter' || e.key === 'Tab' || e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-          e.preventDefault();
-          requestAnimationFrame(() => {
-            const input = taRef.current;
-            if (input) input.setSelectionRange(lockedPrefixLength, lockedPrefixLength);
-          });
-          return;
-        }
-        if (e.key === 'Home' || e.key === 'ArrowLeft') {
-          e.preventDefault();
-          requestAnimationFrame(() => {
-            const input = taRef.current;
-            if (input) input.setSelectionRange(lockedPrefixLength, lockedPrefixLength);
-          });
-          return;
-        }
       }
     }
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -6797,12 +6871,8 @@ const Composer = ({
         setText(next.slice(lockedCommand.length).trimStart());
         return;
       }
-      if (next === lockedCommand || next === lockedCommand + '') {
+      if (next === lockedCommand) {
         setText('');
-        return;
-      }
-      if (next.startsWith(lockedCommand)) {
-        setText(next.slice(lockedCommand.length).replace(/^\s+/, ''));
         return;
       }
       setText(next);
@@ -6911,10 +6981,27 @@ const Composer = ({
   const addImageFiles = React.useCallback(files => {
     const images = Array.from(files || []).filter(f => f && f.type && f.type.startsWith('image/'));
     if (!images.length) return 0;
+    const accepted = [];
+    const oversized = [];
+    images.forEach(function (file) {
+      if (file && typeof file.size === 'number' && file.size > MAX_REFERENCE_IMAGE_BYTES) {
+        oversized.push(file);
+      } else {
+        accepted.push(file);
+      }
+    });
+    if (oversized.length) {
+      const names = oversized.map(function (f) {
+        const sizeMb = (f.size / (1024 * 1024)).toFixed(1);
+        return (f.name || '未命名图片') + '（' + sizeMb + 'MB）';
+      });
+      window.alert('单张参考图不能超过 5MB，以下文件已跳过：\n' + names.slice(0, 5).join('\n') + (names.length > 5 ? '\n…共 ' + names.length + ' 张' : ''));
+    }
+    if (!accepted.length) return 0;
     setManualRefImages(prev => {
       const remaining = Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - prev.length);
       if (remaining <= 0) return prev;
-      const toAdd = images.slice(0, remaining).map(file => ({
+      const toAdd = accepted.slice(0, remaining).map(file => ({
         file,
         name: file.name,
         previewUrl: URL.createObjectURL(file),
@@ -6924,7 +7011,7 @@ const Composer = ({
       }));
       return [...prev, ...toAdd];
     });
-    return Math.min(images.length, Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - manualRefImages.length));
+    return Math.min(accepted.length, Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - manualRefImages.length));
   }, [canvasRefImages.length, manualRefImages.length]);
   const handleDragEnter = e => {
     if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
@@ -7211,9 +7298,14 @@ const Composer = ({
     };
   };
   const protoPanelShell = function (children, width) {
+    // width:
+    // - 'fluid'  → 贴父容器左右，略缩进
+    // - 'fill'   → 贴满父容器内容区（用于生图参数，对齐输入框）
+    // - number   → 固定宽度
     const fluid = width === 'fluid';
+    const fill = width === 'fill';
     return React.createElement(React.Fragment, null,
-    // 透明 backdrop：点击面板外任意位置自动关闭提交
+    // 透明 backdrop：点击面板外任意位置自动关闭
     React.createElement('div', {
       key: 'backdrop',
       onClick: function () {
@@ -7228,18 +7320,19 @@ const Composer = ({
       key: 'panel',
       style: {
         position: 'absolute',
-        left: fluid ? 8 : 0,
-        right: fluid ? 8 : 'auto',
+        left: fill ? 0 : fluid ? 8 : 0,
+        right: fill ? 0 : fluid ? 8 : 'auto',
         bottom: 58,
-        width: fluid ? 'auto' : width || 360,
-        maxWidth: fluid ? 'none' : 'calc(100vw - 36px)',
+        width: fill || fluid ? 'auto' : width || 360,
+        maxWidth: fill || fluid ? 'none' : 'calc(100vw - 36px)',
         borderRadius: 14,
         border: '1px solid var(--line)',
         background: 'var(--panel)',
         boxShadow: '0 12px 28px rgba(25,24,20,0.08)',
-        padding: 14,
+        padding: fill ? '12px 12px 10px' : 14,
         zIndex: 20,
-        overflow: 'hidden'
+        overflow: 'hidden',
+        boxSizing: 'border-box'
       }
     }, children));
   };
@@ -7353,30 +7446,60 @@ const Composer = ({
       }))), 344);
     }
     if (prototypePanel === 'params') {
-      const sizeItems = [['auto', 'auto'], ['1:1', '1:1'], ['3:2', '3:2'], ['2:3', '2:3'], ['4:3', '4:3'], ['3:4', '3:4'], ['5:4', '5:4'], ['16:9', '16:9'], ['9:16', '9:16']];
+      const sizeItems = [['auto', '自动'], ['1:1', '1:1'], ['3:2', '3:2'], ['2:3', '2:3'], ['4:3', '4:3'], ['3:4', '3:4'], ['5:4', '5:4'], ['16:9', '16:9'], ['9:16', '9:16']];
+      const ratioIconSize = function (key) {
+        const base = 10;
+        if (key === 'auto') return {
+          w: base,
+          h: base
+        };
+        const parts = String(key).split(':');
+        const rw = parseFloat(parts[0]) || 1;
+        const rh = parseFloat(parts[1]) || 1;
+        if (rw >= rh) {
+          return {
+            w: base + 3,
+            h: Math.max(6, Math.round((base + 3) * rh / rw))
+          };
+        }
+        return {
+          w: Math.max(6, Math.round((base + 3) * rw / rh)),
+          h: base + 3
+        };
+      };
       const isImageParams = activeMode === 'ai-image';
       const isSpecialParams = activeMode === 'special' || activeMode === 'special_full';
       const isComposeParams = activeMode === 'compose';
       const isDistributeParams = activeMode === 'distribute';
       const paramsTitle = isImageParams ? '生图参数' : isSpecialParams ? '特殊品参数' : isComposeParams ? '合成参数' : isDistributeParams ? '铺货参数' : '问答参数';
-      return protoPanelShell(React.createElement(React.Fragment, null, React.createElement('div', {
+      const batchCountValue = normalizeBatchCount(aiBatchCount);
+      const imageFieldLabel = function (text, extraStyle) {
+        return React.createElement('div', {
+          style: Object.assign({
+            fontSize: 12,
+            fontWeight: 500,
+            color: 'var(--ink-2)',
+            letterSpacing: '-0.01em',
+            marginBottom: 8
+          }, extraStyle || {})
+        }, text);
+      };
+      return protoPanelShell(React.createElement(React.Fragment, null, !isImageParams && React.createElement('div', {
         style: {
           fontSize: 16,
           fontWeight: 700,
           letterSpacing: '-0.01em',
           color: 'var(--ink)'
         }
-      }, paramsTitle), isImageParams && React.createElement(React.Fragment, null, protoSectionLabel('尺寸'), React.createElement('div', {
+      }, paramsTitle), isImageParams && React.createElement(React.Fragment, null, imageFieldLabel('尺寸'), React.createElement('div', {
         style: {
           display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-          gap: 7,
-          padding: 9,
-          borderRadius: 15,
-          background: 'var(--panel-2)'
+          gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+          gap: 6
         }
       }, sizeItems.map(function (item) {
         const active = aiRatio === item[0];
+        const dims = ratioIconSize(item[0]);
         return React.createElement('button', {
           key: item[0],
           type: 'button',
@@ -7384,42 +7507,78 @@ const Composer = ({
             setAiRatio(item[0]);
           },
           style: {
-            width: '100%',
-            minHeight: 58,
-            borderRadius: 12,
-            background: active ? 'white' : 'transparent',
-            border: '1px solid ' + (active ? 'var(--line)' : 'transparent'),
-            boxShadow: 'none',
-            display: 'flex',
-            flexDirection: 'column',
+            display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
             gap: 5,
-            cursor: 'pointer'
-          }
-        }, React.createElement('div', {
-          style: {
-            width: item[0] === '16:9' ? 22 : item[0] === '9:16' ? 10 : 16,
-            height: item[0] === '9:16' ? 22 : item[0] === '16:9' ? 10 : 16,
-            border: '2px dashed ' + (active ? 'var(--ink)' : 'var(--ink-3)'),
-            borderRadius: 4
-          }
-        }), React.createElement('div', {
-          style: {
+            width: '100%',
+            height: 30,
+            padding: '0 4px',
+            borderRadius: 9,
+            background: active ? 'var(--accent-soft)' : 'var(--panel)',
+            border: '1px solid ' + (active ? 'color-mix(in oklch, var(--accent) 45%, white)' : 'var(--line)'),
+            color: active ? 'var(--accent-ink)' : 'var(--ink-2)',
+            boxShadow: 'none',
+            cursor: 'pointer',
             fontSize: 11.5,
-            color: active ? 'var(--ink)' : 'var(--ink-3)',
-            fontWeight: active ? 700 : 500
+            fontWeight: active ? 650 : 500,
+            letterSpacing: '-0.01em',
+            minWidth: 0
+          }
+        }, item[0] === 'auto' ? active ? React.createElement(I.check, {
+          size: 12,
+          stroke: 2.2
+        }) : React.createElement('div', {
+          style: {
+            width: 10,
+            height: 10,
+            borderRadius: 2.5,
+            border: '1.5px solid currentColor',
+            opacity: 0.7,
+            flexShrink: 0
+          }
+        }) : React.createElement('div', {
+          style: {
+            width: dims.w,
+            height: dims.h,
+            borderRadius: 2,
+            border: '1.5px solid currentColor',
+            opacity: active ? 0.95 : 0.7,
+            flexShrink: 0
+          }
+        }), React.createElement('span', {
+          style: {
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
           }
         }, item[1]));
-      })), protoSectionLabel('清晰度'), React.createElement('div', {
+      })), React.createElement('div', {
         style: {
-          flex: 1,
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-          gap: 4
+          height: 1,
+          background: 'var(--line)',
+          margin: '12px 0 12px'
         }
-      }, ['1K', '2K', '4K'].map(function (q) {
+      }), React.createElement('div', {
+        style: {
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 16,
+          alignItems: 'start'
+        }
+      }, React.createElement('div', null, imageFieldLabel('清晰度'), React.createElement('div', {
+        style: {
+          display: 'flex',
+          width: '100%',
+          alignItems: 'stretch',
+          border: '1px solid var(--line)',
+          borderRadius: 9,
+          overflow: 'hidden',
+          background: 'var(--panel)'
+        }
+      }, ['1K', '2K', '4K'].map(function (q, idx) {
         const disabled = !allowedAiQualities.includes(q);
+        const active = aiQuality === q;
         return React.createElement('button', {
           key: q,
           type: 'button',
@@ -7427,51 +7586,82 @@ const Composer = ({
           onClick: function () {
             if (!disabled) setAiQuality(q);
           },
-          style: Object.assign({}, protoChipStyle(aiQuality === q), {
-            width: '100%',
-            minWidth: 0,
+          style: {
+            flex: 1,
+            height: 30,
+            padding: 0,
+            border: 'none',
+            borderLeft: idx === 0 ? 'none' : '1px solid var(--line)',
+            background: active ? 'var(--ink)' : 'transparent',
+            color: active ? 'var(--panel)' : 'var(--ink-2)',
+            fontSize: 12,
+            fontWeight: active ? 700 : 550,
             cursor: disabled ? 'not-allowed' : 'pointer',
-            opacity: disabled ? 0.45 : 1
-          })
+            opacity: disabled ? 0.4 : 1,
+            letterSpacing: '-0.01em'
+          }
         }, q);
-      }))), isImageParams && React.createElement('div', {
+      }))), React.createElement('div', null, imageFieldLabel('并发数 1-4 张'), React.createElement('div', {
         style: {
           display: 'flex',
+          width: '100%',
           alignItems: 'center',
-          gap: 8,
-          marginTop: 8,
-          fontSize: 11.5,
-          color: 'var(--ink-3)',
-          flexWrap: 'nowrap'
-        }
-      }, React.createElement('span', null, '并发数'), React.createElement('input', {
-        type: 'text',
-        inputMode: 'numeric',
-        pattern: '[1-4]*',
-        value: aiBatchCount,
-        onChange: function (e) {
-          const raw = String(e.target.value || '').replace(/\D+/g, '').slice(0, 2);
-          setAiBatchCount(raw);
-        },
-        onBlur: function () {
-          setAiBatchCount(String(normalizeBatchCount(aiBatchCount)));
-        },
-        style: {
-          width: 38,
-          padding: '4px 6px',
+          height: 30,
           border: '1px solid var(--line)',
-          borderRadius: 6,
-          fontSize: 12,
-          color: 'var(--ink)',
-          background: 'var(--panel)',
-          textAlign: 'center'
+          borderRadius: 9,
+          overflow: 'hidden',
+          background: 'var(--panel)'
         }
-      }), React.createElement('span', {
+      }, React.createElement('button', {
+        type: 'button',
+        disabled: batchCountValue <= 1,
+        onClick: function () {
+          setAiBatchCount(String(Math.max(1, batchCountValue - 1)));
+        },
         style: {
-          fontSize: 10.5,
-          color: 'var(--ink-3)'
+          width: 34,
+          height: '100%',
+          display: 'grid',
+          placeItems: 'center',
+          color: batchCountValue <= 1 ? 'var(--ink-3)' : 'var(--ink-2)',
+          cursor: batchCountValue <= 1 ? 'not-allowed' : 'pointer',
+          fontSize: 15,
+          fontWeight: 500,
+          lineHeight: 1,
+          borderRight: '1px solid var(--line)',
+          background: 'transparent',
+          flexShrink: 0
         }
-      }, '张 (1-4)')), activeMode === 'chat' && React.createElement('div', {
+      }, '−'), React.createElement('div', {
+        style: {
+          flex: 1,
+          textAlign: 'center',
+          fontSize: 12.5,
+          fontWeight: 650,
+          color: 'var(--ink)',
+          letterSpacing: '-0.01em'
+        }
+      }, String(batchCountValue)), React.createElement('button', {
+        type: 'button',
+        disabled: batchCountValue >= 4,
+        onClick: function () {
+          setAiBatchCount(String(Math.min(4, batchCountValue + 1)));
+        },
+        style: {
+          width: 34,
+          height: '100%',
+          display: 'grid',
+          placeItems: 'center',
+          color: batchCountValue >= 4 ? 'var(--ink-3)' : 'var(--ink-2)',
+          cursor: batchCountValue >= 4 ? 'not-allowed' : 'pointer',
+          fontSize: 15,
+          fontWeight: 500,
+          lineHeight: 1,
+          borderLeft: '1px solid var(--line)',
+          background: 'transparent',
+          flexShrink: 0
+        }
+      }, '+'))))), activeMode === 'chat' && React.createElement('div', {
         style: {
           marginTop: 12,
           padding: '12px',
@@ -7596,7 +7786,7 @@ const Composer = ({
         style: protoChipStyle(true)
       }, '当前模板'), React.createElement('div', {
         style: protoChipStyle(false)
-      }, '自动匹配素材')))), 'fluid');
+      }, '自动匹配素材')))), isImageParams ? 'fill' : 'fluid');
     }
     return null;
   };
@@ -7748,12 +7938,30 @@ const Composer = ({
       minHeight: composerHeight ? 56 : 92,
       maxHeight: composerHeight ? undefined : 180
     }
-  }, /*#__PURE__*/React.createElement("textarea", {
+  }, hasRefTag && /*#__PURE__*/React.createElement("div", {
+    ref: overlayRef,
+    style: {
+      position: 'absolute',
+      inset: 0,
+      boxSizing: 'border-box',
+      fontSize: 13,
+      lineHeight: 1.45,
+      fontFamily: 'inherit',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      margin: 0,
+      padding: '2px 2px 0',
+      pointerEvents: 'none',
+      overflowY: 'auto',
+      zIndex: 0
+    }
+  }, renderFormattedOverlayText(displayValue)), /*#__PURE__*/React.createElement("textarea", {
     className: "composer-textarea",
     ref: taRef,
     value: displayValue,
     onChange: handleTextChange,
     onKeyDown: handleKeyDown,
+    onScroll: handleScrollSync,
     onPaste: handlePaste,
     onClick: clampSelection,
     onSelect: clampSelection,
@@ -7823,6 +8031,26 @@ const Composer = ({
       border: '1px solid var(--line)'
     }
   }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => insertRefTag(idx),
+    title: `点击在 Prompt 中插入 @图片${idx + 1}`,
+    style: {
+      position: 'absolute',
+      bottom: 2,
+      left: 2,
+      padding: '1px 3px',
+      borderRadius: 4,
+      background: 'rgba(20, 22, 40, 0.72)',
+      color: 'white',
+      fontSize: 9,
+      fontWeight: 600,
+      lineHeight: 1,
+      cursor: 'pointer',
+      backdropFilter: 'blur(4px)',
+      border: 'none'
+    }
+  }, "@", idx + 1), /*#__PURE__*/React.createElement("button", {
+    type: "button",
     onClick: () => removeRefImage(idx),
     style: {
       position: 'absolute',
@@ -7837,7 +8065,8 @@ const Composer = ({
       placeItems: 'center',
       fontSize: 10,
       lineHeight: 1,
-      cursor: 'pointer'
+      cursor: 'pointer',
+      border: 'none'
     }
   }, "\xD7"))), /*#__PURE__*/React.createElement("span", {
     style: {
@@ -8883,6 +9112,7 @@ const Chat = ({
                 originalPrompt: statusData.original_prompt || m.originalPrompt,
                 resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt,
                 promptTrace: statusData.prompt_trace || m.promptTrace,
+                provider: statusData.provider || m.provider,
                 providerSwitched: statusData.providerSwitched || m.providerSwitched,
                 taskId: statusData.task_id || m.taskId,
                 jobId: jobId,
@@ -9074,7 +9304,9 @@ const Chat = ({
               return Object.assign({}, m, {
                 images: images,
                 progress: Math.max(m.progress || 0, Math.min(agg, 99)),
-                status: m.status === 'skill-parsed' ? m.status : 'processing'
+                status: m.status === 'skill-parsed' ? m.status : 'processing',
+                provider: patch.provider || m.provider,
+                providerSwitched: patch.providerSwitched || m.providerSwitched
               });
             }));
           };
@@ -9142,11 +9374,15 @@ const Chat = ({
               status: 'done',
               url: t.url,
               previewUrl: t.previewUrl,
-              progress: 100
+              progress: 100,
+              provider: t.provider,
+              providerSwitched: t.providerSwitched
             } : {
               status: 'failed',
               error: t.error,
-              progress: 100
+              progress: 100,
+              provider: t.provider,
+              providerSwitched: t.providerSwitched
             });
             finishIfAllTerminal();
           };
@@ -9183,21 +9419,29 @@ const Chat = ({
                   markTerminal(jid, {
                     status: 'done',
                     url: sd.image_url,
-                    previewUrl: sd.preview_url || sd.image_url
+                    previewUrl: sd.preview_url || sd.image_url,
+                    provider: sd.provider,
+                    providerSwitched: sd.providerSwitched
                   });
                 } else if (sd.status === 'done' && !sd.image_url) {
                   markTerminal(jid, {
                     status: 'failed',
-                    error: formatAiImageError('任务标记完成但未返回图片地址', jid)
+                    error: formatAiImageError('任务标记完成但未返回图片地址', jid),
+                    provider: sd.provider,
+                    providerSwitched: sd.providerSwitched
                   });
                 } else if (sd.status === 'failed') {
                   markTerminal(jid, {
                     status: 'failed',
-                    error: formatAiImageError(sd.error || '生图失败', jid)
+                    error: formatAiImageError(sd.error || '生图失败', jid),
+                    provider: sd.provider,
+                    providerSwitched: sd.providerSwitched
                   });
                 } else {
                   patchImage(jid, {
-                    progress: sd.progress || 0
+                    progress: sd.progress || 0,
+                    provider: sd.provider,
+                    providerSwitched: sd.providerSwitched
                   });
                 }
               }).catch(function (pollErr) {
@@ -9739,7 +9983,7 @@ const Chat = ({
     }) : null;
     if (activeSkill && !aiCmd && aiOptions.workflow !== 'download') {
       const skillImageOptions = Object.assign({}, aiOptions, {
-        provider: 'sub2api',
+        provider: 'auto',
         size: 'auto',
         resolution: aiOptions.resolution || '1K',
         batchCount: 1,
@@ -13540,6 +13784,285 @@ const InspirationDetail = ({
 };
 window.InspirationPanel = InspirationPanel;
 
+// src/WhatsNewModal.jsx
+// What's New update card — each release version shows once after login
+
+const WHATS_NEW_SEEN_KEY = 'designflow_whats_new_seen';
+const markWhatsNewSeen = function (version) {
+  const value = String(version || '').trim();
+  if (!value) return;
+  try {
+    localStorage.setItem(WHATS_NEW_SEEN_KEY, value);
+  } catch (e) {}
+};
+const getSeenWhatsNewVersion = function () {
+  try {
+    return String(localStorage.getItem(WHATS_NEW_SEEN_KEY) || '').trim();
+  } catch (e) {
+    return '';
+  }
+};
+const WhatsNewFeatureIcon = ({
+  type
+}) => {
+  const wrap = {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    background: 'var(--accent-soft)',
+    color: 'var(--accent-ink)',
+    display: 'grid',
+    placeItems: 'center',
+    flexShrink: 0
+  };
+  let glyph = null;
+  if (type === 'image') {
+    glyph = React.createElement(I.image, {
+      size: 16,
+      stroke: 1.7
+    });
+  } else if (type === 'agent') {
+    glyph = React.createElement(I.user, {
+      size: 16,
+      stroke: 1.7
+    });
+  } else if (type === 'pages') {
+    glyph = React.createElement(I.grid, {
+      size: 16,
+      stroke: 1.7
+    });
+  } else if (type === 'sparkles') {
+    glyph = React.createElement(I.sparkles, {
+      size: 16,
+      stroke: 1.7
+    });
+  } else {
+    glyph = React.createElement(I.zap, {
+      size: 16,
+      stroke: 1.7
+    });
+  }
+  return React.createElement('div', {
+    style: wrap
+  }, glyph);
+};
+const WhatsNewModal = ({
+  release,
+  onClose
+}) => {
+  if (!release) return null;
+  const features = Array.isArray(release.features) ? release.features : [];
+  const versionLabel = [release.version, release.date].filter(Boolean).join(' · ');
+
+  // 用户确认后写入当前版本；同一 version 之后不再弹出
+  const dismiss = function () {
+    markWhatsNewSeen(release.version);
+    if (onClose) onClose();
+  };
+  const openChangelog = function () {
+    const raw = String(release.changelogUrl || 'changelog.html').trim() || 'changelog.html';
+    try {
+      // 相对路径基于当前页面（通常 /ui/），确保站内 changelog.html 可正确解析
+      const url = new URL(raw, window.location.href).toString();
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      window.open(raw, '_blank', 'noopener,noreferrer');
+    }
+  };
+  return React.createElement('div', {
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 240,
+      display: 'grid',
+      placeItems: 'center',
+      padding: 20,
+      background: 'rgba(40, 42, 48, 0.48)'
+    },
+    onClick: function (e) {
+      if (e.target === e.currentTarget) dismiss();
+    }
+  }, React.createElement('div', {
+    role: 'dialog',
+    'aria-modal': 'true',
+    'aria-label': release.title || '更新提示',
+    style: {
+      width: 'min(420px, calc(100vw - 40px))',
+      background: 'var(--panel)',
+      borderRadius: 20,
+      boxShadow: '0 24px 64px rgba(20, 22, 40, 0.18), 0 2px 8px rgba(20, 22, 40, 0.06)',
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column'
+    },
+    onClick: function (e) {
+      e.stopPropagation();
+    }
+  }, React.createElement('div', {
+    style: {
+      padding: '22px 22px 8px',
+      position: 'relative'
+    }
+  }, React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      marginBottom: 18
+    }
+  }, React.createElement('div', {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 12,
+      background: 'var(--ink)',
+      color: 'var(--panel)',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(I.sparkles, {
+    size: 18,
+    stroke: 1.8
+  })), React.createElement('button', {
+    type: 'button',
+    onClick: dismiss,
+    'aria-label': '关闭',
+    style: {
+      width: 28,
+      height: 28,
+      borderRadius: 8,
+      display: 'grid',
+      placeItems: 'center',
+      color: 'var(--ink-3)',
+      cursor: 'pointer',
+      marginTop: -2,
+      marginRight: -4
+    }
+  }, React.createElement(I.close, {
+    size: 15,
+    stroke: 1.8
+  }))), React.createElement('div', {
+    style: {
+      fontSize: 20,
+      fontWeight: 700,
+      letterSpacing: '-0.02em',
+      color: 'var(--ink)',
+      lineHeight: 1.25,
+      marginBottom: 6
+    }
+  }, release.title || 'Designflow 更新了'), versionLabel ? React.createElement('div', {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--ink-3)',
+      letterSpacing: '-0.01em',
+      marginBottom: 18
+    }
+  }, versionLabel) : null, React.createElement('div', {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14,
+      paddingBottom: 8
+    }
+  }, features.map(function (item, idx) {
+    return React.createElement('div', {
+      key: item.title || idx,
+      style: {
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 12
+      }
+    }, React.createElement(WhatsNewFeatureIcon, {
+      type: item.icon
+    }), React.createElement('div', {
+      style: {
+        minWidth: 0,
+        flex: 1,
+        paddingTop: 1
+      }
+    }, React.createElement('div', {
+      style: {
+        fontSize: 13.5,
+        fontWeight: 650,
+        color: 'var(--ink)',
+        letterSpacing: '-0.01em',
+        lineHeight: 1.3,
+        marginBottom: 3
+      }
+    }, item.title || ''), React.createElement('div', {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--ink-2)',
+        lineHeight: 1.55,
+        letterSpacing: '-0.005em'
+      }
+    }, item.desc || '')));
+  }))), React.createElement('div', {
+    style: {
+      borderTop: '1px solid var(--line)',
+      padding: '14px 18px 16px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gap: 8,
+      background: 'var(--panel)'
+    }
+  }, React.createElement('button', {
+    type: 'button',
+    onClick: openChangelog,
+    style: {
+      height: 34,
+      padding: '0 14px',
+      borderRadius: 10,
+      border: '1px solid var(--line)',
+      background: 'var(--panel)',
+      color: 'var(--ink-2)',
+      fontSize: 12.5,
+      fontWeight: 550,
+      cursor: 'pointer',
+      letterSpacing: '-0.01em'
+    }
+  }, '更新日志'), React.createElement('button', {
+    type: 'button',
+    onClick: dismiss,
+    style: {
+      height: 34,
+      padding: '0 16px',
+      borderRadius: 10,
+      border: '1px solid var(--ink)',
+      background: 'var(--ink)',
+      color: 'var(--panel)',
+      fontSize: 12.5,
+      fontWeight: 650,
+      cursor: 'pointer',
+      letterSpacing: '-0.01em'
+    }
+  }, '我知道了'))));
+};
+
+// 仅当 whats-new.json 的 version 与本地已确认版本不同时弹出
+const shouldShowWhatsNew = function (release) {
+  if (!release) return false;
+  const version = String(release.version || '').trim();
+  if (!version) return false;
+  return getSeenWhatsNewVersion() !== version;
+};
+const loadWhatsNewRelease = function () {
+  return fetch('whats-new.json', {
+    cache: 'no-cache'
+  }).then(function (res) {
+    if (!res.ok) throw new Error('whats-new fetch failed');
+    return res.json();
+  }).catch(function () {
+    return null;
+  });
+};
+window.WhatsNewModal = WhatsNewModal;
+window.shouldShowWhatsNew = shouldShowWhatsNew;
+window.loadWhatsNewRelease = loadWhatsNewRelease;
+window.markWhatsNewSeen = markWhatsNewSeen;
+window.WHATS_NEW_SEEN_KEY = WHATS_NEW_SEEN_KEY;
+
 // src/app.jsx
 // App root - wires panels + tweaks + host communication
 
@@ -13670,6 +14193,7 @@ const App = () => {
   const [canvasReferenceSelection, setCanvasReferenceSelection] = React.useState(null);
   const [templatePanelCollapsed, setTemplatePanelCollapsed] = React.useState(true);
   const [templateRevealHovered, setTemplateRevealHovered] = React.useState(false);
+  const [whatsNewRelease, setWhatsNewRelease] = React.useState(null);
   const handleUseInspirationPrompt = React.useCallback(function (post) {
     setInspirationOpen(false);
     setSeedPrompt(post.vlm_prompt || post.resolved_prompt || post.prompt || post.original_prompt || '');
@@ -13855,6 +14379,26 @@ const App = () => {
       alive = false;
     };
   }, [rememberUser]);
+  React.useEffect(() => {
+    if (!currentUser) {
+      setWhatsNewRelease(null);
+      return;
+    }
+    let alive = true;
+    const loader = window.loadWhatsNewRelease;
+    if (typeof loader !== 'function') return;
+    loader().then(function (release) {
+      if (!alive) return;
+      if (release && window.shouldShowWhatsNew && window.shouldShowWhatsNew(release)) {
+        setWhatsNewRelease(release);
+      } else {
+        setWhatsNewRelease(null);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [currentUser]);
   const handleLogin = React.useCallback(async (username, password) => {
     setAuthLoading(true);
     setAuthError('');
@@ -14023,6 +14567,11 @@ const App = () => {
     tweaks: tweaks,
     onChange: updateTweaks,
     onClose: () => setTweaksVisible(false)
-  })));
+  })), currentUser && whatsNewRelease && window.WhatsNewModal && React.createElement(window.WhatsNewModal, {
+    release: whatsNewRelease,
+    onClose: function () {
+      setWhatsNewRelease(null);
+    }
+  }));
 };
 ReactDOM.createRoot(document.getElementById('root')).render(/*#__PURE__*/React.createElement(App, null));

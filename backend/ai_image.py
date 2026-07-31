@@ -94,6 +94,31 @@ _SIZE_MAP: dict[str, tuple[str, str]] = {
     "2160x3840": ("9:16", "4K"),
 }
 
+_CN_DIGIT_MAP = {"一": "1", "二": "2", "三": "3", "四": "4", "五": "5", "六": "6", "七": "7", "八": "8", "九": "9"}
+
+
+def normalize_reference_prompt(prompt: str) -> str:
+    """将 Prompt 中对参考图的显式指代标准化为 [image N]。
+
+    仅接受明确引用，避免把「构图1 / 效果图1」这类普通词误改写：
+    - @图片1 / @图2 / @1 / #3 / ＃1
+    - 第 1 张图 / 第一张图
+    """
+    if not prompt:
+        return prompt
+
+    pattern = (
+        r'[@＃#](?:图片|图)?([1-9])|'
+        r'(?:第\s*([1-9]|[一-九])\s*张图)'
+    )
+
+    def _repl(m: re.Match[str]) -> str:
+        raw = m.group(1) or m.group(2)
+        num = _CN_DIGIT_MAP.get(raw, raw)
+        return f"[image {num}]"
+
+    return re.sub(pattern, _repl, prompt)
+
 
 def _api_error_msg(status: int, raw: str) -> str:
     hint = _HTTP_ERRORS.get(status, "")
@@ -696,9 +721,10 @@ async def _submit_generation_task(
     # GPT Image 2 要求 resolution 小写（1k/2k/4k），Gemini 用大写（1K/2K/4K）
     if model_name == "gpt-image-2":
         resolution = resolution.lower()
+    final_prompt = normalize_reference_prompt(prompt) if reference_urls else prompt
     payload: dict[str, Any] = {
         "model": model_name,
-        "prompt": prompt,
+        "prompt": final_prompt,
         "size": ratio,
         "resolution": resolution,
     }
@@ -1306,6 +1332,8 @@ async def generate_sub2api_async(
     mapped_size = _cliproxy_size(size, resolution)
     timeout = httpx.Timeout(1800.0, connect=30.0)
 
+    final_prompt = normalize_reference_prompt(prompt) if refs else prompt
+
     if on_progress:
         on_progress(5, "starting")
 
@@ -1317,7 +1345,7 @@ async def generate_sub2api_async(
             if refs:
                 data = {
                     "model": model_name,
-                    "prompt": prompt,
+                    "prompt": final_prompt,
                     "size": mapped_size,
                     "n": "1",
                     "quality": "auto",
@@ -1439,9 +1467,11 @@ async def generate_adobe2api_async(
         "Content-Type": "application/json",
     }
 
-    content_list: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-
     refs = images or []
+    final_prompt = normalize_reference_prompt(prompt) if refs else prompt
+
+    content_list: list[dict[str, Any]] = [{"type": "text", "text": final_prompt}]
+
     if refs:
         # adobe2api / Firefly 侧可接受多图；与主链路一致最多 9 张
         if len(refs) > 9:

@@ -26,6 +26,7 @@ BABEL_FILES = [
     "src/Tweaks.jsx",
     "src/AdminPage.jsx",
     "src/InspirationPanel.jsx",
+    "src/WhatsNewModal.jsx",
     "src/app.jsx",
 ]
 

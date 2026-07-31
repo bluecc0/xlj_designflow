@@ -2732,10 +2732,8 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
         for item in form.getlist("image"):
             if not hasattr(item, "read"):
                 continue
-            content = await item.read()
-            if not content:
-                continue
-            reference_images.append((content, getattr(item, "filename", "") or "reference.png"))
+            content, filename = await _aread_reference_upload(item, index=len(reference_images))
+            reference_images.append((content, filename))
     else:
         payload = AgentChatRequest(**(await request.json()))
         message = (payload.message or "").strip()
@@ -3137,11 +3135,13 @@ async def agent_skill_plan_stream_endpoint(
 
     # 取前 3 张参考图，压成长边 1024 的 webp data_url
     ref_data_urls: list[str] = []
-    for f in (image or [])[:3]:
+    for i, f in enumerate((image or [])[:3]):
         try:
-            raw = await f.read()
+            raw, _name = await _aread_reference_upload(f, index=i)
             if raw:
                 ref_data_urls.append(compress_image_to_data_url(raw, 1024))
+        except HTTPException:
+            raise
         except Exception:
             logger.warning("Failed to compress skill planner reference image", exc_info=True)
     has_reference = bool(ref_data_urls)
@@ -4102,8 +4102,9 @@ async def ai_image_retry(request: Request):
             except Exception:
                 pass
 
-    # 3. 合并参考图
-    all_refs = context_ref_bytes + user_refs
+    # 3. 合并参考图：用户可见参考图在前，保持 @图片N 与前端编号一致；
+    # 会话续图的隐藏上下文图追加在后。
+    all_refs = user_refs + context_ref_bytes
     all_refs = all_refs[:9]
     has_reference = bool(all_refs)
 
@@ -4625,6 +4626,21 @@ def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[
 # 首次请求可能已被受理（如 prompt 改写耗时超过客户端超时后服务端仍继续执行），
 # 不去重会重复建 job、重复消耗上游生图额度。单进程内存表（与 compose 串行锁同假设）。
 _AI_IMAGE_SUBMIT_DEDUP_TTL = 600.0  # 秒；覆盖前端两轮 120s 超时 + 重试间隔，留足余量
+MAX_REFERENCE_IMAGE_BYTES = 5 * 1024 * 1024  # 单张参考图硬限制 5MB
+
+
+async def _aread_reference_upload(upload: UploadFile, *, index: int = 0) -> tuple[bytes, str]:
+    """读取单张参考图并校验大小，超限直接 400。
+
+    只读取 MAX+1 字节，避免超大上传把整文件载入内存。
+    """
+    filename = (getattr(upload, "filename", None) or f"ref{index}.png").strip() or f"ref{index}.png"
+    content = await upload.read(MAX_REFERENCE_IMAGE_BYTES + 1)
+    if not content:
+        raise HTTPException(400, f"参考图为空：{filename}")
+    if len(content) > MAX_REFERENCE_IMAGE_BYTES:
+        raise HTTPException(400, f"参考图不能超过 5MB：{filename}")
+    return content, filename
 _ai_image_submits: dict[tuple[str, str], tuple[float, asyncio.Future]] = {}
 
 
@@ -4837,9 +4853,9 @@ async def ai_image_endpoint(
                         pass
 
         # 3. 合并用户上传的参考图与上下文的参考图
-        user_refs: list[tuple[bytes, str]] = [
-            (await f.read(), f.filename or f"ref{i}.png") for i, f in enumerate(images)
-        ]
+        user_refs: list[tuple[bytes, str]] = []
+        for i, f in enumerate(images):
+            user_refs.append(await _aread_reference_upload(f, index=i))
 
         has_reference = bool(images) or bool(context_ref_bytes)
         # 批次模式：N 个独立 job 共享同样的 session/参数；batch_id 用于把 N 条结果聚合成一张多图卡
@@ -4854,7 +4870,9 @@ async def ai_image_endpoint(
                     save_user_refs(user["id"], jid, user_refs)
                 except Exception:
                     logger.warning("Failed to save user refs for job %s", jid)
-            all_refs_batch: list[tuple[bytes, str]] = context_ref_bytes + user_refs
+            # 用户可见参考图在前，保持 @图片N 与前端编号一致；
+            # 会话续图的隐藏上下文图追加在后。
+            all_refs_batch: list[tuple[bytes, str]] = user_refs + context_ref_bytes
             all_refs_batch = all_refs_batch[:9]  # 总共最多 9 张
             request_meta = {
                 "client_request_id": client_req,
@@ -5003,9 +5021,7 @@ async def layered_psd_endpoint(
         raise HTTPException(400, "请描述要拆出的图层，例如：背景、产品、文字")
     if not image.content_type or not image.content_type.startswith("image/"):
         raise HTTPException(400, "请上传一张参考图片")
-    image_bytes = await image.read()
-    if not image_bytes:
-        raise HTTPException(400, "参考图片为空")
+    image_bytes, filename = await _aread_reference_upload(image, index=0)
     job_id = uuid.uuid4().hex
     with _psd_jobs_lock:
         _psd_jobs[job_id] = {
@@ -5020,7 +5036,7 @@ async def layered_psd_endpoint(
     asyncio.create_task(_run_layered_psd_job(
         job_id=job_id,
         image_bytes=image_bytes,
-        filename=image.filename or "reference.png",
+        filename=filename,
         layer_text=layer_text,
         user_id=user["id"],
         model=model,

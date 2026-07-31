@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>更新日志</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #eef0f5;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 48px 24px;
+    font-family: 'Inter', -apple-system, sans-serif;
+    min-height: 100vh;
+  }
+
+  .card {
+    width: 520px;
+    background: #fff;
+    border-radius: 28px;
+    overflow: hidden;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.10), 0 1px 3px rgba(0,0,0,0.06);
+  }
+
+  /* ── header ── */
+  .header {
+    padding: 36px 36px 32px;
+    background: linear-gradient(140deg, #6366f1 0%, #8b5cf6 55%, #a78bfa 100%);
+    position: relative;
+    overflow: hidden;
+  }
+  .header::before {
+    content: '';
+    position: absolute;
+    top: -80px; right: -50px;
+    width: 240px; height: 240px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.08);
+  }
+  .header::after {
+    content: '';
+    position: absolute;
+    bottom: -60px; left: 20px;
+    width: 180px; height: 180px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.05);
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 24px;
+    position: relative;
+  }
+  .brand-icon {
+    width: 34px; height: 34px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    backdrop-filter: blur(4px);
+  }
+  .brand-icon svg { width: 16px; height: 16px; }
+  .brand-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.85);
+    letter-spacing: 0.01em;
+  }
+
+  .version-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255,255,255,0.18);
+    border: 1px solid rgba(255,255,255,0.3);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    padding: 5px 12px;
+    border-radius: 99px;
+    margin-bottom: 16px;
+    position: relative;
+  }
+  .version-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #fff;
+    opacity: 0.9;
+  }
+
+  .header-title {
+    font-size: 32px;
+    font-weight: 900;
+    color: #fff;
+    line-height: 1.2;
+    letter-spacing: -0.03em;
+    margin-bottom: 10px;
+    position: relative;
+  }
+  .header-date {
+    font-size: 13px;
+    color: rgba(255,255,255,0.6);
+    font-weight: 500;
+    position: relative;
+  }
+
+  /* ── body ── */
+  .body {
+    padding: 32px 36px 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  .section-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .section-label-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px 3px 6px;
+    border-radius: 99px;
+  }
+  .section-label-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+  }
+
+  .section-new .section-label-pill {
+    background: #ecfdf5;
+    color: #059669;
+  }
+  .section-new .section-label-dot { background: #10b981; }
+
+  .section-fix .section-label-pill {
+    background: #eff6ff;
+    color: #2563eb;
+  }
+  .section-fix .section-label-dot { background: #3b82f6; }
+
+  .section-improve .section-label-pill {
+    background: #fffbeb;
+    color: #d97706;
+  }
+  .section-improve .section-label-dot { background: #f59e0b; }
+
+  .item {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 16px 16px;
+    border-radius: 14px;
+    background: #f8f9fc;
+    border: 1.5px solid #eef0f6;
+    margin-bottom: 8px;
+  }
+  .item:last-child { margin-bottom: 0; }
+
+  .item-icon {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .item-icon svg { width: 16px; height: 16px; }
+
+  .section-new .item-icon { background: #d1fae5; color: #059669; }
+  .section-fix .item-icon { background: #dbeafe; color: #2563eb; }
+  .section-improve .item-icon { background: #fef3c7; color: #d97706; }
+
+  .item-text { flex: 1; }
+  .item-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #111827;
+    line-height: 1.4;
+    margin-bottom: 4px;
+  }
+  .item-desc {
+    font-size: 13px;
+    color: #6b7280;
+    line-height: 1.6;
+    font-weight: 400;
+  }
+
+  .divider {
+    height: 1px;
+    background: #f0f1f5;
+    margin: 0 -4px;
+  }
+
+  /* ── footer ── */
+  .footer {
+    padding: 20px 36px;
+    border-top: 1.5px solid #f0f1f5;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #fafbfc;
+  }
+  .footer-left {
+    font-size: 12px;
+    color: #9ca3af;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .footer-right {
+    font-size: 12px;
+    color: #c4b5fd;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg viewBox="0 0 16 16" fill="none" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="2" width="5" height="5" rx="1.2"/>
+          <rect x="9" y="2" width="5" height="5" rx="1.2"/>
+          <rect x="2" y="9" width="5" height="5" rx="1.2"/>
+          <path d="M9 11.5h5M11.5 9v5"/>
+        </svg>
+      </div>
+      <span class="brand-name">Design Tool</span>
+    </div>
+
+    <div class="version-badge">
+      <span class="version-dot"></span>
+      v0.4 · 最新版本
+    </div>
+
+    <div class="header-title">功能更新<br>& 修复记录</div>
+    <div class="header-date">2025年4月27日</div>
+  </div>
+
+  <!-- Body -->
+  <div class="body">
+
+    <!-- 新功能 -->
+    <div class="section-new">
+      <div class="section-label">
+        <span class="section-label-pill">
+          <span class="section-label-dot"></span>
+          新功能
+        </span>
+      </div>
+
+      <div class="item">
+        <div class="item-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 3v10M3 8h10"/>
+          </svg>
+        </div>
+        <div class="item-text">
+          <div class="item-title">特殊品 A/B 变体导出</div>
+          <div class="item-desc">slot/variant_a/1、slot/variant_a/2 支持多版本自动导出，仅含变体的画板生成多份</div>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="item-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="4" width="12" height="9" rx="2"/>
+            <path d="M5 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/>
+            <path d="M8 9V7m0 4v-.5"/>
+          </svg>
+        </div>
+        <div class="item-text">
+          <div class="item-title">历史记录显示特殊品任务</div>
+          <div class="item-desc">普通合成与特殊品统一展示，含缩略图、SKU 标签及图片数量</div>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="item-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="8" cy="8" r="6"/>
+            <path d="M8 5v3l2 1.5"/>
+          </svg>
+        </div>
+        <div class="item-text">
+          <div class="item-title">生成进度计时器</div>
+          <div class="item-desc">生成中显示旋转状态圈与实时已用时间，随时掌握进度</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- 修复 -->
+    <div class="section-fix">
+      <div class="section-label">
+        <span class="section-label-pill">
+          <span class="section-label-dot"></span>
+          问题修复
+        </span>
+      </div>
+
+      <div class="item">
+        <div class="item-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 3L6 10l-3-3"/>
+          </svg>
+        </div>
+        <div class="item-text">
+          <div class="item-title">弹性布局内插槽不写入</div>
+          <div class="item-desc">修复 slot 在弹性容器内无法识别顶层画板的问题，time_hour / time_month 等字段现已正常写入</div>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="item-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 3L6 10l-3-3"/>
+          </svg>
+        </div>
+        <div class="item-text">
+          <div class="item-title">所有画板被重复导出</div>
+          <div class="item-desc">只有含变体插槽的画板才导出多个版本，其余画板仅导出一次</div>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="item-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 3L6 10l-3-3"/>
+          </svg>
+        </div>
+        <div class="item-text">
+          <div class="item-title">ZIP 下载缺少 A/B 版文件</div>
+          <div class="item-desc">修复变体文件名匹配错误，_v1 / _v2 已正确打包进压缩包</div>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="item-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 3L6 10l-3-3"/>
+          </svg>
+        </div>
+        <div class="item-text">
+          <div class="item-title">合成完成后无预览图</div>
+          <div class="item-desc">改用后端返回的实际路径构建预览 URL，不再依赖硬编码文件名</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span class="footer-left">Design Tool · 内部版本</span>
+    <span class="footer-right">持续迭代中 ✦</span>
+  </div>
+
+</div>
+
+</body>
+</html>

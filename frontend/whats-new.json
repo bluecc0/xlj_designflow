@@ -1,0 +1,23 @@
+{
+  "version": "V2.4",
+  "date": "2026年7月31日",
+  "title": "Designflow 更新了",
+  "changelogUrl": "changelog.html",
+  "features": [
+    {
+      "icon": "image",
+      "title": "Nano Banana Pro 图像编辑",
+      "desc": "上传图片后用自然语言描述修改需求，AI 自动完成编辑"
+    },
+    {
+      "icon": "agent",
+      "title": "Agent 模式",
+      "desc": "交给 AI 自主完成多步骤设计任务，无需逐步指挥"
+    },
+    {
+      "icon": "pages",
+      "title": "多页面画布",
+      "desc": "在同一项目中创建和管理多个页面，随时切换"
+    }
+  ]
+}
