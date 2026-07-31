@@ -2208,6 +2208,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
 
   // 从文本内容检测当前模式
   // trimmed = 用户实际打的内容（剥去 lockedCommand 锁定的前缀）
+  const activeCommandChip = lockedCommand || (selectedSkill ? ('$' + selectedSkill) : '');
   const _t = (() => {
     const raw = String(text || '').trimStart();
     if (lockedCommand && raw.toLowerCase().startsWith(lockedCommand.toLowerCase())) {
@@ -3496,7 +3497,52 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           flex: composerHeight ? 1 : undefined,
           minHeight: composerHeight ? 56 : 92,
           maxHeight: composerHeight ? undefined : 180,
+          display: 'flex',
+          flexDirection: 'column',
         }}>
+          {activeCommandChip && (
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6, userSelect: 'none' }}>
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '3px 8px',
+                borderRadius: 6,
+                background: selectedSkill ? 'var(--accent-soft)' : 'var(--panel-2)',
+                border: '1px solid ' + (selectedSkill ? 'var(--accent)' : 'var(--line)'),
+                color: selectedSkill ? 'var(--accent-ink)' : 'var(--ink)',
+                fontSize: 11.5,
+                fontWeight: 650,
+                lineHeight: 1.2,
+                letterSpacing: '-0.01em',
+              }}>
+                <span>{activeCommandChip}</span>
+                <button
+                  type="button"
+                  onClick={function() {
+                    setLockedCommand('');
+                    setSelectedSkill('');
+                    setSelectedWorkflow('chat');
+                    if (taRef.current) taRef.current.focus();
+                  }}
+                  title="移除指令标记"
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'inherit',
+                    opacity: 0.6,
+                    cursor: 'pointer',
+                    fontSize: 12,
+                    lineHeight: 1,
+                    padding: 0,
+                    marginRight: -2,
+                    display: 'grid',
+                    placeItems: 'center',
+                  }}
+                >×</button>
+              </span>
+            </div>
+          )}
           <textarea
             className="composer-textarea"
             ref={taRef}
