@@ -2346,6 +2346,25 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     clearRefImages();
   };
 
+  const insertRefTag = React.useCallback((idx) => {
+    const tag = `@图片${idx + 1} `;
+    setText(function(prev) {
+      const current = String(prev || '');
+      const input = taRef.current;
+      if (!input) return current + tag;
+      const start = input.selectionStart ?? current.length;
+      const end = input.selectionEnd ?? current.length;
+      const next = current.slice(0, start) + tag + current.slice(end);
+      setTimeout(function() {
+        if (!taRef.current) return;
+        taRef.current.focus();
+        const newPos = start + tag.length;
+        taRef.current.setSelectionRange(newPos, newPos);
+      }, 0);
+      return next;
+    });
+  }, []);
+
   const handleKeyDown = (e) => {
     const el = taRef.current;
     const start = el ? el.selectionStart : 0;
@@ -3533,7 +3552,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           style={{ display: 'none' }}
         />
 
-        {/* Reference images preview */}
+        {/* Reference images preview */ }
         {refImages.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             {refImages.map((img, idx) => (
@@ -3544,13 +3563,26 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
                   style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--line)' }}
                 />
                 <button
+                  type="button"
+                  onClick={() => insertRefTag(idx)}
+                  title={`点击在 Prompt 中插入 @图片${idx + 1}`}
+                  style={{
+                    position: 'absolute', bottom: 2, left: 2,
+                    padding: '1px 3px', borderRadius: 4,
+                    background: 'rgba(20, 22, 40, 0.72)', color: 'white',
+                    fontSize: 9, fontWeight: 600, lineHeight: 1, cursor: 'pointer',
+                    backdropFilter: 'blur(4px)', border: 'none',
+                  }}
+                >@{idx + 1}</button>
+                <button
+                  type="button"
                   onClick={() => removeRefImage(idx)}
                   style={{
                     position: 'absolute', top: -5, right: -5,
                     width: 15, height: 15, borderRadius: 99,
                     background: 'var(--ink-2)', color: 'white',
                     display: 'grid', placeItems: 'center',
-                    fontSize: 10, lineHeight: 1, cursor: 'pointer',
+                    fontSize: 10, lineHeight: 1, cursor: 'pointer', border: 'none',
                   }}
                 >×</button>
               </div>
