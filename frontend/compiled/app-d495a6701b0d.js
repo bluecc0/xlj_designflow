@@ -13860,8 +13860,9 @@ const WhatsNewModal = ({
     if (onClose) onClose();
   };
   const openChangelog = function () {
-    const raw = String(release.changelogUrl || 'https://github.com/bluecc0/xlj_designflow/commits/master/').trim() || 'https://github.com/bluecc0/xlj_designflow/commits/master/';
+    const raw = String(release.changelogUrl || 'changelog.html').trim() || 'changelog.html';
     try {
+      // 相对路径基于当前页面（通常 /ui/），确保站内 changelog.html 可正确解析
       const url = new URL(raw, window.location.href).toString();
       window.open(url, '_blank', 'noopener,noreferrer');
     } catch (e) {

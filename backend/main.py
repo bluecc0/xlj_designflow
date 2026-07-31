@@ -4102,8 +4102,9 @@ async def ai_image_retry(request: Request):
             except Exception:
                 pass
 
-    # 3. 合并参考图
-    all_refs = context_ref_bytes + user_refs
+    # 3. 合并参考图：用户可见参考图在前，保持 @图片N 与前端编号一致；
+    # 会话续图的隐藏上下文图追加在后。
+    all_refs = user_refs + context_ref_bytes
     all_refs = all_refs[:9]
     has_reference = bool(all_refs)
 
@@ -4629,14 +4630,16 @@ MAX_REFERENCE_IMAGE_BYTES = 5 * 1024 * 1024  # 单张参考图硬限制 5MB
 
 
 async def _aread_reference_upload(upload: UploadFile, *, index: int = 0) -> tuple[bytes, str]:
-    """读取单张参考图并校验大小，超限直接 400。"""
+    """读取单张参考图并校验大小，超限直接 400。
+
+    只读取 MAX+1 字节，避免超大上传把整文件载入内存。
+    """
     filename = (getattr(upload, "filename", None) or f"ref{index}.png").strip() or f"ref{index}.png"
-    content = await upload.read()
+    content = await upload.read(MAX_REFERENCE_IMAGE_BYTES + 1)
     if not content:
         raise HTTPException(400, f"参考图为空：{filename}")
     if len(content) > MAX_REFERENCE_IMAGE_BYTES:
-        size_mb = len(content) / (1024 * 1024)
-        raise HTTPException(400, f"参考图不能超过 5MB：{filename}（{size_mb:.1f}MB）")
+        raise HTTPException(400, f"参考图不能超过 5MB：{filename}")
     return content, filename
 _ai_image_submits: dict[tuple[str, str], tuple[float, asyncio.Future]] = {}
 
@@ -4867,7 +4870,9 @@ async def ai_image_endpoint(
                     save_user_refs(user["id"], jid, user_refs)
                 except Exception:
                     logger.warning("Failed to save user refs for job %s", jid)
-            all_refs_batch: list[tuple[bytes, str]] = context_ref_bytes + user_refs
+            # 用户可见参考图在前，保持 @图片N 与前端编号一致；
+            # 会话续图的隐藏上下文图追加在后。
+            all_refs_batch: list[tuple[bytes, str]] = user_refs + context_ref_bytes
             all_refs_batch = all_refs_batch[:9]  # 总共最多 9 张
             request_meta = {
                 "client_request_id": client_req,

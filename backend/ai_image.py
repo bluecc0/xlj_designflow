@@ -98,21 +98,22 @@ _CN_DIGIT_MAP = {"一": "1", "二": "2", "三": "3", "四": "4", "五": "5", "�
 
 
 def normalize_reference_prompt(prompt: str) -> str:
-    """将 Prompt 中对参考图的自然指代（如 @图片1, @图2, #1, 第一张图, 图1 等）
-    标准化转换为上游生图模型通用的 [image 1], [image 2] 占位符。
+    """将 Prompt 中对参考图的显式指代标准化为 [image N]。
+
+    仅接受明确引用，避免把「构图1 / 效果图1」这类普通词误改写：
+    - @图片1 / @图2 / @1 / #3 / ＃1
+    - 第 1 张图 / 第一张图
     """
     if not prompt:
         return prompt
 
     pattern = (
         r'[@＃#](?:图片|图)?([1-9])|'
-        r'(?:第\s*([1-9]|[一-九])\s*张图)|'
-        r'(?<=[\s,.:;!?()（）\[\]【】一-龥])(?:图|图片)([1-9])(?!\d)|'
-        r'^(?:图|图片)([1-9])(?!\d)'
+        r'(?:第\s*([1-9]|[一-九])\s*张图)'
     )
 
     def _repl(m: re.Match[str]) -> str:
-        raw = m.group(1) or m.group(2) or m.group(3) or m.group(4)
+        raw = m.group(1) or m.group(2)
         num = _CN_DIGIT_MAP.get(raw, raw)
         return f"[image {num}]"
 
