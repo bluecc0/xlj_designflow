@@ -1142,7 +1142,7 @@ const ChatSessionBar = ({ messages, historyControl }) => {
   );
 };
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greetingKey, onQuickReply, agentEnabled, onRetryWithZenmux, onPublishInspiration, onUnpublishInspiration }) => {
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greetingKey, onQuickReply, agentEnabled, onPublishInspiration, onUnpublishInspiration }) => {
   const bottomRef = React.useRef(null);
   const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
 
@@ -1219,7 +1219,11 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
               m.status !== 'failed' && m.status !== 'done' && React.createElement(InlineRefStrip, { items: m.refPreviews }),
               m.providerSwitched && React.createElement('div', {
                 style: { padding: '6px 10px', borderRadius: 6, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)', marginBottom: 6 }
-              }, '订阅线路失败，可手动切换到官方线路重试'),
+              }, '已自动切换到「' + ({
+                sub2api: '订阅',
+                adobe2api: 'Adobe',
+                apimart: 'APIMart',
+              }[m.provider] || m.provider || '备用') + '」线路'),
               showPromptTrace && React.createElement(PromptTraceBlock, {
                 title: m.activeSkill ? ('Skill 解析 · $' + m.activeSkill) : '生图 Prompt',
                 text: promptTraceText || resolvedPromptText,
@@ -1321,12 +1325,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   if (im.status === 'failed') {
                     return React.createElement('div', { key: im.jobId || bi, style: { minHeight: 110, borderRadius: 8, border: '1px solid var(--warn)', background: 'var(--panel)', padding: '8px 9px', display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center' } },
                       React.createElement('div', { style: { fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.4, wordBreak: 'break-word' } },
-                        '第 ' + (bi + 1) + ' 张失败：' + formatAiImageError(im.error, im.jobId)),
-                      m.provider !== 'zenmux' && im.jobId ? React.createElement('button', {
-                        type: 'button',
-                        onClick: function() { onRetryWithZenmux(Object.assign({}, m, { jobId: im.jobId, status: 'failed' })); },
-                        style: { alignSelf: 'flex-start', padding: '3px 8px', borderRadius: 5, fontSize: 10, cursor: 'pointer', border: '1px solid var(--accent)', background: 'var(--panel)', color: 'var(--accent)' },
-                      }, '换官方线路再试') : null
+                        '第 ' + (bi + 1) + ' 张失败：' + formatAiImageError(im.error, im.jobId))
                     );
                   }
                   return React.createElement('div', { key: im.jobId || bi, style: { minHeight: 110, borderRadius: 8, border: '1px dashed var(--line-2)', background: 'var(--panel)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6 } },
@@ -1366,16 +1365,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   lineHeight: 1.45, wordBreak: 'break-word',
                 }
               },
-                formatAiImageError(m.error, m.jobId || m.job_id),
-                m.provider !== 'zenmux' ? React.createElement('button', {
-                  type: 'button',
-                  onClick: function() { onRetryWithZenmux(m); },
-                  style: {
-                    marginTop: 8, padding: '5px 12px', borderRadius: 6, fontSize: 11, cursor: 'pointer',
-                    border: '1px solid var(--accent)', background: 'var(--panel)', color: 'var(--accent)',
-                    display: 'block',
-                  },
-                }, '换官方线路再试') : null
+                formatAiImageError(m.error, m.jobId || m.job_id)
               ),
             );
           })() : m.type === 'parse-result' ? (() => {
@@ -1824,7 +1814,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const [imageType, setImageType] = React.useState('png');
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
-  const [aiProvider, setAiProvider] = React.useState('apimart');
+  const [aiProvider, setAiProvider] = React.useState('auto');
   const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [smartDistributeMode, setSmartDistributeMode] = React.useState('full');
   const [manualRefImages, setManualRefImages] = React.useState([]);
@@ -2227,9 +2217,9 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       if (!AI_OPTIONS[aiRatio].qualities.includes(aiQuality)) {
         setAiQuality(AI_OPTIONS[aiRatio].qualities[0]);
       }
-      // Sub2API 不支持 Nano Banana，切换时自动回默认
-      if (activeAiModel === 'nano-banana-pro' && aiProvider === 'sub2api') {
-        setAiProvider('apimart');
+      // 渠道选择已移除，统一走智能路由
+      if (aiProvider !== 'auto') {
+        setAiProvider('auto');
       }
     }
   }, [activeAiModel, aiQuality, aiRatio, aiProvider]);
@@ -2694,7 +2684,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const activeTaskIconSrc = activeMode === 'ai-image'
     ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
     : null;
-  const providerLabel = aiProvider === 'zenmux' ? '官方' : aiProvider === 'sub2api' ? '订阅' : '默认';
   const modeParamLabel = activeMode === 'ai-image'
     ? (aiRatio + ' · ' + aiQuality)
     : activeMode === 'special_full'
@@ -2709,7 +2698,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const selectedSettingBits = [
     activeSkillInfo ? ('$' + activeSkillInfo.name) : '',
     activeSkillInfo ? '' : (agentEnabled ? 'Agent' : activeTaskLabel),
-    agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? providerLabel : ''),
+    agentEnabled ? '沉浸创作' : (activeMode === 'ai-image' ? '⚡ 智能路由' : ''),
     agentEnabled ? '' : modeParamLabel,
     (activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1) ? ('x' + normalizeBatchCount(aiBatchCount)) : '',
     refImages.length > 0 ? ('ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES) : '',
@@ -2982,29 +2971,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       const isComposeParams = activeMode === 'compose';
       const isDistributeParams = activeMode === 'distribute';
       const paramsTitle = isImageParams ? '生图参数' : isSpecialParams ? '特殊品参数' : isComposeParams ? '合成参数' : isDistributeParams ? '铺货参数' : '问答参数';
-      const providerItems = [
-        activeAiModel !== 'nano-banana-pro' ? {
-          key: 'sub2api',
-          label: '订阅',
-          active: aiProvider === 'sub2api',
-          disabled: false,
-          onClick: function() { setAiProvider('sub2api'); },
-        } : null,
-        {
-          key: 'apimart',
-          label: '默认',
-          active: aiProvider === 'apimart',
-          disabled: false,
-          onClick: function() { setAiProvider('apimart'); },
-        },
-        {
-          key: 'zenmux',
-          label: '官方',
-          active: aiProvider === 'zenmux',
-          disabled: false,
-          onClick: function() { setAiProvider('zenmux'); },
-        },
-      ].filter(Boolean);
       return protoPanelShell(React.createElement(React.Fragment, null,
         React.createElement('div', { style: { fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--ink)' } }, paramsTitle),
         isImageParams && React.createElement(React.Fragment, null,
@@ -3052,46 +3018,25 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
               );
             })
           ),
-          protoSectionLabel('清晰度 / 渠道'),
-          React.createElement('div', { style: { display: 'flex', alignItems: 'stretch', gap: 8, width: '100%' } },
-            React.createElement('div', {
-              style: { flex: 1, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 4 }
-            },
-              ['1K', '2K', '4K'].map(function(q) {
-                const disabled = !allowedAiQualities.includes(q);
-                return React.createElement('button', {
-                  key: q,
-                  type: 'button',
-                  disabled: disabled,
-                  onClick: function() { if (!disabled) setAiQuality(q); },
-                  style: Object.assign({}, protoChipStyle(aiQuality === q), {
-                    width: '100%',
-                    minWidth: 0,
-                    cursor: disabled ? 'not-allowed' : 'pointer',
-                    opacity: disabled ? 0.45 : 1,
-                  })
-                }, q);
-              })
-            ),
-            React.createElement('div', { style: { width: 1, alignSelf: 'stretch', background: 'var(--line)' } }),
-            React.createElement('div', {
-              style: { flex: 1, display: 'grid', gridTemplateColumns: 'repeat(' + providerItems.length + ', minmax(0, 1fr))', gap: 4 }
-            },
-              providerItems.map(function(item) {
-                return React.createElement('button', {
-                  key: item.key,
-                  type: 'button',
-                  disabled: item.disabled,
-                  onClick: item.onClick,
-                  style: Object.assign({}, protoChipStyle(item.active), {
-                    width: '100%',
-                    minWidth: 0,
-                    cursor: item.disabled ? 'not-allowed' : 'pointer',
-                    opacity: item.disabled ? 0.45 : 1,
-                  })
-                }, item.label);
-              })
-            )
+          protoSectionLabel('清晰度'),
+          React.createElement('div', {
+            style: { flex: 1, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 4 }
+          },
+            ['1K', '2K', '4K'].map(function(q) {
+              const disabled = !allowedAiQualities.includes(q);
+              return React.createElement('button', {
+                key: q,
+                type: 'button',
+                disabled: disabled,
+                onClick: function() { if (!disabled) setAiQuality(q); },
+                style: Object.assign({}, protoChipStyle(aiQuality === q), {
+                  width: '100%',
+                  minWidth: 0,
+                  cursor: disabled ? 'not-allowed' : 'pointer',
+                  opacity: disabled ? 0.45 : 1,
+                })
+              }, q);
+            })
           )
         ),
         isImageParams && React.createElement('div', {
@@ -4001,129 +3946,6 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     img.src = url;
   });
 
-  // —— 官方线路重试 ——
-  const handleRetryWithZenmux = React.useCallback(async (failedMsg) => {
-    const jobId = failedMsg.jobId;
-    if (!jobId || !currentAiChatId) return;
-
-    const startedAt = Date.now();
-    setMessages(msgs => [...msgs, {
-      who: 'ai', type: 'ai-image-generating',
-      model: failedMsg.model || 'gpt-image-2',
-      provider: 'zenmux',
-      prompt: failedMsg.prompt || '',
-      size: failedMsg.size || '1024x1024',
-      resolution: failedMsg.resolution || '',
-      status: 'running', startedAt,
-      progress: 0,
-      hasReference: true,
-      refCount: 0,
-      refPreviews: [],
-      jobId: null,
-    }]);
-
-    try {
-      const apiBase = window.API_BASE || window.location.origin;
-      const retryRes = await window.API.retryAiImage(jobId, currentAiChatId);
-      const newJobId = retryRes.job_id;
-
-      setMessages(msgs => msgs.map(m =>
-        m.type === 'ai-image-generating' && m.startedAt === startedAt
-          ? { ...m, jobId: newJobId }
-          : m
-      ));
-
-      var retryPollFails = 0;
-      const pollInterval = setInterval(async () => {
-        try {
-          const statusRes = await fetch(apiBase + '/ai-image/' + newJobId, { credentials: 'include' });
-          if (!statusRes.ok) {
-            retryPollFails += 1;
-            var errBody = {};
-            try { errBody = await statusRes.json(); } catch (_e) {}
-            var detail = (errBody && (errBody.detail || errBody.message || errBody.error)) || '';
-            if (typeof detail === 'object' && detail) detail = detail.message || JSON.stringify(detail);
-            if (statusRes.status === 404 || retryPollFails >= 5) {
-              clearInterval(pollInterval);
-              const fe = Math.floor((Date.now() - startedAt) / 1000);
-              var retryQueryErr = formatAiImageError(detail || ('查询重试任务失败 HTTP ' + statusRes.status), newJobId, { httpStatus: statusRes.status });
-              alertAiImageError(retryQueryErr, { jobId: newJobId });
-              setMessages(msgs => msgs.map(m =>
-                m.type === 'ai-image-generating' && m.startedAt === startedAt
-                  ? { ...m, status: 'failed', error: retryQueryErr, finalElapsed: fe, jobId: newJobId }
-                  : m
-              ));
-              loadAiChatHistory();
-            }
-            return;
-          }
-          retryPollFails = 0;
-          const sd = await statusRes.json();
-          setMessages(msgs => msgs.map(m =>
-            m.type === 'ai-image-generating' && m.startedAt === startedAt
-              ? { ...m, status: sd.status, progress: sd.progress || m.progress, jobId: newJobId, taskId: sd.task_id || m.taskId }
-              : m
-          ));
-          if (sd.status === 'done' && sd.image_url) {
-            clearInterval(pollInterval);
-            const fe = Math.floor((Date.now() - startedAt) / 1000);
-            setMessages(msgs => msgs.map(m =>
-              m.type === 'ai-image-generating' && m.startedAt === startedAt
-                ? { ...m, status: 'done', imageUrl: sd.image_url, previewUrl: sd.preview_url || sd.image_url, finalElapsed: fe, progress: 100, jobId: newJobId }
-                : m
-            ));
-            loadAiChatHistory();
-          } else if (sd.status === 'done' && !sd.image_url) {
-            clearInterval(pollInterval);
-            const fe = Math.floor((Date.now() - startedAt) / 1000);
-            var retryNoImgErr = formatAiImageError('重试完成但未返回图片地址', newJobId, { taskId: sd.task_id });
-            alertAiImageError(retryNoImgErr, { jobId: newJobId });
-            setMessages(msgs => msgs.map(m =>
-              m.type === 'ai-image-generating' && m.startedAt === startedAt
-                ? { ...m, status: 'failed', error: retryNoImgErr, finalElapsed: fe, jobId: newJobId }
-                : m
-            ));
-            loadAiChatHistory();
-          } else if (sd.status === 'failed') {
-            clearInterval(pollInterval);
-            const fe = Math.floor((Date.now() - startedAt) / 1000);
-            var retryFailErr = formatAiImageError(sd.error || '重试失败', newJobId, { taskId: sd.task_id });
-            alertAiImageError(retryFailErr, { jobId: newJobId });
-            setMessages(msgs => msgs.map(m =>
-              m.type === 'ai-image-generating' && m.startedAt === startedAt
-                ? { ...m, status: 'failed', error: retryFailErr, finalElapsed: fe, jobId: newJobId }
-                : m
-            ));
-            loadAiChatHistory();
-          }
-        } catch (e) {
-          retryPollFails += 1;
-          console.warn('ai-image retry poll error job=' + newJobId, e);
-          if (retryPollFails >= 5) {
-            clearInterval(pollInterval);
-            const fe = Math.floor((Date.now() - startedAt) / 1000);
-            var retryPollErr = formatAiImageError((e && e.message) || '重试查询进度连续失败', newJobId);
-            alertAiImageError(retryPollErr, { jobId: newJobId });
-            setMessages(msgs => msgs.map(m =>
-              m.type === 'ai-image-generating' && m.startedAt === startedAt
-                ? { ...m, status: 'failed', error: retryPollErr, finalElapsed: fe, jobId: newJobId }
-                : m
-            ));
-          }
-        }
-      }, 2000);
-    } catch (e) {
-      const fe = Math.floor((Date.now() - startedAt) / 1000);
-      var retryStartErr = formatAiImageError(e.message || '重试失败', null);
-      alertAiImageError(retryStartErr);
-      setMessages(msgs => msgs.map(m =>
-        m.type === 'ai-image-generating' && m.startedAt === startedAt
-          ? { ...m, status: 'failed', error: retryStartErr, finalElapsed: fe }
-          : m
-      ));
-    }
-  }, [currentAiChatId, loadAiChatHistory]);
-
   // —— 发布/取消发布灵感 ——
   const handlePublishInspiration = React.useCallback(async (msg) => {
     if (!msg) return;
@@ -4190,7 +4012,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     var refPreviews = [];
     var lastSize = aiOptions.size || '1024x1024';
     var lastResolution = aiOptions.resolution || '1K';
-    var provider = aiOptions.provider || 'apimart';
+    var provider = aiOptions.provider || 'auto';
     var activeSkill = String(aiOptions.skill || '').trim();
     var plannedPrompt = String(aiOptions.plannedPrompt || '').trim();
     var plannedPromptTrace = String(aiOptions.promptTrace || '').trim();
@@ -4489,6 +4311,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                           originalPrompt: statusData.original_prompt || m.originalPrompt,
                           resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt,
                           promptTrace: statusData.prompt_trace || m.promptTrace,
+                          provider: statusData.provider || m.provider,
                           providerSwitched: statusData.providerSwitched || m.providerSwitched,
                           taskId: statusData.task_id || m.taskId,
                           jobId: jobId,
@@ -4681,6 +4504,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                   images: images,
                   progress: Math.max(m.progress || 0, Math.min(agg, 99)),
                   status: m.status === 'skill-parsed' ? m.status : 'processing',
+                  provider: patch.provider || m.provider,
+                  providerSwitched: patch.providerSwitched || m.providerSwitched,
                 });
               }));
             };
@@ -4743,8 +4568,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
               if (terminal[jid]) return;
               terminal[jid] = t;
               patchImage(jid, t.status === 'done'
-                ? { status: 'done', url: t.url, previewUrl: t.previewUrl, progress: 100 }
-                : { status: 'failed', error: t.error, progress: 100 });
+                ? { status: 'done', url: t.url, previewUrl: t.previewUrl, progress: 100, provider: t.provider, providerSwitched: t.providerSwitched }
+                : { status: 'failed', error: t.error, progress: 100, provider: t.provider, providerSwitched: t.providerSwitched });
               finishIfAllTerminal();
             };
 
@@ -4773,13 +4598,13 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                   .then(function(sd) {
                     if (!sd) return;
                     if (sd.status === 'done' && sd.image_url) {
-                      markTerminal(jid, { status: 'done', url: sd.image_url, previewUrl: sd.preview_url || sd.image_url });
+                      markTerminal(jid, { status: 'done', url: sd.image_url, previewUrl: sd.preview_url || sd.image_url, provider: sd.provider, providerSwitched: sd.providerSwitched });
                     } else if (sd.status === 'done' && !sd.image_url) {
-                      markTerminal(jid, { status: 'failed', error: formatAiImageError('任务标记完成但未返回图片地址', jid) });
+                      markTerminal(jid, { status: 'failed', error: formatAiImageError('任务标记完成但未返回图片地址', jid), provider: sd.provider, providerSwitched: sd.providerSwitched });
                     } else if (sd.status === 'failed') {
-                      markTerminal(jid, { status: 'failed', error: formatAiImageError(sd.error || '生图失败', jid) });
+                      markTerminal(jid, { status: 'failed', error: formatAiImageError(sd.error || '生图失败', jid), provider: sd.provider, providerSwitched: sd.providerSwitched });
                     } else {
-                      patchImage(jid, { progress: sd.progress || 0 });
+                      patchImage(jid, { progress: sd.progress || 0, provider: sd.provider, providerSwitched: sd.providerSwitched });
                     }
                   })
                   .catch(function(pollErr) {
@@ -5239,7 +5064,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
 
     if (activeSkill && !aiCmd && aiOptions.workflow !== 'download') {
       const skillImageOptions = Object.assign({}, aiOptions, {
-        provider: 'sub2api',
+        provider: 'auto',
         size: 'auto',
         resolution: aiOptions.resolution || '1K',
         batchCount: 1,
@@ -5932,9 +5757,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       )}
 
       {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onRetryWithZenmux={handleRetryWithZenmux} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
 
       <Composer
         onSend={handleSend}

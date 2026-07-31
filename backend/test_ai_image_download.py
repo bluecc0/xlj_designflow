@@ -11,33 +11,6 @@ from backend import ai_image
 
 
 class FinalImageDownloadTest(unittest.IsolatedAsyncioTestCase):
-    async def test_zenmux_reference_download_receives_initialized_task_id(self) -> None:
-        response = Mock()
-        response.is_success = True
-        response.json.return_value = {"data": [{"url": "https://upload.example/result.png"}]}
-        client = AsyncMock()
-        client.post.return_value = response
-        client.__aenter__.return_value = client
-        download_mock = AsyncMock(return_value="/ai-images/tester/result.png")
-
-        with (
-            patch.object(ai_image, "_zenmux_model_name", return_value="openai/gpt-image-2"),
-            patch.object(ai_image, "_zenmux_headers", return_value={"Authorization": "Bearer test"}),
-            patch.object(ai_image, "_is_zenmux_vertex_image_model", return_value=False),
-            patch.object(ai_image.httpx, "AsyncClient", return_value=client),
-            patch.object(ai_image, "_download_final_image", new=download_mock),
-        ):
-            result = await ai_image.generate_image_zenmux_async(
-                model="gpt-image-2",
-                prompt="test",
-                images=[(b"reference", "reference.png")],
-                user_id="tester",
-            )
-
-        task_id = result["task_id"]
-        self.assertTrue(task_id.startswith("zenmux:"))
-        self.assertEqual(download_mock.await_args.kwargs["task_id"], task_id)
-
     async def test_configured_proxy_retries_and_saves_result(self) -> None:
         request = httpx.Request("GET", "https://upload.apimart.ai/result.png")
         proxy_client = AsyncMock()

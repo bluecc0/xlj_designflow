@@ -18,7 +18,7 @@ cd editor-lab-tldraw && npm install && npm run build             # 画布构建�
 ```
 backend/              FastAPI 服务
   main.py             所有路由、lifespan、auth 中间件（~1900 行）
-  ai_image.py         AI 生图适配（APIMart + ZenMux 双线路 + 缩略图生成）
+  ai_image.py         AI 生图适配与智能路由（APIMart + CLIProxyAPI + adobe2api）
   compose.py          通用模板合成
   special_compose*.py 特殊品合成（多画板场景）
   penpot_client.py    Penpot REST 客户端
@@ -85,7 +85,7 @@ editor-lab-tldraw/    Tldraw 画布子项目（独立 vite build）
 | `GET /health` | 健康检查 + AI 服务商连通状态 |
 | `POST /ai-image` | 提交生图（multipart，prompt + 1-4 张参考图） |
 | `GET /ai-image/{job_id}` | 轮询状态，前端每 2 秒一次 |
-| `POST /ai-image/retry` | 默认线路失败切 ZenMux |
+| `POST /ai-image/retry` | 生图失败触发智能重试 |
 | `POST /compose` / `/special-compose` | 模板合成 |
 | `GET /templates` | Penpot 模板列表（按 Penpot 团队 + 包含"模板"的项目筛） |
 | `GET /inspiration` / `POST /inspiration` | 灵感瀑布流列表 + 发布 |

@@ -69,17 +69,17 @@ class Settings:
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
 
     # AI 生图 API（APIMart）
-    ai_image_provider: str = os.getenv("AI_IMAGE_PROVIDER", "apimart")
+    ai_image_provider: str = os.getenv("AI_IMAGE_PROVIDER", "auto")
     ai_image_base_url: str = os.getenv("AI_IMAGE_BASE_URL", "https://api.apimart.ai")
     ai_image_api_key: str = os.getenv("AI_IMAGE_API_KEY", "")
     ai_image_job_timeout_seconds: int = int(os.getenv("AI_IMAGE_JOB_TIMEOUT_SECONDS", "600"))
 
-    # AI 生图 API（ZenMux，多模型备用线路；API key 留空则禁用）
-    zenmux_base_url: str = os.getenv("ZENMUX_BASE_URL", "https://zenmux.ai/api/v1")
-    zenmux_api_key: str = os.getenv("ZENMUX_API_KEY", "")
-    zenmux_management_api_key: str = os.getenv("ZENMUX_MANAGEMENT_API_KEY", "")
-    zenmux_gpt_image_model: str = os.getenv("ZENMUX_GPT_IMAGE_MODEL", "openai/gpt-image-2")
-    zenmux_nano_banana_model: str = os.getenv("ZENMUX_NANO_BANANA_MODEL", "google/gemini-3-pro-image-preview")
+    # AI 生图 API（adobe2api）
+    adobe2api_base_url: str = os.getenv("ADOBE2API_BASE_URL", "http://77.73.8.142:6001/v1")
+    adobe2api_api_key: str = os.getenv("ADOBE2API_API_KEY", "")
+
+    # 智能路由模型自定义优先级规则 JSON（可选，用于动态覆写）
+    smart_routing_rules_json: str = os.getenv("SMART_ROUTING_RULES_JSON", "")
 
     # AI 生图 API（可选的单独图生图配置；留空则复用上面的 APIMart 配置）
     nano_banana_base_url: str = os.getenv("NANO_BANANA_BASE_URL", "")
@@ -157,7 +157,7 @@ class Settings:
         self.allowed_login_users = self._load_login_users()
 
         # 统一补协议前缀，避免 ai_image_base_url 等配置没有 http://
-        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "zenmux_base_url", "cliproxy_base_url", "chat_llm_base_url", "skill_llm_base_url"):
+        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "adobe2api_base_url", "cliproxy_base_url", "chat_llm_base_url", "skill_llm_base_url"):
             _val = getattr(self, _key, "")
             if _val and not _val.startswith("http"):
                 setattr(self, _key, "https://" + _val)

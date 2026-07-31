@@ -41,12 +41,22 @@ class FinalImageDownloadError(RuntimeError):
         self.task_id = task_id
 
 
+class AmbiguousUpstreamError(RuntimeError):
+    """同步请求可能已送达上游（读超时/写超时/中途断连），状态不确定，禁止跨渠道重提。"""
+    stage = "ambiguous"
+
+    def __init__(self, message: str, *, task_id: str = "", provider: str = "") -> None:
+        super().__init__(message)
+        self.task_id = task_id
+        self.provider = provider
+
+
 _TRANSIENT_TASK_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 523, 524}
 
 _HTTP_ERRORS: dict[int, str] = {
     400: "请求格式错误，可能是参数不合法",
     401: "API Key 验证失败，请检查配置",
-    402: "账户余额不足或需要充值，请检查 ZenMux/APIMart 账户",
+    402: "账户余额不足或需要充值，请检查 APIMart 账户",
     403: "账号无权限或余额不足",
     404: "接口路径不存在或模型不可用",
     413: "上传的参考图过大",
@@ -64,7 +74,7 @@ SLASH_MODEL_MAP: dict[str, str] = {
 }
 
 PROVIDER_APIMART = "apimart"
-PROVIDER_ZENMUX = "zenmux"
+PROVIDER_ADOBE2API = "adobe2api"
 
 _OUTPUT_DIR = settings.output_path / "ai-images"
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -82,18 +92,6 @@ _SIZE_MAP: dict[str, tuple[str, str]] = {
     "1080x1920": ("9:16", "1K"),
     "1152x2048": ("9:16", "2K"),
     "2160x3840": ("9:16", "4K"),
-}
-
-_ZENMUX_SIZE_MAP: dict[str, dict[str, str]] = {
-    "1:1": {"1K": "1024x1024", "2K": "1536x1536", "4K": "2048x2048"},
-    "3:4": {"1K": "1024x1536", "2K": "1536x2048", "4K": "1536x2048"},
-    "4:3": {"1K": "1536x1024", "2K": "2048x1536", "4K": "2048x1536"},
-    "5:4": {"1K": "1280x1024", "2K": "2560x2048", "4K": "2560x2048"},
-    "4:5": {"1K": "1024x1280", "2K": "2048x2560", "4K": "2048x2560"},
-    "16:9": {"1K": "1536x864", "2K": "2048x1152", "4K": "3840x2160"},
-    "9:16": {"1K": "864x1536", "2K": "1152x2048", "4K": "2160x3840"},
-    "2:3": {"1K": "1024x1536", "2K": "1360x2048", "4K": "1360x2048"},
-    "3:2": {"1K": "1536x1024", "2K": "2048x1360", "4K": "2048x1360"},
 }
 
 
@@ -140,7 +138,11 @@ def format_generation_error(
     # 常见可操作提示（附加在原文后，不替换上游细节）
     low = raw.lower()
     tip = ""
-    if any(k in low for k in ("timeout", "timed out", "超时")):
+    if isinstance(exc, AmbiguousUpstreamError) or any(k in low for k in (
+        "请求可能已送达", "状态不确定", "不切换渠道",
+    )):
+        tip = "请求状态暂时无法确认，请先在任务中心或服务商后台核对，避免立即重复提交"
+    elif any(k in low for k in ("timeout", "timed out", "超时")):
         tip = "可稍后重试，或换线路"
     elif any(k in low for k in ("401", "api key", "unauthorized", "鉴权", "验证失败")):
         tip = "请检查 API Key / 线路配置"
@@ -301,46 +303,20 @@ def _model_credentials(model: str) -> tuple[str, str]:
     return base_url, api_key
 
 
+PROVIDER_AUTO = "auto"
+
+
 def normalize_provider(provider: str | None = None) -> str:
-    clean = (provider or settings.ai_image_provider or PROVIDER_APIMART).strip().casefold()
+    clean = (provider or settings.ai_image_provider or PROVIDER_AUTO).strip().casefold()
+    if clean in ("auto", "smart", "智能路由", "智能"):
+        return PROVIDER_AUTO
     if clean in ("apimart", "api-mart", "api_mart"):
         return PROVIDER_APIMART
-    if clean in ("zenmux", "zen-mux", "zen_mux"):
-        return PROVIDER_ZENMUX
     if clean in ("sub2api", "sub2-api", "sub_2api"):
         return PROVIDER_SUB2API
+    if clean in ("adobe2api", "adobe-2api", "adobe"):
+        return PROVIDER_ADOBE2API
     raise ValueError(f"未知生图线路: {provider}")
-
-
-def _zenmux_model_name(model: str) -> str:
-    model_name = _normalize_model_name(model)
-    if model_name == "gpt-image-2":
-        return settings.zenmux_gpt_image_model
-    if model_name == "gemini-3-pro-image-preview":
-        return settings.zenmux_nano_banana_model
-    return model_name
-
-
-def _is_zenmux_vertex_image_model(model_name: str) -> bool:
-    clean = str(model_name or "").strip().lower()
-    return clean.startswith("google/gemini-3-pro-image") or clean.startswith("gemini-3-pro-image")
-
-
-def _split_provider_model(model_name: str, default_provider: str = "google") -> tuple[str, str]:
-    clean = str(model_name or "").strip()
-    if "/" in clean:
-        provider, name = clean.split("/", 1)
-        return provider or default_provider, name or clean
-    return default_provider, clean
-
-
-def _zenmux_headers() -> dict[str, str]:
-    if not settings.zenmux_api_key:
-        raise ValueError("ZENMUX_API_KEY 未配置，请在 .env 中填写")
-    return {
-        "Authorization": f"Bearer {settings.zenmux_api_key}",
-        "Content-Type": "application/json",
-    }
 
 
 def _normalize_model_name(model: str) -> str:
@@ -352,37 +328,20 @@ def _normalize_model_name(model: str) -> str:
 
 def _normalize_size(size: str, resolution: str = "") -> tuple[str, str]:
     clean = (size or "").strip()
+    explicit_resolution = (resolution or "").strip().upper()
+    if explicit_resolution not in ("1K", "2K", "4K"):
+        explicit_resolution = ""
+
     if clean in _SIZE_MAP:
-        return _SIZE_MAP[clean]
-    clean_resolution = (resolution or "").strip().upper() or "1K"
+        mapped_ratio, mapped_resolution = _SIZE_MAP[clean]
+        # 像素尺寸命中时 ratio 以 map 为准；显式 resolution 覆盖 map 中的默认清晰度
+        # （例如 size=auto + resolution=2K 不能被 _SIZE_MAP["auto"] 的 1K 盖掉）
+        return mapped_ratio, explicit_resolution or mapped_resolution
+
+    clean_resolution = explicit_resolution or "1K"
     if clean in ("auto", "1:1", "3:4", "4:3", "5:4", "4:5", "9:16", "16:9", "2:3", "3:2"):
         return clean, clean_resolution
-    return "1:1", "1K"
-
-
-def _normalize_zenmux_size(size: str, resolution: str = "") -> str:
-    clean = (size or "").strip()
-    clean_resolution = (resolution or "").strip().upper() or "1K"
-    if clean == "auto":
-        return "auto"
-    if re.fullmatch(r"\d+x\d+", clean):
-        return clean
-    if clean in _SIZE_MAP:
-        ratio, mapped_resolution = _SIZE_MAP[clean]
-        clean = ratio
-        clean_resolution = clean_resolution or mapped_resolution
-    ratio_map = _ZENMUX_SIZE_MAP.get(clean or "1:1") or _ZENMUX_SIZE_MAP["1:1"]
-    return ratio_map.get(clean_resolution) or ratio_map.get("1K") or "1024x1024"
-
-
-def _normalize_zenmux_vertex_image_config(size: str, resolution: str = "") -> dict[str, Any]:
-    ratio, clean_resolution = _normalize_size(size, resolution)
-    image_config: dict[str, Any] = {
-        "imageSize": clean_resolution if clean_resolution in {"1K", "2K", "4K"} else "1K",
-    }
-    if ratio and ratio != "auto":
-        image_config["aspectRatio"] = ratio
-    return image_config
+    return "1:1", clean_resolution
 
 
 def _extract_error_text(resp: httpx.Response) -> str:
@@ -456,8 +415,42 @@ def _extract_result_url(payload: Any) -> str | None:
     return None
 
 
-def _extract_zenmux_image_url(payload: Any) -> str | None:
+def _extract_b64_or_image_url(payload: Any) -> str | None:
+    if isinstance(payload, str):
+        clean = payload.strip()
+        if clean.startswith("data:image/"):
+            return clean
+        if clean.startswith("http://") or clean.startswith("https://") or clean.startswith("/"):
+            return clean
+        return None
     if isinstance(payload, dict):
+        # OpenAI chat.completions 风格：choices[].message.content 可能是 data URL / 外链 / 多模态 list
+        choices = payload.get("choices")
+        if isinstance(choices, list):
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                message = choice.get("message") or {}
+                content = message.get("content") if isinstance(message, dict) else None
+                if isinstance(content, str):
+                    found = _extract_b64_or_image_url(content)
+                    if found:
+                        return found
+                elif isinstance(content, list):
+                    for part in content:
+                        if not isinstance(part, dict):
+                            continue
+                        if part.get("type") == "image_url":
+                            image_url = part.get("image_url")
+                            if isinstance(image_url, dict):
+                                found = _extract_b64_or_image_url(image_url.get("url"))
+                            else:
+                                found = _extract_b64_or_image_url(image_url)
+                            if found:
+                                return found
+                        found = _extract_b64_or_image_url(part.get("text") or part.get("url"))
+                        if found:
+                            return found
         data = payload.get("data")
         if isinstance(data, list):
             for item in data:
@@ -475,6 +468,11 @@ def _extract_zenmux_image_url(payload: Any) -> str | None:
                     if url:
                         return url
         return _extract_result_url(payload)
+    if isinstance(payload, list):
+        for item in payload:
+            found = _extract_b64_or_image_url(item)
+            if found:
+                return found
     return _extract_result_url(payload)
 
 
@@ -506,17 +504,17 @@ def _image_bytes_to_data_url(image_bytes: bytes, filename: str) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
-def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "zenmux") -> str:
+def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "ai_image") -> str:
     match = re.match(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$", data_url or "", re.DOTALL)
     if not match:
-        raise RuntimeError("ZenMux 返回了无法识别的图片 data URL")
+        raise RuntimeError("返回了无法识别的图片 data URL")
     mime_type, raw_b64 = match.groups()
     try:
         content = base64.b64decode(raw_b64, validate=True)
     except Exception as exc:
-        raise RuntimeError("ZenMux 返回的图片 base64 解码失败") from exc
+        raise RuntimeError("图片 base64 解码失败") from exc
     if not content:
-        raise RuntimeError("ZenMux 返回的图片内容为空")
+        raise RuntimeError("图片内容为空")
     out_dir = _ensure_user_dated_output_dir(user_id)
     filename = f"{prefix}_{uuid.uuid4().hex}{_extension_from_mime(mime_type)}"
     out_path = out_dir / filename
@@ -711,11 +709,26 @@ async def _submit_generation_task(
     endpoint = f"{base_url}/v1/images/generations"
     resp = await client.post(endpoint, json=payload, headers=headers)
     if not resp.is_success:
+        if resp.status_code >= 500:
+            raise AmbiguousUpstreamError(
+                f"APIMart POST 后返回 HTTP {resp.status_code}，上游是否已创建任务无法确认："
+                f"{_api_error_msg(resp.status_code, _extract_error_text(resp))}",
+                provider=PROVIDER_APIMART,
+            )
         raise RuntimeError(f"提交生图任务失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
-    data = resp.json()
+    try:
+        data = resp.json()
+    except Exception as exc:
+        raise AmbiguousUpstreamError(
+            f"APIMart POST 成功但返回不是 JSON，上游状态无法确认：{resp.text[:300]}",
+            provider=PROVIDER_APIMART,
+        ) from exc
     task_id = _extract_task_id(data)
     if not task_id:
-        raise RuntimeError(f"提交生图任务成功，但未返回 task_id: {str(data)[:200]}")
+        raise AmbiguousUpstreamError(
+            f"APIMart POST 成功但未返回 task_id，上游状态无法确认：{str(data)[:200]}",
+            provider=PROVIDER_APIMART,
+        )
     return str(task_id)
 
 
@@ -885,220 +898,6 @@ async def _download_final_image(
     return _ai_image_public_url(out_path)
 
 
-async def _generate_image_zenmux_vertex_async(
-    *,
-    model_name: str,
-    prompt: str,
-    refs: list[tuple[bytes, str]],
-    size: str,
-    resolution: str,
-    user_id: str,
-    headers: dict[str, str],
-    on_progress: Callable[[int, str], Any] | None = None,
-) -> dict:
-    provider_name, short_model_name = _split_provider_model(model_name, default_provider="google")
-    base_url = settings.zenmux_base_url.rstrip("/")
-    vertex_base_url = re.sub(r"/api/v1/?$", "/api/vertex-ai/v1", base_url)
-    if vertex_base_url == base_url:
-        vertex_base_url = base_url.rstrip("/") + "/api/vertex-ai/v1"
-    endpoint = f"{vertex_base_url}/publishers/{provider_name}/models/{short_model_name}:generateContent"
-
-    parts: list[dict[str, Any]] = []
-    for image_bytes, filename in refs[:9]:
-        parts.append({
-            "inlineData": {
-                "mimeType": _mime_from_filename(filename),
-                "data": base64.b64encode(image_bytes).decode("ascii"),
-            }
-        })
-    parts.append({"text": prompt})
-
-    payload: dict[str, Any] = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": parts,
-            }
-        ],
-        "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
-            "imageConfig": _normalize_zenmux_vertex_image_config(size, resolution),
-        },
-    }
-
-    request_headers = {
-        "Authorization": headers["Authorization"],
-        "Content-Type": "application/json",
-    }
-    if on_progress:
-        on_progress(10, "processing")
-    async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
-        resp = await client.post(endpoint, json=payload, headers=request_headers)
-        if not resp.is_success:
-            raise RuntimeError(f"ZenMux 生图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
-        data = resp.json()
-        if on_progress:
-            on_progress(85, "processing")
-        image_data_url = _extract_vertex_image_data_url(data)
-        if not image_data_url:
-            raise RuntimeError(f"ZenMux Vertex 响应中没有图片: {str(data)[:240]}")
-        local_url = _save_data_url_image(image_data_url, user_id=user_id, prefix="zenmux")
-        if on_progress:
-            on_progress(100, "completed")
-
-    return {
-        "url": local_url,
-        "model": model_name,
-        "prompt": prompt,
-        "size": size,
-        "resolution": resolution,
-        "provider": PROVIDER_ZENMUX,
-        "reference": bool(refs),
-        "task_id": f"zenmux-vertex:{uuid.uuid4().hex}",
-        "usage": _extract_vertex_usage(data),
-    }
-
-
-async def generate_image_zenmux_async(
-    model: str,
-    prompt: str,
-    images: list[tuple[bytes, str]] | None = None,
-    size: str = "1024x1024",
-    resolution: str = "",
-    user_id: str = "anonymous",
-    on_progress: Callable[[int, str], Any] | None = None,
-) -> dict:
-    """ZenMux 生图：无参考图时使用 SSE 流式获取进度 + token 用量；有参考图时使用非流式"""
-    model_name = _zenmux_model_name(model)
-    headers = _zenmux_headers()
-    refs = images or []
-    if _is_zenmux_vertex_image_model(model_name):
-        return await _generate_image_zenmux_vertex_async(
-            model_name=model_name,
-            prompt=prompt,
-            refs=refs,
-            size=size,
-            resolution=resolution,
-            user_id=user_id,
-            headers=headers,
-            on_progress=on_progress,
-        )
-    base_url = settings.zenmux_base_url.rstrip("/")
-    zenmux_size = _normalize_zenmux_size(size, resolution)
-    payload: dict[str, Any] = {
-        "model": model_name,
-        "prompt": prompt,
-        "n": 1,
-        "size": zenmux_size,
-    }
-
-    if refs:
-        # 有参考图：multipart/form-data 不支持流式，保持原有逻辑
-        task_id = f"zenmux:{uuid.uuid4().hex}"
-        endpoint = f"{base_url}/images/edits"
-        form_data = {key: str(value) for key, value in payload.items()}
-        files = [
-            ("image[]", (filename or f"ref{i}.png", image_bytes, _mime_from_filename(filename)))
-            for i, (image_bytes, filename) in enumerate(refs[:9])
-        ]
-        if on_progress:
-            on_progress(10, "processing")
-        async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
-            multipart_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
-            resp = await client.post(endpoint, data=form_data, files=files, headers=multipart_headers)
-            if not resp.is_success:
-                raise RuntimeError(f"ZenMux 生图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
-            data = resp.json()
-            if on_progress:
-                on_progress(90, "processing")
-            image_url = _extract_zenmux_image_url(data)
-            if not image_url:
-                raise RuntimeError(f"ZenMux 响应中没有图片: {str(data)[:240]}")
-            if image_url.startswith("data:image/"):
-                local_url = _save_data_url_image(image_url, user_id=user_id)
-            else:
-                local_url = await _download_final_image(
-                    client, image_url=image_url, user_id=user_id, task_id=task_id
-                )
-            if on_progress:
-                on_progress(100, "completed")
-        usage = None
-    else:
-        # 无参考图：SSE 流式，获取进度事件 + token 用量
-        endpoint = f"{base_url}/images/generations"
-        payload["stream"] = True
-        last_b64 = None
-        usage: dict | None = None
-        output_format = "png"
-        partial_count = 0
-
-        async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
-            async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
-                if not resp.is_success:
-                    body = ""
-                    try:
-                        async for chunk in resp.aiter_bytes():
-                            body += chunk.decode(errors="replace")
-                            if len(body) > 500:
-                                break
-                    except Exception:
-                        pass
-                    raise RuntimeError(f"ZenMux 生图失败：{_api_error_msg(resp.status_code, body[:200])}")
-
-                current_event = ""
-                async for line in resp.aiter_lines():
-                    line = line.strip()
-                    if line.startswith("event: "):
-                        current_event = line[7:].strip()
-                    elif line.startswith("data: "):
-                        data_str = line[6:]
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            event = json.loads(data_str)
-                        except json.JSONDecodeError:
-                            continue
-                        etype = event.get("type") or current_event
-                        if etype == "image_generation.partial_image":
-                            partial_count += 1
-                            last_b64 = event.get("b64_json")
-                            output_format = event.get("output_format", "png")
-                            progress = min(partial_count * 15, 85)
-                            if on_progress:
-                                on_progress(progress, "processing")
-                        elif etype == "image_generation.completed":
-                            last_b64 = event.get("b64_json")
-                            output_format = event.get("output_format", "png")
-                            usage = event.get("usage")
-                            if on_progress:
-                                on_progress(100, "completed")
-                        elif etype in ("error", "image_generation.error"):
-                            err_msg = event.get("message") or event.get("error") or str(event)[:200]
-                            raise RuntimeError(f"ZenMux 生图错误: {err_msg}")
-
-        if not last_b64:
-            raise RuntimeError("ZenMux 流式响应中没有图片数据")
-
-        mime = "image/" + output_format
-        data_url = f"data:{mime};base64,{last_b64}"
-        local_url = _save_data_url_image(data_url, user_id=user_id, prefix="zenmux")
-        task_id = f"zenmux:{uuid.uuid4().hex}"
-
-    result: dict = {
-        "url": local_url,
-        "model": model_name,
-        "prompt": prompt,
-        "size": zenmux_size,
-        "resolution": resolution,
-        "provider": PROVIDER_ZENMUX,
-        "reference": bool(refs),
-        "task_id": task_id,
-    }
-    if usage:
-        result["usage"] = usage
-    return result
-
-
 async def generate_image(
     model: str,
     prompt: str,
@@ -1205,8 +1004,13 @@ async def generate_image_async(
     resolution: str = "",
     user_id: str = "anonymous",
     on_progress: Callable[[int, str], Any] | None = None,
+    on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
-    """异步生图：提交任务 → 轮询进度 → 下载结果。on_progress(progress, api_status) 用于持久化进度。"""
+    """异步生图：提交任务 → 轮询进度 → 下载结果。
+
+    on_progress(progress, api_status) 用于 UI/持久化。
+    on_accepted(task_id) 仅在上游明确接受任务后触发（用于智能路由防重复计费）。
+    """
     model_name = _normalize_model_name(model)
     base_url, api_key = _model_credentials(model_name)
     headers = {
@@ -1223,6 +1027,10 @@ async def generate_image_async(
             size=size,
             resolution=resolution,
         )
+        if on_accepted:
+            on_accepted(str(task_id))
+        if on_progress:
+            on_progress(10, "submitted")
         result_url, _, _task_detail = await _wait_for_task_result(
             client,
             base_url=base_url,
@@ -1254,6 +1062,7 @@ async def generate_image_with_reference_async(
     resolution: str = "",
     user_id: str = "anonymous",
     on_progress: Callable[[int], Any] | None = None,
+    on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
     """异步图生图：上传参考图 → 提交任务 → 轮询进度 → 下载结果。"""
     model_name = _normalize_model_name(model)
@@ -1279,6 +1088,13 @@ async def generate_image_with_reference_async(
             resolution=resolution,
             reference_urls=reference_urls,
         )
+        if on_accepted:
+            on_accepted(str(task_id))
+        if on_progress:
+            try:
+                on_progress(10, "submitted")  # type: ignore[misc]
+            except TypeError:
+                on_progress(10)
         result_url, _, _task_detail = await _wait_for_task_result(
             client,
             base_url=base_url,
@@ -1470,6 +1286,7 @@ async def generate_sub2api_async(
     resolution: str = "",
     user_id: str = "anonymous",
     on_progress: Callable[[int, str], Any] | None = None,
+    on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
     """订阅线路：通过 CLIProxyAPI 的 OpenAI Images 兼容接口生图。"""
     base_url = settings.cliproxy_base_url.rstrip("/")
@@ -1490,7 +1307,7 @@ async def generate_sub2api_async(
     timeout = httpx.Timeout(1800.0, connect=30.0)
 
     if on_progress:
-        on_progress(10, "submitted")
+        on_progress(5, "starting")
 
     try:
         client_kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False}
@@ -1525,21 +1342,40 @@ async def generate_sub2api_async(
                 }
                 endpoint = f"{api_base}/images/generations"
                 resp = await client.post(endpoint, json=payload, headers=_cliproxy_headers(api_key, json_request=True))
-    except httpx.TimeoutException as exc:
-        raise RuntimeError("CLIProxyAPI 请求超时，请降低并发或稍后重试") from exc
     except httpx.RequestError as exc:
+        kind = classify_httpx_transport_error(exc)
+        if kind == "connect":
+            raise RuntimeError(f"CLIProxyAPI 连接失败：{exc}") from exc
+        if kind == "ambiguous":
+            raise AmbiguousUpstreamError(
+                f"CLIProxyAPI 请求可能已送达但响应超时/中断（状态不确定，不切换渠道）：{exc}",
+                provider=PROVIDER_SUB2API,
+            ) from exc
         raise RuntimeError(f"CLIProxyAPI 请求失败：{exc}") from exc
 
     raw_text = resp.text
     if not resp.is_success:
+        if resp.status_code >= 500:
+            raise AmbiguousUpstreamError(
+                f"CLIProxyAPI POST 后返回 HTTP {resp.status_code}，上游是否已受理无法确认："
+                f"{_api_error_msg(resp.status_code, raw_text[:500])}",
+                provider=PROVIDER_SUB2API,
+            )
         raise RuntimeError(f"CLIProxyAPI 生图失败：{_api_error_msg(resp.status_code, raw_text[:500])}")
     try:
         payload = resp.json()
     except Exception as exc:
-        raise RuntimeError(f"CLIProxyAPI 返回不是 JSON: {raw_text[:300]}") from exc
+        raise AmbiguousUpstreamError(
+            f"CLIProxyAPI POST 成功但返回不是 JSON，上游状态无法确认：{raw_text[:300]}",
+            provider=PROVIDER_SUB2API,
+        ) from exc
     if isinstance(payload, dict) and payload.get("error"):
         raise RuntimeError(f"CLIProxyAPI 生图失败: {str(payload.get('error'))[:300]}")
 
+    # 同步接口：HTTP 成功且无 error 即上游已接受/完成；无真实 id 时仍标记 accepted，但不写入哨兵 task_id
+    upstream_id = str((payload or {}).get("id") or "").strip()
+    if on_accepted:
+        on_accepted(upstream_id)
     if on_progress:
         on_progress(85, "saving")
     local_url, item = await _save_cliproxy_response_image(payload, user_id=user_id, api_key=api_key)
@@ -1555,10 +1391,429 @@ async def generate_sub2api_async(
         "requested_size": size,
         "resolution": resolution,
         "provider": PROVIDER_SUB2API,
-        "task_id": None,
+        "task_id": upstream_id or None,
         "usage": usage if isinstance(usage, dict) else None,
         "revised_prompt": item.get("revised_prompt") if isinstance(item, dict) else None,
     }
+
+
+# ── adobe2api (Firefly / OpenAI 兼容接口) ───────────────────────────────────────────────
+
+async def generate_adobe2api_async(
+    model: str,
+    prompt: str,
+    images: list[tuple[bytes, str]] | None = None,
+    size: str = "1024x1024",
+    resolution: str = "",
+    user_id: str = "anonymous",
+    on_progress: Callable[[int, str], Any] | None = None,
+    on_accepted: Callable[[str], Any] | None = None,
+) -> dict:
+    """通过 adobe2api 服务生成/编辑图片 (OpenAI 兼容聊天/生图接口)"""
+    base_url = settings.adobe2api_base_url.rstrip("/")
+    if not base_url.endswith("/v1"):
+        base_url = f"{base_url}/v1"
+    api_key = settings.adobe2api_api_key
+    if not base_url or not api_key:
+        raise RuntimeError("adobe2api 未配置：请检查 ADOBE2API_BASE_URL/ADOBE2API_API_KEY")
+
+    api_endpoint = f"{base_url}/chat/completions"
+    ratio, res_clean = _normalize_size(size, resolution)
+
+    model_name = _normalize_model_name(model).lower()
+    ratio_suffix = ratio.replace(":", "x")
+    res_suffix = res_clean.lower() or "1k"
+
+    # 归一化后的 gemini 模型名不含 banana，需一并识别，避免静默落到 GPT Image
+    if (
+        "banana" in model_name
+        or "gemini" in model_name
+        or model_name == "gemini-3-pro-image-preview"
+    ):
+        target_model = f"firefly-nano-banana-pro-{res_suffix}-{ratio_suffix}"
+    else:
+        target_model = f"firefly-gpt-image-{res_suffix}-{ratio_suffix}"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    content_list: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+
+    refs = images or []
+    if refs:
+        # adobe2api / Firefly 侧可接受多图；与主链路一致最多 9 张
+        if len(refs) > 9:
+            logger.warning("[adobe2api] 参考图 %d 张，仅发送前 9 张", len(refs))
+        for img_bytes, filename in refs[:9]:
+            data_url = _image_bytes_to_data_url(img_bytes, filename)
+            content_list.append({
+                "type": "image_url",
+                "image_url": {"url": data_url},
+            })
+
+    payload = {
+        "model": target_model,
+        "messages": [{"role": "user", "content": content_list}],
+    }
+
+    if on_progress:
+        on_progress(5, "starting")
+
+    timeout = httpx.Timeout(300.0, connect=30.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            resp = await client.post(api_endpoint, json=payload, headers=headers)
+    except httpx.RequestError as exc:
+        kind = classify_httpx_transport_error(exc)
+        if kind == "connect":
+            raise RuntimeError(f"adobe2api 连接失败：{exc}") from exc
+        if kind == "ambiguous":
+            raise AmbiguousUpstreamError(
+                f"adobe2api 请求可能已送达但响应超时/中断（状态不确定，不切换渠道）：{exc}",
+                provider=PROVIDER_ADOBE2API,
+            ) from exc
+        raise RuntimeError(f"adobe2api 请求失败：{exc}") from exc
+
+    if not resp.is_success:
+        if resp.status_code >= 500:
+            raise AmbiguousUpstreamError(
+                f"adobe2api POST 后返回 HTTP {resp.status_code}，上游是否已受理无法确认："
+                f"{_extract_error_text(resp)}",
+                provider=PROVIDER_ADOBE2API,
+            )
+        raise RuntimeError(f"adobe2api 请求失败: HTTP {resp.status_code} - {_extract_error_text(resp)}")
+
+    try:
+        data = resp.json()
+    except Exception as exc:
+        raise AmbiguousUpstreamError(
+            f"adobe2api POST 成功但返回不是 JSON，上游状态无法确认：{resp.text[:300]}",
+            provider=PROVIDER_ADOBE2API,
+        ) from exc
+    result_url = _extract_b64_or_image_url(data) or _extract_result_url(data)
+    if not result_url:
+        raise RuntimeError(f"adobe2api 未返回有效图片 URL 或 Base64: {str(data)[:200]}")
+
+    # 同步接口：拿到有效图片内容后才算上游已接受；无真实 id 时不写哨兵 task_id
+    upstream_id = str((data or {}).get("id") or "").strip()
+    if on_accepted:
+        on_accepted(upstream_id)
+    if on_progress:
+        on_progress(85, "saving")
+
+    if result_url.startswith("data:"):
+        local_url = _save_data_url_image(result_url, user_id=user_id, prefix="adobe2api")
+    else:
+        local_url = await _download_cliproxy_image(result_url, user_id=user_id, api_key=api_key)
+
+    if on_progress:
+        on_progress(100, "done")
+
+    return {
+        "url": local_url,
+        "provider": PROVIDER_ADOBE2API,
+        "model": target_model,
+        "prompt": prompt,
+        "size": size,
+        "resolution": resolution,
+        "task_id": upstream_id or None,
+    }
+
+
+# ── 智能路由调度 (Smart Routing) ─────────────────────────────────────────────────────────────
+
+def classify_httpx_transport_error(exc: BaseException) -> str:
+    """分类传输层错误：connect=可切换；ambiguous=可能已送达不可切换；other=其它。
+
+    仅 ConnectError/ConnectTimeout 视为请求尚未送达。
+    Read/Write/Close/RemoteProtocol 及通用 RequestError 一律 ambiguous，
+    禁止靠错误文案里的 "connection" 字符串推断（connection reset 常发生在响应阶段）。
+    """
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        return "connect"
+    if isinstance(exc, (
+        httpx.ReadTimeout,
+        httpx.WriteTimeout,
+        httpx.PoolTimeout,
+        httpx.ReadError,
+        httpx.WriteError,
+        httpx.CloseError,
+        httpx.RemoteProtocolError,
+        httpx.TimeoutException,
+        httpx.RequestError,
+    )):
+        return "ambiguous"
+    return "other"
+
+
+def is_transient_provider_error(exc: BaseException | str | None) -> bool:
+    """仅在能确认请求尚未受理时切换线路。
+
+    白名单只有连接阶段失败和服务商明确拒绝受理的限流；任何 POST 后响应、
+    解析或未知异常都不切换，避免重复生成与重复计费。
+    """
+    if isinstance(exc, AmbiguousUpstreamError):
+        return False
+    if isinstance(exc, httpx.RequestError):
+        return classify_httpx_transport_error(exc) == "connect"
+
+    raw = str(exc or "").strip()
+    if not raw:
+        return False
+    low = raw.lower()
+
+    # HTTP 429 明确表示本次请求被拒绝受理，可以安全切线。
+    if re.search(r"\bHTTP\s*429\b", raw, re.IGNORECASE) or any(
+        k in low for k in ("rate limit", "too many requests", "请求过于频繁")
+    ):
+        return True
+
+    # Provider 适配器仅在 ConnectError/ConnectTimeout 时生成这些连接阶段文案。
+    if any(k in low for k in (
+        "连接失败", "connecterror", "connecttimeout", "connection refused",
+        "dns", "name or service not known", "nodename nor servname",
+        "network is unreachable", "getaddrinfo",
+    )):
+        return True
+
+    return False
+
+
+# 默认模型选路优先级表：映射标准模型名到首选/降级线路
+DEFAULT_MODEL_ROUTING_RULES: dict[str, list[str]] = {
+    "default": [PROVIDER_SUB2API, PROVIDER_ADOBE2API, PROVIDER_APIMART],
+}
+
+# 服务商能力集合：定义各线路真正支持的模型 (None/空集代表支持全量模型)
+PROVIDER_MODEL_CAPABILITIES: dict[str, set[str] | None] = {
+    PROVIDER_SUB2API: {"gpt-image-2"},  # Sub2API 当前仅支持 gpt-image-2
+    PROVIDER_ADOBE2API: {"gemini-3-pro-image-preview", "gpt-image-2"},
+    PROVIDER_APIMART: None,  # APIMart 适配通用架构，全支持
+}
+
+
+def _get_custom_rules() -> dict[str, list[str]]:
+    """读取自定义规则（在 .env 中填 SMART_ROUTING_RULES_JSON 覆写）"""
+    rules: dict[str, list[str]] = {}
+    raw_json = getattr(settings, "smart_routing_rules_json", "").strip()
+    if raw_json:
+        try:
+            parsed = json.loads(raw_json)
+            if isinstance(parsed, dict):
+                for k, v in parsed.items():
+                    if isinstance(v, list):
+                        rules[k.casefold()] = [str(item).strip().lower() for item in v if str(item).strip()]
+        except Exception as exc:
+            logger.warning("[smart-routing] 无法解析 SMART_ROUTING_RULES_JSON: %s", exc)
+    return rules
+
+
+def get_smart_route_candidates(model: str, resolution: str = "", size: str = "1024x1024") -> list[str]:
+    """根据请求模型、清晰度、能力表与静态 Key 配置，动态计算选路序列"""
+    model_name = _normalize_model_name(model).lower()
+    custom_rules = _get_custom_rules()
+
+    # 显式 resolution 优先；仅当未传时才从 size 像素串推断（_normalize_size 在命中 _SIZE_MAP 时会忽略 resolution）
+    res_upper = (resolution or "").strip().upper()
+    if not res_upper:
+        _ratio, res_clean = _normalize_size(size, resolution)
+        res_upper = res_clean.upper() if res_clean else "1K"
+
+    # 1. 根据模型与画质分辨率选择匹配规则（环境 JSON 显式规则优先）
+    if custom_rules and model_name in custom_rules:
+        preferred_order = custom_rules[model_name]
+    elif model_name == "gpt-image-2":
+        if res_upper in ("2K", "4K"):
+            preferred_order = [PROVIDER_ADOBE2API, PROVIDER_APIMART]
+        else:  # 1K 或 auto 默认为 1K
+            preferred_order = [PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_ADOBE2API]
+    elif "banana" in model_name or "gemini" in model_name:
+        preferred_order = [PROVIDER_APIMART, PROVIDER_ADOBE2API]
+    else:
+        preferred_order = (custom_rules and custom_rules.get("default")) or [PROVIDER_SUB2API, PROVIDER_ADOBE2API, PROVIDER_APIMART]
+
+    candidates: list[str] = []
+
+    # 2. 能力表 & 静态 Key 双重过滤
+    for provider in preferred_order:
+        # 校验 2.1: 线路是否支持该模型
+        supported = PROVIDER_MODEL_CAPABILITIES.get(provider)
+        if supported is not None and model_name not in supported:
+            logger.debug("[smart-routing] Provider %s skipped for model %s (not supported by capability matrix)", provider, model_name)
+            continue
+
+        # 校验 2.2: 线路是否有配置 Key
+        if provider == PROVIDER_SUB2API:
+            if settings.cliproxy_base_url and settings.cliproxy_api_key:
+                candidates.append(provider)
+        elif provider == PROVIDER_ADOBE2API:
+            if settings.adobe2api_base_url and settings.adobe2api_api_key:
+                candidates.append(provider)
+        elif provider == PROVIDER_APIMART:
+            if settings.ai_image_api_key:
+                candidates.append(provider)
+
+    return candidates
+
+
+async def smart_generate_image_async(
+    model: str,
+    prompt: str,
+    images: list[tuple[bytes, str]] | None = None,
+    size: str = "1024x1024",
+    resolution: str = "",
+    user_id: str = "anonymous",
+    on_progress: Callable[[int, str], Any] | None = None,
+    on_attempt: Callable[[str], Any] | None = None,
+    on_accepted: Callable[[str, str], Any] | None = None,
+) -> dict:
+    """智能路由生图：按模型与配置选路，仅对暂态错误自动 Failover。
+
+    是否已提交上游由各 provider 的 on_accepted 明确信号决定。
+    外层 on_accepted(provider, upstream_id) 用于立即持久化任务号。
+    """
+    candidates = get_smart_route_candidates(model, resolution=resolution, size=size)
+    logger.info("[smart-routing] Candidate providers for model=%s res=%s size=%s: %s",
+                model, resolution, size, candidates)
+    if not candidates:
+        raise RuntimeError(
+            f"没有已配置且支持模型 {_normalize_model_name(model)} "
+            f"（清晰度 {resolution or '默认'}）的生图线路"
+        )
+
+    errors: list[str] = []
+    primary_provider = candidates[0]
+    accepted: dict[str, str] = {}
+    last_provider = primary_provider
+
+    def _make_on_accepted(provider_name: str):
+        def _inner(upstream_id: str = "") -> None:
+            # accepted 用 key 存在表示已接受；value 仅在有真实上游号时非空
+            uid = str(upstream_id or "").strip()
+            accepted[provider_name] = uid
+            logger.info(
+                "[smart-routing] Provider %s accepted by upstream id=%s",
+                provider_name, uid or "(none)",
+            )
+            if on_accepted:
+                try:
+                    on_accepted(provider_name, uid)
+                except Exception as cb_exc:
+                    logger.warning("[smart-routing] on_accepted callback failed: %s", cb_exc)
+        return _inner
+
+    def _raise_with_context(
+        exc: BaseException,
+        provider_name: str,
+        err_msg: str,
+        *,
+        force_ambiguous: bool = False,
+    ) -> None:
+        task_id = accepted.get(provider_name) or getattr(exc, "task_id", "") or ""
+        task_id = str(task_id or "").strip()
+        # 已接受后的失败 / 传输状态不确定：统一为 Ambiguous，避免提示“换线路”
+        if force_ambiguous or isinstance(exc, AmbiguousUpstreamError):
+            raise AmbiguousUpstreamError(err_msg, task_id=task_id, provider=provider_name) from exc
+        wrapped = RuntimeError(err_msg)
+        wrapped.task_id = task_id  # type: ignore[attr-defined]
+        wrapped.provider = provider_name  # type: ignore[attr-defined]
+        wrapped.stage = getattr(exc, "stage", "smart_route")  # type: ignore[attr-defined]
+        raise wrapped from exc
+
+    for index, provider in enumerate(candidates):
+        last_provider = provider
+        provider_on_accepted = _make_on_accepted(provider)
+        try:
+            if on_attempt:
+                try:
+                    on_attempt(provider)
+                except Exception as cb_exc:
+                    logger.warning("[smart-routing] on_attempt callback failed: %s", cb_exc)
+            logger.info("[smart-routing] Attempting provider %s (%d/%d)", provider, index + 1, len(candidates))
+            if provider == PROVIDER_SUB2API:
+                result = await generate_sub2api_async(
+                    model=model, prompt=prompt, images=images,
+                    size=size, resolution=resolution, user_id=user_id,
+                    on_progress=on_progress, on_accepted=provider_on_accepted,
+                )
+            elif provider == PROVIDER_ADOBE2API:
+                result = await generate_adobe2api_async(
+                    model=model, prompt=prompt, images=images,
+                    size=size, resolution=resolution, user_id=user_id,
+                    on_progress=on_progress, on_accepted=provider_on_accepted,
+                )
+            else:  # APIMart
+                if images:
+                    result = await generate_image_with_reference_async(
+                        model=model, prompt=prompt, images=images,
+                        size=size, resolution=resolution, user_id=user_id,
+                        on_progress=on_progress, on_accepted=provider_on_accepted,
+                    )
+                else:
+                    result = await generate_image_async(
+                        model=model, prompt=prompt,
+                        size=size, resolution=resolution, user_id=user_id,
+                        on_progress=on_progress, on_accepted=provider_on_accepted,
+                    )
+
+            result["provider"] = provider
+            accepted_tid = (accepted.get(provider) or "").strip()
+            if accepted_tid and not result.get("task_id"):
+                result["task_id"] = accepted_tid
+            if provider != primary_provider:
+                result["provider_switched"] = True
+                logger.warning(
+                    "[smart-routing] Successfully failovered from %s to %s",
+                    primary_provider, provider
+                )
+            return result
+
+        except Exception as exc:
+            already_accepted = provider in accepted
+            # 先按原始异常格式化，再在已接受场景统一抬升为 Ambiguous 文案
+            err_msg = format_generation_error(exc, stage="smart_route", provider=provider, model=model)
+            if already_accepted or isinstance(exc, AmbiguousUpstreamError):
+                err_msg = format_generation_error(
+                    AmbiguousUpstreamError(str(exc), task_id=str(accepted.get(provider) or ""), provider=provider),
+                    stage="smart_route",
+                    provider=provider,
+                    model=model,
+                    task_id=str(accepted.get(provider) or ""),
+                )
+            logger.warning("[smart-routing] Provider %s failed: %s", provider, err_msg)
+            errors.append(f"{provider}: {err_msg}")
+
+            is_last = index >= len(candidates) - 1
+            can_failover = is_transient_provider_error(exc) and not already_accepted and not is_last
+            if already_accepted or isinstance(exc, AmbiguousUpstreamError) or not can_failover:
+                if already_accepted:
+                    logger.warning(
+                        "[smart-routing] Provider %s already accepted upstream (id=%s); skip failover to avoid duplicate billing",
+                        provider, accepted.get(provider),
+                    )
+                elif isinstance(exc, AmbiguousUpstreamError):
+                    logger.warning(
+                        "[smart-routing] Provider %s ambiguous transport error; skip failover to avoid duplicate billing",
+                        provider,
+                    )
+                elif not is_last:
+                    logger.warning(
+                        "[smart-routing] Provider %s error is non-transient; stop failover",
+                        provider,
+                    )
+                _raise_with_context(
+                    exc,
+                    provider,
+                    err_msg,
+                    force_ambiguous=already_accepted or isinstance(exc, AmbiguousUpstreamError),
+                )
+
+    final = RuntimeError(f"所有可用 AI 生图线路均尝试失败：{' | '.join(errors)}")
+    final.provider = last_provider  # type: ignore[attr-defined]
+    final.task_id = accepted.get(last_provider, "")  # type: ignore[attr-defined]
+    raise final
 
 
 def compress_image_to_data_url(image_bytes: bytes, max_long_side: int = 1024) -> str:

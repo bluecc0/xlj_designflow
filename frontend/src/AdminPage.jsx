@@ -24,9 +24,10 @@ const ADMIN_TASK_TYPES = {
 };
 
 const ADMIN_PROVIDERS = {
-  apimart: '默认线路',
-  sub2api: '订阅线路',
-  zenmux: '官方线路',
+  auto: '智能路由',
+  apimart: '默认线路 (APIMart)',
+  sub2api: '订阅线路 (Sub2API)',
+  adobe2api: 'Adobe 线路 (Firefly)',
   penpot: 'Penpot',
   local: '本地处理',
 };
@@ -260,6 +261,7 @@ const ADMIN_CSS = `
   .df-admin-servicestate { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: #a7aba4; }
   .df-admin-servicestate.is-up { background: var(--admin-green); box-shadow: 0 0 0 4px var(--admin-green-soft); }
   .df-admin-servicestate.is-down { background: var(--admin-red); box-shadow: 0 0 0 4px var(--admin-red-soft); }
+  .df-admin-servicestate.is-warn { background: var(--admin-amber); box-shadow: 0 0 0 4px var(--admin-amber-soft); }
   .df-admin-servicebody { margin-top: 18px; color: var(--admin-muted); font-size: 9.5px; line-height: 1.65; word-break: break-all; }
   .df-admin-probelist { max-height: 410px; overflow: auto; padding: 0 16px; }
   .df-admin-probe {
@@ -564,8 +566,25 @@ function AdminUserRanking({ items, hours }) {
   );
 }
 
-function AdminServiceCard({ name, desc, connected, configured, probing, detail, icon }) {
-  var stateClass = connected ? 'is-up' : (probing || configured === false ? '' : 'is-down');
+function AdminServiceCard({ name, desc, connected, configured, probing, throttled, detail, icon }) {
+  var stateClass = '';
+  var stateText = '连接异常';
+  if (configured === false) {
+    stateClass = '';
+    stateText = '未配置';
+  } else if (probing) {
+    stateClass = '';
+    stateText = '正在探测';
+  } else if (throttled) {
+    stateClass = 'is-warn';
+    stateText = '受限/限流';
+  } else if (connected) {
+    stateClass = 'is-up';
+    stateText = '运行正常';
+  } else {
+    stateClass = 'is-down';
+    stateText = '连接异常';
+  }
   return (
     <div className="df-admin-service">
       <div className="df-admin-servicetop">
@@ -577,7 +596,7 @@ function AdminServiceCard({ name, desc, connected, configured, probing, detail, 
         <span className={'df-admin-servicestate ' + stateClass} />
       </div>
       <div className="df-admin-servicebody">
-        {configured === false ? '未配置' : (probing ? '正在探测' : (connected ? '运行正常' : '连接异常'))}
+        {stateText}
         {detail ? <><br />{detail}</> : null}
       </div>
     </div>
@@ -1010,7 +1029,7 @@ function AdminPage({ user, onBack }) {
     { name: '产品素材库', desc: '本地产品图资源', connected: !!(health && health.library && health.library.connected), detail: health && health.library && ((health.library.folders || []).length + ' 个目录 · ' + health.library.path), icon: <I.folder size={15} /> },
     { name: '默认生图线路', desc: 'APIMart', connected: !!apimartProvider.connected, configured: !!apimartProvider.configured, detail: apimartProvider.message || apimartProvider.url, icon: <I.image size={15} /> },
     { name: '订阅生图线路', desc: 'CLIProxyAPI · 每小时生图探测', connected: !!(aiProvider.sub2api && aiProvider.sub2api.connected), configured: !!(aiProvider.sub2api && aiProvider.sub2api.configured), probing: !!(aiProvider.sub2api && aiProvider.sub2api.last_probe && aiProvider.sub2api.last_probe.status === 'running'), detail: aiProvider.sub2api && (aiProvider.sub2api.message || aiProvider.sub2api.url), icon: <I.zap size={15} /> },
-    { name: '官方生图线路', desc: 'ZenMux', connected: !!(aiProvider.zenmux && aiProvider.zenmux.connected), configured: !!(aiProvider.zenmux && aiProvider.zenmux.configured), detail: aiProvider.zenmux && (aiProvider.zenmux.message || aiProvider.zenmux.url), icon: <I.sparkles size={15} /> },
+    { name: 'Adobe 生图线路', desc: 'adobe2api · Firefly', connected: !!(aiProvider.adobe2api && aiProvider.adobe2api.connected), configured: !!(aiProvider.adobe2api && aiProvider.adobe2api.configured), throttled: !!(aiProvider.adobe2api && aiProvider.adobe2api.throttled), detail: aiProvider.adobe2api && (aiProvider.adobe2api.message || aiProvider.adobe2api.url), icon: <I.image size={15} /> },
   ];
 
   var renderOverview = function() {
@@ -1131,7 +1150,7 @@ function AdminPage({ user, onBack }) {
             <option value="">全部用户</option>{users.map(function(item) { return <option value={item.id} key={item.id}>{adminUserLabel(item)}</option>; })}
           </select>
           <select className="df-admin-control" value={taskFilters.provider} onChange={function(e) { setTaskFilter('provider', e.target.value); }}>
-            <option value="">全部渠道</option><option value="apimart">默认线路</option><option value="sub2api">订阅线路</option><option value="zenmux">官方线路</option><option value="penpot">Penpot</option><option value="local">本地处理</option>
+            <option value="">全部渠道</option><option value="apimart">默认线路</option><option value="sub2api">订阅线路</option><option value="adobe2api">Adobe 线路</option><option value="penpot">Penpot</option><option value="local">本地处理</option>
           </select>
           <select className="df-admin-control" value={taskFilters.reference} onChange={function(e) { setTaskFilter('reference', e.target.value); }}>
             <option value="">参考图不限</option><option value="yes">使用参考图</option><option value="no">未用参考图</option>

@@ -45,15 +45,18 @@ from fastapi.staticfiles import StaticFiles
 
 from .ai_image import (
     PROVIDER_SUB2API,
-    PROVIDER_ZENMUX,
+    PROVIDER_ADOBE2API,
+    PROVIDER_APIMART,
+    PROVIDER_AUTO,
     cleanup_user_refs,
     format_generation_error,
     generate_image,
     generate_image_with_reference,
     generate_image_async,
-    generate_image_zenmux_async,
     generate_image_with_reference_async,
     generate_sub2api_async,
+    generate_adobe2api_async,
+    smart_generate_image_async,
     generate_inspiration_thumb,
     get_inspiration_thumb_url_if_exists,
     load_user_refs,
@@ -1138,47 +1141,63 @@ async def _probe_apimart(client: httpx.AsyncClient) -> dict:
     return status
 
 
-async def _probe_zenmux(client: httpx.AsyncClient) -> dict:
+async def _probe_adobe2api(client: httpx.AsyncClient) -> dict:
     status = {
         "connected": False,
-        "configured": bool(settings.zenmux_api_key),
-        "provider": "ZenMux",
-        "url": settings.zenmux_base_url,
+        "configured": bool(settings.adobe2api_base_url and settings.adobe2api_api_key),
+        "provider": "adobe2api",
+        "url": settings.adobe2api_base_url,
     }
+    if not status["configured"]:
+        status["message"] = "未配置 Adobe 线路"
+        return status
 
-    async def probe_models() -> None:
-        if not settings.zenmux_api_key:
-            return
+    # 与生图适配器一致：确保探测走 /v1 前缀，避免根路径 200 掩盖真实接口不可用
+    base = settings.adobe2api_base_url.rstrip("/")
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    status["url"] = base
+    candidates = [f"{base}/models", f"{base}/chat/completions", base]
+    last_error = ""
+    for url in candidates:
         try:
             response = await client.get(
-                f"{settings.zenmux_base_url}/models",
-                headers={"Authorization": f"Bearer {settings.zenmux_api_key}"},
+                url,
+                headers={"Authorization": f"Bearer {settings.adobe2api_api_key}"},
             )
-            status["status_code"] = response.status_code
-            status["connected"] = response.status_code < 500
-            if response.status_code >= 500:
-                status["message"] = response.text[:200]
+            code = response.status_code
+            status["status_code"] = code
+            if 200 <= code < 300:
+                status["connected"] = True
+                status.pop("message", None)
+                return status
+            if code in (401, 403):
+                status["connected"] = False
+                status["message"] = f"鉴权失败 HTTP {code}"
+                return status
+            if code == 429:
+                status["connected"] = True
+                status["throttled"] = True
+                status["message"] = "HTTP 429 限流"
+                return status
+            if code in (404, 405, 422):
+                # chat/completions 对 GET 常返回 405/422，说明路由存在，可视为连通
+                if url.rstrip("/").endswith("chat/completions") and code in (404, 405, 422):
+                    # 404 继续；405/422 表示端点存在
+                    if code in (405, 422):
+                        status["connected"] = True
+                        status["message"] = f"端点可达 HTTP {code}"
+                        return status
+                last_error = f"HTTP {code}"
+                continue
+            if code >= 500:
+                last_error = f"HTTP {code}"
+                continue
+            last_error = f"HTTP {code}"
         except Exception as exc:
-            status["message"] = str(exc)
-
-    async def probe_balance() -> None:
-        if not settings.zenmux_management_api_key:
-            return
-        try:
-            response = await client.get(
-                "https://zenmux.ai/api/v1/management/payg/balance",
-                headers={"Authorization": f"Bearer {settings.zenmux_management_api_key}"},
-            )
-            if response.status_code == 200:
-                payload = response.json()
-                data = payload.get("data") if isinstance(payload, dict) else {}
-                status["total_credits"] = data.get("total_credits")
-                status["top_up_credits"] = data.get("top_up_credits")
-                status["bonus_credits"] = data.get("bonus_credits")
-        except Exception:
-            pass
-
-    await asyncio.gather(probe_models(), probe_balance())
+            last_error = str(exc)
+    status["connected"] = False
+    status["message"] = last_error or "探测失败"
     return status
 
 
@@ -1191,18 +1210,14 @@ async def health():
 async def health_deep():
     local_health = _local_health_payload()
     async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
-        penpot_ok, ai_provider, zenmux_status = await asyncio.gather(
+        penpot_ok, ai_provider, adobe_provider = await asyncio.gather(
             _probe_penpot(client),
             _probe_apimart(client),
-            _probe_zenmux(client),
+            _probe_adobe2api(client),
         )
 
-    # Keep each provider's probe result independent. The top-level flags below
-    # remain the aggregate "at least one image provider is available" signal.
     ai_provider["apimart"] = dict(ai_provider)
-    ai_provider["zenmux"] = zenmux_status
-    ai_provider["connected"] = bool(ai_provider.get("connected") or zenmux_status.get("connected"))
-    ai_provider["configured"] = bool(ai_provider.get("configured") or zenmux_status.get("configured"))
+    ai_provider["adobe2api"] = adobe_provider
 
     latest_sub2api_probe = load_latest_service_probe("sub2api")
     latest_completed_sub2api_probe = load_latest_completed_service_probe("sub2api")
@@ -1261,8 +1276,16 @@ async def health_deep():
             "最近探测失败 · " + str(latest_sub2api_probe.get("error") or "未知错误")[:160]
         )
     ai_provider["sub2api"] = sub2api_status
-    ai_provider["connected"] = bool(ai_provider.get("connected") or sub2api_status.get("connected"))
-    ai_provider["configured"] = bool(ai_provider.get("configured") or sub2api_status.get("configured"))
+    ai_provider["connected"] = bool(
+        ai_provider.get("connected")
+        or sub2api_status.get("connected")
+        or adobe_provider.get("connected")
+    )
+    ai_provider["configured"] = bool(
+        ai_provider.get("configured")
+        or sub2api_status.get("configured")
+        or adobe_provider.get("configured")
+    )
 
     return {
         **local_health,
@@ -3491,6 +3514,7 @@ async def _run_ai_image_background(
     """后台异步生图：轮询进度 → 更新 DB → 下载结果 → 写聊天记录"""
     stage = "init"
     upstream_task_id = ""
+    active_provider = provider
 
     def on_progress(pct: int, api_status: str):
         try:
@@ -3504,55 +3528,106 @@ async def _run_ai_image_background(
             save_ai_image_job(
                 job_id=job_id, user_id=user_id, status=db_status,
                 model=model, prompt=prompt, size=size,
-                provider=provider, resolution=resolution,
+                provider=active_provider or provider, resolution=resolution,
                 original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
                 prompt_trace=prompt_trace,
                 progress=pct, has_reference=has_reference, reference_count=len(refs),
                 request_meta=request_meta, created_at=created_at,
+                task_id=upstream_task_id or None,
+            )
+        except Exception:
+            pass
+
+    def on_accepted(accepted_provider: str = "", upstream_id: str = "") -> None:
+        """上游明确接受任务后立即落库 provider + task_id，便于失败后后台追踪。"""
+        nonlocal upstream_task_id, active_provider
+        if accepted_provider:
+            active_provider = accepted_provider
+        if upstream_id:
+            upstream_task_id = str(upstream_id)
+        try:
+            save_ai_image_job(
+                job_id=job_id, user_id=user_id, status="processing",
+                model=model, prompt=prompt, size=size,
+                provider=active_provider or provider, resolution=resolution,
+                original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
+                prompt_trace=prompt_trace,
+                progress=10, has_reference=has_reference, reference_count=len(refs),
+                request_meta=request_meta, created_at=created_at,
+                task_id=upstream_task_id or None,
+            )
+        except Exception:
+            pass
+
+    def on_attempt(attempt_provider: str) -> None:
+        """每次发起 POST 前记录真实渠道；accepted 只负责补充上游任务号。"""
+        nonlocal active_provider
+        active_provider = attempt_provider or active_provider
+        try:
+            save_ai_image_job(
+                job_id=job_id, user_id=user_id, status="processing",
+                model=model, prompt=prompt, size=size,
+                provider=active_provider or provider, resolution=resolution,
+                original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
+                prompt_trace=prompt_trace,
+                progress=0, has_reference=has_reference, reference_count=len(refs),
+                request_meta=request_meta, created_at=created_at,
+                task_id=upstream_task_id or None,
             )
         except Exception:
             pass
 
     try:
         stage = "generate"
-        if provider == PROVIDER_SUB2API:
+        if provider == PROVIDER_AUTO or not provider:
+            result = await smart_generate_image_async(
+                model=model, prompt=prompt,
+                images=refs if refs else None,
+                size=size, resolution=resolution, user_id=user_id,
+                on_progress=on_progress, on_attempt=on_attempt, on_accepted=on_accepted,
+            )
+        elif provider == PROVIDER_SUB2API:
             result = await generate_sub2api_async(
                 model=model, prompt=prompt,
                 images=refs if refs else None,
                 size=size, resolution=resolution, user_id=user_id,
-                on_progress=on_progress,
+                on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_SUB2API, tid),
             )
-        elif provider == PROVIDER_ZENMUX:
-            result = await generate_image_zenmux_async(
+        elif provider == PROVIDER_ADOBE2API:
+            result = await generate_adobe2api_async(
                 model=model, prompt=prompt,
                 images=refs,
                 size=size, resolution=resolution, user_id=user_id,
-                on_progress=on_progress,
+                on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_ADOBE2API, tid),
             )
         elif refs:
             result = await generate_image_with_reference_async(
                 model=model, prompt=prompt, images=refs,
                 size=size, resolution=resolution, user_id=user_id,
-                on_progress=on_progress,
+                on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_APIMART, tid),
             )
         else:
             result = await generate_image_async(
                 model=model, prompt=prompt,
                 size=size, resolution=resolution, user_id=user_id,
-                on_progress=on_progress,
+                on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_APIMART, tid),
             )
+        actual_provider = str(result.get("provider") or provider)
+        provider_switched = bool(result.get("provider_switched"))
         upstream_task_id = str(result.get("task_id") or "")
         stage = "persist"
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="done",
             model=model, prompt=prompt, size=size,
-            provider=provider, resolution=resolution,
+            provider=actual_provider, resolution=resolution,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
             image_url=result.get("url"), task_id=upstream_task_id or None,
             progress=100, has_reference=has_reference, reference_count=len(refs),
             request_meta=request_meta, created_at=created_at,
         )
+        if provider_switched:
+            mark_ai_image_job_provider_switched(job_id, True)
         cost_str = f" cost={result.get('cost')}" if result.get('cost') is not None else ""
         time_str = f" {result.get('actual_time') or result.get('estimated_time') or ''}s" if (result.get('actual_time') or result.get('estimated_time')) else ""
         usage = result.get("usage")
@@ -3568,7 +3643,12 @@ async def _run_ai_image_background(
             user_id=user_id, username=username,
             action="ai_image",
             detail=f"job={job_id[:8]} model={model} size={size} result=done{cost_str}{time_str}{usage_str} image={result.get('url', '?')[:60]}",
-            payload=json.dumps({"job_id": job_id, "model": model, "size": size, "result": "done", "image_url": result.get("url", ""), "cost": result.get("cost"), "usage": usage}, ensure_ascii=False),
+            payload=json.dumps({
+                "job_id": job_id, "model": model, "size": size, "result": "done",
+                "image_url": result.get("url", ""), "cost": result.get("cost"), "usage": usage,
+                "provider": actual_provider, "provider_switched": provider_switched,
+                "upstream_task_id": upstream_task_id,
+            }, ensure_ascii=False),
         )
         append_ai_chat_message(
             session_id=session_id, user_id=user_id,
@@ -3579,7 +3659,9 @@ async def _run_ai_image_background(
                 "model": model, "prompt": prompt,
                 "resolvedPrompt": resolved_prompt or prompt,
                 "promptTrace": prompt_trace,
-                "provider": provider,
+                "provider": actual_provider,
+                "providerSwitched": provider_switched,
+                "taskId": upstream_task_id,
                 "size": size, "resolution": resolution,
                 "status": "done",
                 "hasReference": has_reference,
@@ -3601,19 +3683,23 @@ async def _run_ai_image_background(
         # Uvicorn reload / server shutdown can cancel in-flight background tasks.
         # Without explicitly persisting this, the UI keeps polling a permanent
         # "processing" job that will never be resumed.
+        cancel_provider = active_provider or provider
         error_msg = format_generation_error(
             "生图任务被服务重载或关闭中断，请重新提交",
             stage=stage or "cancelled",
-            provider=provider,
+            provider=cancel_provider,
             model=model,
             job_id=job_id,
             task_id=upstream_task_id,
         )
-        logger.warning("ai_image background task cancelled: job_id=%s stage=%s", job_id, stage)
+        logger.warning(
+            "ai_image background task cancelled: job_id=%s stage=%s provider=%s",
+            job_id, stage, cancel_provider,
+        )
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="failed",
             model=model, prompt=prompt, size=size,
-            provider=provider, resolution=resolution,
+            provider=cancel_provider, resolution=resolution,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
             has_reference=has_reference, error=error_msg, task_id=upstream_task_id or None,
@@ -3624,7 +3710,11 @@ async def _run_ai_image_background(
             user_id=user_id, username=username,
             action="ai_image",
             detail=f"job={job_id[:8]} model={model} size={size} result=cancelled stage={stage}",
-            payload=json.dumps({"job_id": job_id, "model": model, "size": size, "result": "cancelled", "error": error_msg, "stage": stage}, ensure_ascii=False),
+            payload=json.dumps({
+                "job_id": job_id, "model": model, "size": size, "result": "cancelled",
+                "error": error_msg, "stage": stage, "provider": cancel_provider,
+                "upstream_task_id": upstream_task_id,
+            }, ensure_ascii=False),
         )
         append_ai_chat_message(
             session_id=session_id, user_id=user_id,
@@ -3633,10 +3723,11 @@ async def _run_ai_image_background(
             meta={
                 "job_id": job_id,
                 "model": model, "prompt": prompt,
-                "provider": provider,
+                "provider": cancel_provider,
                 "status": "failed", "error": error_msg,
                 "hasReference": has_reference,
                 "refCount": len(refs),
+                "taskId": upstream_task_id,
                 "stage": stage,
                 "batchId": batch_id,
                 "batchIndex": batch_index,
@@ -3648,22 +3739,23 @@ async def _run_ai_image_background(
     except Exception as e:
         stage = str(getattr(e, "stage", "") or stage or "generate")
         upstream_task_id = str(getattr(e, "task_id", "") or upstream_task_id)
+        fail_provider = str(getattr(e, "provider", "") or active_provider or provider)
         error_msg = format_generation_error(
             e,
             stage=stage or "generate",
-            provider=provider,
+            provider=fail_provider,
             model=model,
             job_id=job_id,
             task_id=upstream_task_id,
         )
         logger.exception(
             "ai_image background task failed: job_id=%s stage=%s provider=%s model=%s error=%s",
-            job_id, stage, provider, model, error_msg[:200],
+            job_id, stage, fail_provider, model, error_msg[:200],
         )
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="failed",
             model=model, prompt=prompt, size=size,
-            provider=provider, resolution=resolution,
+            provider=fail_provider, resolution=resolution,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
             has_reference=has_reference, error=error_msg, task_id=upstream_task_id or None,
@@ -3676,7 +3768,8 @@ async def _run_ai_image_background(
             detail=f"job={job_id[:8]} model={model} size={size} result=failed stage={stage} error={error_msg[:80]}",
             payload=json.dumps({
                 "job_id": job_id, "model": model, "size": size, "result": "failed",
-                "error": error_msg[:500], "stage": stage, "provider": provider,
+                "error": error_msg[:500], "stage": stage, "provider": fail_provider,
+                "upstream_task_id": upstream_task_id,
             }, ensure_ascii=False),
         )
         append_ai_chat_message(
@@ -3686,10 +3779,11 @@ async def _run_ai_image_background(
             meta={
                 "job_id": job_id,
                 "model": model, "prompt": prompt,
-                "provider": provider,
+                "provider": fail_provider,
                 "status": "failed", "error": error_msg,
                 "hasReference": has_reference,
                 "refCount": len(refs),
+                "taskId": upstream_task_id,
                 "stage": stage,
                 "batchId": batch_id,
                 "batchIndex": batch_index,
@@ -3961,6 +4055,7 @@ def ai_image_status(request: Request, job_id: str):
         "prompt_trace": job.get("prompt_trace") or "",
         "task_id": job.get("task_id"),
         "model": job.get("model"),
+        "provider": job.get("provider"),
         "error": error_text or None,
         "providerSwitched": bool(job.get("provider_switched")),
         "layer_extract": layer_extract,
@@ -3969,7 +4064,7 @@ def ai_image_status(request: Request, job_id: str):
 
 @app.post("/ai-image/retry")
 async def ai_image_retry(request: Request):
-    """默认线路失败后，用官方线路重试。复用原 prompt + 磁盘参考图 + 上下文参考图。"""
+    """生图失败后触发智能重试。复用原 prompt + 磁盘参考图 + 上下文参考图。"""
     body = await request.json()
     job_id = (body.get("job_id") or "").strip()
     session_id = (body.get("session_id") or "").strip()
@@ -4017,7 +4112,7 @@ async def ai_image_retry(request: Request):
     save_ai_image_job(
         job_id=new_job_id, user_id=user["id"], status="processing",
         model=model, prompt=prompt, size=size,
-        provider=PROVIDER_ZENMUX, resolution=resolution,
+        provider=PROVIDER_AUTO, resolution=resolution,
         original_prompt=original_prompt, resolved_prompt=resolved_prompt,
         has_reference=has_reference, reference_count=len(all_refs),
         request_meta={
@@ -4032,15 +4127,15 @@ async def ai_image_retry(request: Request):
     log_operation(
         user_id=user["id"], username=user["username"],
         action="ai_image",
-        detail=f"job={new_job_id[:8]} model={model} size={size} result=retry_zenmux refs={len(all_refs)}",
-        payload=json.dumps({"job_id": new_job_id, "model": model, "size": size, "provider": PROVIDER_ZENMUX, "retry_from": job_id}, ensure_ascii=False),
+        detail=f"job={new_job_id[:8]} model={model} size={size} result=retry_auto refs={len(all_refs)}",
+        payload=json.dumps({"job_id": new_job_id, "model": model, "size": size, "provider": PROVIDER_AUTO, "retry_from": job_id}, ensure_ascii=False),
     )
     # 重试消息不重新写入聊天记录（不重复显示 prompt），后台任务完成/失败时会自动追加
     asyncio.create_task(
         _run_ai_image_background(
             job_id=new_job_id, user_id=user["id"], username=user["username"],
             session_id=session_id,
-            provider=PROVIDER_ZENMUX,
+            provider=PROVIDER_AUTO,
             model=model, prompt=prompt,
             size=size, resolution=resolution,
             refs=all_refs, has_reference=has_reference, created_at=created_at,
@@ -4055,7 +4150,7 @@ async def ai_image_retry(request: Request):
             },
         )
     )
-    return {"job_id": new_job_id, "status": "processing", "provider": PROVIDER_ZENMUX}
+    return {"job_id": new_job_id, "status": "processing", "provider": PROVIDER_AUTO}
 
 
 # ─── 灵感（inspiration） ──────────────────────────────────────────────────────

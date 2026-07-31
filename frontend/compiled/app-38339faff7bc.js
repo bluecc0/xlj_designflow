@@ -680,8 +680,17 @@ const TopBar = ({
   const renderAiProviderDetail = function (data) {
     const info = data && data.ai_provider;
     if (!info) return null;
-    const hasBalance = typeof info.remain_balance !== 'undefined';
-    const zenmux = info.zenmux;
+    const apimart = info.apimart || info;
+    const adobe = info.adobe2api || {};
+    const sub2api = info.sub2api || {};
+    const hasBalance = typeof apimart.remain_balance !== 'undefined';
+    const line = function (name, node) {
+      if (!node || node.configured === false && !node.connected && !node.message) return null;
+      let state = '未配置';
+      if (node.configured === false) state = '未配置';else if (node.throttled) state = '受限';else if (node.connected) state = '正常';else state = '异常';
+      return name + ' ' + state;
+    };
+    const parts = [line('APIMart', apimart), line('订阅', sub2api), line('Adobe', adobe)].filter(Boolean);
     return /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
@@ -693,18 +702,13 @@ const TopBar = ({
         fontSize: 11,
         color: 'var(--ink-2)'
       }
-    }, "APIMart ", info.connected ? '正常' : info.configured ? '异常' : '未配置', hasBalance ? ` · 余额 $${fmtBalance(info.remain_balance)}` : ''), zenmux && /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: 'var(--ink-2)'
-      }
-    }, "ZenMux ", zenmux.connected ? '正常' : zenmux.configured ? '异常' : '未配置', typeof zenmux.total_credits === 'number' ? ` · 余额 $${fmtBalance(zenmux.total_credits)}` : ''), info.message && /*#__PURE__*/React.createElement("div", {
+    }, parts.length ? parts.join(' · ') : '智能路由', hasBalance ? ` · 余额 $${fmtBalance(apimart.remain_balance)}` : ''), (apimart.message || adobe.message || sub2api.message) && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 10.5,
         color: 'var(--ink-3)',
         lineHeight: 1.45
       }
-    }, String(info.message).slice(0, 120)));
+    }, String(apimart.message || adobe.message || sub2api.message).slice(0, 120)));
   };
   window.renderAiProviderDetail = renderAiProviderDetail;
   return /*#__PURE__*/React.createElement("div", {
@@ -4796,7 +4800,6 @@ const ChatReturned = ({
   greetingKey,
   onQuickReply,
   agentEnabled,
-  onRetryWithZenmux,
   onPublishInspiration,
   onUnpublishInspiration
 }) => {
@@ -5199,25 +5202,7 @@ const ChatReturned = ({
             lineHeight: 1.4,
             wordBreak: 'break-word'
           }
-        }, '第 ' + (bi + 1) + ' 张失败：' + formatAiImageError(im.error, im.jobId)), m.provider !== 'zenmux' && im.jobId ? React.createElement('button', {
-          type: 'button',
-          onClick: function () {
-            onRetryWithZenmux(Object.assign({}, m, {
-              jobId: im.jobId,
-              status: 'failed'
-            }));
-          },
-          style: {
-            alignSelf: 'flex-start',
-            padding: '3px 8px',
-            borderRadius: 5,
-            fontSize: 10,
-            cursor: 'pointer',
-            border: '1px solid var(--accent)',
-            background: 'var(--panel)',
-            color: 'var(--accent)'
-          }
-        }, '换官方线路再试') : null);
+        }, '第 ' + (bi + 1) + ' 张失败：' + formatAiImageError(im.error, im.jobId)));
       }
       return React.createElement('div', {
         key: im.jobId || bi,
@@ -5349,23 +5334,7 @@ const ChatReturned = ({
         lineHeight: 1.45,
         wordBreak: 'break-word'
       }
-    }, formatAiImageError(m.error, m.jobId || m.job_id), m.provider !== 'zenmux' ? React.createElement('button', {
-      type: 'button',
-      onClick: function () {
-        onRetryWithZenmux(m);
-      },
-      style: {
-        marginTop: 8,
-        padding: '5px 12px',
-        borderRadius: 6,
-        fontSize: 11,
-        cursor: 'pointer',
-        border: '1px solid var(--accent)',
-        background: 'var(--panel)',
-        color: 'var(--accent)',
-        display: 'block'
-      }
-    }, '换官方线路再试') : null));
+    }, formatAiImageError(m.error, m.jobId || m.job_id)));
   })() : m.type === 'parse-result' ? (() => {
     const matchedCount = m.data.products.filter(p => p.image_path).length;
     return /*#__PURE__*/React.createElement("div", {
@@ -6134,7 +6103,7 @@ const Composer = ({
   const [imageType, setImageType] = React.useState('png');
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
-  const [aiProvider, setAiProvider] = React.useState('apimart');
+  const [aiProvider, setAiProvider] = React.useState('auto');
   const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [smartDistributeMode, setSmartDistributeMode] = React.useState('full');
   const [manualRefImages, setManualRefImages] = React.useState([]);
@@ -6627,9 +6596,9 @@ const Composer = ({
       if (!AI_OPTIONS[aiRatio].qualities.includes(aiQuality)) {
         setAiQuality(AI_OPTIONS[aiRatio].qualities[0]);
       }
-      // Sub2API 不支持 Nano Banana，切换时自动回默认
-      if (activeAiModel === 'nano-banana-pro' && aiProvider === 'sub2api') {
-        setAiProvider('apimart');
+      // 渠道选择已移除，统一走智能路由
+      if (aiProvider !== 'auto') {
+        setAiProvider('auto');
       }
     }
   }, [activeAiModel, aiQuality, aiRatio, aiProvider]);
@@ -7093,9 +7062,8 @@ const Composer = ({
   const activeTaskIconKey = activeMode === 'ai-image' ? 'image' : activeMode === 'special' || activeMode === 'special_full' ? 'layers' : selectedWorkflow === 'compose' || selectedWorkflow === 'distribute' ? 'grid' : selectedWorkflow === 'download' ? 'download' : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
   const activeTaskIconSrc = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
-  const providerLabel = aiProvider === 'zenmux' ? '官方' : aiProvider === 'sub2api' ? '订阅' : '默认';
   const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 普通' : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
-  const selectedSettingBits = [activeSkillInfo ? '$' + activeSkillInfo.name : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? providerLabel : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
+  const selectedSettingBits = [activeSkillInfo ? '$' + activeSkillInfo.name : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? '⚡ 智能路由' : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
   const composerPlaceholder = agentEnabled ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）' : activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(text.trim() || lockedCommand || modeParamLabel || refImages.length > 0 || files.length > 0 || activeSkillInfo || skillMenuOpen || !agentEnabled && prototypePanel);
   const minComposerHeight = statusBarVisible ? STATUS_COMPOSER_HEIGHT : COLLAPSED_COMPOSER_HEIGHT;
@@ -7391,31 +7359,6 @@ const Composer = ({
       const isComposeParams = activeMode === 'compose';
       const isDistributeParams = activeMode === 'distribute';
       const paramsTitle = isImageParams ? '生图参数' : isSpecialParams ? '特殊品参数' : isComposeParams ? '合成参数' : isDistributeParams ? '铺货参数' : '问答参数';
-      const providerItems = [activeAiModel !== 'nano-banana-pro' ? {
-        key: 'sub2api',
-        label: '订阅',
-        active: aiProvider === 'sub2api',
-        disabled: false,
-        onClick: function () {
-          setAiProvider('sub2api');
-        }
-      } : null, {
-        key: 'apimart',
-        label: '默认',
-        active: aiProvider === 'apimart',
-        disabled: false,
-        onClick: function () {
-          setAiProvider('apimart');
-        }
-      }, {
-        key: 'zenmux',
-        label: '官方',
-        active: aiProvider === 'zenmux',
-        disabled: false,
-        onClick: function () {
-          setAiProvider('zenmux');
-        }
-      }].filter(Boolean);
       return protoPanelShell(React.createElement(React.Fragment, null, React.createElement('div', {
         style: {
           fontSize: 16,
@@ -7468,14 +7411,7 @@ const Composer = ({
             fontWeight: active ? 700 : 500
           }
         }, item[1]));
-      })), protoSectionLabel('清晰度 / 渠道'), React.createElement('div', {
-        style: {
-          display: 'flex',
-          alignItems: 'stretch',
-          gap: 8,
-          width: '100%'
-        }
-      }, React.createElement('div', {
+      })), protoSectionLabel('清晰度'), React.createElement('div', {
         style: {
           flex: 1,
           display: 'grid',
@@ -7498,33 +7434,7 @@ const Composer = ({
             opacity: disabled ? 0.45 : 1
           })
         }, q);
-      })), React.createElement('div', {
-        style: {
-          width: 1,
-          alignSelf: 'stretch',
-          background: 'var(--line)'
-        }
-      }), React.createElement('div', {
-        style: {
-          flex: 1,
-          display: 'grid',
-          gridTemplateColumns: 'repeat(' + providerItems.length + ', minmax(0, 1fr))',
-          gap: 4
-        }
-      }, providerItems.map(function (item) {
-        return React.createElement('button', {
-          key: item.key,
-          type: 'button',
-          disabled: item.disabled,
-          onClick: item.onClick,
-          style: Object.assign({}, protoChipStyle(item.active), {
-            width: '100%',
-            minWidth: 0,
-            cursor: item.disabled ? 'not-allowed' : 'pointer',
-            opacity: item.disabled ? 0.45 : 1
-          })
-        }, item.label);
-      })))), isImageParams && React.createElement('div', {
+      }))), isImageParams && React.createElement('div', {
         style: {
           display: 'flex',
           alignItems: 'center',
@@ -8575,159 +8485,6 @@ const Chat = ({
     img.src = url;
   });
 
-  // —— 官方线路重试 ——
-  const handleRetryWithZenmux = React.useCallback(async failedMsg => {
-    const jobId = failedMsg.jobId;
-    if (!jobId || !currentAiChatId) return;
-    const startedAt = Date.now();
-    setMessages(msgs => [...msgs, {
-      who: 'ai',
-      type: 'ai-image-generating',
-      model: failedMsg.model || 'gpt-image-2',
-      provider: 'zenmux',
-      prompt: failedMsg.prompt || '',
-      size: failedMsg.size || '1024x1024',
-      resolution: failedMsg.resolution || '',
-      status: 'running',
-      startedAt,
-      progress: 0,
-      hasReference: true,
-      refCount: 0,
-      refPreviews: [],
-      jobId: null
-    }]);
-    try {
-      const apiBase = window.API_BASE || window.location.origin;
-      const retryRes = await window.API.retryAiImage(jobId, currentAiChatId);
-      const newJobId = retryRes.job_id;
-      setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
-        ...m,
-        jobId: newJobId
-      } : m));
-      var retryPollFails = 0;
-      const pollInterval = setInterval(async () => {
-        try {
-          const statusRes = await fetch(apiBase + '/ai-image/' + newJobId, {
-            credentials: 'include'
-          });
-          if (!statusRes.ok) {
-            retryPollFails += 1;
-            var errBody = {};
-            try {
-              errBody = await statusRes.json();
-            } catch (_e) {}
-            var detail = errBody && (errBody.detail || errBody.message || errBody.error) || '';
-            if (typeof detail === 'object' && detail) detail = detail.message || JSON.stringify(detail);
-            if (statusRes.status === 404 || retryPollFails >= 5) {
-              clearInterval(pollInterval);
-              const fe = Math.floor((Date.now() - startedAt) / 1000);
-              var retryQueryErr = formatAiImageError(detail || '查询重试任务失败 HTTP ' + statusRes.status, newJobId, {
-                httpStatus: statusRes.status
-              });
-              alertAiImageError(retryQueryErr, {
-                jobId: newJobId
-              });
-              setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
-                ...m,
-                status: 'failed',
-                error: retryQueryErr,
-                finalElapsed: fe,
-                jobId: newJobId
-              } : m));
-              loadAiChatHistory();
-            }
-            return;
-          }
-          retryPollFails = 0;
-          const sd = await statusRes.json();
-          setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
-            ...m,
-            status: sd.status,
-            progress: sd.progress || m.progress,
-            jobId: newJobId,
-            taskId: sd.task_id || m.taskId
-          } : m));
-          if (sd.status === 'done' && sd.image_url) {
-            clearInterval(pollInterval);
-            const fe = Math.floor((Date.now() - startedAt) / 1000);
-            setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
-              ...m,
-              status: 'done',
-              imageUrl: sd.image_url,
-              previewUrl: sd.preview_url || sd.image_url,
-              finalElapsed: fe,
-              progress: 100,
-              jobId: newJobId
-            } : m));
-            loadAiChatHistory();
-          } else if (sd.status === 'done' && !sd.image_url) {
-            clearInterval(pollInterval);
-            const fe = Math.floor((Date.now() - startedAt) / 1000);
-            var retryNoImgErr = formatAiImageError('重试完成但未返回图片地址', newJobId, {
-              taskId: sd.task_id
-            });
-            alertAiImageError(retryNoImgErr, {
-              jobId: newJobId
-            });
-            setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
-              ...m,
-              status: 'failed',
-              error: retryNoImgErr,
-              finalElapsed: fe,
-              jobId: newJobId
-            } : m));
-            loadAiChatHistory();
-          } else if (sd.status === 'failed') {
-            clearInterval(pollInterval);
-            const fe = Math.floor((Date.now() - startedAt) / 1000);
-            var retryFailErr = formatAiImageError(sd.error || '重试失败', newJobId, {
-              taskId: sd.task_id
-            });
-            alertAiImageError(retryFailErr, {
-              jobId: newJobId
-            });
-            setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
-              ...m,
-              status: 'failed',
-              error: retryFailErr,
-              finalElapsed: fe,
-              jobId: newJobId
-            } : m));
-            loadAiChatHistory();
-          }
-        } catch (e) {
-          retryPollFails += 1;
-          console.warn('ai-image retry poll error job=' + newJobId, e);
-          if (retryPollFails >= 5) {
-            clearInterval(pollInterval);
-            const fe = Math.floor((Date.now() - startedAt) / 1000);
-            var retryPollErr = formatAiImageError(e && e.message || '重试查询进度连续失败', newJobId);
-            alertAiImageError(retryPollErr, {
-              jobId: newJobId
-            });
-            setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
-              ...m,
-              status: 'failed',
-              error: retryPollErr,
-              finalElapsed: fe,
-              jobId: newJobId
-            } : m));
-          }
-        }
-      }, 2000);
-    } catch (e) {
-      const fe = Math.floor((Date.now() - startedAt) / 1000);
-      var retryStartErr = formatAiImageError(e.message || '重试失败', null);
-      alertAiImageError(retryStartErr);
-      setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === startedAt ? {
-        ...m,
-        status: 'failed',
-        error: retryStartErr,
-        finalElapsed: fe
-      } : m));
-    }
-  }, [currentAiChatId, loadAiChatHistory]);
-
   // —— 发布/取消发布灵感 ——
   const handlePublishInspiration = React.useCallback(async msg => {
     if (!msg) return;
@@ -8827,7 +8584,7 @@ const Chat = ({
     var refPreviews = [];
     var lastSize = aiOptions.size || '1024x1024';
     var lastResolution = aiOptions.resolution || '1K';
-    var provider = aiOptions.provider || 'apimart';
+    var provider = aiOptions.provider || 'auto';
     var activeSkill = String(aiOptions.skill || '').trim();
     var plannedPrompt = String(aiOptions.plannedPrompt || '').trim();
     var plannedPromptTrace = String(aiOptions.promptTrace || '').trim();
@@ -10872,7 +10629,6 @@ const Chat = ({
     greetingKey: greetingResetKey,
     onQuickReply: handleQuickReply,
     agentEnabled: agentEnabled,
-    onRetryWithZenmux: handleRetryWithZenmux,
     onPublishInspiration: handlePublishInspiration,
     onUnpublishInspiration: handleUnpublishInspiration
   }), state === 'generating' && /*#__PURE__*/React.createElement(ChatGenerating, null), state === 'returned' && /*#__PURE__*/React.createElement(ChatReturned, {
@@ -10884,7 +10640,6 @@ const Chat = ({
     greetingKey: greetingResetKey,
     onQuickReply: handleQuickReply,
     agentEnabled: agentEnabled,
-    onRetryWithZenmux: handleRetryWithZenmux,
     onPublishInspiration: handlePublishInspiration,
     onUnpublishInspiration: handleUnpublishInspiration
   }), /*#__PURE__*/React.createElement(Composer, {
@@ -11061,9 +10816,10 @@ const ADMIN_TASK_TYPES = {
   special: '特殊品'
 };
 const ADMIN_PROVIDERS = {
-  apimart: '默认线路',
-  sub2api: '订阅线路',
-  zenmux: '官方线路',
+  auto: '智能路由',
+  apimart: '默认线路 (APIMart)',
+  sub2api: '订阅线路 (Sub2API)',
+  adobe2api: 'Adobe 线路 (Firefly)',
   penpot: 'Penpot',
   local: '本地处理'
 };
@@ -11295,6 +11051,7 @@ const ADMIN_CSS = `
   .df-admin-servicestate { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: #a7aba4; }
   .df-admin-servicestate.is-up { background: var(--admin-green); box-shadow: 0 0 0 4px var(--admin-green-soft); }
   .df-admin-servicestate.is-down { background: var(--admin-red); box-shadow: 0 0 0 4px var(--admin-red-soft); }
+  .df-admin-servicestate.is-warn { background: var(--admin-amber); box-shadow: 0 0 0 4px var(--admin-amber-soft); }
   .df-admin-servicebody { margin-top: 18px; color: var(--admin-muted); font-size: 9.5px; line-height: 1.65; word-break: break-all; }
   .df-admin-probelist { max-height: 410px; overflow: auto; padding: 0 16px; }
   .df-admin-probe {
@@ -11650,10 +11407,28 @@ function AdminServiceCard({
   connected,
   configured,
   probing,
+  throttled,
   detail,
   icon
 }) {
-  var stateClass = connected ? 'is-up' : probing || configured === false ? '' : 'is-down';
+  var stateClass = '';
+  var stateText = '连接异常';
+  if (configured === false) {
+    stateClass = '';
+    stateText = '未配置';
+  } else if (probing) {
+    stateClass = '';
+    stateText = '正在探测';
+  } else if (throttled) {
+    stateClass = 'is-warn';
+    stateText = '受限/限流';
+  } else if (connected) {
+    stateClass = 'is-up';
+    stateText = '运行正常';
+  } else {
+    stateClass = 'is-down';
+    stateText = '连接异常';
+  }
   return /*#__PURE__*/React.createElement("div", {
     className: "df-admin-service"
   }, /*#__PURE__*/React.createElement("div", {
@@ -11670,7 +11445,7 @@ function AdminServiceCard({
     className: 'df-admin-servicestate ' + stateClass
   })), /*#__PURE__*/React.createElement("div", {
     className: "df-admin-servicebody"
-  }, configured === false ? '未配置' : probing ? '正在探测' : connected ? '运行正常' : '连接异常', detail ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), detail) : null));
+  }, stateText, detail ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), detail) : null));
 }
 function AdminUserManagement({
   currentUser,
@@ -12296,12 +12071,13 @@ function AdminPage({
       size: 15
     })
   }, {
-    name: '官方生图线路',
-    desc: 'ZenMux',
-    connected: !!(aiProvider.zenmux && aiProvider.zenmux.connected),
-    configured: !!(aiProvider.zenmux && aiProvider.zenmux.configured),
-    detail: aiProvider.zenmux && (aiProvider.zenmux.message || aiProvider.zenmux.url),
-    icon: /*#__PURE__*/React.createElement(I.sparkles, {
+    name: 'Adobe 生图线路',
+    desc: 'adobe2api · Firefly',
+    connected: !!(aiProvider.adobe2api && aiProvider.adobe2api.connected),
+    configured: !!(aiProvider.adobe2api && aiProvider.adobe2api.configured),
+    throttled: !!(aiProvider.adobe2api && aiProvider.adobe2api.throttled),
+    detail: aiProvider.adobe2api && (aiProvider.adobe2api.message || aiProvider.adobe2api.url),
+    icon: /*#__PURE__*/React.createElement(I.image, {
       size: 15
     })
   }];
@@ -12542,8 +12318,8 @@ function AdminPage({
     }, "\u9ED8\u8BA4\u7EBF\u8DEF"), /*#__PURE__*/React.createElement("option", {
       value: "sub2api"
     }, "\u8BA2\u9605\u7EBF\u8DEF"), /*#__PURE__*/React.createElement("option", {
-      value: "zenmux"
-    }, "\u5B98\u65B9\u7EBF\u8DEF"), /*#__PURE__*/React.createElement("option", {
+      value: "adobe2api"
+    }, "Adobe \u7EBF\u8DEF"), /*#__PURE__*/React.createElement("option", {
       value: "penpot"
     }, "Penpot"), /*#__PURE__*/React.createElement("option", {
       value: "local"

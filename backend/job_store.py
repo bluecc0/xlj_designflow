@@ -1149,6 +1149,8 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 "previewUrl": meta.get("previewUrl") or "",
                 "status": meta.get("status") or "done",
                 "error": err_text or None,
+                "provider": meta.get("provider"),
+                "providerSwitched": bool(meta.get("providerSwitched")),
                 "batchIndex": int(meta.get("batchIndex") or 0),
             }
             if batch_id and batch_id in batch_id_to_idx:
@@ -1164,6 +1166,9 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                 msg["error"] = None if ok_imgs else next(
                     (im.get("error") for im in msg["images"] if im.get("error")), None
                 )
+                if meta.get("providerSwitched"):
+                    msg["providerSwitched"] = True
+                    msg["provider"] = meta.get("provider") or msg.get("provider")
             else:
                 idx = len(result)
                 msg = {

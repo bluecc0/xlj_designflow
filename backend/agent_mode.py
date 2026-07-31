@@ -15,7 +15,12 @@ from typing import Any, AsyncIterator, Callable, Optional
 import httpx
 import pydantic
 
-from .ai_image import SLASH_MODEL_MAP, generate_image_async, generate_image_with_reference_async
+from .ai_image import (
+    SLASH_MODEL_MAP,
+    generate_image_async,
+    generate_image_with_reference_async,
+    smart_generate_image_async,
+)
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -2413,19 +2418,10 @@ async def stream_generation_events(
             local_path = settings.output_path / "ai-images" / current_image["imageUrl"].split("/ai-images/", 1)[1]
             if local_path.exists():
                 refs.insert(0, (local_path.read_bytes(), local_path.name))
-        if refs:
-            return await generate_image_with_reference_async(
-                model=resolved_model,
-                prompt=prompt,
-                images=refs,
-                size=size,
-                resolution=resolution,
-                user_id=user_id,
-                on_progress=on_progress,
-            )
-        return await generate_image_async(
+        return await smart_generate_image_async(
             model=resolved_model,
             prompt=prompt,
+            images=refs if refs else None,
             size=size,
             resolution=resolution,
             user_id=user_id,

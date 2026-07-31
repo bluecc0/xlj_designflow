@@ -223,7 +223,7 @@ class AdminConsoleStoreTest(unittest.TestCase):
             user_id="admin",
             status="processing",
             model="gpt-image-2",
-            provider="zenmux",
+            provider="sub2api",
             prompt="海报",
             size="3:4",
             resolution="4K",
@@ -244,7 +244,7 @@ class AdminConsoleStoreTest(unittest.TestCase):
             created_at=created_at,
         )
         detail = job_store.load_admin_task_detail("ai_image", "persist-meta")
-        self.assertEqual(detail["provider"], "zenmux")
+        self.assertEqual(detail["provider"], "sub2api")
         self.assertEqual(detail["resolution"], "4K")
         self.assertEqual(detail["reference_count"], 3)
         self.assertEqual(detail["request"]["batch_count"], 2)
