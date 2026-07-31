@@ -735,13 +735,10 @@ async def _submit_generation_task(
     endpoint = f"{base_url}/v1/images/generations"
     resp = await client.post(endpoint, json=payload, headers=headers)
     if not resp.is_success:
-        if resp.status_code >= 500:
-            raise AmbiguousUpstreamError(
-                f"APIMart POST 后返回 HTTP {resp.status_code}，上游是否已创建任务无法确认："
-                f"{_api_error_msg(resp.status_code, _extract_error_text(resp))}",
-                provider=PROVIDER_APIMART,
-            )
-        raise RuntimeError(f"提交生图任务失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
+        # 已拿到明确 HTTP 错误码：本请求不会返回图，记失败并允许智能路由切换
+        raise RuntimeError(
+            f"提交生图任务失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}"
+        )
     try:
         data = resp.json()
     except Exception as exc:
@@ -1383,13 +1380,10 @@ async def generate_sub2api_async(
 
     raw_text = resp.text
     if not resp.is_success:
-        if resp.status_code >= 500:
-            raise AmbiguousUpstreamError(
-                f"CLIProxyAPI POST 后返回 HTTP {resp.status_code}，上游是否已受理无法确认："
-                f"{_api_error_msg(resp.status_code, raw_text[:500])}",
-                provider=PROVIDER_SUB2API,
-            )
-        raise RuntimeError(f"CLIProxyAPI 生图失败：{_api_error_msg(resp.status_code, raw_text[:500])}")
+        # 已拿到明确 HTTP 错误码：本请求不会返回图，记失败并允许智能路由切换
+        raise RuntimeError(
+            f"CLIProxyAPI 生图失败：{_api_error_msg(resp.status_code, raw_text[:500])}"
+        )
     try:
         payload = resp.json()
     except Exception as exc:
@@ -1507,13 +1501,10 @@ async def generate_adobe2api_async(
         raise RuntimeError(f"adobe2api 请求失败：{exc}") from exc
 
     if not resp.is_success:
-        if resp.status_code >= 500:
-            raise AmbiguousUpstreamError(
-                f"adobe2api POST 后返回 HTTP {resp.status_code}，上游是否已受理无法确认："
-                f"{_extract_error_text(resp)}",
-                provider=PROVIDER_ADOBE2API,
-            )
-        raise RuntimeError(f"adobe2api 请求失败: HTTP {resp.status_code} - {_extract_error_text(resp)}")
+        # 已拿到明确 HTTP 错误码：本请求不会返回图，记失败并允许智能路由切换
+        raise RuntimeError(
+            f"adobe2api 请求失败: HTTP {resp.status_code} - {_extract_error_text(resp)}"
+        )
 
     try:
         data = resp.json()
@@ -1579,10 +1570,14 @@ def classify_httpx_transport_error(exc: BaseException) -> str:
 
 
 def is_transient_provider_error(exc: BaseException | str | None) -> bool:
-    """仅在能确认请求尚未受理时切换线路。
+    """判断是否可安全切换到下一线路。
 
-    白名单只有连接阶段失败和服务商明确拒绝受理的限流；任何 POST 后响应、
-    解析或未知异常都不切换，避免重复生成与重复计费。
+    可切换：
+    - 连接阶段失败（请求未发出）
+    - 已拿到明确 HTTP 错误码（含 429 / 5xx 等）：本请求不会返回图
+    不可切换：
+    - AmbiguousUpstreamError（读超时/断连/成功体无 task_id 等，状态不确定）
+    - 业务性 4xx（鉴权、参数、内容安全等）
     """
     if isinstance(exc, AmbiguousUpstreamError):
         return False
@@ -1594,10 +1589,15 @@ def is_transient_provider_error(exc: BaseException | str | None) -> bool:
         return False
     low = raw.lower()
 
-    # HTTP 429 明确表示本次请求被拒绝受理，可以安全切线。
-    if re.search(r"\bHTTP\s*429\b", raw, re.IGNORECASE) or any(
-        k in low for k in ("rate limit", "too many requests", "请求过于频繁")
-    ):
+    # 明确 HTTP 状态码：只要拿到了响应码，本请求不会再返回图，可切线。
+    # 覆盖 408/409/425/429 与 5xx（含 Cloudflare 520-524）。
+    m = re.search(r"\bHTTP\s*(\d{3})\b", raw, re.IGNORECASE)
+    if m:
+        code = int(m.group(1))
+        if code in _TRANSIENT_TASK_STATUS_CODES or code >= 500:
+            return True
+
+    if any(k in low for k in ("rate limit", "too many requests", "请求过于频繁")):
         return True
 
     # Provider 适配器仅在 ConnectError/ConnectTimeout 时生成这些连接阶段文案。

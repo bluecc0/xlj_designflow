@@ -110,7 +110,8 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                     user_id="u",
                 )
 
-    async def test_http_504_before_accepted_does_not_failover(self) -> None:
+    async def test_http_504_before_accepted_does_failover(self) -> None:
+        """拿到明确 HTTP 错误码后，本请求不会返回图，应静默切到下一线路。"""
         calls = {"sub": 0, "adobe": 0}
 
         async def mock_sub2api(*args, **kwargs):
@@ -124,13 +125,14 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
              patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
              patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
-            with self.assertRaises(RuntimeError):
-                await ai_image.smart_generate_image_async(
-                    model="gpt-image-2",
-                    prompt="test",
-                    user_id="u",
-                )
-        self.assertEqual(calls, {"sub": 1, "adobe": 0})
+            result = await ai_image.smart_generate_image_async(
+                model="gpt-image-2",
+                prompt="test",
+                user_id="u",
+            )
+        self.assertEqual(calls, {"sub": 1, "adobe": 1})
+        self.assertEqual(result.get("provider"), "adobe2api")
+        self.assertTrue(result.get("provider_switched"))
 
     async def test_sub2api_malformed_200_is_ambiguous(self) -> None:
         adobe_calls = 0
@@ -174,7 +176,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(adobe_calls, 0)
 
-    async def test_apimart_submit_504_is_ambiguous(self) -> None:
+    async def test_apimart_submit_504_is_hard_failure(self) -> None:
         class FakeResponse:
             is_success = False
             status_code = 504
@@ -187,7 +189,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             async def post(self, *args, **kwargs):
                 return FakeResponse()
 
-        with self.assertRaises(ai_image.AmbiguousUpstreamError):
+        with self.assertRaises(RuntimeError) as ctx:
             await ai_image._submit_generation_task(
                 FakeClient(),
                 base_url="http://apimart",
@@ -196,6 +198,56 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                 prompt="test",
                 size="auto",
             )
+        self.assertNotIsInstance(ctx.exception, ai_image.AmbiguousUpstreamError)
+        self.assertIn("HTTP 504", str(ctx.exception))
+        self.assertTrue(ai_image.is_transient_provider_error(ctx.exception))
+
+    async def test_sub2api_http_500_failovers_silently(self) -> None:
+        """POST 后明确 HTTP 500：用户无感切线，不抛 ambiguous。"""
+        adobe_calls = 0
+
+        class FakeResponse:
+            is_success = False
+            status_code = 500
+            text = (
+                "The server had an error while processing your request. "
+                "Sorry about that!"
+            )
+
+            def json(self):
+                return {"error": self.text}
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, *args, **kwargs):
+                return FakeResponse()
+
+        async def mock_adobe(*args, **kwargs):
+            nonlocal adobe_calls
+            adobe_calls += 1
+            return {"url": "/x.png", "provider": "adobe2api"}
+
+        with patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api:8080"), \
+             patch.object(ai_image.settings, "cliproxy_api_key", "sk-sub2api"), \
+             patch.object(ai_image.httpx, "AsyncClient", FakeClient), \
+             patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
+            result = await ai_image.smart_generate_image_async(
+                model="gpt-image-2",
+                prompt="test",
+                user_id="u",
+            )
+        self.assertEqual(adobe_calls, 1)
+        self.assertEqual(result.get("provider"), "adobe2api")
+        self.assertTrue(result.get("provider_switched"))
 
     def test_skill_generation_uses_smart_routing(self) -> None:
         chat_source = (
