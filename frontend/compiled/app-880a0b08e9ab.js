@@ -6048,6 +6048,7 @@ const normalizeReferenceUrl = function (rawUrl) {
   }
 };
 const MAX_REFERENCE_IMAGES = 9;
+const MAX_REFERENCE_IMAGE_BYTES = 5 * 1024 * 1024; // 单张参考图硬限制 5MB
 const CHAT_INSPIRATION_CATEGORIES = [{
   id: 'share_card',
   label: '分享卡片'
@@ -6304,6 +6305,13 @@ const Composer = ({
           });
           if (!response.ok) throw new Error('load_reference_failed');
           const blob = await response.blob();
+          if (blob.size > MAX_REFERENCE_IMAGE_BYTES) {
+            const err = new Error('reference_too_large');
+            err.fileName = item.name;
+            err.sourceUrl = item.sourceUrl;
+            err.fileSize = blob.size;
+            throw err;
+          }
           const ext = blob.type && blob.type.indexOf('/') > -1 ? blob.type.split('/')[1] : 'png';
           const safeName = item.name && /\.[a-z0-9]+$/i.test(item.name) ? item.name : (item.name || 'reference') + '.' + ext;
           const file = new File([blob], safeName, {
@@ -6317,6 +6325,15 @@ const Composer = ({
         if (!alive) {
           return;
         }
+        const oversizedNames = [];
+        loaded.forEach(function (result) {
+          if (result && result.status === 'rejected' && result.reason && result.reason.message === 'reference_too_large') {
+            oversizedNames.push(result.reason.fileName || '参考图');
+          }
+        });
+        if (oversizedNames.length) {
+          window.alert('以下参考图超过 5MB，已跳过：\n' + oversizedNames.slice(0, 5).join('\n') + (oversizedNames.length > 5 ? '\n…共 ' + oversizedNames.length + ' 张' : ''));
+        }
         setCanvasRefImages(function (prev) {
           return prev.map(function (entry) {
             if (!entry || !entry.sourceUrl) return entry;
@@ -6324,10 +6341,14 @@ const Composer = ({
               return result && result.status === 'fulfilled' && result.value && result.value.sourceUrl === entry.sourceUrl;
             });
             if (match && match.status === 'fulfilled') return match.value;
+            const oversized = loaded.find(function (result) {
+              return result && result.status === 'rejected' && result.reason && result.reason.message === 'reference_too_large' && result.reason.sourceUrl === entry.sourceUrl;
+            });
+            if (oversized) return null;
             return Object.assign({}, entry, {
               pending: false
             });
-          });
+          }).filter(Boolean);
         });
       } catch (err) {
         console.error('Load canvas reference images failed:', err);
@@ -6915,10 +6936,27 @@ const Composer = ({
   const addImageFiles = React.useCallback(files => {
     const images = Array.from(files || []).filter(f => f && f.type && f.type.startsWith('image/'));
     if (!images.length) return 0;
+    const accepted = [];
+    const oversized = [];
+    images.forEach(function (file) {
+      if (file && typeof file.size === 'number' && file.size > MAX_REFERENCE_IMAGE_BYTES) {
+        oversized.push(file);
+      } else {
+        accepted.push(file);
+      }
+    });
+    if (oversized.length) {
+      const names = oversized.map(function (f) {
+        const sizeMb = (f.size / (1024 * 1024)).toFixed(1);
+        return (f.name || '未命名图片') + '（' + sizeMb + 'MB）';
+      });
+      window.alert('单张参考图不能超过 5MB，以下文件已跳过：\n' + names.slice(0, 5).join('\n') + (names.length > 5 ? '\n…共 ' + names.length + ' 张' : ''));
+    }
+    if (!accepted.length) return 0;
     setManualRefImages(prev => {
       const remaining = Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - prev.length);
       if (remaining <= 0) return prev;
-      const toAdd = images.slice(0, remaining).map(file => ({
+      const toAdd = accepted.slice(0, remaining).map(file => ({
         file,
         name: file.name,
         previewUrl: URL.createObjectURL(file),
@@ -6928,7 +6966,7 @@ const Composer = ({
       }));
       return [...prev, ...toAdd];
     });
-    return Math.min(images.length, Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - manualRefImages.length));
+    return Math.min(accepted.length, Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - manualRefImages.length));
   }, [canvasRefImages.length, manualRefImages.length]);
   const handleDragEnter = e => {
     if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
@@ -13662,6 +13700,284 @@ const InspirationDetail = ({
 };
 window.InspirationPanel = InspirationPanel;
 
+// src/WhatsNewModal.jsx
+// What's New update card — each release version shows once after login
+
+const WHATS_NEW_SEEN_KEY = 'designflow_whats_new_seen';
+const markWhatsNewSeen = function (version) {
+  const value = String(version || '').trim();
+  if (!value) return;
+  try {
+    localStorage.setItem(WHATS_NEW_SEEN_KEY, value);
+  } catch (e) {}
+};
+const getSeenWhatsNewVersion = function () {
+  try {
+    return String(localStorage.getItem(WHATS_NEW_SEEN_KEY) || '').trim();
+  } catch (e) {
+    return '';
+  }
+};
+const WhatsNewFeatureIcon = ({
+  type
+}) => {
+  const wrap = {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    background: 'var(--accent-soft)',
+    color: 'var(--accent-ink)',
+    display: 'grid',
+    placeItems: 'center',
+    flexShrink: 0
+  };
+  let glyph = null;
+  if (type === 'image') {
+    glyph = React.createElement(I.image, {
+      size: 16,
+      stroke: 1.7
+    });
+  } else if (type === 'agent') {
+    glyph = React.createElement(I.user, {
+      size: 16,
+      stroke: 1.7
+    });
+  } else if (type === 'pages') {
+    glyph = React.createElement(I.grid, {
+      size: 16,
+      stroke: 1.7
+    });
+  } else if (type === 'sparkles') {
+    glyph = React.createElement(I.sparkles, {
+      size: 16,
+      stroke: 1.7
+    });
+  } else {
+    glyph = React.createElement(I.zap, {
+      size: 16,
+      stroke: 1.7
+    });
+  }
+  return React.createElement('div', {
+    style: wrap
+  }, glyph);
+};
+const WhatsNewModal = ({
+  release,
+  onClose
+}) => {
+  if (!release) return null;
+  const features = Array.isArray(release.features) ? release.features : [];
+  const versionLabel = [release.version, release.date].filter(Boolean).join(' · ');
+
+  // 用户确认后写入当前版本；同一 version 之后不再弹出
+  const dismiss = function () {
+    markWhatsNewSeen(release.version);
+    if (onClose) onClose();
+  };
+  const openChangelog = function () {
+    const raw = String(release.changelogUrl || 'https://github.com/bluecc0/xlj_designflow/commits/master/').trim() || 'https://github.com/bluecc0/xlj_designflow/commits/master/';
+    try {
+      const url = new URL(raw, window.location.href).toString();
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      window.open(raw, '_blank', 'noopener,noreferrer');
+    }
+  };
+  return React.createElement('div', {
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 240,
+      display: 'grid',
+      placeItems: 'center',
+      padding: 20,
+      background: 'rgba(40, 42, 48, 0.48)'
+    },
+    onClick: function (e) {
+      if (e.target === e.currentTarget) dismiss();
+    }
+  }, React.createElement('div', {
+    role: 'dialog',
+    'aria-modal': 'true',
+    'aria-label': release.title || '更新提示',
+    style: {
+      width: 'min(420px, calc(100vw - 40px))',
+      background: 'var(--panel)',
+      borderRadius: 20,
+      boxShadow: '0 24px 64px rgba(20, 22, 40, 0.18), 0 2px 8px rgba(20, 22, 40, 0.06)',
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column'
+    },
+    onClick: function (e) {
+      e.stopPropagation();
+    }
+  }, React.createElement('div', {
+    style: {
+      padding: '22px 22px 8px',
+      position: 'relative'
+    }
+  }, React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      marginBottom: 18
+    }
+  }, React.createElement('div', {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 12,
+      background: 'var(--ink)',
+      color: 'var(--panel)',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(I.sparkles, {
+    size: 18,
+    stroke: 1.8
+  })), React.createElement('button', {
+    type: 'button',
+    onClick: dismiss,
+    'aria-label': '关闭',
+    style: {
+      width: 28,
+      height: 28,
+      borderRadius: 8,
+      display: 'grid',
+      placeItems: 'center',
+      color: 'var(--ink-3)',
+      cursor: 'pointer',
+      marginTop: -2,
+      marginRight: -4
+    }
+  }, React.createElement(I.close, {
+    size: 15,
+    stroke: 1.8
+  }))), React.createElement('div', {
+    style: {
+      fontSize: 20,
+      fontWeight: 700,
+      letterSpacing: '-0.02em',
+      color: 'var(--ink)',
+      lineHeight: 1.25,
+      marginBottom: 6
+    }
+  }, release.title || 'Designflow 更新了'), versionLabel ? React.createElement('div', {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--ink-3)',
+      letterSpacing: '-0.01em',
+      marginBottom: 18
+    }
+  }, versionLabel) : null, React.createElement('div', {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14,
+      paddingBottom: 8
+    }
+  }, features.map(function (item, idx) {
+    return React.createElement('div', {
+      key: item.title || idx,
+      style: {
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 12
+      }
+    }, React.createElement(WhatsNewFeatureIcon, {
+      type: item.icon
+    }), React.createElement('div', {
+      style: {
+        minWidth: 0,
+        flex: 1,
+        paddingTop: 1
+      }
+    }, React.createElement('div', {
+      style: {
+        fontSize: 13.5,
+        fontWeight: 650,
+        color: 'var(--ink)',
+        letterSpacing: '-0.01em',
+        lineHeight: 1.3,
+        marginBottom: 3
+      }
+    }, item.title || ''), React.createElement('div', {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--ink-2)',
+        lineHeight: 1.55,
+        letterSpacing: '-0.005em'
+      }
+    }, item.desc || '')));
+  }))), React.createElement('div', {
+    style: {
+      borderTop: '1px solid var(--line)',
+      padding: '14px 18px 16px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gap: 8,
+      background: 'var(--panel)'
+    }
+  }, React.createElement('button', {
+    type: 'button',
+    onClick: openChangelog,
+    style: {
+      height: 34,
+      padding: '0 14px',
+      borderRadius: 10,
+      border: '1px solid var(--line)',
+      background: 'var(--panel)',
+      color: 'var(--ink-2)',
+      fontSize: 12.5,
+      fontWeight: 550,
+      cursor: 'pointer',
+      letterSpacing: '-0.01em'
+    }
+  }, '更新日志'), React.createElement('button', {
+    type: 'button',
+    onClick: dismiss,
+    style: {
+      height: 34,
+      padding: '0 16px',
+      borderRadius: 10,
+      border: '1px solid var(--ink)',
+      background: 'var(--ink)',
+      color: 'var(--panel)',
+      fontSize: 12.5,
+      fontWeight: 650,
+      cursor: 'pointer',
+      letterSpacing: '-0.01em'
+    }
+  }, '我知道了'))));
+};
+
+// 仅当 whats-new.json 的 version 与本地已确认版本不同时弹出
+const shouldShowWhatsNew = function (release) {
+  if (!release) return false;
+  const version = String(release.version || '').trim();
+  if (!version) return false;
+  return getSeenWhatsNewVersion() !== version;
+};
+const loadWhatsNewRelease = function () {
+  return fetch('whats-new.json', {
+    cache: 'no-cache'
+  }).then(function (res) {
+    if (!res.ok) throw new Error('whats-new fetch failed');
+    return res.json();
+  }).catch(function () {
+    return null;
+  });
+};
+window.WhatsNewModal = WhatsNewModal;
+window.shouldShowWhatsNew = shouldShowWhatsNew;
+window.loadWhatsNewRelease = loadWhatsNewRelease;
+window.markWhatsNewSeen = markWhatsNewSeen;
+window.WHATS_NEW_SEEN_KEY = WHATS_NEW_SEEN_KEY;
+
 // src/app.jsx
 // App root - wires panels + tweaks + host communication
 
@@ -13792,6 +14108,7 @@ const App = () => {
   const [canvasReferenceSelection, setCanvasReferenceSelection] = React.useState(null);
   const [templatePanelCollapsed, setTemplatePanelCollapsed] = React.useState(true);
   const [templateRevealHovered, setTemplateRevealHovered] = React.useState(false);
+  const [whatsNewRelease, setWhatsNewRelease] = React.useState(null);
   const handleUseInspirationPrompt = React.useCallback(function (post) {
     setInspirationOpen(false);
     setSeedPrompt(post.vlm_prompt || post.resolved_prompt || post.prompt || post.original_prompt || '');
@@ -13977,6 +14294,26 @@ const App = () => {
       alive = false;
     };
   }, [rememberUser]);
+  React.useEffect(() => {
+    if (!currentUser) {
+      setWhatsNewRelease(null);
+      return;
+    }
+    let alive = true;
+    const loader = window.loadWhatsNewRelease;
+    if (typeof loader !== 'function') return;
+    loader().then(function (release) {
+      if (!alive) return;
+      if (release && window.shouldShowWhatsNew && window.shouldShowWhatsNew(release)) {
+        setWhatsNewRelease(release);
+      } else {
+        setWhatsNewRelease(null);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [currentUser]);
   const handleLogin = React.useCallback(async (username, password) => {
     setAuthLoading(true);
     setAuthError('');
@@ -14145,6 +14482,11 @@ const App = () => {
     tweaks: tweaks,
     onChange: updateTweaks,
     onClose: () => setTweaksVisible(false)
-  })));
+  })), currentUser && whatsNewRelease && window.WhatsNewModal && React.createElement(window.WhatsNewModal, {
+    release: whatsNewRelease,
+    onClose: function () {
+      setWhatsNewRelease(null);
+    }
+  }));
 };
 ReactDOM.createRoot(document.getElementById('root')).render(/*#__PURE__*/React.createElement(App, null));

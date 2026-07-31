@@ -95,6 +95,7 @@ const App = () => {
   const [canvasReferenceSelection, setCanvasReferenceSelection] = React.useState(null);
   const [templatePanelCollapsed, setTemplatePanelCollapsed] = React.useState(true);
   const [templateRevealHovered, setTemplateRevealHovered] = React.useState(false);
+  const [whatsNewRelease, setWhatsNewRelease] = React.useState(null);
 
   const handleUseInspirationPrompt = React.useCallback(function(post) {
     setInspirationOpen(false);
@@ -285,6 +286,25 @@ const App = () => {
     return () => { alive = false; };
   }, [rememberUser]);
 
+  React.useEffect(() => {
+    if (!currentUser) {
+      setWhatsNewRelease(null);
+      return;
+    }
+    let alive = true;
+    const loader = window.loadWhatsNewRelease;
+    if (typeof loader !== 'function') return;
+    loader().then(function(release) {
+      if (!alive) return;
+      if (release && window.shouldShowWhatsNew && window.shouldShowWhatsNew(release)) {
+        setWhatsNewRelease(release);
+      } else {
+        setWhatsNewRelease(null);
+      }
+    });
+    return () => { alive = false; };
+  }, [currentUser]);
+
   const handleLogin = React.useCallback(async (username, password) => {
     setAuthLoading(true);
     setAuthError('');
@@ -443,6 +463,10 @@ const App = () => {
           />
         </>
       )}
+      {currentUser && whatsNewRelease && window.WhatsNewModal && React.createElement(window.WhatsNewModal, {
+        release: whatsNewRelease,
+        onClose: function() { setWhatsNewRelease(null); },
+      })}
     </div>
   );
 };

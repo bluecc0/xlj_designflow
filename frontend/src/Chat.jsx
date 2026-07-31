@@ -1791,6 +1791,7 @@ const normalizeReferenceUrl = function(rawUrl) {
 };
 
 const MAX_REFERENCE_IMAGES = 9;
+const MAX_REFERENCE_IMAGE_BYTES = 5 * 1024 * 1024; // 单张参考图硬限制 5MB
 const CHAT_INSPIRATION_CATEGORIES = [
   { id: 'share_card', label: '分享卡片' },
   { id: 'moments', label: '朋友圈' },
@@ -2007,6 +2008,13 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
             const response = await fetch(item.sourceUrl, { credentials: 'include' });
             if (!response.ok) throw new Error('load_reference_failed');
             const blob = await response.blob();
+            if (blob.size > MAX_REFERENCE_IMAGE_BYTES) {
+              const err = new Error('reference_too_large');
+              err.fileName = item.name;
+              err.sourceUrl = item.sourceUrl;
+              err.fileSize = blob.size;
+              throw err;
+            }
             const ext = blob.type && blob.type.indexOf('/') > -1 ? blob.type.split('/')[1] : 'png';
             const safeName = item.name && /\.[a-z0-9]+$/i.test(item.name) ? item.name : ((item.name || 'reference') + '.' + ext);
             const file = new File([blob], safeName, { type: blob.type || 'image/png' });
@@ -2016,6 +2024,19 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
         if (!alive) {
           return;
         }
+        const oversizedNames = [];
+        loaded.forEach(function(result) {
+          if (result && result.status === 'rejected' && result.reason && result.reason.message === 'reference_too_large') {
+            oversizedNames.push(result.reason.fileName || '参考图');
+          }
+        });
+        if (oversizedNames.length) {
+          window.alert(
+            '以下参考图超过 5MB，已跳过：\n'
+            + oversizedNames.slice(0, 5).join('\n')
+            + (oversizedNames.length > 5 ? '\n…共 ' + oversizedNames.length + ' 张' : '')
+          );
+        }
         setCanvasRefImages(function(prev) {
           return prev.map(function(entry) {
             if (!entry || !entry.sourceUrl) return entry;
@@ -2023,8 +2044,14 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
               return result && result.status === 'fulfilled' && result.value && result.value.sourceUrl === entry.sourceUrl;
             });
             if (match && match.status === 'fulfilled') return match.value;
+            const oversized = loaded.find(function(result) {
+              return result && result.status === 'rejected' && result.reason
+                && result.reason.message === 'reference_too_large'
+                && result.reason.sourceUrl === entry.sourceUrl;
+            });
+            if (oversized) return null;
             return Object.assign({}, entry, { pending: false });
-          });
+          }).filter(Boolean);
         });
       } catch (err) {
         console.error('Load canvas reference images failed:', err);
@@ -2556,13 +2583,34 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const addImageFiles = React.useCallback((files) => {
     const images = Array.from(files || []).filter(f => f && f.type && f.type.startsWith('image/'));
     if (!images.length) return 0;
+    const accepted = [];
+    const oversized = [];
+    images.forEach(function(file) {
+      if (file && typeof file.size === 'number' && file.size > MAX_REFERENCE_IMAGE_BYTES) {
+        oversized.push(file);
+      } else {
+        accepted.push(file);
+      }
+    });
+    if (oversized.length) {
+      const names = oversized.map(function(f) {
+        const sizeMb = (f.size / (1024 * 1024)).toFixed(1);
+        return (f.name || '未命名图片') + '（' + sizeMb + 'MB）';
+      });
+      window.alert(
+        '单张参考图不能超过 5MB，以下文件已跳过：\n'
+        + names.slice(0, 5).join('\n')
+        + (names.length > 5 ? '\n…共 ' + names.length + ' 张' : '')
+      );
+    }
+    if (!accepted.length) return 0;
     setManualRefImages(prev => {
       const remaining = Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - prev.length);
       if (remaining <= 0) return prev;
-      const toAdd = images.slice(0, remaining).map(file => ({ file, name: file.name, previewUrl: URL.createObjectURL(file), sourceUrl: '', pending: false, origin: 'manual' }));
+      const toAdd = accepted.slice(0, remaining).map(file => ({ file, name: file.name, previewUrl: URL.createObjectURL(file), sourceUrl: '', pending: false, origin: 'manual' }));
       return [...prev, ...toAdd];
     });
-    return Math.min(images.length, Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - manualRefImages.length));
+    return Math.min(accepted.length, Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - manualRefImages.length));
   }, [canvasRefImages.length, manualRefImages.length]);
 
   const handleDragEnter = (e) => {
