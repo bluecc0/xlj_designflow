@@ -50,6 +50,7 @@ from .ai_image import (
     PROVIDER_AUTO,
     cleanup_user_refs,
     format_generation_error,
+    public_generation_error,
     generate_image,
     generate_image_with_reference,
     generate_image_async,
@@ -3515,6 +3516,7 @@ async def _run_ai_image_background(
     stage = "init"
     upstream_task_id = ""
     active_provider = provider
+    result = None
 
     def on_progress(pct: int, api_status: str):
         try:
@@ -3627,7 +3629,10 @@ async def _run_ai_image_background(
             request_meta=request_meta, created_at=created_at,
         )
         if provider_switched:
-            mark_ai_image_job_provider_switched(job_id, True)
+            try:
+                mark_ai_image_job_provider_switched(job_id, True)
+            except Exception:
+                logger.exception("failed to mark provider switch: job_id=%s", job_id)
         cost_str = f" cost={result.get('cost')}" if result.get('cost') is not None else ""
         time_str = f" {result.get('actual_time') or result.get('estimated_time') or ''}s" if (result.get('actual_time') or result.get('estimated_time')) else ""
         usage = result.get("usage")
@@ -3639,41 +3644,47 @@ async def _run_ai_image_background(
             preview_url, _, _ = generate_inspiration_thumb(result.get("url") or "", user_id, job_id)
         except Exception:
             preview_url = result.get("url") or ""
-        log_operation(
-            user_id=user_id, username=username,
-            action="ai_image",
-            detail=f"job={job_id[:8]} model={model} size={size} result=done{cost_str}{time_str}{usage_str} image={result.get('url', '?')[:60]}",
-            payload=json.dumps({
-                "job_id": job_id, "model": model, "size": size, "result": "done",
-                "image_url": result.get("url", ""), "cost": result.get("cost"), "usage": usage,
-                "provider": actual_provider, "provider_switched": provider_switched,
-                "upstream_task_id": upstream_task_id,
-            }, ensure_ascii=False),
-        )
-        append_ai_chat_message(
-            session_id=session_id, user_id=user_id,
-            role="ai", type="ai_image_result",
-            text=prompt, image_url=result.get("url"),
-            meta={
-                "job_id": job_id,
-                "model": model, "prompt": prompt,
-                "resolvedPrompt": resolved_prompt or prompt,
-                "promptTrace": prompt_trace,
-                "provider": actual_provider,
-                "providerSwitched": provider_switched,
-                "taskId": upstream_task_id,
-                "size": size, "resolution": resolution,
-                "status": "done",
-                "hasReference": has_reference,
-                "refCount": len(refs),
-                "refPreviews": ref_previews or [],
-                "previewUrl": preview_url,
-                "batchId": batch_id,
-                "batchIndex": batch_index,
-                "batchCount": batch_count,
-            },
-            created_at=time.time(),
-        )
+        try:
+            log_operation(
+                user_id=user_id, username=username,
+                action="ai_image",
+                detail=f"job={job_id[:8]} model={model} size={size} result=done{cost_str}{time_str}{usage_str} image={result.get('url', '?')[:60]}",
+                payload=json.dumps({
+                    "job_id": job_id, "model": model, "size": size, "result": "done",
+                    "image_url": result.get("url", ""), "cost": result.get("cost"), "usage": usage,
+                    "provider": actual_provider, "provider_switched": provider_switched,
+                    "upstream_task_id": upstream_task_id,
+                }, ensure_ascii=False),
+            )
+        except Exception:
+            logger.exception("failed to write success operation log: job_id=%s", job_id)
+        try:
+            append_ai_chat_message(
+                session_id=session_id, user_id=user_id,
+                role="ai", type="ai_image_result",
+                text=prompt, image_url=result.get("url"),
+                meta={
+                    "job_id": job_id,
+                    "model": model, "prompt": prompt,
+                    "resolvedPrompt": resolved_prompt or prompt,
+                    "promptTrace": prompt_trace,
+                    "provider": actual_provider,
+                    "providerSwitched": provider_switched,
+                    "taskId": upstream_task_id,
+                    "size": size, "resolution": resolution,
+                    "status": "done",
+                    "hasReference": has_reference,
+                    "refCount": len(refs),
+                    "refPreviews": ref_previews or [],
+                    "previewUrl": preview_url,
+                    "batchId": batch_id,
+                    "batchIndex": batch_index,
+                    "batchCount": batch_count,
+                },
+                created_at=time.time(),
+            )
+        except Exception:
+            logger.exception("failed to append success chat message: job_id=%s", job_id)
         # 成功后清理持久化的参考图
         try:
             cleanup_user_refs(user_id, job_id)
@@ -3684,7 +3695,7 @@ async def _run_ai_image_background(
         # Without explicitly persisting this, the UI keeps polling a permanent
         # "processing" job that will never be resumed.
         cancel_provider = active_provider or provider
-        error_msg = format_generation_error(
+        diagnostic_error = format_generation_error(
             "生图任务被服务重载或关闭中断，请重新提交",
             stage=stage or "cancelled",
             provider=cancel_provider,
@@ -3692,9 +3703,10 @@ async def _run_ai_image_background(
             job_id=job_id,
             task_id=upstream_task_id,
         )
+        error_msg = public_generation_error()
         logger.warning(
-            "ai_image background task cancelled: job_id=%s stage=%s provider=%s",
-            job_id, stage, cancel_provider,
+            "ai_image background task cancelled: job_id=%s stage=%s provider=%s error=%s",
+            job_id, stage, cancel_provider, diagnostic_error[:200],
         )
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="failed",
@@ -3740,7 +3752,7 @@ async def _run_ai_image_background(
         stage = str(getattr(e, "stage", "") or stage or "generate")
         upstream_task_id = str(getattr(e, "task_id", "") or upstream_task_id)
         fail_provider = str(getattr(e, "provider", "") or active_provider or provider)
-        error_msg = format_generation_error(
+        diagnostic_error = format_generation_error(
             e,
             stage=stage or "generate",
             provider=fail_provider,
@@ -3748,9 +3760,30 @@ async def _run_ai_image_background(
             job_id=job_id,
             task_id=upstream_task_id,
         )
+        # 图片已经生成并落盘后，后续写库/日志异常不得把成功任务覆盖成失败。
+        if isinstance(result, dict) and result.get("url"):
+            logger.exception(
+                "ai_image post-generation persistence failed: job_id=%s provider=%s error=%s",
+                job_id, fail_provider, diagnostic_error[:300],
+            )
+            try:
+                save_ai_image_job(
+                    job_id=job_id, user_id=user_id, status="done",
+                    model=model, prompt=prompt, size=size,
+                    provider=str(result.get("provider") or fail_provider), resolution=resolution,
+                    original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
+                    prompt_trace=prompt_trace, image_url=result.get("url"),
+                    task_id=str(result.get("task_id") or upstream_task_id) or None,
+                    progress=100, has_reference=has_reference, reference_count=len(refs),
+                    request_meta=request_meta, created_at=created_at,
+                )
+            except Exception:
+                logger.exception("failed to recover generated image job: job_id=%s", job_id)
+            return
+        error_msg = public_generation_error(e)
         logger.exception(
             "ai_image background task failed: job_id=%s stage=%s provider=%s model=%s error=%s",
-            job_id, stage, fail_provider, model, error_msg[:200],
+            job_id, stage, fail_provider, model, diagnostic_error[:200],
         )
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="failed",
@@ -3769,6 +3802,7 @@ async def _run_ai_image_background(
             payload=json.dumps({
                 "job_id": job_id, "model": model, "size": size, "result": "failed",
                 "error": error_msg[:500], "stage": stage, "provider": fail_provider,
+                "diagnostic_error": diagnostic_error[:1000],
                 "upstream_task_id": upstream_task_id,
             }, ensure_ascii=False),
         )
@@ -3985,28 +4019,7 @@ def ai_image_status(request: Request, job_id: str):
         raise HTTPException(404, f"任务不存在（job={job_id[:8]}）")
     if not _is_admin(user) and job.get("user_id") != user["id"]:
         raise HTTPException(404, f"任务不存在（job={job_id[:8]}）")
-    if job.get("status") in {"queued", "processing"}:
-        age_seconds = time.time() - float(job.get("created_at") or 0)
-        timeout_seconds = max(60, int(settings.ai_image_job_timeout_seconds or 600))
-        if age_seconds > timeout_seconds:
-            error_msg = format_generation_error(
-                f"生图任务超时：超过 {timeout_seconds} 秒没有返回结果，请稍后重试",
-                stage="timeout",
-                model=job.get("model") or "",
-                job_id=job["id"],
-                task_id=job.get("task_id") or "",
-            )
-            save_ai_image_job(
-                job_id=job["id"], user_id=job.get("user_id") or user["id"], status="failed",
-                model=job.get("model") or "", prompt=job.get("prompt") or "", size=job.get("size") or "",
-                original_prompt=job.get("original_prompt") or job.get("prompt") or "",
-                resolved_prompt=job.get("resolved_prompt") or job.get("prompt") or "",
-                prompt_trace=job.get("prompt_trace") or "",
-                has_reference=bool(job.get("has_reference")), error=error_msg,
-                task_id=job.get("task_id"), progress=100,
-                created_at=job.get("created_at") or time.time(),
-            )
-            job = load_ai_image_job(job_id) or job
+    # 状态查询只读，不根据任务年龄擅自判失败。智能路由完整跑完后由后台任务写入最终状态。
     image_url = job.get("image_url")
     preview_url = ""
     if image_url:
@@ -4022,14 +4035,16 @@ def ai_image_status(request: Request, job_id: str):
         except Exception:
             layer_extract = None
     error_text = job.get("error") or ""
-    # 历史脏数据：status=failed 但 error 为空，补一条可排查文案，避免前端「未知错误」
-    if job.get("status") == "failed" and not str(error_text).strip():
-        error_text = format_generation_error(
-            "生图失败但未记录错误详情（可能是旧任务或进程异常退出）",
-            model=job.get("model") or "",
-            job_id=job["id"],
-            task_id=job.get("task_id") or "",
-        )
+    # 新旧失败记录统一收敛为两类用户文案；原始诊断仅保留在服务日志。
+    if job.get("status") == "failed":
+        public_error = public_generation_error(error_text)
+        should_update_error = str(error_text).strip() != public_error
+        error_text = public_error
+        if not should_update_error:
+            should_update_error = not str(job.get("error") or "").strip()
+    else:
+        should_update_error = False
+    if should_update_error:
         try:
             save_ai_image_job(
                 job_id=job["id"], user_id=job.get("user_id") or user["id"], status="failed",

@@ -42,13 +42,21 @@ class FinalImageDownloadError(RuntimeError):
 
 
 class AmbiguousUpstreamError(RuntimeError):
-    """同步请求可能已送达上游（读超时/写超时/中途断连），状态不确定，禁止跨渠道重提。"""
+    """同步请求响应不完整，是否受理由 on_accepted 信号另行判断。"""
     stage = "ambiguous"
 
     def __init__(self, message: str, *, task_id: str = "", provider: str = "") -> None:
         super().__init__(message)
         self.task_id = task_id
         self.provider = provider
+
+
+class SafetyReviewError(RuntimeError):
+    """上游明确因内容安全审核拒绝任务。"""
+
+
+class AllProvidersFailedError(RuntimeError):
+    """所有候选线路均已完成两轮尝试但没有成功结果。"""
 
 
 _TRANSIENT_TASK_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 523, 524}
@@ -1410,7 +1418,7 @@ async def generate_sub2api_async(
             raise RuntimeError(f"CLIProxyAPI 连接失败：{exc}") from exc
         if kind == "ambiguous":
             raise AmbiguousUpstreamError(
-                f"CLIProxyAPI 请求可能已送达但响应超时/中断（状态不确定，不切换渠道）：{exc}",
+                f"CLIProxyAPI 请求响应超时/中断（未收到受理确认）：{exc}",
                 provider=PROVIDER_SUB2API,
             ) from exc
         raise RuntimeError(f"CLIProxyAPI 请求失败：{exc}") from exc
@@ -1532,7 +1540,7 @@ async def generate_adobe2api_async(
             raise RuntimeError(f"adobe2api 连接失败：{exc}") from exc
         if kind == "ambiguous":
             raise AmbiguousUpstreamError(
-                f"adobe2api 请求可能已送达但响应超时/中断（状态不确定，不切换渠道）：{exc}",
+                f"adobe2api 请求响应超时/中断（未收到受理确认）：{exc}",
                 provider=PROVIDER_ADOBE2API,
             ) from exc
         raise RuntimeError(f"adobe2api 请求失败：{exc}") from exc
@@ -1660,6 +1668,40 @@ def is_transient_provider_error(exc: BaseException | str | None) -> bool:
     return False
 
 
+def is_safety_review_error(exc: BaseException | str | None) -> bool:
+    """只识别明确的内容安全审核拒绝，避免把普通 4xx 当成审核拦截。"""
+    parts: list[str] = []
+    current: BaseException | None = exc if isinstance(exc, BaseException) else None
+    while current is not None:
+        parts.append(str(current))
+        current = current.__cause__ or current.__context__
+    if not parts:
+        parts.append(str(exc or ""))
+    low = " ".join(parts).lower()
+    return any(marker in low for marker in (
+        "content_policy_violation",
+        "content policy violation",
+        "policy_violation",
+        "content_filter",
+        "content filter",
+        "moderation_blocked",
+        "blocked by moderation",
+        "blocked by safety",
+        "safety filter",
+        "safety system",
+        "inappropriate content",
+        "prohibited content",
+        "sensitive content",
+        "nsfw",
+        "内容安全",
+        "安全审核",
+        "审核拦截",
+        "内容违规",
+        "违规内容",
+        "涉黄",
+    ))
+
+
 # 默认模型选路优先级表：映射标准模型名到首选/降级线路
 DEFAULT_MODEL_ROUTING_RULES: dict[str, list[str]] = {
     "default": [PROVIDER_SUB2API, PROVIDER_ADOBE2API, PROVIDER_APIMART],
@@ -1741,6 +1783,13 @@ def get_smart_route_candidates(model: str, resolution: str = "", size: str = "10
 SMART_ROUTE_ROUNDS = 2
 
 
+def public_generation_error(exc: BaseException | str | None = None) -> str:
+    """把任务失败收敛为前端允许展示的两类文案。"""
+    if isinstance(exc, SafetyReviewError) or is_safety_review_error(exc):
+        return "内容被上游安全审核系统拦截，请调整提示词或参考图后重试"
+    return f"所有可用 AI 生图线路经过 {SMART_ROUTE_ROUNDS} 轮尝试后仍未成功，请稍后重试"
+
+
 async def smart_generate_image_async(
     model: str,
     prompt: str,
@@ -1757,18 +1806,14 @@ async def smart_generate_image_async(
     用户无感：线路 1 失败 → 线路 2 → 线路 3（如有）→ 再回到线路 1…共两轮；
     全部失败才把错误抛给用户。
 
-    是否已提交上游由各 provider 的 on_accepted 明确信号决定。
-    外层 on_accepted(provider, upstream_id) 用于立即持久化任务号。
-    已接受 / 状态不确定(ambiguous) 仍立即停止，避免重复计费。
+    前端只有两个失败出口：明确的上游安全审核拦截，或全部线路完成两轮后仍失败。
+    是否已提交上游由各 provider 的 on_accepted 明确信号决定；已接受的同一线路不重复提交。
     """
     candidates = get_smart_route_candidates(model, resolution=resolution, size=size)
     logger.info("[smart-routing] Candidate providers for model=%s res=%s size=%s: %s",
                 model, resolution, size, candidates)
     if not candidates:
-        raise RuntimeError(
-            f"没有已配置且支持模型 {_normalize_model_name(model)} "
-            f"（清晰度 {resolution or '默认'}）的生图线路"
-        )
+        raise AllProvidersFailedError(public_generation_error())
 
     # 展开为两轮轮询序列： [a,b,c] → [a,b,c,a,b,c]
     schedule: list[tuple[int, str]] = [
@@ -1798,24 +1843,6 @@ async def smart_generate_image_async(
                 except Exception as cb_exc:
                     logger.warning("[smart-routing] on_accepted callback failed: %s", cb_exc)
         return _inner
-
-    def _raise_with_context(
-        exc: BaseException,
-        provider_name: str,
-        err_msg: str,
-        *,
-        force_ambiguous: bool = False,
-    ) -> None:
-        task_id = accepted.get(provider_name) or getattr(exc, "task_id", "") or ""
-        task_id = str(task_id or "").strip()
-        # 已接受后的失败 / 传输状态不确定：统一为 Ambiguous，避免提示“换线路”
-        if force_ambiguous or isinstance(exc, AmbiguousUpstreamError):
-            raise AmbiguousUpstreamError(err_msg, task_id=task_id, provider=provider_name) from exc
-        wrapped = RuntimeError(err_msg)
-        wrapped.task_id = task_id  # type: ignore[attr-defined]
-        wrapped.provider = provider_name  # type: ignore[attr-defined]
-        wrapped.stage = getattr(exc, "stage", "smart_route")  # type: ignore[attr-defined]
-        raise wrapped from exc
 
     for index, (round_no, provider) in enumerate(schedule):
         last_provider = provider
@@ -1880,66 +1907,36 @@ async def smart_generate_image_async(
 
         except Exception as exc:
             already_accepted = provider in accepted
-            # 先按原始异常格式化，再在已接受场景统一抬升为 Ambiguous 文案
             err_msg = format_generation_error(exc, stage="smart_route", provider=provider, model=model)
-            if already_accepted or isinstance(exc, AmbiguousUpstreamError):
-                err_msg = format_generation_error(
-                    AmbiguousUpstreamError(str(exc), task_id=str(accepted.get(provider) or ""), provider=provider),
-                    stage="smart_route",
-                    provider=provider,
-                    model=model,
-                    task_id=str(accepted.get(provider) or ""),
-                )
             logger.warning(
                 "[smart-routing] Provider %s failed (round %d): %s",
                 provider, round_no, err_msg,
             )
             errors.append(f"R{round_no}/{provider}: {err_msg}")
 
-            is_last = index >= len(schedule) - 1
-            can_failover = is_transient_provider_error(exc) and not already_accepted and not is_last
-
-            # 已接受 / 状态不确定：立即停，绝不继续轮询
-            if already_accepted or isinstance(exc, AmbiguousUpstreamError):
-                if already_accepted:
-                    logger.warning(
-                        "[smart-routing] Provider %s already accepted upstream (id=%s); stop to avoid duplicate billing",
-                        provider, accepted.get(provider),
-                    )
-                else:
-                    logger.warning(
-                        "[smart-routing] Provider %s ambiguous transport error; stop to avoid duplicate billing",
-                        provider,
-                    )
-                _raise_with_context(
-                    exc,
+            if is_safety_review_error(exc):
+                logger.warning(
+                    "[smart-routing] Provider %s rejected the task by safety review; stop routing",
                     provider,
-                    err_msg,
-                    force_ambiguous=True,
                 )
+                safety_error = SafetyReviewError(public_generation_error(exc))
+                safety_error.provider = provider  # type: ignore[attr-defined]
+                safety_error.task_id = str(accepted.get(provider) or "")  # type: ignore[attr-defined]
+                raise safety_error from exc
 
-            # 业务性硬失败（如 400）：继续换线也救不了同一 prompt，立即停
-            if not is_transient_provider_error(exc):
-                if not is_last:
-                    logger.warning(
-                        "[smart-routing] Provider %s error is non-transient; stop failover",
-                        provider,
-                    )
-                _raise_with_context(exc, provider, err_msg, force_ambiguous=False)
+            logger.info(
+                "[smart-routing] Provider %s failed%s; continue schedule (%d/%d)",
+                provider,
+                " after acceptance" if already_accepted else " before acceptance",
+                index + 1,
+                len(schedule),
+            )
+            continue
 
-            # 暂态错误且还有后续步骤：静默继续（含第二轮回到线路 1）
-            if can_failover:
-                logger.info(
-                    "[smart-routing] Transient failure on %s; continue schedule (%d/%d)",
-                    provider, index + 1, len(schedule),
-                )
-                continue
-
-    final = RuntimeError(
-        f"所有可用 AI 生图线路均尝试失败（{SMART_ROUTE_ROUNDS} 轮）：{' | '.join(errors)}"
-    )
+    final = AllProvidersFailedError(public_generation_error())
     final.provider = last_provider  # type: ignore[attr-defined]
-    final.task_id = accepted.get(last_provider, "")  # type: ignore[attr-defined]
+    final.task_id = next((task_id for task_id in reversed(tuple(accepted.values())) if task_id), "")  # type: ignore[attr-defined]
+    final.provider_errors = tuple(errors)  # type: ignore[attr-defined]
     raise final
 
 
