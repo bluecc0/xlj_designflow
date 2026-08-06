@@ -40,10 +40,10 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(gpt_1k_candidates, ["sub2api", "apimart", "adobe2api"])
 
             gpt_2k_candidates = ai_image.get_smart_route_candidates("gpt-image-2", resolution="2K")
-            self.assertEqual(gpt_2k_candidates, ["adobe2api", "apimart"])
+            self.assertEqual(gpt_2k_candidates, ["apimart", "adobe2api"])
 
             gpt_4k_candidates = ai_image.get_smart_route_candidates("gpt-image-2", resolution="4K")
-            self.assertEqual(gpt_4k_candidates, ["adobe2api", "apimart"])
+            self.assertEqual(gpt_4k_candidates, ["apimart", "adobe2api"])
 
             banana_candidates = ai_image.get_smart_route_candidates("nano-banana-pro")
             self.assertEqual(banana_candidates, ["apimart", "adobe2api"])

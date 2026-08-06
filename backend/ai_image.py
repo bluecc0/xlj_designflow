@@ -1704,7 +1704,7 @@ def is_safety_review_error(exc: BaseException | str | None) -> bool:
 
 # 默认模型选路优先级表：映射标准模型名到首选/降级线路
 DEFAULT_MODEL_ROUTING_RULES: dict[str, list[str]] = {
-    "default": [PROVIDER_SUB2API, PROVIDER_ADOBE2API, PROVIDER_APIMART],
+    "default": [PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_ADOBE2API],
 }
 
 # 服务商能力集合：定义各线路真正支持的模型 (None/空集代表支持全量模型)
@@ -1747,13 +1747,13 @@ def get_smart_route_candidates(model: str, resolution: str = "", size: str = "10
         preferred_order = custom_rules[model_name]
     elif model_name == "gpt-image-2":
         if res_upper in ("2K", "4K"):
-            preferred_order = [PROVIDER_ADOBE2API, PROVIDER_APIMART]
+            preferred_order = [PROVIDER_APIMART, PROVIDER_ADOBE2API]
         else:  # 1K 或 auto 默认为 1K
             preferred_order = [PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_ADOBE2API]
     elif "banana" in model_name or "gemini" in model_name:
         preferred_order = [PROVIDER_APIMART, PROVIDER_ADOBE2API]
     else:
-        preferred_order = (custom_rules and custom_rules.get("default")) or [PROVIDER_SUB2API, PROVIDER_ADOBE2API, PROVIDER_APIMART]
+        preferred_order = (custom_rules and custom_rules.get("default")) or [PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_ADOBE2API]
 
     candidates: list[str] = []
 
