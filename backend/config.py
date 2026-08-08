@@ -100,6 +100,7 @@ class Settings:
     kie_timeout_seconds: int = int(os.getenv("KIE_TIMEOUT_SECONDS", "900"))
     kie_poll_interval_seconds: float = float(os.getenv("KIE_POLL_INTERVAL_SECONDS", "3"))
     kie_input_download_retries: int = int(os.getenv("KIE_INPUT_DOWNLOAD_RETRIES", "1"))
+    kie_result_download_retries: int = int(os.getenv("KIE_RESULT_DOWNLOAD_RETRIES", "1"))
 
     # agent mode
     agent_llm_model: str = os.getenv("AGENT_LLM_MODEL", "") or "gpt-5.5"

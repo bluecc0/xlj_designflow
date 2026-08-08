@@ -875,6 +875,8 @@ def _run_local_layer_extract(src_path: Path, out_dir: Path, user_id: str) -> dic
         payload = {}
     if proc.returncode != 0 or not payload.get("ok"):
         detail = str(payload.get("error") or (proc.stderr or proc.stdout or "").strip()[-1200:])
+        if payload.get("kie_task_id"):
+            detail = f"{detail} task_id={payload['kie_task_id']}"
         raise RuntimeError(detail or f"layer-extract 子进程退出码 {proc.returncode}")
     return payload
 
@@ -901,43 +903,30 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
         manifest_url = f"/ai-images/{quote(manifest_rel.as_posix())}"
         # 图层 PNG 目录对外 URL 前缀（job 目录 URL，前端拼 prefix + '/' + layer.path）
         layers_url_prefix = f"/ai-images/{quote((out_dir.relative_to(settings.output_path / 'ai-images')).as_posix())}"
-        # 写一份精简 manifest 到 job 表（前端轮询用），并保存 PSD 下载 URL 到 image_url 字段
+        # 先完整组装 prompt_trace，再一次性写入 done，避免前端轮询读到
+        # done 但 layer_extract 尚未准备好的中间状态。
+        extra = {
+            "psd_url": psd_url,
+            "manifest_url": manifest_url,
+            "layers_url_prefix": layers_url_prefix,
+            "background_status": payload.get("background_status", ""),
+            "decomposition_provider": payload.get("decomposition_provider", "kie"),
+            "kie_task_id": payload.get("kie_task_id", ""),
+            "kie_layers": payload.get("kie_layers", []),
+            "kie_model": settings.kie_layer_model,
+            "layers": payload.get("layers", []),
+            "source_size": payload.get("source_size", []),
+        }
         save_ai_image_job(
             job_id=job_id, user_id=user["id"], status="done",
             model="layer-extract", prompt=prompt,
             size=f"{payload['source_size'][0]}x{payload['source_size'][1]}",
             provider="kie",
-            original_prompt=prompt, resolved_prompt=prompt, image_url=psd_url,
+            original_prompt=prompt, resolved_prompt=prompt,
+            image_url=psd_url, prompt_trace=json.dumps(extra, ensure_ascii=False),
             task_id=payload.get("kie_task_id") or None,
             has_reference=True, progress=100, created_at=created_at,
         )
-        # 把 manifest URL / layers 信息存到 job 的 prompt_trace 字段（复用字段做扩展数据）
-        try:
-            job = load_ai_image_job(job_id) or {}
-            extra = {
-                "psd_url": psd_url,
-                "manifest_url": manifest_url,
-                "layers_url_prefix": layers_url_prefix,
-                "background_status": payload.get("background_status", ""),
-                "decomposition_provider": payload.get("decomposition_provider", "kie"),
-                "kie_task_id": payload.get("kie_task_id", ""),
-                "kie_layers": payload.get("kie_layers", []),
-                "kie_model": settings.kie_layer_model,
-                "layers": payload.get("layers", []),
-                "source_size": payload.get("source_size", []),
-            }
-            save_ai_image_job(
-                job_id=job_id, user_id=user["id"], status="done",
-                model="layer-extract", prompt=prompt,
-                size=job.get("size") or "",
-                provider="kie",
-                original_prompt=prompt, resolved_prompt=prompt,
-                image_url=psd_url, prompt_trace=json.dumps(extra, ensure_ascii=False),
-                task_id=payload.get("kie_task_id") or None,
-                has_reference=True, progress=100, created_at=created_at,
-            )
-        except Exception:
-            pass
         log_operation(
             user_id=user["id"], username=user.get("username", ""),
             action="ai_image_layer_extract",

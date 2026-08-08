@@ -50,9 +50,42 @@ def _emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False), flush=True)
 
 
+async def _download_result_layer(
+    client: httpx.AsyncClient,
+    url: str,
+    index: int,
+    retries: int,
+) -> bytes:
+    max_attempts = max(0, int(retries or 0)) + 1
+    last_error = ""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = await client.get(url)
+            if 200 <= response.status_code < 300 and response.content:
+                return response.content
+            if 200 <= response.status_code < 300:
+                last_error = f"HTTP {response.status_code} 空响应"
+                retryable = True
+            else:
+                last_error = f"HTTP {response.status_code}"
+                retryable = response.status_code == 429 or response.status_code >= 500
+        except httpx.HTTPError as exc:
+            last_error = str(exc) or exc.__class__.__name__
+            retryable = True
+        else:
+            if not retryable:
+                raise RuntimeError(f"下载 Kie 图层 {index} 失败: {last_error}")
+        if attempt < max_attempts:
+            await asyncio.sleep(min(2.0, 0.5 * attempt))
+    raise RuntimeError(
+        f"下载 Kie 图层 {index} 失败: {last_error}（已重试 {max_attempts - 1} 次）"
+    )
+
+
 async def _download_result_layers(
     result_layers: list[dict[str, Any]],
     timeout_seconds: int,
+    retries: int = 0,
 ) -> list[dict[str, Any]]:
     timeout = httpx.Timeout(max(60, int(timeout_seconds or 900)), connect=30.0)
     async with httpx.AsyncClient(
@@ -67,11 +100,8 @@ async def _download_result_layers(
             url = str(layer.get("url") or "").strip()
             if not url:
                 raise RuntimeError(f"Kie 图层 {index} 缺少图片 URL")
-            response = await client.get(url)
-            if response.status_code != 200 or not response.content:
-                raise RuntimeError(f"下载 Kie 图层 {index} 失败: HTTP {response.status_code}")
             item = dict(layer)
-            item["bytes"] = response.content
+            item["bytes"] = await _download_result_layer(client, url, index, retries)
             downloaded.append(item)
     return downloaded
 
@@ -256,7 +286,11 @@ async def _run_remote_decomposition(source_copy: Path) -> dict[str, Any]:
         prompt=LAYER_DECOMPOSITION_PROMPT,
         upload_filename=upload_filename,
     )
-    result_layers = await _download_result_layers(result["result_layers"], settings.kie_timeout_seconds)
+    result_layers = await _download_result_layers(
+        result["result_layers"],
+        settings.kie_timeout_seconds,
+        settings.kie_result_download_retries,
+    )
     return {
         "kie": result,
         "result_layers": result_layers,
@@ -307,6 +341,15 @@ def main() -> int:
     # 外部模型预估数量匹配，而是完整消费 Kie 返回的所有图层。
     source_size = (source_width, source_height)
     background_index = _select_background_index(result_layers, source_size)
+    if background_index is None:
+        _emit({
+            "ok": False,
+            "error": "Kie 任务未返回完整画布背景，无法安全生成 PSD",
+            "background_status": "missing",
+            "decomposition_provider": "kie",
+            "kie_task_id": remote["kie"].get("task_id", ""),
+        })
+        return 3
     background_layer = result_layers[background_index] if background_index is not None else {}
     background_bytes = background_layer.get("bytes")
     foreground_layers = [

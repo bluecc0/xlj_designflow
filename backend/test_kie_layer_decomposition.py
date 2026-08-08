@@ -4,10 +4,16 @@ import json
 import io
 import unittest
 
+import httpx
 from PIL import Image
 
 from backend.kie_layer_decomposition import extract_result_layers, extract_result_urls
-from backend.layer_extract_worker import _coerce_bbox, _layer_bbox, _select_background_index
+from backend.layer_extract_worker import (
+    _coerce_bbox,
+    _download_result_layer,
+    _layer_bbox,
+    _select_background_index,
+)
 
 
 class KieLayerDecompositionHelpersTest(unittest.TestCase):
@@ -105,6 +111,58 @@ class KieLayerDecompositionHelpersTest(unittest.TestCase):
         Image.new("RGB", (50, 50), "white").save(image, format="PNG")
         layers = [{"z_index": 0, "bytes": image.getvalue()}]
         self.assertIsNone(_select_background_index(layers, (100, 200)))
+
+
+class KieResultDownloadRetryTest(unittest.IsolatedAsyncioTestCase):
+    async def test_retries_server_error_before_success(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def get(self, url: str) -> httpx.Response:
+                self.calls += 1
+                request = httpx.Request("GET", url)
+                if self.calls == 1:
+                    return httpx.Response(503, request=request)
+                return httpx.Response(200, content=b"png-bytes", request=request)
+
+        client = FakeClient()
+        content = await _download_result_layer(client, "https://example.test/layer.png", 1, 1)
+
+        self.assertEqual(content, b"png-bytes")
+        self.assertEqual(client.calls, 2)
+
+    async def test_does_not_retry_client_error(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def get(self, url: str) -> httpx.Response:
+                self.calls += 1
+                return httpx.Response(404, request=httpx.Request("GET", url))
+
+        client = FakeClient()
+        with self.assertRaisesRegex(RuntimeError, r"HTTP 404"):
+            await _download_result_layer(client, "https://example.test/layer.png", 1, 2)
+        self.assertEqual(client.calls, 1)
+
+    async def test_retries_empty_success_response(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def get(self, url: str) -> httpx.Response:
+                self.calls += 1
+                request = httpx.Request("GET", url)
+                if self.calls == 1:
+                    return httpx.Response(200, request=request)
+                return httpx.Response(200, content=b"png-bytes", request=request)
+
+        client = FakeClient()
+        content = await _download_result_layer(client, "https://example.test/layer.png", 1, 1)
+
+        self.assertEqual(content, b"png-bytes")
+        self.assertEqual(client.calls, 2)
 
 
 if __name__ == "__main__":
