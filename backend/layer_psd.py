@@ -79,9 +79,13 @@ def export_psd(manifest_path: Path, out_psd: Path | None = None) -> Path:
             bg_layer = psd.create_pixel_layer(bg_img, name="00 background", top=0, left=0)
             psd.append(bg_layer)
 
-    # 前景图层：按 index 升序追加，index 小的在下层（更靠近背景）
+    # 前景图层：按 index 升序追加，index 小的在下层（更靠近背景）。
+    # Worker 会把背景也放入 layers 清单，方便前端/下游完整消费；背景本身
+    # 已经通过 manifest.background 写入，不能在这里重复追加。
     layers = sorted(manifest.get("layers", []), key=lambda l: int(l.get("index", 0)))
     for layer in layers:
+        if layer.get("is_background"):
+            continue
         layer_path = out_dir / layer["path"]
         if not layer_path.exists():
             continue

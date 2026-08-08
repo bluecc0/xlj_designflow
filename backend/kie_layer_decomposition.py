@@ -11,6 +11,7 @@ import json
 import logging
 import mimetypes
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -118,6 +119,7 @@ class KieLayerDecompositionClient:
         output_format: str = "png",
         timeout_seconds: int = 900,
         poll_interval_seconds: float = 3.0,
+        input_download_retries: int = 1,
     ) -> None:
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "https://api.kie.ai").rstrip("/")
@@ -127,6 +129,7 @@ class KieLayerDecompositionClient:
         self.output_format = str(output_format or "png").strip().lower()
         self.timeout_seconds = max(60, int(timeout_seconds or 900))
         self.poll_interval_seconds = max(1.0, float(poll_interval_seconds or 3.0))
+        self.input_download_retries = max(0, int(input_download_retries or 0))
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -306,9 +309,33 @@ class KieLayerDecompositionClient:
             follow_redirects=True,
             trust_env=False,
         ) as client:
-            image_url = await self.upload_image(client, image_path, upload_filename)
-            task_id = await self.create_task(client, image_url=image_url, prompt=prompt)
-            result_layers, task_data = await self.poll_task(client, task_id)
+            last_error: KieLayerDecompositionError | None = None
+            attempts = self.input_download_retries + 1
+            for attempt in range(attempts):
+                # Kie can cache an uploaded filename. A fresh name makes the
+                # retry point to a new object instead of the failed one.
+                retry_filename = upload_filename
+                if retry_filename and attempt:
+                    path = Path(retry_filename)
+                    retry_filename = f"{path.stem}-retry-{uuid.uuid4().hex[:8]}{path.suffix}"
+                image_url = await self.upload_image(client, image_path, retry_filename)
+                task_id = await self.create_task(client, image_url=image_url, prompt=prompt)
+                try:
+                    result_layers, task_data = await self.poll_task(client, task_id)
+                    break
+                except KieLayerDecompositionError as exc:
+                    last_error = exc
+                    retryable = "Timeout while downloading url=" in str(exc)
+                    if not retryable or attempt >= attempts - 1:
+                        raise
+                    logger.warning(
+                        "Kie input download timed out task=%s; uploading a fresh source for retry=%s",
+                        task_id,
+                        attempt + 1,
+                    )
+                    await asyncio.sleep(1)
+            else:
+                raise last_error or KieLayerDecompositionError("Kie 图层分离失败")
         return {
             "task_id": task_id,
             "source_url": image_url,

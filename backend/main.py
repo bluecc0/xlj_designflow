@@ -945,12 +945,14 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
             payload=json.dumps({"job_id": job_id, "psd_url": psd_url}, ensure_ascii=False),
         )
     except Exception as exc:
+        task_match = re.search(r"task_id=([A-Za-z0-9_-]+)", str(exc))
         save_ai_image_job(
             job_id=job_id, user_id=user["id"], status="failed",
             model="layer-extract", prompt=prompt, size="",
             provider="kie",
             original_prompt=prompt, resolved_prompt=prompt,
             has_reference=True, error=str(exc), progress=100, created_at=created_at,
+            task_id=task_match.group(1) if task_match else None,
         )
         log_operation(
             user_id=user["id"], username=user.get("username", ""),

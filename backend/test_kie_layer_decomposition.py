@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import io
 import unittest
 
+from PIL import Image
+
 from backend.kie_layer_decomposition import extract_result_layers, extract_result_urls
-from backend.layer_extract_worker import _coerce_bbox, _layer_bbox
+from backend.layer_extract_worker import _coerce_bbox, _layer_bbox, _select_background_index
 
 
 class KieLayerDecompositionHelpersTest(unittest.TestCase):
@@ -81,6 +84,27 @@ class KieLayerDecompositionHelpersTest(unittest.TestCase):
             }
         }
         self.assertEqual(_layer_bbox(layer, 1000, 2000), [10, 20, 110, 220])
+
+    def test_select_background_uses_full_canvas_z_index_zero(self) -> None:
+        image = io.BytesIO()
+        Image.new("RGB", (100, 200), "white").save(image, format="PNG")
+        raw = image.getvalue()
+        layers = [
+            {"z_index": 0, "bytes": raw},
+            {
+                "z_index": 1,
+                "name": "全画布底层背景",
+                "bytes": raw,
+                "bounding_box": {"absolute": [0, 100, 100, 200]},
+            },
+        ]
+        self.assertEqual(_select_background_index(layers, (100, 200)), 0)
+
+    def test_select_background_does_not_stretch_partial_layer(self) -> None:
+        image = io.BytesIO()
+        Image.new("RGB", (50, 50), "white").save(image, format="PNG")
+        layers = [{"z_index": 0, "bytes": image.getvalue()}]
+        self.assertIsNone(_select_background_index(layers, (100, 200)))
 
 
 if __name__ == "__main__":

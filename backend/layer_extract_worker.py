@@ -133,6 +133,45 @@ def _layer_bbox(layer: dict[str, Any], width: int, height: int) -> list[int] | N
     return None
 
 
+def _select_background_index(
+    result_layers: list[dict[str, Any]],
+    source_size: tuple[int, int],
+) -> int | None:
+    """选择 Kie 返回的全画布背景，避免把局部图拉伸成背景。
+
+    当前 Kie 返回的背景通常是无名称、z_index=0 的全画布 PNG；部分响应
+    还会额外返回带 bounding_box 的局部背景（例如地面），后者必须保留为
+    普通前景层，不能覆盖主背景。
+    """
+    width, height = source_size
+    full_canvas_without_bbox: list[int] = []
+    full_canvas_with_hint: list[int] = []
+    for index, layer in enumerate(result_layers):
+        raw = layer.get("bytes")
+        if not raw or _image_size(raw) != source_size:
+            continue
+        bbox = _layer_bbox(layer, width, height)
+        try:
+            z_index = int(layer.get("z_index", index))
+        except (TypeError, ValueError):
+            z_index = index
+        if z_index == 0:
+            return index
+        if bbox is None:
+            full_canvas_without_bbox.append(index)
+        text = " ".join(
+            str(layer.get(key) or "").lower()
+            for key in ("name", "kind", "description")
+        )
+        if any(marker in text for marker in ("background", "背景", "底图", "场景")):
+            full_canvas_with_hint.append(index)
+    if full_canvas_without_bbox:
+        return full_canvas_without_bbox[0]
+    if full_canvas_with_hint:
+        return full_canvas_with_hint[0]
+    return None
+
+
 def _prepare_background(raw: bytes | None, source: Image.Image, width: int, height: int, output: Path) -> str:
     source_rgba = source.convert("RGBA")
     if raw:
@@ -207,6 +246,7 @@ async def _run_remote_decomposition(source_copy: Path) -> dict[str, Any]:
         output_format=settings.kie_layer_output_format,
         timeout_seconds=settings.kie_timeout_seconds,
         poll_interval_seconds=settings.kie_poll_interval_seconds,
+        input_download_retries=settings.kie_input_download_retries,
     )
     # Kie 文档提示相同 fileName 可能覆盖并命中旧缓存；job 目录名保证每次输入唯一。
     upload_filename = f"designflow-layer-{source_copy.parent.name}.png"
@@ -266,24 +306,8 @@ def main() -> int:
     # Kie 的 layers_data 通常以 z_index=0 的全画布图作为底图；不再根据
     # 外部模型预估数量匹配，而是完整消费 Kie 返回的所有图层。
     source_size = (source_width, source_height)
-    background_index = next(
-        (
-            index for index, layer in enumerate(result_layers)
-            if _layer_bbox(layer, source_width, source_height) is None
-            and _image_size(layer["bytes"]) == source_size
-        ),
-        None,
-    )
-    if background_index is None:
-        background_index = next(
-            (
-                index for index, layer in enumerate(result_layers)
-                if int(layer.get("z_index", index)) == 0
-                and _image_size(layer["bytes"]) == source_size
-            ),
-            0,
-        )
-    background_layer = result_layers[background_index]
+    background_index = _select_background_index(result_layers, source_size)
+    background_layer = result_layers[background_index] if background_index is not None else {}
     background_bytes = background_layer.get("bytes")
     foreground_layers = [
         layer for index, layer in enumerate(result_layers)
@@ -294,7 +318,29 @@ def main() -> int:
     background_status = _prepare_background(
         background_bytes, source, source_width, source_height, background_path
     )
-    layers: list[dict[str, Any]] = []
+    try:
+        background_z_index = int(background_layer.get("z_index", 0)) if background_layer else 0
+    except (TypeError, ValueError):
+        background_z_index = 0
+    background_manifest_layer = {
+        "id": "background",
+        "name": str(background_layer.get("name") or "背景"),
+        "kind": "kie-background" if background_index is not None else "source-background",
+        "index": 0,
+        "z_index": background_z_index,
+        "path": background_path.name,
+        "bbox": [0, 0, source_width, source_height],
+        "x": 0,
+        "y": 0,
+        "width": source_width,
+        "height": source_height,
+        "opacity": 1.0,
+        "visible": True,
+        "locked": False,
+        "is_background": True,
+        "source_layer_index": background_index,
+    }
+    layers: list[dict[str, Any]] = [background_manifest_layer]
     for index, layer in enumerate(foreground_layers, start=1):
         raw = layer["bytes"]
         name = _safe_filename(layer.get("name", "foreground"), f"layer-{index:02d}")
@@ -318,7 +364,8 @@ def main() -> int:
             "path": background_path.name,
             "completedPath": background_path.name,
             "status": background_status,
-            "provider": "kie",
+            "provider": "kie" if background_index is not None else "source",
+            "layer": background_manifest_layer,
         },
         "layers": layers,
         "layerExtraction": {

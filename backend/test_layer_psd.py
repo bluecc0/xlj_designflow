@@ -21,6 +21,13 @@ class LayerPsdExportTest(unittest.TestCase):
                 "background": {"completedPath": "background.png"},
                 "layers": [
                     {
+                        "index": 0,
+                        "name": "背景",
+                        "kind": "kie-background",
+                        "path": "background.png",
+                        "is_background": True,
+                    },
+                    {
                         "index": 1,
                         "name": "主图",
                         "kind": "kie-layer",
