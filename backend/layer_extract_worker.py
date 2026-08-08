@@ -99,9 +99,16 @@ async def _download_result_layers(
         for index, layer in enumerate(result_layers, start=1):
             url = str(layer.get("url") or "").strip()
             if not url:
-                raise RuntimeError(f"Kie 图层 {index} 缺少图片 URL")
+                logger.warning("Kie 图层 %s 缺少图片 URL，跳过", index)
+                continue
             item = dict(layer)
-            item["bytes"] = await _download_result_layer(client, url, index, retries)
+            try:
+                item["bytes"] = await _download_result_layer(client, url, index, retries)
+            except RuntimeError as exc:
+                # A single expired result URL should not discard the other
+                # layers when Kie returned a usable multi-layer result.
+                logger.warning("Kie 图层 %s 下载失败，跳过: %s", index, exc)
+                continue
             downloaded.append(item)
     return downloaded
 
@@ -122,6 +129,31 @@ def _image_size(raw: bytes) -> tuple[int, int] | None:
             return image.size
     except Exception:
         return None
+
+
+def _scale_bbox(
+    bbox: list[int],
+    coordinate_size: tuple[int, int],
+    target_size: tuple[int, int],
+) -> list[int] | None:
+    coordinate_width, coordinate_height = coordinate_size
+    target_width, target_height = target_size
+    if min(coordinate_width, coordinate_height, target_width, target_height) <= 0:
+        return None
+    if coordinate_size == target_size:
+        return bbox
+    scale_x = target_width / coordinate_width
+    scale_y = target_height / coordinate_height
+    return _coerce_bbox(
+        [
+            bbox[0] * scale_x,
+            bbox[1] * scale_y,
+            bbox[2] * scale_x,
+            bbox[3] * scale_y,
+        ],
+        target_width,
+        target_height,
+    )
 
 
 def _coerce_bbox(value: Any, width: int, height: int, normalized: bool = False) -> list[int] | None:
@@ -145,21 +177,27 @@ def _coerce_bbox(value: Any, width: int, height: int, normalized: bool = False) 
     return [x1, y1, x2, y2]
 
 
-def _layer_bbox(layer: dict[str, Any], width: int, height: int) -> list[int] | None:
+def _layer_bbox(
+    layer: dict[str, Any],
+    width: int,
+    height: int,
+    coordinate_size: tuple[int, int] | None = None,
+) -> list[int] | None:
+    coordinate_width, coordinate_height = coordinate_size or (width, height)
     bounding_box = layer.get("bounding_box")
     if isinstance(bounding_box, dict):
         absolute = bounding_box.get("absolute") or bounding_box.get("pixel")
-        bbox = _coerce_bbox(absolute, width, height)
+        bbox = _coerce_bbox(absolute, coordinate_width, coordinate_height)
         if bbox:
-            return bbox
+            return _scale_bbox(bbox, (coordinate_width, coordinate_height), (width, height))
         normalized = bounding_box.get("normalized")
-        bbox = _coerce_bbox(normalized, width, height, normalized=True)
+        bbox = _coerce_bbox(normalized, coordinate_width, coordinate_height, normalized=True)
         if bbox:
-            return bbox
+            return _scale_bbox(bbox, (coordinate_width, coordinate_height), (width, height))
     for key in ("bbox", "box", "coordinates"):
-        bbox = _coerce_bbox(layer.get(key), width, height)
+        bbox = _coerce_bbox(layer.get(key), coordinate_width, coordinate_height)
         if bbox:
-            return bbox
+            return _scale_bbox(bbox, (coordinate_width, coordinate_height), (width, height))
     return None
 
 
@@ -174,31 +212,20 @@ def _select_background_index(
     普通前景层，不能覆盖主背景。
     """
     width, height = source_size
-    full_canvas_without_bbox: list[int] = []
-    full_canvas_with_hint: list[int] = []
     for index, layer in enumerate(result_layers):
         raw = layer.get("bytes")
-        if not raw or _image_size(raw) != source_size:
+        if not raw:
             continue
         bbox = _layer_bbox(layer, width, height)
         try:
             z_index = int(layer.get("z_index", index))
         except (TypeError, ValueError):
             z_index = index
-        if z_index == 0:
+        # Kie identifies the full-canvas output as z_index=0. Its output
+        # resolution may differ from the uploaded image, so dimensions and
+        # aspect ratio must not gate background selection.
+        if z_index == 0 and bbox is None:
             return index
-        if bbox is None:
-            full_canvas_without_bbox.append(index)
-        text = " ".join(
-            str(layer.get(key) or "").lower()
-            for key in ("name", "kind", "description")
-        )
-        if any(marker in text for marker in ("background", "背景", "底图", "场景")):
-            full_canvas_with_hint.append(index)
-    if full_canvas_without_bbox:
-        return full_canvas_without_bbox[0]
-    if full_canvas_with_hint:
-        return full_canvas_with_hint[0]
     return None
 
 
@@ -222,23 +249,33 @@ def _prepare_foreground(
     source_size: tuple[int, int],
     output: Path,
     index: int,
+    coordinate_size: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     width, height = source_size
     image = _to_rgba(raw)
-    bbox = _layer_bbox(layer, width, height)
+    canvas_size = coordinate_size or source_size
+    bbox = _layer_bbox(layer, width, height, coordinate_size=canvas_size)
 
     # Kie 正常会为裁切图返回 bounding_box。若返回全画布透明图，alpha
-    # bbox 可以安全地还原位置；非全画布且没有坐标时不能猜位置，直接失败，
-    # 避免生成一个看似成功但图层错位的 PSD。
+    # bbox 可以安全地还原位置；响应缺少坐标时使用有限的本地兜底位置，
+    # 保证多图层成功响应仍能生成可打开的 PSD。
     if bbox is None and image.size == (width, height):
         alpha_bbox = image.getchannel("A").getbbox()
         if alpha_bbox and alpha_bbox != (0, 0, width, height):
             bbox = list(alpha_bbox)
     if bbox is None:
-        raise RuntimeError(
-            f"Kie 图层缺少 bounding_box，无法安全定位：{layer.get('name') or index}"
-        )
+        # A successful Kie response with multiple images is still useful even
+        # when one layer omits coordinates. Keep the PSD usable by placing a
+        # full-canvas result on the canvas, or an unlocated crop at the origin.
+        if image.size == canvas_size:
+            bbox = [0, 0, width, height]
+        else:
+            bbox = [0, 0, min(width, image.width), min(height, image.height)]
 
+    # Kie may return full-canvas layers at its own output size. Normalize them
+    # before applying the source-space bounding box.
+    if image.size == canvas_size and canvas_size != source_size:
+        image = image.resize(source_size, Image.LANCZOS)
     if image.size == (width, height) and tuple(bbox) != (0, 0, width, height):
         image = image.crop(tuple(bbox))
 
@@ -341,10 +378,10 @@ def main() -> int:
     # 外部模型预估数量匹配，而是完整消费 Kie 返回的所有图层。
     source_size = (source_width, source_height)
     background_index = _select_background_index(result_layers, source_size)
-    if background_index is None:
+    if background_index is None and len(result_layers) <= 2:
         _emit({
             "ok": False,
-            "error": "Kie 任务未返回完整画布背景，无法安全生成 PSD",
+            "error": f"Kie 任务只返回 {len(result_layers)} 个图层，无法组成 PSD",
             "background_status": "missing",
             "decomposition_provider": "kie",
             "kie_task_id": remote["kie"].get("task_id", ""),
@@ -384,11 +421,21 @@ def main() -> int:
         "source_layer_index": background_index,
     }
     layers: list[dict[str, Any]] = [background_manifest_layer]
+    coordinate_size = _image_size(background_bytes) or source_size
     for index, layer in enumerate(foreground_layers, start=1):
         raw = layer["bytes"]
         name = _safe_filename(layer.get("name", "foreground"), f"layer-{index:02d}")
         layer_path = out_dir / f"{index:02d}-{name}.png"
-        layers.append(_prepare_foreground(raw, layer, source_size, layer_path, index))
+        layers.append(
+            _prepare_foreground(
+                raw,
+                layer,
+                source_size,
+                layer_path,
+                index,
+                coordinate_size=coordinate_size,
+            )
+        )
 
     serialized_result_layers = [
         {key: value for key, value in layer.items() if key != "bytes"}

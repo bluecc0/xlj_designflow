@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import io
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 from PIL import Image
@@ -11,7 +14,9 @@ from backend.kie_layer_decomposition import extract_result_layers, extract_resul
 from backend.layer_extract_worker import (
     _coerce_bbox,
     _download_result_layer,
+    _download_result_layers,
     _layer_bbox,
+    _prepare_foreground,
     _select_background_index,
 )
 
@@ -106,14 +111,68 @@ class KieLayerDecompositionHelpersTest(unittest.TestCase):
         ]
         self.assertEqual(_select_background_index(layers, (100, 200)), 0)
 
-    def test_select_background_does_not_stretch_partial_layer(self) -> None:
+    def test_select_background_rejects_explicit_partial_layer(self) -> None:
         image = io.BytesIO()
         Image.new("RGB", (50, 50), "white").save(image, format="PNG")
-        layers = [{"z_index": 0, "bytes": image.getvalue()}]
+        layers = [{
+            "z_index": 0,
+            "bytes": image.getvalue(),
+            "bounding_box": {"absolute": [0, 0, 50, 50]},
+        }]
         self.assertIsNone(_select_background_index(layers, (100, 200)))
+
+    def test_select_background_accepts_kie_output_without_size_check(self) -> None:
+        image = io.BytesIO()
+        Image.new("RGB", (864, 1000), "white").save(image, format="PNG")
+        layers = [{"z_index": 0, "bytes": image.getvalue()}]
+
+        self.assertEqual(_select_background_index(layers, (726, 968)), 0)
+
+    def test_layer_bbox_scales_kie_coordinates_to_source_canvas(self) -> None:
+        layer = {"bounding_box": {"absolute": [171, 439, 747, 700]}}
+
+        self.assertEqual(
+            _layer_bbox(layer, 726, 968, coordinate_size=(864, 1152)),
+            [144, 369, 628, 588],
+        )
+
+    def test_foreground_without_bbox_is_kept_at_origin(self) -> None:
+        image = io.BytesIO()
+        Image.new("RGBA", (40, 30), (255, 0, 0, 255)).save(image, format="PNG")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "layer.png"
+            manifest_layer = _prepare_foreground(
+                image.getvalue(), {}, (100, 80), output, 1
+            )
+
+            self.assertEqual(manifest_layer["bbox"], [0, 0, 40, 30])
+            self.assertTrue(output.exists())
 
 
 class KieResultDownloadRetryTest(unittest.IsolatedAsyncioTestCase):
+    async def test_skips_one_failed_layer_when_other_layers_download(self) -> None:
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def get(self, url: str) -> httpx.Response:
+                request = httpx.Request("GET", url)
+                if "bad" in url:
+                    return httpx.Response(404, request=request)
+                return httpx.Response(200, content=b"png-bytes", request=request)
+
+        with patch("backend.layer_extract_worker.httpx.AsyncClient", return_value=FakeClient()):
+            layers = await _download_result_layers(
+                [{"url": "https://example.test/bad.png"}, {"url": "https://example.test/good.png"}],
+                60,
+            )
+
+        self.assertEqual(len(layers), 1)
+        self.assertEqual(layers[0]["url"], "https://example.test/good.png")
+
     async def test_retries_server_error_before_success(self) -> None:
         class FakeClient:
             def __init__(self) -> None:
