@@ -8054,21 +8054,24 @@ const Composer = ({
     onClick: () => removeRefImage(idx),
     style: {
       position: 'absolute',
-      top: -5,
-      right: -5,
-      width: 15,
-      height: 15,
+      top: 0,
+      right: 0,
+      transform: 'translate(50%, -50%)',
+      width: 16,
+      height: 16,
+      padding: 0,
       borderRadius: 99,
-      background: 'var(--ink-2)',
+      background: 'var(--ink)',
       color: 'white',
       display: 'grid',
       placeItems: 'center',
-      fontSize: 10,
-      lineHeight: 1,
       cursor: 'pointer',
       border: 'none'
     }
-  }, "\xD7"))), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement(I.close, {
+    size: 9,
+    stroke: 2.4
+  })))), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 10,
       color: 'var(--ink-3)'

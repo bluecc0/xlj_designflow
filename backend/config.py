@@ -90,6 +90,18 @@ class Settings:
     vlm_base_url: str = os.getenv("VLM_BASE_URL", "") or ai_image_base_url
     vlm_api_key: str = os.getenv("VLM_API_KEY", "") or ai_image_api_key
 
+    # Kie Seedream 图层分离；key 留空则转 PSD 功能明确不可用
+    kie_base_url: str = os.getenv("KIE_BASE_URL", "https://api.kie.ai")
+    kie_upload_base_url: str = os.getenv("KIE_UPLOAD_BASE_URL", "https://kieai.redpandaai.co")
+    kie_api_key: str = os.getenv("KIE_API_KEY", "")
+    kie_layer_model: str = os.getenv("KIE_LAYER_MODEL", "seedream/5-pro-layer-decomposition")
+    kie_layer_size: str = os.getenv("KIE_LAYER_SIZE", "auto")
+    kie_layer_output_format: str = os.getenv("KIE_LAYER_OUTPUT_FORMAT", "png")
+    kie_timeout_seconds: int = int(os.getenv("KIE_TIMEOUT_SECONDS", "900"))
+    kie_poll_interval_seconds: float = float(os.getenv("KIE_POLL_INTERVAL_SECONDS", "3"))
+    kie_input_download_retries: int = int(os.getenv("KIE_INPUT_DOWNLOAD_RETRIES", "1"))
+    kie_result_download_retries: int = int(os.getenv("KIE_RESULT_DOWNLOAD_RETRIES", "1"))
+
     # agent mode
     agent_llm_model: str = os.getenv("AGENT_LLM_MODEL", "") or "gpt-5.5"
     agent_llm_base_url: str = os.getenv("AGENT_LLM_BASE_URL", "") or cliproxy_base_url
@@ -157,7 +169,7 @@ class Settings:
         self.allowed_login_users = self._load_login_users()
 
         # 统一补协议前缀，避免 ai_image_base_url 等配置没有 http://
-        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "adobe2api_base_url", "cliproxy_base_url", "chat_llm_base_url", "skill_llm_base_url"):
+        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "kie_base_url", "kie_upload_base_url", "adobe2api_base_url", "cliproxy_base_url", "chat_llm_base_url", "skill_llm_base_url"):
             _val = getattr(self, _key, "")
             if _val and not _val.startswith("http"):
                 setattr(self, _key, "https://" + _val)
