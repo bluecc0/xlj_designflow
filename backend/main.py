@@ -927,12 +927,17 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
             task_id=payload.get("kie_task_id") or None,
             has_reference=True, progress=100, created_at=created_at,
         )
-        log_operation(
-            user_id=user["id"], username=user.get("username", ""),
-            action="ai_image_layer_extract",
-            detail=f"job={job_id[:8]} result=done layers={len(payload.get('layers', []))}",
-            payload=json.dumps({"job_id": job_id, "psd_url": psd_url}, ensure_ascii=False),
-        )
+        # 任务已经持久化为 done；操作日志只能 best-effort，不能因为
+        # SQLite 短暂锁定或日志表写入失败而进入下面的 failed 收尾路径。
+        try:
+            log_operation(
+                user_id=user["id"], username=user.get("username", ""),
+                action="ai_image_layer_extract",
+                detail=f"job={job_id[:8]} result=done layers={len(payload.get('layers', []))}",
+                payload=json.dumps({"job_id": job_id, "psd_url": psd_url}, ensure_ascii=False),
+            )
+        except Exception:
+            logger.exception("layer-extract success operation log failed: job=%s", job_id)
     except Exception as exc:
         task_match = re.search(r"task_id=([A-Za-z0-9_-]+)", str(exc))
         save_ai_image_job(
