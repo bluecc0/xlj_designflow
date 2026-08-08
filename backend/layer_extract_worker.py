@@ -1,105 +1,226 @@
-"""图片转分层 PSD 子进程 worker（方案第 5-10 节）。
+"""使用 Kie Seedream 5 Pro 图层分离结果导出 PSD。
 
 链路：
-1. 读原图尺寸 → 推 ratio
-2. 调 gpt-image-2 生成分割图（方案 §5.3 prompt + §5.2 调色板）
-3. 下载分割图到 job 目录
-4. layer_split.split_layers 切层
-5. layer_psd.export_psd 导出 PSD
-6. stdout 输出一行 JSON：{ok, psd_path, manifest_path, layers, segmentation_url, ...}
+1. 把原图提交给 ``seedream/5-pro-layer-decomposition``；
+2. 下载 Kie 返回的图层图片、z_index 和 bounding_box；
+3. 按 Kie 返回的坐标生成 manifest，再复用 layer_psd 导出 PSD。
 
-作为子进程跑（镜像 vectorize_worker），避免阻塞事件循环且隔离重依赖。
+这个文件由 backend.main 作为子进程调用。stdout 最后一行必须是 JSON，诊断
+信息写入 stderr，避免破坏主进程的结果解析。
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import io
 import json
-import shutil
+import logging
+import re
 import sys
 from pathlib import Path
+from typing import Any
 
+import httpx
 from PIL import Image
 
-from backend.ai_image import generate_image_with_reference, _OUTPUT_DIR
-from backend.layer_split import split_layers
+from backend.config import settings
+from backend.kie_layer_decomposition import (
+    KieLayerDecompositionClient,
+    KieLayerDecompositionError,
+)
 from backend.layer_psd import export_psd
 
 
-# 方案 §5.2 推荐前景调色板
-PREFERRED_PALETTE = [
-    "#ff0066", "#66ff00", "#00ffff", "#0066ff", "#9933ff",
-    "#ff6600", "#996633", "#ffcc00", "#00aa66", "#cc33ff",
-]
+logger = logging.getLogger("layer_extract_worker")
 
-# 方案 §5.3 分割 prompt 模板
-SEGMENTATION_PROMPT = """You are preparing a design-layer segmentation map for converting the attached image into editable PSD-like layers.
-
-Create one low-detail hard-edged flat-color segmentation map.
-
-Rules:
-1. Preserve the exact source aspect ratio.
-2. Render the entire background as one solid black region: #000000.
-3. Use one distinct non-black solid color for each independently editable foreground object or logical text group.
-4. Default to object-level granularity, not part-level granularity.
-5. A complete object must stay one region even if it contains texture, labels, highlights, shadows, reflections, or printed details.
-6. Split only things a designer would reasonably move or edit independently.
-7. Text areas should become one filled silhouette or block per logical text group. Do not recreate readable text unless the letter shapes themselves are the object boundary.
-8. Do not include labels, legends, icons, gradients, shadows, textures, readable words, source artwork, or antialias-like details in the segmentation map.
-9. Do not reuse the same or similar foreground color for unrelated objects.
-10. Do not leave important foreground regions uncolored.
-
-Preferred foreground colors:
-#ff0066, #66ff00, #00ffff, #0066ff, #9933ff, #ff6600, #996633, #ffcc00, #00aa66, #cc33ff.
-
-Output only the segmentation map as a PNG.
-"""
-
-# 方案 §7.3 背景补全 prompt 模板
-BACKGROUND_COMPLETION_PROMPT = """You are repairing the background plate for a layered PSD export.
-
-Inputs:
-- Image 1: the original source image. Use it only as reference for lighting, perspective, colors, shadows, texture direction, and scene context.
-- Image 2: the residual background plate after foreground objects/text were removed. This is the target image to repair.
-
-Goal:
-Return one full-frame clean background plate that looks like image 2 after all transparent, blank, cut-out, or damaged regions have been inpainted.
-
-Critical rules:
-1. Treat image 2 as the main canvas. Preserve every valid pixel from image 2 as much as possible.
-2. Repair only missing/transparent/blank/cut-out/damaged regions in image 2.
-3. Do not restore removed foreground objects, products, people, hands, props, badges, labels, logos, icons, readable text, or product shadows that should belong to separate layers.
-4. Continue the surrounding background naturally: match texture, gradients, fabric/wood/paper patterns, lighting, perspective, blur, grain, and color temperature.
-5. If a removed object left a hole over a complex surface, synthesize the hidden background surface, not the object.
-6. The result must be a single flattened RGB/RGBA background image with no alpha holes.
-7. Keep the same composition, aspect ratio, and full-frame canvas. Do not crop, zoom, rotate, add borders, add captions, or create side-by-side comparisons.
-8. Output only the repaired background plate as a PNG.
-"""
-
-# 候选 ratio 及其数值宽高比，用于匹配原图
-_RATIO_CANDIDATES = [
-    ("1:1", 1.0),
-    ("3:4", 3 / 4),
-    ("4:3", 4 / 3),
-    ("5:4", 5 / 4),
-    ("4:5", 4 / 5),
-    ("9:16", 9 / 16),
-    ("16:9", 16 / 9),
-    ("2:3", 2 / 3),
-    ("3:2", 3 / 2),
-]
+# 这是发给 Kie 分层模型的固定任务说明，不是 VLM 预识别结果，也不包含
+# 前端或本地推断的图层数量、坐标。元素识别和坐标返回全部由 Kie 完成。
+LAYER_DECOMPOSITION_PROMPT = (
+    "Separate this image into independent editable Photoshop layers. "
+    "Return one full-canvas background layer first, followed by each visually "
+    "independent foreground object, person, product, text group, logo, shadow, "
+    "or decoration. Preserve the original canvas and composition. Return exact "
+    "bounding boxes and z-order for every layer, keep foreground layers tightly "
+    "cropped with transparency outside visible content, and do not invent or "
+    "redesign any content."
+)
 
 
-def _pick_ratio(width: int, height: int) -> str:
-    if not width or not height:
-        return "1:1"
-    target = width / height
-    best = min(_RATIO_CANDIDATES, key=lambda kv: abs(kv[1] - target))
-    return best[0]
-
-
-def _emit(payload: dict) -> None:
+def _emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+async def _download_result_layers(
+    result_layers: list[dict[str, Any]],
+    timeout_seconds: int,
+) -> list[dict[str, Any]]:
+    timeout = httpx.Timeout(max(60, int(timeout_seconds or 900)), connect=30.0)
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        # Kie 的结果 URL 由服务端直接下载；不要继承本机代理，避免代理
+        # 返回 503 或拦截对象存储 URL，导致 PSD 任务误报失败。
+        trust_env=False,
+    ) as client:
+        downloaded: list[dict[str, Any]] = []
+        for index, layer in enumerate(result_layers, start=1):
+            url = str(layer.get("url") or "").strip()
+            if not url:
+                raise RuntimeError(f"Kie 图层 {index} 缺少图片 URL")
+            response = await client.get(url)
+            if response.status_code != 200 or not response.content:
+                raise RuntimeError(f"下载 Kie 图层 {index} 失败: HTTP {response.status_code}")
+            item = dict(layer)
+            item["bytes"] = response.content
+            downloaded.append(item)
+    return downloaded
+
+
+def _safe_filename(value: str, fallback: str) -> str:
+    clean = re.sub(r"[^\w\-\u4e00-\u9fff]+", "-", str(value or "").strip()).strip("-")
+    return clean[:48] or fallback
+
+
+def _to_rgba(raw: bytes) -> Image.Image:
+    with Image.open(io.BytesIO(raw)) as image:
+        return image.convert("RGBA")
+
+
+def _image_size(raw: bytes) -> tuple[int, int] | None:
+    try:
+        with Image.open(io.BytesIO(raw)) as image:
+            return image.size
+    except Exception:
+        return None
+
+
+def _coerce_bbox(value: Any, width: int, height: int, normalized: bool = False) -> list[int] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        numbers = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return None
+    if normalized:
+        scale_x = width if max(abs(number) for number in numbers) <= 1 else width / 1000
+        scale_y = height if max(abs(number) for number in numbers) <= 1 else height / 1000
+        numbers = [numbers[0] * scale_x, numbers[1] * scale_y, numbers[2] * scale_x, numbers[3] * scale_y]
+    x1, y1, x2, y2 = [round(number) for number in numbers]
+    x1 = max(0, min(width - 1, x1))
+    y1 = max(0, min(height - 1, y1))
+    x2 = max(x1 + 1, min(width, x2))
+    y2 = max(y1 + 1, min(height, y2))
+    if x2 - x1 < 2 or y2 - y1 < 2:
+        return None
+    return [x1, y1, x2, y2]
+
+
+def _layer_bbox(layer: dict[str, Any], width: int, height: int) -> list[int] | None:
+    bounding_box = layer.get("bounding_box")
+    if isinstance(bounding_box, dict):
+        absolute = bounding_box.get("absolute") or bounding_box.get("pixel")
+        bbox = _coerce_bbox(absolute, width, height)
+        if bbox:
+            return bbox
+        normalized = bounding_box.get("normalized")
+        bbox = _coerce_bbox(normalized, width, height, normalized=True)
+        if bbox:
+            return bbox
+    for key in ("bbox", "box", "coordinates"):
+        bbox = _coerce_bbox(layer.get(key), width, height)
+        if bbox:
+            return bbox
+    return None
+
+
+def _prepare_background(raw: bytes | None, source: Image.Image, width: int, height: int, output: Path) -> str:
+    source_rgba = source.convert("RGBA")
+    if raw:
+        image = _to_rgba(raw)
+        if image.size != (width, height):
+            image = image.resize((width, height), Image.LANCZOS)
+        if image.getchannel("A").getextrema()[0] < 255:
+            image = Image.alpha_composite(source_rgba, image)
+    else:
+        image = source_rgba
+    image.convert("RGB").save(output, "PNG")
+    return "ready" if raw else "source-fallback"
+
+
+def _prepare_foreground(
+    raw: bytes,
+    layer: dict[str, Any],
+    source_size: tuple[int, int],
+    output: Path,
+    index: int,
+) -> dict[str, Any]:
+    width, height = source_size
+    image = _to_rgba(raw)
+    bbox = _layer_bbox(layer, width, height)
+
+    # Kie 正常会为裁切图返回 bounding_box。若返回全画布透明图，alpha
+    # bbox 可以安全地还原位置；非全画布且没有坐标时不能猜位置，直接失败，
+    # 避免生成一个看似成功但图层错位的 PSD。
+    if bbox is None and image.size == (width, height):
+        alpha_bbox = image.getchannel("A").getbbox()
+        if alpha_bbox and alpha_bbox != (0, 0, width, height):
+            bbox = list(alpha_bbox)
+    if bbox is None:
+        raise RuntimeError(
+            f"Kie 图层缺少 bounding_box，无法安全定位：{layer.get('name') or index}"
+        )
+
+    if image.size == (width, height) and tuple(bbox) != (0, 0, width, height):
+        image = image.crop(tuple(bbox))
+
+    target_size = (max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1]))
+    if image.size != target_size:
+        image = image.resize(target_size, Image.LANCZOS)
+    image.save(output, "PNG")
+    return {
+        "id": f"layer-{index:02d}",
+        "name": str(layer.get("name") or f"layer-{index:02d}"),
+        "kind": str(layer.get("kind") or "kie-layer"),
+        "index": index,
+        "z_index": int(layer.get("z_index", index)),
+        "path": output.name,
+        "bbox": bbox,
+        "x": bbox[0],
+        "y": bbox[1],
+        "width": target_size[0],
+        "height": target_size[1],
+        "opacity": 1.0,
+        "visible": True,
+        "locked": False,
+    }
+
+
+async def _run_remote_decomposition(source_copy: Path) -> dict[str, Any]:
+    if not settings.kie_api_key:
+        raise KieLayerDecompositionError("未配置 KIE_API_KEY，请先在 .env 中填写")
+    client = KieLayerDecompositionClient(
+        api_key=settings.kie_api_key,
+        base_url=settings.kie_base_url,
+        upload_base_url=settings.kie_upload_base_url,
+        model=settings.kie_layer_model,
+        size=settings.kie_layer_size,
+        output_format=settings.kie_layer_output_format,
+        timeout_seconds=settings.kie_timeout_seconds,
+        poll_interval_seconds=settings.kie_poll_interval_seconds,
+    )
+    # Kie 文档提示相同 fileName 可能覆盖并命中旧缓存；job 目录名保证每次输入唯一。
+    upload_filename = f"designflow-layer-{source_copy.parent.name}.png"
+    # Kie 负责元素识别和坐标返回；这里仅提供固定任务说明，不做 VLM 预识别。
+    result = await client.run(
+        source_copy,
+        prompt=LAYER_DECOMPOSITION_PROMPT,
+        upload_filename=upload_filename,
+    )
+    result_layers = await _download_result_layers(result["result_layers"], settings.kie_timeout_seconds)
+    return {
+        "kie": result,
+        "result_layers": result_layers,
+    }
 
 
 def main() -> int:
@@ -112,158 +233,131 @@ def main() -> int:
     src_path = Path(args.src)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-
     try:
-        with Image.open(src_path) as im:
-            src_w, src_h = im.width, im.height
-            src_mode = im.mode
+        with Image.open(src_path) as image:
+            source = image.convert("RGBA")
+            source_width, source_height = source.size
     except Exception as exc:
         _emit({"ok": False, "error": f"读取原图失败: {exc}"})
         return 1
 
-    # 1. 准备原图副本到 job 目录（manifest 引用 source.png）
     source_copy = out_dir / "source.png"
-    try:
-        Image.open(src_path).convert("RGBA").save(source_copy, "PNG")
-    except Exception as exc:
-        _emit({"ok": False, "error": f"原图转 PNG 失败: {exc}"})
-        return 1
+    source.save(source_copy, "PNG")
 
-    # 2. 调 gpt-image-2 生成分割图
-    ratio = _pick_ratio(src_w, src_h)
     try:
-        with open(source_copy, "rb") as f:
-            src_bytes = f.read()
-        result = asyncio.run(generate_image_with_reference(
-            model="gpt-image-2",
-            prompt=SEGMENTATION_PROMPT,
-            images=[(src_bytes, "source.png")],
-            size=ratio,
-            resolution="1K",
-            user_id=args.user_id,
-        ))
+        remote = asyncio.run(_run_remote_decomposition(source_copy))
+    except (KieLayerDecompositionError, RuntimeError, OSError) as exc:
+        _emit({"ok": False, "error": str(exc)})
+        return 2
     except Exception as exc:
-        _emit({"ok": False, "error": f"生成分割图失败: {exc}"})
+        logger.exception("Kie 图层分离未预期异常")
+        _emit({"ok": False, "error": f"Kie 图层分离异常: {exc}"})
         return 2
 
-    seg_url = result.get("url") or ""
-    if not seg_url.startswith("/ai-images/"):
-        _emit({"ok": False, "error": f"分割图返回 URL 异常: {seg_url}"})
-        return 2
-
-    # 3. 把分割图复制到 job 目录
-    seg_disk = _OUTPUT_DIR / seg_url[len("/ai-images/"):]
-    if not seg_disk.exists():
-        _emit({"ok": False, "error": f"分割图磁盘文件不存在: {seg_disk}"})
-        return 2
-    seg_copy = out_dir / "segmentation.png"
-    shutil.copyfile(seg_disk, seg_copy)
-
-    # 4. 切层
-    try:
-        manifest = split_layers(source_copy, seg_copy, out_dir)
-    except Exception as exc:
-        _emit({"ok": False, "error": f"切层失败: {exc}"})
+    result_layers: list[dict[str, Any]] = remote["result_layers"]
+    if not result_layers:
+        _emit({
+            "ok": False,
+            "error": "Kie 任务成功但没有可下载的图层",
+            "kie_task_id": remote["kie"].get("task_id", ""),
+        })
         return 3
 
-    # 5. 背景补全：给 gpt-image-2 原图 + residual，让它填透明洞（方案 §7）
-    residual_path = out_dir / manifest.get("background", {}).get("residualPath", "00-background-residual.png")
-    completed_path = out_dir / "completed-background.png"
-    background_status = "residual"
-    logs_dir = out_dir / "logs"
-    logs_dir.mkdir(exist_ok=True)
-    bg_log = logs_dir / "background-completion.log"
-    try:
-        if residual_path.exists():
-            with open(source_copy, "rb") as f1, open(residual_path, "rb") as f2:
-                src_bytes = f1.read()
-                residual_bytes = f2.read()
-            bg_log.write_text(f"start background completion, ratio={ratio}, refs=2\n", encoding="utf-8")
-            bg_result = asyncio.run(generate_image_with_reference(
-                model="gpt-image-2",
-                prompt=BACKGROUND_COMPLETION_PROMPT,
-                images=[(src_bytes, "source.png"), (residual_bytes, "residual-background.png")],
-                size=ratio,
-                resolution="1K",
-                user_id=args.user_id,
-            ))
-            bg_url = bg_result.get("url") or ""
-            with open(bg_log, "a", encoding="utf-8") as lf:
-                lf.write(f"model returned url: {bg_url}\n")
-            if bg_url.startswith("/ai-images/"):
-                bg_disk = _OUTPUT_DIR / bg_url[len("/ai-images/"):]
-                if bg_disk.exists():
-                    # 后处理（方案 §7.4）：resize 到原图尺寸、RGBA、透明像素用白色 flatten
-                    bg_img = Image.open(bg_disk).convert("RGBA")
-                    if bg_img.size != (src_w, src_h):
-                        bg_img = bg_img.resize((src_w, src_h), Image.LANCZOS)
-                    # 若仍有透明像素，flatten 到白底
-                    alpha = bg_img.split()[3]
-                    if alpha.getextrema()[0] < 255:
-                        white_bg = Image.new("RGBA", bg_img.size, (255, 255, 255, 255))
-                        bg_img = Image.alpha_composite(white_bg, bg_img)
-                    bg_img.save(completed_path, "PNG")
-                    manifest.setdefault("background", {})["completedPath"] = "completed-background.png"
-                    manifest["background"]["status"] = "ready"
-                    (out_dir / "manifest.json").write_text(
-                        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-                    )
-                    background_status = "ready"
-                    with open(bg_log, "a", encoding="utf-8") as lf:
-                        lf.write(f"completed-background saved, status=ready\n")
-                else:
-                    with open(bg_log, "a", encoding="utf-8") as lf:
-                        lf.write(f"disk file missing: {bg_disk}\n")
-            else:
-                with open(bg_log, "a", encoding="utf-8") as lf:
-                    lf.write(f"url not /ai-images/, got: {bg_url}\n")
-        else:
-            bg_log.write_text(f"residual not found: {residual_path}\n", encoding="utf-8")
-    except Exception as exc:
-        # 背景补全失败不致命，保留 residual（方案 §13.4）
-        import traceback
-        background_status = "failed"
-        manifest.setdefault("background", {})["status"] = "failed"
-        try:
-            (out_dir / "manifest.json").write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-        except Exception:
-            pass
-        err_detail = traceback.format_exc()
-        bg_log.write_text(f"background completion failed: {exc}\n{err_detail}\n", encoding="utf-8")
-        sys.stderr.write(f"背景补全失败，保留 residual: {exc}\n{err_detail}\n")
+    # Kie 的 layers_data 通常以 z_index=0 的全画布图作为底图；不再根据
+    # 外部模型预估数量匹配，而是完整消费 Kie 返回的所有图层。
+    source_size = (source_width, source_height)
+    background_index = next(
+        (
+            index for index, layer in enumerate(result_layers)
+            if _layer_bbox(layer, source_width, source_height) is None
+            and _image_size(layer["bytes"]) == source_size
+        ),
+        None,
+    )
+    if background_index is None:
+        background_index = next(
+            (
+                index for index, layer in enumerate(result_layers)
+                if int(layer.get("z_index", index)) == 0
+                and _image_size(layer["bytes"]) == source_size
+            ),
+            0,
+        )
+    background_layer = result_layers[background_index]
+    background_bytes = background_layer.get("bytes")
+    foreground_layers = [
+        layer for index, layer in enumerate(result_layers)
+        if index != background_index
+    ]
 
-    # 6. 导出 PSD
+    background_path = out_dir / "00-background-kie.png"
+    background_status = _prepare_background(
+        background_bytes, source, source_width, source_height, background_path
+    )
+    layers: list[dict[str, Any]] = []
+    for index, layer in enumerate(foreground_layers, start=1):
+        raw = layer["bytes"]
+        name = _safe_filename(layer.get("name", "foreground"), f"layer-{index:02d}")
+        layer_path = out_dir / f"{index:02d}-{name}.png"
+        layers.append(_prepare_foreground(raw, layer, source_size, layer_path, index))
+
+    serialized_result_layers = [
+        {key: value for key, value in layer.items() if key != "bytes"}
+        for layer in result_layers
+    ]
+
+    manifest = {
+        "jobId": out_dir.name,
+        "source": {
+            "path": source_copy.name,
+            "width": source_width,
+            "height": source_height,
+            "mimeType": "image/png",
+        },
+        "background": {
+            "path": background_path.name,
+            "completedPath": background_path.name,
+            "status": background_status,
+            "provider": "kie",
+        },
+        "layers": layers,
+        "layerExtraction": {
+            "provider": "kie",
+            "model": settings.kie_layer_model,
+            "taskId": remote["kie"].get("task_id", ""),
+            "resultCount": len(result_layers),
+            "resultLayers": serialized_result_layers,
+        },
+    }
+    manifest_path = out_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out_dir / "kie-result.json").write_text(
+        json.dumps({
+            "task_id": remote["kie"].get("task_id", ""),
+            "source_url": remote["kie"].get("source_url", ""),
+            "result_count": len(result_layers),
+            "result_layers": serialized_result_layers,
+            "task": remote["kie"].get("task", {}),
+        }, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
     try:
-        psd_path = export_psd(out_dir / "manifest.json")
+        psd_path = export_psd(manifest_path)
     except Exception as exc:
         _emit({"ok": False, "error": f"PSD 导出失败: {exc}"})
         return 4
 
-    layers_summary = [
-        {
-            "index": l.get("index", 0),
-            "name": l.get("name", ""),
-            "path": l.get("path", ""),
-            "bbox": l.get("bbox", [0, 0, 0, 0]),
-            "x": l.get("x", 0),
-            "y": l.get("y", 0),
-            "width": l.get("width", 0),
-            "height": l.get("height", 0),
-            "segmentationColor": l.get("segmentationColor", ""),
-        }
-        for l in manifest.get("layers", [])
-    ]
-
     _emit({
         "ok": True,
         "psd_path": str(psd_path),
-        "manifest_path": str(out_dir / "manifest.json"),
-        "segmentation_url": seg_url,
-        "source_size": [src_w, src_h],
+        "manifest_path": str(manifest_path),
+        "source_size": [source_width, source_height],
         "background_status": background_status,
-        "layers": layers_summary,
+        "decomposition_provider": "kie",
+        "kie_task_id": remote["kie"].get("task_id", ""),
+        "kie_layers": serialized_result_layers,
+        "layers": layers,
     })
     return 0
 

@@ -1,6 +1,6 @@
 """PSD 导出（方案第 10 节）。
 
-输入：layer_split 产生的 manifest + 输出目录
+输入：图层提取 worker 产生的 manifest + 输出目录
 输出：一份分层 PSD，每个 layer 作为一个 raster 图层，背景为最底层。
 
 使用 psd-tools 1.17+ 的 create_pixel_layer API 写入栅格图层。
@@ -32,6 +32,16 @@ def _flatten_keep_alpha(img: Image.Image) -> Image.Image:
     if img.mode == "RGB":
         return img.convert("RGBA")
     return img.convert("RGBA")
+
+
+def _psd_safe_layer_name(layer: dict, index: int) -> str:
+    """PSD 的旧 Pascal 图层名字段使用 macroman，中文名改用稳定英文兜底。"""
+    raw_name = str(layer.get("name") or "layer").strip()
+    try:
+        raw_name.encode("macroman")
+    except UnicodeEncodeError:
+        raw_name = str(layer.get("kind") or "layer").strip() or "layer"
+    return f"{index:02d} {raw_name[:180]}"
 
 
 def export_psd(manifest_path: Path, out_psd: Path | None = None) -> Path:
@@ -87,7 +97,8 @@ def export_psd(manifest_path: Path, out_psd: Path | None = None) -> Path:
         opacity = float(layer.get("opacity", 1.0))
         opacity_byte = max(0, min(255, int(round(opacity * 255))))
         visible = bool(layer.get("visible", True))
-        name = f"{int(layer.get('index', 0)):02d} {layer.get('name', 'layer')}"
+        index = int(layer.get("index", 0))
+        name = _psd_safe_layer_name(layer, index)
         psd_layer = psd.create_pixel_layer(
             img, name=name, top=y, left=x,
             opacity=opacity_byte, blend_mode=BlendMode.NORMAL,
@@ -95,6 +106,7 @@ def export_psd(manifest_path: Path, out_psd: Path | None = None) -> Path:
         psd_layer.visible = visible
         psd.append(psd_layer)
 
+    # Kie 返回的图层名称可能包含中文，名称已在上面转为 PSD 可编码的稳定兜底名。
     psd.save(str(out_psd))
     return out_psd
 

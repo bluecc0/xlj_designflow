@@ -862,7 +862,11 @@ def _run_local_layer_extract(src_path: Path, out_dir: Path, user_id: str) -> dic
         cwd=str(settings.root_dir),
         capture_output=True,
         text=True,
-        timeout=max(120, int(settings.ai_image_job_timeout_seconds or 600)),
+        timeout=max(
+            120,
+            int(settings.ai_image_job_timeout_seconds or 600),
+            int(settings.kie_timeout_seconds or 900) + 45,
+        ),
         check=False,
     )
     try:
@@ -876,12 +880,13 @@ def _run_local_layer_extract(src_path: Path, out_dir: Path, user_id: str) -> dic
 
 
 async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path, created_at: float) -> None:
-    prompt = "image to layered psd"
+    prompt = "Kie Seedream 5 Pro 图层分离并导出 PSD"
     out_dir = settings.output_path / "ai-images" / user["id"] / "layer-extract" / job_id
     try:
         save_ai_image_job(
             job_id=job_id, user_id=user["id"], status="processing",
             model="layer-extract", prompt=prompt, size="",
+            provider="kie",
             original_prompt=prompt, resolved_prompt=prompt,
             has_reference=True, progress=15, created_at=created_at,
         )
@@ -901,7 +906,9 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
             job_id=job_id, user_id=user["id"], status="done",
             model="layer-extract", prompt=prompt,
             size=f"{payload['source_size'][0]}x{payload['source_size'][1]}",
+            provider="kie",
             original_prompt=prompt, resolved_prompt=prompt, image_url=psd_url,
+            task_id=payload.get("kie_task_id") or None,
             has_reference=True, progress=100, created_at=created_at,
         )
         # 把 manifest URL / layers 信息存到 job 的 prompt_trace 字段（复用字段做扩展数据）
@@ -911,8 +918,11 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
                 "psd_url": psd_url,
                 "manifest_url": manifest_url,
                 "layers_url_prefix": layers_url_prefix,
-                "segmentation_url": payload.get("segmentation_url", ""),
                 "background_status": payload.get("background_status", ""),
+                "decomposition_provider": payload.get("decomposition_provider", "kie"),
+                "kie_task_id": payload.get("kie_task_id", ""),
+                "kie_layers": payload.get("kie_layers", []),
+                "kie_model": settings.kie_layer_model,
                 "layers": payload.get("layers", []),
                 "source_size": payload.get("source_size", []),
             }
@@ -920,8 +930,10 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
                 job_id=job_id, user_id=user["id"], status="done",
                 model="layer-extract", prompt=prompt,
                 size=job.get("size") or "",
+                provider="kie",
                 original_prompt=prompt, resolved_prompt=prompt,
                 image_url=psd_url, prompt_trace=json.dumps(extra, ensure_ascii=False),
+                task_id=payload.get("kie_task_id") or None,
                 has_reference=True, progress=100, created_at=created_at,
             )
         except Exception:
@@ -936,6 +948,7 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
         save_ai_image_job(
             job_id=job_id, user_id=user["id"], status="failed",
             model="layer-extract", prompt=prompt, size="",
+            provider="kie",
             original_prompt=prompt, resolved_prompt=prompt,
             has_reference=True, error=str(exc), progress=100, created_at=created_at,
         )
@@ -3850,7 +3863,7 @@ async def ai_image_vectorize(request: Request):
 
 @app.post("/ai-image/layer-extract")
 async def ai_image_layer_extract(request: Request):
-    """对站内图片执行"转分层 PSD"：gpt-image-2 分割 → 本地切层 → PSD 导出。返回可轮询的 ai-image job。"""
+    """对站内图片执行"转分层 PSD"：Kie 分层 → 本地按坐标导出 PSD。"""
     user = _current_user(request)
     body = await request.json()
     image_url = str(body.get("image_url") or "").strip()
@@ -3860,12 +3873,17 @@ async def ai_image_layer_extract(request: Request):
         src_path = _persist_data_url_image(image_url, user_id=user["id"], job_id=job_id)
     else:
         src_path = _resolve_public_asset_path(image_url, user)
-    prompt = "image to layered psd"
+    prompt = "Kie Seedream 5 Pro 图层分离并导出 PSD"
     save_ai_image_job(
         job_id=job_id, user_id=user["id"], status="processing",
         model="layer-extract", prompt=prompt, size="",
-        provider="local", reference_count=1,
-        request_meta={"operation": "layer_extract", "source_image_url": image_url},
+        provider="kie", reference_count=1,
+        request_meta={
+            "operation": "layer_extract",
+            "provider": "kie",
+            "model": settings.kie_layer_model,
+            "source_image_url": image_url,
+        },
         original_prompt=prompt, resolved_prompt=prompt,
         has_reference=True, progress=0, created_at=created_at,
     )
