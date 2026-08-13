@@ -2211,6 +2211,8 @@ def download_special_zip(job_id: str, names: str = ""):
         "尖货轮播-横版-2": "png",
         "sku": "png",
         "sku-1": "png",
+        "首页SKU": "png",
+        "首页SKU-1": "png",
     }
 
     buffer = io.BytesIO()
@@ -2336,6 +2338,8 @@ def download_special_full_zip(job_id: str, names: str = "", request: Request = N
         "尖货轮播-横版-2": "png",
         "sku": "png",
         "sku-1": "png",
+        "首页SKU": "png",
+        "首页SKU-1": "png",
     }
 
     buffer = io.BytesIO()
