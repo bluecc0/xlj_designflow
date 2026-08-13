@@ -2204,6 +2204,8 @@ def download_special_zip(job_id: str, names: str = ""):
         "sku-1": "{sku}-1",         # → {sku}-1{变体}.png
         "首页SKU": "首页{sku}",       # → 首页{sku}{变体}.png
         "首页SKU-1": "首页{sku}-1",   # → 首页{sku}-1{变体}.png
+        "首页 SKU": "首页{sku}",
+        "首页 SKU-1": "首页{sku}-1",
     }
     FRAME_EXPORT_FORMATS: dict[str, str] = {
         "分类页": "png",
@@ -2215,6 +2217,8 @@ def download_special_zip(job_id: str, names: str = ""):
         "sku-1": "png",
         "首页SKU": "png",
         "首页SKU-1": "png",
+        "首页 SKU": "png",
+        "首页 SKU-1": "png",
     }
 
     buffer = io.BytesIO()
@@ -2333,6 +2337,8 @@ def download_special_full_zip(job_id: str, names: str = "", request: Request = N
         "sku-1": "{sku}-1",
         "首页SKU": "首页{sku}",
         "首页SKU-1": "首页{sku}-1",
+        "首页 SKU": "首页{sku}",
+        "首页 SKU-1": "首页{sku}-1",
     }
     FRAME_EXPORT_FORMATS: dict[str, str] = {
         "分类页": "png",
@@ -2344,6 +2350,8 @@ def download_special_full_zip(job_id: str, names: str = "", request: Request = N
         "sku-1": "png",
         "首页SKU": "png",
         "首页SKU-1": "png",
+        "首页 SKU": "png",
+        "首页 SKU-1": "png",
     }
 
     buffer = io.BytesIO()
