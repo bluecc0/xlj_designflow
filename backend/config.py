@@ -7,11 +7,17 @@ import os
 import json
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 # 加载 .env（在 backend/ 上一级）
 _env_path = Path(__file__).parent.parent / ".env"
+# The checked-in launcher may discover a virtual WSL/Hyper-V adapter first.
+# Keep only the browser-facing Penpot URL controlled by the repository's .env;
+# other process-level environment variables retain their normal precedence.
 load_dotenv(_env_path)
+_penpot_url_from_env = dotenv_values(_env_path).get("PENPOT_BASE_URL")
+if _penpot_url_from_env:
+    os.environ["PENPOT_BASE_URL"] = str(_penpot_url_from_env)
 
 
 class Settings:

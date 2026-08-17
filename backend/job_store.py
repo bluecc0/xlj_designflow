@@ -17,6 +17,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import bcrypt
 
@@ -26,6 +27,22 @@ from .models import ComposeJob, ComposeRequest, ComposeStatus
 
 _DB_PATH = settings.root_dir / "jobs.db"
 _lock = threading.Lock()
+
+
+def _public_penpot_edit_url(url: str | None) -> str | None:
+    """Use the current browser-facing Penpot host for persisted edit URLs."""
+    if not url or not settings.penpot_base_url:
+        return url
+    try:
+        current = urlsplit(settings.penpot_base_url)
+        stored = urlsplit(url)
+        if not current.netloc or not stored.netloc:
+            return url
+        return urlunsplit(
+            (current.scheme, current.netloc, stored.path, stored.query, stored.fragment)
+        )
+    except ValueError:
+        return url
 
 
 def _json_value(raw, fallback):
@@ -489,7 +506,7 @@ def _row_to_job(row: sqlite3.Row) -> ComposeJob:
         request=req,
         result_path=row["result_path"],
         penpot_file_id=row["penpot_file_id"],
-        penpot_edit_url=row["penpot_edit_url"],
+        penpot_edit_url=_public_penpot_edit_url(row["penpot_edit_url"]),
         error=row["error"],
         progress=progress,
         created_at=row["created_at"],
@@ -591,7 +608,7 @@ def load_special_jobs(limit: int = 50, user_id: Optional[str] = None) -> list[di
             'sku': row["sku"] or '',
             'status': row["status"],
             'created_at': row["created_at"],
-            'penpot_edit_url': row["penpot_edit_url"],
+            'penpot_edit_url': _public_penpot_edit_url(row["penpot_edit_url"]),
             'frames': frame_list,
             '_type': 'special',
         })
@@ -2533,6 +2550,7 @@ def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
             if not row:
                 return None
             item = dict(row)
+            item["penpot_edit_url"] = _public_penpot_edit_url(item.get("penpot_edit_url"))
             request = _json_object(item.pop("request_json", "{}"))
             progress = _json_value(item.pop("progress_json", "[]"), [])
             return {
@@ -2563,6 +2581,7 @@ def load_admin_task_detail(task_type: str, task_id: str) -> dict | None:
             if not row:
                 return None
             item = dict(row)
+            item["penpot_edit_url"] = _public_penpot_edit_url(item.get("penpot_edit_url"))
             request = _json_object(item.pop("request_json", "{}"))
             progress = _json_value(item.pop("progress_json", "[]"), [])
             result_paths = _json_value(item.pop("result_paths_json", "[]"), [])

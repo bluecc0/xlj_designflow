@@ -16,6 +16,7 @@ import {
   toRichText,
   type Editor,
   type TLComponents,
+  type TLAssetStore,
   type TLGeoShape,
   type TLImageAsset,
   type TLImageShape,
@@ -30,6 +31,92 @@ import {
 
 const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
 const editorSnapshotUrl = `/editor/snapshot?user_id=${encodeURIComponent(editorUserId)}`
+
+async function uploadEditorAsset(file: File, abortSignal?: AbortSignal) {
+  const form = new FormData()
+  form.append('image', file, file.name || 'canvas-image')
+  const response = await fetch('/editor/assets', {
+    method: 'POST',
+    body: form,
+    credentials: 'include',
+    signal: abortSignal,
+  })
+  if (!response.ok) {
+    let message = `画板图片保存失败: HTTP ${response.status}`
+    try {
+      const data = await response.json()
+      if (data?.detail) message = String(data.detail)
+    } catch {}
+    throw new Error(message)
+  }
+  const data = await response.json()
+  if (!data?.url) throw new Error('画板图片保存失败：服务端未返回地址')
+  return String(data.url)
+}
+
+const editorAssetStore: TLAssetStore = {
+  async upload(_asset, file, abortSignal) {
+    return { src: await uploadEditorAsset(file, abortSignal) }
+  },
+  resolve(asset) {
+    return String((asset.props as any)?.src || '')
+  },
+}
+
+async function dataUrlToImageFile(src: string, name: string, mimeType: string) {
+  const response = await fetch(src)
+  const blob = await response.blob()
+  const type = blob.type || mimeType || 'image/png'
+  const extension = type === 'image/jpeg' ? '.jpg' : `.${type.split('/')[1] || 'png'}`
+  const filename = name && name.includes('.') ? name : `${name || 'canvas-image'}${extension}`
+  return new File([blob], filename, { type })
+}
+
+async function compactAndPersistEditorAssets(editor: Editor) {
+  const snapshot = editor.getSnapshot() as any
+  const store = snapshot.store || snapshot.document?.store
+  if (!store || typeof store !== 'object') return { changed: false, failed: 0 }
+
+  const referencedAssetIds = new Set(
+    Object.values(store)
+      .filter((record: any) => record?.typeName === 'shape' && record?.props?.assetId)
+      .map((record: any) => String(record.props.assetId))
+  )
+  const imageAssets = editor.getAssets().filter((asset: any) => asset?.type === 'image')
+  const orphanAssets = imageAssets.filter((asset: any) => !referencedAssetIds.has(String(asset.id)))
+  if (orphanAssets.length) editor.deleteAssets(orphanAssets.map((asset: any) => asset.id))
+
+  let migrated = 0
+  let failed = 0
+  const embeddedAssets = imageAssets.filter((asset: any) => {
+    const src = String(asset?.props?.src || '')
+    return referencedAssetIds.has(String(asset.id)) && src.startsWith('data:image/')
+  })
+  for (const asset of embeddedAssets) {
+    try {
+      const file = await dataUrlToImageFile(
+        String((asset.props as any).src),
+        String((asset.props as any).name || 'canvas-image'),
+        String((asset.props as any).mimeType || '')
+      )
+      const src = await uploadEditorAsset(file)
+      editor.updateAssets([{
+        ...asset,
+        props: {
+          ...asset.props,
+          src,
+          fileSize: file.size,
+          mimeType: file.type || (asset.props as any).mimeType,
+        },
+      } as any])
+      migrated += 1
+    } catch (error) {
+      failed += 1
+      console.error('Failed to persist embedded canvas asset', error)
+    }
+  }
+  return { changed: orphanAssets.length > 0 || migrated > 0, failed }
+}
 
 const COLOR_OPTIONS = [
   { value: 'black', label: '黑色' },
@@ -1631,6 +1718,26 @@ function normalizeDesignflowAssetUrlsInSnapshot(snapshot: any) {
   return snapshot
 }
 
+function pruneUnreferencedImageAssetsInSnapshot(snapshot: any) {
+  const store = snapshot?.store || snapshot?.document?.store
+  if (!store || typeof store !== 'object') return snapshot
+  const referencedAssetIds = new Set(
+    Object.values(store)
+      .filter((record: any) => record?.typeName === 'shape' && record?.props?.assetId)
+      .map((record: any) => String(record.props.assetId))
+  )
+  Object.entries(store).forEach(([recordId, record]: [string, any]) => {
+    if (
+      record?.typeName === 'asset' &&
+      record?.type === 'image' &&
+      !referencedAssetIds.has(recordId)
+    ) {
+      delete store[recordId]
+    }
+  })
+  return snapshot
+}
+
 function TldrawHostBridge() {
   const editor = useEditor()
 
@@ -1639,6 +1746,7 @@ function TldrawHostBridge() {
   const snapshotHydratedRef = React.useRef(false)
   const queuedHostMessagesRef = React.useRef<any[]>([])
   const notifyReadyRef = React.useRef<() => void>(() => {})
+  const saveSnapshotNowRef = React.useRef<() => Promise<boolean>>(async () => true)
 
   React.useEffect(() => {
     const scheduleReflow = () => {
@@ -1853,6 +1961,9 @@ function TldrawHostBridge() {
         } else {
           editor.createPage({ name: pageName })
         }
+        if (!(await saveSnapshotNowRef.current())) {
+          window.parent.postMessage({ type: 'designflow:editor-error', message: '新建画板保存失败' }, '*')
+        }
         return
       }
 
@@ -1860,6 +1971,9 @@ function TldrawHostBridge() {
         const page = editor.getCurrentPage()
         if (page && data.pageName) {
           editor.renamePage(page.id, data.pageName)
+          if (!(await saveSnapshotNowRef.current())) {
+            window.parent.postMessage({ type: 'designflow:editor-error', message: '画板名称保存失败' }, '*')
+          }
         }
         return
       }
@@ -1883,6 +1997,9 @@ function TldrawHostBridge() {
             mode: data.mode === 'background' ? 'background' : 'image',
             name: data.name,
           })
+          if (!(await saveSnapshotNowRef.current())) {
+            throw new Error('图片已插入，但画板保存失败')
+          }
           window.parent.postMessage({ type: 'designflow:editor-inserted', mode: data.mode || 'image', urls: deduped }, '*')
         } catch (error: any) {
           window.parent.postMessage({ type: 'designflow:editor-error', message: error?.message || 'insert_failed' }, '*')
@@ -1928,31 +2045,24 @@ function TldrawHostBridge() {
     let saveTimer: number | null = null
     let lastRaw = ''
     let revisionRef = { current: 0 }
-    let isSavingRef = { current: false }
-    let hasPendingSaveRef = { current: false }
     let pendingIntentRef = { current: 'update' }
+    let snapshotNeedsMigrationSave = false
+    let saveChain: Promise<boolean> = Promise.resolve(true)
 
     const scheduleSave = (delay = 500) => {
       if (saveTimer) clearTimeout(saveTimer)
       saveTimer = window.setTimeout(doSave, delay)
     }
 
-    const doSave = async () => {
-      if (!snapshotHydratedRef.current) return
-      if (isSavingRef.current) {
-        hasPendingSaveRef.current = true
-        return
-      }
-
+    const performSave = async () => {
+      if (!snapshotHydratedRef.current) return true
       try {
-        const snapshot = editor.getSnapshot() as any
+        const snapshot = pruneUnreferencedImageAssetsInSnapshot(editor.getSnapshot() as any)
         const store = snapshot.store || snapshot.document?.store
-        if (!store || typeof store !== 'object' || Object.keys(store).length === 0) return
+        if (!store || typeof store !== 'object' || Object.keys(store).length === 0) return true
         const currentRaw = JSON.stringify(snapshot)
-        if (currentRaw === lastRaw) return
+        if (currentRaw === lastRaw) return true
 
-        isSavingRef.current = true
-        hasPendingSaveRef.current = false
         const currentIntent = pendingIntentRef.current
 
         const payload = {
@@ -1974,43 +2084,41 @@ function TldrawHostBridge() {
             lastRaw = currentRaw
             revisionRef.current = data.revision
             pendingIntentRef.current = 'update'
+            return true
           }
         } else if (res.status === 409) {
-          // 409 发生（stale revision 或拒绝覆盖）：绝不能盲目提升 revision 后重新保存！
-          // 应该从服务端重新拉取最新快照进行同步，避免无线循环重试或并发多标签页强行覆盖。
-          try {
-            const reloadRes = await fetch(editorSnapshotUrl, { credentials: 'include' })
-            if (reloadRes.ok) {
-              const reloadData = await reloadRes.json()
-              if (typeof reloadData.revision === 'number') {
-                revisionRef.current = reloadData.revision
-              }
-              if (reloadData.snapshot) {
-                const normalized = normalizeDesignflowAssetUrlsInSnapshot(normalizeImageShapesInSnapshot(reloadData.snapshot))
-                const store = normalized.store || normalized.document?.store
-                if (store && typeof store === 'object' && Object.keys(store).length > 0) {
-                  editor.loadSnapshot(normalized)
-                  lastRaw = JSON.stringify(normalized)
-                  pendingIntentRef.current = 'update'
-                }
-              }
-            }
-          } catch (reloadErr) {}
+          // 冲突时保留当前本地画板，绝不自动加载服务端快照。
+          // 自动回滚会让刚删除的图片重新出现，或让尚未保存的新图片消失。
+          window.parent.postMessage({
+            type: 'designflow:editor-error',
+            message: '画板已在其他页面更新，当前内容未被覆盖；请关闭其他页面后刷新',
+          }, '*')
+          return false
+        } else {
+          throw new Error(`画板保存失败: HTTP ${res.status}`)
         }
       } catch (e) {
-      } finally {
-        isSavingRef.current = false
-        if (hasPendingSaveRef.current) {
-          hasPendingSaveRef.current = false
-          scheduleSave(100)
-        }
+        console.error('Failed to save canvas snapshot', e)
+        try {
+          window.parent.postMessage({
+            type: 'designflow:editor-error',
+            message: e instanceof Error ? e.message : '画板保存失败',
+          }, '*')
+        } catch {}
+        return false
       }
+      return false
     }
+    const doSave = () => {
+      saveChain = saveChain.then(performSave, performSave)
+      return saveChain
+    }
+    saveSnapshotNowRef.current = doSave
 
     const doSaveSync = () => {
       try {
         if (!snapshotHydratedRef.current) return
-        const snapshot = editor.getSnapshot() as any
+        const snapshot = pruneUnreferencedImageAssetsInSnapshot(editor.getSnapshot() as any)
         const store = snapshot.store || snapshot.document?.store
         if (!store || typeof store !== 'object' || Object.keys(store).length === 0) return
         const currentRaw = JSON.stringify(snapshot)
@@ -2050,17 +2158,19 @@ function TldrawHostBridge() {
           const store = normalizedSnapshot.store || normalizedSnapshot.document?.store
           if (store && typeof store === 'object' && Object.keys(store).length > 0) {
             editor.loadSnapshot(normalizedSnapshot)
+            const migration = await compactAndPersistEditorAssets(editor)
+            snapshotNeedsMigrationSave = migration.changed
             window.setTimeout(() => {
               normalizeCurrentAssetUrls()
               reflowSequentialImages(editor)
               editor.zoomToFit({ animation: { duration: 0 } })
-              doSave()
             }, 0)
           }
         }
       } catch (e) {
       } finally {
         snapshotHydratedRef.current = true
+        if (snapshotNeedsMigrationSave) scheduleSave(0)
         notifyReadyRef.current()
         const queued = queuedHostMessagesRef.current.splice(0)
         queued.reduce((promise, message) => {
@@ -2081,6 +2191,7 @@ function TldrawHostBridge() {
       if (!snapshotHydratedRef.current) return
       try {
         const removed = entry?.changes?.removed || {}
+        const added = entry?.changes?.added || {}
         const hasRemovedShapesOrPages = Object.values(removed).some((record: any) => {
           const typeName = record?.typeName
           return typeName === 'shape' || typeName === 'page'
@@ -2088,6 +2199,12 @@ function TldrawHostBridge() {
         if (hasRemovedShapesOrPages) {
           pendingIntentRef.current = 'user_delete'
         }
+        const hasAddedCanvasContent = Object.values(added).some((record: any) => {
+          const typeName = record?.typeName
+          return typeName === 'shape' || typeName === 'page' || typeName === 'asset'
+        })
+        scheduleSave(hasAddedCanvasContent ? 0 : 500)
+        return
       } catch (e) {}
 
       scheduleSave(500)
@@ -2102,6 +2219,7 @@ function TldrawHostBridge() {
       if (saveTimer) clearTimeout(saveTimer)
       window.removeEventListener('beforeunload', doSaveSync)
       window.removeEventListener('pagehide', doSaveSync)
+      saveSnapshotNowRef.current = async () => true
     }
   }, [editor, handleHostMessage, normalizeCurrentAssetUrls])
 
@@ -2150,7 +2268,7 @@ export default function App() {
     <div className="app-shell">
       <div className="app-frame">
         <div className="canvas-shell">
-          <Tldraw onMount={handleMount} components={components} locale="zh-cn" assetUrls={assetUrls} licenseKey={import.meta.env.VITE_TLDRAW_LICENSE_KEY}>
+          <Tldraw assets={editorAssetStore} onMount={handleMount} components={components} locale="zh-cn" assetUrls={assetUrls} licenseKey={import.meta.env.VITE_TLDRAW_LICENSE_KEY}>
             <EditorSurface />
           </Tldraw>
         </div>

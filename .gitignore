@@ -18,6 +18,9 @@ output/
 *.png
 *.jpg
 
+# Local-only UI release notes
+frontend/whats-new.json
+
 # Env
 .env
 .env.*

@@ -4633,6 +4633,43 @@ async def editor_save_snapshot(request: Request):
     return {"saved": True, "revision": rev}
 
 
+_EDITOR_ASSET_SUFFIXES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+_EDITOR_ASSET_MAX_BYTES = 30 * 1024 * 1024
+
+
+@app.post("/editor/assets")
+async def editor_upload_asset(request: Request, image: UploadFile = File(...)):
+    """Persist a tldraw image outside the snapshot so autosaves stay small."""
+    user = _current_user(request)
+    content_type = str(image.content_type or "").split(";", 1)[0].strip().lower()
+    suffix = _EDITOR_ASSET_SUFFIXES.get(content_type)
+    if not suffix:
+        raise HTTPException(400, "仅支持 PNG、JPEG、WebP 或 GIF 图片")
+
+    payload = await image.read(_EDITOR_ASSET_MAX_BYTES + 1)
+    if not payload:
+        raise HTTPException(400, "图片内容为空")
+    if len(payload) > _EDITOR_ASSET_MAX_BYTES:
+        raise HTTPException(413, "图片大小不能超过 30 MB")
+
+    safe_user_id = "".join(
+        ch for ch in str(user["id"]).strip() if ch.isalnum() or ch in ("-", "_")
+    )
+    if not safe_user_id:
+        raise HTTPException(400, "用户 ID 无效")
+    asset_dir = settings.output_path / "ai-images" / safe_user_id / "editor-assets"
+    asset_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}{suffix}"
+    (asset_dir / filename).write_bytes(payload)
+    return {"url": f"/ai-images/{quote(safe_user_id)}/editor-assets/{filename}"}
+
+
 @app.get("/editor/snapshot")
 def editor_load_snapshot(request: Request):
     """加载画布快照"""
