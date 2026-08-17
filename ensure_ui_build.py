@@ -8,8 +8,11 @@ import importlib.util
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import time
+import webbrowser
 from pathlib import Path
 
 
@@ -109,6 +112,7 @@ def frontend_status() -> tuple[bool, str]:
 
 def tldraw_sources() -> list[Path]:
     files = walk_files(TLDRAW / "src")
+    files.extend(walk_files(TLDRAW / "public"))
     for name in (
         "package.json",
         "package-lock.json",
@@ -159,6 +163,21 @@ def rebuild_tldraw() -> None:
     run([resolve_cmd("npm"), "run", "build"], TLDRAW)
 
 
+def wait_open(port: int) -> int:
+    url = f"http://127.0.0.1:{port}/ui"
+    for _ in range(90):
+        try:
+            with socket.create_connection(("127.0.0.1", port), 0.4):
+                break
+        except OSError:
+            time.sleep(2)
+    else:
+        print(f"[UI] port {port} not ready, skip opening browser")
+        return 1
+    webbrowser.open(url)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Rebuild frontend / tldraw when source files are stale."
@@ -168,7 +187,16 @@ def main() -> int:
         action="store_true",
         help="rebuild both even when artifacts look fresh",
     )
+    parser.add_argument(
+        "--open-when-ready",
+        type=int,
+        metavar="PORT",
+        help="wait until PORT is listening, then open /ui",
+    )
     args = parser.parse_args()
+
+    if args.open_when_ready is not None:
+        return wait_open(args.open_when_ready)
 
     try:
         need_frontend, frontend_reason = frontend_status()
