@@ -118,6 +118,7 @@ slot_schema.json            普通合成列别名
 template_rules.json         历史规则（智能铺货不再依赖）
 login_users.example.json    账号模板
 start.example.bat           Windows 一键启动模板（复制为 start.bat，该文件 git 忽略）
+ensure_ui_build.py          启动/更新时按过期检查重建 frontend 与 tldraw
 KNOWLEDGE.md                注入对话 system prompt 的产品说明
 ```
 
@@ -149,10 +150,10 @@ cd editor-lab-tldraw && npm install && npm run build && cd ..
 uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Windows 也可：`copy start.example.bat start.bat` 后双击。默认只起后端 `:8000`，同一个窗口，关掉窗口即停。`PENPOT_BASE_URL` 以 `.env` 为准。
+Windows 也可：`copy start.example.bat start.bat` 后双击。默认只起后端 `:8000`，同一个窗口，关掉窗口即停。`PENPOT_BASE_URL` 以 `.env` 为准。启动前会跑 `ensure_ui_build.py`：JSX 或 tldraw 源比产物新才重建，已是最新就跳过。
 
 ```bat
-start.bat              只开 8000
+start.bat              只开 8000（过期则先 rebuild 前端 / 画布）
 start.bat extras       额外再开 Penpot MCP :4401 和插件 :4400（日常不需要）
 start.bat install      重装 backend/requirements.txt
 ```
@@ -166,15 +167,19 @@ Penpot 没起来时模板列表为空，其它功能仍可测。
 
 ## 改代码后必须 rebuild
 
-| 改了什么 | 必须跑 | 否则 |
+浏览器不编译 JSX。正式机不要手跑两套命令：`start.bat` 和 `update_formal_local.bat` 都会先跑根目录 `ensure_ui_build.py`，源比产物新才重建。
+
+| 改了什么 | 自动 / 手动 | 否则 |
 |---|---|---|
-| `frontend/src/*.jsx`（`api.js` 除外） | `cd frontend && python build.py` | `/ui` 仍是旧 bundle |
+| `frontend/src/*.jsx`（`api.js` 除外） | 启动或 pull 后自动；也可 `cd frontend && python build.py` | `/ui` 仍是旧 bundle |
 | `frontend/src/api.js` | 不用 build，刷新即可 | — |
 | `frontend/whats-new.json` | 不用 build | — |
-| `editor-lab-tldraw/src/*` | `cd editor-lab-tldraw && npm run build` | iframe 仍是旧 dist |
+| `editor-lab-tldraw/src/*` | 启动或 pull 后自动；也可 `cd editor-lab-tldraw && npm run build` | iframe 仍是旧 dist |
 | `backend/*.py` | `--reload` 自动重启 | — |
 
-`build.py` 用本机 Node + `frontend/vendor/babel.min.js` 按 `BABEL_FILES` 顺序编译，写出 `frontend/compiled/app-<12位sha>.js`，并改 `index.html` 里的 `data-designflow-bundle` 标签。旧 hash 文件会被删掉。
+强制两边都编：`python ensure_ui_build.py --force`。
+
+`build.py` 用本机 Node + `frontend/vendor/babel.min.js` 按 `BABEL_FILES` 顺序编译，写出 `frontend/compiled/app-<12位sha>.js`，并改 `index.html` 里的 `data-designflow-bundle` 标签。旧 hash 文件会被删掉。`index.html` 是产物，不要拿它当过期判断源。
 
 新增 JSX 文件时：加入 `BABEL_FILES`，并保证 `index.html` 里对应引用关系还对得上。
 

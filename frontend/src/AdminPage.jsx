@@ -76,10 +76,7 @@ const ADMIN_CSS = `
     color: #f8f8f5;
   }
   .df-admin-brand { padding: 4px 10px 22px; }
-  .df-admin-brandmark {
-    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
-    color: #111; background: #d7ff60; margin-bottom: 12px;
-  }
+  .df-admin-brandmark { width: 30px; height: 30px; margin-bottom: 12px; }
   .df-admin-brandname { font-size: 16px; font-weight: 700; letter-spacing: -.025em; }
   .df-admin-brandmeta { margin-top: 3px; font-size: 10px; color: #8e938a; letter-spacing: .14em; text-transform: uppercase; }
   .df-admin-navlabel { padding: 0 10px 7px; color: #777c73; font-size: 9px; letter-spacing: .16em; text-transform: uppercase; }
@@ -1282,7 +1279,7 @@ function AdminPage({ user, onBack }) {
       <style>{ADMIN_CSS}</style>
       <aside className="df-admin-sidebar">
         <div className="df-admin-brand">
-          <div className="df-admin-brandmark"><I.zap size={15} /></div>
+          <div className="df-admin-brandmark"><I.logo size={15} style={{ width: 30, height: 30, borderRadius: 8 }} /></div>
           <div className="df-admin-brandname">DesignFlow</div>
           <div className="df-admin-brandmeta">Operations</div>
         </div>

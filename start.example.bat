@@ -48,6 +48,14 @@ for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":%BACKEND_PORT% " ^| 
     taskkill /PID %%p /F >nul 2>&1
 )
 
+echo Checking frontend / canvas builds...
+"%VENV_PYTHON%" "%ROOT%ensure_ui_build.py"
+if errorlevel 1 (
+    echo UI rebuild failed.
+    pause
+    exit /b 1
+)
+
 if /i "%~1"=="extras" (
     echo Starting optional Penpot MCP :4401 and plugin :4400
     if exist "%ROOT%penpot\mcp\packages\server\dist\index.js" (

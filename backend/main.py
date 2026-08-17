@@ -297,9 +297,24 @@ async def _sub2api_service_monitor_loop() -> None:
         await asyncio.sleep(30)
 
 
+def _ensure_ui_build() -> None:
+    script = Path(__file__).resolve().parent.parent / "ensure_ui_build.py"
+    if not script.is_file():
+        logger.warning("ensure_ui_build.py missing; skip UI stale check")
+        return
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=str(script.parent),
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("frontend / canvas rebuild failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    await asyncio.to_thread(_ensure_ui_build)
     app.state.inspiration_migration_task = asyncio.create_task(
         asyncio.to_thread(_migrate_inspiration_thumbnails)
     )

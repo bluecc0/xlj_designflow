@@ -6048,7 +6048,25 @@ const normalizeReferenceUrl = function (rawUrl) {
   }
 };
 const MAX_REFERENCE_IMAGES = 9;
-const MAX_REFERENCE_IMAGE_BYTES = 5 * 1024 * 1024; // 单张参考图硬限制 5MB
+const MAX_REFERENCE_IMAGE_BYTES = 5 * 1024 * 1024; // 单张参考图硬限制 5MB，只在发送时拦截
+
+function referenceFileSize(item) {
+  if (item && item.file && typeof item.file.size === 'number') return item.file.size;
+  return 0;
+}
+function listOversizedReferences(items) {
+  return (Array.isArray(items) ? items : []).filter(function (item) {
+    return referenceFileSize(item) > MAX_REFERENCE_IMAGE_BYTES;
+  });
+}
+function formatOversizedReferenceAlert(items) {
+  const names = items.map(function (item) {
+    const name = item && (item.name || item.file && item.file.name) || '参考图';
+    const size = referenceFileSize(item);
+    return size ? name + '（' + (size / (1024 * 1024)).toFixed(1) + 'MB）' : name;
+  });
+  return '单张参考图不能超过 5MB，请先去掉超限图片再发送：\n' + names.slice(0, 5).join('\n') + (names.length > 5 ? '\n…共 ' + names.length + ' 张' : '');
+}
 const CHAT_INSPIRATION_CATEGORIES = [{
   id: 'share_card',
   label: '分享卡片'
@@ -6305,13 +6323,6 @@ const Composer = ({
           });
           if (!response.ok) throw new Error('load_reference_failed');
           const blob = await response.blob();
-          if (blob.size > MAX_REFERENCE_IMAGE_BYTES) {
-            const err = new Error('reference_too_large');
-            err.fileName = item.name;
-            err.sourceUrl = item.sourceUrl;
-            err.fileSize = blob.size;
-            throw err;
-          }
           const ext = blob.type && blob.type.indexOf('/') > -1 ? blob.type.split('/')[1] : 'png';
           const safeName = item.name && /\.[a-z0-9]+$/i.test(item.name) ? item.name : (item.name || 'reference') + '.' + ext;
           const file = new File([blob], safeName, {
@@ -6325,15 +6336,6 @@ const Composer = ({
         if (!alive) {
           return;
         }
-        const oversizedNames = [];
-        loaded.forEach(function (result) {
-          if (result && result.status === 'rejected' && result.reason && result.reason.message === 'reference_too_large') {
-            oversizedNames.push(result.reason.fileName || '参考图');
-          }
-        });
-        if (oversizedNames.length) {
-          window.alert('以下参考图超过 5MB，已跳过：\n' + oversizedNames.slice(0, 5).join('\n') + (oversizedNames.length > 5 ? '\n…共 ' + oversizedNames.length + ' 张' : ''));
-        }
         setCanvasRefImages(function (prev) {
           return prev.map(function (entry) {
             if (!entry || !entry.sourceUrl) return entry;
@@ -6341,14 +6343,10 @@ const Composer = ({
               return result && result.status === 'fulfilled' && result.value && result.value.sourceUrl === entry.sourceUrl;
             });
             if (match && match.status === 'fulfilled') return match.value;
-            const oversized = loaded.find(function (result) {
-              return result && result.status === 'rejected' && result.reason && result.reason.message === 'reference_too_large' && result.reason.sourceUrl === entry.sourceUrl;
-            });
-            if (oversized) return null;
             return Object.assign({}, entry, {
               pending: false
             });
-          }).filter(Boolean);
+          });
         });
       } catch (err) {
         console.error('Load canvas reference images failed:', err);
@@ -6707,6 +6705,17 @@ const Composer = ({
     const sendMessage = message;
     const executionMessage = skillInvocation.skill ? skillInvocation.prompt : message;
     if (!executionMessage || isLoading) return;
+    if (refImages.some(function (item) {
+      return item && item.pending;
+    })) {
+      window.alert('参考图还在加载，请稍候再发送');
+      return;
+    }
+    const oversizedRefs = listOversizedReferences(refImages);
+    if (oversizedRefs.length) {
+      window.alert(formatOversizedReferenceAlert(oversizedRefs));
+      return;
+    }
     const imagesToSend = [...refImages];
     const normalizedBatchCount = normalizeBatchCount(aiBatchCount);
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
@@ -6981,27 +6990,10 @@ const Composer = ({
   const addImageFiles = React.useCallback(files => {
     const images = Array.from(files || []).filter(f => f && f.type && f.type.startsWith('image/'));
     if (!images.length) return 0;
-    const accepted = [];
-    const oversized = [];
-    images.forEach(function (file) {
-      if (file && typeof file.size === 'number' && file.size > MAX_REFERENCE_IMAGE_BYTES) {
-        oversized.push(file);
-      } else {
-        accepted.push(file);
-      }
-    });
-    if (oversized.length) {
-      const names = oversized.map(function (f) {
-        const sizeMb = (f.size / (1024 * 1024)).toFixed(1);
-        return (f.name || '未命名图片') + '（' + sizeMb + 'MB）';
-      });
-      window.alert('单张参考图不能超过 5MB，以下文件已跳过：\n' + names.slice(0, 5).join('\n') + (names.length > 5 ? '\n…共 ' + names.length + ' 张' : ''));
-    }
-    if (!accepted.length) return 0;
     setManualRefImages(prev => {
       const remaining = Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - prev.length);
       if (remaining <= 0) return prev;
-      const toAdd = accepted.slice(0, remaining).map(file => ({
+      const toAdd = images.slice(0, remaining).map(file => ({
         file,
         name: file.name,
         previewUrl: URL.createObjectURL(file),
@@ -7011,7 +7003,7 @@ const Composer = ({
       }));
       return [...prev, ...toAdd];
     });
-    return Math.min(accepted.length, Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - manualRefImages.length));
+    return Math.min(images.length, Math.max(0, MAX_REFERENCE_IMAGES - canvasRefImages.length - manualRefImages.length));
   }, [canvasRefImages.length, manualRefImages.length]);
   const handleDragEnter = e => {
     if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
@@ -7899,10 +7891,11 @@ const Composer = ({
       display: 'flex',
       gap: 8,
       alignItems: 'center',
-      flexWrap: 'wrap',
+      flexWrap: 'nowrap',
       minWidth: 0,
       flex: 1,
-      overflow: 'hidden'
+      overflow: 'hidden',
+      whiteSpace: 'nowrap'
     }
   }, selectedSettingBits.map(function (bit, idx) {
     const isSkillBit = typeof bit === 'string' && bit.startsWith('$');
@@ -7912,7 +7905,8 @@ const Composer = ({
         fontSize: 12,
         fontWeight: isSkillBit ? 750 : idx === 0 ? 600 : 400,
         color: isSkillBit ? 'var(--accent)' : idx === 0 ? 'var(--ink)' : 'var(--ink-3)',
-        whiteSpace: 'nowrap'
+        whiteSpace: 'nowrap',
+        flexShrink: 0
       }
     }, bit);
   }))), /*#__PURE__*/React.createElement("div", {
@@ -8019,7 +8013,8 @@ const Composer = ({
     style: {
       position: 'relative',
       display: 'inline-flex'
-    }
+    },
+    title: referenceFileSize(img) > MAX_REFERENCE_IMAGE_BYTES ? '超过 5MB，发送前需去掉' : undefined
   }, /*#__PURE__*/React.createElement("img", {
     src: img.previewUrl,
     alt: `参考图${idx + 1}`,
@@ -8028,9 +8023,23 @@ const Composer = ({
       height: 44,
       objectFit: 'cover',
       borderRadius: 6,
-      border: '1px solid var(--line)'
+      border: referenceFileSize(img) > MAX_REFERENCE_IMAGE_BYTES ? '1px solid #d14343' : '1px solid var(--line)'
     }
-  }), /*#__PURE__*/React.createElement("button", {
+  }), referenceFileSize(img) > MAX_REFERENCE_IMAGE_BYTES && /*#__PURE__*/React.createElement("span", {
+    style: {
+      position: 'absolute',
+      top: 2,
+      left: 2,
+      padding: '1px 3px',
+      borderRadius: 3,
+      background: 'rgba(209, 67, 67, 0.92)',
+      color: 'white',
+      fontSize: 8,
+      fontWeight: 700,
+      lineHeight: 1,
+      pointerEvents: 'none'
+    }
+  }, "5MB"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => insertRefTag(idx),
     title: `点击在 Prompt 中插入 @图片${idx + 1}`,
@@ -8838,6 +8847,10 @@ const Chat = ({
         finalRefImages = finalRefImages.concat(productRefFiles);
         finalPrompt = enhancePromptWithProductRefs(prompt, resolvedRefs, refImages.length > 0);
       }
+      var oversizedFinalRefs = listOversizedReferences(finalRefImages);
+      if (oversizedFinalRefs.length) {
+        throw new Error(formatOversizedReferenceAlert(oversizedFinalRefs));
+      }
       try {
         refPreviews = await Promise.all(finalRefImages.map(r => fileToThumbDataUrl(r.file)));
       } catch (e) {
@@ -9501,6 +9514,11 @@ const Chat = ({
     const executionText = String(aiOptions.skillPrompt || text).trim();
     setLastSubmittedMessage(text);
     refImages = await materializeReferenceImages(refImages);
+    const oversizedRefs = listOversizedReferences(refImages);
+    if (oversizedRefs.length) {
+      window.alert(formatOversizedReferenceAlert(oversizedRefs));
+      return;
+    }
 
     // 计算用户消息中的参考图预览
     var userRefPreviews = [];
@@ -11113,10 +11131,7 @@ const ADMIN_CSS = `
     color: #f8f8f5;
   }
   .df-admin-brand { padding: 4px 10px 22px; }
-  .df-admin-brandmark {
-    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
-    color: #111; background: #d7ff60; margin-bottom: 12px;
-  }
+  .df-admin-brandmark { width: 30px; height: 30px; margin-bottom: 12px; }
   .df-admin-brandname { font-size: 16px; font-weight: 700; letter-spacing: -.025em; }
   .df-admin-brandmeta { margin-top: 3px; font-size: 10px; color: #8e938a; letter-spacing: .14em; text-transform: uppercase; }
   .df-admin-navlabel { padding: 0 10px 7px; color: #777c73; font-size: 9px; letter-spacing: .16em; text-transform: uppercase; }
@@ -12792,8 +12807,13 @@ function AdminPage({
     className: "df-admin-brand"
   }, /*#__PURE__*/React.createElement("div", {
     className: "df-admin-brandmark"
-  }, /*#__PURE__*/React.createElement(I.zap, {
-    size: 15
+  }, /*#__PURE__*/React.createElement(I.logo, {
+    size: 15,
+    style: {
+      width: 30,
+      height: 30,
+      borderRadius: 8
+    }
   })), /*#__PURE__*/React.createElement("div", {
     className: "df-admin-brandname"
   }, "DesignFlow"), /*#__PURE__*/React.createElement("div", {
