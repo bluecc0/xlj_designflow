@@ -32,6 +32,92 @@ import {
 const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
 const editorSnapshotUrl = `/editor/snapshot?user_id=${encodeURIComponent(editorUserId)}`
 
+type PendingLayerExtractJob = {
+  jobId: string
+  sourceUrl: string
+  createdAt: number
+}
+
+const layerExtractStorageKey = `designflow:layer-extract-jobs:${editorUserId || 'anonymous'}`
+
+function readPendingLayerExtractJobs(): PendingLayerExtractJob[] {
+  try {
+    const raw = window.localStorage.getItem(layerExtractStorageKey)
+    const parsed = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((item) => item && typeof item.jobId === 'string' && typeof item.sourceUrl === 'string')
+      .slice(-12)
+  } catch {
+    return []
+  }
+}
+
+function writePendingLayerExtractJobs(jobs: PendingLayerExtractJob[]) {
+  try {
+    if (jobs.length) {
+      window.localStorage.setItem(layerExtractStorageKey, JSON.stringify(jobs.slice(-12)))
+    } else {
+      window.localStorage.removeItem(layerExtractStorageKey)
+    }
+  } catch {}
+}
+
+function rememberPendingLayerExtractJob(job: PendingLayerExtractJob) {
+  const jobs = readPendingLayerExtractJobs().filter((item) => item.jobId !== job.jobId)
+  jobs.push(job)
+  writePendingLayerExtractJobs(jobs)
+}
+
+function forgetPendingLayerExtractJob(jobId: string) {
+  writePendingLayerExtractJobs(readPendingLayerExtractJobs().filter((item) => item.jobId !== jobId))
+}
+
+async function fetchLayerExtractJobStatus(jobId: string) {
+  const response = await fetch(`/ai-image/${encodeURIComponent(jobId)}`, { credentials: 'include' })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return await response.json()
+}
+
+async function pollLayerExtractJobStatus(jobId: string) {
+  for (let i = 0; i < 600; i++) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1000))
+    const result = await fetchLayerExtractJobStatus(jobId)
+    if (result.status === 'done' || result.status === 'failed') return result
+  }
+  throw new Error('分层 PSD 超时（超过 10 分钟）')
+}
+
+async function fetchImageAsFileWithRetry(url: string, name: string, retries = 2) {
+  let lastError: unknown = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetchImageAsFile(url, name, { timeoutMs: 15000 })
+    } catch (error) {
+      lastError = error
+      if (attempt < retries) {
+        await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt + 1)))
+      }
+    }
+  }
+  throw lastError || new Error('图层下载失败')
+}
+
+function triggerLayerExtractPsdDownload(psdUrl: string) {
+  if (!psdUrl) return
+  const link = document.createElement('a')
+  link.href = psdUrl
+  link.download = 'layered.psd'
+  link.target = '_blank'
+  link.rel = 'noopener noreferrer'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
 async function uploadEditorAsset(file: File, abortSignal?: AbortSignal) {
   const form = new FormData()
   form.append('image', file, file.name || 'canvas-image')
@@ -538,8 +624,15 @@ function useVectorizeSelectedImage() {
 
 function useLayerExtractSelectedImage() {
   const editor = useEditor()
-  const [layerExtractState, setLayerExtractState] = React.useState<{ loading: boolean; status: 'idle' | 'done' | 'error'; message: string }>({ loading: false, status: 'idle', message: '' })
+  const [layerExtractState, setLayerExtractState] = React.useState<{
+    loading: boolean
+    status: 'idle' | 'done' | 'error'
+    message: string
+    jobId?: string
+    psdUrl?: string
+  }>({ loading: false, status: 'idle', message: '' })
   const clearTimerRef = React.useRef<number | null>(null)
+  const runningJobsRef = React.useRef(new Set<string>())
 
   const setTemporaryState = React.useCallback((status: 'done' | 'error', message: string, delay = 2600) => {
     if (clearTimerRef.current) {
@@ -560,95 +653,73 @@ function useLayerExtractSelectedImage() {
     setLayerExtractState((prev) => (prev.loading ? prev : { loading: false, status: 'idle', message: '' }))
   }, [])
 
-  React.useEffect(() => {
-    return () => {
-      if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
-    }
-  }, [])
-
-  const handleLayerExtractSelectedImage = React.useCallback(async () => {
-    if (clearTimerRef.current) {
-      window.clearTimeout(clearTimerRef.current)
-      clearTimerRef.current = null
-    }
-    const shape = editor.getOnlySelectedShape()
-    if (!shape || shape.type !== 'image') return
-    const asset = editor.getAsset((shape.props as any).assetId)
-    const assetMime = String((asset?.props as any)?.mimeType || '').toLowerCase()
-    if (assetMime === 'image/svg+xml') {
-      setTemporaryState('error', 'SVG 无法转 PSD')
-      return
-    }
-    const src = await resolveUpscaleSourceUrl(String((asset?.props as any)?.src || '').trim())
-    if (!src) {
-      setTemporaryState('error', '没有找到图片地址')
-      return
+  const recoverLayerExtractResult = React.useCallback(async (job: PendingLayerExtractJob, result: any) => {
+    const extra = result?.layer_extract
+    const layers: any[] = Array.isArray(extra?.layers) ? extra.layers : []
+    const psdUrl = normalizeDesignflowAssetUrl(String(extra?.psd_url || ''))
+    if (!extra || !psdUrl || !Array.isArray(extra.layers)) {
+      throw new Error('转 PSD 结果异常')
     }
 
-    setLayerExtractState({ loading: true, status: 'idle', message: '正在转分层 PSD' })
-    try {
-      const createResp = await fetch('/ai-image/layer-extract', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_url: src }),
+    setLayerExtractState({
+      loading: true,
+      status: 'idle',
+      message: `任务已完成，正在恢复画布（0/${layers.length}）`,
+      jobId: job.jobId,
+      psdUrl,
+    })
+    // 异步自动下载可能被浏览器拦截，工具栏会一直保留手动下载入口。
+    triggerLayerExtractPsdDownload(psdUrl)
+
+    const sourceUrl = normalizeDesignflowAssetUrl(job.sourceUrl)
+    const sourceShape = editor
+      .getCurrentPageShapes()
+      .filter((candidate): candidate is TLImageShape => candidate.type === 'image')
+      .find((candidate) => {
+        const asset = editor.getAsset((candidate.props as any).assetId)
+        const candidateUrl = normalizeDesignflowAssetUrl(String((asset?.props as any)?.src || ''))
+        return candidateUrl === sourceUrl
       })
-      if (!createResp.ok) {
-        const text = await createResp.text()
-        throw new Error(text || `HTTP ${createResp.status}`)
+    const sourceBounds = sourceShape ? editor.getShapePageBounds(sourceShape.id) : null
+    const sourceSize: [number, number] = Array.isArray(extra.source_size) ? extra.source_size : [0, 0]
+    const layersUrlPrefix = normalizeDesignflowAssetUrl(String(extra.layers_url_prefix || '')).replace(/\/+$/, '')
+    const scale = sourceBounds && sourceSize[0] ? sourceBounds.width / sourceSize[0] : 1
+    const viewport = editor.getViewportPageBounds()
+    const groupOffsetX = sourceBounds ? sourceBounds.maxX + 40 : viewport.center.x
+    const groupOriginY = sourceBounds ? sourceBounds.minY : viewport.center.y
+
+    const existingLayerIndices = new Set<number>()
+    for (const candidate of editor.getCurrentPageShapes()) {
+      if (candidate.type !== 'image') continue
+      const meta = (candidate.meta || {}) as any
+      const asset = editor.getAsset((candidate.props as any).assetId)
+      const assetUrl = normalizeDesignflowAssetUrl(String((asset?.props as any)?.src || ''))
+      const belongsToJob = String(meta.layerExtractJobId || '') === job.jobId ||
+        (assetUrl && assetUrl.includes(`/layer-extract/${job.jobId}/`))
+      if (!belongsToJob) continue
+      const index = Number(meta.layerIndex)
+      if (Number.isFinite(index)) existingLayerIndices.add(index)
+    }
+
+    const failedLayers: string[] = []
+    let recoveredCount = existingLayerIndices.size
+    if (layers.length) editor.markHistoryStoppingPoint('insert-layer-extract')
+
+    for (let position = 0; position < layers.length; position++) {
+      const layer = layers[position]
+      const layerIndexValue = Number(layer?.index)
+      const layerIndex = Number.isFinite(layerIndexValue) ? layerIndexValue : position
+      if (existingLayerIndices.has(layerIndex)) continue
+
+      const layerPath = String(layer?.path || '').replace(/^\/+/, '')
+      if (!layerPath || !layersUrlPrefix) {
+        failedLayers.push(String(layer?.name || layerIndex))
+        continue
       }
-      const created = await createResp.json()
-      const jobId = created.job_id
-      if (!jobId) throw new Error('没有返回任务 ID')
 
-      let result: any = null
-      for (let i = 0; i < 600; i++) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1000))
-        const statusResp = await fetch(`/ai-image/${encodeURIComponent(jobId)}`, { credentials: 'include' })
-        if (!statusResp.ok) {
-          const text = await statusResp.text()
-          throw new Error(text || `HTTP ${statusResp.status}`)
-        }
-        result = await statusResp.json()
-        if (result.status === 'done') break
-        if (result.status === 'failed') throw new Error(result.error || '转 PSD 失败')
-      }
-      if (!result || result.status !== 'done') {
-        throw new Error('转 PSD 超时（超过 10 分钟）')
-      }
-      const extra = result.layer_extract
-      if (!extra || !extra.psd_url || !extra.layers) {
-        throw new Error('转 PSD 结果异常')
-      }
-
-      // 1. 自动下载 PSD
-      const psdUrl = normalizeDesignflowAssetUrl(extra.psd_url)
-      const psdLink = document.createElement('a')
-      psdLink.href = psdUrl
-      psdLink.download = 'layered.psd'
-      psdLink.target = '_blank'
-      psdLink.rel = 'noopener noreferrer'
-      document.body.appendChild(psdLink)
-      psdLink.click()
-      document.body.removeChild(psdLink)
-
-      // 2. 把每个 layer 作为独立 image shape 插入到源图右侧，按原 bbox 相对位置排列
-      const sourceShape = editor.getOnlySelectedShape()
-      const sourceBounds = sourceShape ? editor.getShapePageBounds(sourceShape.id) : null
-      const sourceSize: [number, number] = extra.source_size || [0, 0]
-      const layers: any[] = extra.layers
-      const layersUrlPrefix = normalizeDesignflowAssetUrl(extra.layers_url_prefix || '')
-
-      // 源图在画布上的尺寸 → 计算 layer bbox 到画布坐标的缩放比
-      const scale = sourceBounds && sourceSize[0] ? sourceBounds.width / sourceSize[0] : 1
-      const groupOffsetX = sourceBounds ? sourceBounds.maxX + 40 : 0
-      const groupOriginY = sourceBounds ? sourceBounds.minY : 0
-
-      const assetRecords: TLImageAsset[] = []
-      const shapeCreations: any[] = []
-      for (const layer of layers) {
-        const layerUrl = `${layersUrlPrefix}/${layer.path}`
-        const file = await fetchImageAsFile(layerUrl, layer.path.split('/').pop() || 'layer.png')
+      const layerUrl = `${layersUrlPrefix}/${layerPath}`
+      try {
+        const file = await fetchImageAsFileWithRetry(layerUrl, layerPath.split('/').pop() || 'layer.png')
         const previewUrl = window.URL.createObjectURL(file)
         let size: { w: number; h: number }
         try {
@@ -656,26 +727,32 @@ function useLayerExtractSelectedImage() {
         } finally {
           window.URL.revokeObjectURL(previewUrl)
         }
+
         const assetId = AssetRecordType.createId()
         const shapeId = createShapeId() as TLImageShape['id']
-        assetRecords.push({
+        const assetRecord: TLImageAsset = {
           id: assetId,
           typeName: 'asset',
           type: 'image',
           props: {
             w: size.w,
             h: size.h,
-            name: layer.path.split('/').pop() || 'layer.png',
+            name: layerPath.split('/').pop() || 'layer.png',
             isAnimated: false,
             mimeType: 'image/png',
             src: layerUrl,
             fileSize: file.size,
           },
-          meta: { layerExtractFrom: src, layerIndex: layer.index },
-        })
-        const layerX = groupOffsetX + (layer.x || 0) * scale
-        const layerY = groupOriginY + (layer.y || 0) * scale
-        shapeCreations.push({
+          meta: {
+            layerExtractFrom: sourceUrl,
+            layerExtractJobId: job.jobId,
+            layerIndex,
+          },
+        }
+        const layerX = groupOffsetX + Number(layer?.x || 0) * scale
+        const layerY = groupOriginY + Number(layer?.y || 0) * scale
+        editor.createAssets([assetRecord])
+        editor.createShape({
           id: shapeId,
           type: 'image',
           x: layerX,
@@ -694,34 +771,151 @@ function useLayerExtractSelectedImage() {
           meta: {
             designflowInserted: true,
             designflowLayoutExcluded: true,
-            layerExtractFrom: src,
-            layerIndex: layer.index,
+            layerExtractFrom: sourceUrl,
+            layerExtractJobId: job.jobId,
+            layerIndex,
           },
         })
+        editor.bringToFront([shapeId])
+        existingLayerIndices.add(layerIndex)
+        recoveredCount += 1
+        setLayerExtractState((prev) => ({
+          ...prev,
+          loading: true,
+          message: `正在恢复画布（${recoveredCount}/${layers.length}）`,
+        }))
+      } catch (error) {
+        console.error('Failed to recover layer extract layer', { jobId: job.jobId, layerPath, error })
+        failedLayers.push(String(layer?.name || layerPath))
       }
+    }
 
-      editor.markHistoryStoppingPoint('insert-layer-extract')
-      if (assetRecords.length) editor.createAssets(assetRecords)
-      for (const creation of shapeCreations) {
-        editor.createShape(creation)
-      }
-      if (shapeCreations.length) {
-        editor.bringToFront(shapeCreations.map((c) => c.id))
-      }
+    if (failedLayers.length) {
+      setLayerExtractState({
+        loading: false,
+        status: 'error',
+        message: `已恢复 ${recoveredCount}/${layers.length} 层，${failedLayers.length} 层待重试`,
+        jobId: job.jobId,
+        psdUrl,
+      })
+      return false
+    }
 
-      const layerCount = layers.length
-      setTemporaryState('done', layerCount > 0 ? `已转 ${layerCount} 层并下载 PSD` : '已生成 PSD', 3200)
+    forgetPendingLayerExtractJob(job.jobId)
+    setLayerExtractState({
+      loading: false,
+      status: 'done',
+      message: layers.length ? `已恢复 ${layers.length} 层并生成 PSD` : '已生成 PSD',
+      jobId: job.jobId,
+      psdUrl,
+    })
+    return true
+  }, [editor])
+
+  const processLayerExtractJob = React.useCallback(async (job: PendingLayerExtractJob) => {
+    if (runningJobsRef.current.has(job.jobId)) return false
+    runningJobsRef.current.add(job.jobId)
+    try {
+      setLayerExtractState({ loading: true, status: 'idle', message: '正在等待分层 PSD', jobId: job.jobId })
+      const result = await pollLayerExtractJobStatus(job.jobId)
+      if (result.status === 'failed') {
+        forgetPendingLayerExtractJob(job.jobId)
+        throw new Error(result.error || '转 PSD 失败')
+      }
+      return await recoverLayerExtractResult(job, result)
     } catch (error: any) {
-      // 错误持久显示在按钮旁，不自动消失（用户可能离开页面很久才回来）
+      setLayerExtractState((prev) => ({
+        loading: false,
+        status: 'error',
+        message: formatUpscaleError(error),
+        jobId: job.jobId,
+        psdUrl: prev.psdUrl,
+      }))
+      return false
+    } finally {
+      runningJobsRef.current.delete(job.jobId)
+    }
+  }, [recoverLayerExtractResult])
+
+  const processPendingLayerExtractJobs = React.useCallback(() => {
+    const pending = readPendingLayerExtractJobs()
+    pending.reduce(
+      (chain, job) => chain.then(() => processLayerExtractJob(job)),
+      Promise.resolve(false)
+    ).catch((error) => console.error('Failed to recover pending layer extract jobs', error))
+  }, [processLayerExtractJob])
+
+  React.useEffect(() => {
+    const recover = () => processPendingLayerExtractJobs()
+    window.addEventListener('designflow:editor-hydrated', recover)
+    if ((window as any).__designflowEditorHydrated) recover()
+    return () => window.removeEventListener('designflow:editor-hydrated', recover)
+  }, [processPendingLayerExtractJobs])
+
+  React.useEffect(() => {
+    return () => {
+      if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
+    }
+  }, [])
+
+  const handleLayerExtractSelectedImage = React.useCallback(async () => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+      clearTimerRef.current = null
+    }
+    const resumableJob = layerExtractState.jobId
+      ? readPendingLayerExtractJobs().find((job) => job.jobId === layerExtractState.jobId)
+      : null
+    if (layerExtractState.status === 'error' && resumableJob) {
+      await processLayerExtractJob(resumableJob)
+      return
+    }
+    const shape = editor.getOnlySelectedShape()
+    if (!shape || shape.type !== 'image') return
+    const asset = editor.getAsset((shape.props as any).assetId)
+    const assetMime = String((asset?.props as any)?.mimeType || '').toLowerCase()
+    if (assetMime === 'image/svg+xml') {
+      setTemporaryState('error', 'SVG 无法转 PSD')
+      return
+    }
+    const src = await resolveUpscaleSourceUrl(String((asset?.props as any)?.src || '').trim())
+    if (!src) {
+      setTemporaryState('error', '没有找到图片地址')
+      return
+    }
+
+    setLayerExtractState({ loading: true, status: 'idle', message: '正在创建分层 PSD 任务' })
+    try {
+      const createResp = await fetch('/ai-image/layer-extract', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_url: src }),
+      })
+      if (!createResp.ok) {
+        const text = await createResp.text()
+        throw new Error(text || `HTTP ${createResp.status}`)
+      }
+      const created = await createResp.json()
+      const jobId = created.job_id
+      if (!jobId) throw new Error('没有返回任务 ID')
+      const job = { jobId: String(jobId), sourceUrl: src, createdAt: Date.now() }
+      rememberPendingLayerExtractJob(job)
+      await processLayerExtractJob(job)
+    } catch (error: any) {
       if (clearTimerRef.current) {
         window.clearTimeout(clearTimerRef.current)
         clearTimerRef.current = null
       }
       setLayerExtractState({ loading: false, status: 'error', message: formatUpscaleError(error) })
     }
-  }, [editor, setTemporaryState])
+  }, [editor, layerExtractState.jobId, layerExtractState.status, processLayerExtractJob, setTemporaryState])
 
-  return { layerExtractState, handleLayerExtractSelectedImage, clearMessage }
+  const handleLayerExtractPsdDownload = React.useCallback(() => {
+    if (layerExtractState.psdUrl) triggerLayerExtractPsdDownload(layerExtractState.psdUrl)
+  }, [layerExtractState.psdUrl])
+
+  return { layerExtractState, handleLayerExtractSelectedImage, handleLayerExtractPsdDownload, clearMessage }
 }
 
 
@@ -765,7 +959,12 @@ function DesignflowImageToolbar() {
   )
   const { upscaleState, handleUpscaleSelectedImage, clearMessage } = useUpscaleSelectedImage()
   const { vectorizeState, handleVectorizeSelectedImage, clearMessage: clearVectorizeMessage } = useVectorizeSelectedImage()
-  const { layerExtractState, handleLayerExtractSelectedImage, clearMessage: clearLayerExtractMessage } = useLayerExtractSelectedImage()
+  const {
+    layerExtractState,
+    handleLayerExtractSelectedImage,
+    handleLayerExtractPsdDownload,
+    clearMessage: clearLayerExtractMessage,
+  } = useLayerExtractSelectedImage()
   const [batchDownloadState, setBatchDownloadState] = React.useState<{
     loading: boolean
     message: string
@@ -929,7 +1128,7 @@ function DesignflowImageToolbar() {
       </TldrawUiToolbarButton>
       <TldrawUiToolbarButton
         type="icon"
-        title={layerExtractState.loading ? '正在转分层 PSD' : (layerExtractState.message || '转 PSD')}
+        title={layerExtractState.loading ? '正在转分层 PSD' : (layerExtractState.message || (layerExtractState.status === 'error' ? '重试恢复分层 PSD' : '转 PSD'))}
         data-testid="tool.image-layer-extract"
         onClick={handleLayerExtractSelectedImage}
         disabled={layerExtractState.loading || upscaleState.loading || vectorizeState.loading}
@@ -940,6 +1139,16 @@ function DesignflowImageToolbar() {
           <TldrawUiButtonIcon small icon="stack-vertical" />
         )}
       </TldrawUiToolbarButton>
+      {layerExtractState.psdUrl && (
+        <TldrawUiToolbarButton
+          type="icon"
+          title="下载 PSD"
+          data-testid="tool.image-layer-extract-download"
+          onClick={handleLayerExtractPsdDownload}
+        >
+          <TldrawUiButtonIcon small icon="download" />
+        </TldrawUiToolbarButton>
+      )}
       {layerExtractState.status === 'error' && layerExtractState.message && (
         <span className="designflow-layer-extract-error" title={layerExtractState.message}>
           {layerExtractState.message}
@@ -1738,6 +1947,76 @@ function pruneUnreferencedImageAssetsInSnapshot(snapshot: any) {
   return snapshot
 }
 
+function cloneEditorSnapshot(snapshot: any) {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot
+  return JSON.parse(JSON.stringify(snapshot))
+}
+
+function recordsEqual(left: any, right: any) {
+  if (left === undefined || right === undefined) return left === right
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function getEditorSnapshotStore(snapshot: any): Record<string, any> {
+  if (snapshot?.document?.store && typeof snapshot.document.store === 'object') {
+    return snapshot.document.store
+  }
+  if (snapshot?.store && typeof snapshot.store === 'object') return snapshot.store
+  return {}
+}
+
+function mergeEditorSnapshotStores(baseSnapshot: any, localSnapshot: any, remoteSnapshot: any) {
+  const baseStore = getEditorSnapshotStore(baseSnapshot)
+  const localStore = getEditorSnapshotStore(localSnapshot)
+  const remoteStore = getEditorSnapshotStore(remoteSnapshot)
+  const merged: Record<string, any> = {}
+  const recordIds = new Set([
+    ...Object.keys(baseStore),
+    ...Object.keys(localStore),
+    ...Object.keys(remoteStore),
+  ])
+
+  for (const recordId of recordIds) {
+    const baseRecord = baseStore[recordId]
+    const localRecord = localStore[recordId]
+    const remoteRecord = remoteStore[recordId]
+    const localChanged = !recordsEqual(localRecord, baseRecord)
+    const remoteChanged = !recordsEqual(remoteRecord, baseRecord)
+    let nextRecord: any
+
+    if (localChanged && !remoteChanged) {
+      nextRecord = localRecord
+    } else if (!localChanged && remoteChanged) {
+      nextRecord = remoteRecord
+    } else if (localChanged && remoteChanged) {
+      // 两边同时修改同一条记录时保留当前页面的修改；删除也视为明确的本地操作。
+      nextRecord = localRecord
+    } else {
+      nextRecord = remoteRecord ?? localRecord ?? baseRecord
+    }
+
+    if (nextRecord !== undefined) merged[recordId] = cloneEditorSnapshot(nextRecord)
+  }
+  return merged
+}
+
+function mergeEditorSnapshots(baseSnapshot: any, localSnapshot: any, remoteSnapshot: any) {
+  const merged = cloneEditorSnapshot(remoteSnapshot || localSnapshot)
+  const mergedStore = mergeEditorSnapshotStores(baseSnapshot, localSnapshot, remoteSnapshot)
+  if (merged?.document && typeof merged.document === 'object') {
+    merged.document.store = mergedStore
+  } else if (merged && typeof merged === 'object') {
+    merged.store = mergedStore
+  }
+
+  const baseSession = baseSnapshot?.session
+  const localSession = localSnapshot?.session
+  if (localSession && !recordsEqual(localSession, baseSession)) {
+    merged.session = cloneEditorSnapshot(localSession)
+  }
+  return merged
+}
+
 function TldrawHostBridge() {
   const editor = useEditor()
 
@@ -2044,8 +2323,11 @@ function TldrawHostBridge() {
   React.useEffect(() => {
     let saveTimer: number | null = null
     let lastRaw = ''
+    let lastSavedSnapshot: any = null
     let revisionRef = { current: 0 }
     let pendingIntentRef = { current: 'update' }
+    let reconcilingSnapshot = false
+    let syncSaveSent = false
     let snapshotNeedsMigrationSave = false
     let saveChain: Promise<boolean> = Promise.resolve(true)
 
@@ -2054,7 +2336,40 @@ function TldrawHostBridge() {
       saveTimer = window.setTimeout(doSave, delay)
     }
 
-    const performSave = async () => {
+    const rebaseSnapshot = async (localSnapshot: any, intent: string) => {
+      const latestResponse = await fetch(editorSnapshotUrl, { credentials: 'include' })
+      if (!latestResponse.ok) {
+        const text = await latestResponse.text()
+        throw new Error(text || `HTTP ${latestResponse.status}`)
+      }
+      const latestData = await latestResponse.json()
+      if (!latestData?.snapshot || typeof latestData.revision !== 'number') {
+        throw new Error('服务端没有返回可恢复的画板快照')
+      }
+
+      const remoteSnapshot = normalizeDesignflowAssetUrlsInSnapshot(
+        normalizeImageShapesInSnapshot(cloneEditorSnapshot(latestData.snapshot))
+      )
+      const mergedSnapshot = mergeEditorSnapshots(lastSavedSnapshot, localSnapshot, remoteSnapshot)
+      reconcilingSnapshot = true
+      try {
+        editor.loadSnapshot(mergedSnapshot)
+      } finally {
+        reconcilingSnapshot = false
+      }
+
+      const currentSnapshot = pruneUnreferencedImageAssetsInSnapshot(editor.getSnapshot() as any)
+      const remoteComparable = pruneUnreferencedImageAssetsInSnapshot(cloneEditorSnapshot(remoteSnapshot))
+      const currentRaw = JSON.stringify(currentSnapshot)
+      const remoteRaw = JSON.stringify(remoteComparable)
+      revisionRef.current = latestData.revision
+      lastSavedSnapshot = cloneEditorSnapshot(remoteSnapshot)
+      lastRaw = remoteRaw
+      pendingIntentRef.current = intent || 'update'
+      return currentRaw !== remoteRaw
+    }
+
+    const performSave = async (attempt = 0): Promise<boolean> => {
       if (!snapshotHydratedRef.current) return true
       try {
         const snapshot = pruneUnreferencedImageAssetsInSnapshot(editor.getSnapshot() as any)
@@ -2082,16 +2397,40 @@ function TldrawHostBridge() {
           const data = await res.json()
           if (data && data.saved && typeof data.revision === 'number') {
             lastRaw = currentRaw
+            lastSavedSnapshot = cloneEditorSnapshot(snapshot)
             revisionRef.current = data.revision
             pendingIntentRef.current = 'update'
             return true
           }
         } else if (res.status === 409) {
-          // 冲突时保留当前本地画板，绝不自动加载服务端快照。
-          // 自动回滚会让刚删除的图片重新出现，或让尚未保存的新图片消失。
+          let conflict: any = null
+          try {
+            conflict = await res.json()
+          } catch {}
+          const detail = conflict?.detail
+          const reason = typeof detail === 'object' && detail ? String(detail.reason || '') : ''
+          const recoverable = reason === 'stale_revision' ||
+            reason === 'uninitialized_overwrite_rejected' ||
+            reason === 'stale_revision_or_uninitialized'
+
+          if (recoverable && attempt < 2) {
+            try {
+              if (await rebaseSnapshot(snapshot, currentIntent)) return await performSave(attempt + 1)
+              return true
+            } catch (rebaseError) {
+              console.error('Failed to reconcile editor snapshot conflict', rebaseError)
+            }
+          }
+
+          const detailText = typeof detail === 'string' ? detail : ''
+          const message = detailText || (
+            recoverable
+              ? '画板保存冲突，当前内容已保留；自动合并失败，请稍后重试'
+              : '画板保存被拒绝，请刷新后重试'
+          )
           window.parent.postMessage({
             type: 'designflow:editor-error',
-            message: '画板已在其他页面更新，当前内容未被覆盖；请关闭其他页面后刷新',
+            message,
           }, '*')
           return false
         } else {
@@ -2110,7 +2449,7 @@ function TldrawHostBridge() {
       return false
     }
     const doSave = () => {
-      saveChain = saveChain.then(performSave, performSave)
+      saveChain = saveChain.then(() => performSave(), () => performSave())
       return saveChain
     }
     saveSnapshotNowRef.current = doSave
@@ -2118,11 +2457,13 @@ function TldrawHostBridge() {
     const doSaveSync = () => {
       try {
         if (!snapshotHydratedRef.current) return
+        if (syncSaveSent) return
         const snapshot = pruneUnreferencedImageAssetsInSnapshot(editor.getSnapshot() as any)
         const store = snapshot.store || snapshot.document?.store
         if (!store || typeof store !== 'object' || Object.keys(store).length === 0) return
         const currentRaw = JSON.stringify(snapshot)
         if (currentRaw === lastRaw) return
+        syncSaveSent = true
 
         const payload = {
           snapshot,
@@ -2132,7 +2473,7 @@ function TldrawHostBridge() {
         const bodyStr = JSON.stringify(payload)
         if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
           const blob = new Blob([bodyStr], { type: 'application/json' })
-          navigator.sendBeacon(editorSnapshotUrl, blob)
+          if (navigator.sendBeacon(editorSnapshotUrl, blob)) return
         }
         fetch(editorSnapshotUrl, {
           method: 'POST',
@@ -2154,12 +2495,18 @@ function TldrawHostBridge() {
         }
         if (data.snapshot) {
           // 验证快照有效：store 至少有一个 page 记录
-          const normalizedSnapshot = normalizeDesignflowAssetUrlsInSnapshot(normalizeImageShapesInSnapshot(data.snapshot))
+          const normalizedSnapshot = normalizeDesignflowAssetUrlsInSnapshot(
+            normalizeImageShapesInSnapshot(cloneEditorSnapshot(data.snapshot))
+          )
           const store = normalizedSnapshot.store || normalizedSnapshot.document?.store
           if (store && typeof store === 'object' && Object.keys(store).length > 0) {
             editor.loadSnapshot(normalizedSnapshot)
             const migration = await compactAndPersistEditorAssets(editor)
             snapshotNeedsMigrationSave = migration.changed
+            lastSavedSnapshot = cloneEditorSnapshot(normalizedSnapshot)
+            lastRaw = snapshotNeedsMigrationSave
+              ? JSON.stringify(normalizedSnapshot)
+              : JSON.stringify(editor.getSnapshot())
             window.setTimeout(() => {
               normalizeCurrentAssetUrls()
               reflowSequentialImages(editor)
@@ -2167,9 +2514,18 @@ function TldrawHostBridge() {
             }, 0)
           }
         }
+        if (!lastSavedSnapshot) {
+          const initialSnapshot = editor.getSnapshot() as any
+          lastSavedSnapshot = cloneEditorSnapshot(initialSnapshot)
+          lastRaw = JSON.stringify(initialSnapshot)
+        }
       } catch (e) {
       } finally {
         snapshotHydratedRef.current = true
+        ;(window as any).__designflowEditorHydrated = true
+        try {
+          window.dispatchEvent(new Event('designflow:editor-hydrated'))
+        } catch {}
         if (snapshotNeedsMigrationSave) scheduleSave(0)
         notifyReadyRef.current()
         const queued = queuedHostMessagesRef.current.splice(0)
@@ -2189,6 +2545,7 @@ function TldrawHostBridge() {
     // 监听用户变更，识别删除动作，自动串行化保存
     const unlisten = editor.store.listen((entry: any) => {
       if (!snapshotHydratedRef.current) return
+      if (reconcilingSnapshot) return
       try {
         const removed = entry?.changes?.removed || {}
         const added = entry?.changes?.added || {}

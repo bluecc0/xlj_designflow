@@ -47,7 +47,10 @@ LAYER_DECOMPOSITION_PROMPT = (
 
 
 def _emit(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    # The parent process parses stdout as JSON, and Windows may expose the
+    # child stdout as GBK. ASCII-escape non-ASCII metadata so a successful PSD
+    # export cannot fail while printing its result payload.
+    print(json.dumps(payload, ensure_ascii=True), flush=True)
 
 
 async def _download_result_layer(
