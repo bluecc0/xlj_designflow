@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
@@ -143,6 +143,7 @@ from .job_store import (
     save_ai_image_job,
     save_editor_snapshot,
     load_editor_snapshot,
+    create_daily_database_backup,
     save_special_job,
     load_special_jobs,
     sync_user_test_status,
@@ -297,6 +298,30 @@ async def _sub2api_service_monitor_loop() -> None:
         await asyncio.sleep(30)
 
 
+async def _database_backup_loop() -> None:
+    """Run the daily database backup without blocking the async server."""
+    while True:
+        backup_succeeded = False
+        try:
+            backup_path = await asyncio.to_thread(create_daily_database_backup)
+            backup_succeeded = backup_path is not None
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("[database-backup] daily backup failed")
+
+        now = datetime.now()
+        next_day = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=5, microsecond=0
+        )
+        seconds_until_next_day = max(60, (next_day - now).total_seconds())
+        # Retry a failed backup within the same day, but never create a second
+        # backup after the current date already has one.
+        await asyncio.sleep(
+            seconds_until_next_day if backup_succeeded else min(3600, seconds_until_next_day)
+        )
+
+
 def _ensure_ui_build() -> None:
     script = Path(__file__).resolve().parent.parent / "ensure_ui_build.py"
     if not script.is_file():
@@ -318,6 +343,7 @@ async def lifespan(app: FastAPI):
     app.state.inspiration_migration_task = asyncio.create_task(
         asyncio.to_thread(_migrate_inspiration_thumbnails)
     )
+    app.state.database_backup_task = asyncio.create_task(_database_backup_loop())
     app.state.sub2api_monitor_task = None
     if (
         settings.sub2api_monitor_enabled
@@ -334,6 +360,10 @@ async def lifespan(app: FastAPI):
         if monitor_task:
             monitor_task.cancel()
             await asyncio.gather(monitor_task, return_exceptions=True)
+        backup_task = app.state.database_backup_task
+        if backup_task:
+            backup_task.cancel()
+            await asyncio.gather(backup_task, return_exceptions=True)
         await proxy_download_stop()
 
 

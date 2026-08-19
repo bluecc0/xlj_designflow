@@ -39,6 +39,7 @@ nul
 
 # SQLite
 *.db
+backups/
 ~$*
 penpot/
 backend.log

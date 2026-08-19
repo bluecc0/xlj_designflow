@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import sqlite3
 import threading
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
 from urllib.parse import urlsplit, urlunsplit
@@ -27,6 +30,61 @@ from .models import ComposeJob, ComposeRequest, ComposeStatus
 
 _DB_PATH = settings.root_dir / "jobs.db"
 _lock = threading.Lock()
+_DATABASE_BACKUP_DIR = settings.root_dir / "backups"
+_DATABASE_BACKUP_RETENTION = 3
+_database_backup_lock = threading.Lock()
+logger = logging.getLogger(__name__)
+
+
+def create_daily_database_backup() -> Path | None:
+    """Create one consistent SQLite backup for the current local calendar day."""
+    with _database_backup_lock:
+        if not _DB_PATH.is_file():
+            logger.warning("[database-backup] database file is missing: %s", _DB_PATH)
+            return None
+
+        _DATABASE_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        day = datetime.now().strftime("%Y%m%d")
+        backup_path = _DATABASE_BACKUP_DIR / f"jobs.db-{day}.sqlite3"
+        temp_path = _DATABASE_BACKUP_DIR / f".{backup_path.name}.{os.getpid()}.tmp"
+
+        try:
+            if not backup_path.exists():
+                source = None
+                target = None
+                try:
+                    source = sqlite3.connect(str(_DB_PATH), timeout=30)
+                    target = sqlite3.connect(str(temp_path), timeout=30)
+                    source.backup(target, pages=1000, sleep=0.1)
+                    target.commit()
+                    check = target.execute("PRAGMA quick_check").fetchone()
+                    if not check or check[0] != "ok":
+                        raise RuntimeError(f"SQLite quick_check failed: {check!r}")
+                finally:
+                    if target is not None:
+                        target.close()
+                    if source is not None:
+                        source.close()
+                os.replace(temp_path, backup_path)
+                logger.info("[database-backup] created %s", backup_path)
+
+            backups = sorted(
+                _DATABASE_BACKUP_DIR.glob("jobs.db-*.sqlite3"),
+                key=lambda path: path.name,
+                reverse=True,
+            )
+            for stale_path in backups[_DATABASE_BACKUP_RETENTION:]:
+                try:
+                    stale_path.unlink()
+                    logger.info("[database-backup] removed old backup %s", stale_path)
+                except FileNotFoundError:
+                    pass
+            return backup_path
+        finally:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _public_penpot_edit_url(url: str | None) -> str | None:
