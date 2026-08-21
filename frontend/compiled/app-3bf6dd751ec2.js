@@ -6104,6 +6104,7 @@ const CHAT_INSPIRATION_CATEGORIES = [{
 
 // ---------- Composer ----------
 
+const DEFAULT_COMPOSER_COMMAND = '/Gpt image 2';
 const Composer = ({
   onSend,
   onParseTable,
@@ -6121,7 +6122,7 @@ const Composer = ({
   canvasReferenceSelection
 }) => {
   const [text, setText] = React.useState('');
-  const [lockedCommand, setLockedCommand] = React.useState('');
+  const [lockedCommand, setLockedCommand] = React.useState(DEFAULT_COMPOSER_COMMAND);
   const [files, setFiles] = React.useState([]);
   const [imageType, setImageType] = React.useState('png');
   const [aiRatio, setAiRatio] = React.useState('auto');
@@ -6277,7 +6278,7 @@ const Composer = ({
     if (!resetKey) return;
     setText('');
     setSelectedSkill('');
-    setLockedCommand('');
+    setLockedCommand(DEFAULT_COMPOSER_COMMAND);
     setSelectedWorkflow('chat');
     setFiles([]);
     clearRefImages();
@@ -7045,7 +7046,7 @@ const Composer = ({
   const clearComposer = React.useCallback(() => {
     setText('');
     setSelectedSkill('');
-    setLockedCommand('');
+    setLockedCommand(DEFAULT_COMPOSER_COMMAND);
     setSelectedWorkflow('chat');
     setFiles([]);
     clearRefImages();
