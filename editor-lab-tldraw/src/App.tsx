@@ -22,9 +22,7 @@ import {
   type TLImageShape,
   type TLShape,
   type TLTextShape,
-  TldrawUiButtonIcon,
   TldrawUiContextualToolbar,
-  TldrawUiToolbarButton,
   useEditor,
   useValue,
 } from 'tldraw'
@@ -920,8 +918,110 @@ function useLayerExtractSelectedImage() {
 
 
 
+type DesignflowToolbarIconName = 'download' | 'upscale' | 'vectorize' | 'layers'
+
+type DesignflowToolbarButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  ariaLabel: string
+}
+
+function DesignflowToolbarButton({
+  ariaLabel,
+  className = '',
+  children,
+  ...props
+}: DesignflowToolbarButtonProps) {
+  return (
+    <button
+      {...props}
+      type="button"
+      draggable={false}
+      aria-label={ariaLabel}
+      className={`tlui-button tlui-button__icon designflow-toolbar-button ${className}`.trim()}
+    >
+      {children}
+    </button>
+  )
+}
+
+function DesignflowToolbarIcon({ name }: { name: DesignflowToolbarIconName }) {
+  const commonProps = {
+    viewBox: '0 0 24 24',
+    width: 17,
+    height: 17,
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.8,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+    focusable: false,
+  }
+
+  if (name === 'download') {
+    return (
+      <svg {...commonProps}>
+        <path d="M12 3v12" />
+        <path d="M7 10l5 5 5-5" />
+        <path d="M4 19h16" />
+      </svg>
+    )
+  }
+
+  if (name === 'upscale') {
+    return (
+      <svg {...commonProps}>
+        <circle cx="10.5" cy="10.5" r="6.5" />
+        <path d="M20 20l-4.35-4.35" />
+        <path d="M10.5 8v5" />
+        <path d="M8 10.5h5" />
+      </svg>
+    )
+  }
+
+  if (name === 'vectorize') {
+    return (
+      <svg {...commonProps}>
+        <circle cx="5" cy="19" r="1.6" />
+        <circle cx="19" cy="5" r="1.6" />
+        <path d="M6.3 17.8C10 14 12 10 17.6 6.4" />
+      </svg>
+    )
+  }
+
+  if (name === 'layers') {
+    return (
+      <svg {...commonProps}>
+        <path d="M12 3l8 4.5-8 4.5-8-4.5z" />
+        <path d="M4 12.5l8 4.5 8-4.5" />
+        <path d="M4 16.5l8 4.5 8-4.5" />
+      </svg>
+    )
+  }
+
+  return null
+}
+
 function DesignflowImageToolbar() {
   const editor = useEditor()
+  const cameraZoom = useValue(
+    'designflow-camera-zoom',
+    () => editor.getZoomLevel(),
+    [editor]
+  )
+  // Keep the positioning anchor stable, but scale the visual toolbar with the canvas.
+  // The clamp prevents the toolbar from becoming unusably small or oversized at extremes.
+  const toolbarScale = Math.min(
+    1.08,
+    Math.max(0.62, Math.pow(Math.max(cameraZoom, 0.01), 0.35))
+  )
+
+  React.useLayoutEffect(() => {
+    const root = document.documentElement
+    root.style.setProperty('--designflow-toolbar-scale', String(toolbarScale))
+    return () => {
+      root.style.removeProperty('--designflow-toolbar-scale')
+    }
+  }, [toolbarScale])
   const selectedShapeIds = useValue(
     'designflow-selected-shape-ids',
     () => editor.getSelectedShapeIds() as string[],
@@ -962,7 +1062,6 @@ function DesignflowImageToolbar() {
   const {
     layerExtractState,
     handleLayerExtractSelectedImage,
-    handleLayerExtractPsdDownload,
     clearMessage: clearLayerExtractMessage,
   } = useLayerExtractSelectedImage()
   const [batchDownloadState, setBatchDownloadState] = React.useState<{
@@ -1055,13 +1154,12 @@ function DesignflowImageToolbar() {
   if (isDownloadOnlyMode) {
     return (
       <TldrawUiContextualToolbar
-        className="tlui-media__toolbar tlui-image__toolbar designflow-upscale-toolbar"
+        className="tlui-media__toolbar tlui-image__toolbar designflow-upscale-toolbar designflow-upscale-toolbar-batch"
         getSelectionBounds={getSelectionBounds}
         label={imageCount > 1 ? `批量下载 ${imageCount} 张` : '下载图片'}
       >
-        <TldrawUiToolbarButton
-          type="icon"
-          title={
+        <DesignflowToolbarButton
+          ariaLabel={
             batchDownloadState.loading
               ? batchDownloadState.message || '下载中'
               : batchDownloadState.message ||
@@ -1074,9 +1172,10 @@ function DesignflowImageToolbar() {
           {batchDownloadState.loading ? (
             <span className="designflow-upscale-spinner" />
           ) : (
-            <TldrawUiButtonIcon small icon="download" />
+            <DesignflowToolbarIcon name="download" />
           )}
-        </TldrawUiToolbarButton>
+          <span className="designflow-toolbar-label">下载图片</span>
+        </DesignflowToolbarButton>
         {batchDownloadState.message && !batchDownloadState.loading && (
           <span className="designflow-batch-download-status" title={batchDownloadState.message}>
             {batchDownloadState.message}
@@ -1088,21 +1187,23 @@ function DesignflowImageToolbar() {
 
   return (
     <TldrawUiContextualToolbar
-      className="tlui-media__toolbar tlui-image__toolbar designflow-upscale-toolbar"
+      className="tlui-media__toolbar tlui-image__toolbar designflow-upscale-toolbar designflow-upscale-toolbar-single"
       getSelectionBounds={getSelectionBounds}
       label="高清放大"
     >
-      <TldrawUiToolbarButton
-        type="icon"
-        title="下载原图"
+      <DesignflowToolbarButton
+        ariaLabel="下载原图"
         data-testid="tool.image-download-original"
         onClick={handleDownloadOriginal}
       >
-        <TldrawUiButtonIcon small icon="download" />
-      </TldrawUiToolbarButton>
-      <TldrawUiToolbarButton
-        type="icon"
-        title={upscaleState.loading ? '正在高清放大' : (upscaleState.message || '高清放大')}
+        <DesignflowToolbarIcon name="download" />
+        <span className="designflow-toolbar-label">下载原图</span>
+      </DesignflowToolbarButton>
+
+      <span className="designflow-toolbar-divider" aria-hidden="true" />
+
+      <DesignflowToolbarButton
+        ariaLabel={upscaleState.loading ? '正在高清放大' : (upscaleState.message || '高清放大')}
         data-testid="tool.image-upscale"
         onClick={handleUpscaleSelectedImage}
         disabled={upscaleState.loading || vectorizeState.loading || layerExtractState.loading}
@@ -1110,12 +1211,15 @@ function DesignflowImageToolbar() {
         {upscaleState.loading ? (
           <span className="designflow-upscale-spinner" />
         ) : (
-          <TldrawUiButtonIcon small icon="zoom-in" />
+          <DesignflowToolbarIcon name="upscale" />
         )}
-      </TldrawUiToolbarButton>
-      <TldrawUiToolbarButton
-        type="icon"
-        title={vectorizeState.loading ? '正在转为 SVG' : (vectorizeState.message || '转为 SVG')}
+        <span className="designflow-toolbar-label">高清放大</span>
+      </DesignflowToolbarButton>
+
+      <span className="designflow-toolbar-divider" aria-hidden="true" />
+
+      <DesignflowToolbarButton
+        ariaLabel={vectorizeState.loading ? '正在转为 SVG' : (vectorizeState.message || '转为 SVG')}
         data-testid="tool.image-vectorize"
         onClick={handleVectorizeSelectedImage}
         disabled={vectorizeState.loading || upscaleState.loading || layerExtractState.loading}
@@ -1123,12 +1227,16 @@ function DesignflowImageToolbar() {
         {vectorizeState.loading ? (
           <span className="designflow-upscale-spinner" />
         ) : (
-          <TldrawUiButtonIcon small icon="spline-cubic" />
+          <DesignflowToolbarIcon name="vectorize" />
         )}
-      </TldrawUiToolbarButton>
-      <TldrawUiToolbarButton
-        type="icon"
-        title={layerExtractState.loading ? '正在转分层 PSD' : (layerExtractState.message || (layerExtractState.status === 'error' ? '重试恢复分层 PSD' : '转 PSD'))}
+        <span className="designflow-toolbar-label">转为 SVG</span>
+      </DesignflowToolbarButton>
+
+      <span className="designflow-toolbar-divider" aria-hidden="true" />
+
+      <DesignflowToolbarButton
+        className="designflow-toolbar-button-ai"
+        ariaLabel={layerExtractState.loading ? '正在转分层 PSD' : (layerExtractState.message || (layerExtractState.status === 'error' ? '重试恢复分层 PSD' : '转 PSD'))}
         data-testid="tool.image-layer-extract"
         onClick={handleLayerExtractSelectedImage}
         disabled={layerExtractState.loading || upscaleState.loading || vectorizeState.loading}
@@ -1136,21 +1244,14 @@ function DesignflowImageToolbar() {
         {layerExtractState.loading ? (
           <span className="designflow-upscale-spinner" />
         ) : (
-          <TldrawUiButtonIcon small icon="stack-vertical" />
+          <DesignflowToolbarIcon name="layers" />
         )}
-      </TldrawUiToolbarButton>
-      {layerExtractState.psdUrl && (
-        <TldrawUiToolbarButton
-          type="icon"
-          title="下载 PSD"
-          data-testid="tool.image-layer-extract-download"
-          onClick={handleLayerExtractPsdDownload}
-        >
-          <TldrawUiButtonIcon small icon="download" />
-        </TldrawUiToolbarButton>
-      )}
+        <span className="designflow-toolbar-label">图层分离</span>
+        <span className="designflow-ai-dot" aria-hidden="true" />
+      </DesignflowToolbarButton>
+
       {layerExtractState.status === 'error' && layerExtractState.message && (
-        <span className="designflow-layer-extract-error" title={layerExtractState.message}>
+        <span className="designflow-toolbar-status" role="status" title={layerExtractState.message}>
           {layerExtractState.message}
         </span>
       )}

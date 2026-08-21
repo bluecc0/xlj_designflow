@@ -761,14 +761,14 @@ const TopBar = ({
       fontWeight: 600,
       letterSpacing: '-0.01em'
     }
-  }, "Designflow"), /*#__PURE__*/React.createElement("span", {
+  }, "XLJ Studio"), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 11,
       color: 'var(--ink-3)',
       letterSpacing: '0.02em',
       marginTop: 1
     }
-  }, "\u4E28  AI \u9A71\u52A8\u7684\u7535\u5546\u8BBE\u8BA1\u8D44\u4EA7\u751F\u6210\u5E73\u53F0"))), /*#__PURE__*/React.createElement("div", {
+  }, "|  \u946B\u4E50\u7EAAAI\u89C6\u89C9\u521B\u4F5C\u5E73\u53F0"))), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1
     }

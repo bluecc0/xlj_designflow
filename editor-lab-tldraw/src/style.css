@@ -509,10 +509,202 @@ input {
 }
 
 .designflow-upscale-toolbar {
-  display: inline-flex;
+  --designflow-toolbar-ink: #374151;
+  --designflow-toolbar-muted: #6b7280;
+  --designflow-toolbar-line: rgba(15, 23, 42, 0.09);
+  --designflow-toolbar-hover: rgba(15, 23, 42, 0.06);
+  --designflow-toolbar-active: rgba(124, 106, 240, 0.14);
+  --designflow-toolbar-anchor-width: 340px;
+  width: min(var(--designflow-toolbar-anchor-width), calc(100vw - 32px));
+  height: 50px;
+  pointer-events: none !important;
+  transition: opacity 80ms ease-in-out;
+}
+
+.designflow-upscale-toolbar-batch {
+  --designflow-toolbar-anchor-width: 128px;
+}
+
+.designflow-upscale-toolbar[data-interactive='true'] {
+  pointer-events: none !important;
+}
+
+.designflow-upscale-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 999px;
+  animation: designflow-upscale-spin 0.8s linear infinite;
+}
+
+@keyframes designflow-upscale-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.designflow-upscale-toolbar .tlui-menu {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  display: flex;
   align-items: center;
-  gap: 4px;
-  padding-right: 4px;
+  width: max-content;
+  gap: 0;
+  padding: 6px;
+  overflow: visible;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 14px 30px -8px rgba(15, 23, 42, 0.18),
+    0 1px 0 rgba(255, 255, 255, 0.7) inset;
+  transform: translateX(-50%) scale(var(--designflow-toolbar-scale, 1));
+  transform-origin: 50% 50%;
+  pointer-events: all;
+}
+
+/* Match the divider spacing so the edge icons sit in equal visual slots. */
+.designflow-upscale-toolbar-single .tlui-menu {
+  padding-inline: 14px;
+}
+
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 38px;
+  max-width: none;
+  height: 36px;
+  padding: 0 9px;
+  gap: 0;
+  overflow: hidden;
+  border-radius: 999px;
+  color: var(--designflow-toolbar-muted);
+  box-sizing: border-box;
+  transition: background 180ms ease, color 180ms ease,
+    padding 250ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button::after {
+  inset: 2px;
+  border-radius: 999px;
+  background: var(--designflow-toolbar-hover);
+}
+
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:active::after {
+  background: var(--designflow-toolbar-active);
+  opacity: 1;
+}
+
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:hover,
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:focus-visible {
+  padding: 0 14px 0 10px;
+  color: var(--designflow-toolbar-ink);
+  outline: none;
+}
+
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:disabled,
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button[data-disabled] {
+  color: #9ca3af;
+}
+
+.designflow-upscale-toolbar .designflow-toolbar-button > .tlui-icon,
+.designflow-upscale-toolbar .designflow-toolbar-button > svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+  flex: none;
+}
+
+.designflow-toolbar-label {
+  display: inline-block;
+  flex: 0 0 auto;
+  max-width: 0;
+  margin-inline-start: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  transition: max-width 250ms ease, opacity 200ms ease 20ms,
+    margin-inline-start 250ms ease;
+}
+
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:hover .designflow-toolbar-label,
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:focus-visible .designflow-toolbar-label {
+  max-width: 100px;
+  margin-inline-start: 6px;
+  opacity: 1;
+}
+
+.designflow-toolbar-button-ai {
+  overflow: visible !important;
+}
+
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button > .designflow-ai-dot {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ffb454;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.95),
+    0 0 8px rgba(255, 180, 84, 0.6);
+  animation: designflow-toolbar-pulse 2.6s ease-in-out infinite;
+}
+
+@keyframes designflow-toolbar-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  50% {
+    transform: scale(1.3);
+    opacity: 0.7;
+  }
+}
+
+.designflow-toolbar-divider {
+  width: 1px;
+  height: 20px;
+  flex: 0 0 1px;
+  margin: 0 10px;
+  background: var(--designflow-toolbar-line);
+}
+
+.designflow-upscale-toolbar .tlui-menu > .designflow-toolbar-divider {
+  flex: 0 0 1px;
+  margin-inline: 14px !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .designflow-upscale-toolbar .tlui-button.designflow-toolbar-button,
+  .designflow-toolbar-label {
+    transition-duration: 0.01ms;
+  }
+}
+
+.designflow-toolbar-status {
+  max-width: 180px;
+  margin-inline-start: 4px;
+  padding: 0 6px;
+  overflow: hidden;
+  color: #e5484d;
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
 }
 
 .designflow-upscale-spinner {
@@ -528,16 +720,4 @@ input {
   to {
     transform: rotate(360deg);
   }
-}
-
-.designflow-layer-extract-error {
-  color: #e5484d;
-  font-size: 11px;
-  line-height: 1.2;
-  max-width: 220px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 0 6px;
-  user-select: text;
 }

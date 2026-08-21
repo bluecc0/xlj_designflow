@@ -363,8 +363,8 @@ window.renderAiProviderDetail = renderAiProviderDetail;
           </svg>
         </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>Designflow</span>
-            <span style={{ fontSize: 11, color: 'var(--ink-3)', letterSpacing: '0.02em', marginTop: 1 }}>丨  AI 驱动的电商设计资产生成平台</span>
+            <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>XLJ Studio</span>
+            <span style={{ fontSize: 11, color: 'var(--ink-3)', letterSpacing: '0.02em', marginTop: 1 }}>|  鑫乐纪AI视觉创作平台</span>
           </div>
       </div>
 
