@@ -15,6 +15,11 @@ editor-lab-tldraw/vite-dev.err.log
 
 # Output / runtime
 output/
+models/
+*.safetensors
+*.bin
+*.pth
+*.pt
 *.png
 *.jpg
 

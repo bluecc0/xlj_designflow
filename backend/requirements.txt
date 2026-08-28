@@ -14,3 +14,11 @@ vtracer>=0.6.15
 psd-tools>=1.17.4
 python-multipart>=0.0.9
 bcrypt>=4.0.0
+torch>=2.2.0
+torchvision>=0.17.0
+transformers>=4.40.0
+timm>=0.9.16
+einops>=0.7.0
+kornia>=0.7.0
+safetensors>=0.4.0
+

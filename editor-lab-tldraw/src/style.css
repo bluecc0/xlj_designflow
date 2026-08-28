@@ -514,7 +514,7 @@ input {
   --designflow-toolbar-line: rgba(15, 23, 42, 0.09);
   --designflow-toolbar-hover: rgba(15, 23, 42, 0.06);
   --designflow-toolbar-active: rgba(124, 106, 240, 0.14);
-  --designflow-toolbar-anchor-width: 340px;
+  --designflow-toolbar-anchor-width: 420px;
   width: min(var(--designflow-toolbar-anchor-width), calc(100vw - 32px));
   height: 50px;
   pointer-events: none !important;

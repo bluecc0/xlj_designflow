@@ -94,6 +94,7 @@ from .agent_mode import (
     summarize_project_title,
 )
 from .psd_layered import create_layered_psd_from_image
+from .matting_service import matting_service
 from .special_compose_full import run_special_full_compose
 from .compose import get_client, run_compose
 from .config import settings
@@ -340,6 +341,10 @@ def _ensure_ui_build() -> None:
 async def lifespan(app: FastAPI):
     init_db()
     await asyncio.to_thread(_ensure_ui_build)
+    if settings.matting_enabled:
+        app.state.matting_warmup_task = asyncio.create_task(
+            asyncio.to_thread(matting_service.warmup)
+        )
     app.state.inspiration_migration_task = asyncio.create_task(
         asyncio.to_thread(_migrate_inspiration_thumbnails)
     )
@@ -892,6 +897,54 @@ async def _run_vectorize_background(job_id: str, user: dict, src_path: Path, cre
             detail=f"job={job_id[:8]} result=failed",
             payload=json.dumps({"job_id": job_id, "error": str(exc)}, ensure_ascii=False),
         )
+
+
+async def _run_matting_background(job_id: str, user: dict, src_path: Path, created_at: float) -> None:
+    prompt = "local ai matting background removal"
+    out_dir = settings.output_path / "ai-images" / user["id"] / "matting"
+    out_path = out_dir / f"{job_id}.png"
+    try:
+        save_ai_image_job(
+            job_id=job_id, user_id=user["id"], status="processing",
+            model="local-matting", prompt=prompt, size="",
+            provider="local", reference_count=1,
+            original_prompt=prompt, resolved_prompt=prompt,
+            has_reference=True, progress=15, created_at=created_at,
+        )
+        width, height = await asyncio.to_thread(matting_service.process_image_file, src_path, out_path)
+        image_url = f"/ai-images/{quote(user['id'])}/matting/{quote(out_path.name)}"
+        save_ai_image_job(
+            job_id=job_id, user_id=user["id"], status="done",
+            model="local-matting", prompt=prompt,
+            size=f"{width}x{height}" if width and height else "",
+            original_prompt=prompt, resolved_prompt=prompt, image_url=image_url,
+            has_reference=True, progress=100, created_at=created_at,
+        )
+        try:
+            generate_inspiration_thumb(image_url, user["id"], job_id)
+        except Exception:
+            pass
+        log_operation(
+            user_id=user["id"], username=user.get("username", ""),
+            action="ai_image_matting",
+            detail=f"job={job_id[:8]} result=done size={width}x{height}",
+            payload=json.dumps({"job_id": job_id, "image_url": image_url, "width": width, "height": height}, ensure_ascii=False),
+        )
+    except Exception as exc:
+        logger.exception("[Matting] Matting job failed: %s", exc)
+        save_ai_image_job(
+            job_id=job_id, user_id=user["id"], status="failed",
+            model="local-matting", prompt=prompt, size="",
+            original_prompt=prompt, resolved_prompt=prompt,
+            has_reference=True, error=str(exc), progress=100, created_at=created_at,
+        )
+        log_operation(
+            user_id=user["id"], username=user.get("username", ""),
+            action="ai_image_matting",
+            detail=f"job={job_id[:8]} result=failed",
+            payload=json.dumps({"job_id": job_id, "error": str(exc)}, ensure_ascii=False),
+        )
+
 
 
 def _run_local_layer_extract(src_path: Path, out_dir: Path, user_id: str) -> dict:
@@ -3950,6 +4003,32 @@ async def ai_image_vectorize(request: Request):
     )
     asyncio.create_task(_run_vectorize_background(job_id, dict(user), src_path, created_at))
     return {"job_id": job_id, "status": "processing", "progress": 0}
+
+
+@app.post("/ai-image/matting")
+async def ai_image_matting(request: Request):
+    """对站内图片执行 AI 智能抠图（背景去除），返回可轮询的 ai-image job。"""
+    user = _current_user(request)
+    body = await request.json()
+    image_url = str(body.get("image_url") or "").strip()
+    job_id = uuid.uuid4().hex
+    created_at = time.time()
+    if image_url.startswith("data:image/"):
+        src_path = _persist_data_url_image(image_url, user_id=user["id"], job_id=job_id)
+    else:
+        src_path = _resolve_public_asset_path(image_url, user)
+    prompt = "local ai matting background removal"
+    save_ai_image_job(
+        job_id=job_id, user_id=user["id"], status="processing",
+        model="local-matting", prompt=prompt, size="",
+        provider="local", reference_count=1,
+        request_meta={"operation": "matting", "source_image_url": image_url},
+        original_prompt=prompt, resolved_prompt=prompt,
+        has_reference=True, progress=0, created_at=created_at,
+    )
+    asyncio.create_task(_run_matting_background(job_id, dict(user), src_path, created_at))
+    return {"job_id": job_id, "status": "processing", "progress": 0}
+
 
 
 @app.post("/ai-image/layer-extract")

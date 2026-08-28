@@ -620,6 +620,152 @@ function useVectorizeSelectedImage() {
 }
 
 
+function useMattingSelectedImage() {
+  const editor = useEditor()
+  const [mattingState, setMattingState] = React.useState<{ loading: boolean; status: 'idle' | 'done' | 'error'; message: string }>({ loading: false, status: 'idle', message: '' })
+  const clearTimerRef = React.useRef<number | null>(null)
+
+  const setTemporaryState = React.useCallback((status: 'done' | 'error', message: string, delay = 2600) => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+    }
+    setMattingState({ loading: false, status, message })
+    clearTimerRef.current = window.setTimeout(() => {
+      setMattingState((prev) => (prev.loading ? prev : { loading: false, status: 'idle', message: '' }))
+      clearTimerRef.current = null
+    }, delay)
+  }, [])
+
+  const clearMessage = React.useCallback(() => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+      clearTimerRef.current = null
+    }
+    setMattingState((prev) => (prev.loading ? prev : { loading: false, status: 'idle', message: '' }))
+  }, [])
+
+  React.useEffect(() => {
+    return () => {
+      if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
+    }
+  }, [])
+
+  const handleMattingSelectedImage = React.useCallback(async () => {
+    if (clearTimerRef.current) {
+      window.clearTimeout(clearTimerRef.current)
+      clearTimerRef.current = null
+    }
+    const shape = editor.getOnlySelectedShape()
+    if (!shape || shape.type !== 'image') return
+    const asset = editor.getAsset((shape.props as any).assetId)
+    const src = await resolveUpscaleSourceUrl(String((asset?.props as any)?.src || '').trim())
+    if (!src) {
+      setTemporaryState('error', '没有找到图片地址')
+      return
+    }
+
+    setMattingState({ loading: true, status: 'idle', message: '正在智能抠图' })
+    try {
+      const createResp = await fetch('/ai-image/matting', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_url: src }),
+      })
+      if (!createResp.ok) {
+        const text = await createResp.text()
+        throw new Error(text || `HTTP ${createResp.status}`)
+      }
+      const created = await createResp.json()
+      const jobId = created.job_id
+      if (!jobId) throw new Error('没有返回任务 ID')
+
+      let result: any = null
+      for (let i = 0; i < 180; i++) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000))
+        const statusResp = await fetch(`/ai-image/${encodeURIComponent(jobId)}`, { credentials: 'include' })
+        if (!statusResp.ok) {
+          const text = await statusResp.text()
+          throw new Error(text || `HTTP ${statusResp.status}`)
+        }
+        result = await statusResp.json()
+        if (result.status === 'done') break
+        if (result.status === 'failed') throw new Error(result.error || '抠图失败')
+      }
+      if (!result || result.status !== 'done' || !result.image_url) {
+        throw new Error('抠图任务超时')
+      }
+
+      const imageUrl = normalizeDesignflowAssetUrl(result.image_url)
+      const file = await fetchImageAsFile(imageUrl, 'matting.png')
+      const previewUrl = window.URL.createObjectURL(file)
+      let size: { w: number; h: number }
+      try {
+        size = await getImageSize(previewUrl)
+      } finally {
+        window.URL.revokeObjectURL(previewUrl)
+      }
+      const sourceShape = editor.getOnlySelectedShape()
+      const sourceBounds = sourceShape ? editor.getShapePageBounds(sourceShape.id) : null
+      const targetW = Number((sourceShape?.props as any)?.w) || size.w
+      const targetH = Number((sourceShape?.props as any)?.h) || size.h
+      const layout = getSequentialLayoutContext(editor)
+      const assetId = AssetRecordType.createId()
+      const shapeId = createShapeId() as TLImageShape['id']
+      const assetRecord: TLImageAsset = {
+        id: assetId,
+        typeName: 'asset',
+        type: 'image',
+        props: {
+          w: size.w,
+          h: size.h,
+          name: file.name || 'matting.png',
+          isAnimated: false,
+          mimeType: file.type || 'image/png',
+          src: imageUrl,
+          fileSize: file.size,
+        },
+        meta: { mattingFrom: src },
+      }
+      editor.markHistoryStoppingPoint('insert-matting-image')
+      editor.createAssets([assetRecord])
+      editor.createShape({
+        id: shapeId,
+        type: 'image',
+        x: sourceBounds ? sourceBounds.maxX + 40 : 0,
+        y: sourceBounds ? sourceBounds.minY : 0,
+        props: {
+          w: targetW,
+          h: targetH,
+          assetId,
+          playing: true,
+          url: '',
+          crop: null,
+          flipX: false,
+          flipY: false,
+          altText: file.name || 'matting.png',
+        },
+        meta: {
+          designflowInserted: true,
+          designflowLayoutOrder: layout.nextOrder,
+          designflowLayoutAnchorX: layout.anchorX,
+          designflowLayoutAnchorY: layout.anchorY,
+          designflowOriginalWidth: size.w,
+          designflowOriginalHeight: size.h,
+          mattingFrom: src,
+        },
+      })
+      editor.bringToFront([shapeId])
+      setTemporaryState('done', '已插入抠图', 2200)
+    } catch (error: any) {
+      setTemporaryState('error', formatUpscaleError(error))
+    }
+  }, [editor, setTemporaryState])
+
+  return { mattingState, handleMattingSelectedImage, clearMessage }
+}
+
+
 function useLayerExtractSelectedImage() {
   const editor = useEditor()
   const [layerExtractState, setLayerExtractState] = React.useState<{
@@ -918,7 +1064,7 @@ function useLayerExtractSelectedImage() {
 
 
 
-type DesignflowToolbarIconName = 'download' | 'upscale' | 'vectorize' | 'layers'
+type DesignflowToolbarIconName = 'download' | 'upscale' | 'vectorize' | 'matting' | 'layers'
 
 type DesignflowToolbarButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   ariaLabel: string
@@ -984,6 +1130,18 @@ function DesignflowToolbarIcon({ name }: { name: DesignflowToolbarIconName }) {
         <circle cx="5" cy="19" r="1.6" />
         <circle cx="19" cy="5" r="1.6" />
         <path d="M6.3 17.8C10 14 12 10 17.6 6.4" />
+      </svg>
+    )
+  }
+
+  if (name === 'matting') {
+    return (
+      <svg {...commonProps}>
+        <circle cx="6" cy="6" r="3" />
+        <circle cx="6" cy="18" r="3" />
+        <path d="M20 4L8.12 15.88" />
+        <path d="M14.47 14.48L20 20" />
+        <path d="M8.12 8.12L12 12" />
       </svg>
     )
   }
@@ -1059,6 +1217,7 @@ function DesignflowImageToolbar() {
   )
   const { upscaleState, handleUpscaleSelectedImage, clearMessage } = useUpscaleSelectedImage()
   const { vectorizeState, handleVectorizeSelectedImage, clearMessage: clearVectorizeMessage } = useVectorizeSelectedImage()
+  const { mattingState, handleMattingSelectedImage, clearMessage: clearMattingMessage } = useMattingSelectedImage()
   const {
     layerExtractState,
     handleLayerExtractSelectedImage,
@@ -1078,9 +1237,10 @@ function DesignflowImageToolbar() {
     downloadAbortRef.current = null
     clearMessage()
     clearVectorizeMessage()
+    clearMattingMessage()
     clearLayerExtractMessage()
     setBatchDownloadState({ loading: false, message: '' })
-  }, [clearMessage, clearVectorizeMessage, clearLayerExtractMessage, selectionKey])
+  }, [clearMessage, clearVectorizeMessage, clearMattingMessage, clearLayerExtractMessage, selectionKey])
 
   const handleDownloadOriginal = React.useCallback(async () => {
     if (!imageShapeId) return
@@ -1206,7 +1366,7 @@ function DesignflowImageToolbar() {
         ariaLabel={upscaleState.loading ? '正在高清放大' : (upscaleState.message || '高清放大')}
         data-testid="tool.image-upscale"
         onClick={handleUpscaleSelectedImage}
-        disabled={upscaleState.loading || vectorizeState.loading || layerExtractState.loading}
+        disabled={upscaleState.loading || vectorizeState.loading || mattingState.loading || layerExtractState.loading}
       >
         {upscaleState.loading ? (
           <span className="designflow-upscale-spinner" />
@@ -1222,7 +1382,7 @@ function DesignflowImageToolbar() {
         ariaLabel={vectorizeState.loading ? '正在转为 SVG' : (vectorizeState.message || '转为 SVG')}
         data-testid="tool.image-vectorize"
         onClick={handleVectorizeSelectedImage}
-        disabled={vectorizeState.loading || upscaleState.loading || layerExtractState.loading}
+        disabled={vectorizeState.loading || upscaleState.loading || mattingState.loading || layerExtractState.loading}
       >
         {vectorizeState.loading ? (
           <span className="designflow-upscale-spinner" />
@@ -1236,10 +1396,28 @@ function DesignflowImageToolbar() {
 
       <DesignflowToolbarButton
         className="designflow-toolbar-button-ai"
+        ariaLabel={mattingState.loading ? '正在智能抠图' : (mattingState.message || '智能抠图')}
+        data-testid="tool.image-matting"
+        onClick={handleMattingSelectedImage}
+        disabled={mattingState.loading || upscaleState.loading || vectorizeState.loading || layerExtractState.loading}
+      >
+        {mattingState.loading ? (
+          <span className="designflow-upscale-spinner" />
+        ) : (
+          <DesignflowToolbarIcon name="matting" />
+        )}
+        <span className="designflow-toolbar-label">抠图</span>
+        <span className="designflow-ai-dot" aria-hidden="true" />
+      </DesignflowToolbarButton>
+
+      <span className="designflow-toolbar-divider" aria-hidden="true" />
+
+      <DesignflowToolbarButton
+        className="designflow-toolbar-button-ai"
         ariaLabel={layerExtractState.loading ? '正在转分层 PSD' : (layerExtractState.message || (layerExtractState.status === 'error' ? '重试恢复分层 PSD' : '转 PSD'))}
         data-testid="tool.image-layer-extract"
         onClick={handleLayerExtractSelectedImage}
-        disabled={layerExtractState.loading || upscaleState.loading || vectorizeState.loading}
+        disabled={layerExtractState.loading || upscaleState.loading || vectorizeState.loading || mattingState.loading}
       >
         {layerExtractState.loading ? (
           <span className="designflow-upscale-spinner" />
@@ -1253,6 +1431,11 @@ function DesignflowImageToolbar() {
       {layerExtractState.status === 'error' && layerExtractState.message && (
         <span className="designflow-toolbar-status" role="status" title={layerExtractState.message}>
           {layerExtractState.message}
+        </span>
+      )}
+      {mattingState.status === 'error' && mattingState.message && (
+        <span className="designflow-toolbar-status" role="status" title={mattingState.message}>
+          {mattingState.message}
         </span>
       )}
     </TldrawUiContextualToolbar>
