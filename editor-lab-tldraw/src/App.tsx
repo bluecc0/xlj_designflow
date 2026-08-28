@@ -20,6 +20,7 @@ import {
   type TLGeoShape,
   type TLImageAsset,
   type TLImageShape,
+  type TLParentId,
   type TLShape,
   type TLTextShape,
   TldrawUiContextualToolbar,
@@ -2050,8 +2051,9 @@ const DESIGNFLOW_GRID_CELL_WIDTH = 420
 const DESIGNFLOW_GRID_CELL_HEIGHT = 560
 const DESIGNFLOW_GRID_GAP = 40
 
-function isSequentialLayoutImage(editor: Editor, shape: TLShape): shape is TLImageShape {
-  if (shape.type !== 'image' || shape.isLocked || shape.parentId !== editor.getCurrentPageId()) return false
+function isSequentialLayoutImage(editor: Editor, shape: TLShape, pageId?: string): shape is TLImageShape {
+  const targetPageId = pageId || editor.getCurrentPageId()
+  if (shape.type !== 'image' || shape.isLocked || shape.parentId !== targetPageId) return false
   const meta = (shape.meta || {}) as any
   // Layer extraction pieces intentionally overlap to reconstruct the source image.
   return !meta.designflowLayoutExcluded && !meta.layerExtractFrom
@@ -2070,7 +2072,7 @@ function getVisualImageOrder(editor: Editor, shapes: TLImageShape[]) {
 }
 
 function getSequentialLayoutContext(editor: Editor, pageId?: string) {
-  const targetPageId = pageId || editor.getCurrentPageId()
+  const targetPageId = (pageId || editor.getCurrentPageId()) as TLParentId
   const shapes = (
     targetPageId === editor.getCurrentPageId()
       ? editor.getCurrentPageShapes()
@@ -2078,7 +2080,7 @@ function getSequentialLayoutContext(editor: Editor, pageId?: string) {
           .getSortedChildIdsForParent(targetPageId)
           .map((id) => editor.getShape(id))
           .filter((shape): shape is TLShape => Boolean(shape))
-  ).filter((shape) => isSequentialLayoutImage(editor, shape))
+  ).filter((shape): shape is TLImageShape => isSequentialLayoutImage(editor, shape, targetPageId))
   const visualOrder = getVisualImageOrder(editor, shapes)
   const ordered = shapes.slice().sort((a, b) => {
     const aOrder = Number((a.meta as any)?.designflowLayoutOrder)
@@ -2116,8 +2118,16 @@ function getSequentialLayoutContext(editor: Editor, pageId?: string) {
   }
 }
 
-function reflowSequentialImages(editor: Editor) {
-  const shapes = editor.getCurrentPageShapes().filter((shape) => isSequentialLayoutImage(editor, shape))
+function reflowSequentialImages(editor: Editor, pageId?: string) {
+  const targetPageId = (pageId || editor.getCurrentPageId()) as TLParentId
+  const shapes = (
+    targetPageId === editor.getCurrentPageId()
+      ? editor.getCurrentPageShapes()
+      : editor
+          .getSortedChildIdsForParent(targetPageId)
+          .map((id) => editor.getShape(id))
+          .filter((shape): shape is TLShape => Boolean(shape))
+  ).filter((shape): shape is TLImageShape => isSequentialLayoutImage(editor, shape, targetPageId))
   if (!shapes.length) return
 
   const visualOrder = getVisualImageOrder(editor, shapes)
@@ -2131,7 +2141,7 @@ function reflowSequentialImages(editor: Editor) {
     return visualOrder.indexOf(a) - visualOrder.indexOf(b)
   })
 
-  const context = getSequentialLayoutContext(editor)
+  const context = getSequentialLayoutContext(editor, targetPageId)
   editor.updateShapes(
     ordered.map((shape, index) => {
       const meta = (shape.meta || {}) as any
