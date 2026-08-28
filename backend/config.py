@@ -152,6 +152,15 @@ class Settings:
     upscale_cli_scale: int = int(os.getenv("UPSCALE_CLI_SCALE", "2"))
     upscale_cli_timeout_seconds: int = int(os.getenv("UPSCALE_CLI_TIMEOUT_SECONDS", "900"))
 
+    # 本地智能抠图 (BiRefNet)
+    matting_enabled: bool = os.getenv("MATTING_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+    matting_model_name: str = os.getenv("MATTING_MODEL_NAME", "ZhengPeng7/BiRefNet").strip()
+    matting_model_path: str = os.getenv("MATTING_MODEL_PATH", "").strip()
+    matting_device: str = os.getenv("MATTING_DEVICE", "auto").strip().lower()
+    matting_warmup_enabled: bool = os.getenv("MATTING_WARMUP_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+    matting_input_size: int = int(os.getenv("MATTING_INPUT_SIZE", "1024"))
+    matting_hf_endpoint: str = os.getenv("HF_ENDPOINT", "https://hf-mirror.com").strip()
+
     root_dir: Path = Path(__file__).parent.parent
 
     # 产品知识库（注入到 AI 对话 system prompt）
@@ -170,6 +179,19 @@ class Settings:
             self.login_users_path = self.root_dir / self.login_users_path
         if not self.knowledge_path.is_absolute():
             self.knowledge_path = self.root_dir / self.knowledge_path
+
+        # 自动检测本地 models/ 目录下的抠图模型权重（方便离线拷贝迁移）
+        if not self.matting_model_path:
+            for candidate in (
+                self.root_dir / "models" / "BiRefNet",
+                self.root_dir / "models" / "BiRefNet-general",
+                self.root_dir / "models" / "birefnet",
+            ):
+                if candidate.is_dir() and any(candidate.iterdir()):
+                    self.matting_model_path = str(candidate)
+                    break
+        elif not Path(self.matting_model_path).is_absolute():
+            self.matting_model_path = str(self.root_dir / self.matting_model_path)
 
         self.output_path.mkdir(parents=True, exist_ok=True)
         self.allowed_login_users = self._load_login_users()
