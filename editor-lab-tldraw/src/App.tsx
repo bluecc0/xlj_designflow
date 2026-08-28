@@ -658,7 +658,7 @@ function useMattingSelectedImage() {
     const initialSourceShape = editor.getOnlySelectedShape()
     if (!initialSourceShape || initialSourceShape.type !== 'image') return
     const sourceShapeId = initialSourceShape.id
-    const sourceParentId = initialSourceShape.parentId || editor.getCurrentPageId()
+    const sourcePageId = editor.getAncestorPageId(initialSourceShape) || editor.getCurrentPageId()
     const initialSourceBounds = editor.getShapePageBounds(sourceShapeId)
     const initialTargetW = Number((initialSourceShape.props as any)?.w) || 0
     const initialTargetH = Number((initialSourceShape.props as any)?.h) || 0
@@ -711,9 +711,9 @@ function useMattingSelectedImage() {
         window.URL.revokeObjectURL(previewUrl)
       }
 
-      // 无论轮询期间选区是否切换，均精准基于触发抠图的原图定位、缩放与所属画板页面
+      // 无论轮询期间选区是否切换，均精准基于触发抠图的原图定位、缩放与所属页面根节点
       const liveSourceShape = editor.getShape(sourceShapeId)
-      const targetParentId = liveSourceShape?.parentId || sourceParentId || editor.getCurrentPageId()
+      const targetPageId = (liveSourceShape ? editor.getAncestorPageId(liveSourceShape) : null) || sourcePageId || editor.getCurrentPageId()
       const liveBounds = liveSourceShape ? editor.getShapePageBounds(sourceShapeId) : null
       const bounds = liveBounds || initialSourceBounds
       const targetW = Number((liveSourceShape?.props as any)?.w) || initialTargetW || size.w
@@ -721,7 +721,7 @@ function useMattingSelectedImage() {
       const insertX = bounds ? bounds.maxX + 40 : 0
       const insertY = bounds ? bounds.minY : 0
 
-      const layout = getSequentialLayoutContext(editor)
+      const layout = getSequentialLayoutContext(editor, targetPageId)
       const assetId = AssetRecordType.createId()
       const shapeId = createShapeId() as TLImageShape['id']
       const assetRecord: TLImageAsset = {
@@ -744,7 +744,7 @@ function useMattingSelectedImage() {
       editor.createShape({
         id: shapeId,
         type: 'image',
-        parentId: targetParentId,
+        parentId: targetPageId,
         x: insertX,
         y: insertY,
         props: {
@@ -2069,8 +2069,16 @@ function getVisualImageOrder(editor: Editor, shapes: TLImageShape[]) {
   })
 }
 
-function getSequentialLayoutContext(editor: Editor) {
-  const shapes = editor.getCurrentPageShapes().filter((shape) => isSequentialLayoutImage(editor, shape))
+function getSequentialLayoutContext(editor: Editor, pageId?: string) {
+  const targetPageId = pageId || editor.getCurrentPageId()
+  const shapes = (
+    targetPageId === editor.getCurrentPageId()
+      ? editor.getCurrentPageShapes()
+      : editor
+          .getSortedChildIdsForParent(targetPageId)
+          .map((id) => editor.getShape(id))
+          .filter((shape): shape is TLShape => Boolean(shape))
+  ).filter((shape) => isSequentialLayoutImage(editor, shape))
   const visualOrder = getVisualImageOrder(editor, shapes)
   const ordered = shapes.slice().sort((a, b) => {
     const aOrder = Number((a.meta as any)?.designflowLayoutOrder)
