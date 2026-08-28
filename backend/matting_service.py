@@ -25,6 +25,9 @@ AutoModelForImageSegmentation = None
 
 def _ensure_ml_imports() -> None:
     global torch, transforms, AutoModelForImageSegmentation
+    # 必须在导入 transformers / huggingface_hub 前设置 HF_ENDPOINT，否则 hub 初始化时读取的仍是默认域名
+    if settings.matting_hf_endpoint and "HF_ENDPOINT" not in os.environ:
+        os.environ["HF_ENDPOINT"] = settings.matting_hf_endpoint
     if torch is None:
         import torch as _torch
         import torchvision.transforms as _transforms
@@ -92,9 +95,8 @@ class MattingModelManager:
                 loaded_custom = False
 
                 if settings.matting_model_path and Path(settings.matting_model_path).is_dir():
-                    local_dir = Path(settings.matting_model_path)
+                    local_dir = Path(settings.matting_model_path).resolve()
                     birefnet_py = local_dir / "birefnet.py"
-                    # 查找本地 safetensors 文件
                     safetensors_candidates = [
                         local_dir / "BiRefNet-general.safetensors",
                         local_dir / "model.safetensors",
@@ -106,19 +108,35 @@ class MattingModelManager:
                             safetensors_path = p
                             break
 
+                    # 1. 优先尝试本地 safetensors 直接装载
                     if birefnet_py.is_file() and safetensors_path and safetensors_path.is_file():
-                        logger.info("[MattingService] 发现本地独立架构定义与权重: %s", safetensors_path.name)
-                        import sys
-                        if str(local_dir) not in sys.path:
-                            sys.path.insert(0, str(local_dir))
-                        import birefnet
-                        from safetensors.torch import load_file
+                        try:
+                            import sys
+                            if str(local_dir) not in sys.path:
+                                sys.path.insert(0, str(local_dir))
+                            parent_dir = str(local_dir.parent)
+                            if parent_dir not in sys.path:
+                                sys.path.insert(0, parent_dir)
 
-                        self.model = birefnet.BiRefNet(bb_pretrained=False)
-                        weights = load_file(str(safetensors_path))
-                        self.model.load_state_dict(weights, strict=False)
-                        loaded_custom = True
+                            from safetensors.torch import load_file
+                            try:
+                                import birefnet
+                                birefnet_cls = getattr(birefnet, "BiRefNet", None)
+                            except ImportError:
+                                # 兼容包含相对导入 (from .BiRefNet_config) 的快照包
+                                pkg = __import__(f"{local_dir.name}.birefnet", fromlist=["BiRefNet"])
+                                birefnet_cls = getattr(pkg, "BiRefNet", None)
 
+                            if birefnet_cls:
+                                self.model = birefnet_cls(bb_pretrained=False)
+                                weights = load_file(str(safetensors_path))
+                                self.model.load_state_dict(weights, strict=False)
+                                loaded_custom = True
+                                logger.info("[MattingService] 本地独立权重加载成功: %s", safetensors_path.name)
+                        except Exception as custom_err:
+                            logger.warning("[MattingService] 本地独立类加载失败，转由 AutoModel 尝试: %s", custom_err)
+
+                    # 2. 尝试标准 Hugging Face 本地 snapshot 加载
                     if not loaded_custom:
                         logger.info("[MattingService] 尝试通过 AutoModel 加载本地权重: %s", local_dir)
                         self.model = AutoModelForImageSegmentation.from_pretrained(

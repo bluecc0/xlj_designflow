@@ -26,7 +26,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-%VENV_PIP% install transformers timm einops huggingface_hub
+%VENV_PIP% install transformers timm einops kornia safetensors huggingface_hub
 if errorlevel 1 (
     echo.
     echo 抠图模型组件安装失败。

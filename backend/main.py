@@ -924,12 +924,15 @@ async def _run_matting_background(job_id: str, user: dict, src_path: Path, creat
             generate_inspiration_thumb(image_url, user["id"], job_id)
         except Exception:
             pass
-        log_operation(
-            user_id=user["id"], username=user.get("username", ""),
-            action="ai_image_matting",
-            detail=f"job={job_id[:8]} result=done size={width}x{height}",
-            payload=json.dumps({"job_id": job_id, "image_url": image_url, "width": width, "height": height}, ensure_ascii=False),
-        )
+        try:
+            log_operation(
+                user_id=user["id"], username=user.get("username", ""),
+                action="ai_image_matting",
+                detail=f"job={job_id[:8]} result=done size={width}x{height}",
+                payload=json.dumps({"job_id": job_id, "image_url": image_url, "width": width, "height": height}, ensure_ascii=False),
+            )
+        except Exception:
+            logger.exception("matting success operation log failed: job=%s", job_id)
     except Exception as exc:
         logger.exception("[Matting] Matting job failed: %s", exc)
         save_ai_image_job(

@@ -655,9 +655,13 @@ function useMattingSelectedImage() {
       window.clearTimeout(clearTimerRef.current)
       clearTimerRef.current = null
     }
-    const shape = editor.getOnlySelectedShape()
-    if (!shape || shape.type !== 'image') return
-    const asset = editor.getAsset((shape.props as any).assetId)
+    const initialSourceShape = editor.getOnlySelectedShape()
+    if (!initialSourceShape || initialSourceShape.type !== 'image') return
+    const sourceShapeId = initialSourceShape.id
+    const initialSourceBounds = editor.getShapePageBounds(sourceShapeId)
+    const initialTargetW = Number((initialSourceShape.props as any)?.w) || 0
+    const initialTargetH = Number((initialSourceShape.props as any)?.h) || 0
+    const asset = editor.getAsset((initialSourceShape.props as any).assetId)
     const src = await resolveUpscaleSourceUrl(String((asset?.props as any)?.src || '').trim())
     if (!src) {
       setTemporaryState('error', '没有找到图片地址')
@@ -705,10 +709,16 @@ function useMattingSelectedImage() {
       } finally {
         window.URL.revokeObjectURL(previewUrl)
       }
-      const sourceShape = editor.getOnlySelectedShape()
-      const sourceBounds = sourceShape ? editor.getShapePageBounds(sourceShape.id) : null
-      const targetW = Number((sourceShape?.props as any)?.w) || size.w
-      const targetH = Number((sourceShape?.props as any)?.h) || size.h
+
+      // 无论轮询期间选区是否切换，均精准基于触发抠图的原图定位与缩放
+      const liveSourceShape = editor.getShape(sourceShapeId)
+      const liveBounds = liveSourceShape ? editor.getShapePageBounds(sourceShapeId) : null
+      const bounds = liveBounds || initialSourceBounds
+      const targetW = Number((liveSourceShape?.props as any)?.w) || initialTargetW || size.w
+      const targetH = Number((liveSourceShape?.props as any)?.h) || initialTargetH || size.h
+      const insertX = bounds ? bounds.maxX + 40 : 0
+      const insertY = bounds ? bounds.minY : 0
+
       const layout = getSequentialLayoutContext(editor)
       const assetId = AssetRecordType.createId()
       const shapeId = createShapeId() as TLImageShape['id']
@@ -732,8 +742,8 @@ function useMattingSelectedImage() {
       editor.createShape({
         id: shapeId,
         type: 'image',
-        x: sourceBounds ? sourceBounds.maxX + 40 : 0,
-        y: sourceBounds ? sourceBounds.minY : 0,
+        x: insertX,
+        y: insertY,
         props: {
           w: targetW,
           h: targetH,
