@@ -941,12 +941,15 @@ async def _run_matting_background(job_id: str, user: dict, src_path: Path, creat
             original_prompt=prompt, resolved_prompt=prompt,
             has_reference=True, error=str(exc), progress=100, created_at=created_at,
         )
-        log_operation(
-            user_id=user["id"], username=user.get("username", ""),
-            action="ai_image_matting",
-            detail=f"job={job_id[:8]} result=failed",
-            payload=json.dumps({"job_id": job_id, "error": str(exc)}, ensure_ascii=False),
-        )
+        try:
+            log_operation(
+                user_id=user["id"], username=user.get("username", ""),
+                action="ai_image_matting",
+                detail=f"job={job_id[:8]} result=failed",
+                payload=json.dumps({"job_id": job_id, "error": str(exc)}, ensure_ascii=False),
+            )
+        except Exception:
+            logger.exception("matting failure operation log failed: job=%s", job_id)
 
 
 
@@ -4011,6 +4014,8 @@ async def ai_image_vectorize(request: Request):
 @app.post("/ai-image/matting")
 async def ai_image_matting(request: Request):
     """对站内图片执行 AI 智能抠图（背景去除），返回可轮询的 ai-image job。"""
+    if not settings.matting_enabled:
+        raise HTTPException(503, "抠图服务未启用 (MATTING_ENABLED=false)")
     user = _current_user(request)
     body = await request.json()
     image_url = str(body.get("image_url") or "").strip()
