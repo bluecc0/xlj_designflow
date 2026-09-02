@@ -27,6 +27,13 @@ import {
   useEditor,
   useValue,
 } from 'tldraw'
+import {
+  OutpaintingOverlay,
+  OutpaintingProvider,
+  getExpectedSizeForDraft,
+  hasOutpaintMargins,
+  useOutpainting,
+} from './outpainting'
 
 const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
 const editorSnapshotUrl = `/editor/snapshot?user_id=${encodeURIComponent(editorUserId)}`
@@ -1078,7 +1085,7 @@ function useLayerExtractSelectedImage() {
 
 
 
-type DesignflowToolbarIconName = 'download' | 'upscale' | 'vectorize' | 'matting' | 'layers'
+type DesignflowToolbarIconName = 'download' | 'outpaint' | 'upscale' | 'vectorize' | 'matting' | 'layers'
 
 type DesignflowToolbarButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   ariaLabel: string
@@ -1123,6 +1130,18 @@ function DesignflowToolbarIcon({ name }: { name: DesignflowToolbarIconName }) {
         <path d="M12 3v12" />
         <path d="M7 10l5 5 5-5" />
         <path d="M4 19h16" />
+      </svg>
+    )
+  }
+
+  if (name === 'outpaint') {
+    return (
+      <svg {...commonProps}>
+        <path d="M8 8h8v8H8z" />
+        <path d="M12 5V2m0 3-1.5-1.5M12 5l1.5-1.5" />
+        <path d="M19 12h3m-3 0 1.5-1.5M19 12l1.5 1.5" />
+        <path d="M12 19v3m0-3-1.5 1.5M12 19l1.5 1.5" />
+        <path d="M5 12H2m3 0-1.5-1.5M5 12l-1.5 1.5" />
       </svg>
     )
   }
@@ -1175,6 +1194,7 @@ function DesignflowToolbarIcon({ name }: { name: DesignflowToolbarIconName }) {
 
 function DesignflowImageToolbar() {
   const editor = useEditor()
+  const outpainting = useOutpainting()
   const cameraZoom = useValue(
     'designflow-camera-zoom',
     () => editor.getZoomLevel(),
@@ -1237,6 +1257,42 @@ function DesignflowImageToolbar() {
     handleLayerExtractSelectedImage,
     clearMessage: clearLayerExtractMessage,
   } = useLayerExtractSelectedImage()
+  const otherImageOperationBusy =
+    upscaleState.loading || vectorizeState.loading || mattingState.loading || layerExtractState.loading
+  React.useEffect(() => {
+    outpainting.setExternalOperationBusy(otherImageOperationBusy)
+    return () => outpainting.setExternalOperationBusy(false)
+  }, [otherImageOperationBusy, outpainting.setExternalOperationBusy])
+  const outpaintingMatchesSelection = Boolean(
+    imageShapeId &&
+    outpainting.draft?.sourceShapeId === imageShapeId &&
+    outpainting.eligibility.shapeId === imageShapeId
+  )
+  const outpaintingHasMargins = Boolean(
+    outpaintingMatchesSelection &&
+    outpainting.draft &&
+    hasOutpaintMargins(outpainting.draft.margins)
+  )
+  const outpaintingExpected = outpaintingMatchesSelection && outpainting.draft
+    ? getExpectedSizeForDraft(outpainting.eligibility, outpainting.draft.margins)
+    : null
+  const outpaintingTitle = outpainting.operation.processing
+    ? outpainting.operation.message || '扩图处理中'
+    : otherImageOperationBusy
+      ? '其他图片任务进行中，请稍候'
+      : !outpainting.eligibility.eligible
+        ? outpainting.eligibility.reason || '当前图片暂不支持扩图'
+        : !outpaintingHasMargins
+          ? '拖动蓝色边框或四角，设置至少一个扩展范围'
+          : `扩图至 ${outpaintingExpected?.w || 0} × ${outpaintingExpected?.h || 0}`
+  const runExternalImageOperation = React.useCallback(async (operation: () => Promise<void>) => {
+    if (!outpainting.claimOperation('external')) return
+    try {
+      await operation()
+    } finally {
+      outpainting.releaseOperation('external')
+    }
+  }, [outpainting.claimOperation, outpainting.releaseOperation])
   const [batchDownloadState, setBatchDownloadState] = React.useState<{
     loading: boolean
     message: string
@@ -1376,11 +1432,39 @@ function DesignflowImageToolbar() {
 
       <span className="designflow-toolbar-divider" aria-hidden="true" />
 
+      {outpainting.config?.enabled && (
+        <>
+          <DesignflowToolbarButton
+            className="designflow-toolbar-button-ai"
+            ariaLabel={outpaintingTitle}
+            title={outpaintingTitle}
+            data-testid="tool.image-outpaint"
+            onClick={outpainting.submit}
+            disabled={
+              outpainting.operation.processing ||
+              otherImageOperationBusy ||
+              !outpaintingMatchesSelection ||
+              !outpainting.eligibility.eligible ||
+              !outpaintingHasMargins
+            }
+          >
+            {outpainting.operation.processing ? (
+              <span className="designflow-upscale-spinner" />
+            ) : (
+              <DesignflowToolbarIcon name="outpaint" />
+            )}
+            <span className="designflow-toolbar-label">扩图</span>
+            <span className="designflow-ai-dot" aria-hidden="true" />
+          </DesignflowToolbarButton>
+          <span className="designflow-toolbar-divider" aria-hidden="true" />
+        </>
+      )}
+
       <DesignflowToolbarButton
         ariaLabel={upscaleState.loading ? '正在高清放大' : (upscaleState.message || '高清放大')}
         data-testid="tool.image-upscale"
-        onClick={handleUpscaleSelectedImage}
-        disabled={upscaleState.loading || vectorizeState.loading || mattingState.loading || layerExtractState.loading}
+        onClick={() => runExternalImageOperation(handleUpscaleSelectedImage)}
+        disabled={upscaleState.loading || vectorizeState.loading || mattingState.loading || layerExtractState.loading || outpainting.operation.processing}
       >
         {upscaleState.loading ? (
           <span className="designflow-upscale-spinner" />
@@ -1395,8 +1479,8 @@ function DesignflowImageToolbar() {
       <DesignflowToolbarButton
         ariaLabel={vectorizeState.loading ? '正在转为 SVG' : (vectorizeState.message || '转为 SVG')}
         data-testid="tool.image-vectorize"
-        onClick={handleVectorizeSelectedImage}
-        disabled={vectorizeState.loading || upscaleState.loading || mattingState.loading || layerExtractState.loading}
+        onClick={() => runExternalImageOperation(handleVectorizeSelectedImage)}
+        disabled={vectorizeState.loading || upscaleState.loading || mattingState.loading || layerExtractState.loading || outpainting.operation.processing}
       >
         {vectorizeState.loading ? (
           <span className="designflow-upscale-spinner" />
@@ -1412,8 +1496,8 @@ function DesignflowImageToolbar() {
         className="designflow-toolbar-button-ai"
         ariaLabel={mattingState.loading ? '正在智能抠图' : (mattingState.message || '智能抠图')}
         data-testid="tool.image-matting"
-        onClick={handleMattingSelectedImage}
-        disabled={mattingState.loading || upscaleState.loading || vectorizeState.loading || layerExtractState.loading}
+        onClick={() => runExternalImageOperation(handleMattingSelectedImage)}
+        disabled={mattingState.loading || upscaleState.loading || vectorizeState.loading || layerExtractState.loading || outpainting.operation.processing}
       >
         {mattingState.loading ? (
           <span className="designflow-upscale-spinner" />
@@ -1430,8 +1514,8 @@ function DesignflowImageToolbar() {
         className="designflow-toolbar-button-ai"
         ariaLabel={layerExtractState.loading ? '正在转分层 PSD' : (layerExtractState.message || (layerExtractState.status === 'error' ? '重试恢复分层 PSD' : '转 PSD'))}
         data-testid="tool.image-layer-extract"
-        onClick={handleLayerExtractSelectedImage}
-        disabled={layerExtractState.loading || upscaleState.loading || vectorizeState.loading || mattingState.loading}
+        onClick={() => runExternalImageOperation(handleLayerExtractSelectedImage)}
+        disabled={layerExtractState.loading || upscaleState.loading || vectorizeState.loading || mattingState.loading || outpainting.operation.processing}
       >
         {layerExtractState.loading ? (
           <span className="designflow-upscale-spinner" />
@@ -1798,6 +1882,15 @@ function TldrawPropertiesPanel() {
   )
 }
 
+function DesignflowOutpaintingCanvasOverlay() {
+  return (
+    <OutpaintingOverlay
+      getSequentialSourceOrder={getSequentialSourceOrder}
+      reflowSequentialImages={reflowSequentialImages}
+    />
+  )
+}
+
 function EditorSurface() {
   return (
     <>
@@ -2069,6 +2162,31 @@ function getVisualImageOrder(editor: Editor, shapes: TLImageShape[]) {
     if (Math.abs(xDiff) > 1) return xDiff
     return String(a.id).localeCompare(String(b.id))
   })
+}
+
+function getSequentialSourceOrder(editor: Editor, sourceShape: TLImageShape, pageId: string) {
+  if (!isSequentialLayoutImage(editor, sourceShape, pageId)) return null
+  const targetPageId = pageId as TLParentId
+  const shapes = (
+    targetPageId === editor.getCurrentPageId()
+      ? editor.getCurrentPageShapes()
+      : editor
+          .getSortedChildIdsForParent(targetPageId)
+          .map((id) => editor.getShape(id))
+          .filter((shape): shape is TLShape => Boolean(shape))
+  ).filter((shape): shape is TLImageShape => isSequentialLayoutImage(editor, shape, targetPageId))
+  const visualOrder = getVisualImageOrder(editor, shapes)
+  const ordered = shapes.slice().sort((a, b) => {
+    const aOrder = Number((a.meta as any)?.designflowLayoutOrder)
+    const bOrder = Number((b.meta as any)?.designflowLayoutOrder)
+    const aValid = Number.isFinite(aOrder) && aOrder > 0
+    const bValid = Number.isFinite(bOrder) && bOrder > 0
+    if (aValid && bValid && aOrder !== bOrder) return aOrder - bOrder
+    if (aValid !== bValid) return aValid ? -1 : 1
+    return visualOrder.indexOf(a) - visualOrder.indexOf(b)
+  })
+  const index = ordered.findIndex((shape) => shape.id === sourceShape.id)
+  return index >= 0 ? index + 1 : null
 }
 
 function getSequentialLayoutContext(editor: Editor, pageId?: string) {
@@ -2921,6 +3039,7 @@ export default function App() {
       HelperButtons: null,
       StylePanel: null,
       ImageToolbar: DesignflowImageToolbar,
+      InFrontOfTheCanvas: DesignflowOutpaintingCanvasOverlay,
     }),
     []
   )
@@ -2940,9 +3059,11 @@ export default function App() {
     <div className="app-shell">
       <div className="app-frame">
         <div className="canvas-shell">
-          <Tldraw assets={editorAssetStore} onMount={handleMount} components={components} locale="zh-cn" assetUrls={assetUrls} licenseKey={import.meta.env.VITE_TLDRAW_LICENSE_KEY}>
-            <EditorSurface />
-          </Tldraw>
+          <OutpaintingProvider>
+            <Tldraw assets={editorAssetStore} onMount={handleMount} components={components} locale="zh-cn" assetUrls={assetUrls} licenseKey={import.meta.env.VITE_TLDRAW_LICENSE_KEY}>
+              <EditorSurface />
+            </Tldraw>
+          </OutpaintingProvider>
         </div>
       </div>
     </div>

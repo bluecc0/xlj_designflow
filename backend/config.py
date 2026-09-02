@@ -96,6 +96,37 @@ class Settings:
     vlm_base_url: str = os.getenv("VLM_BASE_URL", "") or ai_image_base_url
     vlm_api_key: str = os.getenv("VLM_API_KEY", "") or ai_image_api_key
 
+    # Runware FLUX 扩图。运行参数统一由根目录 .env 管理，真实 API key 不进入仓库。
+    runware_outpainting_enabled: bool = os.getenv("RUNWARE_OUTPAINTING_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    runware_api_key: str = os.getenv("RUNWARE_API_KEY", "").strip()
+    runware_api_url: str = os.getenv("RUNWARE_API_URL", "https://api.runware.ai/v1").strip()
+    runware_outpainting_model: str = os.getenv("RUNWARE_OUTPAINTING_MODEL", "bfl:flux@outpainting").strip()
+    runware_outpainting_mode: str = os.getenv("RUNWARE_OUTPAINTING_MODE", "fast").strip().lower() or "fast"
+    runware_outpainting_output_format: str = os.getenv("RUNWARE_OUTPAINTING_OUTPUT_FORMAT", "PNG").strip().upper() or "PNG"
+    runware_outpainting_output_quality: int = int(os.getenv("RUNWARE_OUTPAINTING_OUTPUT_QUALITY", "95"))
+    runware_outpainting_auto_crop: bool = os.getenv("RUNWARE_OUTPAINTING_AUTO_CROP", "false").strip().lower() in {"1", "true", "yes", "on"}
+    runware_outpainting_ttl_seconds: int = int(os.getenv("RUNWARE_OUTPAINTING_TTL_SECONDS", "3600"))
+    runware_outpainting_max_concurrency: int = int(os.getenv("RUNWARE_OUTPAINTING_MAX_CONCURRENCY", "2"))
+    runware_outpainting_max_queue_size: int = int(os.getenv("RUNWARE_OUTPAINTING_MAX_QUEUE_SIZE", "4"))
+    runware_outpainting_max_pending_per_user: int = int(os.getenv("RUNWARE_OUTPAINTING_MAX_PENDING_PER_USER", "2"))
+    runware_outpainting_max_request_bytes: int = int(os.getenv("RUNWARE_OUTPAINTING_MAX_REQUEST_BYTES", "30000000"))
+    runware_outpainting_timeout_seconds: float = float(os.getenv("RUNWARE_OUTPAINTING_TIMEOUT_SECONDS", "600"))
+    runware_outpainting_poll_interval_seconds: float = float(os.getenv("RUNWARE_OUTPAINTING_POLL_INTERVAL_SECONDS", "2"))
+    runware_outpainting_transient_retries: int = int(os.getenv("RUNWARE_OUTPAINTING_TRANSIENT_RETRIES", "4"))
+    runware_outpainting_retry_backoff_seconds: float = float(os.getenv("RUNWARE_OUTPAINTING_RETRY_BACKOFF_SECONDS", "1.5"))
+    runware_outpainting_retry_backoff_cap_seconds: float = float(os.getenv("RUNWARE_OUTPAINTING_RETRY_BACKOFF_CAP_SECONDS", "8"))
+    runware_outpainting_result_download_retries: int = int(os.getenv("RUNWARE_OUTPAINTING_RESULT_DOWNLOAD_RETRIES", "2"))
+    runware_outpainting_result_host_suffixes: str = os.getenv("RUNWARE_OUTPAINTING_RESULT_HOST_SUFFIXES", "runware.ai").strip()
+    runware_outpainting_max_source_bytes: int = int(os.getenv("RUNWARE_OUTPAINTING_MAX_SOURCE_BYTES", str(20 * 1024 * 1024)))
+    runware_outpainting_max_source_pixels: int = int(os.getenv("RUNWARE_OUTPAINTING_MAX_SOURCE_PIXELS", "50000000"))
+    runware_outpainting_max_encoded_input_bytes: int = int(os.getenv("RUNWARE_OUTPAINTING_MAX_ENCODED_INPUT_BYTES", str(20 * 1024 * 1024)))
+    runware_outpainting_max_result_bytes: int = int(os.getenv("RUNWARE_OUTPAINTING_MAX_RESULT_BYTES", "30000000"))
+    outpaint_snap_pixels: int = int(os.getenv("OUTPAINT_SNAP_PIXELS", "64"))
+    outpaint_max_width: int = int(os.getenv("OUTPAINT_MAX_WIDTH", "2048"))
+    outpaint_max_height: int = int(os.getenv("OUTPAINT_MAX_HEIGHT", "2048"))
+    outpaint_max_area_pixels: int = int(os.getenv("OUTPAINT_MAX_AREA_PIXELS", "4194304"))
+    outpaint_recommended_area_pixels: int = int(os.getenv("OUTPAINT_RECOMMENDED_AREA_PIXELS", "2097152"))
+
     # Kie Seedream 图层分离；key 留空则转 PSD 功能明确不可用
     kie_base_url: str = os.getenv("KIE_BASE_URL", "https://api.kie.ai")
     kie_upload_base_url: str = os.getenv("KIE_UPLOAD_BASE_URL", "https://kieai.redpandaai.co")
@@ -197,7 +228,7 @@ class Settings:
         self.allowed_login_users = self._load_login_users()
 
         # 统一补协议前缀，避免 ai_image_base_url 等配置没有 http://
-        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "kie_base_url", "kie_upload_base_url", "adobe2api_base_url", "cliproxy_base_url", "chat_llm_base_url", "skill_llm_base_url"):
+        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "kie_base_url", "kie_upload_base_url", "adobe2api_base_url", "cliproxy_base_url", "chat_llm_base_url", "skill_llm_base_url", "runware_api_url"):
             _val = getattr(self, _key, "")
             if _val and not _val.startswith("http"):
                 setattr(self, _key, "https://" + _val)
