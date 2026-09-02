@@ -328,11 +328,3 @@ export function normalizeVector(vector: Point): Point {
   if (!length) return { x: 0, y: 0 }
   return { x: vector.x / length, y: vector.y / length }
 }
-
-export function offsetPoint(origin: Point, direction: Point, distance: number): Point {
-  const unit = normalizeVector(direction)
-  return {
-    x: origin.x + unit.x * distance,
-    y: origin.y + unit.y * distance,
-  }
-}

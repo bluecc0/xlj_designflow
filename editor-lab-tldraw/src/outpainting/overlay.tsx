@@ -655,9 +655,7 @@ export function OutpaintingOverlay({
                 onLostPointerCapture={(event) => {
                   if (dragRef.current?.target === event.currentTarget) dragRef.current = null
                 }}
-              >
-                <span aria-hidden="true" />
-              </button>
+              />
             )
           })}
 
@@ -677,8 +675,8 @@ export function OutpaintingOverlay({
                 data-testid={`outpaint-corner-${corner}`}
                 className="designflow-outpainting-corner-control"
                 style={{
-                  left: cornerGeometry.handle.x,
-                  top: cornerGeometry.handle.y,
+                  left: cornerGeometry.point.x,
+                  top: cornerGeometry.point.y,
                   cursor: handlesFrozen ? 'wait' : cornerGeometry.cursor,
                 }}
                 title={handlesFrozen ? '其他图片任务进行中，请稍候' : `拖动调整${CORNER_LABEL[corner]}扩图范围`}

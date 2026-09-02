@@ -752,20 +752,10 @@ input {
   vector-effect: non-scaling-stroke;
 }
 
-.designflow-outpainting-handle-stem {
-  fill: none;
-  stroke: rgba(79, 70, 229, 0.42);
-  stroke-width: 1px;
-  stroke-dasharray: 3 3;
-  vector-effect: non-scaling-stroke;
-}
-
 .designflow-outpainting-edge-control,
 .designflow-outpainting-corner-control {
   position: absolute;
   box-sizing: border-box;
-  width: 28px;
-  height: 28px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -777,55 +767,45 @@ input {
 
 .designflow-outpainting-edge-control {
   z-index: 3;
+  height: 32px;
   transform-origin: center;
 }
 
 .designflow-outpainting-corner-control {
   z-index: 4;
+  width: 32px;
+  height: 32px;
   transform: translate(-50%, -50%);
 }
 
-.designflow-outpainting-edge-control > span,
 .designflow-outpainting-corner-control > span {
   position: absolute;
   top: 50%;
   left: 50%;
-  border: 1.5px solid #4f46e5;
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.14);
-}
-
-.designflow-outpainting-edge-control > span {
-  width: 18px;
-  height: 6px;
-  border-radius: 999px;
-  transform: translate(-50%, -50%);
-}
-
-.designflow-outpainting-corner-control > span {
   width: 8px;
   height: 8px;
+  border: 1.5px solid #4f46e5;
   border-radius: 2px;
-  transform: translate(-50%, -50%) rotate(45deg);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.14);
+  transform: translate(-50%, -50%);
   transition: width 120ms ease, height 120ms ease, box-shadow 120ms ease;
 }
 
-.designflow-outpainting-edge-control:hover:not(:disabled) > span,
-.designflow-outpainting-edge-control:focus-visible > span {
-  height: 7px;
-  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.16), 0 2px 6px rgba(15, 23, 42, 0.16);
-}
-
-.designflow-outpainting-corner-control:hover:not(:disabled) > span,
-.designflow-outpainting-corner-control:focus-visible > span {
-  width: 9px;
-  height: 9px;
-  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.16), 0 2px 6px rgba(15, 23, 42, 0.16);
+.designflow-outpainting-edge-control:hover:not(:disabled) {
+  background: rgba(79, 70, 229, 0.08);
 }
 
 .designflow-outpainting-edge-control:focus-visible {
   outline: 2px solid #4f46e5;
   outline-offset: 1px;
+  background: rgba(79, 70, 229, 0.16);
+}
+
+.designflow-outpainting-corner-control:hover:not(:disabled) > span {
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.16), 0 2px 6px rgba(15, 23, 42, 0.16);
 }
 
 .designflow-outpainting-corner-control:focus-visible {
@@ -914,7 +894,6 @@ input {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .designflow-outpainting-edge-control > span,
   .designflow-outpainting-corner-control > span {
     transition: none;
   }
