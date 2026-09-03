@@ -97,6 +97,50 @@ class ImagePreparationTest(unittest.TestCase):
         )
         self.assertEqual((geometry.expected_width, geometry.expected_height), (192, 96))
 
+    def test_source_snapshot_round_trips_prepared_image(self) -> None:
+        prepared = runware.prepare_outpainting_image(
+            png_data_uri((128, 64)),
+            processing_width=64,
+            processing_height=32,
+            max_source_bytes=1024 * 1024,
+            max_source_pixels=1024 * 1024,
+            max_encoded_input_bytes=1024 * 1024,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir)
+            snapshot_url = runware.persist_prepared_source_snapshot(
+                prepared,
+                output_root=output_root,
+                user_id="operator_a",
+                job_id="jobsource1",
+            )
+            self.assertEqual(
+                snapshot_url,
+                "/ai-images/operator_a/outpainting/jobsource1/source.png",
+            )
+            snapshot_path = output_root / "ai-images" / "operator_a" / "outpainting" / "jobsource1" / "source.png"
+            self.assertTrue(snapshot_path.is_file())
+            loaded = runware.load_prepared_source_snapshot(
+                snapshot_url,
+                output_root=output_root,
+                user_id="operator_a",
+                meta={
+                    "source_width": prepared.source_width,
+                    "source_height": prepared.source_height,
+                    "processing_width": prepared.processing_width,
+                    "processing_height": prepared.processing_height,
+                    "source_format": prepared.source_format,
+                    "source_sha256": prepared.source_sha256,
+                },
+            )
+            self.assertEqual(loaded.processing_width, 64)
+            self.assertEqual(loaded.processing_height, 32)
+            self.assertEqual(loaded.source_sha256, prepared.source_sha256)
+            self.assertTrue(loaded.data_uri.startswith("data:image/png;base64,"))
+            self.assertFalse(runware.is_pre_submit_phase("submitting"))
+            self.assertTrue(runware.is_pre_submit_phase("queued"))
+            self.assertFalse(runware.is_pre_submit_phase(None))
+
     def test_rejects_non_proportional_or_upscaled_processing_size(self) -> None:
         common = {
             "max_source_bytes": 1024 * 1024,
@@ -723,64 +767,75 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             app_main._release_runware_outpainting_claim(claimed_job_id)
             return Mock()
 
-        with (
-            patch.object(app_main.settings, "runware_outpainting_enabled", True),
-            patch.object(app_main.settings, "runware_api_key", "rw-test-key"),
-            patch.object(app_main, "load_ai_image_job_by_client_request_id", return_value=None),
-            patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
-            patch.object(app_main, "_track_runware_outpainting_task", side_effect=close_task),
-        ):
-            response = await app_main.ai_image_outpainting(request)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "output"
+            output_path.mkdir()
+            with (
+                patch.object(app_main.settings, "runware_outpainting_enabled", True),
+                patch.object(app_main.settings, "runware_api_key", "rw-test-key"),
+                patch.object(app_main.settings, "output_path", output_path),
+                patch.object(app_main, "load_ai_image_job_by_client_request_id", return_value=None),
+                patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
+                patch.object(app_main, "_track_runware_outpainting_task", side_effect=close_task),
+            ):
+                response = await app_main.ai_image_outpainting(request)
 
-        self.assertEqual(response["expected_dimensions"], {"width": 129, "height": 33})
-        self.assertEqual(response["processing_width"], 64)
-        self.assertEqual(len(saved), 1)
-        initial = saved[0]
-        self.assertEqual(initial["provider"], "runware")
-        self.assertEqual(initial["client_request_id"], "33333333-3333-4333-8333-333333333333")
-        self.assertEqual(initial["model"], "bfl:flux@outpainting")
-        self.assertEqual(initial["task_id"], response["task_id"])
-        self.assertEqual(initial["request_meta"]["provider_task_uuid"], response["task_id"])
-        self.assertEqual(
-            {
-                key: initial["request_meta"][key]
-                for key in ("top", "right", "bottom", "left", "expected_width", "expected_height")
-            },
-            {
-                "top": 1,
-                "right": 65,
-                "bottom": 0,
-                "left": 0,
-                "expected_width": 129,
-                "expected_height": 33,
-            },
-        )
-        self.assertEqual(
-            {
-                key: initial["request_meta"][key]
-                for key in (
-                    "provider_top",
-                    "provider_right",
-                    "provider_bottom",
-                    "provider_left",
-                    "provider_width",
-                    "provider_height",
-                    "provider_margin_alignment",
-                )
-            },
-            {
-                "provider_top": 64,
-                "provider_right": 128,
-                "provider_bottom": 0,
-                "provider_left": 0,
-                "provider_width": 192,
-                "provider_height": 96,
-                "provider_margin_alignment": 64,
-            },
-        )
-        self.assertEqual(initial["request_meta"]["source_kind"], "data_uri")
-        self.assertIsNone(initial["request_meta"]["source_image_url"])
-        self.assertNotIn("base64", json.dumps(initial["request_meta"]))
+            self.assertEqual(response["expected_dimensions"], {"width": 129, "height": 33})
+            self.assertEqual(response["processing_width"], 64)
+            self.assertEqual(len(saved), 1)
+            initial = saved[0]
+            self.assertEqual(initial["provider"], "runware")
+            self.assertEqual(initial["client_request_id"], "33333333-3333-4333-8333-333333333333")
+            self.assertEqual(initial["model"], "bfl:flux@outpainting")
+            self.assertEqual(initial["task_id"], response["task_id"])
+            self.assertEqual(initial["request_meta"]["provider_task_uuid"], response["task_id"])
+            self.assertEqual(initial["request_meta"]["phase"], "queued")
+            snapshot_url = initial["request_meta"]["source_snapshot_url"]
+            self.assertEqual(
+                snapshot_url,
+                f"/ai-images/operator_a/outpainting/{initial['job_id']}/source.png",
+            )
+            self.assertTrue((output_path / "ai-images" / "operator_a" / "outpainting" / initial["job_id"] / "source.png").is_file())
+            self.assertEqual(
+                {
+                    key: initial["request_meta"][key]
+                    for key in ("top", "right", "bottom", "left", "expected_width", "expected_height")
+                },
+                {
+                    "top": 1,
+                    "right": 65,
+                    "bottom": 0,
+                    "left": 0,
+                    "expected_width": 129,
+                    "expected_height": 33,
+                },
+            )
+            self.assertEqual(
+                {
+                    key: initial["request_meta"][key]
+                    for key in (
+                        "provider_top",
+                        "provider_right",
+                        "provider_bottom",
+                        "provider_left",
+                        "provider_width",
+                        "provider_height",
+                        "provider_margin_alignment",
+                    )
+                },
+                {
+                    "provider_top": 64,
+                    "provider_right": 128,
+                    "provider_bottom": 0,
+                    "provider_left": 0,
+                    "provider_width": 192,
+                    "provider_height": 96,
+                    "provider_margin_alignment": 64,
+                },
+            )
+            self.assertEqual(initial["request_meta"]["source_kind"], "data_uri")
+            self.assertIsNone(initial["request_meta"]["source_image_url"])
+            self.assertNotIn("base64", json.dumps(initial["request_meta"]))
 
     async def test_strict_internal_resolver_blocks_foreign_and_external_urls(self) -> None:
         request = json_request({})
@@ -1105,6 +1160,122 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 run_mock.assert_not_awaited()
                 self.assertEqual(saved[-1]["status"], "failed")
                 self.assertEqual(saved[-1]["error"], "扩图任务恢复信息无效，请重新扩图")
+
+    async def test_recovery_resubmits_queued_job_with_same_uuid(self) -> None:
+        request = json_request({
+            "image_url": png_data_uri((128, 64)),
+            "processing_width": 64,
+            "processing_height": 32,
+            "outpaint": {"top": 1, "right": 65, "bottom": 0, "left": 0},
+            "client_request_id": "77777777-7777-4777-8777-777777777777",
+        })
+        saved: list[dict] = []
+
+        def close_task(coroutine, *, claimed_job_id=""):
+            coroutine.close()
+            app_main._release_runware_outpainting_claim(claimed_job_id)
+            return Mock()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "output"
+            output_path.mkdir()
+            with (
+                patch.object(app_main.settings, "runware_outpainting_enabled", True),
+                patch.object(app_main.settings, "runware_api_key", "rw-test-key"),
+                patch.object(app_main.settings, "output_path", output_path),
+                patch.object(app_main, "load_ai_image_job_by_client_request_id", return_value=None),
+                patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
+                patch.object(app_main, "_track_runware_outpainting_task", side_effect=close_task),
+            ):
+                response = await app_main.ai_image_outpainting(request)
+
+            queued = saved[0]
+            self.assertEqual(queued["request_meta"]["phase"], "queued")
+            stored_job = {
+                "id": queued["job_id"],
+                "user_id": queued["user_id"],
+                "status": queued["status"],
+                "model": queued["model"],
+                "provider": queued["provider"],
+                "prompt": queued["prompt"],
+                "original_prompt": queued["original_prompt"],
+                "resolved_prompt": queued["resolved_prompt"],
+                "size": queued["size"],
+                "resolution": queued["resolution"],
+                "task_id": queued["task_id"],
+                "created_at": queued["created_at"],
+                "request_meta": queued["request_meta"],
+            }
+            result = runware.RunwareOutpaintingResult(
+                image_url="/ai-images/operator_a/2026-01-01/outpainting_job-queued.png",
+                provider_task_uuid=str(queued["task_id"]),
+                cost=0.02,
+                width=129,
+                height=33,
+            )
+            recovered: list[dict] = []
+            run_mock = AsyncMock(return_value=result)
+            app_main.app.state.runware_outpainting_semaphore = app_main.asyncio.Semaphore(1)
+            with (
+                patch.object(app_main.settings, "output_path", output_path),
+                patch.object(app_main, "load_active_runware_outpainting_jobs", return_value=[stored_job]),
+                patch.object(app_main, "run_outpainting", new=run_mock),
+                patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: recovered.append(kwargs)),
+                patch.object(app_main, "generate_inspiration_thumb"),
+                patch.object(app_main, "log_operation"),
+                patch.object(app_main.settings, "runware_outpainting_max_concurrency", 1),
+            ):
+                await app_main._recover_runware_outpainting_jobs()
+
+            transport = run_mock.await_args.kwargs
+            self.assertTrue(transport["submit_request"])
+            self.assertIsNotNone(transport["prepared"])
+            self.assertEqual(transport["provider_task_uuid"], response["task_id"])
+            self.assertEqual(transport["prepared"].processing_width, 64)
+            self.assertEqual(transport["prepared"].processing_height, 32)
+            self.assertEqual(recovered[-1]["status"], "done")
+            self.assertEqual(recovered[-1]["task_id"], response["task_id"])
+
+    async def test_recovery_fails_queued_job_without_source_snapshot(self) -> None:
+        provider_uuid = "88888888-8888-4888-8888-888888888888"
+        stored_job = {
+            "id": "job-queued-missing-source",
+            "user_id": "operator_a",
+            "status": "processing",
+            "model": runware.RUNWARE_MODEL,
+            "provider": "runware",
+            "prompt": "Runware FLUX outpainting",
+            "original_prompt": "Runware FLUX outpainting",
+            "resolved_prompt": "Runware FLUX outpainting",
+            "size": "128x64",
+            "resolution": "",
+            "task_id": provider_uuid,
+            "created_at": 123.0,
+            "request_meta": {
+                "operation": "outpainting",
+                "provider_task_uuid": provider_uuid,
+                "phase": "queued",
+                "processing_width": 64,
+                "processing_height": 64,
+                "top": 64,
+                "right": 0,
+                "bottom": 0,
+                "left": 0,
+                "expected_width": 64,
+                "expected_height": 128,
+            },
+        }
+        saved: list[dict] = []
+        run_mock = AsyncMock()
+        with (
+            patch.object(app_main, "load_active_runware_outpainting_jobs", return_value=[stored_job]),
+            patch.object(app_main, "run_outpainting", new=run_mock),
+            patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
+        ):
+            await app_main._recover_runware_outpainting_jobs()
+        run_mock.assert_not_awaited()
+        self.assertEqual(saved[-1]["status"], "failed")
+        self.assertEqual(saved[-1]["error"], "扩图任务恢复信息无效，请重新扩图")
 
     async def test_done_persistence_retries_without_marking_paid_result_failed(self) -> None:
         prepared = runware.prepare_outpainting_image(

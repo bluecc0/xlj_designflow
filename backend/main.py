@@ -105,6 +105,10 @@ from .runware_outpainting import (
     RunwareOutpaintingError,
     PreparedOutpaintingImage,
     OutpaintingGeometry,
+    discard_prepared_source_snapshot,
+    is_pre_submit_phase,
+    load_prepared_source_snapshot,
+    persist_prepared_source_snapshot,
     prepare_outpainting_image,
     run_outpainting,
     validate_geometry,
@@ -1507,7 +1511,9 @@ async def _recover_runware_outpainting_jobs() -> None:
         return
 
     logger.warning("Runware outpainting recovery found %s unfinished job(s)", len(jobs))
-    recoveries: list[tuple[dict, OutpaintingGeometry, str, dict]] = []
+    recoveries: list[
+        tuple[dict, OutpaintingGeometry, str, dict, PreparedOutpaintingImage | None, bool]
+    ] = []
     for stored_job in jobs:
         job_id = str(stored_job.get("id") or "")
         meta = stored_job.get("request_meta")
@@ -1563,7 +1569,20 @@ async def _recover_runware_outpainting_jobs() -> None:
                 for name, expected in provider_fields.items()
             ):
                 raise OutpaintingValidationError("恢复服务尺寸不一致")
-            recoveries.append((stored_job, geometry, provider_task_uuid, dict(meta)))
+            resume_only = not is_pre_submit_phase(meta.get("phase"))
+            prepared = None
+            if not resume_only:
+                # Queued jobs never reached Runware; rebuild the prepared image and
+                # resubmit the same UUID. Later phases may already have been submitted.
+                prepared = load_prepared_source_snapshot(
+                    str(meta.get("source_snapshot_url") or ""),
+                    output_root=settings.output_path,
+                    user_id=str(stored_job.get("user_id") or ""),
+                    meta=meta,
+                )
+            recoveries.append(
+                (stored_job, geometry, provider_task_uuid, dict(meta), prepared, resume_only)
+            )
         except Exception as exc:
             logger.error(
                 "Runware outpainting recovery metadata rejected: job=%s error=%s",
@@ -1605,14 +1624,14 @@ async def _recover_runware_outpainting_jobs() -> None:
                 _run_runware_outpainting_background(
                     str(job.get("id")),
                     {"id": str(job.get("user_id") or ""), "username": ""},
-                    None,
+                    prepared,
                     geometry,
                     provider_task_uuid,
                     meta,
                     float(job.get("created_at") or time.time()),
-                    resume_only=True,
+                    resume_only=resume_only,
                 )
-                for job, geometry, provider_task_uuid, meta in batch
+                for job, geometry, provider_task_uuid, meta, prepared, resume_only in batch
             ),
             return_exceptions=True,
         )
@@ -4798,6 +4817,12 @@ async def ai_image_outpainting(request: Request):
             provider_task_uuid = str(uuid.uuid4())
             created_at = time.time()
             prompt = "Runware FLUX outpainting"
+            source_snapshot_url = persist_prepared_source_snapshot(
+                prepared,
+                output_root=settings.output_path,
+                user_id=user_id,
+                job_id=job_id,
+            )
             request_meta = {
                 "operation": "outpainting",
                 "client_request_id": client_request_id,
@@ -4806,6 +4831,7 @@ async def ai_image_outpainting(request: Request):
                 "provider_task_uuid": provider_task_uuid,
                 "source_kind": source_kind,
                 "source_image_url": source_image_url,
+                "source_snapshot_url": source_snapshot_url,
                 "source_width": prepared.source_width,
                 "source_height": prepared.source_height,
                 "source_format": prepared.source_format,
@@ -4853,6 +4879,11 @@ async def ai_image_outpainting(request: Request):
                 )
             except sqlite3.IntegrityError:
                 claims.pop(job_id, None)
+                discard_prepared_source_snapshot(
+                    source_snapshot_url,
+                    output_root=settings.output_path,
+                    user_id=user_id,
+                )
                 duplicate = load_ai_image_job_by_client_request_id(
                     str(user["id"]),
                     client_request_id,
@@ -4862,6 +4893,11 @@ async def ai_image_outpainting(request: Request):
                 raise
             except Exception:
                 claims.pop(job_id, None)
+                discard_prepared_source_snapshot(
+                    source_snapshot_url,
+                    output_root=settings.output_path,
+                    user_id=user_id,
+                )
                 raise
             return None, prepared, geometry, job_id, provider_task_uuid, created_at, request_meta
 

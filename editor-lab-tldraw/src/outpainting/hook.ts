@@ -197,6 +197,127 @@ function createOperationToken() {
   })
 }
 
+const EDITOR_USER_ID = new URLSearchParams(window.location.search).get('user_id') || ''
+const EDITOR_CANVAS_ID = 'editor'
+const PENDING_STORAGE_KEY = `designflow:outpainting-pending:${EDITOR_USER_ID || 'anonymous'}:${EDITOR_CANVAS_ID}`
+const PENDING_TTL_MS = 24 * 60 * 60 * 1000
+
+type PendingOutpaintingJob = {
+  jobId: string
+  token: string
+  fingerprint: string
+  capture: OutpaintingSourceCapture
+  createdAt: number
+}
+
+function persistableCapture(capture: OutpaintingSourceCapture): OutpaintingSourceCapture {
+  const sourceUrl = String(capture.sourceUrl || '')
+  if (sourceUrl.startsWith('data:') || sourceUrl.startsWith('blob:')) {
+    return { ...capture, sourceUrl: '' }
+  }
+  return { ...capture }
+}
+
+function readPendingOutpaintingJob(): PendingOutpaintingJob | null {
+  try {
+    const raw = window.localStorage.getItem(PENDING_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<PendingOutpaintingJob>
+    if (!parsed || typeof parsed.jobId !== 'string' || !parsed.jobId) return null
+    if (typeof parsed.token !== 'string' || !parsed.token) return null
+    const capture = parsed.capture
+    if (!capture || typeof capture !== 'object') return null
+    if (!capture.sourceShapeId || !capture.sourcePageId || !capture.margins) return null
+    if (!(Number(capture.processingWidth) > 0) || !(Number(capture.processingHeight) > 0)) return null
+    const createdAt = Number(parsed.createdAt) || 0
+    if (createdAt > 0 && Date.now() - createdAt > PENDING_TTL_MS) {
+      window.localStorage.removeItem(PENDING_STORAGE_KEY)
+      return null
+    }
+    return {
+      jobId: parsed.jobId,
+      token: parsed.token,
+      fingerprint: typeof parsed.fingerprint === 'string' ? parsed.fingerprint : '',
+      capture: { ...capture, operationToken: parsed.token },
+      createdAt,
+    }
+  } catch {
+    return null
+  }
+}
+
+function writePendingOutpaintingJob(job: PendingOutpaintingJob) {
+  try {
+    window.localStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify({
+      jobId: job.jobId,
+      token: job.token,
+      fingerprint: job.fingerprint,
+      capture: persistableCapture(job.capture),
+      createdAt: job.createdAt,
+    }))
+  } catch {}
+}
+
+function clearPendingOutpaintingJob() {
+  try {
+    window.localStorage.removeItem(PENDING_STORAGE_KEY)
+  } catch {}
+}
+
+function hasInsertedOutpaintingResult(editor: Editor, token: string) {
+  if (!token) return false
+  for (const asset of editor.getAssets()) {
+    const meta = (asset.meta || {}) as Record<string, unknown>
+    if (meta.outpaintingOperationToken === token) return true
+  }
+  for (const page of editor.getPages()) {
+    for (const shapeId of editor.getPageShapeIds(page.id)) {
+      const shape = editor.getShape(shapeId)
+      const meta = (shape?.meta || {}) as Record<string, unknown>
+      if (meta.outpaintingOperationToken === token) return true
+    }
+  }
+  return false
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
+function abortIfStale(isCurrentOperation: () => boolean) {
+  if (!isCurrentOperation()) throw new DOMException('aborted', 'AbortError')
+}
+
+async function pollOutpaintingJob(
+  jobId: string,
+  timeoutMs: number,
+  isCurrentOperation: () => boolean,
+  onProgress: (result: Record<string, unknown>, status: string) => void,
+) {
+  const pollIntervalMs = 1000
+  const deadline = Date.now() + timeoutMs
+  for (let attempt = 0; Date.now() < deadline; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => window.setTimeout(resolve, pollIntervalMs))
+    abortIfStale(isCurrentOperation)
+    const statusResponse = await fetch(`/ai-image/${encodeURIComponent(jobId)}`, { credentials: 'include' })
+    if (!statusResponse.ok) {
+      throw new Error(await readErrorResponse(statusResponse, `扩图状态读取失败: HTTP ${statusResponse.status}`))
+    }
+    const result = await statusResponse.json() as Record<string, unknown>
+    const status = String(result.status || '').toLowerCase()
+    if (status === 'failed' || status === 'error') {
+      const error = new Error(String(result.error || '扩图失败'))
+      ;(error as Error & { terminalJobFailure?: boolean }).terminalJobFailure = true
+      throw error
+    }
+    if (status === 'done' || status === 'completed' || status === 'success') {
+      return result
+    }
+    onProgress(result, status)
+  }
+  throw new Error('扩图任务超时，请稍后重试')
+}
+
 async function readErrorResponse(response: Response, fallback: string) {
   try {
     const text = await response.text()
@@ -399,6 +520,9 @@ function insertOutpaintingResult(
   mimeType: string,
   sequentialLayout: SequentialLayoutAdapter
 ) {
+  if (hasInsertedOutpaintingResult(editor, capture.operationToken)) {
+    return null
+  }
   if (!editor.getPage(capture.sourcePageId)) {
     throw new Error('原图所在画板已删除，扩图结果未插入')
   }
@@ -443,6 +567,7 @@ function insertOutpaintingResult(
 
   editor.markHistoryStoppingPoint('insert-outpainted-image')
   editor.run(() => {
+    if (hasInsertedOutpaintingResult(editor, capture.operationToken)) return
     editor.createAssets([assetRecord])
     if (capture.sequentialOrder !== null) shiftSequentialOrdersForInsert(editor, capture)
     editor.createShape({
@@ -506,6 +631,104 @@ export function useOutpaintingController(editor: Editor, sequentialLayout: Seque
   const outpainting = useOutpainting()
   const activeOperationRef = React.useRef<string | null>(null)
   const retryRequestRef = React.useRef<{ fingerprint: string; token: string } | null>(null)
+  const restoreStartedRef = React.useRef(false)
+
+  const finishInserted = React.useCallback((operationToken: string) => {
+    retryRequestRef.current = null
+    clearPendingOutpaintingJob()
+    outpainting.clearDraft()
+    outpainting.setOperation({
+      stage: 'done',
+      message: '扩图已完成并插入画板',
+      progress: null,
+      processing: false,
+      sourceShapeId: null,
+    })
+    window.setTimeout(() => {
+      if (activeOperationRef.current !== operationToken) return
+      outpainting.setOperation((current) => current.stage === 'done'
+        ? { stage: 'idle', message: '', progress: null, processing: false, sourceShapeId: null }
+        : current)
+    }, 2200)
+  }, [outpainting])
+
+  const watchAndInsert = React.useCallback(async (
+    jobId: string,
+    capture: OutpaintingSourceCapture,
+    timeoutSeconds: number,
+  ) => {
+    const operationToken = capture.operationToken
+    const isCurrentOperation = () => activeOperationRef.current === operationToken
+    abortIfStale(isCurrentOperation)
+    outpainting.setOperation({
+      stage: 'queued',
+      message: '扩图任务排队中',
+      progress: null,
+      processing: true,
+      sourceShapeId: capture.sourceShapeId,
+    })
+    const completed = await pollOutpaintingJob(
+      jobId,
+      Math.max(15_000, (timeoutSeconds + 30) * 1000),
+      isCurrentOperation,
+      (result, status) => {
+        const progress = providerProgress(result.progress)
+        outpainting.setOperation({
+          stage: status === 'queued' || status === 'pending' ? 'queued' : 'processing',
+          message: status === 'queued' || status === 'pending' ? '扩图任务排队中' : stageMessage(result),
+          progress,
+          processing: true,
+          sourceShapeId: capture.sourceShapeId,
+        })
+      }
+    )
+    const imageUrl = normalizeResultUrl(String(completed.image_url || ''))
+    if (!imageUrl) throw new Error('扩图完成，但服务没有返回结果图片')
+    abortIfStale(isCurrentOperation)
+    if (hasInsertedOutpaintingResult(editor, operationToken)) {
+      finishInserted(operationToken)
+      return
+    }
+    outpainting.setOperation({
+      stage: 'downloading',
+      message: '扩图完成，正在读取结果',
+      progress: null,
+      processing: true,
+      sourceShapeId: capture.sourceShapeId,
+    })
+    const imageDetails = await fetchImageDetails(imageUrl)
+    abortIfStale(isCurrentOperation)
+    const expectedNaturalSize = getExpectedOutpaintSize(
+      { w: capture.processingWidth, h: capture.processingHeight },
+      capture.margins
+    )
+    if (
+      imageDetails.size.w !== expectedNaturalSize.w
+      || imageDetails.size.h !== expectedNaturalSize.h
+    ) {
+      throw new Error(
+        `扩图结果尺寸不正确，预期 ${expectedNaturalSize.w} × ${expectedNaturalSize.h}`
+      )
+    }
+    outpainting.setOperation({
+      stage: 'inserting',
+      message: '正在插入扩图结果',
+      progress: null,
+      processing: true,
+      sourceShapeId: capture.sourceShapeId,
+    })
+    insertOutpaintingResult(
+      editor,
+      capture,
+      imageUrl,
+      imageDetails.size,
+      imageDetails.fileSize,
+      imageDetails.mimeType,
+      sequentialLayout
+    )
+    abortIfStale(isCurrentOperation)
+    finishInserted(operationToken)
+  }, [editor, finishInserted, outpainting, sequentialLayout])
 
   const submit = React.useCallback(async () => {
     const { config, draft, eligibility, operation, externalOperationBusy } = outpainting
@@ -598,7 +821,6 @@ export function useOutpaintingController(editor: Editor, sequentialLayout: Seque
       sourceShapeId: capture.sourceShapeId,
     })
 
-    let terminalJobFailure = false
     try {
       capture.sourceUrl = await resolveSourceUrl(capture.sourceUrl)
       if (!capture.sourceUrl) throw new Error('当前图片没有可用地址')
@@ -620,108 +842,22 @@ export function useOutpaintingController(editor: Editor, sequentialLayout: Seque
       const created = await createResponse.json()
       const jobId = String(created?.job_id || '')
       if (!jobId) throw new Error('扩图服务没有返回任务 ID')
-      if (!isCurrentOperation()) return
-
-      outpainting.setOperation({
-        stage: 'queued',
-        message: '扩图任务排队中',
-        progress: null,
-        processing: true,
-        sourceShapeId: capture.sourceShapeId,
-      })
-
-      let completed: Record<string, unknown> | null = null
-      const pollIntervalMs = 1000
-      const timeoutMs = Math.max(15_000, (config.timeoutSeconds + 30) * 1000)
-      const deadline = Date.now() + timeoutMs
-      for (let attempt = 0; Date.now() < deadline; attempt += 1) {
-        if (attempt > 0) await new Promise((resolve) => window.setTimeout(resolve, pollIntervalMs))
-        if (!isCurrentOperation()) return
-        const statusResponse = await fetch(`/ai-image/${encodeURIComponent(jobId)}`, { credentials: 'include' })
-        if (!statusResponse.ok) {
-          throw new Error(await readErrorResponse(statusResponse, `扩图状态读取失败: HTTP ${statusResponse.status}`))
-        }
-        const result = await statusResponse.json() as Record<string, unknown>
-        const status = String(result.status || '').toLowerCase()
-        if (status === 'failed' || status === 'error') {
-          terminalJobFailure = true
-          throw new Error(String(result.error || '扩图失败'))
-        }
-        if (status === 'done' || status === 'completed' || status === 'success') {
-          completed = result
-          break
-        }
-        const progress = providerProgress(result.progress)
-        outpainting.setOperation({
-          stage: status === 'queued' || status === 'pending' ? 'queued' : 'processing',
-          message: status === 'queued' || status === 'pending' ? '扩图任务排队中' : stageMessage(result),
-          progress,
-          processing: true,
-          sourceShapeId: capture.sourceShapeId,
-        })
-      }
-      if (!completed) throw new Error('扩图任务超时，请稍后重试')
-      const imageUrl = normalizeResultUrl(String(completed.image_url || ''))
-      if (!imageUrl) throw new Error('扩图完成，但服务没有返回结果图片')
-      if (!isCurrentOperation()) return
-
-      outpainting.setOperation({
-        stage: 'downloading',
-        message: '扩图完成，正在读取结果',
-        progress: null,
-        processing: true,
-        sourceShapeId: capture.sourceShapeId,
-      })
-      const imageDetails = await fetchImageDetails(imageUrl)
-      if (!isCurrentOperation()) return
-      const expectedNaturalSize = getExpectedOutpaintSize(
-        { w: capture.processingWidth, h: capture.processingHeight },
-        capture.margins
-      )
-      if (
-        imageDetails.size.w !== expectedNaturalSize.w
-        || imageDetails.size.h !== expectedNaturalSize.h
-      ) {
-        throw new Error(
-          `扩图结果尺寸不正确，预期 ${expectedNaturalSize.w} × ${expectedNaturalSize.h}`
-        )
-      }
-
-      outpainting.setOperation({
-        stage: 'inserting',
-        message: '正在插入扩图结果',
-        progress: null,
-        processing: true,
-        sourceShapeId: capture.sourceShapeId,
-      })
-      insertOutpaintingResult(
-        editor,
+      abortIfStale(isCurrentOperation)
+      writePendingOutpaintingJob({
+        jobId,
+        token: operationToken,
+        fingerprint: requestFingerprint,
         capture,
-        imageUrl,
-        imageDetails.size,
-        imageDetails.fileSize,
-        imageDetails.mimeType,
-        sequentialLayout
-      )
-      if (!isCurrentOperation()) return
-      retryRequestRef.current = null
-      outpainting.clearDraft()
-      outpainting.setOperation({
-        stage: 'done',
-        message: '扩图已完成并插入画板',
-        progress: null,
-        processing: false,
-        sourceShapeId: null,
+        createdAt: Date.now(),
       })
-      window.setTimeout(() => {
-        if (activeOperationRef.current !== operationToken) return
-        outpainting.setOperation((current) => current.stage === 'done'
-          ? { stage: 'idle', message: '', progress: null, processing: false, sourceShapeId: null }
-          : current)
-      }, 2200)
+      await watchAndInsert(jobId, capture, config.timeoutSeconds)
     } catch (error) {
-      if (!isCurrentOperation()) return
-      if (terminalJobFailure) retryRequestRef.current = null
+      if (isAbortError(error) || !isCurrentOperation()) return
+      const terminalJobFailure = Boolean((error as Error & { terminalJobFailure?: boolean }).terminalJobFailure)
+      if (terminalJobFailure) {
+        retryRequestRef.current = null
+        clearPendingOutpaintingJob()
+      }
       outpainting.setOperation({
         stage: 'error',
         message: formatError(error),
@@ -732,12 +868,57 @@ export function useOutpaintingController(editor: Editor, sequentialLayout: Seque
     } finally {
       outpainting.releaseOperation('outpainting')
     }
-  }, [editor, outpainting, sequentialLayout])
+  }, [editor, outpainting, sequentialLayout, watchAndInsert])
 
   React.useEffect(() => {
     outpainting.registerExecutor(submit)
     return () => outpainting.registerExecutor(null)
   }, [outpainting.registerExecutor, submit])
+
+  const watchAndInsertRef = React.useRef(watchAndInsert)
+  watchAndInsertRef.current = watchAndInsert
+  const configReady = Boolean(outpainting.config)
+  const timeoutSeconds = outpainting.config?.timeoutSeconds || 600
+
+  React.useEffect(() => {
+    if (!configReady || restoreStartedRef.current) return
+    const pending = readPendingOutpaintingJob()
+    restoreStartedRef.current = true
+    if (!pending) return
+    if (hasInsertedOutpaintingResult(editor, pending.token)) {
+      clearPendingOutpaintingJob()
+      return
+    }
+    if (!outpainting.claimOperation('outpainting')) return
+    const operationToken = pending.token
+    activeOperationRef.current = operationToken
+    retryRequestRef.current = { fingerprint: pending.fingerprint, token: operationToken }
+    let cancelled = false
+    void (async () => {
+      try {
+        await watchAndInsertRef.current(pending.jobId, pending.capture, timeoutSeconds)
+      } catch (error) {
+        if (cancelled || isAbortError(error) || activeOperationRef.current !== operationToken) return
+        const terminalJobFailure = Boolean((error as Error & { terminalJobFailure?: boolean }).terminalJobFailure)
+        if (terminalJobFailure) {
+          retryRequestRef.current = null
+          clearPendingOutpaintingJob()
+        }
+        outpainting.setOperation({
+          stage: 'error',
+          message: formatError(error),
+          progress: null,
+          processing: false,
+          sourceShapeId: pending.capture.sourceShapeId,
+        })
+      } finally {
+        outpainting.releaseOperation('outpainting')
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [configReady, editor, outpainting.claimOperation, outpainting.releaseOperation, outpainting.setOperation, timeoutSeconds])
 
   return outpainting
 }

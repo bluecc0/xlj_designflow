@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import hashlib
 import inspect
 import io
@@ -23,7 +24,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import httpx
 from PIL import Image, UnidentifiedImageError
@@ -373,6 +374,171 @@ def prepare_outpainting_image(
         source_sha256=hashlib.sha256(payload).hexdigest(),
         encoded_bytes=len(encoded_png),
     )
+
+
+_PRE_SUBMIT_PHASES = frozenset({"queued"})
+_SOURCE_SNAPSHOT_NAME = "source.png"
+
+
+def is_pre_submit_phase(phase: Any) -> bool:
+    """True when the persisted job has not yet attempted a Runware submit."""
+    return str(phase or "").strip().casefold() in _PRE_SUBMIT_PHASES
+
+
+def _safe_path_component(value: str) -> str:
+    safe = "".join(
+        char for char in str(value or "").strip() if char.isalnum() or char in {"-", "_"}
+    )
+    return safe or "anonymous"
+
+
+def _png_bytes_from_data_uri(data_uri: str) -> bytes:
+    marker = "base64,"
+    index = str(data_uri or "").find(marker)
+    if index < 0:
+        raise OutpaintingValidationError("处理后的图片数据无效")
+    try:
+        payload = base64.b64decode(data_uri[index + len(marker):], validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise OutpaintingValidationError("处理后的图片数据无效") from exc
+    if not payload:
+        raise OutpaintingValidationError("处理后的图片数据无效")
+    return payload
+
+
+def _snapshot_directory(output_root: Path, user_id: str, job_id: str) -> Path:
+    safe_user = _safe_path_component(user_id)
+    safe_job = _safe_path_component(job_id)
+    if safe_job == "anonymous":
+        raise OutpaintingValidationError("扩图任务 ID 无效")
+    return output_root / "ai-images" / safe_user / "outpainting" / safe_job
+
+
+def persist_prepared_source_snapshot(
+    prepared: PreparedOutpaintingImage,
+    *,
+    output_root: Path,
+    user_id: str,
+    job_id: str,
+) -> str:
+    """Write the prepared PNG to disk so queued recovery can resubmit the same UUID."""
+    png_payload = _png_bytes_from_data_uri(prepared.data_uri)
+    directory = _snapshot_directory(output_root, user_id, job_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    out_path = directory / _SOURCE_SNAPSHOT_NAME
+    temp_path = directory / f".{_SOURCE_SNAPSHOT_NAME}.{uuid.uuid4().hex}.tmp"
+    try:
+        temp_path.write_bytes(png_payload)
+        os.replace(temp_path, out_path)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    rel = out_path.relative_to(output_root / "ai-images")
+    return "/ai-images/" + quote(rel.as_posix(), safe="/")
+
+
+def _resolve_source_snapshot_path(
+    snapshot_url: str,
+    *,
+    output_root: Path,
+    user_id: str,
+) -> Path:
+    value = str(snapshot_url or "").strip()
+    prefix = "/ai-images/"
+    if not value.startswith(prefix):
+        raise OutpaintingValidationError("扩图原图快照路径无效")
+    try:
+        rel = unquote(value[len(prefix):].lstrip("/"))
+    except Exception as exc:
+        raise OutpaintingValidationError("扩图原图快照路径无效") from exc
+    parts = Path(rel).parts
+    safe_user = _safe_path_component(user_id)
+    if (
+        len(parts) != 4
+        or parts[0] != safe_user
+        or parts[1] != "outpainting"
+        or parts[3] != _SOURCE_SNAPSHOT_NAME
+        or parts[2] != _safe_path_component(parts[2])
+        or parts[2] == "anonymous"
+    ):
+        raise OutpaintingValidationError("扩图原图快照路径无效")
+    root = (output_root / "ai-images").resolve()
+    owner_root = (root / safe_user).resolve()
+    candidate = (root.joinpath(*parts)).resolve()
+    if owner_root not in candidate.parents:
+        raise OutpaintingValidationError("扩图原图快照路径无效")
+    if not candidate.is_file():
+        raise OutpaintingValidationError("扩图原图快照不存在")
+    return candidate
+
+
+def load_prepared_source_snapshot(
+    snapshot_url: str,
+    *,
+    output_root: Path,
+    user_id: str,
+    meta: dict[str, Any],
+) -> PreparedOutpaintingImage:
+    """Rebuild the prepared image from a durable snapshot written before submit."""
+    path = _resolve_source_snapshot_path(
+        snapshot_url,
+        output_root=output_root,
+        user_id=user_id,
+    )
+    payload = path.read_bytes()
+    if not payload:
+        raise OutpaintingValidationError("扩图原图快照为空")
+    try:
+        source_width = strict_int(meta.get("source_width"), "source_width", minimum=1)
+        source_height = strict_int(meta.get("source_height"), "source_height", minimum=1)
+        processing_width = strict_int(meta.get("processing_width"), "processing_width", minimum=1)
+        processing_height = strict_int(meta.get("processing_height"), "processing_height", minimum=1)
+    except OutpaintingValidationError as exc:
+        raise OutpaintingValidationError("扩图原图快照尺寸无效") from exc
+    try:
+        with Image.open(io.BytesIO(payload)) as image:
+            image.load()
+            actual_size = image.size
+    except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError) as exc:
+        raise OutpaintingValidationError("扩图原图快照损坏") from exc
+    if actual_size != (processing_width, processing_height):
+        raise OutpaintingValidationError("扩图原图快照尺寸不一致")
+    data_uri = "data:image/png;base64," + base64.b64encode(payload).decode("ascii")
+    return PreparedOutpaintingImage(
+        data_uri=data_uri,
+        source_width=source_width,
+        source_height=source_height,
+        processing_width=processing_width,
+        processing_height=processing_height,
+        source_format=str(meta.get("source_format") or "PNG"),
+        source_sha256=str(meta.get("source_sha256") or ""),
+        encoded_bytes=len(payload),
+    )
+
+
+def discard_prepared_source_snapshot(
+    snapshot_url: str,
+    *,
+    output_root: Path,
+    user_id: str,
+) -> None:
+    try:
+        path = _resolve_source_snapshot_path(
+            snapshot_url,
+            output_root=output_root,
+            user_id=user_id,
+        )
+        path.unlink(missing_ok=True)
+        parent = path.parent
+        if parent.exists():
+            try:
+                parent.rmdir()
+            except OSError:
+                pass
+    except Exception:
+        return
 
 
 def _safe_text(value: Any, limit: int = 300) -> str:
