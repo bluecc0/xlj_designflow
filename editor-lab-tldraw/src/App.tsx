@@ -30,6 +30,7 @@ import {
 import {
   OutpaintingOverlay,
   OutpaintingProvider,
+  DesignflowSelectionForegroundOverlayUtil,
   getExpectedSizeForDraft,
   hasOutpaintMargins,
   useOutpainting,
@@ -1263,17 +1264,20 @@ function DesignflowImageToolbar() {
     outpainting.setExternalOperationBusy(otherImageOperationBusy)
     return () => outpainting.setExternalOperationBusy(false)
   }, [otherImageOperationBusy, outpainting.setExternalOperationBusy])
-  const outpaintingMatchesSelection = Boolean(
+  const outpaintingSelected = Boolean(
     imageShapeId &&
-    outpainting.draft?.sourceShapeId === imageShapeId &&
     outpainting.eligibility.shapeId === imageShapeId
   )
+  const outpaintingComposing = Boolean(
+    outpaintingSelected &&
+    outpainting.draft?.sourceShapeId === imageShapeId
+  )
   const outpaintingHasMargins = Boolean(
-    outpaintingMatchesSelection &&
+    outpaintingComposing &&
     outpainting.draft &&
     hasOutpaintMargins(outpainting.draft.margins)
   )
-  const outpaintingExpected = outpaintingMatchesSelection && outpainting.draft
+  const outpaintingExpected = outpaintingComposing && outpainting.draft
     ? getExpectedSizeForDraft(outpainting.eligibility, outpainting.draft.margins)
     : null
   const outpaintingTitle = outpainting.operation.processing
@@ -1282,9 +1286,11 @@ function DesignflowImageToolbar() {
       ? '其他图片任务进行中，请稍候'
       : !outpainting.eligibility.eligible
         ? outpainting.eligibility.reason || '当前图片暂不支持扩图'
-        : !outpaintingHasMargins
-          ? '拖动蓝色边框或四角，设置至少一个扩展范围'
-          : `扩图至 ${outpaintingExpected?.w || 0} × ${outpaintingExpected?.h || 0}`
+        : !outpaintingComposing
+          ? '点击后拖动边缘设置扩展范围'
+          : !outpaintingHasMargins
+            ? '拖动蓝色边框或四角，设置至少一个扩展范围'
+            : `生成 ${outpaintingExpected?.w || 0} × ${outpaintingExpected?.h || 0}`
   const runExternalImageOperation = React.useCallback(async (operation: () => Promise<void>) => {
     if (!outpainting.claimOperation('external')) return
     try {
@@ -1439,13 +1445,19 @@ function DesignflowImageToolbar() {
             ariaLabel={outpaintingTitle}
             title={outpaintingTitle}
             data-testid="tool.image-outpaint"
-            onClick={outpainting.submit}
+            data-composing={outpaintingComposing ? 'true' : 'false'}
+            aria-pressed={outpaintingComposing}
+            onClick={() => {
+              if (!imageShapeId) return
+              if (outpaintingComposing) outpainting.submit()
+              else outpainting.enterCompose(imageShapeId)
+            }}
             disabled={
               outpainting.operation.processing ||
               otherImageOperationBusy ||
-              !outpaintingMatchesSelection ||
+              !outpaintingSelected ||
               !outpainting.eligibility.eligible ||
-              !outpaintingHasMargins
+              (outpaintingComposing && !outpaintingHasMargins)
             }
           >
             {outpainting.operation.processing ? (
@@ -1453,7 +1465,7 @@ function DesignflowImageToolbar() {
             ) : (
               <DesignflowToolbarIcon name="outpaint" />
             )}
-            <span className="designflow-toolbar-label">扩图</span>
+            <span className="designflow-toolbar-label">{outpaintingComposing ? '生成' : '扩图'}</span>
             <span className="designflow-ai-dot" aria-hidden="true" />
           </DesignflowToolbarButton>
           <span className="designflow-toolbar-divider" aria-hidden="true" />
@@ -3055,12 +3067,14 @@ export default function App() {
     []
   )
 
+  const overlayUtils = React.useMemo(() => [DesignflowSelectionForegroundOverlayUtil], [])
+
   return (
     <div className="app-shell">
       <div className="app-frame">
         <div className="canvas-shell">
           <OutpaintingProvider>
-            <Tldraw assets={editorAssetStore} onMount={handleMount} components={components} locale="zh-cn" assetUrls={assetUrls} licenseKey={import.meta.env.VITE_TLDRAW_LICENSE_KEY}>
+            <Tldraw assets={editorAssetStore} onMount={handleMount} components={components} overlayUtils={overlayUtils} locale="zh-cn" assetUrls={assetUrls} licenseKey={import.meta.env.VITE_TLDRAW_LICENSE_KEY}>
               <EditorSurface />
             </Tldraw>
           </OutpaintingProvider>

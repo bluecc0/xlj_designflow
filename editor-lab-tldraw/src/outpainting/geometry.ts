@@ -46,11 +46,7 @@ export function isWithinOutpaintingLimits(
   margins: OutpaintMargins,
   config: OutpaintingConfig
 ) {
-  const output = getProviderOutpaintSize(
-    input,
-    margins,
-    config.providerMarginAlignment
-  )
+  const output = getExpectedOutpaintSize(input, margins)
   return (
     output.w <= config.maxWidth &&
     output.h <= config.maxHeight &&
@@ -65,13 +61,13 @@ export function getProcessingSizeForOutpainting(
 ): Size {
   const width = Math.max(1, Math.round(sourceWidth))
   const height = Math.max(1, Math.round(sourceHeight))
-  const alignment = Math.max(1, Math.round(config.providerMarginAlignment))
-  const maxBaseWidth = Math.max(1, config.maxWidth - alignment)
-  const maxBaseHeight = Math.max(1, config.maxHeight - alignment)
+  const reserved = 1
+  const maxBaseWidth = Math.max(1, config.maxWidth - reserved)
+  const maxBaseHeight = Math.max(1, config.maxHeight - reserved)
   const area = width * height
   const quadraticA = area
-  const quadraticB = alignment * (width + height)
-  const quadraticC = alignment * alignment - config.maxAreaPixels
+  const quadraticB = reserved * (width + height)
+  const quadraticC = reserved * reserved - config.maxAreaPixels
   let areaScale = 1
   if (quadraticA > 0) {
     const discriminant = quadraticB * quadraticB - 4 * quadraticA * quadraticC
@@ -91,8 +87,8 @@ export function getProcessingSizeForOutpainting(
   let nextWidth = Math.max(1, Math.min(width, Math.round(width * scale)))
   let nextHeight = Math.max(1, Math.min(height, Math.round(height * scale)))
   const fits = (candidateWidth: number, candidateHeight: number) => {
-    const envelopeWidth = candidateWidth + alignment
-    const envelopeHeight = candidateHeight + alignment
+    const envelopeWidth = candidateWidth + reserved
+    const envelopeHeight = candidateHeight + reserved
     return (
       envelopeWidth <= config.maxWidth &&
       envelopeHeight <= config.maxHeight &&
@@ -195,18 +191,17 @@ function constrainMargins(
 ) {
   if (isWithinOutpaintingLimits(processingSize, desired, config)) return desired
 
-  const alignment = config.providerMarginAlignment
   const widthClamped = clampAxisMargins(
     desired,
     startingMargins,
     ['left', 'right'],
-    (margins) => getProviderOutpaintSize(processingSize, margins, alignment).w <= config.maxWidth
+    (margins) => getExpectedOutpaintSize(processingSize, margins).w <= config.maxWidth
   )
   const axisClamped = clampAxisMargins(
     widthClamped,
     startingMargins,
     ['top', 'bottom'],
-    (margins) => getProviderOutpaintSize(processingSize, margins, alignment).h <= config.maxHeight
+    (margins) => getExpectedOutpaintSize(processingSize, margins).h <= config.maxHeight
   )
   if (isWithinOutpaintingLimits(processingSize, axisClamped, config)) return axisClamped
 

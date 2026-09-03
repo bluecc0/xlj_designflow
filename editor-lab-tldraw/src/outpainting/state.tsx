@@ -1,5 +1,5 @@
 import React from 'react'
-import type { TLImageShape } from 'tldraw'
+import { atom, type TLImageShape } from 'tldraw'
 import {
   ZERO_OUTPAINT_MARGINS,
   type OutpaintMargins,
@@ -11,7 +11,7 @@ import {
 
 const FALLBACK_CONFIG: OutpaintingConfig = {
   enabled: false,
-  providerMarginAlignment: 64,
+  providerMarginAlignment: 1,
   maxWidth: 2048,
   maxHeight: 2048,
   maxAreaPixels: 4_194_304,
@@ -35,6 +35,16 @@ const IDLE_OPERATION: OutpaintingOperationState = {
   progress: null,
   processing: false,
   sourceShapeId: null,
+}
+
+const composingAtom = atom('designflow.outpainting.composing', false)
+
+export function setOutpaintingComposing(active: boolean) {
+  composingAtom.set(active)
+}
+
+export function isOutpaintingComposing() {
+  return composingAtom.get()
 }
 
 let outpaintingConfigPromise: Promise<OutpaintingConfig> | null = null
@@ -103,6 +113,7 @@ type OutpaintingContextValue = {
   externalOperationBusy: boolean
   setEligibility: (eligibility: OutpaintingEligibility) => void
   ensureDraft: (shapeId: TLImageShape['id']) => void
+  enterCompose: (shapeId: TLImageShape['id']) => void
   setMargins: (shapeId: TLImageShape['id'], margins: OutpaintMargins) => void
   clearDraft: () => void
   setOperation: React.Dispatch<React.SetStateAction<OutpaintingOperationState>>
@@ -141,6 +152,12 @@ export function OutpaintingProvider({ children }: { children: React.ReactNode })
     })
   }, [])
 
+  const enterCompose = React.useCallback((shapeId: TLImageShape['id']) => {
+    if (eligibility.shapeId !== shapeId || !eligibility.eligible) return
+    setOutpaintingComposing(true)
+    ensureDraft(shapeId)
+  }, [eligibility, ensureDraft])
+
   const setMargins = React.useCallback((shapeId: TLImageShape['id'], margins: OutpaintMargins) => {
     setDraft((current) => {
       if (current?.sourceShapeId !== shapeId) return current
@@ -150,7 +167,7 @@ export function OutpaintingProvider({ children }: { children: React.ReactNode })
 
   const clearDraft = React.useCallback(() => {
     setDraft(null)
-    setEligibility(EMPTY_ELIGIBILITY)
+    setOutpaintingComposing(false)
     setOperation((current) => (current.processing ? current : IDLE_OPERATION))
   }, [])
 
@@ -184,6 +201,7 @@ export function OutpaintingProvider({ children }: { children: React.ReactNode })
       externalOperationBusy,
       setEligibility,
       ensureDraft,
+      enterCompose,
       setMargins,
       clearDraft,
       setOperation,
@@ -200,6 +218,7 @@ export function OutpaintingProvider({ children }: { children: React.ReactNode })
       operation,
       externalOperationBusy,
       ensureDraft,
+      enterCompose,
       setMargins,
       clearDraft,
       claimOperation,

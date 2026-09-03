@@ -121,7 +121,7 @@ class Settings:
     runware_outpainting_max_source_pixels: int = int(os.getenv("RUNWARE_OUTPAINTING_MAX_SOURCE_PIXELS", "50000000"))
     runware_outpainting_max_encoded_input_bytes: int = int(os.getenv("RUNWARE_OUTPAINTING_MAX_ENCODED_INPUT_BYTES", str(20 * 1024 * 1024)))
     runware_outpainting_max_result_bytes: int = int(os.getenv("RUNWARE_OUTPAINTING_MAX_RESULT_BYTES", "30000000"))
-    outpaint_snap_pixels: int = int(os.getenv("OUTPAINT_SNAP_PIXELS", "64"))
+    outpaint_snap_pixels: int = int(os.getenv("OUTPAINT_SNAP_PIXELS", "1"))
     outpaint_max_width: int = int(os.getenv("OUTPAINT_MAX_WIDTH", "2048"))
     outpaint_max_height: int = int(os.getenv("OUTPAINT_MAX_HEIGHT", "2048"))
     outpaint_max_area_pixels: int = int(os.getenv("OUTPAINT_MAX_AREA_PIXELS", "4194304"))

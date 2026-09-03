@@ -97,7 +97,6 @@ from .agent_mode import (
 from .psd_layered import create_layered_psd_from_image
 from .matting_service import matting_service
 from .runware_outpainting import (
-    MARGIN_ALIGNMENT,
     MAX_OUTPUT_PIXELS,
     MAX_OUTPUT_SIDE,
     RUNWARE_MODEL,
@@ -110,6 +109,7 @@ from .runware_outpainting import (
     load_prepared_source_snapshot,
     persist_prepared_source_snapshot,
     prepare_outpainting_image,
+    resolve_geometry_from_meta,
     run_outpainting,
     validate_geometry,
 )
@@ -1132,7 +1132,7 @@ def _outpainting_effective_limits() -> dict[str, int]:
         max_width * max_height,
     )
     return {
-        "snap_pixels": MARGIN_ALIGNMENT,
+        "snap_pixels": 1,
         "max_width": max_width,
         "max_height": max_height,
         "max_area_pixels": max_area,
@@ -1174,8 +1174,6 @@ def _outpainting_configuration_error() -> str:
         return "RUNWARE_OUTPAINTING_MAX_PENDING_PER_USER 必须至少为 1"
     if int(settings.runware_outpainting_max_request_bytes) < 1024:
         return "RUNWARE_OUTPAINTING_MAX_REQUEST_BYTES 必须至少为 1024"
-    if int(settings.outpaint_snap_pixels) != MARGIN_ALIGNMENT:
-        return f"OUTPAINT_SNAP_PIXELS 必须为 {MARGIN_ALIGNMENT}"
     result_host_suffixes = _outpainting_result_host_suffixes()
     if not result_host_suffixes:
         return "RUNWARE_OUTPAINTING_RESULT_HOST_SUFFIXES 不能为空"
@@ -1524,14 +1522,8 @@ async def _recover_runware_outpainting_jobs() -> None:
                 stored_job.get("task_id") or meta.get("provider_task_uuid") or ""
             )
             provider_task_uuid = str(uuid.UUID(provider_task_uuid))
-            geometry = validate_geometry(
-                processing_width=meta.get("processing_width"),
-                processing_height=meta.get("processing_height"),
-                top=meta.get("top"),
-                right=meta.get("right"),
-                bottom=meta.get("bottom"),
-                left=meta.get("left"),
-                margin_alignment=MARGIN_ALIGNMENT,
+            geometry = resolve_geometry_from_meta(
+                meta,
                 max_width=MAX_OUTPUT_SIDE,
                 max_height=MAX_OUTPUT_SIDE,
                 max_pixels=MAX_OUTPUT_PIXELS,
@@ -1547,28 +1539,6 @@ async def _recover_runware_outpainting_jobs() -> None:
                 for name, expected in expected_fields.items()
             ):
                 raise OutpaintingValidationError("恢复尺寸不一致")
-
-            provider_fields = {
-                "provider_top": geometry.provider_top,
-                "provider_right": geometry.provider_right,
-                "provider_bottom": geometry.provider_bottom,
-                "provider_left": geometry.provider_left,
-                "provider_width": geometry.provider_width,
-                "provider_height": geometry.provider_height,
-                "provider_margin_alignment": MARGIN_ALIGNMENT,
-            }
-            present_provider_fields = {
-                name for name in provider_fields if name in meta
-            }
-            if present_provider_fields and present_provider_fields != set(provider_fields):
-                raise OutpaintingValidationError("恢复服务尺寸信息不完整")
-            if present_provider_fields and any(
-                isinstance(meta.get(name), bool)
-                or not isinstance(meta.get(name), int)
-                or meta.get(name) != expected
-                for name, expected in provider_fields.items()
-            ):
-                raise OutpaintingValidationError("恢复服务尺寸不一致")
             resume_only = not is_pre_submit_phase(meta.get("phase"))
             prepared = None
             if not resume_only:
@@ -4808,7 +4778,6 @@ async def ai_image_outpainting(request: Request):
                 right=outpaint.get("right", 0),
                 bottom=outpaint.get("bottom", 0),
                 left=outpaint.get("left", 0),
-                margin_alignment=limits["snap_pixels"],
                 max_width=limits["max_width"],
                 max_height=limits["max_height"],
                 max_pixels=limits["max_area_pixels"],

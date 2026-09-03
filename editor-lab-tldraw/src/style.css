@@ -750,6 +750,21 @@ input {
   stroke: rgba(79, 70, 229, 0.92);
   stroke-width: 1.5px;
   vector-effect: non-scaling-stroke;
+  animation: designflow-outpainting-outline-enter 280ms ease-out;
+}
+
+@keyframes designflow-outpainting-outline-enter {
+  from {
+    stroke: rgba(79, 70, 229, 0.18);
+  }
+  to {
+    stroke: rgba(79, 70, 229, 0.92);
+  }
+}
+
+.designflow-outpainting-composing .tl-selection__bg {
+  display: none;
+  pointer-events: none;
 }
 
 .designflow-outpainting-edge-control,
@@ -894,6 +909,10 @@ input {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .designflow-outpainting-outline {
+    animation: none;
+  }
+
   .designflow-outpainting-corner-control > span {
     transition: none;
   }

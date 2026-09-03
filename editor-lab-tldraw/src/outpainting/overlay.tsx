@@ -2,6 +2,7 @@ import React from 'react'
 import {
   useEditor,
   useValue,
+  SelectionForegroundOverlayUtil,
   type Editor,
   type TLImageShape,
   type TLPageId,
@@ -20,6 +21,7 @@ import {
   getOutpaintingEligibility,
   useOutpaintingController,
 } from './hook'
+import { isOutpaintingComposing, setOutpaintingComposing } from './state'
 import {
   ZERO_OUTPAINT_MARGINS,
   type OutpaintCorner,
@@ -335,6 +337,13 @@ function isOutpaintingEscapeContext() {
   return !activeElement || activeElement === document.body
 }
 
+export class DesignflowSelectionForegroundOverlayUtil extends SelectionForegroundOverlayUtil {
+  override isActive(): boolean {
+    if (isOutpaintingComposing()) return false
+    return super.isActive()
+  }
+}
+
 export function OutpaintingOverlay({
   getSequentialSourceOrder,
   reflowSequentialImages,
@@ -366,17 +375,21 @@ export function OutpaintingOverlay({
 
   React.useEffect(() => {
     outpainting.setEligibility(eligibility)
-    if (eligibility.eligible && eligibility.shapeId) {
-      outpainting.ensureDraft(eligibility.shapeId as TLImageShape['id'])
-    } else {
+    const draftShapeId = outpainting.draft?.sourceShapeId
+    if (
+      draftShapeId &&
+      (draftShapeId !== eligibility.shapeId || !eligibility.eligible) &&
+      !outpainting.operation.processing
+    ) {
       outpainting.clearDraft()
       outpainting.setEligibility(eligibility)
     }
   }, [
     eligibility,
     selectionKey,
+    outpainting.draft?.sourceShapeId,
+    outpainting.operation.processing,
     outpainting.clearDraft,
-    outpainting.ensureDraft,
     outpainting.setEligibility,
   ])
 
@@ -396,23 +409,19 @@ export function OutpaintingOverlay({
     },
     [editor, renderShape, draft, eligibility]
   )
-  const selectedShapeGeometry = useValue(
-    'designflow-outpainting-selected-shape-geometry',
-    () => {
-      if (!selectedImage || !outpainting.config?.enabled) return null
-      const processingWidth = Math.max(1, eligibility.processingWidth || Number(selectedImage.props.w))
-      const processingHeight = Math.max(1, eligibility.processingHeight || Number(selectedImage.props.h))
-      return createOverlayGeometry(
-        editor,
-        selectedImage,
-        { ...ZERO_OUTPAINT_MARGINS },
-        processingWidth,
-        processingHeight
-      )
-    },
-    [editor, selectedImage, outpainting.config, eligibility]
-  )
   const dragRef = React.useRef<DragState | null>(null)
+  React.useEffect(() => {
+    const composing = Boolean(renderShape && draft)
+    setOutpaintingComposing(composing)
+    editor.getContainer().classList.toggle('designflow-outpainting-composing', composing)
+  }, [draft, editor, renderShape])
+  React.useEffect(() => {
+    const container = editor.getContainer()
+    return () => {
+      setOutpaintingComposing(false)
+      container.classList.remove('designflow-outpainting-composing')
+    }
+  }, [editor])
   const patternId = React.useId().replace(/[^a-zA-Z0-9_-]/g, '') || 'outpaint-hatch'
   const handlesFrozen = outpainting.operation.processing || outpainting.externalOperationBusy
 
@@ -451,12 +460,16 @@ export function OutpaintingOverlay({
       }
       if (!isOutpaintingEscapeContext()) return
       const currentDraft = outpainting.draft
-      const hasDraftMargins = currentDraft && Object.values(currentDraft.margins).some((value) => value > 0)
-      if (!currentDraft || (!hasDraftMargins && outpainting.operation.stage !== 'error')) return
-      outpainting.setMargins(currentDraft.sourceShapeId, { ...ZERO_OUTPAINT_MARGINS })
-      outpainting.setOperation((current) => current.stage === 'error'
-        ? { stage: 'idle', message: '', progress: null, processing: false, sourceShapeId: null }
-        : current)
+      if (!currentDraft) return
+      const hasDraftMargins = Object.values(currentDraft.margins).some((value) => value > 0)
+      if (hasDraftMargins || outpainting.operation.stage === 'error') {
+        outpainting.setMargins(currentDraft.sourceShapeId, { ...ZERO_OUTPAINT_MARGINS })
+        outpainting.setOperation((current) => current.stage === 'error'
+          ? { stage: 'idle', message: '', progress: null, processing: false, sourceShapeId: null }
+          : current)
+      } else {
+        outpainting.clearDraft()
+      }
       event.preventDefault()
       event.stopImmediatePropagation()
     }
@@ -589,7 +602,10 @@ export function OutpaintingOverlay({
   if (!outpainting.config?.enabled) return null
 
   return (
-    <div className="designflow-outpainting-layer">
+    <div
+      className="designflow-outpainting-layer"
+      data-outpainting-composing={geometry && draft ? 'true' : 'false'}
+    >
       {geometry && draft && (
         <>
           <svg className="designflow-outpainting-svg" aria-hidden="true">
@@ -714,19 +730,6 @@ export function OutpaintingOverlay({
             </span>
           )}
         </>
-      )}
-
-      {!eligibility.eligible && eligibility.reason && selectedShapeGeometry && (
-        <span
-          className="designflow-outpainting-ineligible"
-          style={{
-            left: (selectedShapeGeometry.source[0].x + selectedShapeGeometry.source[1].x) / 2,
-            top: Math.min(...selectedShapeGeometry.source.map((point) => point.y)) - 18,
-          }}
-          role="status"
-        >
-          {eligibility.reason}
-        </span>
       )}
 
       {showOperationStatus && (

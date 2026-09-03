@@ -179,7 +179,7 @@ class ImagePreparationTest(unittest.TestCase):
                 max_encoded_input_bytes=1024 * 1024,
             )
 
-    def test_geometry_keeps_exact_margins_and_aligns_provider_envelope(self) -> None:
+    def test_geometry_keeps_exact_margins_without_provider_alignment(self) -> None:
         with self.assertRaisesRegex(runware.OutpaintingValidationError, "至少一个"):
             runware.validate_geometry(
                 processing_width=64, processing_height=64,
@@ -215,31 +215,45 @@ class ImagePreparationTest(unittest.TestCase):
         )
         self.assertEqual(
             geometry.provider_margins(),
-            {"top": 64, "right": 128, "bottom": 0, "left": 64},
+            {"top": 1, "right": 65, "bottom": 0, "left": 64},
         )
         self.assertEqual((geometry.expected_width, geometry.expected_height), (769, 481))
-        self.assertEqual((geometry.provider_width, geometry.provider_height), (832, 544))
-        self.assertEqual(geometry.crop_box(), (0, 63, 769, 544))
+        self.assertEqual((geometry.provider_width, geometry.provider_height), (769, 481))
+        self.assertEqual(geometry.crop_box(), (0, 0, 769, 481))
         self.assertEqual(
             [runware.align_margin_for_provider(value, 64) for value in (0, 1, 64, 65)],
             [0, 64, 64, 128],
         )
+        aligned = runware.validate_geometry(
+            processing_width=640,
+            processing_height=480,
+            top=1,
+            right=65,
+            bottom=0,
+            left=64,
+            margin_alignment=64,
+        )
+        self.assertEqual(
+            aligned.provider_margins(),
+            {"top": 64, "right": 128, "bottom": 0, "left": 64},
+        )
+        self.assertEqual(aligned.crop_box(), (0, 63, 769, 544))
 
-    def test_geometry_rejects_provider_envelope_overflow(self) -> None:
+    def test_geometry_rejects_output_overflow(self) -> None:
         boundary = runware.validate_geometry(
-            processing_width=1984,
+            processing_width=2047,
             processing_height=2048,
             top=0,
             right=1,
             bottom=0,
             left=0,
         )
-        self.assertEqual((boundary.expected_width, boundary.expected_height), (1985, 2048))
+        self.assertEqual((boundary.expected_width, boundary.expected_height), (2048, 2048))
         self.assertEqual((boundary.provider_width, boundary.provider_height), (2048, 2048))
 
-        with self.assertRaisesRegex(runware.OutpaintingValidationError, "服务要求"):
+        with self.assertRaisesRegex(runware.OutpaintingValidationError, "不能超过"):
             runware.validate_geometry(
-                processing_width=1985,
+                processing_width=2048,
                 processing_height=64,
                 top=0,
                 right=1,
@@ -344,7 +358,7 @@ class RunwareTransportTest(unittest.IsolatedAsyncioTestCase):
                     "cost": 0.0123,
                 }]}),
             ],
-            [self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((192, 128)))],
+            [self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((129, 65)))],
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             result, sleep_mock = await self.run_with_client(fake, Path(temp_dir))
@@ -362,7 +376,7 @@ class RunwareTransportTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(task["model"], "bfl:flux@outpainting")
         self.assertEqual(task["deliveryMethod"], "async")
         self.assertEqual(task["numberResults"], 1)
-        self.assertEqual(task["outpaint"], {"top": 64, "right": 128, "bottom": 0, "left": 0})
+        self.assertEqual(task["outpaint"], {"top": 1, "right": 65, "bottom": 0, "left": 0})
         self.assertEqual(task["settings"], {"autoCrop": False, "mode": "fast"})
         self.assertEqual(task["outputType"], "URL")
         self.assertEqual(task["outputFormat"], "PNG")
@@ -415,7 +429,7 @@ class RunwareTransportTest(unittest.IsolatedAsyncioTestCase):
                     "imageURL": "https://cdn.runware.ai/result.png",
                 }]}),
             ],
-            [self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((192, 128)))],
+            [self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((129, 65)))],
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             await self.run_with_client(fake, Path(temp_dir))
@@ -433,7 +447,7 @@ class RunwareTransportTest(unittest.IsolatedAsyncioTestCase):
                 "imageURL": "https://cdn.runware.ai/result.png",
                 "cost": 0.04,
             }]})],
-            [self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((192, 128)))],
+            [self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((129, 65)))],
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             with (
@@ -502,7 +516,7 @@ class RunwareTransportTest(unittest.IsolatedAsyncioTestCase):
                     "imageURL": "https://cdn.runware.ai/result.png",
                 }]}),
             ],
-            [self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((192, 128)))],
+            [self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((129, 65)))],
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             await self.run_with_client(fake, Path(temp_dir))
@@ -558,7 +572,7 @@ class RunwareTransportTest(unittest.IsolatedAsyncioTestCase):
             }]})],
             [
                 self.response(503, headers={"Retry-After": "6", "Content-Type": "text/plain"}, content=b"busy"),
-                self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((192, 128))),
+                self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((129, 65))),
             ],
         )
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -569,7 +583,7 @@ class RunwareTransportTest(unittest.IsolatedAsyncioTestCase):
     async def test_download_requires_image_content_type_and_exact_dimensions(self) -> None:
         for headers, content, expected_message in (
             ({"Content-Type": "text/html"}, b"not an image", "不是有效图片"),
-            ({"Content-Type": "image/png"}, png_bytes((129, 65)), "尺寸不正确"),
+            ({"Content-Type": "image/png"}, png_bytes((192, 128)), "尺寸不正确"),
         ):
             with self.subTest(expected_message=expected_message):
                 fake = FakeClient(
@@ -610,7 +624,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         ):
             config = app_main.ai_image_outpainting_config()
         self.assertTrue(config["enabled"])
-        self.assertEqual(config["snap_pixels"], 64)
+        self.assertEqual(config["snap_pixels"], 1)
         self.assertEqual(config["max_width"], 2048)
         self.assertEqual(config["max_height"], 2048)
         self.assertEqual(config["max_area_pixels"], 4_194_304)
@@ -824,13 +838,13 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                     )
                 },
                 {
-                    "provider_top": 64,
-                    "provider_right": 128,
+                    "provider_top": 1,
+                    "provider_right": 65,
                     "provider_bottom": 0,
                     "provider_left": 0,
-                    "provider_width": 192,
-                    "provider_height": 96,
-                    "provider_margin_alignment": 64,
+                    "provider_width": 129,
+                    "provider_height": 33,
+                    "provider_margin_alignment": 1,
                 },
             )
             self.assertEqual(initial["request_meta"]["source_kind"], "data_uri")
@@ -988,7 +1002,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(poll["outpainting"]["provider_task_uuid"], provider_uuid)
         self.assertNotIn("source_sha256", poll["outpainting"])
 
-    async def test_recovery_polls_persisted_uuid_without_resubmission(self) -> None:
+    async def test_recovery_polls_legacy_aligned_provider_envelope(self) -> None:
         provider_uuid = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
         stored_job = {
             "id": "job-recovery",

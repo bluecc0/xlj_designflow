@@ -34,9 +34,18 @@ logger = logging.getLogger(__name__)
 
 RUNWARE_API_URL = "https://api.runware.ai/v1/"
 RUNWARE_MODEL = "bfl:flux@outpainting"
-MARGIN_ALIGNMENT = 64
+LEGACY_MARGIN_ALIGNMENT = 64
 MAX_OUTPUT_SIDE = 2048
 MAX_OUTPUT_PIXELS = 4_194_304
+_PROVIDER_GEOMETRY_FIELDS = (
+    "provider_top",
+    "provider_right",
+    "provider_bottom",
+    "provider_left",
+    "provider_width",
+    "provider_height",
+    "provider_margin_alignment",
+)
 _TRANSIENT_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
 _RETRYABLE_PROVIDER_CODES = {
     "timeoutprovider",
@@ -162,7 +171,7 @@ def validate_geometry(
     right: Any,
     bottom: Any,
     left: Any,
-    margin_alignment: int = MARGIN_ALIGNMENT,
+    margin_alignment: int = 1,
     max_width: int = MAX_OUTPUT_SIDE,
     max_height: int = MAX_OUTPUT_SIDE,
     max_pixels: int = MAX_OUTPUT_PIXELS,
@@ -191,10 +200,13 @@ def validate_geometry(
     if expected_width * expected_height > max_pixels:
         raise OutpaintingValidationError(f"扩图结果不能超过 {max_pixels} 像素")
 
-    provider_margins = {
-        name: align_margin_for_provider(value, margin_alignment)
-        for name, value in margins.items()
-    }
+    if margin_alignment == 1:
+        provider_margins = dict(margins)
+    else:
+        provider_margins = {
+            name: align_margin_for_provider(value, margin_alignment)
+            for name, value in margins.items()
+        }
     provider_width = (
         processing_width
         + provider_margins["left"]
@@ -224,6 +236,72 @@ def validate_geometry(
         provider_width=provider_width,
         provider_height=provider_height,
     )
+
+
+def _provider_geometry_snapshot(
+    geometry: OutpaintingGeometry,
+    alignment: int,
+) -> dict[str, int]:
+    return {
+        "provider_top": geometry.provider_top,
+        "provider_right": geometry.provider_right,
+        "provider_bottom": geometry.provider_bottom,
+        "provider_left": geometry.provider_left,
+        "provider_width": geometry.provider_width,
+        "provider_height": geometry.provider_height,
+        "provider_margin_alignment": alignment,
+    }
+
+
+def resolve_geometry_from_meta(
+    meta: dict[str, Any],
+    *,
+    max_width: int = MAX_OUTPUT_SIDE,
+    max_height: int = MAX_OUTPUT_SIDE,
+    max_pixels: int = MAX_OUTPUT_PIXELS,
+) -> OutpaintingGeometry:
+    """Rebuild geometry for recovery.
+
+    New jobs store exact provider margins. In-flight jobs created before that
+    change may still have a 64-aligned provider envelope; keep those pollable.
+    """
+    requested = {
+        "processing_width": meta.get("processing_width"),
+        "processing_height": meta.get("processing_height"),
+        "top": meta.get("top"),
+        "right": meta.get("right"),
+        "bottom": meta.get("bottom"),
+        "left": meta.get("left"),
+        "max_width": max_width,
+        "max_height": max_height,
+        "max_pixels": max_pixels,
+    }
+    geometry = validate_geometry(**requested, margin_alignment=1)
+    present = {name for name in _PROVIDER_GEOMETRY_FIELDS if name in meta}
+    if not present:
+        return geometry
+    if present != set(_PROVIDER_GEOMETRY_FIELDS):
+        raise OutpaintingValidationError("恢复服务尺寸信息不完整")
+
+    def stored_matches(expected: dict[str, int]) -> bool:
+        return not any(
+            isinstance(meta.get(name), bool)
+            or not isinstance(meta.get(name), int)
+            or meta.get(name) != value
+            for name, value in expected.items()
+        )
+
+    if stored_matches(_provider_geometry_snapshot(geometry, 1)):
+        return geometry
+    legacy = validate_geometry(
+        **requested,
+        margin_alignment=LEGACY_MARGIN_ALIGNMENT,
+    )
+    if stored_matches(
+        _provider_geometry_snapshot(legacy, LEGACY_MARGIN_ALIGNMENT)
+    ):
+        return legacy
+    raise OutpaintingValidationError("恢复服务尺寸不一致")
 
 
 def _read_source_bytes(source: str | Path, max_source_bytes: int) -> tuple[bytes, str | None]:
