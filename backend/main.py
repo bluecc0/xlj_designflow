@@ -1278,6 +1278,14 @@ async def _save_outpainting_job_with_retries(**values) -> None:
     await asyncio.to_thread(persist)
 
 
+def _discard_outpainting_source_snapshot(request_meta: dict | None, user_id: str) -> None:
+    discard_prepared_source_snapshot(
+        str((request_meta or {}).get("source_snapshot_url") or ""),
+        output_root=settings.output_path,
+        user_id=str(user_id or ""),
+    )
+
+
 async def _run_runware_outpainting_background(
     job_id: str,
     user: dict,
@@ -1327,10 +1335,12 @@ async def _run_runware_outpainting_background(
         await asyncio.to_thread(persist_processing, progress, phase)
 
     result = None
+    submission_attempted = False
     try:
         persist_processing(5 if not resume_only else 20, "queued" if not resume_only else "recovering")
         async with semaphore:
             persist_processing(10 if not resume_only else 25, "submitting" if not resume_only else "recovering")
+            submission_attempted = True
             result = await run_outpainting(
                 api_key=settings.runware_api_key,
                 api_url=settings.runware_api_url,
@@ -1384,6 +1394,7 @@ async def _run_runware_outpainting_background(
             progress=100,
             created_at=created_at,
         )
+        _discard_outpainting_source_snapshot(request_meta, user_id)
         try:
             generate_inspiration_thumb(result.image_url, user_id, job_id)
         except Exception:
@@ -1412,7 +1423,10 @@ async def _run_runware_outpainting_background(
         except Exception:
             logger.exception("Runware outpainting success operation log failed: job=%s", job_id)
     except asyncio.CancelledError:
-        interrupted_meta = {**request_meta, "phase": "interrupted"}
+        # Waiting on the semaphore (or cancelled before run_outpainting) never
+        # reached Runware. Keep a pre-submit phase so restart resubmits the UUID.
+        interrupt_phase = "interrupted" if (resume_only or submission_attempted) else "queued"
+        interrupted_meta = {**request_meta, "phase": interrupt_phase}
         try:
             await _save_outpainting_job_with_retries(
                 job_id=job_id,
@@ -1478,6 +1492,7 @@ async def _run_runware_outpainting_background(
                 progress=100,
                 created_at=created_at,
             )
+            _discard_outpainting_source_snapshot(request_meta, user_id)
         except Exception:
             logger.exception("Runware outpainting failure persistence failed: job=%s", job_id)
         try:
@@ -1582,6 +1597,10 @@ async def _recover_runware_outpainting_jobs() -> None:
                     error="扩图任务恢复信息无效，请重新扩图",
                     progress=100,
                     created_at=float(stored_job.get("created_at") or time.time()),
+                )
+                _discard_outpainting_source_snapshot(
+                    meta if isinstance(meta, dict) else None,
+                    str(stored_job.get("user_id") or ""),
                 )
             except Exception:
                 logger.exception("Runware outpainting invalid recovery persistence failed: job=%s", job_id)

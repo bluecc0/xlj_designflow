@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -139,6 +140,7 @@ class ImagePreparationTest(unittest.TestCase):
             self.assertTrue(loaded.data_uri.startswith("data:image/png;base64,"))
             self.assertFalse(runware.is_pre_submit_phase("submitting"))
             self.assertTrue(runware.is_pre_submit_phase("queued"))
+            self.assertFalse(runware.is_pre_submit_phase("interrupted"))
             self.assertFalse(runware.is_pre_submit_phase(None))
 
     def test_rejects_non_proportional_or_upscaled_processing_size(self) -> None:
@@ -1290,6 +1292,258 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         run_mock.assert_not_awaited()
         self.assertEqual(saved[-1]["status"], "failed")
         self.assertEqual(saved[-1]["error"], "扩图任务恢复信息无效，请重新扩图")
+
+    async def test_cancel_while_waiting_for_semaphore_recovers_as_resubmit(self) -> None:
+        job_id = "job-cancel-queued"
+        provider_uuid = "99999999-9999-4999-8999-999999999999"
+        waiting = asyncio.Event()
+        held = asyncio.Semaphore(0)
+
+        class WaitingSemaphore:
+            async def __aenter__(self):
+                waiting.set()
+                await held.acquire()
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                held.release()
+                return False
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "output"
+            output_path.mkdir()
+            prepared = runware.prepare_outpainting_image(
+                png_data_uri((128, 64)),
+                processing_width=64,
+                processing_height=32,
+                max_source_bytes=1024 * 1024,
+                max_source_pixels=1024 * 1024,
+                max_encoded_input_bytes=1024 * 1024,
+            )
+            geometry = runware.validate_geometry(
+                processing_width=64,
+                processing_height=32,
+                top=1,
+                right=65,
+                bottom=0,
+                left=0,
+            )
+            snapshot_url = runware.persist_prepared_source_snapshot(
+                prepared,
+                output_root=output_path,
+                user_id="operator_a",
+                job_id=job_id,
+            )
+            snapshot_path = (
+                output_path / "ai-images" / "operator_a" / "outpainting" / job_id / "source.png"
+            )
+            request_meta = {
+                "operation": "outpainting",
+                "provider_task_uuid": provider_uuid,
+                "source_snapshot_url": snapshot_url,
+                "source_width": prepared.source_width,
+                "source_height": prepared.source_height,
+                "processing_width": prepared.processing_width,
+                "processing_height": prepared.processing_height,
+                "source_format": prepared.source_format,
+                "source_sha256": prepared.source_sha256,
+                "top": 1,
+                "right": 65,
+                "bottom": 0,
+                "left": 0,
+                "expected_width": geometry.expected_width,
+                "expected_height": geometry.expected_height,
+                "phase": "queued",
+            }
+            saved: list[dict] = []
+            app_main.app.state.runware_outpainting_semaphore = WaitingSemaphore()
+            with (
+                patch.object(app_main.settings, "output_path", output_path),
+                patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
+                patch.object(app_main, "run_outpainting", new=AsyncMock()) as run_mock,
+            ):
+                worker = asyncio.create_task(
+                    app_main._run_runware_outpainting_background(
+                        job_id,
+                        {"id": "operator_a", "username": "运营A", "role": "user"},
+                        prepared,
+                        geometry,
+                        provider_uuid,
+                        request_meta,
+                        123.0,
+                    )
+                )
+                await asyncio.wait_for(waiting.wait(), timeout=2)
+                worker.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await worker
+                run_mock.assert_not_awaited()
+                self.assertEqual(saved[-1]["request_meta"]["phase"], "queued")
+                self.assertEqual(saved[-1]["status"], "processing")
+                self.assertTrue(snapshot_path.is_file())
+
+                stored_job = {
+                    "id": job_id,
+                    "user_id": "operator_a",
+                    "status": saved[-1]["status"],
+                    "model": saved[-1]["model"],
+                    "provider": saved[-1]["provider"],
+                    "prompt": saved[-1]["prompt"],
+                    "original_prompt": saved[-1]["original_prompt"],
+                    "resolved_prompt": saved[-1]["resolved_prompt"],
+                    "size": saved[-1]["size"],
+                    "resolution": saved[-1]["resolution"],
+                    "task_id": saved[-1]["task_id"],
+                    "created_at": saved[-1]["created_at"],
+                    "request_meta": saved[-1]["request_meta"],
+                }
+                result = runware.RunwareOutpaintingResult(
+                    image_url="/ai-images/operator_a/2026-01-01/outpainting_job-cancel.png",
+                    provider_task_uuid=provider_uuid,
+                    cost=0.02,
+                    width=129,
+                    height=33,
+                )
+                recovered: list[dict] = []
+                recover_mock = AsyncMock(return_value=result)
+                app_main.app.state.runware_outpainting_semaphore = asyncio.Semaphore(1)
+                with (
+                    patch.object(app_main, "load_active_runware_outpainting_jobs", return_value=[stored_job]),
+                    patch.object(app_main, "run_outpainting", new=recover_mock),
+                    patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: recovered.append(kwargs)),
+                    patch.object(app_main, "generate_inspiration_thumb"),
+                    patch.object(app_main, "log_operation"),
+                    patch.object(app_main.settings, "runware_outpainting_max_concurrency", 1),
+                ):
+                    await app_main._recover_runware_outpainting_jobs()
+
+                self.assertTrue(recover_mock.await_args.kwargs["submit_request"])
+                self.assertEqual(recover_mock.await_args.kwargs["provider_task_uuid"], provider_uuid)
+                self.assertEqual(recovered[-1]["status"], "done")
+
+    async def test_terminal_success_discards_source_snapshot(self) -> None:
+        job_id = "job-done-snapshot"
+        provider_uuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "output"
+            output_path.mkdir()
+            prepared = runware.prepare_outpainting_image(
+                png_data_uri((128, 64)),
+                processing_width=64,
+                processing_height=32,
+                max_source_bytes=1024 * 1024,
+                max_source_pixels=1024 * 1024,
+                max_encoded_input_bytes=1024 * 1024,
+            )
+            geometry = runware.validate_geometry(
+                processing_width=64,
+                processing_height=32,
+                top=1,
+                right=65,
+                bottom=0,
+                left=0,
+            )
+            snapshot_url = runware.persist_prepared_source_snapshot(
+                prepared,
+                output_root=output_path,
+                user_id="operator_a",
+                job_id=job_id,
+            )
+            snapshot_path = (
+                output_path / "ai-images" / "operator_a" / "outpainting" / job_id / "source.png"
+            )
+            self.assertTrue(snapshot_path.is_file())
+            result = runware.RunwareOutpaintingResult(
+                image_url="/ai-images/operator_a/2026-01-01/outpainting_job-done.png",
+                provider_task_uuid=provider_uuid,
+                cost=0.01,
+                width=129,
+                height=33,
+            )
+            app_main.app.state.runware_outpainting_semaphore = asyncio.Semaphore(1)
+            with (
+                patch.object(app_main.settings, "output_path", output_path),
+                patch.object(app_main, "run_outpainting", new=AsyncMock(return_value=result)),
+                patch.object(app_main, "save_ai_image_job"),
+                patch.object(app_main, "generate_inspiration_thumb"),
+                patch.object(app_main, "log_operation"),
+            ):
+                await app_main._run_runware_outpainting_background(
+                    job_id,
+                    {"id": "operator_a", "username": "运营A", "role": "user"},
+                    prepared,
+                    geometry,
+                    provider_uuid,
+                    {
+                        "operation": "outpainting",
+                        "provider_task_uuid": provider_uuid,
+                        "source_snapshot_url": snapshot_url,
+                        "expected_width": geometry.expected_width,
+                        "expected_height": geometry.expected_height,
+                    },
+                    123.0,
+                )
+            self.assertFalse(snapshot_path.exists())
+
+    async def test_terminal_failure_discards_source_snapshot(self) -> None:
+        job_id = "job-failed-snapshot"
+        provider_uuid = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "output"
+            output_path.mkdir()
+            prepared = runware.prepare_outpainting_image(
+                png_data_uri((128, 64)),
+                processing_width=64,
+                processing_height=32,
+                max_source_bytes=1024 * 1024,
+                max_source_pixels=1024 * 1024,
+                max_encoded_input_bytes=1024 * 1024,
+            )
+            geometry = runware.validate_geometry(
+                processing_width=64,
+                processing_height=32,
+                top=1,
+                right=65,
+                bottom=0,
+                left=0,
+            )
+            snapshot_url = runware.persist_prepared_source_snapshot(
+                prepared,
+                output_root=output_path,
+                user_id="operator_a",
+                job_id=job_id,
+            )
+            snapshot_path = (
+                output_path / "ai-images" / "operator_a" / "outpainting" / job_id / "source.png"
+            )
+            self.assertTrue(snapshot_path.is_file())
+            app_main.app.state.runware_outpainting_semaphore = asyncio.Semaphore(1)
+            with (
+                patch.object(app_main.settings, "output_path", output_path),
+                patch.object(
+                    app_main,
+                    "run_outpainting",
+                    new=AsyncMock(side_effect=runware.RunwareOutpaintingError("扩图失败", diagnostic="boom")),
+                ),
+                patch.object(app_main, "save_ai_image_job"),
+                patch.object(app_main, "log_operation"),
+            ):
+                await app_main._run_runware_outpainting_background(
+                    job_id,
+                    {"id": "operator_a", "username": "运营A", "role": "user"},
+                    prepared,
+                    geometry,
+                    provider_uuid,
+                    {
+                        "operation": "outpainting",
+                        "provider_task_uuid": provider_uuid,
+                        "source_snapshot_url": snapshot_url,
+                        "expected_width": geometry.expected_width,
+                        "expected_height": geometry.expected_height,
+                    },
+                    123.0,
+                )
+            self.assertFalse(snapshot_path.exists())
 
     async def test_done_persistence_retries_without_marking_paid_result_failed(self) -> None:
         prepared = runware.prepare_outpainting_image(
