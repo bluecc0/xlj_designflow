@@ -10,12 +10,12 @@ import {
 } from 'tldraw'
 import {
   applyMatrix,
-  getBoundsForTransformedSize,
   getExpectedOutpaintSize,
   getProcessingSizeForOutpainting,
   hasOutpaintMargins,
   invertMatrix,
   isWithinOutpaintingLimits,
+  marginPixelsToLocal,
 } from './geometry'
 import { useOutpainting } from './state'
 import type {
@@ -392,48 +392,59 @@ function getPageRotation(matrix: MatrixSnapshot) {
   return Math.atan2(matrix.b, matrix.a)
 }
 
-function hasFrameAncestor(editor: Editor, parentId: TLParentId, pageId: OutpaintingSourceCapture['sourcePageId']) {
-  let currentParentId: TLParentId = parentId
-  const visited = new Set<string>()
-  while (currentParentId !== pageId && !visited.has(String(currentParentId))) {
-    visited.add(String(currentParentId))
-    const parent = editor.getShape(currentParentId as TLImageShape['id'])
-    if (!parent) return false
-    if (parent.type === 'frame') return true
-    currentParentId = parent.parentId
-  }
-  return false
+function getOverlayOrigin(capture: OutpaintingSourceCapture, displayWidth: number, displayHeight: number) {
+  const localMargins = marginPixelsToLocal(
+    capture.margins,
+    { w: displayWidth, h: displayHeight },
+    { w: capture.processingWidth, h: capture.processingHeight },
+  )
+  return { x: -localMargins.left, y: -localMargins.top }
 }
 
 function getResultPlacement(
+  editor: Editor,
   capture: OutpaintingSourceCapture,
-  displayWidth: number,
-  displayHeight: number,
-  useCapturedParent: boolean
 ) {
-  const relativeBounds = getBoundsForTransformedSize(capture.sourcePageTransform, {
-    w: displayWidth,
-    h: displayHeight,
-  })
-  const pageOrigin = {
-    x: capture.initialPageBounds.x + capture.initialPageBounds.w + 40 - relativeBounds.minX,
-    y: capture.initialPageBounds.y - relativeBounds.minY,
-  }
-  if (!useCapturedParent || capture.sourceParentId === capture.sourcePageId) {
+  const live = editor.getShape<TLImageShape>(capture.sourceShapeId)
+  const livePageId = live ? editor.getAncestorPageId(live) : null
+  const displayWidth = live ? Number(live.props.w) : capture.displayWidth
+  const displayHeight = live ? Number(live.props.h) : capture.displayHeight
+  const localOrigin = getOverlayOrigin(capture, displayWidth, displayHeight)
+
+  if (live && livePageId === capture.sourcePageId) {
+    const pageTransform = matrixSnapshot(editor.getShapePageTransform(live))
+    const pageOrigin = applyMatrix(pageTransform, localOrigin)
+    const parentId = live.parentId
+    if (parentId === capture.sourcePageId) {
+      return {
+        parentId,
+        x: pageOrigin.x,
+        y: pageOrigin.y,
+        rotation: getPageRotation(pageTransform),
+        displayWidth,
+        displayHeight,
+      }
+    }
+    const inverseParent = invertMatrix(matrixSnapshot(editor.getShapeParentTransform(live)))
+    const local = inverseParent ? applyMatrix(inverseParent, pageOrigin) : pageOrigin
     return {
-      parentId: capture.sourcePageId as TLParentId,
-      x: pageOrigin.x,
-      y: pageOrigin.y,
-      rotation: getPageRotation(capture.sourcePageTransform),
+      parentId,
+      x: local.x,
+      y: local.y,
+      rotation: live.rotation,
+      displayWidth,
+      displayHeight,
     }
   }
-  const inverseParent = invertMatrix(capture.sourceParentPageTransform)
-  const localOrigin = inverseParent ? applyMatrix(inverseParent, pageOrigin) : pageOrigin
+
+  const pageOrigin = applyMatrix(capture.sourcePageTransform, localOrigin)
   return {
-    parentId: capture.sourceParentId,
-    x: localOrigin.x,
-    y: localOrigin.y,
-    rotation: capture.sourceRotation,
+    parentId: capture.sourcePageId as TLParentId,
+    x: pageOrigin.x,
+    y: pageOrigin.y,
+    rotation: getPageRotation(capture.sourcePageTransform),
+    displayWidth,
+    displayHeight,
   }
 }
 
@@ -484,33 +495,6 @@ function captureSource(
   }
 }
 
-function shiftSequentialOrdersForInsert(editor: Editor, capture: OutpaintingSourceCapture) {
-  if (capture.sequentialOrder === null) return
-  const updates = editor
-    .getSortedChildIdsForParent(capture.sourcePageId)
-    .map((id) => editor.getShape(id))
-    .filter((shape): shape is TLImageShape => Boolean(shape && shape.type === 'image'))
-    .flatMap((shape) => {
-      const meta = (shape.meta || {}) as Record<string, unknown>
-      const order = Number(meta.designflowLayoutOrder)
-      if (shape.id === capture.sourceShapeId) {
-        if (Number.isFinite(order) && order > 0) return []
-        return [{
-          id: shape.id,
-          type: shape.type,
-          meta: { ...meta, designflowLayoutOrder: capture.sequentialOrder },
-        }]
-      }
-      if (!Number.isFinite(order) || order <= capture.sequentialOrder!) return []
-      return [{
-        id: shape.id,
-        type: shape.type,
-        meta: { ...meta, designflowLayoutOrder: order + 1 },
-      }]
-    })
-  if (updates.length) editor.updateShapes(updates as never)
-}
-
 function insertOutpaintingResult(
   editor: Editor,
   capture: OutpaintingSourceCapture,
@@ -518,7 +502,6 @@ function insertOutpaintingResult(
   naturalSize: { w: number; h: number },
   fileSize: number,
   mimeType: string,
-  sequentialLayout: SequentialLayoutAdapter
 ) {
   if (hasInsertedOutpaintingResult(editor, capture.operationToken)) {
     return null
@@ -526,22 +509,15 @@ function insertOutpaintingResult(
   if (!editor.getPage(capture.sourcePageId)) {
     throw new Error('原图所在画板已删除，扩图结果未插入')
   }
-  const outputDisplayWidth = Math.max(1, naturalSize.w * (capture.displayWidth / capture.processingWidth))
-  const outputDisplayHeight = Math.max(1, naturalSize.h * (capture.displayHeight / capture.processingHeight))
-  const capturedParentShape = capture.sourceParentId === capture.sourcePageId
-    ? null
-    : editor.getShape(capture.sourceParentId)
-  const parentIsStillValid = capture.sourceParentId === capture.sourcePageId || (
-    capturedParentShape
-      ? editor.getAncestorPageId(capturedParentShape) === capture.sourcePageId
-      : false
+  const placement = getResultPlacement(editor, capture)
+  const outputDisplayWidth = Math.max(
+    1,
+    naturalSize.w * (placement.displayWidth / capture.processingWidth)
   )
-  const useCapturedParent = parentIsStillValid && !hasFrameAncestor(
-    editor,
-    capture.sourceParentId,
-    capture.sourcePageId
+  const outputDisplayHeight = Math.max(
+    1,
+    naturalSize.h * (placement.displayHeight / capture.processingHeight)
   )
-  const placement = getResultPlacement(capture, outputDisplayWidth, outputDisplayHeight, useCapturedParent)
   const assetId = AssetRecordType.createId()
   const shapeId = createShapeId() as TLImageShape['id']
   const assetRecord: TLImageAsset = {
@@ -569,14 +545,13 @@ function insertOutpaintingResult(
   editor.run(() => {
     if (hasInsertedOutpaintingResult(editor, capture.operationToken)) return
     editor.createAssets([assetRecord])
-    if (capture.sequentialOrder !== null) shiftSequentialOrdersForInsert(editor, capture)
     editor.createShape({
       id: shapeId,
       type: 'image',
-      parentId: capture.sequentialOrder !== null ? capture.sourcePageId : placement.parentId,
+      parentId: placement.parentId,
       x: placement.x,
       y: placement.y,
-      rotation: capture.sequentialOrder !== null ? capture.sourceRotation : placement.rotation,
+      rotation: placement.rotation,
       props: {
         w: outputDisplayWidth,
         h: outputDisplayHeight,
@@ -590,10 +565,7 @@ function insertOutpaintingResult(
       },
       meta: {
         designflowInserted: true,
-        designflowLayoutDeferred: capture.sequentialOrder === null ? undefined : true,
-        designflowLayoutOrder: capture.sequentialOrder === null ? undefined : capture.sequentialOrder + 1,
-        designflowOriginalWidth: naturalSize.w,
-        designflowOriginalHeight: naturalSize.h,
+        designflowLayoutExcluded: true,
         outpaintedFrom: capture.sourceUrl,
         outpaintingOperationToken: capture.operationToken,
         outpaintingSourceShapeId: capture.sourceShapeId,
@@ -601,24 +573,13 @@ function insertOutpaintingResult(
         outpaintingSourceParentId: capture.sourceParentId,
         outpaintingSourceIndex: String(capture.sourceIndex),
         outpaintingMargins: cloneMargins(capture.margins),
+        designflowOriginalWidth: naturalSize.w,
+        designflowOriginalHeight: naturalSize.h,
         naturalWidth: naturalSize.w,
         naturalHeight: naturalSize.h,
       },
     })
-    if (capture.sequentialOrder !== null) {
-      const createdShape = editor.getShape<TLImageShape>(shapeId)
-      if (createdShape) {
-        editor.updateShape({
-          id: shapeId,
-          type: 'image',
-          meta: {
-            ...(createdShape.meta || {}),
-            designflowLayoutOrder: capture.sequentialOrder + 1,
-          },
-        })
-      }
-      sequentialLayout.reflow(capture.sourcePageId)
-    } else editor.bringToFront([shapeId])
+    editor.bringToFront([shapeId])
     if (editor.getCurrentPageId() !== capture.sourcePageId) {
       editor.setCurrentPage(capture.sourcePageId)
     }
@@ -639,7 +600,7 @@ export function useOutpaintingController(editor: Editor, sequentialLayout: Seque
     outpainting.clearDraft()
     outpainting.setOperation({
       stage: 'done',
-      message: '扩图已完成并插入画板',
+      message: '扩图已填入拉出的范围',
       progress: null,
       processing: false,
       sourceShapeId: null,
@@ -712,7 +673,7 @@ export function useOutpaintingController(editor: Editor, sequentialLayout: Seque
     }
     outpainting.setOperation({
       stage: 'inserting',
-      message: '正在插入扩图结果',
+      message: '正在把扩图叠到原图上',
       progress: null,
       processing: true,
       sourceShapeId: capture.sourceShapeId,
@@ -724,11 +685,10 @@ export function useOutpaintingController(editor: Editor, sequentialLayout: Seque
       imageDetails.size,
       imageDetails.fileSize,
       imageDetails.mimeType,
-      sequentialLayout
     )
     abortIfStale(isCurrentOperation)
     finishInserted(operationToken)
-  }, [editor, finishInserted, outpainting, sequentialLayout])
+  }, [editor, finishInserted, outpainting])
 
   const submit = React.useCallback(async () => {
     const { config, draft, eligibility, operation, externalOperationBusy } = outpainting

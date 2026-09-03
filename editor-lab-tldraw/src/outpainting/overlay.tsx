@@ -491,6 +491,7 @@ export function OutpaintingOverlay({
     ) return
     event.preventDefault()
     event.stopPropagation()
+    editor.markEventAsHandled(event)
     try {
       event.currentTarget.setPointerCapture(event.pointerId)
     } catch {
@@ -522,6 +523,7 @@ export function OutpaintingOverlay({
     ) return
     event.preventDefault()
     event.stopPropagation()
+    editor.markEventAsHandled(event)
     const pagePoint = editor.screenToPage({ x: event.clientX, y: event.clientY })
     const localPoint = editor.getPointInShapeSpace(renderShape, pagePoint)
     const nextMargins = getMarginsFromLocalDrag(
@@ -541,16 +543,18 @@ export function OutpaintingOverlay({
     if (!drag || drag.pointerId !== event.pointerId) return
     event.preventDefault()
     event.stopPropagation()
+    editor.markEventAsHandled(event)
     dragRef.current = null
     releaseCapturedPointer(drag)
-  }, [])
+  }, [editor])
 
   const cancelPointerDrag = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
     if (dragRef.current?.pointerId !== event.pointerId) return
     event.preventDefault()
     event.stopPropagation()
+    editor.markEventAsHandled(event)
     cancelCurrentDrag(true)
-  }, [cancelCurrentDrag])
+  }, [cancelCurrentDrag, editor])
 
   const handleEdgeKeyDown = React.useCallback((
     edge: OutpaintEdge,

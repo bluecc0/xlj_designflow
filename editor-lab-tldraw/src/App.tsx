@@ -31,7 +31,6 @@ import {
   OutpaintingOverlay,
   OutpaintingProvider,
   DesignflowSelectionForegroundOverlayUtil,
-  getExpectedSizeForDraft,
   hasOutpaintMargins,
   useOutpainting,
 } from './outpainting'
@@ -1277,9 +1276,6 @@ function DesignflowImageToolbar() {
     outpainting.draft &&
     hasOutpaintMargins(outpainting.draft.margins)
   )
-  const outpaintingExpected = outpaintingComposing && outpainting.draft
-    ? getExpectedSizeForDraft(outpainting.eligibility, outpainting.draft.margins)
-    : null
   const outpaintingTitle = outpainting.operation.processing
     ? outpainting.operation.message || '扩图处理中'
     : otherImageOperationBusy
@@ -1290,7 +1286,7 @@ function DesignflowImageToolbar() {
           ? '点击后拖动边缘设置扩展范围'
           : !outpaintingHasMargins
             ? '拖动蓝色边框或四角，设置至少一个扩展范围'
-            : `生成 ${outpaintingExpected?.w || 0} × ${outpaintingExpected?.h || 0}`
+            : '按当前范围生成'
   const runExternalImageOperation = React.useCallback(async (operation: () => Promise<void>) => {
     if (!outpainting.claimOperation('external')) return
     try {
@@ -1378,13 +1374,20 @@ function DesignflowImageToolbar() {
     }
   }, [batchDownloadState.loading, editor, imageCount, selectedImageIds])
 
+  const lastSelectionBoundsRef = React.useRef<Box | undefined>(undefined)
   const getSelectionBounds = React.useCallback(() => {
     const fullBounds = editor.getSelectionScreenBounds()
-    if (!fullBounds) return undefined
-    return new Box(fullBounds.x, fullBounds.y, fullBounds.width, fullBounds.height)
-  }, [editor])
+    if (fullBounds) {
+      // Height 0 anchors the toolbar to the top of the image, matching tldraw's
+      // DefaultImageToolbar. Full height would use midY and hide on tall images.
+      const bounds = new Box(fullBounds.x, fullBounds.y, fullBounds.width, 0)
+      lastSelectionBoundsRef.current = bounds
+      return bounds
+    }
+    return outpaintingComposing ? lastSelectionBoundsRef.current : undefined
+  }, [editor, outpaintingComposing])
 
-  if (imageCount === 0 || !showToolbar || isLocked) return null
+  if (imageCount === 0 || (!showToolbar && !outpaintingComposing) || isLocked) return null
 
   // 多选 / 混合多选：只提供图片下载，不暴露单图处理工具
   if (isDownloadOnlyMode) {
@@ -1423,8 +1426,9 @@ function DesignflowImageToolbar() {
 
   return (
     <TldrawUiContextualToolbar
-      className="tlui-media__toolbar tlui-image__toolbar designflow-upscale-toolbar designflow-upscale-toolbar-single"
+      className={`tlui-media__toolbar tlui-image__toolbar designflow-upscale-toolbar designflow-upscale-toolbar-single${outpaintingComposing ? ' designflow-outpainting-composing-toolbar' : ''}`}
       getSelectionBounds={getSelectionBounds}
+      isMousingDown={outpaintingComposing ? false : undefined}
       label="高清放大"
     >
       <DesignflowToolbarButton
@@ -1452,12 +1456,12 @@ function DesignflowImageToolbar() {
               if (outpaintingComposing) outpainting.submit()
               else outpainting.enterCompose(imageShapeId)
             }}
+            aria-disabled={outpaintingComposing && !outpaintingHasMargins ? true : undefined}
             disabled={
               outpainting.operation.processing ||
               otherImageOperationBusy ||
               !outpaintingSelected ||
-              !outpainting.eligibility.eligible ||
-              (outpaintingComposing && !outpaintingHasMargins)
+              !outpainting.eligibility.eligible
             }
           >
             {outpainting.operation.processing ? (
@@ -1505,7 +1509,6 @@ function DesignflowImageToolbar() {
       <span className="designflow-toolbar-divider" aria-hidden="true" />
 
       <DesignflowToolbarButton
-        className="designflow-toolbar-button-ai"
         ariaLabel={mattingState.loading ? '正在智能抠图' : (mattingState.message || '智能抠图')}
         data-testid="tool.image-matting"
         onClick={() => runExternalImageOperation(handleMattingSelectedImage)}
@@ -1517,13 +1520,11 @@ function DesignflowImageToolbar() {
           <DesignflowToolbarIcon name="matting" />
         )}
         <span className="designflow-toolbar-label">抠图</span>
-        <span className="designflow-ai-dot" aria-hidden="true" />
       </DesignflowToolbarButton>
 
       <span className="designflow-toolbar-divider" aria-hidden="true" />
 
       <DesignflowToolbarButton
-        className="designflow-toolbar-button-ai"
         ariaLabel={layerExtractState.loading ? '正在转分层 PSD' : (layerExtractState.message || (layerExtractState.status === 'error' ? '重试恢复分层 PSD' : '转 PSD'))}
         data-testid="tool.image-layer-extract"
         onClick={() => runExternalImageOperation(handleLayerExtractSelectedImage)}
@@ -1535,7 +1536,6 @@ function DesignflowImageToolbar() {
           <DesignflowToolbarIcon name="layers" />
         )}
         <span className="designflow-toolbar-label">图层分离</span>
-        <span className="designflow-ai-dot" aria-hidden="true" />
       </DesignflowToolbarButton>
 
       {layerExtractState.status === 'error' && layerExtractState.message && (

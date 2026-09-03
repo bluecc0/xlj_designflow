@@ -587,6 +587,7 @@ input {
   border-radius: 999px;
   color: var(--designflow-toolbar-muted);
   box-sizing: border-box;
+  cursor: pointer;
   transition: background 180ms ease, color 180ms ease,
     padding 250ms cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -612,6 +613,7 @@ input {
 .designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:disabled,
 .designflow-upscale-toolbar .tlui-button.designflow-toolbar-button[data-disabled] {
   color: #9ca3af;
+  cursor: default;
 }
 
 .designflow-upscale-toolbar .designflow-toolbar-button > .tlui-icon,
@@ -638,10 +640,27 @@ input {
 }
 
 .designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:hover .designflow-toolbar-label,
-.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:focus-visible .designflow-toolbar-label {
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:focus-visible .designflow-toolbar-label,
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button[data-composing='true'] .designflow-toolbar-label {
   max-width: 100px;
   margin-inline-start: 6px;
   opacity: 1;
+}
+
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button[data-composing='true'] {
+  padding: 0 14px 0 10px;
+  color: var(--designflow-toolbar-ink);
+  background: var(--designflow-toolbar-active);
+  cursor: pointer;
+}
+
+.designflow-upscale-toolbar.designflow-outpainting-composing-toolbar {
+  opacity: 1 !important;
+}
+
+.designflow-upscale-toolbar.designflow-outpainting-composing-toolbar .tlui-menu,
+.designflow-upscale-toolbar.designflow-outpainting-composing-toolbar .tlui-menu * {
+  pointer-events: all !important;
 }
 
 .designflow-toolbar-button-ai {
