@@ -587,6 +587,7 @@ input {
   border-radius: 999px;
   color: var(--designflow-toolbar-muted);
   box-sizing: border-box;
+  cursor: pointer;
   transition: background 180ms ease, color 180ms ease,
     padding 250ms cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -612,6 +613,7 @@ input {
 .designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:disabled,
 .designflow-upscale-toolbar .tlui-button.designflow-toolbar-button[data-disabled] {
   color: #9ca3af;
+  cursor: default;
 }
 
 .designflow-upscale-toolbar .designflow-toolbar-button > .tlui-icon,
@@ -638,10 +640,27 @@ input {
 }
 
 .designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:hover .designflow-toolbar-label,
-.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:focus-visible .designflow-toolbar-label {
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button:focus-visible .designflow-toolbar-label,
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button[data-composing='true'] .designflow-toolbar-label {
   max-width: 100px;
   margin-inline-start: 6px;
   opacity: 1;
+}
+
+.designflow-upscale-toolbar .tlui-button.designflow-toolbar-button[data-composing='true'] {
+  padding: 0 14px 0 10px;
+  color: var(--designflow-toolbar-ink);
+  background: var(--designflow-toolbar-active);
+  cursor: pointer;
+}
+
+.designflow-upscale-toolbar.designflow-outpainting-composing-toolbar {
+  opacity: 1 !important;
+}
+
+.designflow-upscale-toolbar.designflow-outpainting-composing-toolbar .tlui-menu,
+.designflow-upscale-toolbar.designflow-outpainting-composing-toolbar .tlui-menu * {
+  pointer-events: all !important;
 }
 
 .designflow-toolbar-button-ai {
@@ -719,5 +738,205 @@ input {
 @keyframes designflow-upscale-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+.designflow-outpainting-layer {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+}
+
+.designflow-outpainting-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.designflow-outpainting-band {
+  stroke: rgba(79, 70, 229, 0.42);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+
+.designflow-outpainting-outline {
+  fill: none;
+  stroke: rgba(79, 70, 229, 0.92);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+  animation: designflow-outpainting-outline-enter 280ms ease-out;
+}
+
+@keyframes designflow-outpainting-outline-enter {
+  from {
+    stroke: rgba(79, 70, 229, 0.18);
+  }
+  to {
+    stroke: rgba(79, 70, 229, 0.92);
+  }
+}
+
+.designflow-outpainting-composing .tl-selection__bg {
+  display: none;
+  pointer-events: none;
+}
+
+.designflow-outpainting-edge-control,
+.designflow-outpainting-corner-control {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.designflow-outpainting-edge-control {
+  z-index: 3;
+  height: 32px;
+  transform-origin: center;
+}
+
+.designflow-outpainting-corner-control {
+  z-index: 4;
+  width: 32px;
+  height: 32px;
+  transform: translate(-50%, -50%);
+}
+
+.designflow-outpainting-corner-control > span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid #4f46e5;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.14);
+  transform: translate(-50%, -50%);
+  transition: width 120ms ease, height 120ms ease, box-shadow 120ms ease;
+}
+
+.designflow-outpainting-edge-control:hover:not(:disabled) {
+  background: rgba(79, 70, 229, 0.08);
+}
+
+.designflow-outpainting-edge-control:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 1px;
+  background: rgba(79, 70, 229, 0.16);
+}
+
+.designflow-outpainting-corner-control:hover:not(:disabled) > span {
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.16), 0 2px 6px rgba(15, 23, 42, 0.16);
+}
+
+.designflow-outpainting-corner-control:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 1px;
+}
+
+.designflow-outpainting-edge-control:disabled,
+.designflow-outpainting-corner-control:disabled {
+  cursor: wait;
+  opacity: 0.48;
+}
+
+.designflow-outpainting-margin-label,
+.designflow-outpainting-size-label,
+.designflow-outpainting-ineligible {
+  position: absolute;
+  z-index: 2;
+  max-width: min(320px, calc(100% - 24px));
+  padding: 4px 7px;
+  border: 1px solid rgba(79, 70, 229, 0.22);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+  color: #4338ca;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.designflow-outpainting-margin-label {
+  padding: 3px 6px;
+  background: rgba(238, 242, 255, 0.96);
+}
+
+.designflow-outpainting-size-label {
+  color: #312e81;
+}
+
+.designflow-outpainting-ineligible {
+  z-index: 4;
+  border-color: rgba(180, 83, 9, 0.22);
+  background: rgba(255, 251, 235, 0.97);
+  color: #92400e;
+}
+
+.designflow-outpainting-operation {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(480px, calc(100% - 32px));
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid rgba(79, 70, 229, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+  color: #3730a3;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.designflow-outpainting-operation-error {
+  border-color: rgba(220, 38, 38, 0.2);
+  color: #b42318;
+}
+
+.designflow-outpainting-operation-done {
+  border-color: rgba(22, 163, 74, 0.2);
+  color: #166534;
+}
+
+.designflow-outpainting-progress {
+  color: #6366f1;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .designflow-outpainting-outline {
+    animation: none;
+  }
+
+  .designflow-outpainting-corner-control > span {
+    transition: none;
+  }
+
+  .designflow-outpainting-operation .designflow-upscale-spinner {
+    animation-duration: 1.6s;
   }
 }

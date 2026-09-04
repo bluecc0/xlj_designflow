@@ -222,6 +222,7 @@ def init_db() -> None:
                 image_url        TEXT,
                 has_reference    INTEGER NOT NULL DEFAULT 0,
                 reference_count  INTEGER,
+                client_request_id TEXT,
                 request_meta_json TEXT,
                 error            TEXT,
                 task_id          TEXT,
@@ -241,6 +242,7 @@ def init_db() -> None:
             ("provider", "TEXT"),
             ("resolution", "TEXT"),
             ("reference_count", "INTEGER"),
+            ("client_request_id", "TEXT"),
             ("request_meta_json", "TEXT"),
             ("updated_at", "REAL"),
         ]:
@@ -249,6 +251,9 @@ def init_db() -> None:
             except Exception:
                 pass
         conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_image_jobs_user_client_request_unique
+            ON ai_image_jobs(user_id, client_request_id)
+            WHERE client_request_id IS NOT NULL AND client_request_id != ''
         """)
         conn.execute(
             "UPDATE ai_image_jobs SET updated_at = created_at WHERE updated_at IS NULL"
@@ -629,6 +634,23 @@ def save_special_job(job) -> None:
         conn.commit()
 
 
+def load_special_job(job_id: str) -> dict | None:
+    """Load the owner/status fields needed to authorize a persisted special result."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, user_id, status, result_paths_json FROM special_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "status": row["status"],
+        "result_paths": json.loads(row["result_paths_json"] or "[]"),
+    }
+
+
 def load_special_jobs(limit: int = 50, user_id: Optional[str] = None) -> list[dict]:
     """从数据库加载特殊品任务列表（返回 dict 列表供 history API 使用）"""
     with _connect() as conn:
@@ -848,6 +870,7 @@ def save_ai_image_job(
     image_url: str | None = None,
     has_reference: bool = False,
     reference_count: int | None = None,
+    client_request_id: str | None = None,
     request_meta: dict | str | None = None,
     error: str | None = None,
     task_id: str | None = None,
@@ -868,8 +891,8 @@ def save_ai_image_job(
             INSERT INTO ai_image_jobs
               (id, user_id, status, model, provider, prompt, original_prompt, resolved_prompt,
                prompt_trace, size, resolution, image_url, has_reference, reference_count,
-               request_meta_json, error, task_id, progress, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               client_request_id, request_meta_json, error, task_id, progress, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 user_id = excluded.user_id,
                 status = excluded.status,
@@ -884,6 +907,7 @@ def save_ai_image_job(
                 image_url = excluded.image_url,
                 has_reference = excluded.has_reference,
                 reference_count = COALESCE(excluded.reference_count, ai_image_jobs.reference_count),
+                client_request_id = COALESCE(excluded.client_request_id, ai_image_jobs.client_request_id),
                 request_meta_json = COALESCE(excluded.request_meta_json, ai_image_jobs.request_meta_json),
                 -- 进度轮询写入时 error 常为 NULL，不能覆盖已有失败原因；
                 -- 终态 done/failed 才以本次写入为准（done 可清空 error）。
@@ -915,6 +939,7 @@ def save_ai_image_job(
                 image_url,
                 1 if has_reference else 0,
                 reference_count,
+                client_request_id,
                 request_meta_json,
                 error,
                 task_id,
@@ -953,6 +978,7 @@ def load_ai_image_jobs(limit: int = 50, user_id: Optional[str] = None) -> list[d
             "image_url": row["image_url"],
             "has_reference": bool(row["has_reference"]),
             "reference_count": row["reference_count"] if "reference_count" in row.keys() else None,
+            "client_request_id": row["client_request_id"] if "client_request_id" in row.keys() else None,
             "error": row["error"],
             "task_id": row["task_id"],
             "progress": row["progress"],
@@ -983,6 +1009,7 @@ def load_ai_image_job(job_id: str) -> dict | None:
         "image_url": row["image_url"],
         "has_reference": bool(row["has_reference"]),
         "reference_count": row["reference_count"] if "reference_count" in row.keys() else None,
+        "client_request_id": row["client_request_id"] if "client_request_id" in row.keys() else None,
         "request_meta": _json_object(row["request_meta_json"]) if "request_meta_json" in row.keys() else {},
         "error": row["error"],
         "task_id": row["task_id"],
@@ -992,6 +1019,45 @@ def load_ai_image_job(job_id: str) -> dict | None:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"] if "updated_at" in row.keys() else row["created_at"],
     }
+
+
+def load_ai_image_job_by_client_request_id(user_id: str, client_request_id: str) -> dict | None:
+    """Find a durable job created for one user's idempotency token."""
+    if not user_id or not client_request_id:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id FROM ai_image_jobs
+            WHERE user_id = ? AND client_request_id = ?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (user_id, client_request_id),
+        ).fetchone()
+    return load_ai_image_job(str(row["id"])) if row else None
+
+
+def load_active_outpainting_jobs(limit: int = 1000) -> list[dict]:
+    """Load unfinished BFL outpainting jobs for startup recovery."""
+    bounded_limit = max(1, min(int(limit), 10_000))
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id FROM ai_image_jobs
+            WHERE provider = 'bfl'
+              AND status IN ('pending', 'queued', 'processing', 'running')
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (bounded_limit,),
+        ).fetchall()
+    jobs: list[dict] = []
+    for row in rows:
+        job = load_ai_image_job(str(row["id"]))
+        meta = job.get("request_meta") if job else None
+        if job and isinstance(meta, dict) and meta.get("operation") == "outpainting":
+            jobs.append(job)
+    return jobs
 
 
 def mark_ai_image_job_provider_switched(job_id: str, switched: bool = True) -> None:

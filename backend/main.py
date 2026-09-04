@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -95,6 +96,25 @@ from .agent_mode import (
 )
 from .psd_layered import create_layered_psd_from_image
 from .matting_service import matting_service
+from .bfl_outpainting import (
+    BFL_ALLOWED_MODES,
+    BFL_OUTPAINTING_MODEL,
+    MAX_OUTPUT_PIXELS,
+    MAX_OUTPUT_SIDE,
+    MIN_CANVAS_SIDE,
+    BflOutpaintingError,
+    OutpaintingValidationError,
+    PreparedOutpaintingImage,
+    OutpaintingGeometry,
+    discard_prepared_source_snapshot,
+    is_pre_submit_phase,
+    load_prepared_source_snapshot,
+    persist_prepared_source_snapshot,
+    prepare_outpainting_image,
+    resolve_geometry_from_meta,
+    run_outpainting,
+    validate_geometry,
+)
 from .special_compose_full import run_special_full_compose
 from .compose import get_client, run_compose
 from .config import settings
@@ -133,6 +153,8 @@ from .job_store import (
     load_agent_messages,
     load_ai_image_job,
     load_ai_image_jobs,
+    load_ai_image_job_by_client_request_id,
+    load_active_outpainting_jobs,
     load_ai_image_job_by_image_url,
     load_job,
     count_operation_logs,
@@ -146,6 +168,7 @@ from .job_store import (
     load_editor_snapshot,
     create_daily_database_backup,
     save_special_job,
+    load_special_job,
     load_special_jobs,
     sync_user_test_status,
     update_agent_project,
@@ -340,6 +363,11 @@ def _ensure_ui_build() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    app.state.outpainting_semaphore = asyncio.Semaphore(
+        max(1, int(settings.bfl_outpainting_max_concurrency or 2))
+    )
+    app.state.outpainting_tasks = set()
+    app.state.outpainting_claims = {}
     await asyncio.to_thread(_ensure_ui_build)
     if settings.matting_enabled:
         app.state.matting_warmup_task = asyncio.create_task(
@@ -349,6 +377,15 @@ async def lifespan(app: FastAPI):
         asyncio.to_thread(_migrate_inspiration_thumbnails)
     )
     app.state.database_backup_task = asyncio.create_task(_database_backup_loop())
+    app.state.outpainting_recovery_task = None
+    if (
+        settings.bfl_outpainting_enabled
+        and settings.bfl_api_key.strip()
+        and not _outpainting_configuration_error()
+    ):
+        app.state.outpainting_recovery_task = _track_outpainting_task(
+            _recover_outpainting_jobs()
+        )
     app.state.sub2api_monitor_task = None
     if (
         settings.sub2api_monitor_enabled
@@ -369,6 +406,11 @@ async def lifespan(app: FastAPI):
         if backup_task:
             backup_task.cancel()
             await asyncio.gather(backup_task, return_exceptions=True)
+        outpainting_tasks = list(getattr(app.state, "outpainting_tasks", set()))
+        for task in outpainting_tasks:
+            task.cancel()
+        if outpainting_tasks:
+            await asyncio.gather(*outpainting_tasks, return_exceptions=True)
         await proxy_download_stop()
 
 
@@ -476,7 +518,11 @@ _AUTH_EXEMPT_PREFIXES = (
     "/redoc",
     "/openapi.json",
 )
-_AUTH_EXEMPT_EXACT_PATHS = {"/", "/ai-image/client-event"}
+_AUTH_EXEMPT_EXACT_PATHS = {
+    "/",
+    "/ai-image/client-event",
+    "/ai-image/outpainting/config",
+}
 
 
 class ProxyDownloadInspectRequest(pydantic.BaseModel):
@@ -698,6 +744,133 @@ def _resolve_public_asset_path(raw_url: str | None, user: dict | None = None) ->
             raise HTTPException(404, "图片文件不存在")
         return candidate
     raise HTTPException(400, "只支持站内图片资源放大")
+
+
+def _safe_asset_owner_id(user_id: str) -> str:
+    safe = "".join(
+        char for char in str(user_id or "").strip()
+        if char.isalnum() or char in {"-", "_"}
+    )
+    return safe or "anonymous"
+
+
+def _assert_strict_asset_owner(owner_id: str | None, user: dict) -> None:
+    if _is_admin(user):
+        return
+    if not owner_id or owner_id != user.get("id"):
+        # Match polling's non-enumerating behavior for another user's assets.
+        raise HTTPException(404, "图片文件不存在")
+
+
+def _outpainting_internal_path(raw_url: str, request: Request, user: dict) -> tuple[Path, str]:
+    """Resolve only internal, owner-authorized raster sources for paid outpainting."""
+    value = str(raw_url or "").strip()
+    if not value:
+        raise HTTPException(400, "图片地址不能为空")
+    try:
+        parsed = urlsplit(value)
+    except Exception as exc:
+        raise HTTPException(400, "图片地址无效") from exc
+    if parsed.scheme or parsed.netloc:
+        if parsed.scheme.lower() not in {"http", "https"}:
+            raise HTTPException(400, "只支持站内图片地址")
+        if parsed.username or parsed.password or parsed.netloc.casefold() != request.url.netloc.casefold():
+            raise HTTPException(400, "不允许使用外部图片地址")
+        raw_path = parsed.path
+    else:
+        raw_path = parsed.path or value
+    try:
+        path = unquote(raw_path)
+    except Exception as exc:
+        raise HTTPException(400, "图片地址无效") from exc
+    if not path.startswith("/") or "\x00" in path or "\\" in path:
+        raise HTTPException(400, "图片地址无效")
+
+    compose_match = re.fullmatch(r"/compose/([^/]+)/image/?", path)
+    if compose_match:
+        candidate = _resolve_public_asset_path(path, user)
+        return candidate, path.rstrip("/")
+
+    grid_match = re.fullmatch(r"/export/grid/([^/]+)/(\d+)/?", path)
+    if grid_match:
+        job_id = grid_match.group(1)
+        job = load_job(job_id)
+        if not job:
+            raise HTTPException(404, "图片文件不存在")
+        _assert_strict_asset_owner(job.user_id, user)
+        candidate = (settings.output_path / f"{job_id}_grid_{int(grid_match.group(2)):02d}.png").resolve()
+        output_root = settings.output_path.resolve()
+        if output_root not in candidate.parents or not candidate.is_file():
+            raise HTTPException(404, "图片文件不存在")
+        return candidate, path.rstrip("/")
+
+    if path.startswith("/ai-images/"):
+        rel = path.removeprefix("/ai-images/").lstrip("/")
+        parts = Path(rel).parts
+        if len(parts) < 2:
+            raise HTTPException(400, "图片地址无效")
+        owner_id = parts[0]
+        expected_owner = _safe_asset_owner_id(str(user.get("id") or ""))
+        if not _is_admin(user) and owner_id != expected_owner:
+            raise HTTPException(404, "图片文件不存在")
+        root = (settings.output_path / "ai-images").resolve()
+        owner_root = (root / owner_id).resolve()
+        candidate = (root / rel).resolve()
+        if owner_root not in candidate.parents or not candidate.is_file():
+            raise HTTPException(404, "图片文件不存在")
+        return candidate, path
+
+    results_match = re.fullmatch(r"/results/([^/]+)/(.+)", path)
+    if results_match:
+        job_id = results_match.group(1)
+        with _jobs_lock:
+            active_job = _jobs.get(job_id)
+        owner_id = getattr(active_job, "user_id", None) if active_job else None
+        if not owner_id:
+            regular_job = load_job(job_id)
+            owner_id = regular_job.user_id if regular_job else None
+        if not owner_id:
+            special_job = load_special_job(job_id)
+            owner_id = special_job.get("user_id") if special_job else None
+        _assert_strict_asset_owner(owner_id, user)
+        root = (settings.output_path / "results").resolve()
+        job_root = (root / job_id).resolve()
+        rel = path.removeprefix("/results/").lstrip("/")
+        candidate = (root / rel).resolve()
+        if job_root not in candidate.parents or not candidate.is_file():
+            raise HTTPException(404, "图片文件不存在")
+        return candidate, path
+
+    output_match = re.fullmatch(r"/output/([^/]+)\.png", path)
+    if output_match:
+        filename_stem = output_match.group(1)
+        grid_name = re.fullmatch(r"(.+)_grid_\d{2}", filename_stem)
+        job_id = grid_name.group(1) if grid_name else filename_stem
+        job = load_job(job_id)
+        if not job:
+            raise HTTPException(404, "图片文件不存在")
+        _assert_strict_asset_owner(job.user_id, user)
+        candidate = (settings.output_path / f"{filename_stem}.png").resolve()
+        output_root = settings.output_path.resolve()
+        if output_root not in candidate.parents or not candidate.is_file():
+            raise HTTPException(404, "图片文件不存在")
+        return candidate, path
+
+    psd_match = re.fullmatch(r"/output/psd/([^/]+)/(.+)", path)
+    if psd_match:
+        owner_id = psd_match.group(1)
+        expected_owner = _safe_asset_owner_id(str(user.get("id") or ""))
+        if not _is_admin(user) and owner_id != expected_owner:
+            raise HTTPException(404, "图片文件不存在")
+        root = (settings.output_path / "psd").resolve()
+        owner_root = (root / owner_id).resolve()
+        rel = path.removeprefix("/output/psd/").lstrip("/")
+        candidate = (root / rel).resolve()
+        if owner_root not in candidate.parents or not candidate.is_file():
+            raise HTTPException(404, "图片文件不存在")
+        return candidate, path
+
+    raise HTTPException(400, "仅支持有明确归属的站内图片或图片 data URI")
 
 
 def _persist_data_url_image(raw_url: str, *, user_id: str, job_id: str) -> Path:
@@ -952,6 +1125,638 @@ async def _run_matting_background(job_id: str, user: dict, src_path: Path, creat
             logger.exception("matting failure operation log failed: job=%s", job_id)
 
 
+def _outpainting_effective_limits() -> dict[str, int]:
+    max_width = min(MAX_OUTPUT_SIDE, max(1, int(settings.outpaint_max_width)))
+    max_height = min(MAX_OUTPUT_SIDE, max(1, int(settings.outpaint_max_height)))
+    max_area = min(
+        MAX_OUTPUT_PIXELS,
+        max(1, int(settings.outpaint_max_area_pixels)),
+        max_width * max_height,
+    )
+    return {
+        "snap_pixels": 1,
+        "max_width": max_width,
+        "max_height": max_height,
+        "max_area_pixels": max_area,
+        "recommended_area_pixels": min(
+            max_area,
+            max(1, int(settings.outpaint_recommended_area_pixels)),
+        ),
+        "min_processing_side": (
+            MIN_CANVAS_SIDE
+            if str(settings.bfl_outpainting_mode or "").strip().casefold() == "fast"
+            else 1
+        ),
+    }
+
+
+def _outpainting_configuration_error() -> str:
+    try:
+        api_url = urlsplit(str(settings.bfl_api_url or ""))
+    except Exception:
+        return "BFL_API_URL 无效"
+    path = api_url.path.rstrip("/")
+    if (
+        api_url.scheme.lower() != "https"
+        or (api_url.hostname or "").casefold().rstrip(".") != "api.bfl.ai"
+        or path not in {"", "/"}
+        or api_url.query
+        or api_url.fragment
+        or api_url.username
+        or api_url.password
+    ):
+        return "BFL_API_URL 必须为 https://api.bfl.ai"
+    if settings.bfl_outpainting_mode not in BFL_ALLOWED_MODES:
+        return "BFL_OUTPAINTING_MODE 必须为 fast 或 high"
+    if settings.bfl_outpainting_output_format != "PNG":
+        return "BFL_OUTPAINTING_OUTPUT_FORMAT 必须为 PNG"
+    if settings.bfl_outpainting_auto_crop:
+        return "BFL_OUTPAINTING_AUTO_CROP 必须为 false"
+    if int(settings.bfl_outpainting_max_concurrency) < 1:
+        return "BFL_OUTPAINTING_MAX_CONCURRENCY 必须至少为 1"
+    if int(settings.bfl_outpainting_max_queue_size) < 0:
+        return "BFL_OUTPAINTING_MAX_QUEUE_SIZE 不能为负数"
+    if int(settings.bfl_outpainting_max_pending_per_user) < 1:
+        return "BFL_OUTPAINTING_MAX_PENDING_PER_USER 必须至少为 1"
+    if int(settings.bfl_outpainting_max_request_bytes) < 1024:
+        return "BFL_OUTPAINTING_MAX_REQUEST_BYTES 必须至少为 1024"
+    result_host_suffixes = _outpainting_result_host_suffixes()
+    if not result_host_suffixes:
+        return "BFL_OUTPAINTING_RESULT_HOST_SUFFIXES 不能为空"
+    if any(
+        suffix != "bfl.ai" and not suffix.endswith(".bfl.ai")
+        for suffix in result_host_suffixes
+    ):
+        return "BFL_OUTPAINTING_RESULT_HOST_SUFFIXES 仅支持 bfl.ai 域名"
+    return ""
+
+
+def _outpainting_result_host_suffixes() -> tuple[str, ...]:
+    return tuple(
+        value.strip().casefold().lstrip(".")
+        for value in str(settings.bfl_outpainting_result_host_suffixes or "").split(",")
+        if value.strip().lstrip(".")
+    )
+
+
+_outpainting_submit_lock = threading.Lock()
+
+
+class _OutpaintingCapacityError(RuntimeError):
+    pass
+
+
+def _outpainting_runtime() -> tuple[asyncio.Semaphore, set[asyncio.Task]]:
+    semaphore = getattr(app.state, "outpainting_semaphore", None)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(
+            max(1, int(settings.bfl_outpainting_max_concurrency or 2))
+        )
+        app.state.outpainting_semaphore = semaphore
+    tasks = getattr(app.state, "outpainting_tasks", None)
+    if tasks is None:
+        tasks = set()
+        app.state.outpainting_tasks = tasks
+    return semaphore, tasks
+
+
+def _outpainting_claims() -> dict[str, str]:
+    claims = getattr(app.state, "outpainting_claims", None)
+    if claims is None:
+        claims = {}
+        app.state.outpainting_claims = claims
+    return claims
+
+
+def _release_outpainting_claim(job_id: str) -> None:
+    if not job_id:
+        return
+    with _outpainting_submit_lock:
+        _outpainting_claims().pop(job_id, None)
+
+
+def _track_outpainting_task(
+    coroutine,
+    *,
+    claimed_job_id: str = "",
+) -> asyncio.Task:
+    _semaphore, tasks = _outpainting_runtime()
+    try:
+        task = asyncio.create_task(coroutine)
+    except Exception:
+        _release_outpainting_claim(claimed_job_id)
+        raise
+    tasks.add(task)
+
+    def _discard(completed: asyncio.Task) -> None:
+        tasks.discard(completed)
+        _release_outpainting_claim(claimed_job_id)
+        if completed.cancelled():
+            return
+        try:
+            error = completed.exception()
+        except asyncio.CancelledError:
+            return
+        if error is not None:
+            logger.error(
+                "BFL outpainting background task escaped worker handling: %s",
+                type(error).__name__,
+            )
+
+    task.add_done_callback(_discard)
+    return task
+
+
+async def _save_outpainting_job_with_retries(**values) -> None:
+    def persist() -> None:
+        last_error: Exception | None = None
+        for attempt in range(4):
+            try:
+                save_ai_image_job(**values)
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt < 3:
+                    time.sleep(0.2 * (2**attempt))
+        assert last_error is not None
+        raise last_error
+
+    await asyncio.to_thread(persist)
+
+
+def _discard_outpainting_source_snapshot(request_meta: dict | None, user_id: str) -> None:
+    discard_prepared_source_snapshot(
+        str((request_meta or {}).get("source_snapshot_url") or ""),
+        output_root=settings.output_path,
+        user_id=str(user_id or ""),
+    )
+
+
+async def _run_outpainting_background(
+    job_id: str,
+    user: dict,
+    prepared: PreparedOutpaintingImage | None,
+    geometry: OutpaintingGeometry,
+    provider_task_id: str,
+    request_meta: dict,
+    created_at: float,
+    *,
+    resume_only: bool = False,
+    polling_url: str = "",
+    acceptance_resume_attempts: int = 1,
+) -> None:
+    prompt = "FLUX outpainting"
+    user_id = str(user.get("id") or "")
+    semaphore, _tasks = _outpainting_runtime()
+    accepted = {
+        "provider_task_id": str(provider_task_id or "").strip(),
+        "polling_url": str(polling_url or "").strip(),
+    }
+    # Resume already has a durable accepted id. A new submit only becomes
+    # durable after on_accepted finishes its persistence retries.
+    acceptance_persisted = bool(
+        resume_only and accepted["provider_task_id"] and accepted["polling_url"]
+    )
+
+    def persist_processing(progress: int, phase: str) -> None:
+        if accepted["provider_task_id"]:
+            request_meta["provider_task_id"] = accepted["provider_task_id"]
+            request_meta["provider_task_uuid"] = accepted["provider_task_id"]
+        if accepted["polling_url"]:
+            request_meta["polling_url"] = accepted["polling_url"]
+        progress_meta = {**request_meta, "phase": phase}
+        try:
+            save_ai_image_job(
+                job_id=job_id,
+                user_id=user_id,
+                status="processing",
+                model=BFL_OUTPAINTING_MODEL,
+                provider="bfl",
+                prompt=prompt,
+                original_prompt=prompt,
+                resolved_prompt=prompt,
+                size=f"{geometry.expected_width}x{geometry.expected_height}",
+                resolution="",
+                has_reference=True,
+                reference_count=1,
+                request_meta=progress_meta,
+                task_id=accepted["provider_task_id"],
+                progress=progress,
+                created_at=created_at,
+            )
+        except Exception:
+            # A transient SQLite lock must not abandon an accepted paid task.
+            logger.exception(
+                "BFL outpainting progress persistence failed: job=%s task=%s phase=%s",
+                job_id,
+                accepted["provider_task_id"] or "-",
+                phase,
+            )
+
+    async def on_progress(progress: int, phase: str) -> None:
+        await asyncio.to_thread(persist_processing, progress, phase)
+
+    async def on_accepted(task_id: str, poll_url: str) -> None:
+        nonlocal acceptance_persisted
+        accepted["provider_task_id"] = str(task_id or "").strip()
+        accepted["polling_url"] = str(poll_url or "").strip()
+        if not accepted["provider_task_id"] or not accepted["polling_url"]:
+            raise BflOutpaintingError(
+                "扩图服务返回无效响应，请稍后重试",
+                diagnostic="accepted callback missing id or polling_url",
+            )
+        request_meta["provider_task_id"] = accepted["provider_task_id"]
+        request_meta["provider_task_uuid"] = accepted["provider_task_id"]
+        request_meta["polling_url"] = accepted["polling_url"]
+        await _save_outpainting_job_with_retries(
+            job_id=job_id,
+            user_id=user_id,
+            status="processing",
+            model=BFL_OUTPAINTING_MODEL,
+            provider="bfl",
+            prompt=prompt,
+            original_prompt=prompt,
+            resolved_prompt=prompt,
+            size=f"{geometry.expected_width}x{geometry.expected_height}",
+            resolution="",
+            has_reference=True,
+            reference_count=1,
+            request_meta={**request_meta, "phase": "polling"},
+            task_id=accepted["provider_task_id"],
+            progress=15,
+            created_at=created_at,
+        )
+        acceptance_persisted = True
+
+    result = None
+    submission_attempted = False
+    try:
+        persist_processing(5 if not resume_only else 20, "queued" if not resume_only else "recovering")
+        async with semaphore:
+            persist_processing(10 if not resume_only else 25, "submitting" if not resume_only else "recovering")
+            submission_attempted = True
+            result = await run_outpainting(
+                api_key=settings.bfl_api_key,
+                api_url=settings.bfl_api_url,
+                mode=settings.bfl_outpainting_mode,
+                output_format=settings.bfl_outpainting_output_format,
+                auto_crop=settings.bfl_outpainting_auto_crop,
+                result_host_suffixes=_outpainting_result_host_suffixes(),
+                prepared=prepared,
+                geometry=geometry,
+                provider_task_id=accepted["provider_task_id"],
+                polling_url=accepted["polling_url"],
+                output_root=settings.output_path,
+                user_id=user_id,
+                job_id=job_id,
+                timeout_seconds=max(1.0, float(settings.bfl_outpainting_timeout_seconds)),
+                poll_interval_seconds=max(0.1, float(settings.bfl_outpainting_poll_interval_seconds)),
+                transient_retry_count=max(0, int(settings.bfl_outpainting_transient_retries)),
+                retry_backoff_seconds=max(0.0, float(settings.bfl_outpainting_retry_backoff_seconds)),
+                retry_backoff_cap_seconds=max(0.1, float(settings.bfl_outpainting_retry_backoff_cap_seconds)),
+                max_result_bytes=max(1, int(settings.bfl_outpainting_max_result_bytes)),
+                result_download_retry_count=max(0, int(settings.bfl_outpainting_result_download_retries)),
+                submit_request=not resume_only,
+                on_progress=on_progress,
+                on_accepted=on_accepted,
+            )
+            if result.provider_task_id:
+                accepted["provider_task_id"] = result.provider_task_id
+                request_meta["provider_task_id"] = result.provider_task_id
+                request_meta["provider_task_uuid"] = result.provider_task_id
+            if result.polling_url:
+                accepted["polling_url"] = result.polling_url
+                request_meta["polling_url"] = result.polling_url
+        final_meta = {
+            **request_meta,
+            "phase": "done",
+            "output_url": result.image_url,
+            "cost": result.cost,
+            "actual_width": result.width,
+            "actual_height": result.height,
+        }
+        await _save_outpainting_job_with_retries(
+            job_id=job_id,
+            user_id=user_id,
+            status="done",
+            model=BFL_OUTPAINTING_MODEL,
+            provider="bfl",
+            prompt=prompt,
+            original_prompt=prompt,
+            resolved_prompt=prompt,
+            size=f"{result.width}x{result.height}",
+            resolution="",
+            image_url=result.image_url,
+            has_reference=True,
+            reference_count=1,
+            request_meta=final_meta,
+            task_id=accepted["provider_task_id"],
+            progress=100,
+            created_at=created_at,
+        )
+        _discard_outpainting_source_snapshot(request_meta, user_id)
+        try:
+            generate_inspiration_thumb(result.image_url, user_id, job_id)
+        except Exception:
+            logger.exception("BFL outpainting thumbnail failed: job=%s", job_id)
+        try:
+            task_label = (accepted["provider_task_id"] or "-")[:8]
+            log_operation(
+                user_id=user_id,
+                username=str(user.get("username") or ""),
+                action="ai_image_outpainting",
+                detail=(
+                    f"job={job_id[:8]} task={task_label} result=done "
+                    f"size={result.width}x{result.height}"
+                ),
+                payload=json.dumps(
+                    {
+                        "job_id": job_id,
+                        "provider_task_id": accepted["provider_task_id"],
+                        "image_url": result.image_url,
+                        "width": result.width,
+                        "height": result.height,
+                        "cost": result.cost,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception:
+            logger.exception("BFL outpainting success operation log failed: job=%s", job_id)
+    except asyncio.CancelledError:
+        # Waiting on the semaphore (or cancelled before run_outpainting) never
+        # reached BFL. Keep a pre-submit phase so restart resubmits.
+        interrupt_phase = "interrupted" if (resume_only or submission_attempted) else "queued"
+        interrupted_meta = {**request_meta, "phase": interrupt_phase}
+        try:
+            await _save_outpainting_job_with_retries(
+                job_id=job_id,
+                user_id=user_id,
+                status="processing",
+                model=BFL_OUTPAINTING_MODEL,
+                provider="bfl",
+                prompt=prompt,
+                original_prompt=prompt,
+                resolved_prompt=prompt,
+                size=f"{geometry.expected_width}x{geometry.expected_height}",
+                resolution="",
+                has_reference=True,
+                reference_count=1,
+                request_meta=interrupted_meta,
+                task_id=accepted["provider_task_id"],
+                progress=20 if resume_only else 10,
+                created_at=created_at,
+            )
+        except Exception:
+            logger.exception("BFL outpainting interruption persistence failed: job=%s", job_id)
+        raise
+    except Exception as exc:
+        if result is not None:
+            logger.error(
+                "BFL outpainting result saved but final persistence failed: job=%s task=%s error=%s",
+                job_id,
+                accepted["provider_task_id"] or "-",
+                type(exc).__name__,
+            )
+            return
+        if (
+            accepted["provider_task_id"]
+            and accepted["polling_url"]
+            and not acceptance_persisted
+        ):
+            # BFL already accepted (and billed) this task, but the local
+            # acceptance row never became durable. Keep a recoverable
+            # processing/interrupted job and the source snapshot.
+            logger.warning(
+                "BFL outpainting accepted but local persistence failed; "
+                "keeping recoverable processing job: job=%s task=%s error=%s",
+                job_id,
+                accepted["provider_task_id"],
+                type(exc).__name__,
+            )
+            interrupted_meta = {**request_meta, "phase": "interrupted"}
+            try:
+                await _save_outpainting_job_with_retries(
+                    job_id=job_id,
+                    user_id=user_id,
+                    status="processing",
+                    model=BFL_OUTPAINTING_MODEL,
+                    provider="bfl",
+                    prompt=prompt,
+                    original_prompt=prompt,
+                    resolved_prompt=prompt,
+                    size=f"{geometry.expected_width}x{geometry.expected_height}",
+                    resolution="",
+                    has_reference=True,
+                    reference_count=1,
+                    request_meta=interrupted_meta,
+                    task_id=accepted["provider_task_id"],
+                    progress=20,
+                    created_at=created_at,
+                )
+            except Exception:
+                logger.exception(
+                    "BFL outpainting accepted-id recovery persistence failed: job=%s",
+                    job_id,
+                )
+                return
+            if acceptance_resume_attempts <= 0:
+                return
+            logger.warning(
+                "BFL outpainting resuming poll after accepted-id persistence failure: "
+                "job=%s task=%s remaining=%s",
+                job_id,
+                accepted["provider_task_id"],
+                acceptance_resume_attempts,
+            )
+            await _run_outpainting_background(
+                job_id,
+                user,
+                None,
+                geometry,
+                accepted["provider_task_id"],
+                request_meta,
+                created_at,
+                resume_only=True,
+                polling_url=accepted["polling_url"],
+                acceptance_resume_attempts=acceptance_resume_attempts - 1,
+            )
+            return
+        if isinstance(exc, BflOutpaintingError):
+            public_error = exc.public_message
+            diagnostic = exc.diagnostic or type(exc).__name__
+        else:
+            public_error = "扩图服务处理失败，请稍后重试"
+            diagnostic = type(exc).__name__
+        logger.error(
+            "BFL outpainting failed: job=%s task=%s error=%s diagnostic=%s",
+            job_id,
+            accepted["provider_task_id"] or "-",
+            type(exc).__name__,
+            str(diagnostic)[:500],
+        )
+        failed_meta = {**request_meta, "phase": "failed"}
+        try:
+            await _save_outpainting_job_with_retries(
+                job_id=job_id,
+                user_id=user_id,
+                status="failed",
+                model=BFL_OUTPAINTING_MODEL,
+                provider="bfl",
+                prompt=prompt,
+                original_prompt=prompt,
+                resolved_prompt=prompt,
+                size=f"{geometry.expected_width}x{geometry.expected_height}",
+                resolution="",
+                has_reference=True,
+                reference_count=1,
+                request_meta=failed_meta,
+                task_id=accepted["provider_task_id"],
+                error=public_error,
+                progress=100,
+                created_at=created_at,
+            )
+            _discard_outpainting_source_snapshot(request_meta, user_id)
+        except Exception:
+            logger.exception("BFL outpainting failure persistence failed: job=%s", job_id)
+        try:
+            task_label = (accepted["provider_task_id"] or "-")[:8]
+            log_operation(
+                user_id=user_id,
+                username=str(user.get("username") or ""),
+                action="ai_image_outpainting",
+                detail=f"job={job_id[:8]} task={task_label} result=failed",
+                payload=json.dumps(
+                    {
+                        "job_id": job_id,
+                        "provider_task_id": accepted["provider_task_id"],
+                        "error": public_error,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception:
+            logger.exception("BFL outpainting failure operation log failed: job=%s", job_id)
+
+
+async def _recover_outpainting_jobs() -> None:
+    try:
+        jobs = await asyncio.to_thread(load_active_outpainting_jobs)
+    except Exception:
+        logger.exception("BFL outpainting recovery scan failed")
+        return
+    if not jobs:
+        return
+
+    logger.warning("BFL outpainting recovery found %s unfinished job(s)", len(jobs))
+    recoveries: list[
+        tuple[dict, OutpaintingGeometry, str, dict, PreparedOutpaintingImage | None, bool, str]
+    ] = []
+    for stored_job in jobs:
+        job_id = str(stored_job.get("id") or "")
+        meta = stored_job.get("request_meta")
+        try:
+            if not job_id or not isinstance(meta, dict):
+                raise OutpaintingValidationError("恢复元数据缺失")
+            provider_task_id = str(
+                stored_job.get("task_id")
+                or meta.get("provider_task_id")
+                or meta.get("provider_task_uuid")
+                or ""
+            ).strip()
+            polling_url = str(meta.get("polling_url") or "").strip()
+            geometry = resolve_geometry_from_meta(
+                meta,
+                max_width=MAX_OUTPUT_SIDE,
+                max_height=MAX_OUTPUT_SIDE,
+                max_pixels=MAX_OUTPUT_PIXELS,
+            )
+            expected_fields = {
+                "expected_width": geometry.expected_width,
+                "expected_height": geometry.expected_height,
+            }
+            if any(
+                isinstance(meta.get(name), bool)
+                or not isinstance(meta.get(name), int)
+                or meta.get(name) != expected
+                for name, expected in expected_fields.items()
+            ):
+                raise OutpaintingValidationError("恢复尺寸不一致")
+            resume_only = not is_pre_submit_phase(meta.get("phase"))
+            prepared = None
+            if resume_only:
+                if not polling_url:
+                    raise OutpaintingValidationError("恢复轮询地址缺失")
+            else:
+                # Queued jobs never reached BFL; rebuild the prepared image and
+                # submit a new provider task. Later phases poll the accepted id.
+                prepared = load_prepared_source_snapshot(
+                    str(meta.get("source_snapshot_url") or ""),
+                    output_root=settings.output_path,
+                    user_id=str(stored_job.get("user_id") or ""),
+                    meta=meta,
+                )
+            recoveries.append(
+                (stored_job, geometry, provider_task_id, dict(meta), prepared, resume_only, polling_url)
+            )
+        except Exception as exc:
+            logger.error(
+                "BFL outpainting recovery metadata rejected: job=%s error=%s",
+                job_id or "-",
+                type(exc).__name__,
+            )
+            if not job_id:
+                continue
+            failed_meta = dict(meta) if isinstance(meta, dict) else {"operation": "outpainting"}
+            failed_meta["phase"] = "failed"
+            try:
+                await _save_outpainting_job_with_retries(
+                    job_id=job_id,
+                    user_id=str(stored_job.get("user_id") or ""),
+                    status="failed",
+                    model=BFL_OUTPAINTING_MODEL,
+                    provider="bfl",
+                    prompt=str(stored_job.get("prompt") or "FLUX outpainting"),
+                    original_prompt=str(stored_job.get("original_prompt") or "FLUX outpainting"),
+                    resolved_prompt=str(stored_job.get("resolved_prompt") or "FLUX outpainting"),
+                    size=str(stored_job.get("size") or ""),
+                    resolution=str(stored_job.get("resolution") or ""),
+                    has_reference=True,
+                    reference_count=1,
+                    request_meta=failed_meta,
+                    task_id=str(stored_job.get("task_id") or ""),
+                    error="扩图任务恢复信息无效，请重新扩图",
+                    progress=100,
+                    created_at=float(stored_job.get("created_at") or time.time()),
+                )
+                _discard_outpainting_source_snapshot(
+                    meta if isinstance(meta, dict) else None,
+                    str(stored_job.get("user_id") or ""),
+                )
+            except Exception:
+                logger.exception("BFL outpainting invalid recovery persistence failed: job=%s", job_id)
+
+    concurrency = max(1, int(settings.bfl_outpainting_max_concurrency or 2))
+    for offset in range(0, len(recoveries), concurrency):
+        batch = recoveries[offset:offset + concurrency]
+        await asyncio.gather(
+            *(
+                _run_outpainting_background(
+                    str(job.get("id")),
+                    {"id": str(job.get("user_id") or ""), "username": ""},
+                    prepared,
+                    geometry,
+                    provider_task_id,
+                    meta,
+                    float(job.get("created_at") or time.time()),
+                    resume_only=resume_only,
+                    polling_url=polling_url,
+                )
+                for job, geometry, provider_task_id, meta, prepared, resume_only, polling_url in batch
+            ),
+            return_exceptions=True,
+        )
+
 
 def _run_local_layer_extract(src_path: Path, out_dir: Path, user_id: str) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1118,6 +1923,19 @@ def _assert_job_owner(job_user_id: Optional[str], user: dict) -> None:
         raise HTTPException(403, "无权访问其他人的任务")
 
 
+def _outpainting_asset_owner(path: str) -> str | None:
+    try:
+        decoded = unquote(path).replace("\\", "/")
+    except Exception:
+        return None
+    parts = [part for part in decoded.split("/") if part]
+    if len(parts) < 3 or parts[0] != "ai-images":
+        return None
+    if not any(part.startswith("outpainting_") for part in parts[2:]):
+        return None
+    return parts[1]
+
+
 @app.middleware("http")
 async def attach_user_context(request: Request, call_next):
     request.state.user = _get_session_user(request)
@@ -1150,6 +1968,14 @@ async def attach_user_context(request: Request, call_next):
                     request.method, path, client_req_id or "-", (time.monotonic() - t0) * 1000,
                 )
             return JSONResponse({"detail": "请先输入名字进入系统"}, status_code=401)
+    outpainting_owner = _outpainting_asset_owner(path)
+    if (
+        outpainting_owner
+        and request.state.user is not None
+        and not _is_admin(request.state.user)
+        and str(request.state.user.get("id") or "") != outpainting_owner
+    ):
+        return JSONResponse({"detail": "图片不存在"}, status_code=404)
     try:
         response = await call_next(request)
     except Exception:
@@ -3956,6 +4782,286 @@ async def _run_ai_image_background(
         )
 
 
+@app.get("/ai-image/outpainting/config")
+def ai_image_outpainting_config():
+    """Return only non-secret geometry constraints needed by the canvas UI."""
+    limits = _outpainting_effective_limits()
+    return {
+        "enabled": bool(
+            settings.bfl_outpainting_enabled
+            and settings.bfl_api_key.strip()
+            and not _outpainting_configuration_error()
+        ),
+        "max_source_bytes": max(1, int(settings.bfl_outpainting_max_source_bytes)),
+        "timeout_seconds": max(1, int(settings.bfl_outpainting_timeout_seconds)),
+        **limits,
+    }
+
+
+def _outpainting_job_response(job: dict) -> dict:
+    meta = job.get("request_meta") if isinstance(job.get("request_meta"), dict) else {}
+    expected_width = int(meta.get("expected_width") or 0)
+    expected_height = int(meta.get("expected_height") or 0)
+    return {
+        "job_id": job["id"],
+        "status": job.get("status") or "processing",
+        "progress": int(job.get("progress") or 0),
+        "task_id": job.get("task_id") or meta.get("provider_task_id") or meta.get("provider_task_uuid") or "",
+        "processing_width": int(meta.get("processing_width") or 0),
+        "processing_height": int(meta.get("processing_height") or 0),
+        "expected_width": expected_width,
+        "expected_height": expected_height,
+        "expected_dimensions": {
+            "width": expected_width,
+            "height": expected_height,
+        },
+        "deduplicated": True,
+    }
+
+
+async def _read_outpainting_json_body(request: Request) -> dict:
+    max_bytes = max(1024, int(settings.bfl_outpainting_max_request_bytes))
+    raw_content_length = str(request.headers.get("content-length") or "").strip()
+    if raw_content_length:
+        try:
+            if int(raw_content_length) > max_bytes:
+                raise HTTPException(413, "扩图请求体过大")
+        except ValueError as exc:
+            raise HTTPException(400, "Content-Length 无效") from exc
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(413, "扩图请求体过大")
+        chunks.append(chunk)
+    try:
+        body = json.loads(b"".join(chunks))
+    except Exception as exc:
+        raise HTTPException(400, "请求 JSON 无效") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(400, "请求 JSON 必须是对象")
+    return body
+
+
+@app.post("/ai-image/outpainting")
+async def ai_image_outpainting(request: Request):
+    """Create one durable, idempotent FLUX outpainting job."""
+    user = _current_user(request)
+    if not settings.bfl_outpainting_enabled:
+        raise HTTPException(503, "扩图功能未启用")
+    if not settings.bfl_api_key.strip():
+        raise HTTPException(503, "扩图服务尚未配置，请联系管理员")
+    configuration_error = _outpainting_configuration_error()
+    if configuration_error:
+        logger.error("BFL outpainting configuration rejected: %s", configuration_error)
+        raise HTTPException(503, "扩图服务配置无效，请联系管理员")
+    body = await _read_outpainting_json_body(request)
+
+    raw_client_request_id = str(
+        body.get("client_request_id")
+        or request.headers.get("x-client-request-id")
+        or ""
+    ).strip()
+    try:
+        client_request_id = str(uuid.UUID(raw_client_request_id))
+    except (ValueError, AttributeError):
+        raise HTTPException(400, "client_request_id 必须是有效 UUID")
+
+    existing = await asyncio.to_thread(
+        load_ai_image_job_by_client_request_id,
+        str(user["id"]),
+        client_request_id,
+    )
+    if existing:
+        return _outpainting_job_response(existing)
+
+    image_url = str(body.get("image_url") or "").strip()
+    if not image_url:
+        raise HTTPException(400, "image_url 不能为空")
+    if image_url.casefold().startswith("data:image/"):
+        source: str | Path = image_url
+        source_kind = "data_uri"
+        source_image_url = None
+    else:
+        source, source_image_url = _outpainting_internal_path(image_url, request, user)
+        source_kind = "internal_url"
+
+    raw_outpaint = body.get("outpaint")
+    outpaint = raw_outpaint if isinstance(raw_outpaint, dict) else body
+    limits = _outpainting_effective_limits()
+
+    def prepare_and_claim():
+        with _outpainting_submit_lock:
+            duplicate = load_ai_image_job_by_client_request_id(
+                str(user["id"]),
+                client_request_id,
+            )
+            if duplicate:
+                return duplicate, None, None, None, None, None
+
+            claims = _outpainting_claims()
+            user_id = str(user["id"])
+            max_inflight = max(1, int(settings.bfl_outpainting_max_concurrency)) + max(
+                0, int(settings.bfl_outpainting_max_queue_size)
+            )
+            max_per_user = max(1, int(settings.bfl_outpainting_max_pending_per_user))
+            if len(claims) >= max_inflight:
+                raise _OutpaintingCapacityError("扩图任务较多，请稍后再试")
+            if sum(1 for claimed_user_id in claims.values() if claimed_user_id == user_id) >= max_per_user:
+                raise _OutpaintingCapacityError("你已有扩图任务在处理中，请等待完成后再试")
+
+            prepared = prepare_outpainting_image(
+                source,
+                processing_width=body.get("processing_width"),
+                processing_height=body.get("processing_height"),
+                max_source_bytes=max(1, int(settings.bfl_outpainting_max_source_bytes)),
+                max_source_pixels=max(1, int(settings.bfl_outpainting_max_source_pixels)),
+                max_encoded_input_bytes=max(1, int(settings.bfl_outpainting_max_encoded_input_bytes)),
+            )
+            geometry = validate_geometry(
+                processing_width=prepared.processing_width,
+                processing_height=prepared.processing_height,
+                top=outpaint.get("top", 0),
+                right=outpaint.get("right", 0),
+                bottom=outpaint.get("bottom", 0),
+                left=outpaint.get("left", 0),
+                max_width=limits["max_width"],
+                max_height=limits["max_height"],
+                max_pixels=limits["max_area_pixels"],
+            )
+            job_id = uuid.uuid4().hex
+            created_at = time.time()
+            prompt = "FLUX outpainting"
+            source_snapshot_url = persist_prepared_source_snapshot(
+                prepared,
+                output_root=settings.output_path,
+                user_id=user_id,
+                job_id=job_id,
+            )
+            request_meta = {
+                "operation": "outpainting",
+                "client_request_id": client_request_id,
+                "provider": "bfl",
+                "model": BFL_OUTPAINTING_MODEL,
+                "provider_task_id": "",
+                "provider_task_uuid": "",
+                "polling_url": "",
+                "source_kind": source_kind,
+                "source_image_url": source_image_url,
+                "source_snapshot_url": source_snapshot_url,
+                "source_width": prepared.source_width,
+                "source_height": prepared.source_height,
+                "source_format": prepared.source_format,
+                "source_sha256": prepared.source_sha256,
+                "processing_width": prepared.processing_width,
+                "processing_height": prepared.processing_height,
+                "top": geometry.top,
+                "right": geometry.right,
+                "bottom": geometry.bottom,
+                "left": geometry.left,
+                "expected_width": geometry.expected_width,
+                "expected_height": geometry.expected_height,
+                "provider_top": geometry.provider_top,
+                "provider_right": geometry.provider_right,
+                "provider_bottom": geometry.provider_bottom,
+                "provider_left": geometry.provider_left,
+                "provider_width": geometry.provider_width,
+                "provider_height": geometry.provider_height,
+                "provider_margin_alignment": limits["snap_pixels"],
+                "auto_crop": settings.bfl_outpainting_auto_crop,
+                "mode": settings.bfl_outpainting_mode,
+                "phase": "queued",
+                "cost": None,
+            }
+            claims[job_id] = user_id
+            try:
+                save_ai_image_job(
+                    job_id=job_id,
+                    user_id=user["id"],
+                    status="processing",
+                    model=BFL_OUTPAINTING_MODEL,
+                    provider="bfl",
+                    prompt=prompt,
+                    original_prompt=prompt,
+                    resolved_prompt=prompt,
+                    size=f"{geometry.expected_width}x{geometry.expected_height}",
+                    resolution="",
+                    has_reference=True,
+                    reference_count=1,
+                    client_request_id=client_request_id,
+                    request_meta=request_meta,
+                    task_id="",
+                    progress=0,
+                    created_at=created_at,
+                )
+            except sqlite3.IntegrityError:
+                claims.pop(job_id, None)
+                discard_prepared_source_snapshot(
+                    source_snapshot_url,
+                    output_root=settings.output_path,
+                    user_id=user_id,
+                )
+                duplicate = load_ai_image_job_by_client_request_id(
+                    str(user["id"]),
+                    client_request_id,
+                )
+                if duplicate:
+                    return duplicate, None, None, None, None, None
+                raise
+            except Exception:
+                claims.pop(job_id, None)
+                discard_prepared_source_snapshot(
+                    source_snapshot_url,
+                    output_root=settings.output_path,
+                    user_id=user_id,
+                )
+                raise
+            return None, prepared, geometry, job_id, created_at, request_meta
+
+    try:
+        existing_job, prepared, geometry, job_id, created_at, request_meta = await asyncio.to_thread(
+            prepare_and_claim
+        )
+    except OutpaintingValidationError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except _OutpaintingCapacityError as exc:
+        raise HTTPException(429, str(exc)) from exc
+
+    if existing_job:
+        return _outpainting_job_response(existing_job)
+    _track_outpainting_task(
+        _run_outpainting_background(
+            job_id,
+            dict(user),
+            prepared,
+            geometry,
+            "",
+            request_meta,
+            created_at,
+        ),
+        claimed_job_id=job_id,
+    )
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "progress": 0,
+        "task_id": "",
+        "processing_width": prepared.processing_width,
+        "processing_height": prepared.processing_height,
+        "expected_width": geometry.expected_width,
+        "expected_height": geometry.expected_height,
+        "expected_dimensions": {
+            "width": geometry.expected_width,
+            "height": geometry.expected_height,
+        },
+        "deduplicated": False,
+    }
+
+
 @app.post("/ai-image/upscale")
 async def ai_image_upscale(request: Request):
     """对站内图片执行本地高清放大，返回可轮询的 ai-image job。"""
@@ -4196,9 +5302,34 @@ def ai_image_status(request: Request, job_id: str):
             layer_extract = json.loads(job["prompt_trace"])
         except Exception:
             layer_extract = None
+    request_meta = job.get("request_meta") if isinstance(job.get("request_meta"), dict) else {}
+    operation = str(request_meta.get("operation") or "")
+    outpainting = None
+    if operation == "outpainting":
+        outpainting = {
+            key: request_meta.get(key)
+            for key in (
+                "provider_task_id",
+                "provider_task_uuid",
+                "processing_width",
+                "processing_height",
+                "top",
+                "right",
+                "bottom",
+                "left",
+                "expected_width",
+                "expected_height",
+                "phase",
+                "cost",
+                "actual_width",
+                "actual_height",
+            )
+            if key in request_meta
+        }
     error_text = job.get("error") or ""
-    # 新旧失败记录统一收敛为两类用户文案；原始诊断仅保留在服务日志。
-    if job.get("status") == "failed":
+    # Smart-routed generation errors use a generic two-round message. Operation-specific
+    # workers already persist bounded public errors and must not be rewritten here.
+    if job.get("status") == "failed" and operation != "outpainting":
         public_error = public_generation_error(error_text)
         should_update_error = str(error_text).strip() != public_error
         error_text = public_error
@@ -4236,6 +5367,8 @@ def ai_image_status(request: Request, job_id: str):
         "error": error_text or None,
         "providerSwitched": bool(job.get("provider_switched")),
         "layer_extract": layer_extract,
+        "outpainting": outpainting,
+        "cost": outpainting.get("cost") if outpainting else None,
     }
 
 

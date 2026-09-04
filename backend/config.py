@@ -96,6 +96,34 @@ class Settings:
     vlm_base_url: str = os.getenv("VLM_BASE_URL", "") or ai_image_base_url
     vlm_api_key: str = os.getenv("VLM_API_KEY", "") or ai_image_api_key
 
+    # BFL FLUX 扩图。运行参数统一由根目录 .env 管理，真实 API key 不进入仓库。
+    bfl_outpainting_enabled: bool = os.getenv("BFL_OUTPAINTING_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    bfl_api_key: str = os.getenv("BFL_API_KEY", "").strip()
+    bfl_api_url: str = os.getenv("BFL_API_URL", "https://api.bfl.ai").strip()
+    bfl_outpainting_mode: str = os.getenv("BFL_OUTPAINTING_MODE", "fast").strip().lower() or "fast"
+    bfl_outpainting_output_format: str = os.getenv("BFL_OUTPAINTING_OUTPUT_FORMAT", "PNG").strip().upper() or "PNG"
+    bfl_outpainting_auto_crop: bool = os.getenv("BFL_OUTPAINTING_AUTO_CROP", "false").strip().lower() in {"1", "true", "yes", "on"}
+    bfl_outpainting_max_concurrency: int = int(os.getenv("BFL_OUTPAINTING_MAX_CONCURRENCY", "2"))
+    bfl_outpainting_max_queue_size: int = int(os.getenv("BFL_OUTPAINTING_MAX_QUEUE_SIZE", "4"))
+    bfl_outpainting_max_pending_per_user: int = int(os.getenv("BFL_OUTPAINTING_MAX_PENDING_PER_USER", "2"))
+    bfl_outpainting_max_request_bytes: int = int(os.getenv("BFL_OUTPAINTING_MAX_REQUEST_BYTES", "30000000"))
+    bfl_outpainting_timeout_seconds: float = float(os.getenv("BFL_OUTPAINTING_TIMEOUT_SECONDS", "600"))
+    bfl_outpainting_poll_interval_seconds: float = float(os.getenv("BFL_OUTPAINTING_POLL_INTERVAL_SECONDS", "2"))
+    bfl_outpainting_transient_retries: int = int(os.getenv("BFL_OUTPAINTING_TRANSIENT_RETRIES", "4"))
+    bfl_outpainting_retry_backoff_seconds: float = float(os.getenv("BFL_OUTPAINTING_RETRY_BACKOFF_SECONDS", "1.5"))
+    bfl_outpainting_retry_backoff_cap_seconds: float = float(os.getenv("BFL_OUTPAINTING_RETRY_BACKOFF_CAP_SECONDS", "8"))
+    bfl_outpainting_result_download_retries: int = int(os.getenv("BFL_OUTPAINTING_RESULT_DOWNLOAD_RETRIES", "2"))
+    bfl_outpainting_result_host_suffixes: str = os.getenv("BFL_OUTPAINTING_RESULT_HOST_SUFFIXES", "delivery.bfl.ai,bfl.ai").strip()
+    bfl_outpainting_max_source_bytes: int = int(os.getenv("BFL_OUTPAINTING_MAX_SOURCE_BYTES", str(20 * 1024 * 1024)))
+    bfl_outpainting_max_source_pixels: int = int(os.getenv("BFL_OUTPAINTING_MAX_SOURCE_PIXELS", "50000000"))
+    bfl_outpainting_max_encoded_input_bytes: int = int(os.getenv("BFL_OUTPAINTING_MAX_ENCODED_INPUT_BYTES", str(20 * 1024 * 1024)))
+    bfl_outpainting_max_result_bytes: int = int(os.getenv("BFL_OUTPAINTING_MAX_RESULT_BYTES", "30000000"))
+    outpaint_snap_pixels: int = int(os.getenv("OUTPAINT_SNAP_PIXELS", "1"))
+    outpaint_max_width: int = int(os.getenv("OUTPAINT_MAX_WIDTH", "2048"))
+    outpaint_max_height: int = int(os.getenv("OUTPAINT_MAX_HEIGHT", "2048"))
+    outpaint_max_area_pixels: int = int(os.getenv("OUTPAINT_MAX_AREA_PIXELS", "4194304"))
+    outpaint_recommended_area_pixels: int = int(os.getenv("OUTPAINT_RECOMMENDED_AREA_PIXELS", "2097152"))
+
     # Kie Seedream 图层分离；key 留空则转 PSD 功能明确不可用
     kie_base_url: str = os.getenv("KIE_BASE_URL", "https://api.kie.ai")
     kie_upload_base_url: str = os.getenv("KIE_UPLOAD_BASE_URL", "https://kieai.redpandaai.co")
@@ -197,7 +225,7 @@ class Settings:
         self.allowed_login_users = self._load_login_users()
 
         # 统一补协议前缀，避免 ai_image_base_url 等配置没有 http://
-        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "kie_base_url", "kie_upload_base_url", "adobe2api_base_url", "cliproxy_base_url", "chat_llm_base_url", "skill_llm_base_url"):
+        for _key in ("ai_image_base_url", "nano_banana_base_url", "vlm_base_url", "agent_vlm_base_url", "kie_base_url", "kie_upload_base_url", "adobe2api_base_url", "cliproxy_base_url", "chat_llm_base_url", "skill_llm_base_url", "bfl_api_url"):
             _val = getattr(self, _key, "")
             if _val and not _val.startswith("http"):
                 setattr(self, _key, "https://" + _val)
