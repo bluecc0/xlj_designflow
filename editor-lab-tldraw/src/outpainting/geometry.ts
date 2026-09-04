@@ -14,6 +14,21 @@ export function getExpectedOutpaintSize(input: Size, margins: OutpaintMargins): 
   }
 }
 
+export function getWorkingSizeForOutpainting(natural: Size, display: Size): Size {
+  const naturalWidth = Math.max(1, Math.round(natural.w))
+  const naturalHeight = Math.max(1, Math.round(natural.h))
+  const displayWidth = Math.round(display.w)
+  const displayHeight = Math.round(display.h)
+  if (!(displayWidth > 0) || !(displayHeight > 0)) {
+    return { w: naturalWidth, h: naturalHeight }
+  }
+  const scale = Math.min(1, displayWidth / naturalWidth, displayHeight / naturalHeight)
+  return {
+    w: Math.max(1, Math.round(naturalWidth * scale)),
+    h: Math.max(1, Math.round(naturalHeight * scale)),
+  }
+}
+
 export function alignMarginForProvider(margin: number, alignment: number) {
   const normalizedMargin = Math.max(0, Math.round(margin))
   if (!normalizedMargin) return 0

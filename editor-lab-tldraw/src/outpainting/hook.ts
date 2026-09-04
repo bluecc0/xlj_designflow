@@ -12,6 +12,7 @@ import {
   applyMatrix,
   getExpectedOutpaintSize,
   getProcessingSizeForOutpainting,
+  getWorkingSizeForOutpainting,
   hasOutpaintMargins,
   invertMatrix,
   isWithinOutpaintingLimits,
@@ -122,12 +123,16 @@ export function getOutpaintingEligibility(
     return { shapeId: shape.id, eligible: false, reason: '仅支持静态 PNG、JPEG 或 WebP 图片扩图', processingWidth: 0, processingHeight: 0 }
   }
   const meta = (shape.meta || {}) as Record<string, unknown>
-  const sourceWidth = Math.round(Number(asset.props.w || meta.designflowOriginalWidth || 0))
-  const sourceHeight = Math.round(Number(asset.props.h || meta.designflowOriginalHeight || 0))
-  if (sourceWidth <= 0 || sourceHeight <= 0) {
+  const naturalWidth = Math.round(Number(asset.props.w || meta.designflowOriginalWidth || 0))
+  const naturalHeight = Math.round(Number(asset.props.h || meta.designflowOriginalHeight || 0))
+  if (naturalWidth <= 0 || naturalHeight <= 0) {
     return { shapeId: shape.id, eligible: false, reason: '无法读取原图尺寸，暂时不能扩图', processingWidth: 0, processingHeight: 0 }
   }
-  const processingSize = getProcessingSizeForOutpainting(sourceWidth, sourceHeight, config)
+  const workingSize = getWorkingSizeForOutpainting(
+    { w: naturalWidth, h: naturalHeight },
+    { w: Number(shape.props.w), h: Number(shape.props.h) }
+  )
+  const processingSize = getProcessingSizeForOutpainting(workingSize.w, workingSize.h, config)
   const processingWidth = processingSize.w
   const processingHeight = processingSize.h
   const canExpand = [
