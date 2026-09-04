@@ -35,6 +35,7 @@ export type OutpaintingConfig = {
   recommendedAreaPixels: number
   maxSourceBytes: number
   timeoutSeconds: number
+  minProcessingSide: number
   isFallback: boolean
 }
 

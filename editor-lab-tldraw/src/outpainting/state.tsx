@@ -18,6 +18,7 @@ const FALLBACK_CONFIG: OutpaintingConfig = {
   recommendedAreaPixels: 2_097_152,
   maxSourceBytes: 20 * 1024 * 1024,
   timeoutSeconds: 600,
+  minProcessingSide: 64,
   isFallback: true,
 }
 
@@ -93,6 +94,10 @@ function loadOutpaintingConfig() {
           timeoutSeconds: Math.min(
             3600,
             positiveInteger(data?.timeout_seconds, FALLBACK_CONFIG.timeoutSeconds)
+          ),
+          minProcessingSide: positiveInteger(
+            data?.min_processing_side,
+            FALLBACK_CONFIG.minProcessingSide
           ),
           isFallback: false,
         }

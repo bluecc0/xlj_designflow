@@ -737,10 +737,19 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             max(1, int(app_main.settings.bfl_outpainting_timeout_seconds)),
         )
         self.assertIsInstance(config["timeout_seconds"], int)
+        self.assertEqual(config["min_processing_side"], 64)
         self.assertNotIn("model", config)
         self.assertNotIn("api_url", config)
         self.assertNotIn("api_key", config)
         self.assertNotIn("secret", json.dumps(config).casefold())
+
+        with (
+            patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+            patch.object(app_main.settings, "bfl_api_key", "super-secret"),
+            patch.object(app_main.settings, "bfl_outpainting_mode", "high"),
+        ):
+            high_config = app_main.ai_image_outpainting_config()
+        self.assertEqual(high_config["min_processing_side"], 1)
 
     async def test_feature_flag_rejects_before_job_creation(self) -> None:
         request = json_request({"image_url": png_data_uri(), "top": 64})
@@ -1832,6 +1841,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
     async def test_acceptance_write_exhaustion_keeps_paid_task_recoverable(self) -> None:
         job_id = "job-accept-exhausted"
         saved: list[dict] = []
+        run_calls: list[dict] = []
 
         def save_fail_acceptance(**kwargs):
             meta = kwargs.get("request_meta") or {}
@@ -1839,15 +1849,27 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 raise sqlite3.OperationalError("database is locked")
             saved.append(kwargs)
 
-        async def run_and_fail_accept(**kwargs):
-            try:
-                await kwargs["on_accepted"](TASK_ID, POLLING_URL)
-            except sqlite3.OperationalError as exc:
-                raise bfl.BflOutpaintingError(
-                    "扩图服务内部状态无效，请稍后重试",
-                    diagnostic=f"accepted-id persistence failed: {type(exc).__name__}",
-                ) from exc
-            raise AssertionError("on_accepted should have exhausted persistence retries")
+        async def run_then_resume(**kwargs):
+            run_calls.append({
+                "submit_request": kwargs.get("submit_request", True),
+                "provider_task_id": str(kwargs.get("provider_task_id") or ""),
+                "polling_url": str(kwargs.get("polling_url") or ""),
+            })
+            if kwargs.get("submit_request", True):
+                try:
+                    await kwargs["on_accepted"](TASK_ID, POLLING_URL)
+                except sqlite3.OperationalError as exc:
+                    raise bfl.BflOutpaintingError(
+                        "扩图服务内部状态无效，请稍后重试",
+                        diagnostic=f"accepted-id persistence failed: {type(exc).__name__}",
+                    ) from exc
+                raise AssertionError("on_accepted should have exhausted persistence retries")
+            return make_result(
+                provider_task_id=TASK_ID,
+                polling_url=POLLING_URL,
+                width=64,
+                height=128,
+            )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "output"
@@ -1879,9 +1901,10 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             app_main.app.state.outpainting_semaphore = app_main.asyncio.Semaphore(1)
             with (
                 patch.object(app_main.settings, "output_path", output_path),
-                patch.object(app_main, "run_outpainting", new=run_and_fail_accept),
+                patch.object(app_main, "run_outpainting", new=run_then_resume),
                 patch.object(app_main, "save_ai_image_job", side_effect=save_fail_acceptance),
                 patch.object(app_main.time, "sleep"),
+                patch.object(app_main, "generate_inspiration_thumb"),
                 patch.object(app_main, "log_operation"),
             ):
                 await app_main._run_outpainting_background(
@@ -1901,15 +1924,25 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                     },
                     123.0,
                 )
-            self.assertTrue(snapshot_path.is_file())
+            self.assertFalse(snapshot_path.exists())
 
+        self.assertEqual(len(run_calls), 2)
+        self.assertTrue(run_calls[0]["submit_request"])
+        self.assertFalse(run_calls[1]["submit_request"])
+        self.assertEqual(run_calls[1]["provider_task_id"], TASK_ID)
+        self.assertEqual(run_calls[1]["polling_url"], POLLING_URL)
         self.assertNotIn("failed", [item["status"] for item in saved])
-        last = saved[-1]
-        self.assertEqual(last["status"], "processing")
-        self.assertEqual(last["task_id"], TASK_ID)
-        self.assertEqual(last["request_meta"]["phase"], "interrupted")
-        self.assertEqual(last["request_meta"]["polling_url"], POLLING_URL)
-        self.assertEqual(last["request_meta"]["provider_task_id"], TASK_ID)
+        interrupted_rows = [
+            row
+            for row in saved
+            if (row.get("request_meta") or {}).get("phase") == "interrupted"
+        ]
+        self.assertEqual(len(interrupted_rows), 1)
+        self.assertEqual(interrupted_rows[0]["status"], "processing")
+        self.assertEqual(interrupted_rows[0]["task_id"], TASK_ID)
+        self.assertEqual(interrupted_rows[0]["request_meta"]["polling_url"], POLLING_URL)
+        self.assertEqual(saved[-1]["status"], "done")
+        self.assertEqual(saved[-1]["task_id"], TASK_ID)
 
 
 class JobStoreIdempotencyTest(unittest.TestCase):

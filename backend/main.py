@@ -101,6 +101,7 @@ from .bfl_outpainting import (
     BFL_OUTPAINTING_MODEL,
     MAX_OUTPUT_PIXELS,
     MAX_OUTPUT_SIDE,
+    MIN_CANVAS_SIDE,
     BflOutpaintingError,
     OutpaintingValidationError,
     PreparedOutpaintingImage,
@@ -1141,6 +1142,11 @@ def _outpainting_effective_limits() -> dict[str, int]:
             max_area,
             max(1, int(settings.outpaint_recommended_area_pixels)),
         ),
+        "min_processing_side": (
+            MIN_CANVAS_SIDE
+            if str(settings.bfl_outpainting_mode or "").strip().casefold() == "fast"
+            else 1
+        ),
     }
 
 
@@ -1297,6 +1303,7 @@ async def _run_outpainting_background(
     *,
     resume_only: bool = False,
     polling_url: str = "",
+    acceptance_resume_attempts: int = 1,
 ) -> None:
     prompt = "FLUX outpainting"
     user_id = str(user.get("id") or "")
@@ -1552,6 +1559,28 @@ async def _run_outpainting_background(
                     "BFL outpainting accepted-id recovery persistence failed: job=%s",
                     job_id,
                 )
+                return
+            if acceptance_resume_attempts <= 0:
+                return
+            logger.warning(
+                "BFL outpainting resuming poll after accepted-id persistence failure: "
+                "job=%s task=%s remaining=%s",
+                job_id,
+                accepted["provider_task_id"],
+                acceptance_resume_attempts,
+            )
+            await _run_outpainting_background(
+                job_id,
+                user,
+                None,
+                geometry,
+                accepted["provider_task_id"],
+                request_meta,
+                created_at,
+                resume_only=True,
+                polling_url=accepted["polling_url"],
+                acceptance_resume_attempts=acceptance_resume_attempts - 1,
+            )
             return
         if isinstance(exc, BflOutpaintingError):
             public_error = exc.public_message

@@ -129,18 +129,23 @@ export function getOutpaintingEligibility(
   if (naturalWidth <= 0 || naturalHeight <= 0) {
     return { shapeId: shape.id, eligible: false, reason: '无法读取原图尺寸，暂时不能扩图', processingWidth: 0, processingHeight: 0 }
   }
+  const minProcessingSide = Math.max(
+    1,
+    Math.round(Number(config.minProcessingSide) || MIN_PROCESSING_SIDE)
+  )
   const workingSize = getWorkingSizeForOutpainting(
     { w: naturalWidth, h: naturalHeight },
-    { w: Number(shape.props.w), h: Number(shape.props.h) }
+    { w: Number(shape.props.w), h: Number(shape.props.h) },
+    minProcessingSide
   )
   const processingSize = getProcessingSizeForOutpainting(workingSize.w, workingSize.h, config)
   const processingWidth = processingSize.w
   const processingHeight = processingSize.h
-  if (processingWidth < MIN_PROCESSING_SIDE || processingHeight < MIN_PROCESSING_SIDE) {
+  if (processingWidth < minProcessingSide || processingHeight < minProcessingSide) {
     return {
       shapeId: shape.id,
       eligible: false,
-      reason: `扩图需要每边至少 ${MIN_PROCESSING_SIDE}px`,
+      reason: `扩图需要每边至少 ${minProcessingSide}px`,
       processingWidth,
       processingHeight,
     }
