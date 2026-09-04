@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
 BFL_API_URL = "https://api.bfl.ai"
 BFL_API_HOST = "api.bfl.ai"
 BFL_OUTPAINTING_PATH = "/v1/flux-tools/outpainting-v1"
-BFL_GET_RESULT_PATH = "/v1/get_result"
 BFL_OUTPAINTING_MODEL = "flux-tools/outpainting-v1"
 BFL_ALLOWED_MODES = frozenset({"fast", "high"})
 BFL_READY_STATUS = "ready"
@@ -789,16 +788,6 @@ def _validate_bfl_polling_url(raw_url: str) -> str:
     return parsed.geturl()
 
 
-def _fallback_polling_url(api_url: str, provider_task_id: str) -> str:
-    task_id = str(provider_task_id or "").strip()
-    if not task_id:
-        raise BflOutpaintingError(
-            "扩图任务无法恢复，请重新扩图",
-            diagnostic="missing BFL task id for polling",
-        )
-    return f"{api_url.rstrip('/')}{BFL_GET_RESULT_PATH}?id={quote(task_id, safe='')}"
-
-
 def _accepted_task(payload: dict[str, Any] | None) -> tuple[str, str, float | None]:
     if not payload:
         raise BflOutpaintingError(
@@ -813,7 +802,10 @@ def _accepted_task(payload: dict[str, Any] | None) -> tuple[str, str, float | No
             diagnostic="submit response missing id",
         )
     if not polling_url:
-        polling_url = _fallback_polling_url(BFL_API_URL, task_id)
+        raise BflOutpaintingError(
+            "扩图服务返回无效响应，请稍后重试",
+            diagnostic="submit response missing polling_url",
+        )
     return task_id, _validate_bfl_polling_url(polling_url), _result_cost(payload)
 
 
@@ -1215,15 +1207,12 @@ async def run_outpainting(
     else:
         provider_task_id = str(provider_task_id or "").strip()
         polling_url = str(polling_url or "").strip()
-        if polling_url:
-            polling_url = _validate_bfl_polling_url(polling_url)
-        elif provider_task_id:
-            polling_url = _fallback_polling_url(api_url, provider_task_id)
-        else:
+        if not polling_url:
             raise BflOutpaintingError(
                 "扩图任务无法恢复，请重新扩图",
-                diagnostic="resume requires provider_task_id or polling_url",
+                diagnostic="resume requires polling_url",
             )
+        polling_url = _validate_bfl_polling_url(polling_url)
 
     headers = {
         "accept": "application/json",
@@ -1299,12 +1288,13 @@ async def run_outpainting(
             provider_task_id, polling_url, cost = _accepted_task(payload)
             try:
                 await _notify_accepted(on_accepted, provider_task_id, polling_url)
-            except Exception:
-                logger.exception(
-                    "BFL outpainting accepted-id persistence failed: job=%s task=%s",
-                    job_id,
-                    _safe_text(provider_task_id, 80),
-                )
+            except BflOutpaintingError:
+                raise
+            except Exception as exc:
+                raise BflOutpaintingError(
+                    "扩图服务内部状态无效，请稍后重试",
+                    diagnostic=f"accepted-id persistence failed: {type(exc).__name__}",
+                ) from exc
 
         await _notify(on_progress, 20, "polling")
         transient_failures = 0

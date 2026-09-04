@@ -530,6 +530,44 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake.get_calls[0]["url"], self.polling_url)
         self.assertEqual(fake.get_calls[0]["headers"]["x-key"], "bfl-test-key")
 
+    async def test_submit_without_polling_url_is_malformed(self) -> None:
+        fake = FakeClient(post_results=[self.response(200, {"id": self.task_id, "cost": 0.01})])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(bfl.BflOutpaintingError) as raised:
+                await self.run_with_client(fake, Path(temp_dir))
+        self.assertIn("无效响应", raised.exception.public_message)
+        self.assertEqual(len(fake.post_calls), 1)
+        self.assertEqual(len(fake.get_calls), 0)
+        self.assertEqual(len(fake.stream_calls), 0)
+
+    async def test_resume_requires_returned_polling_url(self) -> None:
+        fake = FakeClient()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(bfl.BflOutpaintingError) as raised:
+                await self.run_with_client(
+                    fake,
+                    Path(temp_dir),
+                    prepared=None,
+                    provider_task_id=self.task_id,
+                    submit_request=False,
+                )
+        self.assertIn("无法恢复", raised.exception.public_message)
+        self.assertEqual(len(fake.post_calls), 0)
+        self.assertEqual(len(fake.get_calls), 0)
+
+    async def test_accepted_callback_failure_does_not_poll(self) -> None:
+        async def boom(_task_id: str, _polling_url: str) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        fake = FakeClient(post_results=[self.submit_ok()])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(bfl.BflOutpaintingError) as raised:
+                await self.run_with_client(fake, Path(temp_dir), on_accepted=boom)
+        self.assertIn("内部状态", raised.exception.public_message)
+        self.assertEqual(len(fake.post_calls), 1)
+        self.assertEqual(len(fake.get_calls), 0)
+        self.assertEqual(len(fake.stream_calls), 0)
+
     async def test_http_402_on_submit_is_not_treated_as_pending(self) -> None:
         fake = FakeClient(post_results=[self.response(402, {"detail": "insufficient funds"})])
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -591,6 +629,7 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
                     Path(temp_dir),
                     prepared=None,
                     provider_task_id=self.task_id,
+                    polling_url=self.polling_url,
                     submit_request=False,
                     transient_retry_count=1,
                     retry_backoff_seconds=0,
@@ -1071,6 +1110,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             "request_meta": {
                 "operation": "outpainting",
                 "provider_task_uuid": provider_uuid,
+                "polling_url": POLLING_URL.replace(TASK_ID, provider_uuid),
                 "processing_width": 64,
                 "processing_height": 64,
                 "top": 1,
@@ -1111,6 +1151,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(transport["prepared"])
         self.assertFalse(transport["submit_request"])
         self.assertEqual(transport["provider_task_id"], provider_uuid)
+        self.assertEqual(transport["polling_url"], POLLING_URL.replace(TASK_ID, provider_uuid))
         self.assertEqual(
             transport["geometry"].provider_margins(),
             {"top": 64, "right": 128, "bottom": 0, "left": 0},
@@ -1136,6 +1177,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             "request_meta": {
                 "operation": "outpainting",
                 "provider_task_uuid": provider_uuid,
+                "polling_url": POLLING_URL.replace(TASK_ID, provider_uuid),
                 "processing_width": 64,
                 "processing_height": 64,
                 "top": 64,
@@ -1225,6 +1267,48 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 run_mock.assert_not_awaited()
                 self.assertEqual(saved[-1]["status"], "failed")
                 self.assertEqual(saved[-1]["error"], "扩图任务恢复信息无效，请重新扩图")
+
+    async def test_recovery_rejects_resume_without_polling_url(self) -> None:
+        provider_uuid = "aeaeaeae-aeae-4aea-8aea-aeaeaeaeaeae"
+        stored_job = {
+            "id": "job-missing-polling-url",
+            "user_id": "operator_a",
+            "status": "processing",
+            "model": bfl.BFL_OUTPAINTING_MODEL,
+            "provider": "bfl",
+            "prompt": "FLUX outpainting",
+            "original_prompt": "FLUX outpainting",
+            "resolved_prompt": "FLUX outpainting",
+            "size": "64x128",
+            "resolution": "",
+            "task_id": provider_uuid,
+            "created_at": 123.0,
+            "request_meta": {
+                "operation": "outpainting",
+                "provider_task_id": provider_uuid,
+                "provider_task_uuid": provider_uuid,
+                "phase": "polling",
+                "processing_width": 64,
+                "processing_height": 64,
+                "top": 64,
+                "right": 0,
+                "bottom": 0,
+                "left": 0,
+                "expected_width": 64,
+                "expected_height": 128,
+            },
+        }
+        saved: list[dict] = []
+        run_mock = AsyncMock()
+        with (
+            patch.object(app_main, "load_active_outpainting_jobs", return_value=[stored_job]),
+            patch.object(app_main, "run_outpainting", new=run_mock),
+            patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
+        ):
+            await app_main._recover_outpainting_jobs()
+        run_mock.assert_not_awaited()
+        self.assertEqual(saved[-1]["status"], "failed")
+        self.assertEqual(saved[-1]["error"], "扩图任务恢复信息无效，请重新扩图")
 
     async def test_recovery_resubmits_queued_job_from_snapshot(self) -> None:
         request = json_request({
@@ -1650,6 +1734,78 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 123.0,
             )
         self.assertEqual(done_attempts, 2)
+        self.assertEqual(saved[-1]["status"], "done")
+        self.assertNotIn("failed", [item["status"] for item in saved])
+
+    async def test_acceptance_persistence_retries_before_polling(self) -> None:
+        prepared = bfl.prepare_outpainting_image(
+            png_data_uri(),
+            max_source_bytes=1024 * 1024,
+            max_source_pixels=1024 * 1024,
+            max_encoded_input_bytes=1024 * 1024,
+        )
+        geometry = bfl.validate_geometry(
+            processing_width=64,
+            processing_height=64,
+            top=64,
+            right=0,
+            bottom=0,
+            left=0,
+        )
+        saved: list[dict] = []
+        acceptance_attempts = 0
+
+        def save_with_one_acceptance_lock(**kwargs):
+            nonlocal acceptance_attempts
+            meta = kwargs.get("request_meta") or {}
+            if meta.get("phase") == "polling" and kwargs.get("task_id"):
+                acceptance_attempts += 1
+                if acceptance_attempts == 1:
+                    raise sqlite3.OperationalError("database is locked")
+            saved.append(kwargs)
+
+        async def run_and_accept(**kwargs):
+            await kwargs["on_accepted"](TASK_ID, POLLING_URL)
+            return make_result(
+                provider_task_id=TASK_ID,
+                polling_url=POLLING_URL,
+                width=64,
+                height=128,
+            )
+
+        app_main.app.state.outpainting_semaphore = app_main.asyncio.Semaphore(1)
+        with (
+            patch.object(app_main, "run_outpainting", new=run_and_accept),
+            patch.object(app_main, "save_ai_image_job", side_effect=save_with_one_acceptance_lock),
+            patch.object(app_main.time, "sleep"),
+            patch.object(app_main, "generate_inspiration_thumb"),
+            patch.object(app_main, "log_operation"),
+        ):
+            await app_main._run_outpainting_background(
+                "job-accept-retry",
+                {"id": "operator_a", "username": "运营A", "role": "user"},
+                prepared,
+                geometry,
+                "",
+                {
+                    "operation": "outpainting",
+                    "provider_task_id": "",
+                    "provider_task_uuid": "",
+                    "polling_url": "",
+                    "expected_width": 64,
+                    "expected_height": 128,
+                },
+                123.0,
+            )
+        self.assertEqual(acceptance_attempts, 2)
+        accepted_rows = [
+            row
+            for row in saved
+            if (row.get("request_meta") or {}).get("phase") == "polling" and row.get("task_id")
+        ]
+        self.assertGreaterEqual(len(accepted_rows), 1)
+        self.assertEqual(accepted_rows[0]["task_id"], TASK_ID)
+        self.assertEqual(accepted_rows[0]["request_meta"]["polling_url"], POLLING_URL)
         self.assertEqual(saved[-1]["status"], "done")
         self.assertNotIn("failed", [item["status"] for item in saved])
 

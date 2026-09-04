@@ -1347,10 +1347,32 @@ async def _run_outpainting_background(
     async def on_accepted(task_id: str, poll_url: str) -> None:
         accepted["provider_task_id"] = str(task_id or "").strip()
         accepted["polling_url"] = str(poll_url or "").strip()
+        if not accepted["provider_task_id"] or not accepted["polling_url"]:
+            raise BflOutpaintingError(
+                "扩图服务返回无效响应，请稍后重试",
+                diagnostic="accepted callback missing id or polling_url",
+            )
         request_meta["provider_task_id"] = accepted["provider_task_id"]
         request_meta["provider_task_uuid"] = accepted["provider_task_id"]
         request_meta["polling_url"] = accepted["polling_url"]
-        await asyncio.to_thread(persist_processing, 15, "polling")
+        await _save_outpainting_job_with_retries(
+            job_id=job_id,
+            user_id=user_id,
+            status="processing",
+            model=BFL_OUTPAINTING_MODEL,
+            provider="bfl",
+            prompt=prompt,
+            original_prompt=prompt,
+            resolved_prompt=prompt,
+            size=f"{geometry.expected_width}x{geometry.expected_height}",
+            resolution="",
+            has_reference=True,
+            reference_count=1,
+            request_meta={**request_meta, "phase": "polling"},
+            task_id=accepted["provider_task_id"],
+            progress=15,
+            created_at=created_at,
+        )
 
     result = None
     submission_attempted = False
@@ -1586,8 +1608,8 @@ async def _recover_outpainting_jobs() -> None:
             resume_only = not is_pre_submit_phase(meta.get("phase"))
             prepared = None
             if resume_only:
-                if not provider_task_id and not polling_url:
-                    raise OutpaintingValidationError("恢复任务编号缺失")
+                if not polling_url:
+                    raise OutpaintingValidationError("恢复轮询地址缺失")
             else:
                 # Queued jobs never reached BFL; rebuild the prepared image and
                 # submit a new provider task. Later phases poll the accepted id.
