@@ -162,6 +162,26 @@ class ImagePreparationTest(unittest.TestCase):
             self.assertFalse(bfl.is_pre_submit_phase("interrupted"))
             self.assertFalse(bfl.is_pre_submit_phase(None))
 
+    def test_fast_mode_rejects_processing_below_minimum_side(self) -> None:
+        prepared = bfl.prepare_outpainting_image(
+            png_data_uri((32, 32)),
+            processing_width=32,
+            processing_height=32,
+            max_source_bytes=1024 * 1024,
+            max_source_pixels=1024 * 1024,
+            max_encoded_input_bytes=1024 * 1024,
+        )
+        geometry = bfl.validate_geometry(
+            processing_width=32,
+            processing_height=32,
+            top=32,
+            right=32,
+            bottom=0,
+            left=0,
+        )
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "每边至少 64px"):
+            bfl._validate_fast_mode_geometry(prepared, geometry)
+
     def test_rejects_non_proportional_or_upscaled_processing_size(self) -> None:
         common = {
             "max_source_bytes": 1024 * 1024,
@@ -1808,6 +1828,88 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(accepted_rows[0]["request_meta"]["polling_url"], POLLING_URL)
         self.assertEqual(saved[-1]["status"], "done")
         self.assertNotIn("failed", [item["status"] for item in saved])
+
+    async def test_acceptance_write_exhaustion_keeps_paid_task_recoverable(self) -> None:
+        job_id = "job-accept-exhausted"
+        saved: list[dict] = []
+
+        def save_fail_acceptance(**kwargs):
+            meta = kwargs.get("request_meta") or {}
+            if meta.get("phase") == "polling" and kwargs.get("task_id"):
+                raise sqlite3.OperationalError("database is locked")
+            saved.append(kwargs)
+
+        async def run_and_fail_accept(**kwargs):
+            try:
+                await kwargs["on_accepted"](TASK_ID, POLLING_URL)
+            except sqlite3.OperationalError as exc:
+                raise bfl.BflOutpaintingError(
+                    "扩图服务内部状态无效，请稍后重试",
+                    diagnostic=f"accepted-id persistence failed: {type(exc).__name__}",
+                ) from exc
+            raise AssertionError("on_accepted should have exhausted persistence retries")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "output"
+            output_path.mkdir()
+            prepared = bfl.prepare_outpainting_image(
+                png_data_uri(),
+                max_source_bytes=1024 * 1024,
+                max_source_pixels=1024 * 1024,
+                max_encoded_input_bytes=1024 * 1024,
+            )
+            geometry = bfl.validate_geometry(
+                processing_width=64,
+                processing_height=64,
+                top=64,
+                right=0,
+                bottom=0,
+                left=0,
+            )
+            snapshot_url = bfl.persist_prepared_source_snapshot(
+                prepared,
+                output_root=output_path,
+                user_id="operator_a",
+                job_id=job_id,
+            )
+            snapshot_path = (
+                output_path / "ai-images" / "operator_a" / "outpainting" / job_id / "source.png"
+            )
+            self.assertTrue(snapshot_path.is_file())
+            app_main.app.state.outpainting_semaphore = app_main.asyncio.Semaphore(1)
+            with (
+                patch.object(app_main.settings, "output_path", output_path),
+                patch.object(app_main, "run_outpainting", new=run_and_fail_accept),
+                patch.object(app_main, "save_ai_image_job", side_effect=save_fail_acceptance),
+                patch.object(app_main.time, "sleep"),
+                patch.object(app_main, "log_operation"),
+            ):
+                await app_main._run_outpainting_background(
+                    job_id,
+                    {"id": "operator_a", "username": "运营A", "role": "user"},
+                    prepared,
+                    geometry,
+                    "",
+                    {
+                        "operation": "outpainting",
+                        "provider_task_id": "",
+                        "provider_task_uuid": "",
+                        "polling_url": "",
+                        "source_snapshot_url": snapshot_url,
+                        "expected_width": 64,
+                        "expected_height": 128,
+                    },
+                    123.0,
+                )
+            self.assertTrue(snapshot_path.is_file())
+
+        self.assertNotIn("failed", [item["status"] for item in saved])
+        last = saved[-1]
+        self.assertEqual(last["status"], "processing")
+        self.assertEqual(last["task_id"], TASK_ID)
+        self.assertEqual(last["request_meta"]["phase"], "interrupted")
+        self.assertEqual(last["request_meta"]["polling_url"], POLLING_URL)
+        self.assertEqual(last["request_meta"]["provider_task_id"], TASK_ID)
 
 
 class JobStoreIdempotencyTest(unittest.TestCase):

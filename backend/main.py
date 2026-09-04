@@ -1305,6 +1305,11 @@ async def _run_outpainting_background(
         "provider_task_id": str(provider_task_id or "").strip(),
         "polling_url": str(polling_url or "").strip(),
     }
+    # Resume already has a durable accepted id. A new submit only becomes
+    # durable after on_accepted finishes its persistence retries.
+    acceptance_persisted = bool(
+        resume_only and accepted["provider_task_id"] and accepted["polling_url"]
+    )
 
     def persist_processing(progress: int, phase: str) -> None:
         if accepted["provider_task_id"]:
@@ -1345,6 +1350,7 @@ async def _run_outpainting_background(
         await asyncio.to_thread(persist_processing, progress, phase)
 
     async def on_accepted(task_id: str, poll_url: str) -> None:
+        nonlocal acceptance_persisted
         accepted["provider_task_id"] = str(task_id or "").strip()
         accepted["polling_url"] = str(poll_url or "").strip()
         if not accepted["provider_task_id"] or not accepted["polling_url"]:
@@ -1373,6 +1379,7 @@ async def _run_outpainting_background(
             progress=15,
             created_at=created_at,
         )
+        acceptance_persisted = True
 
     result = None
     submission_attempted = False
@@ -1504,6 +1511,47 @@ async def _run_outpainting_background(
                 accepted["provider_task_id"] or "-",
                 type(exc).__name__,
             )
+            return
+        if (
+            accepted["provider_task_id"]
+            and accepted["polling_url"]
+            and not acceptance_persisted
+        ):
+            # BFL already accepted (and billed) this task, but the local
+            # acceptance row never became durable. Keep a recoverable
+            # processing/interrupted job and the source snapshot.
+            logger.warning(
+                "BFL outpainting accepted but local persistence failed; "
+                "keeping recoverable processing job: job=%s task=%s error=%s",
+                job_id,
+                accepted["provider_task_id"],
+                type(exc).__name__,
+            )
+            interrupted_meta = {**request_meta, "phase": "interrupted"}
+            try:
+                await _save_outpainting_job_with_retries(
+                    job_id=job_id,
+                    user_id=user_id,
+                    status="processing",
+                    model=BFL_OUTPAINTING_MODEL,
+                    provider="bfl",
+                    prompt=prompt,
+                    original_prompt=prompt,
+                    resolved_prompt=prompt,
+                    size=f"{geometry.expected_width}x{geometry.expected_height}",
+                    resolution="",
+                    has_reference=True,
+                    reference_count=1,
+                    request_meta=interrupted_meta,
+                    task_id=accepted["provider_task_id"],
+                    progress=20,
+                    created_at=created_at,
+                )
+            except Exception:
+                logger.exception(
+                    "BFL outpainting accepted-id recovery persistence failed: job=%s",
+                    job_id,
+                )
             return
         if isinstance(exc, BflOutpaintingError):
             public_error = exc.public_message

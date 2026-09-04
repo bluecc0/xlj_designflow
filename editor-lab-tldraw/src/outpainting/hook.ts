@@ -17,6 +17,7 @@ import {
   invertMatrix,
   isWithinOutpaintingLimits,
   marginPixelsToLocal,
+  MIN_PROCESSING_SIDE,
 } from './geometry'
 import { useOutpainting } from './state'
 import type {
@@ -135,6 +136,15 @@ export function getOutpaintingEligibility(
   const processingSize = getProcessingSizeForOutpainting(workingSize.w, workingSize.h, config)
   const processingWidth = processingSize.w
   const processingHeight = processingSize.h
+  if (processingWidth < MIN_PROCESSING_SIDE || processingHeight < MIN_PROCESSING_SIDE) {
+    return {
+      shapeId: shape.id,
+      eligible: false,
+      reason: `扩图需要每边至少 ${MIN_PROCESSING_SIDE}px`,
+      processingWidth,
+      processingHeight,
+    }
+  }
   const canExpand = [
     { top: 1, right: 0, bottom: 0, left: 0 },
     { top: 0, right: 1, bottom: 0, left: 0 },
