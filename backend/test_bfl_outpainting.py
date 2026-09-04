@@ -18,7 +18,7 @@ from starlette.requests import Request
 
 from backend import job_store
 from backend import main as app_main
-from backend import runware_outpainting as runware
+from backend import bfl_outpainting as bfl
 
 
 def png_bytes(size: tuple[int, int] = (64, 64), color=(20, 80, 140, 255)) -> bytes:
@@ -74,9 +74,28 @@ def json_request(body: dict, *, host: str = "designflow.test") -> Request:
     return request
 
 
+
+TASK_ID = "11111111-1111-4111-8111-111111111111"
+POLLING_URL = f"https://api.bfl.ai/v1/get_result?id={TASK_ID}"
+RESULT_URL = "https://delivery.bfl.ai/result.png"
+
+
+def make_result(**overrides) -> bfl.BflOutpaintingResult:
+    values = {
+        "image_url": "/ai-images/operator_a/2026-01-01/outpainting_job.png",
+        "provider_task_id": TASK_ID,
+        "polling_url": POLLING_URL,
+        "cost": 0.02,
+        "width": 64,
+        "height": 128,
+    }
+    values.update(overrides)
+    return bfl.BflOutpaintingResult(**values)
+
+
 class ImagePreparationTest(unittest.TestCase):
     def test_validates_and_proportionally_downscales_to_png_data_uri(self) -> None:
-        prepared = runware.prepare_outpainting_image(
+        prepared = bfl.prepare_outpainting_image(
             png_data_uri((128, 64)),
             processing_width=64,
             processing_height=32,
@@ -88,7 +107,7 @@ class ImagePreparationTest(unittest.TestCase):
         self.assertEqual((prepared.processing_width, prepared.processing_height), (64, 32))
         self.assertTrue(prepared.data_uri.startswith("data:image/png;base64,"))
 
-        geometry = runware.validate_geometry(
+        geometry = bfl.validate_geometry(
             processing_width=64,
             processing_height=32,
             top=64,
@@ -99,7 +118,7 @@ class ImagePreparationTest(unittest.TestCase):
         self.assertEqual((geometry.expected_width, geometry.expected_height), (192, 96))
 
     def test_source_snapshot_round_trips_prepared_image(self) -> None:
-        prepared = runware.prepare_outpainting_image(
+        prepared = bfl.prepare_outpainting_image(
             png_data_uri((128, 64)),
             processing_width=64,
             processing_height=32,
@@ -109,7 +128,7 @@ class ImagePreparationTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             output_root = Path(temp_dir)
-            snapshot_url = runware.persist_prepared_source_snapshot(
+            snapshot_url = bfl.persist_prepared_source_snapshot(
                 prepared,
                 output_root=output_root,
                 user_id="operator_a",
@@ -121,7 +140,7 @@ class ImagePreparationTest(unittest.TestCase):
             )
             snapshot_path = output_root / "ai-images" / "operator_a" / "outpainting" / "jobsource1" / "source.png"
             self.assertTrue(snapshot_path.is_file())
-            loaded = runware.load_prepared_source_snapshot(
+            loaded = bfl.load_prepared_source_snapshot(
                 snapshot_url,
                 output_root=output_root,
                 user_id="operator_a",
@@ -138,10 +157,10 @@ class ImagePreparationTest(unittest.TestCase):
             self.assertEqual(loaded.processing_height, 32)
             self.assertEqual(loaded.source_sha256, prepared.source_sha256)
             self.assertTrue(loaded.data_uri.startswith("data:image/png;base64,"))
-            self.assertFalse(runware.is_pre_submit_phase("submitting"))
-            self.assertTrue(runware.is_pre_submit_phase("queued"))
-            self.assertFalse(runware.is_pre_submit_phase("interrupted"))
-            self.assertFalse(runware.is_pre_submit_phase(None))
+            self.assertFalse(bfl.is_pre_submit_phase("submitting"))
+            self.assertTrue(bfl.is_pre_submit_phase("queued"))
+            self.assertFalse(bfl.is_pre_submit_phase("interrupted"))
+            self.assertFalse(bfl.is_pre_submit_phase(None))
 
     def test_rejects_non_proportional_or_upscaled_processing_size(self) -> None:
         common = {
@@ -149,15 +168,15 @@ class ImagePreparationTest(unittest.TestCase):
             "max_source_pixels": 1024 * 1024,
             "max_encoded_input_bytes": 1024 * 1024,
         }
-        with self.assertRaisesRegex(runware.OutpaintingValidationError, "相同比例"):
-            runware.prepare_outpainting_image(
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "相同比例"):
+            bfl.prepare_outpainting_image(
                 png_data_uri((100, 50)),
                 processing_width=50,
                 processing_height=30,
                 **common,
             )
-        with self.assertRaisesRegex(runware.OutpaintingValidationError, "不能放大"):
-            runware.prepare_outpainting_image(
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "不能放大"):
+            bfl.prepare_outpainting_image(
                 png_data_uri((100, 50)),
                 processing_width=200,
                 processing_height=100,
@@ -166,15 +185,15 @@ class ImagePreparationTest(unittest.TestCase):
 
     def test_rejects_bad_declared_format_and_decoded_byte_cap(self) -> None:
         jpeg_declared_png = "data:image/jpeg;base64," + base64.b64encode(png_bytes()).decode("ascii")
-        with self.assertRaisesRegex(runware.OutpaintingValidationError, "声明格式"):
-            runware.prepare_outpainting_image(
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "声明格式"):
+            bfl.prepare_outpainting_image(
                 jpeg_declared_png,
                 max_source_bytes=1024 * 1024,
                 max_source_pixels=1024 * 1024,
                 max_encoded_input_bytes=1024 * 1024,
             )
-        with self.assertRaisesRegex(runware.OutpaintingValidationError, "过大"):
-            runware.prepare_outpainting_image(
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "过大"):
+            bfl.prepare_outpainting_image(
                 png_data_uri(),
                 max_source_bytes=10,
                 max_source_pixels=1024 * 1024,
@@ -182,28 +201,28 @@ class ImagePreparationTest(unittest.TestCase):
             )
 
     def test_geometry_keeps_exact_margins_without_provider_alignment(self) -> None:
-        with self.assertRaisesRegex(runware.OutpaintingValidationError, "至少一个"):
-            runware.validate_geometry(
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "至少一个"):
+            bfl.validate_geometry(
                 processing_width=64, processing_height=64,
                 top=0, right=0, bottom=0, left=0,
             )
-        with self.assertRaisesRegex(runware.OutpaintingValidationError, "必须是整数"):
-            runware.validate_geometry(
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "必须是整数"):
+            bfl.validate_geometry(
                 processing_width=64, processing_height=64,
                 top=True, right=0, bottom=0, left=0,
             )
-        with self.assertRaisesRegex(runware.OutpaintingValidationError, "必须是整数"):
-            runware.validate_geometry(
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "必须是整数"):
+            bfl.validate_geometry(
                 processing_width=64, processing_height=64,
                 top=1.5, right=0, bottom=0, left=0,
             )
-        with self.assertRaisesRegex(runware.OutpaintingValidationError, "非负"):
-            runware.validate_geometry(
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "非负"):
+            bfl.validate_geometry(
                 processing_width=64, processing_height=64,
                 top=-1, right=0, bottom=0, left=0,
             )
 
-        geometry = runware.validate_geometry(
+        geometry = bfl.validate_geometry(
             processing_width=640,
             processing_height=480,
             top=1,
@@ -223,10 +242,10 @@ class ImagePreparationTest(unittest.TestCase):
         self.assertEqual((geometry.provider_width, geometry.provider_height), (769, 481))
         self.assertEqual(geometry.crop_box(), (0, 0, 769, 481))
         self.assertEqual(
-            [runware.align_margin_for_provider(value, 64) for value in (0, 1, 64, 65)],
+            [bfl.align_margin_for_provider(value, 64) for value in (0, 1, 64, 65)],
             [0, 64, 64, 128],
         )
-        aligned = runware.validate_geometry(
+        aligned = bfl.validate_geometry(
             processing_width=640,
             processing_height=480,
             top=1,
@@ -242,7 +261,7 @@ class ImagePreparationTest(unittest.TestCase):
         self.assertEqual(aligned.crop_box(), (0, 63, 769, 544))
 
     def test_geometry_rejects_output_overflow(self) -> None:
-        boundary = runware.validate_geometry(
+        boundary = bfl.validate_geometry(
             processing_width=2047,
             processing_height=2048,
             top=0,
@@ -253,8 +272,8 @@ class ImagePreparationTest(unittest.TestCase):
         self.assertEqual((boundary.expected_width, boundary.expected_height), (2048, 2048))
         self.assertEqual((boundary.provider_width, boundary.provider_height), (2048, 2048))
 
-        with self.assertRaisesRegex(runware.OutpaintingValidationError, "不能超过"):
-            runware.validate_geometry(
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "不能超过"):
+            bfl.validate_geometry(
                 processing_width=2048,
                 processing_height=64,
                 top=0,
@@ -262,6 +281,19 @@ class ImagePreparationTest(unittest.TestCase):
                 bottom=0,
                 left=0,
             )
+
+
+    def test_geometry_rejects_canvas_smaller_than_64(self) -> None:
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "不能小于"):
+            bfl.validate_geometry(
+                processing_width=64,
+                processing_height=32,
+                top=1,
+                right=0,
+                bottom=0,
+                left=0,
+            )
+
 
 
 class StreamContext:
@@ -276,10 +308,17 @@ class StreamContext:
 
 
 class FakeClient:
-    def __init__(self, post_results: list, stream_results: list[httpx.Response]) -> None:
-        self.post_results = list(post_results)
-        self.stream_results = list(stream_results)
+    def __init__(
+        self,
+        post_results: list | None = None,
+        get_results: list | None = None,
+        stream_results: list[httpx.Response] | None = None,
+    ) -> None:
+        self.post_results = list(post_results or [])
+        self.get_results = list(get_results or [])
+        self.stream_results = list(stream_results or [])
         self.post_calls: list[dict] = []
+        self.get_calls: list[dict] = []
         self.stream_calls: list[dict] = []
 
     async def __aenter__(self):
@@ -295,20 +334,27 @@ class FakeClient:
             raise result
         return result
 
+    async def get(self, url: str, **kwargs):
+        self.get_calls.append({"url": url, **kwargs})
+        result = self.get_results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
     def stream(self, method: str, url: str, **kwargs):
         self.stream_calls.append({"method": method, "url": url, **kwargs})
         return StreamContext(self.stream_results.pop(0))
 
 
-class RunwareTransportTest(unittest.IsolatedAsyncioTestCase):
+class BflTransportTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.prepared = runware.prepare_outpainting_image(
+        self.prepared = bfl.prepare_outpainting_image(
             png_data_uri(),
             max_source_bytes=1024 * 1024,
             max_source_pixels=1024 * 1024,
             max_encoded_input_bytes=1024 * 1024,
         )
-        self.geometry = runware.validate_geometry(
+        self.geometry = bfl.validate_geometry(
             processing_width=64,
             processing_height=64,
             top=1,
@@ -316,83 +362,106 @@ class RunwareTransportTest(unittest.IsolatedAsyncioTestCase):
             bottom=0,
             left=0,
         )
-        self.task_uuid = "11111111-1111-4111-8111-111111111111"
+        self.task_id = TASK_ID
+        self.polling_url = POLLING_URL
 
     def response(self, status: int, payload=None, *, headers=None, content: bytes | None = None) -> httpx.Response:
-        request = httpx.Request("POST", runware.RUNWARE_API_URL)
+        request = httpx.Request("POST", bfl.BFL_API_URL)
         if content is not None:
             return httpx.Response(status, request=request, headers=headers, content=content)
         return httpx.Response(status, request=request, headers=headers, json=payload)
 
-    async def run_with_client(self, fake: FakeClient, output_root: Path):
+    def submit_ok(self, *, cost: float | None = 0.0123) -> httpx.Response:
+        payload = {"id": self.task_id, "polling_url": self.polling_url}
+        if cost is not None:
+            payload["cost"] = cost
+        return self.response(200, payload)
+
+    def ready(self, *, cost: float | None = 0.0123, sample: str = RESULT_URL) -> httpx.Response:
+        payload = {
+            "id": self.task_id,
+            "status": "Ready",
+            "result": {"sample": sample},
+        }
+        if cost is not None:
+            payload["cost"] = cost
+        return self.response(200, payload)
+
+    def png_result(self, size: tuple[int, int] = (129, 65)) -> httpx.Response:
+        return self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes(size))
+
+    async def run_with_client(self, fake: FakeClient, output_root: Path, **overrides):
+        kwargs = {
+            "api_key": "bfl-test-key",
+            "mode": "fast",
+            "prepared": self.prepared,
+            "geometry": self.geometry,
+            "output_root": output_root,
+            "user_id": "operator_a",
+            "job_id": "job-1",
+            "timeout_seconds": 30,
+            "poll_interval_seconds": 0.1,
+            "transient_retry_count": 3,
+            "retry_backoff_seconds": 1,
+            "retry_backoff_cap_seconds": 20,
+            "max_result_bytes": 1024 * 1024,
+            "result_download_retry_count": 2,
+        }
+        kwargs.update(overrides)
         with (
-            patch.object(runware.httpx, "AsyncClient", return_value=fake),
-            patch.object(runware.asyncio, "sleep", new=AsyncMock()) as sleep_mock,
+            patch.object(bfl.httpx, "AsyncClient", return_value=fake),
+            patch.object(bfl.asyncio, "sleep", new=AsyncMock()) as sleep_mock,
         ):
-            result = await runware.run_outpainting(
-                api_key="rw-test-key",
-                mode="fast",
-                prepared=self.prepared,
-                geometry=self.geometry,
-                provider_task_uuid=self.task_uuid,
-                output_root=output_root,
-                user_id="operator_a",
-                job_id="job-1",
-                timeout_seconds=30,
-                poll_interval_seconds=0.1,
-                transient_retry_count=3,
-                retry_backoff_seconds=1,
-                retry_backoff_cap_seconds=20,
-                max_result_bytes=1024 * 1024,
-                result_download_retry_count=2,
-            )
+            result = await bfl.run_outpainting(**kwargs)
         return result, sleep_mock
 
-    async def test_exact_array_payload_poll_retry_after_and_validated_download(self) -> None:
+    async def test_canvas_offset_payload_poll_retry_after_and_validated_download(self) -> None:
+        accepted: list[tuple[str, str]] = []
         fake = FakeClient(
-            [
-                self.response(200, {"data": [{"taskUUID": self.task_uuid, "status": "processing"}]}),
-                self.response(429, {"errors": []}, headers={"Retry-After": "7"}),
-                self.response(200, {"data": [{
-                    "taskUUID": self.task_uuid,
-                    "status": "success",
-                    "imageURL": "https://cdn.runware.ai/result.png",
-                    "cost": 0.0123,
-                }]}),
+            post_results=[self.submit_ok()],
+            get_results=[
+                self.response(429, {"status": "Pending"}, headers={"Retry-After": "7"}),
+                self.ready(),
             ],
-            [self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((129, 65)))],
+            stream_results=[self.png_result()],
         )
         with tempfile.TemporaryDirectory() as temp_dir:
-            result, sleep_mock = await self.run_with_client(fake, Path(temp_dir))
+            result, sleep_mock = await self.run_with_client(
+                fake,
+                Path(temp_dir),
+                on_accepted=lambda task_id, polling_url: accepted.append((task_id, polling_url)),
+            )
             self.assertTrue(
                 (Path(temp_dir) / "ai-images" / result.image_url.removeprefix("/ai-images/")).is_file()
             )
 
         self.assertEqual(result.cost, 0.0123)
         self.assertEqual((result.width, result.height), (129, 65))
-        self.assertEqual(len(fake.post_calls), 3)
-        submit = fake.post_calls[0]["json"]
-        self.assertIsInstance(submit, list)
-        self.assertEqual(len(submit), 1)
-        task = submit[0]
-        self.assertEqual(task["model"], "bfl:flux@outpainting")
-        self.assertEqual(task["deliveryMethod"], "async")
-        self.assertEqual(task["numberResults"], 1)
-        self.assertEqual(task["outpaint"], {"top": 1, "right": 65, "bottom": 0, "left": 0})
-        self.assertEqual(task["settings"], {"autoCrop": False, "mode": "fast"})
-        self.assertEqual(task["outputType"], "URL")
-        self.assertEqual(task["outputFormat"], "PNG")
-        self.assertEqual(task["outputQuality"], 95)
-        self.assertEqual(task["ttl"], 3600)
-        self.assertTrue(task["includeCost"])
-        self.assertTrue(task["inputs"]["image"].startswith("data:image/png;base64,"))
-        for forbidden in ("prompt", "width", "height", "canvas", "mask"):
-            self.assertNotIn(forbidden, task)
-        for poll_call in fake.post_calls[1:]:
-            self.assertEqual(
-                poll_call["json"],
-                [{"taskType": "getResponse", "taskUUID": self.task_uuid}],
-            )
+        self.assertEqual(result.provider_task_id, self.task_id)
+        self.assertEqual(result.polling_url, self.polling_url)
+        self.assertEqual(accepted, [(self.task_id, self.polling_url)])
+        self.assertEqual(len(fake.post_calls), 1)
+        self.assertEqual(len(fake.get_calls), 2)
+        submit = fake.post_calls[0]
+        self.assertEqual(submit["url"], "https://api.bfl.ai/v1/flux-tools/outpainting-v1")
+        self.assertEqual(submit["headers"]["x-key"], "bfl-test-key")
+        self.assertEqual(submit["headers"]["accept"], "application/json")
+        body = submit["json"]
+        self.assertIsInstance(body, dict)
+        self.assertEqual(body["width"], 129)
+        self.assertEqual(body["height"], 65)
+        self.assertEqual(body["reference_offset_x"], 0)
+        self.assertEqual(body["reference_offset_y"], 1)
+        self.assertEqual(body["output_format"], "png")
+        self.assertEqual(body["mode"], "fast")
+        self.assertFalse(body["auto_crop"])
+        self.assertNotIn("prompt", body)
+        self.assertFalse(body["input_image"].startswith("data:"))
+        self.assertGreater(len(body["input_image"]), 20)
+        for poll_call in fake.get_calls:
+            self.assertEqual(poll_call["url"], self.polling_url)
+            self.assertEqual(poll_call["headers"]["x-key"], "bfl-test-key")
+            self.assertNotIn("Content-Type", poll_call["headers"])
         sleep_mock.assert_any_await(7.0)
 
     def test_provider_result_is_cropped_to_exact_requested_geometry(self) -> None:
@@ -401,7 +470,7 @@ class RunwareTransportTest(unittest.IsolatedAsyncioTestCase):
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             output_root = Path(temp_dir)
-            image_url = runware._validate_and_save_result(
+            image_url = bfl._validate_and_save_result(
                 payload,
                 output_root=output_root,
                 user_id="operator_a",
@@ -421,160 +490,145 @@ class RunwareTransportTest(unittest.IsolatedAsyncioTestCase):
                     ((x1 - 1) % 256, (y1 - 1) % 256, (x1 + y1 - 2) % 256, 255),
                 )
 
-    async def test_ambiguous_submission_polls_original_uuid_without_resubmitting(self) -> None:
-        request = httpx.Request("POST", runware.RUNWARE_API_URL)
-        fake = FakeClient(
-            [
-                httpx.ReadTimeout("ambiguous", request=request),
-                self.response(200, {"data": [{
-                    "taskUUID": self.task_uuid,
-                    "imageURL": "https://cdn.runware.ai/result.png",
-                }]}),
-            ],
-            [self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((129, 65)))],
-        )
-        with tempfile.TemporaryDirectory() as temp_dir:
-            await self.run_with_client(fake, Path(temp_dir))
-        self.assertEqual(len(fake.post_calls), 2)
-        self.assertEqual(fake.post_calls[0]["json"][0]["taskType"], "imageInference")
-        self.assertEqual(
-            fake.post_calls[1]["json"],
-            [{"taskType": "getResponse", "taskUUID": self.task_uuid}],
-        )
+    async def test_ambiguous_submission_fails_without_polling_or_resubmitting(self) -> None:
+        request = httpx.Request("POST", bfl.BFL_API_URL)
+        for submit_result in (
+            httpx.ReadTimeout("ambiguous", request=request),
+            self.response(503, {"status": "error"}),
+        ):
+            with self.subTest(submit_result=type(submit_result).__name__ if isinstance(submit_result, BaseException) else submit_result.status_code):
+                fake = FakeClient(post_results=[submit_result])
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    with self.assertRaises(bfl.BflOutpaintingError) as raised:
+                        await self.run_with_client(fake, Path(temp_dir))
+                self.assertIn("连接失败", raised.exception.public_message)
+                self.assertEqual(len(fake.post_calls), 1)
+                self.assertEqual(len(fake.get_calls), 0)
+                self.assertEqual(len(fake.stream_calls), 0)
 
-    async def test_resume_polls_existing_uuid_without_submission(self) -> None:
+    async def test_resume_polls_existing_id_without_submission(self) -> None:
         fake = FakeClient(
-            [self.response(200, {"data": [{
-                "taskUUID": self.task_uuid,
-                "imageURL": "https://cdn.runware.ai/result.png",
-                "cost": 0.04,
-            }]})],
-            [self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((129, 65)))],
+            get_results=[self.ready(cost=0.04)],
+            stream_results=[self.png_result()],
         )
         with tempfile.TemporaryDirectory() as temp_dir:
-            with (
-                patch.object(runware.httpx, "AsyncClient", return_value=fake),
-                patch.object(runware.asyncio, "sleep", new=AsyncMock()),
-            ):
-                result = await runware.run_outpainting(
-                    api_key="rw-test-key",
-                    mode="fast",
-                    prepared=None,
-                    geometry=self.geometry,
-                    provider_task_uuid=self.task_uuid,
-                    output_root=Path(temp_dir),
-                    user_id="operator_a",
-                    job_id="job-recovery",
-                    timeout_seconds=30,
-                    poll_interval_seconds=0.1,
-                    transient_retry_count=3,
+            result, _sleep = await self.run_with_client(
+                fake,
+                Path(temp_dir),
+                prepared=None,
+                provider_task_id=self.task_id,
+                polling_url=self.polling_url,
+                submit_request=False,
+                retry_backoff_seconds=0,
+                retry_backoff_cap_seconds=1,
+                result_download_retry_count=0,
+            )
+        self.assertEqual(result.cost, 0.04)
+        self.assertEqual(result.provider_task_id, self.task_id)
+        self.assertEqual(len(fake.post_calls), 0)
+        self.assertEqual(len(fake.get_calls), 1)
+        self.assertEqual(fake.get_calls[0]["url"], self.polling_url)
+        self.assertEqual(fake.get_calls[0]["headers"]["x-key"], "bfl-test-key")
+
+    async def test_http_402_on_submit_is_not_treated_as_pending(self) -> None:
+        fake = FakeClient(post_results=[self.response(402, {"detail": "insufficient funds"})])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(bfl.BflOutpaintingError) as raised:
+                await self.run_with_client(
+                    fake,
+                    Path(temp_dir),
+                    transient_retry_count=1,
                     retry_backoff_seconds=0,
                     retry_backoff_cap_seconds=1,
-                    max_result_bytes=1024 * 1024,
                     result_download_retry_count=0,
-                    submit_request=False,
                 )
-        self.assertEqual(result.cost, 0.04)
-        self.assertEqual(len(fake.post_calls), 1)
-        self.assertEqual(
-            fake.post_calls[0]["json"],
-            [{"taskType": "getResponse", "taskUUID": self.task_uuid}],
-        )
-
-    async def test_http_200_errors_are_not_treated_as_pending(self) -> None:
-        fake = FakeClient(
-            [self.response(200, {"data": [], "errors": [{"code": 402, "message": "insufficient funds"}]})],
-            [],
-        )
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with patch.object(runware.httpx, "AsyncClient", return_value=fake):
-                with self.assertRaises(runware.RunwareOutpaintingError) as raised:
-                    await runware.run_outpainting(
-                        api_key="rw-test-key",
-                        mode="fast",
-                        prepared=self.prepared,
-                        geometry=self.geometry,
-                        provider_task_uuid=self.task_uuid,
-                        output_root=Path(temp_dir),
-                        user_id="operator_a",
-                        job_id="job-1",
-                        timeout_seconds=30,
-                        poll_interval_seconds=0.1,
-                        transient_retry_count=1,
-                        retry_backoff_seconds=0,
-                        retry_backoff_cap_seconds=1,
-                        max_result_bytes=1024 * 1024,
-                        result_download_retry_count=0,
-                    )
         self.assertEqual(raised.exception.public_message, "扩图服务账户余额不足，请联系管理员")
         self.assertEqual(len(fake.post_calls), 1)
+        self.assertEqual(len(fake.get_calls), 0)
 
-    async def test_retryable_provider_error_polls_same_uuid(self) -> None:
+    async def test_poll_pending_then_ready(self) -> None:
         fake = FakeClient(
-            [
-                self.response(200, {"errors": [{"code": "timeoutProvider", "message": "busy"}]}),
-                self.response(200, {"data": [{
-                    "taskUUID": self.task_uuid,
-                    "imageURL": "https://cdn.runware.ai/result.png",
-                }]}),
+            post_results=[self.submit_ok(cost=None)],
+            get_results=[
+                self.response(200, {"id": self.task_id, "status": "Pending"}),
+                self.ready(cost=0.04),
             ],
-            [self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((129, 65)))],
+            stream_results=[self.png_result()],
         )
         with tempfile.TemporaryDirectory() as temp_dir:
-            await self.run_with_client(fake, Path(temp_dir))
-        self.assertEqual(len(fake.post_calls), 2)
-        self.assertEqual(fake.post_calls[0]["json"][0]["taskType"], "imageInference")
-        self.assertEqual(fake.post_calls[1]["json"], [{"taskType": "getResponse", "taskUUID": self.task_uuid}])
+            result, _sleep = await self.run_with_client(fake, Path(temp_dir))
+        self.assertEqual(result.cost, 0.04)
+        self.assertEqual(len(fake.post_calls), 1)
+        self.assertEqual(len(fake.get_calls), 2)
+
+    async def test_moderated_status_is_terminal(self) -> None:
+        fake = FakeClient(
+            post_results=[self.submit_ok()],
+            get_results=[self.response(200, {"id": self.task_id, "status": "Content Moderated"})],
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(bfl.BflOutpaintingError) as raised:
+                await self.run_with_client(
+                    fake,
+                    Path(temp_dir),
+                    transient_retry_count=1,
+                    retry_backoff_seconds=0,
+                    retry_backoff_cap_seconds=1,
+                    result_download_retry_count=0,
+                )
+        self.assertEqual(raised.exception.public_message, "扩图内容未通过安全审核，请更换图片后重试")
+        self.assertEqual(len(fake.get_calls), 1)
+        self.assertEqual(len(fake.stream_calls), 0)
+
+    async def test_task_not_found_is_terminal(self) -> None:
+        fake = FakeClient(
+            get_results=[self.response(200, {"id": self.task_id, "status": "Task not found"})],
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(bfl.BflOutpaintingError) as raised:
+                await self.run_with_client(
+                    fake,
+                    Path(temp_dir),
+                    prepared=None,
+                    provider_task_id=self.task_id,
+                    submit_request=False,
+                    transient_retry_count=1,
+                    retry_backoff_seconds=0,
+                    retry_backoff_cap_seconds=1,
+                    result_download_retry_count=0,
+                )
+        self.assertEqual(raised.exception.public_message, "扩图任务无法恢复，请重新扩图")
+        self.assertEqual(len(fake.post_calls), 0)
+        self.assertEqual(len(fake.get_calls), 1)
 
     async def test_rejects_untrusted_result_and_redirect_hosts(self) -> None:
-        with self.assertRaisesRegex(runware.RunwareOutpaintingError, "不受信任"):
-            runware._validate_result_url("https://evil.example/result.png", ("runware.ai",))
-        runware._validate_result_url("https://cdn.runware.ai/result.png", ("runware.ai",))
+        with self.assertRaisesRegex(bfl.BflOutpaintingError, "不受信任"):
+            bfl._validate_result_url("https://evil.example/result.png", ("delivery.bfl.ai", "bfl.ai"))
+        bfl._validate_result_url("https://delivery.bfl.ai/result.png", ("delivery.bfl.ai", "bfl.ai"))
 
         fake = FakeClient(
-            [self.response(200, {"data": [{
-                "taskUUID": self.task_uuid,
-                "imageURL": "https://cdn.runware.ai/result.png",
-            }]})],
-            [self.response(302, headers={"Location": "https://evil.example/result.png"}, content=b"")],
+            post_results=[self.submit_ok()],
+            get_results=[self.ready()],
+            stream_results=[self.response(302, headers={"Location": "https://evil.example/result.png"}, content=b"")],
         )
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch.object(runware.httpx, "AsyncClient", return_value=fake):
-                with self.assertRaisesRegex(runware.RunwareOutpaintingError, "不受信任"):
-                    await runware.run_outpainting(
-                        api_key="rw-test-key",
-                        mode="fast",
-                        prepared=self.prepared,
-                        geometry=self.geometry,
-                        provider_task_uuid=self.task_uuid,
-                        output_root=Path(temp_dir),
-                        user_id="operator_a",
-                        job_id="job-1",
-                        timeout_seconds=30,
-                        poll_interval_seconds=0.1,
-                        transient_retry_count=1,
-                        retry_backoff_seconds=0,
-                        retry_backoff_cap_seconds=1,
-                        max_result_bytes=1024 * 1024,
-                        result_download_retry_count=0,
-                    )
-
-    def test_ignores_provider_data_for_another_task_uuid(self) -> None:
-        selected = runware._select_task_item(
-            {"data": [{"taskUUID": "99999999-9999-4999-8999-999999999999", "imageURL": "https://cdn.runware.ai/wrong.png"}]},
-            self.task_uuid,
-        )
-        self.assertIsNone(selected)
+            with self.assertRaisesRegex(bfl.BflOutpaintingError, "不受信任"):
+                await self.run_with_client(
+                    fake,
+                    Path(temp_dir),
+                    transient_retry_count=1,
+                    retry_backoff_seconds=0,
+                    retry_backoff_cap_seconds=1,
+                    result_download_retry_count=0,
+                )
 
     async def test_download_retries_transient_status_with_retry_after(self) -> None:
         fake = FakeClient(
-            [self.response(200, {"data": [{
-                "taskUUID": self.task_uuid,
-                "imageURL": "https://cdn.runware.ai/result.png",
-            }]})],
-            [
+            post_results=[self.submit_ok()],
+            get_results=[self.ready()],
+            stream_results=[
                 self.response(503, headers={"Retry-After": "6", "Content-Type": "text/plain"}, content=b"busy"),
-                self.response(200, headers={"Content-Type": "image/png"}, content=png_bytes((129, 65))),
+                self.png_result(),
             ],
         )
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -589,40 +643,28 @@ class RunwareTransportTest(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(expected_message=expected_message):
                 fake = FakeClient(
-                    [self.response(200, {"data": [{
-                        "taskUUID": self.task_uuid,
-                        "imageURL": "https://cdn.runware.ai/result.png",
-                    }]})],
-                    [self.response(200, headers=headers, content=content)],
+                    post_results=[self.submit_ok()],
+                    get_results=[self.ready()],
+                    stream_results=[self.response(200, headers=headers, content=content)],
                 )
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    with patch.object(runware.httpx, "AsyncClient", return_value=fake):
-                        with self.assertRaisesRegex(runware.RunwareOutpaintingError, expected_message):
-                            await runware.run_outpainting(
-                                api_key="rw-test-key",
-                                mode="fast",
-                                prepared=self.prepared,
-                                geometry=self.geometry,
-                                provider_task_uuid=self.task_uuid,
-                                output_root=Path(temp_dir),
-                                user_id="operator_a",
-                                job_id="job-1",
-                                timeout_seconds=30,
-                                poll_interval_seconds=0.1,
-                                transient_retry_count=1,
-                                retry_backoff_seconds=0,
-                                retry_backoff_cap_seconds=1,
-                                max_result_bytes=1024 * 1024,
-                                result_download_retry_count=0,
-                            )
+                    with self.assertRaisesRegex(bfl.BflOutpaintingError, expected_message):
+                        await self.run_with_client(
+                            fake,
+                            Path(temp_dir),
+                            transient_retry_count=1,
+                            retry_backoff_seconds=0,
+                            retry_backoff_cap_seconds=1,
+                            result_download_retry_count=0,
+                        )
 
 
 class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
     async def test_public_config_is_safe_and_reflects_effective_enablement(self) -> None:
         with (
-            patch.object(app_main.settings, "runware_outpainting_enabled", True),
-            patch.object(app_main.settings, "runware_api_key", "super-secret"),
-            patch.object(app_main.settings, "runware_outpainting_mode", "fast"),
+            patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+            patch.object(app_main.settings, "bfl_api_key", "super-secret"),
+            patch.object(app_main.settings, "bfl_outpainting_mode", "fast"),
         ):
             config = app_main.ai_image_outpainting_config()
         self.assertTrue(config["enabled"])
@@ -630,10 +672,10 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config["max_width"], 2048)
         self.assertEqual(config["max_height"], 2048)
         self.assertEqual(config["max_area_pixels"], 4_194_304)
-        self.assertEqual(config["max_source_bytes"], app_main.settings.runware_outpainting_max_source_bytes)
+        self.assertEqual(config["max_source_bytes"], app_main.settings.bfl_outpainting_max_source_bytes)
         self.assertEqual(
             config["timeout_seconds"],
-            max(1, int(app_main.settings.runware_outpainting_timeout_seconds)),
+            max(1, int(app_main.settings.bfl_outpainting_timeout_seconds)),
         )
         self.assertIsInstance(config["timeout_seconds"], int)
         self.assertNotIn("model", config)
@@ -644,8 +686,8 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
     async def test_feature_flag_rejects_before_job_creation(self) -> None:
         request = json_request({"image_url": png_data_uri(), "top": 64})
         with (
-            patch.object(app_main.settings, "runware_outpainting_enabled", False),
-            patch.object(app_main.settings, "runware_api_key", ""),
+            patch.object(app_main.settings, "bfl_outpainting_enabled", False),
+            patch.object(app_main.settings, "bfl_api_key", ""),
             patch.object(app_main, "save_ai_image_job") as save_job,
         ):
             with self.assertRaises(HTTPException) as raised:
@@ -655,8 +697,8 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
 
         request = json_request({"image_url": png_data_uri(), "top": 64})
         with (
-            patch.object(app_main.settings, "runware_outpainting_enabled", True),
-            patch.object(app_main.settings, "runware_api_key", ""),
+            patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+            patch.object(app_main.settings, "bfl_api_key", ""),
             patch.object(app_main, "save_ai_image_job") as save_job,
         ):
             with self.assertRaises(HTTPException) as missing_key:
@@ -667,8 +709,8 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
     async def test_requires_client_request_uuid_before_preparing_image(self) -> None:
         request = json_request({"image_url": png_data_uri(), "outpaint": {"top": 64}})
         with (
-            patch.object(app_main.settings, "runware_outpainting_enabled", True),
-            patch.object(app_main.settings, "runware_api_key", "rw-test-key"),
+            patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+            patch.object(app_main.settings, "bfl_api_key", "bfl-test-key"),
             patch.object(app_main, "prepare_outpainting_image") as prepare_image,
         ):
             with self.assertRaises(HTTPException) as raised:
@@ -682,9 +724,9 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             "padding": "x" * 2048,
         })
         with (
-            patch.object(app_main.settings, "runware_outpainting_enabled", True),
-            patch.object(app_main.settings, "runware_api_key", "rw-test-key"),
-            patch.object(app_main.settings, "runware_outpainting_max_request_bytes", 1024),
+            patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+            patch.object(app_main.settings, "bfl_api_key", "bfl-test-key"),
+            patch.object(app_main.settings, "bfl_outpainting_max_request_bytes", 1024),
             patch.object(app_main, "prepare_outpainting_image") as prepare_image,
         ):
             with self.assertRaises(HTTPException) as raised:
@@ -698,14 +740,14 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             "outpaint": {"top": 64},
             "client_request_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         })
-        app_main.app.state.runware_outpainting_claims = {"busy-job": "operator_b"}
+        app_main.app.state.outpainting_claims = {"busy-job": "operator_b"}
         try:
             with (
-                patch.object(app_main.settings, "runware_outpainting_enabled", True),
-                patch.object(app_main.settings, "runware_api_key", "rw-test-key"),
-                patch.object(app_main.settings, "runware_outpainting_max_concurrency", 1),
-                patch.object(app_main.settings, "runware_outpainting_max_queue_size", 0),
-                patch.object(app_main.settings, "runware_outpainting_max_pending_per_user", 2),
+                patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+                patch.object(app_main.settings, "bfl_api_key", "bfl-test-key"),
+                patch.object(app_main.settings, "bfl_outpainting_max_concurrency", 1),
+                patch.object(app_main.settings, "bfl_outpainting_max_queue_size", 0),
+                patch.object(app_main.settings, "bfl_outpainting_max_pending_per_user", 2),
                 patch.object(app_main, "load_ai_image_job_by_client_request_id", return_value=None),
                 patch.object(app_main, "prepare_outpainting_image") as prepare_image,
             ):
@@ -714,13 +756,13 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(raised.exception.status_code, 429)
             prepare_image.assert_not_called()
         finally:
-            app_main.app.state.runware_outpainting_claims = {}
+            app_main.app.state.outpainting_claims = {}
 
     async def test_invalid_configuration_disables_config_and_submission(self) -> None:
         with (
-            patch.object(app_main.settings, "runware_outpainting_enabled", True),
-            patch.object(app_main.settings, "runware_api_key", "rw-test-key"),
-            patch.object(app_main.settings, "runware_outpainting_mode", "quality"),
+            patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+            patch.object(app_main.settings, "bfl_api_key", "bfl-test-key"),
+            patch.object(app_main.settings, "bfl_outpainting_mode", "quality"),
         ):
             self.assertFalse(app_main.ai_image_outpainting_config()["enabled"])
             request = json_request({
@@ -748,12 +790,12 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         }
         request = json_request({"client_request_id": token})
         with (
-            patch.object(app_main.settings, "runware_outpainting_enabled", True),
-            patch.object(app_main.settings, "runware_api_key", "rw-test-key"),
+            patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+            patch.object(app_main.settings, "bfl_api_key", "bfl-test-key"),
             patch.object(app_main, "load_ai_image_job_by_client_request_id", return_value=existing),
             patch.object(app_main, "prepare_outpainting_image") as prepare_image,
             patch.object(app_main, "save_ai_image_job") as save_job,
-            patch.object(app_main, "_track_runware_outpainting_task") as track_task,
+            patch.object(app_main, "_track_outpainting_task") as track_task,
         ):
             response = await app_main.ai_image_outpainting(request)
         self.assertTrue(response["deduplicated"])
@@ -765,9 +807,9 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_endpoint_persists_task_uuid_metadata_and_returns_expected_dimensions(self) -> None:
         request = json_request({
-            "image_url": png_data_uri((128, 64)),
+            "image_url": png_data_uri((128, 128)),
             "processing_width": 64,
-            "processing_height": 32,
+            "processing_height": 64,
             "outpaint": {
                 "top": 1,
                 "right": 65,
@@ -780,31 +822,34 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
 
         def close_task(coroutine, *, claimed_job_id=""):
             coroutine.close()
-            app_main._release_runware_outpainting_claim(claimed_job_id)
+            app_main._release_outpainting_claim(claimed_job_id)
             return Mock()
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "output"
             output_path.mkdir()
             with (
-                patch.object(app_main.settings, "runware_outpainting_enabled", True),
-                patch.object(app_main.settings, "runware_api_key", "rw-test-key"),
+                patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+                patch.object(app_main.settings, "bfl_api_key", "bfl-test-key"),
                 patch.object(app_main.settings, "output_path", output_path),
                 patch.object(app_main, "load_ai_image_job_by_client_request_id", return_value=None),
                 patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
-                patch.object(app_main, "_track_runware_outpainting_task", side_effect=close_task),
+                patch.object(app_main, "_track_outpainting_task", side_effect=close_task),
             ):
                 response = await app_main.ai_image_outpainting(request)
 
-            self.assertEqual(response["expected_dimensions"], {"width": 129, "height": 33})
+            self.assertEqual(response["expected_dimensions"], {"width": 129, "height": 65})
             self.assertEqual(response["processing_width"], 64)
+            self.assertEqual(response["task_id"], "")
             self.assertEqual(len(saved), 1)
             initial = saved[0]
-            self.assertEqual(initial["provider"], "runware")
+            self.assertEqual(initial["provider"], "bfl")
             self.assertEqual(initial["client_request_id"], "33333333-3333-4333-8333-333333333333")
-            self.assertEqual(initial["model"], "bfl:flux@outpainting")
-            self.assertEqual(initial["task_id"], response["task_id"])
-            self.assertEqual(initial["request_meta"]["provider_task_uuid"], response["task_id"])
+            self.assertEqual(initial["model"], "flux-tools/outpainting-v1")
+            self.assertEqual(initial["task_id"], "")
+            self.assertEqual(initial["request_meta"]["provider_task_id"], "")
+            self.assertEqual(initial["request_meta"]["provider_task_uuid"], "")
+            self.assertEqual(initial["request_meta"]["polling_url"], "")
             self.assertEqual(initial["request_meta"]["phase"], "queued")
             snapshot_url = initial["request_meta"]["source_snapshot_url"]
             self.assertEqual(
@@ -823,7 +868,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                     "bottom": 0,
                     "left": 0,
                     "expected_width": 129,
-                    "expected_height": 33,
+                    "expected_height": 65,
                 },
             )
             self.assertEqual(
@@ -845,7 +890,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                     "provider_bottom": 0,
                     "provider_left": 0,
                     "provider_width": 129,
-                    "provider_height": 33,
+                    "provider_height": 65,
                     "provider_margin_alignment": 1,
                 },
             )
@@ -913,13 +958,13 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_worker_persists_cost_and_polling_projects_outpainting_metadata(self) -> None:
-        prepared = runware.prepare_outpainting_image(
+        prepared = bfl.prepare_outpainting_image(
             png_data_uri(),
             max_source_bytes=1024 * 1024,
             max_source_pixels=1024 * 1024,
             max_encoded_input_bytes=1024 * 1024,
         )
-        geometry = runware.validate_geometry(
+        geometry = bfl.validate_geometry(
             processing_width=64,
             processing_height=64,
             top=64,
@@ -937,25 +982,26 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             "cost": None,
         }
         saved: list[dict] = []
-        result = runware.RunwareOutpaintingResult(
+        result = make_result(
             image_url="/ai-images/operator_a/2026-01-01/outpainting_job.png",
-            provider_task_uuid=provider_uuid,
+            provider_task_id=provider_uuid,
+            polling_url=f"https://api.bfl.ai/v1/get_result?id={provider_uuid}",
             cost=0.02,
             width=64,
             height=128,
         )
-        app_main.app.state.runware_outpainting_semaphore = app_main.asyncio.Semaphore(1)
-        app_main.app.state.runware_outpainting_tasks = set()
+        app_main.app.state.outpainting_semaphore = app_main.asyncio.Semaphore(1)
+        app_main.app.state.outpainting_tasks = set()
         run_mock = AsyncMock(return_value=result)
         with (
             patch.object(app_main, "run_outpainting", new=run_mock),
-            patch.object(app_main.settings, "runware_outpainting_output_quality", 88),
-            patch.object(app_main.settings, "runware_outpainting_ttl_seconds", 1234),
+            patch.object(app_main.settings, "bfl_outpainting_mode", "fast"),
+            patch.object(app_main.settings, "bfl_outpainting_output_format", "PNG"),
             patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
             patch.object(app_main, "generate_inspiration_thumb"),
             patch.object(app_main, "log_operation"),
         ):
-            await app_main._run_runware_outpainting_background(
+            await app_main._run_outpainting_background(
                 "job-2",
                 {"id": "operator_a", "username": "运营A", "role": "user"},
                 prepared,
@@ -966,13 +1012,15 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(saved[-1]["status"], "done")
         transport = run_mock.await_args.kwargs
-        self.assertEqual(transport["api_url"], app_main.settings.runware_api_url)
-        self.assertEqual(transport["model"], "bfl:flux@outpainting")
+        self.assertEqual(transport["api_url"], app_main.settings.bfl_api_url)
         self.assertEqual(transport["mode"], "fast")
         self.assertEqual(transport["output_format"], "PNG")
-        self.assertEqual(transport["output_quality"], 88)
-        self.assertEqual(transport["ttl_seconds"], 1234)
         self.assertFalse(transport["auto_crop"])
+        self.assertIsNotNone(transport["on_accepted"])
+        self.assertNotIn("model", transport)
+        self.assertNotIn("output_quality", transport)
+        self.assertNotIn("ttl_seconds", transport)
+        self.assertNotIn("provider_task_uuid", transport)
         self.assertEqual(saved[-1]["task_id"], provider_uuid)
         self.assertEqual(saved[-1]["request_meta"]["cost"], 0.02)
         self.assertEqual(saved[-1]["image_url"], result.image_url)
@@ -983,13 +1031,13 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             "status": "done",
             "progress": 100,
             "image_url": result.image_url,
-            "original_prompt": "Runware FLUX outpainting",
-            "resolved_prompt": "Runware FLUX outpainting",
-            "prompt": "Runware FLUX outpainting",
+            "original_prompt": "FLUX outpainting",
+            "resolved_prompt": "FLUX outpainting",
+            "prompt": "FLUX outpainting",
             "prompt_trace": "",
             "task_id": provider_uuid,
-            "model": runware.RUNWARE_MODEL,
-            "provider": "runware",
+            "model": bfl.BFL_OUTPAINTING_MODEL,
+            "provider": "bfl",
             "error": None,
             "provider_switched": False,
             "request_meta": saved[-1]["request_meta"],
@@ -1001,6 +1049,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         ):
             poll = app_main.ai_image_status(object(), "job-2")
         self.assertEqual(poll["cost"], 0.02)
+        self.assertEqual(poll["outpainting"]["provider_task_id"], provider_uuid)
         self.assertEqual(poll["outpainting"]["provider_task_uuid"], provider_uuid)
         self.assertNotIn("source_sha256", poll["outpainting"])
 
@@ -1010,11 +1059,11 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             "id": "job-recovery",
             "user_id": "operator_a",
             "status": "processing",
-            "model": runware.RUNWARE_MODEL,
-            "provider": "runware",
-            "prompt": "Runware FLUX outpainting",
-            "original_prompt": "Runware FLUX outpainting",
-            "resolved_prompt": "Runware FLUX outpainting",
+            "model": bfl.BFL_OUTPAINTING_MODEL,
+            "provider": "bfl",
+            "prompt": "FLUX outpainting",
+            "original_prompt": "FLUX outpainting",
+            "resolved_prompt": "FLUX outpainting",
             "size": "129x65",
             "resolution": "",
             "task_id": provider_uuid,
@@ -1039,29 +1088,29 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 "provider_margin_alignment": 64,
             },
         }
-        result = runware.RunwareOutpaintingResult(
+        result = make_result(
             image_url="/ai-images/operator_a/2026-01-01/outpainting_job-recovery.png",
-            provider_task_uuid=provider_uuid,
+            provider_task_id=provider_uuid,
             cost=0.03,
             width=129,
             height=65,
         )
         saved: list[dict] = []
-        app_main.app.state.runware_outpainting_semaphore = app_main.asyncio.Semaphore(1)
+        app_main.app.state.outpainting_semaphore = app_main.asyncio.Semaphore(1)
         run_mock = AsyncMock(return_value=result)
         with (
-            patch.object(app_main, "load_active_runware_outpainting_jobs", return_value=[stored_job]),
+            patch.object(app_main, "load_active_outpainting_jobs", return_value=[stored_job]),
             patch.object(app_main, "run_outpainting", new=run_mock),
             patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
             patch.object(app_main, "generate_inspiration_thumb"),
             patch.object(app_main, "log_operation"),
-            patch.object(app_main.settings, "runware_outpainting_max_concurrency", 1),
+            patch.object(app_main.settings, "bfl_outpainting_max_concurrency", 1),
         ):
-            await app_main._recover_runware_outpainting_jobs()
+            await app_main._recover_outpainting_jobs()
         transport = run_mock.await_args.kwargs
         self.assertIsNone(transport["prepared"])
         self.assertFalse(transport["submit_request"])
-        self.assertEqual(transport["provider_task_uuid"], provider_uuid)
+        self.assertEqual(transport["provider_task_id"], provider_uuid)
         self.assertEqual(
             transport["geometry"].provider_margins(),
             {"top": 64, "right": 128, "bottom": 0, "left": 0},
@@ -1075,11 +1124,11 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             "id": "job-legacy-recovery",
             "user_id": "operator_a",
             "status": "processing",
-            "model": runware.RUNWARE_MODEL,
-            "provider": "runware",
-            "prompt": "Runware FLUX outpainting",
-            "original_prompt": "Runware FLUX outpainting",
-            "resolved_prompt": "Runware FLUX outpainting",
+            "model": bfl.BFL_OUTPAINTING_MODEL,
+            "provider": "bfl",
+            "prompt": "FLUX outpainting",
+            "original_prompt": "FLUX outpainting",
+            "resolved_prompt": "FLUX outpainting",
             "size": "64x128",
             "resolution": "",
             "task_id": provider_uuid,
@@ -1097,24 +1146,24 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 "expected_height": 128,
             },
         }
-        result = runware.RunwareOutpaintingResult(
+        result = make_result(
             image_url="/ai-images/operator_a/2026-01-01/outpainting_job-legacy.png",
-            provider_task_uuid=provider_uuid,
+            provider_task_id=provider_uuid,
             cost=0.01,
             width=64,
             height=128,
         )
-        app_main.app.state.runware_outpainting_semaphore = app_main.asyncio.Semaphore(1)
+        app_main.app.state.outpainting_semaphore = app_main.asyncio.Semaphore(1)
         run_mock = AsyncMock(return_value=result)
         with (
-            patch.object(app_main, "load_active_runware_outpainting_jobs", return_value=[stored_job]),
+            patch.object(app_main, "load_active_outpainting_jobs", return_value=[stored_job]),
             patch.object(app_main, "run_outpainting", new=run_mock),
             patch.object(app_main, "save_ai_image_job"),
             patch.object(app_main, "generate_inspiration_thumb"),
             patch.object(app_main, "log_operation"),
-            patch.object(app_main.settings, "runware_outpainting_max_concurrency", 1),
+            patch.object(app_main.settings, "bfl_outpainting_max_concurrency", 1),
         ):
-            await app_main._recover_runware_outpainting_jobs()
+            await app_main._recover_outpainting_jobs()
         self.assertFalse(run_mock.await_args.kwargs["submit_request"])
         self.assertEqual(
             run_mock.await_args.kwargs["geometry"].provider_margins(),
@@ -1154,11 +1203,11 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                     "id": f"job-invalid-recovery-{index}",
                     "user_id": "operator_a",
                     "status": "processing",
-                    "model": runware.RUNWARE_MODEL,
-                    "provider": "runware",
-                    "prompt": "Runware FLUX outpainting",
-                    "original_prompt": "Runware FLUX outpainting",
-                    "resolved_prompt": "Runware FLUX outpainting",
+                    "model": bfl.BFL_OUTPAINTING_MODEL,
+                    "provider": "bfl",
+                    "prompt": "FLUX outpainting",
+                    "original_prompt": "FLUX outpainting",
+                    "resolved_prompt": "FLUX outpainting",
                     "size": "129x65",
                     "resolution": "",
                     "task_id": provider_uuid,
@@ -1168,20 +1217,20 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 saved: list[dict] = []
                 run_mock = AsyncMock()
                 with (
-                    patch.object(app_main, "load_active_runware_outpainting_jobs", return_value=[stored_job]),
+                    patch.object(app_main, "load_active_outpainting_jobs", return_value=[stored_job]),
                     patch.object(app_main, "run_outpainting", new=run_mock),
                     patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
                 ):
-                    await app_main._recover_runware_outpainting_jobs()
+                    await app_main._recover_outpainting_jobs()
                 run_mock.assert_not_awaited()
                 self.assertEqual(saved[-1]["status"], "failed")
                 self.assertEqual(saved[-1]["error"], "扩图任务恢复信息无效，请重新扩图")
 
-    async def test_recovery_resubmits_queued_job_with_same_uuid(self) -> None:
+    async def test_recovery_resubmits_queued_job_from_snapshot(self) -> None:
         request = json_request({
-            "image_url": png_data_uri((128, 64)),
+            "image_url": png_data_uri((128, 128)),
             "processing_width": 64,
-            "processing_height": 32,
+            "processing_height": 64,
             "outpaint": {"top": 1, "right": 65, "bottom": 0, "left": 0},
             "client_request_id": "77777777-7777-4777-8777-777777777777",
         })
@@ -1189,19 +1238,19 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
 
         def close_task(coroutine, *, claimed_job_id=""):
             coroutine.close()
-            app_main._release_runware_outpainting_claim(claimed_job_id)
+            app_main._release_outpainting_claim(claimed_job_id)
             return Mock()
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "output"
             output_path.mkdir()
             with (
-                patch.object(app_main.settings, "runware_outpainting_enabled", True),
-                patch.object(app_main.settings, "runware_api_key", "rw-test-key"),
+                patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+                patch.object(app_main.settings, "bfl_api_key", "bfl-test-key"),
                 patch.object(app_main.settings, "output_path", output_path),
                 patch.object(app_main, "load_ai_image_job_by_client_request_id", return_value=None),
                 patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
-                patch.object(app_main, "_track_runware_outpainting_task", side_effect=close_task),
+                patch.object(app_main, "_track_outpainting_task", side_effect=close_task),
             ):
                 response = await app_main.ai_image_outpainting(request)
 
@@ -1222,35 +1271,34 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 "created_at": queued["created_at"],
                 "request_meta": queued["request_meta"],
             }
-            result = runware.RunwareOutpaintingResult(
+            result = make_result(
                 image_url="/ai-images/operator_a/2026-01-01/outpainting_job-queued.png",
-                provider_task_uuid=str(queued["task_id"]),
+                provider_task_id=str(queued["task_id"] or TASK_ID),
                 cost=0.02,
                 width=129,
-                height=33,
+                height=65,
             )
             recovered: list[dict] = []
             run_mock = AsyncMock(return_value=result)
-            app_main.app.state.runware_outpainting_semaphore = app_main.asyncio.Semaphore(1)
+            app_main.app.state.outpainting_semaphore = app_main.asyncio.Semaphore(1)
             with (
                 patch.object(app_main.settings, "output_path", output_path),
-                patch.object(app_main, "load_active_runware_outpainting_jobs", return_value=[stored_job]),
+                patch.object(app_main, "load_active_outpainting_jobs", return_value=[stored_job]),
                 patch.object(app_main, "run_outpainting", new=run_mock),
                 patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: recovered.append(kwargs)),
                 patch.object(app_main, "generate_inspiration_thumb"),
                 patch.object(app_main, "log_operation"),
-                patch.object(app_main.settings, "runware_outpainting_max_concurrency", 1),
+                patch.object(app_main.settings, "bfl_outpainting_max_concurrency", 1),
             ):
-                await app_main._recover_runware_outpainting_jobs()
+                await app_main._recover_outpainting_jobs()
 
             transport = run_mock.await_args.kwargs
             self.assertTrue(transport["submit_request"])
             self.assertIsNotNone(transport["prepared"])
-            self.assertEqual(transport["provider_task_uuid"], response["task_id"])
+            self.assertEqual(transport.get("provider_task_id") or "", "")
             self.assertEqual(transport["prepared"].processing_width, 64)
-            self.assertEqual(transport["prepared"].processing_height, 32)
+            self.assertEqual(transport["prepared"].processing_height, 64)
             self.assertEqual(recovered[-1]["status"], "done")
-            self.assertEqual(recovered[-1]["task_id"], response["task_id"])
 
     async def test_recovery_fails_queued_job_without_source_snapshot(self) -> None:
         provider_uuid = "88888888-8888-4888-8888-888888888888"
@@ -1258,11 +1306,11 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             "id": "job-queued-missing-source",
             "user_id": "operator_a",
             "status": "processing",
-            "model": runware.RUNWARE_MODEL,
-            "provider": "runware",
-            "prompt": "Runware FLUX outpainting",
-            "original_prompt": "Runware FLUX outpainting",
-            "resolved_prompt": "Runware FLUX outpainting",
+            "model": bfl.BFL_OUTPAINTING_MODEL,
+            "provider": "bfl",
+            "prompt": "FLUX outpainting",
+            "original_prompt": "FLUX outpainting",
+            "resolved_prompt": "FLUX outpainting",
             "size": "128x64",
             "resolution": "",
             "task_id": provider_uuid,
@@ -1284,11 +1332,11 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         saved: list[dict] = []
         run_mock = AsyncMock()
         with (
-            patch.object(app_main, "load_active_runware_outpainting_jobs", return_value=[stored_job]),
+            patch.object(app_main, "load_active_outpainting_jobs", return_value=[stored_job]),
             patch.object(app_main, "run_outpainting", new=run_mock),
             patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
         ):
-            await app_main._recover_runware_outpainting_jobs()
+            await app_main._recover_outpainting_jobs()
         run_mock.assert_not_awaited()
         self.assertEqual(saved[-1]["status"], "failed")
         self.assertEqual(saved[-1]["error"], "扩图任务恢复信息无效，请重新扩图")
@@ -1312,23 +1360,23 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "output"
             output_path.mkdir()
-            prepared = runware.prepare_outpainting_image(
-                png_data_uri((128, 64)),
+            prepared = bfl.prepare_outpainting_image(
+                png_data_uri((128, 128)),
                 processing_width=64,
-                processing_height=32,
+                processing_height=64,
                 max_source_bytes=1024 * 1024,
                 max_source_pixels=1024 * 1024,
                 max_encoded_input_bytes=1024 * 1024,
             )
-            geometry = runware.validate_geometry(
+            geometry = bfl.validate_geometry(
                 processing_width=64,
-                processing_height=32,
+                processing_height=64,
                 top=1,
                 right=65,
                 bottom=0,
                 left=0,
             )
-            snapshot_url = runware.persist_prepared_source_snapshot(
+            snapshot_url = bfl.persist_prepared_source_snapshot(
                 prepared,
                 output_root=output_path,
                 user_id="operator_a",
@@ -1356,14 +1404,14 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 "phase": "queued",
             }
             saved: list[dict] = []
-            app_main.app.state.runware_outpainting_semaphore = WaitingSemaphore()
+            app_main.app.state.outpainting_semaphore = WaitingSemaphore()
             with (
                 patch.object(app_main.settings, "output_path", output_path),
                 patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
                 patch.object(app_main, "run_outpainting", new=AsyncMock()) as run_mock,
             ):
                 worker = asyncio.create_task(
-                    app_main._run_runware_outpainting_background(
+                    app_main._run_outpainting_background(
                         job_id,
                         {"id": "operator_a", "username": "运营A", "role": "user"},
                         prepared,
@@ -1397,28 +1445,28 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                     "created_at": saved[-1]["created_at"],
                     "request_meta": saved[-1]["request_meta"],
                 }
-                result = runware.RunwareOutpaintingResult(
+                result = make_result(
                     image_url="/ai-images/operator_a/2026-01-01/outpainting_job-cancel.png",
-                    provider_task_uuid=provider_uuid,
+                    provider_task_id=provider_uuid,
                     cost=0.02,
                     width=129,
-                    height=33,
+                    height=65,
                 )
                 recovered: list[dict] = []
                 recover_mock = AsyncMock(return_value=result)
-                app_main.app.state.runware_outpainting_semaphore = asyncio.Semaphore(1)
+                app_main.app.state.outpainting_semaphore = asyncio.Semaphore(1)
                 with (
-                    patch.object(app_main, "load_active_runware_outpainting_jobs", return_value=[stored_job]),
+                    patch.object(app_main, "load_active_outpainting_jobs", return_value=[stored_job]),
                     patch.object(app_main, "run_outpainting", new=recover_mock),
                     patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: recovered.append(kwargs)),
                     patch.object(app_main, "generate_inspiration_thumb"),
                     patch.object(app_main, "log_operation"),
-                    patch.object(app_main.settings, "runware_outpainting_max_concurrency", 1),
+                    patch.object(app_main.settings, "bfl_outpainting_max_concurrency", 1),
                 ):
-                    await app_main._recover_runware_outpainting_jobs()
+                    await app_main._recover_outpainting_jobs()
 
                 self.assertTrue(recover_mock.await_args.kwargs["submit_request"])
-                self.assertEqual(recover_mock.await_args.kwargs["provider_task_uuid"], provider_uuid)
+                self.assertIsNotNone(recover_mock.await_args.kwargs["prepared"])
                 self.assertEqual(recovered[-1]["status"], "done")
 
     async def test_terminal_success_discards_source_snapshot(self) -> None:
@@ -1427,23 +1475,23 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "output"
             output_path.mkdir()
-            prepared = runware.prepare_outpainting_image(
-                png_data_uri((128, 64)),
+            prepared = bfl.prepare_outpainting_image(
+                png_data_uri((128, 128)),
                 processing_width=64,
-                processing_height=32,
+                processing_height=64,
                 max_source_bytes=1024 * 1024,
                 max_source_pixels=1024 * 1024,
                 max_encoded_input_bytes=1024 * 1024,
             )
-            geometry = runware.validate_geometry(
+            geometry = bfl.validate_geometry(
                 processing_width=64,
-                processing_height=32,
+                processing_height=64,
                 top=1,
                 right=65,
                 bottom=0,
                 left=0,
             )
-            snapshot_url = runware.persist_prepared_source_snapshot(
+            snapshot_url = bfl.persist_prepared_source_snapshot(
                 prepared,
                 output_root=output_path,
                 user_id="operator_a",
@@ -1453,14 +1501,14 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 output_path / "ai-images" / "operator_a" / "outpainting" / job_id / "source.png"
             )
             self.assertTrue(snapshot_path.is_file())
-            result = runware.RunwareOutpaintingResult(
+            result = make_result(
                 image_url="/ai-images/operator_a/2026-01-01/outpainting_job-done.png",
-                provider_task_uuid=provider_uuid,
+                provider_task_id=provider_uuid,
                 cost=0.01,
                 width=129,
-                height=33,
+                height=65,
             )
-            app_main.app.state.runware_outpainting_semaphore = asyncio.Semaphore(1)
+            app_main.app.state.outpainting_semaphore = asyncio.Semaphore(1)
             with (
                 patch.object(app_main.settings, "output_path", output_path),
                 patch.object(app_main, "run_outpainting", new=AsyncMock(return_value=result)),
@@ -1468,7 +1516,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 patch.object(app_main, "generate_inspiration_thumb"),
                 patch.object(app_main, "log_operation"),
             ):
-                await app_main._run_runware_outpainting_background(
+                await app_main._run_outpainting_background(
                     job_id,
                     {"id": "operator_a", "username": "运营A", "role": "user"},
                     prepared,
@@ -1491,23 +1539,23 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "output"
             output_path.mkdir()
-            prepared = runware.prepare_outpainting_image(
-                png_data_uri((128, 64)),
+            prepared = bfl.prepare_outpainting_image(
+                png_data_uri((128, 128)),
                 processing_width=64,
-                processing_height=32,
+                processing_height=64,
                 max_source_bytes=1024 * 1024,
                 max_source_pixels=1024 * 1024,
                 max_encoded_input_bytes=1024 * 1024,
             )
-            geometry = runware.validate_geometry(
+            geometry = bfl.validate_geometry(
                 processing_width=64,
-                processing_height=32,
+                processing_height=64,
                 top=1,
                 right=65,
                 bottom=0,
                 left=0,
             )
-            snapshot_url = runware.persist_prepared_source_snapshot(
+            snapshot_url = bfl.persist_prepared_source_snapshot(
                 prepared,
                 output_root=output_path,
                 user_id="operator_a",
@@ -1517,18 +1565,18 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 output_path / "ai-images" / "operator_a" / "outpainting" / job_id / "source.png"
             )
             self.assertTrue(snapshot_path.is_file())
-            app_main.app.state.runware_outpainting_semaphore = asyncio.Semaphore(1)
+            app_main.app.state.outpainting_semaphore = asyncio.Semaphore(1)
             with (
                 patch.object(app_main.settings, "output_path", output_path),
                 patch.object(
                     app_main,
                     "run_outpainting",
-                    new=AsyncMock(side_effect=runware.RunwareOutpaintingError("扩图失败", diagnostic="boom")),
+                    new=AsyncMock(side_effect=bfl.BflOutpaintingError("扩图失败", diagnostic="boom")),
                 ),
                 patch.object(app_main, "save_ai_image_job"),
                 patch.object(app_main, "log_operation"),
             ):
-                await app_main._run_runware_outpainting_background(
+                await app_main._run_outpainting_background(
                     job_id,
                     {"id": "operator_a", "username": "运营A", "role": "user"},
                     prepared,
@@ -1546,13 +1594,13 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(snapshot_path.exists())
 
     async def test_done_persistence_retries_without_marking_paid_result_failed(self) -> None:
-        prepared = runware.prepare_outpainting_image(
+        prepared = bfl.prepare_outpainting_image(
             png_data_uri(),
             max_source_bytes=1024 * 1024,
             max_source_pixels=1024 * 1024,
             max_encoded_input_bytes=1024 * 1024,
         )
-        geometry = runware.validate_geometry(
+        geometry = bfl.validate_geometry(
             processing_width=64,
             processing_height=64,
             top=64,
@@ -1561,9 +1609,9 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             left=0,
         )
         provider_uuid = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
-        result = runware.RunwareOutpaintingResult(
+        result = make_result(
             image_url="/ai-images/operator_a/2026-01-01/outpainting_job-retry.png",
-            provider_task_uuid=provider_uuid,
+            provider_task_id=provider_uuid,
             cost=0.01,
             width=64,
             height=128,
@@ -1579,7 +1627,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                     raise sqlite3.OperationalError("database is locked")
             saved.append(kwargs)
 
-        app_main.app.state.runware_outpainting_semaphore = app_main.asyncio.Semaphore(1)
+        app_main.app.state.outpainting_semaphore = app_main.asyncio.Semaphore(1)
         with (
             patch.object(app_main, "run_outpainting", new=AsyncMock(return_value=result)),
             patch.object(app_main, "save_ai_image_job", side_effect=save_with_one_lock_failure),
@@ -1587,7 +1635,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             patch.object(app_main, "generate_inspiration_thumb"),
             patch.object(app_main, "log_operation"),
         ):
-            await app_main._run_runware_outpainting_background(
+            await app_main._run_outpainting_background(
                 "job-retry",
                 {"id": "operator_a", "username": "运营A", "role": "user"},
                 prepared,
@@ -1615,9 +1663,9 @@ class JobStoreIdempotencyTest(unittest.TestCase):
                 job_id=job_id,
                 user_id=user_id,
                 status="processing",
-                model="bfl:flux@outpainting",
-                provider="runware",
-                prompt="Runware FLUX outpainting",
+                model="flux-tools/outpainting-v1",
+                provider="bfl",
+                prompt="FLUX outpainting",
                 size="128x64",
                 client_request_id=token,
                 request_meta={"operation": "outpainting", "expected_width": 128, "expected_height": 64},
@@ -1638,7 +1686,7 @@ class JobStoreIdempotencyTest(unittest.TestCase):
                     "job-b",
                 )
                 self.assertEqual(
-                    {job["id"] for job in job_store.load_active_runware_outpainting_jobs()},
+                    {job["id"] for job in job_store.load_active_outpainting_jobs()},
                     {"job-a", "job-b"},
                 )
                 with self.assertRaises(sqlite3.IntegrityError):

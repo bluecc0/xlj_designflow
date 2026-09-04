@@ -1,6 +1,6 @@
-"""Runware FLUX outpainting transport and image validation.
+"""Black Forest Labs FLUX outpainting transport and image validation.
 
-This module deliberately owns the provider wire format.  Callers must resolve and
+This module deliberately owns the BFL wire format. Callers must resolve and
 authorize internal DesignFlow URLs before passing a local path here.
 """
 from __future__ import annotations
@@ -32,11 +32,24 @@ from PIL import Image, UnidentifiedImageError
 
 logger = logging.getLogger(__name__)
 
-RUNWARE_API_URL = "https://api.runware.ai/v1/"
-RUNWARE_MODEL = "bfl:flux@outpainting"
+BFL_API_URL = "https://api.bfl.ai"
+BFL_API_HOST = "api.bfl.ai"
+BFL_OUTPAINTING_PATH = "/v1/flux-tools/outpainting-v1"
+BFL_GET_RESULT_PATH = "/v1/get_result"
+BFL_OUTPAINTING_MODEL = "flux-tools/outpainting-v1"
+BFL_ALLOWED_MODES = frozenset({"fast", "high"})
+BFL_READY_STATUS = "ready"
+BFL_PENDING_STATUSES = frozenset({"pending", "reasoning", "generating"})
+BFL_FAILURE_STATUSES = frozenset({
+    "error",
+    "request moderated",
+    "content moderated",
+    "task not found",
+})
 LEGACY_MARGIN_ALIGNMENT = 64
 MAX_OUTPUT_SIDE = 2048
 MAX_OUTPUT_PIXELS = 4_194_304
+MIN_CANVAS_SIDE = 64
 _PROVIDER_GEOMETRY_FIELDS = (
     "provider_top",
     "provider_right",
@@ -47,12 +60,6 @@ _PROVIDER_GEOMETRY_FIELDS = (
     "provider_margin_alignment",
 )
 _TRANSIENT_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
-_RETRYABLE_PROVIDER_CODES = {
-    "timeoutprovider",
-    "providerratelimitexceeded",
-    "providerunavailable",
-    "serviceunavailable",
-}
 _ALLOWED_SOURCE_FORMATS = {"PNG", "JPEG", "WEBP"}
 _ALLOWED_DATA_MIMES = {
     "image/png": "PNG",
@@ -60,16 +67,16 @@ _ALLOWED_DATA_MIMES = {
     "image/jpg": "JPEG",
     "image/webp": "WEBP",
 }
-_FAILED_STATUSES = {"failed", "failure", "error", "cancelled", "canceled"}
 
 ProgressCallback = Callable[[int, str], Awaitable[None] | None]
+AcceptedCallback = Callable[[str, str], Awaitable[None] | None]
 
 
 class OutpaintingValidationError(ValueError):
     """A safe validation failure suitable for an HTTP 4xx response."""
 
 
-class RunwareOutpaintingError(RuntimeError):
+class BflOutpaintingError(RuntimeError):
     """Provider/download failure with separate public and diagnostic messages."""
 
     def __init__(
@@ -138,11 +145,20 @@ class OutpaintingGeometry:
             y0 + self.expected_height,
         )
 
+    def bfl_canvas(self) -> dict[str, int]:
+        return {
+            "width": self.provider_width,
+            "height": self.provider_height,
+            "reference_offset_x": self.provider_left,
+            "reference_offset_y": self.provider_top,
+        }
+
 
 @dataclass(frozen=True)
-class RunwareOutpaintingResult:
+class BflOutpaintingResult:
     image_url: str
-    provider_task_uuid: str
+    provider_task_id: str
+    polling_url: str
     cost: float | None
     width: int
     height: int
@@ -193,6 +209,10 @@ def validate_geometry(
 
     expected_width = processing_width + margins["left"] + margins["right"]
     expected_height = processing_height + margins["top"] + margins["bottom"]
+    if expected_width < MIN_CANVAS_SIDE or expected_height < MIN_CANVAS_SIDE:
+        raise OutpaintingValidationError(
+            f"扩图结果不能小于 {MIN_CANVAS_SIDE} × {MIN_CANVAS_SIDE}px"
+        )
     if expected_width > max_width or expected_height > max_height:
         raise OutpaintingValidationError(
             f"扩图结果不能超过 {max_width} × {max_height}px"
@@ -459,7 +479,7 @@ _SOURCE_SNAPSHOT_NAME = "source.png"
 
 
 def is_pre_submit_phase(phase: Any) -> bool:
-    """True when the persisted job has not yet attempted a Runware submit."""
+    """True when the persisted job has not yet attempted a BFL submit."""
     return str(phase or "").strip().casefold() in _PRE_SUBMIT_PHASES
 
 
@@ -499,7 +519,7 @@ def persist_prepared_source_snapshot(
     user_id: str,
     job_id: str,
 ) -> str:
-    """Write the prepared PNG to disk so queued recovery can resubmit the same UUID."""
+    """Write the prepared PNG to disk so queued recovery can resubmit the same image."""
     png_payload = _png_bytes_from_data_uri(prepared.data_uri)
     directory = _snapshot_directory(output_root, user_id, job_id)
     directory.mkdir(parents=True, exist_ok=True)
@@ -630,31 +650,6 @@ def _safe_text(value: Any, limit: int = 300) -> str:
     return "".join(char if char.isprintable() else " " for char in text)[:limit]
 
 
-def _provider_error_codes(errors: list[dict[str, Any]]) -> set[str]:
-    return {
-        str(item.get("code") or item.get("errorCode") or "").strip().casefold()
-        for item in errors
-        if str(item.get("code") or item.get("errorCode") or "").strip()
-    }
-
-
-def _payload_has_retryable_errors(payload: dict[str, Any] | None) -> bool:
-    return bool(_provider_error_codes(_payload_errors(payload)) & _RETRYABLE_PROVIDER_CODES)
-
-
-def _provider_status_code(errors: list[dict[str, Any]]) -> int | None:
-    for item in errors:
-        for key in ("statusCode", "status_code", "httpStatus", "code"):
-            value = item.get(key)
-            try:
-                candidate = int(value)
-            except (TypeError, ValueError):
-                continue
-            if 100 <= candidate <= 599:
-                return candidate
-    return None
-
-
 def public_error_for_status(status_code: int | None) -> str:
     if status_code == 401:
         return "扩图服务鉴权失败，请联系管理员"
@@ -679,88 +674,210 @@ def _json_payload(response: httpx.Response) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _payload_errors(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+def _bfl_error_detail(payload: dict[str, Any] | None) -> str:
     if not payload:
-        return []
-    raw_errors = payload.get("errors")
-    if isinstance(raw_errors, dict):
-        return [raw_errors]
-    if isinstance(raw_errors, list):
-        return [item for item in raw_errors if isinstance(item, dict)]
-    return []
-
-
-def _raise_payload_errors(
-    payload: dict[str, Any] | None,
-    *,
-    fallback_status: int | None = None,
-) -> None:
-    errors = _payload_errors(payload)
-    if not errors:
-        return
-    status_code = _provider_status_code(errors) or fallback_status
-    codes = _provider_error_codes(errors)
-    if "providerratelimitexceeded" in codes:
-        public_message = "扩图服务繁忙，请稍后重试"
-    elif "timeoutprovider" in codes or "providerunavailable" in codes or "serviceunavailable" in codes:
-        public_message = "扩图服务暂时不可用，请稍后重试"
-    else:
-        public_message = public_error_for_status(status_code)
-    summary = "; ".join(
-        filter(
-            None,
-            (
-                f"code={_safe_text(item.get('code'), 40)} message={_safe_text(item.get('message') or item.get('error'), 160)}"
-                for item in errors[:3]
-            ),
-        )
-    )
-    raise RunwareOutpaintingError(
-        public_message,
-        diagnostic=f"provider_errors {summary}".strip(),
-        http_status=status_code,
-    )
-
-
-def _payload_data(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not payload:
-        return []
-    raw_data = payload.get("data")
-    if isinstance(raw_data, dict):
-        return [raw_data]
-    if isinstance(raw_data, list):
-        return [item for item in raw_data if isinstance(item, dict)]
-    return []
-
-
-def _select_task_item(
-    payload: dict[str, Any] | None,
-    provider_task_uuid: str,
-) -> dict[str, Any] | None:
-    data = _payload_data(payload)
-    if not data:
-        return None
-    for item in data:
-        item_uuid = str(item.get("taskUUID") or item.get("taskUuid") or "")
-        if item_uuid == provider_task_uuid:
-            return item
-    return None
-
-
-def _result_url(item: dict[str, Any] | None) -> str:
-    if not item:
         return ""
-    for key in ("imageURL", "imageUrl", "image_url", "url"):
-        value = item.get(key)
+    detail = payload.get("detail")
+    if isinstance(detail, str) and detail.strip():
+        return _safe_text(detail, 200)
+    if isinstance(detail, list):
+        parts: list[str] = []
+        for item in detail[:3]:
+            if isinstance(item, dict):
+                parts.append(_safe_text(item.get("msg") or item.get("message") or item, 80))
+            else:
+                parts.append(_safe_text(item, 80))
+        return "; ".join(part for part in parts if part)
+    for key in ("message", "error", "status"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return _safe_text(value, 200)
+    return ""
+
+
+def _raise_bfl_http_error(
+    response: httpx.Response,
+    *,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    payload = payload if payload is not None else _json_payload(response)
+    detail = _bfl_error_detail(payload)
+    raise BflOutpaintingError(
+        public_error_for_status(response.status_code),
+        diagnostic=f"HTTP {response.status_code} {detail}".strip(),
+        http_status=response.status_code,
+    )
+
+
+def _raw_base64_from_data_uri(data_uri: str) -> str:
+    marker = "base64,"
+    index = str(data_uri or "").find(marker)
+    if index < 0:
+        raise BflOutpaintingError(
+            "扩图服务内部状态无效，请稍后重试",
+            diagnostic="prepared image is missing base64 payload",
+        )
+    value = data_uri[index + len(marker):].strip()
+    if not value:
+        raise BflOutpaintingError(
+            "扩图服务内部状态无效，请稍后重试",
+            diagnostic="prepared image base64 payload is empty",
+        )
+    return value
+
+
+def _normalized_bfl_api_url(api_url: str) -> str:
+    parsed = urlsplit(str(api_url or "").strip())
+    path = parsed.path.rstrip("/")
+    if (
+        parsed.scheme.lower() != "https"
+        or (parsed.hostname or "").casefold().rstrip(".") != BFL_API_HOST
+        or path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+    ):
+        raise BflOutpaintingError(
+            "扩图服务配置无效，请联系管理员",
+            diagnostic="BFL_API_URL must equal https://api.bfl.ai",
+        )
+    return f"https://{BFL_API_HOST}"
+
+
+def _host_allowed(hostname: str, allowed_host_suffixes: tuple[str, ...]) -> bool:
+    host = hostname.casefold().rstrip(".")
+    allowed = tuple(
+        suffix.casefold().strip().lstrip(".").rstrip(".")
+        for suffix in allowed_host_suffixes
+        if suffix.strip().lstrip(".").rstrip(".")
+    )
+    return bool(allowed) and any(host == suffix or host.endswith("." + suffix) for suffix in allowed)
+
+
+def _validate_bfl_polling_url(raw_url: str) -> str:
+    try:
+        parsed = urlsplit(str(raw_url or "").strip())
+    except Exception as exc:
+        raise BflOutpaintingError(
+            "扩图服务返回的轮询地址无效，请稍后重试",
+            diagnostic="polling_url parse failed",
+        ) from exc
+    hostname = (parsed.hostname or "").casefold().rstrip(".")
+    if (
+        parsed.scheme.lower() != "https"
+        or not hostname
+        or parsed.username
+        or parsed.password
+        or not _host_allowed(hostname, ("bfl.ai",))
+        or hostname in {"localhost", "localhost.localdomain"}
+        or hostname.endswith(".local")
+    ):
+        raise BflOutpaintingError(
+            "扩图服务返回的轮询地址不受信任，请稍后重试",
+            diagnostic=f"polling_url host={_safe_text(hostname, 80)}",
+        )
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return parsed.geturl()
+    if not address.is_global:
+        raise BflOutpaintingError(
+            "扩图服务返回的轮询地址无效，请稍后重试",
+            diagnostic="polling_url is not a public host",
+        )
+    return parsed.geturl()
+
+
+def _fallback_polling_url(api_url: str, provider_task_id: str) -> str:
+    task_id = str(provider_task_id or "").strip()
+    if not task_id:
+        raise BflOutpaintingError(
+            "扩图任务无法恢复，请重新扩图",
+            diagnostic="missing BFL task id for polling",
+        )
+    return f"{api_url.rstrip('/')}{BFL_GET_RESULT_PATH}?id={quote(task_id, safe='')}"
+
+
+def _accepted_task(payload: dict[str, Any] | None) -> tuple[str, str, float | None]:
+    if not payload:
+        raise BflOutpaintingError(
+            "扩图服务返回无效响应，请稍后重试",
+            diagnostic="submit payload is not an object",
+        )
+    task_id = str(payload.get("id") or "").strip()
+    polling_url = str(payload.get("polling_url") or "").strip()
+    if not task_id:
+        raise BflOutpaintingError(
+            "扩图服务返回无效响应，请稍后重试",
+            diagnostic="submit response missing id",
+        )
+    if not polling_url:
+        polling_url = _fallback_polling_url(BFL_API_URL, task_id)
+    return task_id, _validate_bfl_polling_url(polling_url), _result_cost(payload)
+
+
+def _poll_status(payload: dict[str, Any] | None) -> str:
+    if not payload:
+        return ""
+    return str(payload.get("status") or payload.get("state") or "").strip().casefold()
+
+
+def _poll_result_url(payload: dict[str, Any] | None) -> str:
+    if not payload:
+        return ""
+    result = payload.get("result")
+    if isinstance(result, dict):
+        sample = result.get("sample")
+        if isinstance(sample, str) and sample.strip():
+            return sample.strip()
+        for key in ("imageURL", "imageUrl", "image_url", "url"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    for key in ("sample", "imageURL", "imageUrl", "image_url", "url"):
+        value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    for key in ("output", "result"):
-        nested = item.get(key)
-        if isinstance(nested, dict):
-            found = _result_url(nested)
-            if found:
-                return found
     return ""
+
+
+def _public_error_for_bfl_status(status: str) -> str:
+    if status in {"request moderated", "content moderated"}:
+        return "扩图内容未通过安全审核，请更换图片后重试"
+    if status == "task not found":
+        return "扩图任务无法恢复，请重新扩图"
+    return "扩图服务处理失败，请稍后重试"
+
+
+async def _notify_accepted(
+    callback: AcceptedCallback | None,
+    provider_task_id: str,
+    polling_url: str,
+) -> None:
+    if callback is None:
+        return
+    result = callback(provider_task_id, polling_url)
+    if inspect.isawaitable(result):
+        await result
+
+
+def _validate_fast_mode_geometry(
+    prepared: PreparedOutpaintingImage,
+    geometry: OutpaintingGeometry,
+) -> None:
+    if prepared.processing_width < MIN_CANVAS_SIDE or prepared.processing_height < MIN_CANVAS_SIDE:
+        raise OutpaintingValidationError(
+            f"fast 模式要求原图每边至少 {MIN_CANVAS_SIDE}px"
+        )
+    long_side = max(prepared.processing_width, prepared.processing_height)
+    short_side = min(prepared.processing_width, prepared.processing_height)
+    if short_side <= 0 or long_side > short_side * 8:
+        raise OutpaintingValidationError("fast 模式要求原图宽高比不超过 8:1")
+    if geometry.provider_width < MIN_CANVAS_SIDE or geometry.provider_height < MIN_CANVAS_SIDE:
+        raise OutpaintingValidationError(
+            f"扩图结果不能小于 {MIN_CANVAS_SIDE} × {MIN_CANVAS_SIDE}px"
+        )
 
 
 def _result_cost(item: dict[str, Any] | None) -> float | None:
@@ -778,12 +895,6 @@ def _result_cost(item: dict[str, Any] | None) -> float | None:
             return None
         return parsed if math.isfinite(parsed) else None
     return None
-
-
-def _result_status(item: dict[str, Any] | None) -> str:
-    if not item:
-        return ""
-    return str(item.get("status") or item.get("state") or "").strip().lower()
 
 
 def _retry_after_seconds(response: httpx.Response | None, fallback: float, cap: float) -> float:
@@ -815,9 +926,9 @@ def _validate_result_url(raw_url: str, allowed_host_suffixes: tuple[str, ...]) -
     try:
         parsed = urlsplit(raw_url)
     except Exception as exc:
-        raise RunwareOutpaintingError("扩图结果地址无效，请稍后重试") from exc
+        raise BflOutpaintingError("扩图结果地址无效，请稍后重试") from exc
     if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
-        raise RunwareOutpaintingError("扩图结果地址无效，请稍后重试")
+        raise BflOutpaintingError("扩图结果地址无效，请稍后重试")
     hostname = parsed.hostname.casefold().rstrip(".")
     allowed = tuple(
         suffix.casefold().strip().lstrip(".").rstrip(".")
@@ -825,15 +936,15 @@ def _validate_result_url(raw_url: str, allowed_host_suffixes: tuple[str, ...]) -
         if suffix.strip().lstrip(".").rstrip(".")
     )
     if not allowed or not any(hostname == suffix or hostname.endswith("." + suffix) for suffix in allowed):
-        raise RunwareOutpaintingError("扩图结果地址不受信任，请稍后重试")
+        raise BflOutpaintingError("扩图结果地址不受信任，请稍后重试")
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".local"):
-        raise RunwareOutpaintingError("扩图结果地址无效，请稍后重试")
+        raise BflOutpaintingError("扩图结果地址无效，请稍后重试")
     try:
         address = ipaddress.ip_address(hostname)
     except ValueError:
         return
     if not address.is_global:
-        raise RunwareOutpaintingError("扩图结果地址无效，请稍后重试")
+        raise BflOutpaintingError("扩图结果地址无效，请稍后重试")
 
 
 class _TransientDownloadError(RuntimeError):
@@ -864,7 +975,7 @@ async def _download_once(
                 if response.status_code in {301, 302, 303, 307, 308}:
                     location = str(response.headers.get("Location") or "").strip()
                     if not location or redirect_count >= max_redirects:
-                        raise RunwareOutpaintingError("扩图结果下载重定向无效，请稍后重试")
+                        raise BflOutpaintingError("扩图结果下载重定向无效，请稍后重试")
                     current_url = urljoin(current_url, location)
                     continue
                 if response.status_code in _TRANSIENT_HTTP_STATUSES:
@@ -877,20 +988,20 @@ async def _download_once(
                         if response.status_code in {401, 402, 403, 422, 429} or response.status_code >= 500
                         else "扩图结果下载失败，请稍后重试"
                     )
-                    raise RunwareOutpaintingError(
+                    raise BflOutpaintingError(
                         mapped,
                         diagnostic=f"download HTTP {response.status_code}",
                         http_status=response.status_code,
                     )
                 content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
                 if not content_type.startswith("image/"):
-                    raise RunwareOutpaintingError(
+                    raise BflOutpaintingError(
                         "扩图结果不是有效图片，请稍后重试",
                         diagnostic=f"download content_type={_safe_text(content_type, 80)}",
                     )
                 raw_length = str(response.headers.get("Content-Length") or "").strip()
                 if raw_length.isdigit() and int(raw_length) > max_result_bytes:
-                    raise RunwareOutpaintingError("扩图结果文件过大，已停止下载")
+                    raise BflOutpaintingError("扩图结果文件过大，已停止下载")
                 chunks: list[bytes] = []
                 total = 0
                 async for chunk in response.aiter_bytes():
@@ -898,18 +1009,18 @@ async def _download_once(
                         continue
                     total += len(chunk)
                     if total > max_result_bytes:
-                        raise RunwareOutpaintingError("扩图结果文件过大，已停止下载")
+                        raise BflOutpaintingError("扩图结果文件过大，已停止下载")
                     chunks.append(chunk)
                 if not chunks:
-                    raise RunwareOutpaintingError("扩图结果图片为空，请稍后重试")
+                    raise BflOutpaintingError("扩图结果图片为空，请稍后重试")
                 return b"".join(chunks)
         except _TransientDownloadError:
             raise
-        except RunwareOutpaintingError:
+        except BflOutpaintingError:
             raise
         except httpx.RequestError as exc:
             raise _TransientDownloadError(type(exc).__name__) from exc
-    raise RunwareOutpaintingError("扩图结果下载重定向过多，请稍后重试")
+    raise BflOutpaintingError("扩图结果下载重定向过多，请稍后重试")
 
 
 def _validate_and_save_result(
@@ -927,9 +1038,9 @@ def _validate_and_save_result(
             dimensions = probe.size
             probe.verify()
         if image_format != "PNG":
-            raise RunwareOutpaintingError("扩图服务返回的图片格式不正确，请稍后重试")
+            raise BflOutpaintingError("扩图服务返回的图片格式不正确，请稍后重试")
         if dimensions != (geometry.provider_width, geometry.provider_height):
-            raise RunwareOutpaintingError(
+            raise BflOutpaintingError(
                 "扩图结果尺寸不正确，请稍后重试",
                 diagnostic=(
                     f"provider_expected={geometry.provider_width}x{geometry.provider_height} "
@@ -945,7 +1056,7 @@ def _validate_and_save_result(
             or crop_box[2] <= crop_box[0]
             or crop_box[3] <= crop_box[1]
         ):
-            raise RunwareOutpaintingError(
+            raise BflOutpaintingError(
                 "扩图结果裁剪范围无效，请稍后重试",
                 diagnostic=(
                     f"crop={crop_box} provider="
@@ -965,21 +1076,21 @@ def _validate_and_save_result(
         finally:
             converted.close()
         if safe_image.size != (geometry.expected_width, geometry.expected_height):
-            raise RunwareOutpaintingError(
+            raise BflOutpaintingError(
                 "扩图结果裁剪尺寸不正确，请稍后重试",
                 diagnostic=(
                     f"expected={geometry.expected_width}x{geometry.expected_height} "
                     f"actual={safe_image.size[0]}x{safe_image.size[1]}"
                 ),
             )
-    except RunwareOutpaintingError:
+    except BflOutpaintingError:
         if safe_image is not None:
             safe_image.close()
         raise
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError) as exc:
         if safe_image is not None:
             safe_image.close()
-        raise RunwareOutpaintingError("扩图结果图片损坏，请稍后重试") from exc
+        raise BflOutpaintingError("扩图结果图片损坏，请稍后重试") from exc
 
     safe_user = "".join(
         char for char in str(user_id or "").strip() if char.isalnum() or char in {"-", "_"}
@@ -1040,7 +1151,7 @@ async def _download_result(
                     if status_code is not None
                     else "扩图结果下载网络失败，请稍后重试"
                 )
-                raise RunwareOutpaintingError(
+                raise BflOutpaintingError(
                     public_message,
                     diagnostic=f"download transient retries={attempt + 1} error={_safe_text(exc, 120)}",
                     http_status=status_code,
@@ -1051,23 +1162,21 @@ async def _download_result(
                 retry_backoff_cap_seconds,
             )
             await asyncio.sleep(delay)
-    raise RunwareOutpaintingError("扩图结果下载失败，请稍后重试")
+    raise BflOutpaintingError("扩图结果下载失败，请稍后重试")
 
 
 async def run_outpainting(
     *,
     api_key: str,
-    api_url: str = RUNWARE_API_URL,
-    model: str = RUNWARE_MODEL,
+    api_url: str = BFL_API_URL,
     mode: str,
-    output_format: str = "PNG",
-    output_quality: int = 95,
+    output_format: str = "png",
     auto_crop: bool = False,
-    ttl_seconds: int = 3600,
-    result_host_suffixes: tuple[str, ...] = ("runware.ai",),
+    result_host_suffixes: tuple[str, ...] = ("delivery.bfl.ai", "bfl.ai"),
     prepared: PreparedOutpaintingImage | None,
     geometry: OutpaintingGeometry,
-    provider_task_uuid: str,
+    provider_task_id: str = "",
+    polling_url: str = "",
     output_root: Path,
     user_id: str,
     job_id: str,
@@ -1080,181 +1189,136 @@ async def run_outpainting(
     result_download_retry_count: int,
     submit_request: bool = True,
     on_progress: ProgressCallback | None = None,
-) -> RunwareOutpaintingResult:
-    """Submit once or resume by polling the same UUID, then validate and save."""
-    api_url = str(api_url or "").strip().rstrip("/") + "/"
-    parsed_api_url = urlsplit(api_url)
-    if (
-        parsed_api_url.scheme.lower() != "https"
-        or parsed_api_url.hostname != "api.runware.ai"
-        or parsed_api_url.path.rstrip("/") != "/v1"
-        or parsed_api_url.query
-        or parsed_api_url.fragment
-        or parsed_api_url.username
-        or parsed_api_url.password
-    ):
-        raise RunwareOutpaintingError(
-            "扩图服务配置无效，请联系管理员",
-            diagnostic="RUNWARE_API_URL must equal https://api.runware.ai/v1",
-        )
-    if model != RUNWARE_MODEL:
-        raise RunwareOutpaintingError(
-            "扩图服务配置无效，请联系管理员",
-            diagnostic=f"unsupported model={_safe_text(model, 80)}",
-        )
-    if str(mode).casefold() != "fast":
-        raise RunwareOutpaintingError(
+    on_accepted: AcceptedCallback | None = None,
+) -> BflOutpaintingResult:
+    """Submit to BFL outpainting-v1, persist the returned id, then poll and save."""
+    api_url = _normalized_bfl_api_url(api_url)
+    normalized_mode = str(mode or "").strip().casefold()
+    if normalized_mode not in BFL_ALLOWED_MODES:
+        raise BflOutpaintingError(
             "扩图服务配置无效，请联系管理员",
             diagnostic=f"unsupported mode={_safe_text(mode, 40)}",
         )
-    if str(output_format).upper() != "PNG" or auto_crop:
-        raise RunwareOutpaintingError(
+    if str(output_format or "").strip().lower() != "png" or auto_crop:
+        raise BflOutpaintingError(
             "扩图服务配置无效，请联系管理员",
-            diagnostic="outpainting requires PNG and autoCrop=false",
+            diagnostic="outpainting requires PNG and auto_crop=false",
         )
-    output_quality = max(1, min(100, int(output_quality)))
-    ttl_seconds = max(60, min(86_400, int(ttl_seconds)))
+    if submit_request:
+        if prepared is None:
+            raise BflOutpaintingError(
+                "扩图服务内部状态无效，请稍后重试",
+                diagnostic="prepared image is required for submission",
+            )
+        if normalized_mode == "fast":
+            _validate_fast_mode_geometry(prepared, geometry)
+    else:
+        provider_task_id = str(provider_task_id or "").strip()
+        polling_url = str(polling_url or "").strip()
+        if polling_url:
+            polling_url = _validate_bfl_polling_url(polling_url)
+        elif provider_task_id:
+            polling_url = _fallback_polling_url(api_url, provider_task_id)
+        else:
+            raise BflOutpaintingError(
+                "扩图任务无法恢复，请重新扩图",
+                diagnostic="resume requires provider_task_id or polling_url",
+            )
+
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "accept": "application/json",
+        "x-key": api_key,
         "Content-Type": "application/json",
     }
-    if submit_request and prepared is None:
-        raise RunwareOutpaintingError(
-            "扩图服务内部状态无效，请稍后重试",
-            diagnostic="prepared image is required for submission",
-        )
-    submission_body = None
-    if prepared is not None:
-        submission_body = [
-            {
-                "taskType": "imageInference",
-                "taskUUID": provider_task_uuid,
-                "model": model,
-                "deliveryMethod": "async",
-                "numberResults": 1,
-                "inputs": {"image": prepared.data_uri},
-                "outpaint": geometry.provider_margins(),
-                "settings": {"autoCrop": auto_crop, "mode": mode},
-                "outputType": "URL",
-                "outputFormat": output_format,
-                "outputQuality": output_quality,
-                "includeCost": True,
-                "ttl": ttl_seconds,
-            }
-        ]
-    polling_body = [{"taskType": "getResponse", "taskUUID": provider_task_uuid}]
+    poll_headers = {
+        "accept": "application/json",
+        "x-key": api_key,
+    }
     request_timeout = min(60.0, max(1.0, timeout_seconds))
     timeout = httpx.Timeout(request_timeout, connect=min(20.0, request_timeout))
     result_url = ""
     cost: float | None = None
-    submission_ambiguous = False
-    initial_poll_delay = 0.0
     deadline = time.monotonic() + timeout_seconds
+    submit_url = f"{api_url}{BFL_OUTPAINTING_PATH}"
 
     if submit_request:
-        assert prepared is not None and submission_body is not None
+        assert prepared is not None
         logger.info(
-            "Runware outpainting submit task=%s processing=%sx%s exact=%sx%s "
-            "provider=%sx%s requested_margins=%s provider_margins=%s mode=%s",
-            provider_task_uuid,
+            "BFL outpainting submit processing=%sx%s exact=%sx%s "
+            "canvas=%sx%s offset=(%s,%s) requested_margins=%s mode=%s",
             prepared.processing_width,
             prepared.processing_height,
             geometry.expected_width,
             geometry.expected_height,
             geometry.provider_width,
             geometry.provider_height,
+            geometry.provider_left,
+            geometry.provider_top,
             geometry.requested_margins(),
-            geometry.provider_margins(),
-            mode,
+            normalized_mode,
         )
     else:
-        submission_ambiguous = True
         logger.info(
-            "Runware outpainting resume task=%s exact=%sx%s provider=%sx%s",
-            provider_task_uuid,
+            "BFL outpainting resume task=%s exact=%sx%s canvas=%sx%s",
+            _safe_text(provider_task_id, 80),
             geometry.expected_width,
             geometry.expected_height,
             geometry.provider_width,
             geometry.provider_height,
         )
+
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         if submit_request:
+            assert prepared is not None
+            submission_body = {
+                "input_image": _raw_base64_from_data_uri(prepared.data_uri),
+                "width": geometry.provider_width,
+                "height": geometry.provider_height,
+                "reference_offset_x": geometry.provider_left,
+                "reference_offset_y": geometry.provider_top,
+                "output_format": "png",
+                "mode": normalized_mode,
+                "auto_crop": False,
+            }
             try:
-                response = await client.post(api_url, headers=headers, json=submission_body)
+                response = await client.post(submit_url, headers=headers, json=submission_body)
             except httpx.RequestError as exc:
-                submission_ambiguous = True
-                initial_poll_delay = min(
-                    retry_backoff_cap_seconds,
-                    max(0.0, retry_backoff_seconds),
-                )
-                logger.warning(
-                    "Runware outpainting submission ambiguous task=%s error=%s; polling original UUID",
-                    provider_task_uuid,
-                    type(exc).__name__,
-                )
-            else:
-                payload = _json_payload(response)
+                raise BflOutpaintingError(
+                    "扩图服务连接失败，请稍后重试",
+                    diagnostic=f"submit {type(exc).__name__}",
+                ) from exc
+            payload = _json_payload(response)
+            if response.status_code in _TRANSIENT_HTTP_STATUSES or not response.is_success:
                 if response.status_code in _TRANSIENT_HTTP_STATUSES:
-                    submission_ambiguous = True
-                    initial_poll_delay = _retry_after_seconds(
-                        response,
-                        retry_backoff_seconds,
-                        retry_backoff_cap_seconds,
-                    )
-                    logger.warning(
-                        "Runware outpainting submission ambiguous task=%s http=%s; polling original UUID",
-                        provider_task_uuid,
-                        response.status_code,
-                    )
-                elif not response.is_success:
-                    _raise_payload_errors(payload, fallback_status=response.status_code)
-                    raise RunwareOutpaintingError(
-                        public_error_for_status(response.status_code),
-                        diagnostic=f"submit HTTP {response.status_code}",
+                    raise BflOutpaintingError(
+                        "扩图服务连接失败，请稍后重试",
+                        diagnostic=f"submit HTTP {response.status_code} ambiguous",
                         http_status=response.status_code,
                     )
-                else:
-                    # Runware may return HTTP 200 with an errors array. Retryable provider
-                    # errors are treated as ambiguous acceptance, so we only poll the
-                    # original UUID and never create a second paid task.
-                    if _payload_has_retryable_errors(payload):
-                        submission_ambiguous = True
-                        initial_poll_delay = min(
-                            retry_backoff_cap_seconds,
-                            max(0.0, retry_backoff_seconds),
-                        )
-                    else:
-                        _raise_payload_errors(payload, fallback_status=response.status_code)
-                    item = _select_task_item(payload, provider_task_uuid)
-                    status = _result_status(item)
-                    if status in _FAILED_STATUSES:
-                        raise RunwareOutpaintingError(
-                            "扩图服务处理失败，请稍后重试",
-                            diagnostic=f"submit terminal status={_safe_text(status, 40)}",
-                        )
-                    result_url = _result_url(item)
-                    cost = _result_cost(item)
+                _raise_bfl_http_error(response, payload=payload)
+            provider_task_id, polling_url, cost = _accepted_task(payload)
+            try:
+                await _notify_accepted(on_accepted, provider_task_id, polling_url)
+            except Exception:
+                logger.exception(
+                    "BFL outpainting accepted-id persistence failed: job=%s task=%s",
+                    job_id,
+                    _safe_text(provider_task_id, 80),
+                )
 
         await _notify(on_progress, 20, "polling")
-        if initial_poll_delay > 0:
-            await asyncio.sleep(initial_poll_delay)
         transient_failures = 0
         polls = 0
         while not result_url:
             if time.monotonic() >= deadline:
-                raise RunwareOutpaintingError("扩图服务处理超时，请稍后重试")
+                raise BflOutpaintingError("扩图服务处理超时，请稍后重试")
             polls += 1
-            poll_response: httpx.Response | None = None
             try:
-                poll_response = await client.post(
-                    api_url,
-                    headers=headers,
-                    json=polling_body,
-                )
+                poll_response = await client.get(polling_url, headers=poll_headers)
             except httpx.RequestError as exc:
                 transient_failures += 1
                 if transient_failures > transient_retry_count:
-                    raise RunwareOutpaintingError(
+                    raise BflOutpaintingError(
                         "扩图服务连接失败，请稍后重试",
                         diagnostic=f"poll request retries={transient_failures} error={type(exc).__name__}",
                     ) from exc
@@ -1270,7 +1334,7 @@ async def run_outpainting(
             if poll_response.status_code in _TRANSIENT_HTTP_STATUSES:
                 transient_failures += 1
                 if transient_failures > transient_retry_count:
-                    raise RunwareOutpaintingError(
+                    raise BflOutpaintingError(
                         public_error_for_status(poll_response.status_code),
                         diagnostic=f"poll HTTP {poll_response.status_code} retries={transient_failures}",
                         http_status=poll_response.status_code,
@@ -1283,59 +1347,31 @@ async def run_outpainting(
                 await asyncio.sleep(delay)
                 continue
             if not poll_response.is_success:
-                _raise_payload_errors(poll_payload, fallback_status=poll_response.status_code)
-                raise RunwareOutpaintingError(
-                    public_error_for_status(poll_response.status_code),
-                    diagnostic=f"poll HTTP {poll_response.status_code}",
-                    http_status=poll_response.status_code,
-                )
-
-            if _payload_has_retryable_errors(poll_payload):
-                transient_failures += 1
-                if transient_failures > transient_retry_count:
-                    _raise_payload_errors(poll_payload, fallback_status=poll_response.status_code)
-                await asyncio.sleep(
-                    min(
-                        retry_backoff_cap_seconds,
-                        retry_backoff_seconds * (2 ** (transient_failures - 1)),
-                    )
-                )
-                continue
+                _raise_bfl_http_error(poll_response, payload=poll_payload)
 
             transient_failures = 0
-            try:
-                _raise_payload_errors(poll_payload, fallback_status=poll_response.status_code)
-            except RunwareOutpaintingError as exc:
-                # A just-accepted async task may not be queryable immediately.  If the
-                # submission outcome was ambiguous, allow a few bounded same-UUID polls.
-                lower_diagnostic = exc.diagnostic.casefold()
-                not_ready = any(token in lower_diagnostic for token in ("not found", "not_found", "unknown task"))
-                if submission_ambiguous and not_ready and polls <= transient_retry_count:
-                    await asyncio.sleep(min(retry_backoff_cap_seconds, poll_interval_seconds * polls))
-                    continue
-                raise
-            item = _select_task_item(poll_payload, provider_task_uuid)
-            if item is None and not submit_request and polls > transient_retry_count:
-                raise RunwareOutpaintingError(
-                    "扩图任务无法恢复，请重新扩图",
-                    diagnostic=f"recovery task not found after polls={polls}",
-                )
-            status = _result_status(item)
-            if status in _FAILED_STATUSES:
-                raise RunwareOutpaintingError(
-                    "扩图服务处理失败，请稍后重试",
+            status = _poll_status(poll_payload)
+            if status in BFL_FAILURE_STATUSES:
+                raise BflOutpaintingError(
+                    _public_error_for_bfl_status(status),
                     diagnostic=f"poll terminal status={_safe_text(status, 40)}",
                 )
-            result_url = _result_url(item)
-            polled_cost = _result_cost(item)
+            polled_cost = _result_cost(poll_payload)
             if polled_cost is not None:
                 cost = polled_cost
-            if result_url:
-                break
+            if status == BFL_READY_STATUS or status not in BFL_PENDING_STATUSES:
+                result_url = _poll_result_url(poll_payload)
+                if result_url:
+                    break
+                if status == BFL_READY_STATUS:
+                    raise BflOutpaintingError(
+                        "扩图服务返回无效响应，请稍后重试",
+                        diagnostic="ready response missing result.sample",
+                    )
             await _notify(on_progress, min(75, 20 + polls * 3), "polling")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise RunwareOutpaintingError("扩图服务处理超时，请稍后重试")
+                raise BflOutpaintingError("扩图服务处理超时，请稍后重试")
             await asyncio.sleep(min(poll_interval_seconds, remaining))
 
         await _notify(on_progress, 85, "downloading")
@@ -1352,9 +1388,10 @@ async def run_outpainting(
             retry_backoff_seconds=retry_backoff_seconds,
             retry_backoff_cap_seconds=retry_backoff_cap_seconds,
         )
-    return RunwareOutpaintingResult(
+    return BflOutpaintingResult(
         image_url=local_url,
-        provider_task_uuid=provider_task_uuid,
+        provider_task_id=provider_task_id,
+        polling_url=polling_url,
         cost=cost,
         width=geometry.expected_width,
         height=geometry.expected_height,

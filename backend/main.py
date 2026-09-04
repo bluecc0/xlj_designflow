@@ -96,12 +96,13 @@ from .agent_mode import (
 )
 from .psd_layered import create_layered_psd_from_image
 from .matting_service import matting_service
-from .runware_outpainting import (
+from .bfl_outpainting import (
+    BFL_ALLOWED_MODES,
+    BFL_OUTPAINTING_MODEL,
     MAX_OUTPUT_PIXELS,
     MAX_OUTPUT_SIDE,
-    RUNWARE_MODEL,
+    BflOutpaintingError,
     OutpaintingValidationError,
-    RunwareOutpaintingError,
     PreparedOutpaintingImage,
     OutpaintingGeometry,
     discard_prepared_source_snapshot,
@@ -152,7 +153,7 @@ from .job_store import (
     load_ai_image_job,
     load_ai_image_jobs,
     load_ai_image_job_by_client_request_id,
-    load_active_runware_outpainting_jobs,
+    load_active_outpainting_jobs,
     load_ai_image_job_by_image_url,
     load_job,
     count_operation_logs,
@@ -361,11 +362,11 @@ def _ensure_ui_build() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    app.state.runware_outpainting_semaphore = asyncio.Semaphore(
-        max(1, int(settings.runware_outpainting_max_concurrency or 2))
+    app.state.outpainting_semaphore = asyncio.Semaphore(
+        max(1, int(settings.bfl_outpainting_max_concurrency or 2))
     )
-    app.state.runware_outpainting_tasks = set()
-    app.state.runware_outpainting_claims = {}
+    app.state.outpainting_tasks = set()
+    app.state.outpainting_claims = {}
     await asyncio.to_thread(_ensure_ui_build)
     if settings.matting_enabled:
         app.state.matting_warmup_task = asyncio.create_task(
@@ -375,14 +376,14 @@ async def lifespan(app: FastAPI):
         asyncio.to_thread(_migrate_inspiration_thumbnails)
     )
     app.state.database_backup_task = asyncio.create_task(_database_backup_loop())
-    app.state.runware_outpainting_recovery_task = None
+    app.state.outpainting_recovery_task = None
     if (
-        settings.runware_outpainting_enabled
-        and settings.runware_api_key.strip()
+        settings.bfl_outpainting_enabled
+        and settings.bfl_api_key.strip()
         and not _outpainting_configuration_error()
     ):
-        app.state.runware_outpainting_recovery_task = _track_runware_outpainting_task(
-            _recover_runware_outpainting_jobs()
+        app.state.outpainting_recovery_task = _track_outpainting_task(
+            _recover_outpainting_jobs()
         )
     app.state.sub2api_monitor_task = None
     if (
@@ -404,7 +405,7 @@ async def lifespan(app: FastAPI):
         if backup_task:
             backup_task.cancel()
             await asyncio.gather(backup_task, return_exceptions=True)
-        outpainting_tasks = list(getattr(app.state, "runware_outpainting_tasks", set()))
+        outpainting_tasks = list(getattr(app.state, "outpainting_tasks", set()))
         for task in outpainting_tasks:
             task.cancel()
         if outpainting_tasks:
@@ -1145,106 +1146,105 @@ def _outpainting_effective_limits() -> dict[str, int]:
 
 def _outpainting_configuration_error() -> str:
     try:
-        api_url = urlsplit(str(settings.runware_api_url or ""))
+        api_url = urlsplit(str(settings.bfl_api_url or ""))
     except Exception:
-        return "RUNWARE_API_URL 无效"
+        return "BFL_API_URL 无效"
+    path = api_url.path.rstrip("/")
     if (
         api_url.scheme.lower() != "https"
-        or api_url.hostname != "api.runware.ai"
-        or api_url.path.rstrip("/") != "/v1"
+        or (api_url.hostname or "").casefold().rstrip(".") != "api.bfl.ai"
+        or path not in {"", "/"}
         or api_url.query
         or api_url.fragment
         or api_url.username
         or api_url.password
     ):
-        return "RUNWARE_API_URL 必须为 https://api.runware.ai/v1"
-    if settings.runware_outpainting_model != RUNWARE_MODEL:
-        return f"RUNWARE_OUTPAINTING_MODEL 必须为 {RUNWARE_MODEL}"
-    if settings.runware_outpainting_mode != "fast":
-        return "RUNWARE_OUTPAINTING_MODE 必须为 fast"
-    if settings.runware_outpainting_output_format != "PNG":
-        return "RUNWARE_OUTPAINTING_OUTPUT_FORMAT 必须为 PNG"
-    if settings.runware_outpainting_auto_crop:
-        return "RUNWARE_OUTPAINTING_AUTO_CROP 必须为 false"
-    if int(settings.runware_outpainting_max_concurrency) < 1:
-        return "RUNWARE_OUTPAINTING_MAX_CONCURRENCY 必须至少为 1"
-    if int(settings.runware_outpainting_max_queue_size) < 0:
-        return "RUNWARE_OUTPAINTING_MAX_QUEUE_SIZE 不能为负数"
-    if int(settings.runware_outpainting_max_pending_per_user) < 1:
-        return "RUNWARE_OUTPAINTING_MAX_PENDING_PER_USER 必须至少为 1"
-    if int(settings.runware_outpainting_max_request_bytes) < 1024:
-        return "RUNWARE_OUTPAINTING_MAX_REQUEST_BYTES 必须至少为 1024"
+        return "BFL_API_URL 必须为 https://api.bfl.ai"
+    if settings.bfl_outpainting_mode not in BFL_ALLOWED_MODES:
+        return "BFL_OUTPAINTING_MODE 必须为 fast 或 high"
+    if settings.bfl_outpainting_output_format != "PNG":
+        return "BFL_OUTPAINTING_OUTPUT_FORMAT 必须为 PNG"
+    if settings.bfl_outpainting_auto_crop:
+        return "BFL_OUTPAINTING_AUTO_CROP 必须为 false"
+    if int(settings.bfl_outpainting_max_concurrency) < 1:
+        return "BFL_OUTPAINTING_MAX_CONCURRENCY 必须至少为 1"
+    if int(settings.bfl_outpainting_max_queue_size) < 0:
+        return "BFL_OUTPAINTING_MAX_QUEUE_SIZE 不能为负数"
+    if int(settings.bfl_outpainting_max_pending_per_user) < 1:
+        return "BFL_OUTPAINTING_MAX_PENDING_PER_USER 必须至少为 1"
+    if int(settings.bfl_outpainting_max_request_bytes) < 1024:
+        return "BFL_OUTPAINTING_MAX_REQUEST_BYTES 必须至少为 1024"
     result_host_suffixes = _outpainting_result_host_suffixes()
     if not result_host_suffixes:
-        return "RUNWARE_OUTPAINTING_RESULT_HOST_SUFFIXES 不能为空"
+        return "BFL_OUTPAINTING_RESULT_HOST_SUFFIXES 不能为空"
     if any(
-        suffix != "runware.ai" and not suffix.endswith(".runware.ai")
+        suffix != "bfl.ai" and not suffix.endswith(".bfl.ai")
         for suffix in result_host_suffixes
     ):
-        return "RUNWARE_OUTPAINTING_RESULT_HOST_SUFFIXES 仅支持 runware.ai 域名"
+        return "BFL_OUTPAINTING_RESULT_HOST_SUFFIXES 仅支持 bfl.ai 域名"
     return ""
 
 
 def _outpainting_result_host_suffixes() -> tuple[str, ...]:
     return tuple(
         value.strip().casefold().lstrip(".")
-        for value in str(settings.runware_outpainting_result_host_suffixes or "").split(",")
+        for value in str(settings.bfl_outpainting_result_host_suffixes or "").split(",")
         if value.strip().lstrip(".")
     )
 
 
-_runware_outpainting_submit_lock = threading.Lock()
+_outpainting_submit_lock = threading.Lock()
 
 
 class _OutpaintingCapacityError(RuntimeError):
     pass
 
 
-def _runware_outpainting_runtime() -> tuple[asyncio.Semaphore, set[asyncio.Task]]:
-    semaphore = getattr(app.state, "runware_outpainting_semaphore", None)
+def _outpainting_runtime() -> tuple[asyncio.Semaphore, set[asyncio.Task]]:
+    semaphore = getattr(app.state, "outpainting_semaphore", None)
     if semaphore is None:
         semaphore = asyncio.Semaphore(
-            max(1, int(settings.runware_outpainting_max_concurrency or 2))
+            max(1, int(settings.bfl_outpainting_max_concurrency or 2))
         )
-        app.state.runware_outpainting_semaphore = semaphore
-    tasks = getattr(app.state, "runware_outpainting_tasks", None)
+        app.state.outpainting_semaphore = semaphore
+    tasks = getattr(app.state, "outpainting_tasks", None)
     if tasks is None:
         tasks = set()
-        app.state.runware_outpainting_tasks = tasks
+        app.state.outpainting_tasks = tasks
     return semaphore, tasks
 
 
-def _runware_outpainting_claims() -> dict[str, str]:
-    claims = getattr(app.state, "runware_outpainting_claims", None)
+def _outpainting_claims() -> dict[str, str]:
+    claims = getattr(app.state, "outpainting_claims", None)
     if claims is None:
         claims = {}
-        app.state.runware_outpainting_claims = claims
+        app.state.outpainting_claims = claims
     return claims
 
 
-def _release_runware_outpainting_claim(job_id: str) -> None:
+def _release_outpainting_claim(job_id: str) -> None:
     if not job_id:
         return
-    with _runware_outpainting_submit_lock:
-        _runware_outpainting_claims().pop(job_id, None)
+    with _outpainting_submit_lock:
+        _outpainting_claims().pop(job_id, None)
 
 
-def _track_runware_outpainting_task(
+def _track_outpainting_task(
     coroutine,
     *,
     claimed_job_id: str = "",
 ) -> asyncio.Task:
-    _semaphore, tasks = _runware_outpainting_runtime()
+    _semaphore, tasks = _outpainting_runtime()
     try:
         task = asyncio.create_task(coroutine)
     except Exception:
-        _release_runware_outpainting_claim(claimed_job_id)
+        _release_outpainting_claim(claimed_job_id)
         raise
     tasks.add(task)
 
     def _discard(completed: asyncio.Task) -> None:
         tasks.discard(completed)
-        _release_runware_outpainting_claim(claimed_job_id)
+        _release_outpainting_claim(claimed_job_id)
         if completed.cancelled():
             return
         try:
@@ -1253,7 +1253,7 @@ def _track_runware_outpainting_task(
             return
         if error is not None:
             logger.error(
-                "Runware outpainting background task escaped worker handling: %s",
+                "BFL outpainting background task escaped worker handling: %s",
                 type(error).__name__,
             )
 
@@ -1286,30 +1286,40 @@ def _discard_outpainting_source_snapshot(request_meta: dict | None, user_id: str
     )
 
 
-async def _run_runware_outpainting_background(
+async def _run_outpainting_background(
     job_id: str,
     user: dict,
     prepared: PreparedOutpaintingImage | None,
     geometry: OutpaintingGeometry,
-    provider_task_uuid: str,
+    provider_task_id: str,
     request_meta: dict,
     created_at: float,
     *,
     resume_only: bool = False,
+    polling_url: str = "",
 ) -> None:
-    prompt = "Runware FLUX outpainting"
+    prompt = "FLUX outpainting"
     user_id = str(user.get("id") or "")
-    semaphore, _tasks = _runware_outpainting_runtime()
+    semaphore, _tasks = _outpainting_runtime()
+    accepted = {
+        "provider_task_id": str(provider_task_id or "").strip(),
+        "polling_url": str(polling_url or "").strip(),
+    }
 
     def persist_processing(progress: int, phase: str) -> None:
+        if accepted["provider_task_id"]:
+            request_meta["provider_task_id"] = accepted["provider_task_id"]
+            request_meta["provider_task_uuid"] = accepted["provider_task_id"]
+        if accepted["polling_url"]:
+            request_meta["polling_url"] = accepted["polling_url"]
         progress_meta = {**request_meta, "phase": phase}
         try:
             save_ai_image_job(
                 job_id=job_id,
                 user_id=user_id,
                 status="processing",
-                model=RUNWARE_MODEL,
-                provider="runware",
+                model=BFL_OUTPAINTING_MODEL,
+                provider="bfl",
                 prompt=prompt,
                 original_prompt=prompt,
                 resolved_prompt=prompt,
@@ -1318,21 +1328,29 @@ async def _run_runware_outpainting_background(
                 has_reference=True,
                 reference_count=1,
                 request_meta=progress_meta,
-                task_id=provider_task_uuid,
+                task_id=accepted["provider_task_id"],
                 progress=progress,
                 created_at=created_at,
             )
         except Exception:
             # A transient SQLite lock must not abandon an accepted paid task.
             logger.exception(
-                "Runware outpainting progress persistence failed: job=%s task=%s phase=%s",
+                "BFL outpainting progress persistence failed: job=%s task=%s phase=%s",
                 job_id,
-                provider_task_uuid,
+                accepted["provider_task_id"] or "-",
                 phase,
             )
 
     async def on_progress(progress: int, phase: str) -> None:
         await asyncio.to_thread(persist_processing, progress, phase)
+
+    async def on_accepted(task_id: str, poll_url: str) -> None:
+        accepted["provider_task_id"] = str(task_id or "").strip()
+        accepted["polling_url"] = str(poll_url or "").strip()
+        request_meta["provider_task_id"] = accepted["provider_task_id"]
+        request_meta["provider_task_uuid"] = accepted["provider_task_id"]
+        request_meta["polling_url"] = accepted["polling_url"]
+        await asyncio.to_thread(persist_processing, 15, "polling")
 
     result = None
     submission_attempted = False
@@ -1342,31 +1360,37 @@ async def _run_runware_outpainting_background(
             persist_processing(10 if not resume_only else 25, "submitting" if not resume_only else "recovering")
             submission_attempted = True
             result = await run_outpainting(
-                api_key=settings.runware_api_key,
-                api_url=settings.runware_api_url,
-                model=settings.runware_outpainting_model,
-                mode=settings.runware_outpainting_mode,
-                output_format=settings.runware_outpainting_output_format,
-                output_quality=settings.runware_outpainting_output_quality,
-                auto_crop=settings.runware_outpainting_auto_crop,
-                ttl_seconds=settings.runware_outpainting_ttl_seconds,
+                api_key=settings.bfl_api_key,
+                api_url=settings.bfl_api_url,
+                mode=settings.bfl_outpainting_mode,
+                output_format=settings.bfl_outpainting_output_format,
+                auto_crop=settings.bfl_outpainting_auto_crop,
                 result_host_suffixes=_outpainting_result_host_suffixes(),
                 prepared=prepared,
                 geometry=geometry,
-                provider_task_uuid=provider_task_uuid,
+                provider_task_id=accepted["provider_task_id"],
+                polling_url=accepted["polling_url"],
                 output_root=settings.output_path,
                 user_id=user_id,
                 job_id=job_id,
-                timeout_seconds=max(1.0, float(settings.runware_outpainting_timeout_seconds)),
-                poll_interval_seconds=max(0.1, float(settings.runware_outpainting_poll_interval_seconds)),
-                transient_retry_count=max(0, int(settings.runware_outpainting_transient_retries)),
-                retry_backoff_seconds=max(0.0, float(settings.runware_outpainting_retry_backoff_seconds)),
-                retry_backoff_cap_seconds=max(0.1, float(settings.runware_outpainting_retry_backoff_cap_seconds)),
-                max_result_bytes=max(1, int(settings.runware_outpainting_max_result_bytes)),
-                result_download_retry_count=max(0, int(settings.runware_outpainting_result_download_retries)),
+                timeout_seconds=max(1.0, float(settings.bfl_outpainting_timeout_seconds)),
+                poll_interval_seconds=max(0.1, float(settings.bfl_outpainting_poll_interval_seconds)),
+                transient_retry_count=max(0, int(settings.bfl_outpainting_transient_retries)),
+                retry_backoff_seconds=max(0.0, float(settings.bfl_outpainting_retry_backoff_seconds)),
+                retry_backoff_cap_seconds=max(0.1, float(settings.bfl_outpainting_retry_backoff_cap_seconds)),
+                max_result_bytes=max(1, int(settings.bfl_outpainting_max_result_bytes)),
+                result_download_retry_count=max(0, int(settings.bfl_outpainting_result_download_retries)),
                 submit_request=not resume_only,
                 on_progress=on_progress,
+                on_accepted=on_accepted,
             )
+            if result.provider_task_id:
+                accepted["provider_task_id"] = result.provider_task_id
+                request_meta["provider_task_id"] = result.provider_task_id
+                request_meta["provider_task_uuid"] = result.provider_task_id
+            if result.polling_url:
+                accepted["polling_url"] = result.polling_url
+                request_meta["polling_url"] = result.polling_url
         final_meta = {
             **request_meta,
             "phase": "done",
@@ -1379,8 +1403,8 @@ async def _run_runware_outpainting_background(
             job_id=job_id,
             user_id=user_id,
             status="done",
-            model=RUNWARE_MODEL,
-            provider="runware",
+            model=BFL_OUTPAINTING_MODEL,
+            provider="bfl",
             prompt=prompt,
             original_prompt=prompt,
             resolved_prompt=prompt,
@@ -1390,7 +1414,7 @@ async def _run_runware_outpainting_background(
             has_reference=True,
             reference_count=1,
             request_meta=final_meta,
-            task_id=provider_task_uuid,
+            task_id=accepted["provider_task_id"],
             progress=100,
             created_at=created_at,
         )
@@ -1398,20 +1422,21 @@ async def _run_runware_outpainting_background(
         try:
             generate_inspiration_thumb(result.image_url, user_id, job_id)
         except Exception:
-            logger.exception("Runware outpainting thumbnail failed: job=%s", job_id)
+            logger.exception("BFL outpainting thumbnail failed: job=%s", job_id)
         try:
+            task_label = (accepted["provider_task_id"] or "-")[:8]
             log_operation(
                 user_id=user_id,
                 username=str(user.get("username") or ""),
                 action="ai_image_outpainting",
                 detail=(
-                    f"job={job_id[:8]} task={provider_task_uuid[:8]} result=done "
+                    f"job={job_id[:8]} task={task_label} result=done "
                     f"size={result.width}x{result.height}"
                 ),
                 payload=json.dumps(
                     {
                         "job_id": job_id,
-                        "provider_task_uuid": provider_task_uuid,
+                        "provider_task_id": accepted["provider_task_id"],
                         "image_url": result.image_url,
                         "width": result.width,
                         "height": result.height,
@@ -1421,10 +1446,10 @@ async def _run_runware_outpainting_background(
                 ),
             )
         except Exception:
-            logger.exception("Runware outpainting success operation log failed: job=%s", job_id)
+            logger.exception("BFL outpainting success operation log failed: job=%s", job_id)
     except asyncio.CancelledError:
         # Waiting on the semaphore (or cancelled before run_outpainting) never
-        # reached Runware. Keep a pre-submit phase so restart resubmits the UUID.
+        # reached BFL. Keep a pre-submit phase so restart resubmits.
         interrupt_phase = "interrupted" if (resume_only or submission_attempted) else "queued"
         interrupted_meta = {**request_meta, "phase": interrupt_phase}
         try:
@@ -1432,8 +1457,8 @@ async def _run_runware_outpainting_background(
                 job_id=job_id,
                 user_id=user_id,
                 status="processing",
-                model=RUNWARE_MODEL,
-                provider="runware",
+                model=BFL_OUTPAINTING_MODEL,
+                provider="bfl",
                 prompt=prompt,
                 original_prompt=prompt,
                 resolved_prompt=prompt,
@@ -1442,32 +1467,32 @@ async def _run_runware_outpainting_background(
                 has_reference=True,
                 reference_count=1,
                 request_meta=interrupted_meta,
-                task_id=provider_task_uuid,
+                task_id=accepted["provider_task_id"],
                 progress=20 if resume_only else 10,
                 created_at=created_at,
             )
         except Exception:
-            logger.exception("Runware outpainting interruption persistence failed: job=%s", job_id)
+            logger.exception("BFL outpainting interruption persistence failed: job=%s", job_id)
         raise
     except Exception as exc:
         if result is not None:
             logger.error(
-                "Runware outpainting result saved but final persistence failed: job=%s task=%s error=%s",
+                "BFL outpainting result saved but final persistence failed: job=%s task=%s error=%s",
                 job_id,
-                provider_task_uuid,
+                accepted["provider_task_id"] or "-",
                 type(exc).__name__,
             )
             return
-        if isinstance(exc, RunwareOutpaintingError):
+        if isinstance(exc, BflOutpaintingError):
             public_error = exc.public_message
             diagnostic = exc.diagnostic or type(exc).__name__
         else:
             public_error = "扩图服务处理失败，请稍后重试"
             diagnostic = type(exc).__name__
         logger.error(
-            "Runware outpainting failed: job=%s task=%s error=%s diagnostic=%s",
+            "BFL outpainting failed: job=%s task=%s error=%s diagnostic=%s",
             job_id,
-            provider_task_uuid,
+            accepted["provider_task_id"] or "-",
             type(exc).__name__,
             str(diagnostic)[:500],
         )
@@ -1477,8 +1502,8 @@ async def _run_runware_outpainting_background(
                 job_id=job_id,
                 user_id=user_id,
                 status="failed",
-                model=RUNWARE_MODEL,
-                provider="runware",
+                model=BFL_OUTPAINTING_MODEL,
+                provider="bfl",
                 prompt=prompt,
                 original_prompt=prompt,
                 resolved_prompt=prompt,
@@ -1487,45 +1512,46 @@ async def _run_runware_outpainting_background(
                 has_reference=True,
                 reference_count=1,
                 request_meta=failed_meta,
-                task_id=provider_task_uuid,
+                task_id=accepted["provider_task_id"],
                 error=public_error,
                 progress=100,
                 created_at=created_at,
             )
             _discard_outpainting_source_snapshot(request_meta, user_id)
         except Exception:
-            logger.exception("Runware outpainting failure persistence failed: job=%s", job_id)
+            logger.exception("BFL outpainting failure persistence failed: job=%s", job_id)
         try:
+            task_label = (accepted["provider_task_id"] or "-")[:8]
             log_operation(
                 user_id=user_id,
                 username=str(user.get("username") or ""),
                 action="ai_image_outpainting",
-                detail=f"job={job_id[:8]} task={provider_task_uuid[:8]} result=failed",
+                detail=f"job={job_id[:8]} task={task_label} result=failed",
                 payload=json.dumps(
                     {
                         "job_id": job_id,
-                        "provider_task_uuid": provider_task_uuid,
+                        "provider_task_id": accepted["provider_task_id"],
                         "error": public_error,
                     },
                     ensure_ascii=False,
                 ),
             )
         except Exception:
-            logger.exception("Runware outpainting failure operation log failed: job=%s", job_id)
+            logger.exception("BFL outpainting failure operation log failed: job=%s", job_id)
 
 
-async def _recover_runware_outpainting_jobs() -> None:
+async def _recover_outpainting_jobs() -> None:
     try:
-        jobs = await asyncio.to_thread(load_active_runware_outpainting_jobs)
+        jobs = await asyncio.to_thread(load_active_outpainting_jobs)
     except Exception:
-        logger.exception("Runware outpainting recovery scan failed")
+        logger.exception("BFL outpainting recovery scan failed")
         return
     if not jobs:
         return
 
-    logger.warning("Runware outpainting recovery found %s unfinished job(s)", len(jobs))
+    logger.warning("BFL outpainting recovery found %s unfinished job(s)", len(jobs))
     recoveries: list[
-        tuple[dict, OutpaintingGeometry, str, dict, PreparedOutpaintingImage | None, bool]
+        tuple[dict, OutpaintingGeometry, str, dict, PreparedOutpaintingImage | None, bool, str]
     ] = []
     for stored_job in jobs:
         job_id = str(stored_job.get("id") or "")
@@ -1533,10 +1559,13 @@ async def _recover_runware_outpainting_jobs() -> None:
         try:
             if not job_id or not isinstance(meta, dict):
                 raise OutpaintingValidationError("恢复元数据缺失")
-            provider_task_uuid = str(
-                stored_job.get("task_id") or meta.get("provider_task_uuid") or ""
-            )
-            provider_task_uuid = str(uuid.UUID(provider_task_uuid))
+            provider_task_id = str(
+                stored_job.get("task_id")
+                or meta.get("provider_task_id")
+                or meta.get("provider_task_uuid")
+                or ""
+            ).strip()
+            polling_url = str(meta.get("polling_url") or "").strip()
             geometry = resolve_geometry_from_meta(
                 meta,
                 max_width=MAX_OUTPUT_SIDE,
@@ -1556,9 +1585,12 @@ async def _recover_runware_outpainting_jobs() -> None:
                 raise OutpaintingValidationError("恢复尺寸不一致")
             resume_only = not is_pre_submit_phase(meta.get("phase"))
             prepared = None
-            if not resume_only:
-                # Queued jobs never reached Runware; rebuild the prepared image and
-                # resubmit the same UUID. Later phases may already have been submitted.
+            if resume_only:
+                if not provider_task_id and not polling_url:
+                    raise OutpaintingValidationError("恢复任务编号缺失")
+            else:
+                # Queued jobs never reached BFL; rebuild the prepared image and
+                # submit a new provider task. Later phases poll the accepted id.
                 prepared = load_prepared_source_snapshot(
                     str(meta.get("source_snapshot_url") or ""),
                     output_root=settings.output_path,
@@ -1566,11 +1598,11 @@ async def _recover_runware_outpainting_jobs() -> None:
                     meta=meta,
                 )
             recoveries.append(
-                (stored_job, geometry, provider_task_uuid, dict(meta), prepared, resume_only)
+                (stored_job, geometry, provider_task_id, dict(meta), prepared, resume_only, polling_url)
             )
         except Exception as exc:
             logger.error(
-                "Runware outpainting recovery metadata rejected: job=%s error=%s",
+                "BFL outpainting recovery metadata rejected: job=%s error=%s",
                 job_id or "-",
                 type(exc).__name__,
             )
@@ -1583,11 +1615,11 @@ async def _recover_runware_outpainting_jobs() -> None:
                     job_id=job_id,
                     user_id=str(stored_job.get("user_id") or ""),
                     status="failed",
-                    model=RUNWARE_MODEL,
-                    provider="runware",
-                    prompt=str(stored_job.get("prompt") or "Runware FLUX outpainting"),
-                    original_prompt=str(stored_job.get("original_prompt") or "Runware FLUX outpainting"),
-                    resolved_prompt=str(stored_job.get("resolved_prompt") or "Runware FLUX outpainting"),
+                    model=BFL_OUTPAINTING_MODEL,
+                    provider="bfl",
+                    prompt=str(stored_job.get("prompt") or "FLUX outpainting"),
+                    original_prompt=str(stored_job.get("original_prompt") or "FLUX outpainting"),
+                    resolved_prompt=str(stored_job.get("resolved_prompt") or "FLUX outpainting"),
                     size=str(stored_job.get("size") or ""),
                     resolution=str(stored_job.get("resolution") or ""),
                     has_reference=True,
@@ -1603,24 +1635,25 @@ async def _recover_runware_outpainting_jobs() -> None:
                     str(stored_job.get("user_id") or ""),
                 )
             except Exception:
-                logger.exception("Runware outpainting invalid recovery persistence failed: job=%s", job_id)
+                logger.exception("BFL outpainting invalid recovery persistence failed: job=%s", job_id)
 
-    concurrency = max(1, int(settings.runware_outpainting_max_concurrency or 2))
+    concurrency = max(1, int(settings.bfl_outpainting_max_concurrency or 2))
     for offset in range(0, len(recoveries), concurrency):
         batch = recoveries[offset:offset + concurrency]
         await asyncio.gather(
             *(
-                _run_runware_outpainting_background(
+                _run_outpainting_background(
                     str(job.get("id")),
                     {"id": str(job.get("user_id") or ""), "username": ""},
                     prepared,
                     geometry,
-                    provider_task_uuid,
+                    provider_task_id,
                     meta,
                     float(job.get("created_at") or time.time()),
                     resume_only=resume_only,
+                    polling_url=polling_url,
                 )
-                for job, geometry, provider_task_uuid, meta, prepared, resume_only in batch
+                for job, geometry, provider_task_id, meta, prepared, resume_only, polling_url in batch
             ),
             return_exceptions=True,
         )
@@ -4656,12 +4689,12 @@ def ai_image_outpainting_config():
     limits = _outpainting_effective_limits()
     return {
         "enabled": bool(
-            settings.runware_outpainting_enabled
-            and settings.runware_api_key.strip()
+            settings.bfl_outpainting_enabled
+            and settings.bfl_api_key.strip()
             and not _outpainting_configuration_error()
         ),
-        "max_source_bytes": max(1, int(settings.runware_outpainting_max_source_bytes)),
-        "timeout_seconds": max(1, int(settings.runware_outpainting_timeout_seconds)),
+        "max_source_bytes": max(1, int(settings.bfl_outpainting_max_source_bytes)),
+        "timeout_seconds": max(1, int(settings.bfl_outpainting_timeout_seconds)),
         **limits,
     }
 
@@ -4674,7 +4707,7 @@ def _outpainting_job_response(job: dict) -> dict:
         "job_id": job["id"],
         "status": job.get("status") or "processing",
         "progress": int(job.get("progress") or 0),
-        "task_id": job.get("task_id") or meta.get("provider_task_uuid"),
+        "task_id": job.get("task_id") or meta.get("provider_task_id") or meta.get("provider_task_uuid") or "",
         "processing_width": int(meta.get("processing_width") or 0),
         "processing_height": int(meta.get("processing_height") or 0),
         "expected_width": expected_width,
@@ -4688,7 +4721,7 @@ def _outpainting_job_response(job: dict) -> dict:
 
 
 async def _read_outpainting_json_body(request: Request) -> dict:
-    max_bytes = max(1024, int(settings.runware_outpainting_max_request_bytes))
+    max_bytes = max(1024, int(settings.bfl_outpainting_max_request_bytes))
     raw_content_length = str(request.headers.get("content-length") or "").strip()
     if raw_content_length:
         try:
@@ -4717,15 +4750,15 @@ async def _read_outpainting_json_body(request: Request) -> dict:
 
 @app.post("/ai-image/outpainting")
 async def ai_image_outpainting(request: Request):
-    """Create one durable, idempotent Runware FLUX outpainting job."""
+    """Create one durable, idempotent FLUX outpainting job."""
     user = _current_user(request)
-    if not settings.runware_outpainting_enabled:
+    if not settings.bfl_outpainting_enabled:
         raise HTTPException(503, "扩图功能未启用")
-    if not settings.runware_api_key.strip():
+    if not settings.bfl_api_key.strip():
         raise HTTPException(503, "扩图服务尚未配置，请联系管理员")
     configuration_error = _outpainting_configuration_error()
     if configuration_error:
-        logger.error("Runware outpainting configuration rejected: %s", configuration_error)
+        logger.error("BFL outpainting configuration rejected: %s", configuration_error)
         raise HTTPException(503, "扩图服务配置无效，请联系管理员")
     body = await _read_outpainting_json_body(request)
 
@@ -4763,20 +4796,20 @@ async def ai_image_outpainting(request: Request):
     limits = _outpainting_effective_limits()
 
     def prepare_and_claim():
-        with _runware_outpainting_submit_lock:
+        with _outpainting_submit_lock:
             duplicate = load_ai_image_job_by_client_request_id(
                 str(user["id"]),
                 client_request_id,
             )
             if duplicate:
-                return duplicate, None, None, None, None, None, None
+                return duplicate, None, None, None, None, None
 
-            claims = _runware_outpainting_claims()
+            claims = _outpainting_claims()
             user_id = str(user["id"])
-            max_inflight = max(1, int(settings.runware_outpainting_max_concurrency)) + max(
-                0, int(settings.runware_outpainting_max_queue_size)
+            max_inflight = max(1, int(settings.bfl_outpainting_max_concurrency)) + max(
+                0, int(settings.bfl_outpainting_max_queue_size)
             )
-            max_per_user = max(1, int(settings.runware_outpainting_max_pending_per_user))
+            max_per_user = max(1, int(settings.bfl_outpainting_max_pending_per_user))
             if len(claims) >= max_inflight:
                 raise _OutpaintingCapacityError("扩图任务较多，请稍后再试")
             if sum(1 for claimed_user_id in claims.values() if claimed_user_id == user_id) >= max_per_user:
@@ -4786,9 +4819,9 @@ async def ai_image_outpainting(request: Request):
                 source,
                 processing_width=body.get("processing_width"),
                 processing_height=body.get("processing_height"),
-                max_source_bytes=max(1, int(settings.runware_outpainting_max_source_bytes)),
-                max_source_pixels=max(1, int(settings.runware_outpainting_max_source_pixels)),
-                max_encoded_input_bytes=max(1, int(settings.runware_outpainting_max_encoded_input_bytes)),
+                max_source_bytes=max(1, int(settings.bfl_outpainting_max_source_bytes)),
+                max_source_pixels=max(1, int(settings.bfl_outpainting_max_source_pixels)),
+                max_encoded_input_bytes=max(1, int(settings.bfl_outpainting_max_encoded_input_bytes)),
             )
             geometry = validate_geometry(
                 processing_width=prepared.processing_width,
@@ -4802,9 +4835,8 @@ async def ai_image_outpainting(request: Request):
                 max_pixels=limits["max_area_pixels"],
             )
             job_id = uuid.uuid4().hex
-            provider_task_uuid = str(uuid.uuid4())
             created_at = time.time()
-            prompt = "Runware FLUX outpainting"
+            prompt = "FLUX outpainting"
             source_snapshot_url = persist_prepared_source_snapshot(
                 prepared,
                 output_root=settings.output_path,
@@ -4814,9 +4846,11 @@ async def ai_image_outpainting(request: Request):
             request_meta = {
                 "operation": "outpainting",
                 "client_request_id": client_request_id,
-                "provider": "runware",
-                "model": settings.runware_outpainting_model,
-                "provider_task_uuid": provider_task_uuid,
+                "provider": "bfl",
+                "model": BFL_OUTPAINTING_MODEL,
+                "provider_task_id": "",
+                "provider_task_uuid": "",
+                "polling_url": "",
                 "source_kind": source_kind,
                 "source_image_url": source_image_url,
                 "source_snapshot_url": source_snapshot_url,
@@ -4839,8 +4873,8 @@ async def ai_image_outpainting(request: Request):
                 "provider_width": geometry.provider_width,
                 "provider_height": geometry.provider_height,
                 "provider_margin_alignment": limits["snap_pixels"],
-                "auto_crop": settings.runware_outpainting_auto_crop,
-                "mode": settings.runware_outpainting_mode,
+                "auto_crop": settings.bfl_outpainting_auto_crop,
+                "mode": settings.bfl_outpainting_mode,
                 "phase": "queued",
                 "cost": None,
             }
@@ -4850,8 +4884,8 @@ async def ai_image_outpainting(request: Request):
                     job_id=job_id,
                     user_id=user["id"],
                     status="processing",
-                    model=settings.runware_outpainting_model,
-                    provider="runware",
+                    model=BFL_OUTPAINTING_MODEL,
+                    provider="bfl",
                     prompt=prompt,
                     original_prompt=prompt,
                     resolved_prompt=prompt,
@@ -4861,7 +4895,7 @@ async def ai_image_outpainting(request: Request):
                     reference_count=1,
                     client_request_id=client_request_id,
                     request_meta=request_meta,
-                    task_id=provider_task_uuid,
+                    task_id="",
                     progress=0,
                     created_at=created_at,
                 )
@@ -4877,7 +4911,7 @@ async def ai_image_outpainting(request: Request):
                     client_request_id,
                 )
                 if duplicate:
-                    return duplicate, None, None, None, None, None, None
+                    return duplicate, None, None, None, None, None
                 raise
             except Exception:
                 claims.pop(job_id, None)
@@ -4887,10 +4921,10 @@ async def ai_image_outpainting(request: Request):
                     user_id=user_id,
                 )
                 raise
-            return None, prepared, geometry, job_id, provider_task_uuid, created_at, request_meta
+            return None, prepared, geometry, job_id, created_at, request_meta
 
     try:
-        existing_job, prepared, geometry, job_id, provider_task_uuid, created_at, request_meta = await asyncio.to_thread(
+        existing_job, prepared, geometry, job_id, created_at, request_meta = await asyncio.to_thread(
             prepare_and_claim
         )
     except OutpaintingValidationError as exc:
@@ -4900,13 +4934,13 @@ async def ai_image_outpainting(request: Request):
 
     if existing_job:
         return _outpainting_job_response(existing_job)
-    _track_runware_outpainting_task(
-        _run_runware_outpainting_background(
+    _track_outpainting_task(
+        _run_outpainting_background(
             job_id,
             dict(user),
             prepared,
             geometry,
-            provider_task_uuid,
+            "",
             request_meta,
             created_at,
         ),
@@ -4916,7 +4950,7 @@ async def ai_image_outpainting(request: Request):
         "job_id": job_id,
         "status": "processing",
         "progress": 0,
-        "task_id": provider_task_uuid,
+        "task_id": "",
         "processing_width": prepared.processing_width,
         "processing_height": prepared.processing_height,
         "expected_width": geometry.expected_width,
@@ -5176,6 +5210,7 @@ def ai_image_status(request: Request, job_id: str):
         outpainting = {
             key: request_meta.get(key)
             for key in (
+                "provider_task_id",
                 "provider_task_uuid",
                 "processing_width",
                 "processing_height",

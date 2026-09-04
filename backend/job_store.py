@@ -1037,14 +1037,14 @@ def load_ai_image_job_by_client_request_id(user_id: str, client_request_id: str)
     return load_ai_image_job(str(row["id"])) if row else None
 
 
-def load_active_runware_outpainting_jobs(limit: int = 1000) -> list[dict]:
-    """Load unfinished Runware outpainting jobs for same-UUID startup recovery."""
+def load_active_outpainting_jobs(limit: int = 1000) -> list[dict]:
+    """Load unfinished BFL outpainting jobs for startup recovery."""
     bounded_limit = max(1, min(int(limit), 10_000))
     with _connect() as conn:
         rows = conn.execute(
             """
             SELECT id FROM ai_image_jobs
-            WHERE provider = 'runware'
+            WHERE provider = 'bfl'
               AND status IN ('pending', 'queued', 'processing', 'running')
             ORDER BY created_at ASC
             LIMIT ?
