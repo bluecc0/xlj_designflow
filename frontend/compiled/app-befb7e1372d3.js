@@ -1796,13 +1796,24 @@ const Canvas = ({
   const pendingMessageRef = React.useRef(null);
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
+  const [canvasEngine, setCanvasEngine] = React.useState(() => {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const val = urlParams.get('canvas');
+      if (val === 'kun' || val === 'beta') return val;
+      return localStorage.getItem('designflow_canvas_engine') || 'beta';
+    } catch (e) {
+      return 'beta';
+    }
+  });
   const editorSrc = React.useMemo(() => {
     const params = new URLSearchParams({
       v: String(Date.now())
     });
     if (userId) params.set('user_id', String(userId));
-    return `/editor-beta/index.html?${params.toString()}`;
-  }, [userId]);
+    const basePath = canvasEngine === 'kun' ? '/editor-kun' : '/editor-beta';
+    return `${basePath}/index.html?${params.toString()}`;
+  }, [userId, canvasEngine]);
   const postToEditor = React.useCallback(message => {
     const win = iframeRef.current && iframeRef.current.contentWindow;
     if (!win) return false;
@@ -1976,7 +1987,42 @@ const Canvas = ({
       background: editorInsertState.status === 'failed' ? 'rgba(180,35,24,0.08)' : 'rgba(0,128,96,0.08)',
       border: editorInsertState.status === 'failed' ? '1px solid rgba(180,35,24,0.16)' : '1px solid rgba(0,128,96,0.16)'
     }
-  }, editorInsertState.message)), /*#__PURE__*/React.createElement("div", {
+  }, editorInsertState.message), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4,
+      marginLeft: 6
+    }
+  }, /*#__PURE__*/React.createElement("select", {
+    value: canvasEngine,
+    onChange: e => {
+      const next = e.target.value;
+      setCanvasEngine(next);
+      try {
+        localStorage.setItem('designflow_canvas_engine', next);
+        const u = new URL(window.location.href);
+        u.searchParams.set('canvas', next);
+        window.history.replaceState({}, '', u.toString());
+      } catch (err) {}
+      setIframeNonce(n => n + 1);
+    },
+    style: {
+      fontSize: 11,
+      padding: '1px 6px',
+      borderRadius: 4,
+      border: '1px solid var(--line)',
+      background: 'var(--panel-2)',
+      color: 'var(--ink)',
+      cursor: 'pointer',
+      outline: 'none'
+    },
+    title: "\u5207\u6362\u65E0\u9650\u753B\u5E03\u5185\u6838"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "beta"
+  }, "Tldraw \u753B\u5E03"), /*#__PURE__*/React.createElement("option", {
+    value: "kun"
+  }, "Kun \u6781\u7B80\u753B\u5E03 (Demo)")))), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1
     }

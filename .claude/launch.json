@@ -18,6 +18,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "editor-lab-tldraw"],
       "port": 8013
+    },
+    {
+      "name": "editor-kun",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "editor-lab-kun"],
+      "port": 8014
     }
   ]
 }

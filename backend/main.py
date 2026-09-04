@@ -497,6 +497,14 @@ if _editor_beta_dist.exists():
         name="editor-beta",
     )
 
+_editor_kun_dist = Path(__file__).parent.parent / "editor-lab-kun" / "dist"
+if _editor_kun_dist.exists():
+    app.mount(
+        "/editor-kun",
+        CacheAwareStaticFiles(directory=str(_editor_kun_dist), html=True),
+        name="editor-kun",
+    )
+
 # ─── 内存任务存储（PoC 阶段，后续换 Redis / DB）────────────────────────────────
 _jobs: dict[str, ComposeJob] = {}
 _jobs_lock = threading.Lock()
@@ -513,6 +521,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/products/resolve-references",
     "/avatars",
     "/editor-beta",
+    "/editor-kun",
     "/ui",
     "/docs",
     "/redoc",
