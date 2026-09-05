@@ -23,38 +23,35 @@ const PANEL_INSPIRATION_TABS = [
   { id: 'favorite', label: '我收藏的' },
 ].concat(PANEL_INSPIRATION_CATEGORIES);
 
-const InspirationPanel = ({ onClose, onUsePrompt }) => {
+const InspirationPanel = ({ open = true, onClose, onUsePrompt }) => {
   const [tab, setTab] = React.useState('all');
   const [search, setSearch] = React.useState('');
   const [posts, setPosts] = React.useState([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [detailPost, setDetailPost] = React.useState(null);
-  const [canvasRect, setCanvasRect] = React.useState(null);
   const [ratios, setRatios] = React.useState({}); // postId -> width/height
   const containerRef = React.useRef(null);
   const [containerWidth, setContainerWidth] = React.useState(0);
   const loadIdRef = React.useRef(0);
 
-  // 跟踪画布位置，让浮层只覆盖画布区
+  // ESC 快捷键关闭
   React.useEffect(function() {
-    const iframe = document.querySelector('iframe[src*="editor-beta"]');
-    if (!iframe) return;
-    const update = function() {
-      const r = iframe.getBoundingClientRect();
-      setCanvasRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+    if (!open) return;
+    const onKeyDown = function(e) {
+      if (e.key === 'Escape') {
+        if (detailPost) {
+          setDetailPost(null);
+        } else if (onClose) {
+          onClose();
+        }
+      }
     };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(iframe);
-    window.addEventListener('resize', update);
-    window.addEventListener('scroll', update, true);
+    window.addEventListener('keydown', onKeyDown);
     return function() {
-      ro.disconnect();
-      window.removeEventListener('resize', update);
-      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('keydown', onKeyDown);
     };
-  }, []);
+  }, [open, detailPost, onClose]);
 
   // 跟踪主区域宽度
   React.useEffect(function() {
@@ -190,14 +187,11 @@ const InspirationPanel = ({ onClose, onUsePrompt }) => {
 
   return (
     <div style={{
-      position: 'fixed',
-      top: canvasRect ? canvasRect.top : 0,
-      left: canvasRect ? canvasRect.left : 0,
-      width: canvasRect ? canvasRect.width : '100vw',
-      height: canvasRect ? canvasRect.height : '100vh',
-      zIndex: 50,
+      width: '100%',
+      height: '100%',
       background: 'var(--panel-2)',
-      display: 'flex', flexDirection: 'column',
+      display: 'flex',
+      flexDirection: 'column',
       overflow: 'hidden',
     }}>
       {/* 顶部栏 */}
@@ -416,6 +410,14 @@ const InspirationCard = ({ post, height, onRatioLoad, onOpen, onToggleFavorite }
 };
 
 const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnpublish }) => {
+  const [entered, setEntered] = React.useState(false);
+  React.useEffect(function() {
+    var raf = requestAnimationFrame(function() {
+      setEntered(true);
+    });
+    return function() { cancelAnimationFrame(raf); };
+  }, []);
+
   const [describing, setDescribing] = React.useState(false);
   const [describeError, setDescribeError] = React.useState('');
   const [localPost, setLocalPost] = React.useState(post);
@@ -443,6 +445,8 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnp
         position: 'absolute', inset: 0,
         background: 'rgba(0,0,0,0.32)',
         zIndex: 20,
+        opacity: entered ? 1 : 0,
+        transition: 'opacity 180ms ease',
       }}/>
       <div style={{
         position: 'absolute', top: 0, right: 0, bottom: 0,
@@ -450,7 +454,9 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnp
         background: 'var(--panel)',
         borderLeft: '1px solid var(--line)',
         display: 'flex', flexDirection: 'column',
-        boxShadow: '-8px 0 24px rgba(0,0,0,0.12)',
+        boxShadow: entered ? '-8px 0 28px rgba(0,0,0,0.14)' : 'none',
+        transform: entered ? 'translateX(0)' : 'translateX(100%)',
+        transition: 'transform 220ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 220ms ease',
       }}>
         {/* 抽屉头 */}
         <div style={{

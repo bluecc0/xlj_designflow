@@ -137,75 +137,32 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
   }, [editorCommand, postToEditor, t]);
 
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0,
-      overflow: 'hidden',
-      background: 'var(--panel-2)',
-    }}>
-      <div style={{
-        height: 44, flexShrink: 0,
-        borderBottom: '1px solid var(--line)',
-        display: 'flex', alignItems: 'center',
-        padding: '0 16px', gap: 10,
-        background: 'var(--panel)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-          <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>编辑器</span>
-          <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{t?.name || '空白画布'}</span>
-          {hasResult && (
-            <span className="mono" style={{ fontSize: 10, color: 'var(--ok)', padding: '2px 6px', borderRadius: 4, background: 'rgba(0,128,96,0.08)', border: '1px solid rgba(0,128,96,0.16)' }}>
-              已接收结果图
-            </span>
-          )}
-          {editorInsertState && (
-            <span
-              className="mono"
-              title={editorInsertState.message}
-              style={{
-                fontSize: 10,
-                color: editorInsertState.status === 'failed' ? 'var(--warn)' : (editorInsertState.status === 'done' ? 'var(--ok)' : 'var(--ink-3)'),
-                padding: '2px 6px',
-                borderRadius: 4,
-                background: editorInsertState.status === 'failed' ? 'rgba(180,35,24,0.08)' : 'rgba(0,128,96,0.08)',
-                border: editorInsertState.status === 'failed' ? '1px solid rgba(180,35,24,0.16)' : '1px solid rgba(0,128,96,0.16)',
-              }}
-            >
-              {editorInsertState.message}
-            </span>
-          )}
-        </div>
-        <div style={{ flex: 1 }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {window.lastComposeJobId && (
-            <button
-              onClick={() => {
-                const frames = (resultTemplate && resultTemplate._frameNames) || ((resultTemplate?.frames || []).map(f => f.name || f.variant || '画板'));
-                const names = frames.join(',');
-                const ep = window.lastComposeEndpoint || '/special-compose';
-                window.open(`${ep}/${window.lastComposeJobId}/download-zip?names=${encodeURIComponent(names)}`, '_blank');
-              }}
-              style={canvasActionSecondaryStyle}
-            >
-              打包下载
-            </button>
-          )}
-          {window.resultPenpotUrl && (
-            <button onClick={() => window.open(window.resultPenpotUrl, '_blank')} style={canvasActionSecondaryStyle}>
-              Penpot
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div style={{ flex: 1, minHeight: 0, position: 'relative', background: 'oklch(0.98 0.003 260)' }}>
-        <iframe
-          key={iframeNonce}
-          ref={iframeRef}
-          src={editorSrc}
-          title="Designflow Editor"
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', background: 'transparent' }}
-        />
-      </div>
+    <div
+      id="designflow-canvas-container"
+      style={{
+        position: 'relative',
+        minWidth: 0,
+        minHeight: 0,
+        width: '100%',
+        height: '100%',
+        overflow: 'hidden',
+        background: 'oklch(0.98 0.003 260)',
+      }}
+    >
+      <iframe
+        key={iframeNonce}
+        ref={iframeRef}
+        src={editorSrc}
+        title="Designflow Editor"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          border: 'none',
+          background: 'transparent',
+        }}
+      />
     </div>
   );
 };

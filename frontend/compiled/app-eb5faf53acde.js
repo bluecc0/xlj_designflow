@@ -1929,92 +1929,14 @@ const Canvas = ({
     }
   }, [editorCommand, postToEditor, t]);
   return /*#__PURE__*/React.createElement("div", {
+    id: "designflow-canvas-container",
     style: {
-      display: 'flex',
-      flexDirection: 'column',
+      position: 'relative',
       minWidth: 0,
       minHeight: 0,
+      width: '100%',
+      height: '100%',
       overflow: 'hidden',
-      background: 'var(--panel-2)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      height: 44,
-      flexShrink: 0,
-      borderBottom: '1px solid var(--line)',
-      display: 'flex',
-      alignItems: 'center',
-      padding: '0 16px',
-      gap: 10,
-      background: 'var(--panel)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8,
-      fontSize: 12
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      color: 'var(--ink-3)',
-      fontSize: 10,
-      textTransform: 'uppercase',
-      letterSpacing: '0.06em'
-    }
-  }, "\u7F16\u8F91\u5668"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: 'var(--ink)',
-      fontWeight: 500
-    }
-  }, t?.name || '空白画布'), hasResult && /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      fontSize: 10,
-      color: 'var(--ok)',
-      padding: '2px 6px',
-      borderRadius: 4,
-      background: 'rgba(0,128,96,0.08)',
-      border: '1px solid rgba(0,128,96,0.16)'
-    }
-  }, "\u5DF2\u63A5\u6536\u7ED3\u679C\u56FE"), editorInsertState && /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    title: editorInsertState.message,
-    style: {
-      fontSize: 10,
-      color: editorInsertState.status === 'failed' ? 'var(--warn)' : editorInsertState.status === 'done' ? 'var(--ok)' : 'var(--ink-3)',
-      padding: '2px 6px',
-      borderRadius: 4,
-      background: editorInsertState.status === 'failed' ? 'rgba(180,35,24,0.08)' : 'rgba(0,128,96,0.08)',
-      border: editorInsertState.status === 'failed' ? '1px solid rgba(180,35,24,0.16)' : '1px solid rgba(0,128,96,0.16)'
-    }
-  }, editorInsertState.message)), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8
-    }
-  }, window.lastComposeJobId && /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      const frames = resultTemplate && resultTemplate._frameNames || (resultTemplate?.frames || []).map(f => f.name || f.variant || '画板');
-      const names = frames.join(',');
-      const ep = window.lastComposeEndpoint || '/special-compose';
-      window.open(`${ep}/${window.lastComposeJobId}/download-zip?names=${encodeURIComponent(names)}`, '_blank');
-    },
-    style: canvasActionSecondaryStyle
-  }, "\u6253\u5305\u4E0B\u8F7D"), window.resultPenpotUrl && /*#__PURE__*/React.createElement("button", {
-    onClick: () => window.open(window.resultPenpotUrl, '_blank'),
-    style: canvasActionSecondaryStyle
-  }, "Penpot"))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minHeight: 0,
-      position: 'relative',
       background: 'oklch(0.98 0.003 260)'
     }
   }, /*#__PURE__*/React.createElement("iframe", {
@@ -2030,7 +1952,7 @@ const Canvas = ({
       border: 'none',
       background: 'transparent'
     }
-  })));
+  }));
 };
 const canvasActionPrimaryStyle = {
   fontSize: 12,
@@ -12973,6 +12895,7 @@ const PANEL_INSPIRATION_TABS = [{
   label: '我收藏的'
 }].concat(PANEL_INSPIRATION_CATEGORIES);
 const InspirationPanel = ({
+  open = true,
   onClose,
   onUsePrompt
 }) => {
@@ -12982,36 +12905,28 @@ const InspirationPanel = ({
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [detailPost, setDetailPost] = React.useState(null);
-  const [canvasRect, setCanvasRect] = React.useState(null);
   const [ratios, setRatios] = React.useState({}); // postId -> width/height
   const containerRef = React.useRef(null);
   const [containerWidth, setContainerWidth] = React.useState(0);
   const loadIdRef = React.useRef(0);
 
-  // 跟踪画布位置，让浮层只覆盖画布区
+  // ESC 快捷键关闭
   React.useEffect(function () {
-    const iframe = document.querySelector('iframe[src*="editor-beta"]');
-    if (!iframe) return;
-    const update = function () {
-      const r = iframe.getBoundingClientRect();
-      setCanvasRect({
-        top: r.top,
-        left: r.left,
-        width: r.width,
-        height: r.height
-      });
+    if (!open) return;
+    const onKeyDown = function (e) {
+      if (e.key === 'Escape') {
+        if (detailPost) {
+          setDetailPost(null);
+        } else if (onClose) {
+          onClose();
+        }
+      }
     };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(iframe);
-    window.addEventListener('resize', update);
-    window.addEventListener('scroll', update, true);
+    window.addEventListener('keydown', onKeyDown);
     return function () {
-      ro.disconnect();
-      window.removeEventListener('resize', update);
-      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('keydown', onKeyDown);
     };
-  }, []);
+  }, [open, detailPost, onClose]);
 
   // 跟踪主区域宽度
   React.useEffect(function () {
@@ -13175,12 +13090,8 @@ const InspirationPanel = ({
   }, []);
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      position: 'fixed',
-      top: canvasRect ? canvasRect.top : 0,
-      left: canvasRect ? canvasRect.left : 0,
-      width: canvasRect ? canvasRect.width : '100vw',
-      height: canvasRect ? canvasRect.height : '100vh',
-      zIndex: 50,
+      width: '100%',
+      height: '100%',
       background: 'var(--panel-2)',
       display: 'flex',
       flexDirection: 'column',
@@ -13474,6 +13385,15 @@ const InspirationDetail = ({
   onToggleFavorite,
   onUnpublish
 }) => {
+  const [entered, setEntered] = React.useState(false);
+  React.useEffect(function () {
+    var raf = requestAnimationFrame(function () {
+      setEntered(true);
+    });
+    return function () {
+      cancelAnimationFrame(raf);
+    };
+  }, []);
   const [describing, setDescribing] = React.useState(false);
   const [describeError, setDescribeError] = React.useState('');
   const [localPost, setLocalPost] = React.useState(post);
@@ -13505,7 +13425,9 @@ const InspirationDetail = ({
       position: 'absolute',
       inset: 0,
       background: 'rgba(0,0,0,0.32)',
-      zIndex: 20
+      zIndex: 20,
+      opacity: entered ? 1 : 0,
+      transition: 'opacity 180ms ease'
     }
   }), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -13519,7 +13441,9 @@ const InspirationDetail = ({
       borderLeft: '1px solid var(--line)',
       display: 'flex',
       flexDirection: 'column',
-      boxShadow: '-8px 0 24px rgba(0,0,0,0.12)'
+      boxShadow: entered ? '-8px 0 28px rgba(0,0,0,0.14)' : 'none',
+      transform: entered ? 'translateX(0)' : 'translateX(100%)',
+      transition: 'transform 220ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 220ms ease'
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -14208,6 +14132,63 @@ const LiteLoginGate = ({
     }
   }, loading ? '进入中...' : '进入工作台')));
 };
+const FlipStage = ({
+  inspirationOpen,
+  childrenA,
+  childrenB
+}) => {
+  const stageRef = React.useRef(null);
+  const panelARef = React.useRef(null);
+  const panelBRef = React.useRef(null);
+  const currentRef = React.useRef(inspirationOpen ? 'B' : 'A');
+  const isFirstMount = React.useRef(true);
+  React.useEffect(() => {
+    if (isFirstMount.current) {
+      isFirstMount.current = false;
+      return;
+    }
+    const target = inspirationOpen ? 'B' : 'A';
+    if (currentRef.current === target) return;
+    const forward = target === 'B';
+    const from = forward ? panelARef.current : panelBRef.current;
+    const to = forward ? panelBRef.current : panelARef.current;
+    const reduceMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduceMotion || !from || !to) {
+      if (from) from.className = 'designflow-panel';
+      if (to) to.className = 'designflow-panel active';
+      currentRef.current = target;
+      return;
+    }
+    if (stageRef.current) {
+      stageRef.current.style.setProperty('--dir', forward ? '1' : '-1');
+    }
+    to.className = 'designflow-panel active entering';
+    from.className = 'designflow-panel active leaving';
+    const onAnimEnd = e => {
+      if (e.target !== from) return;
+      from.removeEventListener('animationend', onAnimEnd);
+      from.className = 'designflow-panel';
+      to.className = 'designflow-panel active';
+      currentRef.current = target;
+    };
+    from.addEventListener('animationend', onAnimEnd);
+    return () => {
+      from.removeEventListener('animationend', onAnimEnd);
+    };
+  }, [inspirationOpen]);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "designflow-stage-wrap"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "designflow-stage",
+    ref: stageRef
+  }, /*#__PURE__*/React.createElement("div", {
+    ref: panelARef,
+    className: `designflow-panel ${!inspirationOpen ? 'active' : ''}`
+  }, childrenA), /*#__PURE__*/React.createElement("div", {
+    ref: panelBRef,
+    className: `designflow-panel ${inspirationOpen ? 'active' : ''}`
+  }, childrenB)));
+};
 const App = () => {
   const DEFAULT_TWEAKS = {
     chatState: 'returned',
@@ -14574,13 +14555,23 @@ const App = () => {
       transform: 'translateX(-1px)',
       opacity: templateRevealHovered ? 0.9 : 0.55
     }
-  }, templatePanelCollapsed ? '›' : '‹'))), /*#__PURE__*/React.createElement(Canvas, {
-    key: 'canvas:' + currentUser.id,
-    template: activeTemplate,
-    resultTemplate: resultTemplate,
-    editorCommand: editorCommand,
-    onUseReferenceImages: handleUseCanvasReferences,
-    userId: currentUser.id
+  }, templatePanelCollapsed ? '›' : '‹'))), /*#__PURE__*/React.createElement(FlipStage, {
+    inspirationOpen: inspirationOpen,
+    childrenA: /*#__PURE__*/React.createElement(Canvas, {
+      key: 'canvas:' + currentUser.id,
+      template: activeTemplate,
+      resultTemplate: resultTemplate,
+      editorCommand: editorCommand,
+      onUseReferenceImages: handleUseCanvasReferences,
+      userId: currentUser.id
+    }),
+    childrenB: /*#__PURE__*/React.createElement(InspirationPanel, {
+      open: inspirationOpen,
+      onClose: function () {
+        setInspirationOpen(false);
+      },
+      onUsePrompt: handleUseInspirationPrompt
+    })
   }), /*#__PURE__*/React.createElement(Chat, {
     key: 'chat:' + currentUser.id,
     state: tweaks.chatState,
@@ -14594,12 +14585,7 @@ const App = () => {
     seedPrompt: seedPrompt,
     onSeedConsumed: handleSeedConsumed,
     canvasReferenceSelection: canvasReferenceSelection
-  })), inspirationOpen && /*#__PURE__*/React.createElement(InspirationPanel, {
-    onClose: function () {
-      setInspirationOpen(false);
-    },
-    onUsePrompt: handleUseInspirationPrompt
-  }), /*#__PURE__*/React.createElement(Tweaks, {
+  })), /*#__PURE__*/React.createElement(Tweaks, {
     visible: tweaksVisible,
     tweaks: tweaks,
     onChange: updateTweaks,
