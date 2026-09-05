@@ -497,11 +497,17 @@ if _editor_beta_dist.exists():
         name="editor-beta",
     )
 
-_editor_kun_dist = Path(__file__).parent.parent / "editor-lab-kun" / "dist"
-if _editor_kun_dist.exists():
+_editor_canvas_dist = Path(__file__).parent.parent / "editor-lab-kun" / "dist"
+if _editor_canvas_dist.exists():
+    app.mount(
+        "/editor-canvas",
+        CacheAwareStaticFiles(directory=str(_editor_canvas_dist), html=True),
+        name="editor-canvas",
+    )
+    # 兼容旧路径
     app.mount(
         "/editor-kun",
-        CacheAwareStaticFiles(directory=str(_editor_kun_dist), html=True),
+        CacheAwareStaticFiles(directory=str(_editor_canvas_dist), html=True),
         name="editor-kun",
     )
 
@@ -521,6 +527,7 @@ _AUTH_EXEMPT_PREFIXES = (
     "/products/resolve-references",
     "/avatars",
     "/editor-beta",
+    "/editor-canvas",
     "/editor-kun",
     "/ui",
     "/docs",
@@ -1904,6 +1911,16 @@ def _normalize_agent_images_for_api(images: list[dict]) -> list[dict]:
 def _normalize_editor_snapshot_assets(snapshot: dict | None) -> dict | None:
     if not isinstance(snapshot, dict):
         return snapshot
+
+    # 兼容新版无限画布格式
+    if isinstance(snapshot.get("images"), list):
+        for im in snapshot["images"]:
+            if isinstance(im, dict) and "src" in im:
+                normalized = _normalize_public_asset_url(im["src"])
+                if normalized:
+                    im["src"] = normalized
+        return snapshot
+
     document = snapshot.get("document")
     store = snapshot.get("store")
     if not isinstance(store, dict) and isinstance(document, dict):
@@ -5949,8 +5966,34 @@ def editor_load_snapshot(request: Request):
 
 
 def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[str]:
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except Exception:
+            return []
     if not isinstance(snapshot, dict):
         return []
+
+    prefix = "/ai-images/"
+    foreign: list[str] = []
+
+    # 兼容新版无限画布格式 (version 2)
+    if isinstance(snapshot.get("images"), list):
+        for im in snapshot["images"]:
+            if not isinstance(im, dict):
+                continue
+            src = str(im.get("src") or "")
+            try:
+                path = urlsplit(src).path if "://" in src else src.split("?", 1)[0]
+            except Exception:
+                path = src
+            if not path.startswith(prefix):
+                continue
+            owner = unquote(path[len(prefix):].split("/", 1)[0])
+            if owner and owner != user_id:
+                foreign.append(src)
+        return foreign
+
     store = snapshot.get("store")
     document = snapshot.get("document")
     if not isinstance(store, dict) and isinstance(document, dict):
@@ -5958,8 +6001,6 @@ def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[
     if not isinstance(store, dict):
         return []
 
-    prefix = "/ai-images/"
-    foreign: list[str] = []
     for record in store.values():
         if not isinstance(record, dict) or record.get("typeName") != "asset":
             continue

@@ -2,53 +2,142 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { CanvasGrid } from './components/CanvasGrid'
 import { FrameShape } from './components/FrameShape'
 import { ImageShape } from './components/ImageShape'
+import { TextShape } from './components/TextShape'
 import { SelectionOverlay } from './components/SelectionOverlay'
-import { FloatingToolbar } from './components/FloatingToolbar'
 import { CanvasZoomBar } from './components/CanvasZoomBar'
+import { Minimap } from './components/Minimap'
+import { TopBar } from './components/TopBar'
+import { BottomToolbar } from './components/BottomToolbar'
+import { ContextualToolbar } from './components/ContextualToolbar'
+import { OutpaintingOverlay } from './components/OutpaintingOverlay'
+import { MarqueeSelection } from './components/MarqueeSelection'
+import { ContextMenu, type ContextMenuState } from './components/ContextMenu'
+import { SnapGuides } from './components/SnapGuides'
+import type { SnapLine } from './utils/snapping'
 import { useViewportStore } from './store/viewportStore'
 import { useCanvasStore } from './store/canvasStore'
+import { useHistoryStore } from './store/historyStore'
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 
 const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
 const editorSnapshotUrl = `/editor/snapshot?user_id=${encodeURIComponent(editorUserId)}`
 
 export function App() {
-  const { zoom, panX, panY, isSpacePressed, isPanning, setSpacePressed, setIsPanning, panBy, zoomAt } =
-    useViewportStore()
+  const {
+    zoom,
+    panX,
+    panY,
+    isSpacePressed,
+    isPanning,
+    setSpacePressed,
+    setIsPanning,
+    panBy,
+    zoomAt,
+    screenToCanvas,
+  } = useViewportStore()
 
   const {
+    pages,
+    activePageId,
     frames,
     images,
-    selectedId,
-    activeFrameId,
+    texts,
+    selectedIds,
+    selectedType,
+    activeTool,
+    setActiveTool,
+    setSelected,
+    toggleSelected,
+    clearSelection,
+    deleteSelected,
+    duplicateSelected,
+    selectAll,
+    createPage,
+    renamePage,
+    addText,
+    insertImagesAuto,
     revision,
     isDirty,
-    setSelectedId,
-    setActiveFrameId,
-    deleteImage,
-    insertImageAuto,
-    addFrame,
+    markSaved,
     loadDocument,
     getDocument,
-    markSaved,
   } = useCanvasStore()
+
+  const undo = useHistoryStore((s) => s.undo)
+  const redo = useHistoryStore((s) => s.redo)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const isMouseDownRef = useRef(false)
   const lastMousePosRef = useRef({ x: 0, y: 0 })
   const snapshotHydratedRef = useRef(false)
+  const wheelTimerRef = useRef<any>(null)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved')
 
-  // 1. 快捷键监听（空格平移、Delete删除）
+  // 扩图状态
+  const [outpaintingImageId, setOutpaintingImageId] = useState<string | null>(null)
+
+  // 框选状态
+  const [marqueeStart, setMarqueeStart] = useState<{ x: number; y: number } | null>(null)
+  const [marqueeCurrent, setMarqueeCurrent] = useState<{ x: number; y: number } | null>(null)
+
+  // 右键菜单与吸附参考线状态
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0 })
+  const [snapLines, setSnapLines] = useState<SnapLine[]>([])
+
+  // 1. 快捷键监听
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // 忽略在输入框内的快捷键
+      const isInput = ['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)
+      if (isInput) return
+
       if (e.code === 'Space' && !e.repeat) {
         setSpacePressed(true)
       }
-      if ((e.code === 'Delete' || e.code === 'Backspace') && selectedId) {
-        // 如果焦点在输入框中则不触发删除
-        if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return
-        deleteImage(selectedId)
+
+      // 工具快捷键
+      if (e.key === 'v' || e.key === 'V') {
+        setActiveTool('select')
+      } else if (e.key === 'h' || e.key === 'H') {
+        setActiveTool('hand')
+      } else if (e.key === 'f' || e.key === 'F') {
+        setActiveTool('frame')
+      } else if (e.key === 't' || e.key === 'T') {
+        setActiveTool('text')
+      }
+
+      // 撤销 / 重做
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault()
+        const doc = getDocument()
+        const prev = undo(doc)
+        if (prev) loadDocument(prev)
+      } else if (
+        (e.metaKey || e.ctrlKey) &&
+        (e.shiftKey && (e.key === 'z' || e.key === 'Z') || e.key === 'y' || e.key === 'Y')
+      ) {
+        e.preventDefault()
+        const doc = getDocument()
+        const next = redo(doc)
+        if (next) loadDocument(next)
+      }
+
+      // 复制
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault()
+        duplicateSelected()
+      }
+
+      // 全选
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault()
+        selectAll()
+      }
+
+      // 删除
+      if ((e.code === 'Delete' || e.code === 'Backspace') && selectedIds.length > 0) {
+        e.preventDefault()
+        deleteSelected()
       }
     }
 
@@ -65,49 +154,162 @@ export function App() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [selectedId, deleteImage, setSpacePressed, setIsPanning])
+  }, [
+    selectedIds,
+    deleteSelected,
+    duplicateSelected,
+    selectAll,
+    setSpacePressed,
+    setIsPanning,
+    setActiveTool,
+    undo,
+    redo,
+    getDocument,
+    loadDocument,
+  ])
 
-  // 2. 滚轮与触控板手势缩放与平移
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
+  // 2. 原生非 passive 滚轮与手势监听（彻底杜绝放大整个浏览器界面）
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const handleNativeWheel = (e: WheelEvent) => {
       e.preventDefault()
-      const isCtrlOrMeta = e.ctrlKey || e.metaKey
+      e.stopPropagation()
 
+      const isCtrlOrMeta = e.ctrlKey || e.metaKey
       if (isCtrlOrMeta) {
-        // 缩放
-        const factor = e.deltaY < 0 ? 1.08 : 0.92
+        // 触控板捏合或 Ctrl+滚轮：平滑指数缩放
+        const factor = Math.exp(-e.deltaY * 0.01)
         zoomAt({ x: e.clientX, y: e.clientY }, factor)
       } else {
-        // 触控板滑动平移
+        // 双指滑动平移或鼠标常规滚轮
         panBy(-e.deltaX, -e.deltaY)
       }
-    },
-    [zoomAt, panBy]
-  )
 
-  // 3. 画布背景拖拽平移（按住空格或中键拖动）
+      // 视角变动后防抖触发存盘
+      clearTimeout(wheelTimerRef.current)
+      wheelTimerRef.current = setTimeout(() => {
+        useCanvasStore.setState({ isDirty: true })
+      }, 1000)
+    }
+
+    const preventGesture = (e: Event) => {
+      e.preventDefault()
+    }
+
+    container.addEventListener('wheel', handleNativeWheel, { passive: false })
+    container.addEventListener('gesturestart', preventGesture as any, { passive: false })
+    container.addEventListener('gesturechange', preventGesture as any, { passive: false })
+    container.addEventListener('gestureend', preventGesture as any, { passive: false })
+
+    return () => {
+      container.removeEventListener('wheel', handleNativeWheel)
+      container.removeEventListener('gesturestart', preventGesture as any)
+      container.removeEventListener('gesturechange', preventGesture as any)
+      container.removeEventListener('gestureend', preventGesture as any)
+    }
+  }, [zoomAt, panBy])
+
+  // 3. 画布背景拖拽平移 & 框选
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 1 || isSpacePressed || e.target === containerRef.current) {
+    if (contextMenu.visible) {
+      setContextMenu((m) => ({ ...m, visible: false }))
+    }
+
+    // 中键、空格或当前是抓手工具：触发平移
+    if (e.button === 1 || isSpacePressed || activeTool === 'hand') {
       isMouseDownRef.current = true
       setIsPanning(true)
       lastMousePosRef.current = { x: e.clientX, y: e.clientY }
-      if (e.target === containerRef.current) {
-        setSelectedId(null)
+      return
+    }
+
+    // 在空白区域按下
+    const isCanvasBg =
+      e.target === containerRef.current ||
+      (e.target as HTMLElement).getAttribute('data-canvas-bg') === 'true'
+    if (isCanvasBg) {
+      clearSelection()
+      setOutpaintingImageId(null)
+
+      if (activeTool === 'text') {
+        const pt = screenToCanvas({ x: e.clientX, y: e.clientY })
+        addText({
+          x: Math.round(pt.x),
+          y: Math.round(pt.y),
+        })
+        setActiveTool('select')
+        return
+      }
+
+      if (activeTool === 'select') {
+        // 开启框选
+        setMarqueeStart({ x: e.clientX, y: e.clientY })
+        setMarqueeCurrent({ x: e.clientX, y: e.clientY })
       }
     }
   }
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isMouseDownRef.current) return
-    const dx = e.clientX - lastMousePosRef.current.x
-    const dy = e.clientY - lastMousePosRef.current.y
-    lastMousePosRef.current = { x: e.clientX, y: e.clientY }
-    panBy(dx, dy)
+    if (isPanning || isSpacePressed) {
+      const dx = e.clientX - lastMousePosRef.current.x
+      const dy = e.clientY - lastMousePosRef.current.y
+      lastMousePosRef.current = { x: e.clientX, y: e.clientY }
+      panBy(dx, dy)
+      return
+    }
+
+    if (marqueeStart) {
+      setMarqueeCurrent({ x: e.clientX, y: e.clientY })
+    }
   }
 
   const handleMouseUp = () => {
+    if (isPanning) {
+      clearTimeout(wheelTimerRef.current)
+      wheelTimerRef.current = setTimeout(() => {
+        useCanvasStore.setState({ isDirty: true })
+      }, 1000)
+    }
+
     isMouseDownRef.current = false
     setIsPanning(false)
+
+    // 框选结束判定
+    if (marqueeStart && marqueeCurrent) {
+      const sx = Math.min(marqueeStart.x, marqueeCurrent.x)
+      const sy = Math.min(marqueeStart.y, marqueeCurrent.y)
+      const sw = Math.abs(marqueeCurrent.x - marqueeStart.x)
+      const sh = Math.abs(marqueeCurrent.y - marqueeStart.y)
+
+      if (sw > 6 || sh > 6) {
+        // 转换为画布世界坐标系
+        const topLeft = screenToCanvas({ x: sx, y: sy })
+        const bottomRight = screenToCanvas({ x: sx + sw, y: sy + sh })
+
+        const pageImages = images.filter((im) => im.pageId === activePageId)
+        const hitImageIds = pageImages
+          .filter((im) => {
+            const imR = im.x + im.width
+            const imB = im.y + im.height
+            return !(
+              imR < topLeft.x ||
+              im.x > bottomRight.x ||
+              imB < topLeft.y ||
+              im.y > bottomRight.y
+            )
+          })
+          .map((im) => im.id)
+
+        if (hitImageIds.length > 0) {
+          setSelected(hitImageIds, 'image')
+        }
+      }
+
+      setMarqueeStart(null)
+      setMarqueeCurrent(null)
+    }
   }
 
   // 4. 恢复快照
@@ -130,14 +332,14 @@ export function App() {
             loadDocument(converted, Number(data.revision || 1))
           }
         } catch (err) {
-          console.warn('[KunCanvas] 快照解析错误:', err)
+          console.warn('[Canvas] 快照解析错误:', err)
         } finally {
           snapshotHydratedRef.current = true
           notifyReady()
         }
       })
       .catch((err) => {
-        console.warn('[KunCanvas] 快照加载失败:', err)
+        console.warn('[Canvas] 快照加载失败:', err)
         snapshotHydratedRef.current = true
         notifyReady()
       })
@@ -170,10 +372,15 @@ export function App() {
               setSaveStatus('saved')
             })
           } else if (res.status === 401) {
-            // 未登录状态下演示，降级为本地状态已保持
             markSaved(revision)
             setSaveStatus('saved')
           } else {
+            res.json().then((d) => {
+              const currentRev = d?.detail?.current_revision
+              if (currentRev && Number(currentRev) > revision) {
+                markSaved(Number(currentRev))
+              }
+            }).catch(() => {})
             setSaveStatus('error')
           }
         })
@@ -199,29 +406,26 @@ export function App() {
       }
 
       if (data.type === 'designflow:insert-image') {
-        const urls: string[] = Array.isArray(data.urls) && data.urls.length ? data.urls : data.url ? [data.url] : []
-        urls.forEach((u) => {
-          if (u) insertImageAuto(u, data.name)
-        })
-        window.parent.postMessage({ type: 'designflow:editor-inserted', urls, mode: data.mode }, '*')
+        const urls: string[] = Array.isArray(data.urls) && data.urls.length
+          ? data.urls
+          : data.url
+          ? [data.url]
+          : []
+        if (urls.length > 0) {
+          insertImagesAuto(urls, data.mode, data.name)
+          window.parent.postMessage({ type: 'designflow:editor-inserted', urls, mode: data.mode }, '*')
+        }
         return
       }
 
       if (data.type === 'designflow:new-canvas') {
-        const pageName = data.pageName || '画板 1'
-        const existing = frames.find((f) => f.name === pageName)
-        if (existing) {
-          setActiveFrameId(existing.id)
-        } else {
-          const nextX = frames.length * 1200
-          addFrame({
-            id: 'frame-' + Math.random().toString(36).slice(2, 8),
-            name: pageName,
-            x: nextX,
-            y: 0,
-            width: 1080,
-            height: 1080,
-          })
+        createPage(data.pageName)
+        return
+      }
+
+      if (data.type === 'designflow:set-page-name') {
+        if (data.name) {
+          renamePage(activePageId, data.name)
         }
         return
       }
@@ -230,51 +434,88 @@ export function App() {
     window.addEventListener('message', handleHostMessage)
     notifyReady()
     return () => window.removeEventListener('message', handleHostMessage)
-  }, [frames, notifyReady, insertImageAuto, addFrame, setActiveFrameId])
+  }, [notifyReady, insertImagesAuto, createPage, renamePage, activePageId])
 
-  const selectedImage = images.find((im) => im.id === selectedId)
+  // 7. 自动同步画布选中的图片给主站聊天框作为参考图；点选空白或非图片时，通知主站清空自动参考图
+  useEffect(() => {
+    if (!snapshotHydratedRef.current) return
+
+    if (selectedType === 'image' && selectedIds.length > 0) {
+      const selectedImages = images.filter((im) => im.pageId === activePageId && selectedIds.includes(im.id))
+      if (selectedImages.length > 0) {
+        const payload = selectedImages.map((im, idx) => ({
+          src: im.url,
+          name: im.name || `reference-${idx + 1}.png`,
+        }))
+        window.parent.postMessage(
+          {
+            type: 'designflow:use-as-reference',
+            images: payload,
+          },
+          '*'
+        )
+        return
+      }
+    }
+
+    // 选区为空或非图片时，通知主站清空画布自动参考图（不影响用户手动上传的参考图）
+    window.parent.postMessage(
+      {
+        type: 'designflow:use-as-reference',
+        images: [],
+      },
+      '*'
+    )
+  }, [selectedIds, selectedType, images, activePageId])
+
+  // 过滤当前活动页面的画板和图片
+  const currentFrames = frames.filter((f) => f.pageId === activePageId)
+  const currentImages = images.filter((im) => im.pageId === activePageId)
+  const currentTexts = (texts || []).filter((t) => t.pageId === activePageId)
+
+  // 正在扩图的目标图元
+  const outpaintingTarget = currentImages.find((im) => im.id === outpaintingImageId)
+
+  // 单选中的第一张图片（用于挂载控制手柄）
+  const singleSelectedImage =
+    selectedType === 'image' && selectedIds.length === 1
+      ? currentImages.find((im) => im.id === selectedIds[0])
+      : null
 
   return (
     <div
       ref={containerRef}
-      onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        const isCanvasBackground =
+          e.target === containerRef.current ||
+          (e.target as HTMLElement).getAttribute('data-canvas-bg') === 'true'
+        if (isCanvasBackground) {
+          clearSelection()
+        }
+        setContextMenu({
+          visible: true,
+          x: e.clientX,
+          y: e.clientY,
+          targetType: 'canvas',
+        })
+      }}
       style={{
         position: 'relative',
         width: '100vw',
         height: '100vh',
         overflow: 'hidden',
-        cursor: isPanning || isSpacePressed ? 'grab' : 'default',
+        touchAction: 'none',
+        overscrollBehavior: 'none',
+        cursor: isPanning || isSpacePressed || activeTool === 'hand' ? 'grab' : activeTool === 'text' ? 'text' : 'default',
+        backgroundColor: '#f8fafc',
       }}
     >
-      {/* 顶部指示条 */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 12,
-          left: 14,
-          zIndex: 80,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '4px 10px',
-          backgroundColor: '#ffffff',
-          borderRadius: 6,
-          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-          border: '1px solid #e2e8f0',
-          fontSize: 11,
-          fontWeight: 600,
-          color: '#334155',
-        }}
-      >
-        <div style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: '#4f46e5' }} />
-        <span>Kun Canvas Demo</span>
-        <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 400 }}>
-          {saveStatus === 'saving' ? '正在保存...' : saveStatus === 'error' ? '保存异常' : '已保存'}
-        </span>
-      </div>
+      {/* 顶部多画板标签栏与存盘指示 */}
+      <TopBar saveStatus={saveStatus} />
 
       {/* 点阵网格背景 */}
       <CanvasGrid zoom={zoom} panX={panX} panY={panY} />
@@ -289,36 +530,130 @@ export function App() {
           height: '100%',
           transformOrigin: '0 0',
           transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
-          pointerEvents: 'none', // 事件由子元素各自捕获
+          pointerEvents: 'none',
         }}
       >
         {/* 画板列表 */}
-        {frames.map((frame) => (
+        {currentFrames.map((frame) => (
           <div key={frame.id} style={{ pointerEvents: 'auto' }}>
             <FrameShape
               frame={frame}
-              isActive={activeFrameId === frame.id}
-              onClick={() => {
-                setActiveFrameId(frame.id)
-                setSelectedId(null)
+              isSelected={selectedType === 'frame' && selectedIds.includes(frame.id)}
+              onSelect={() => setSelected([frame.id], 'frame')}
+              onContextMenu={(e) => {
+                setSelected([frame.id], 'frame')
+                setContextMenu({
+                  visible: true,
+                  x: e.clientX,
+                  y: e.clientY,
+                  targetId: frame.id,
+                  targetType: 'frame',
+                })
               }}
             />
           </div>
         ))}
 
         {/* 图片图元列表 */}
-        {images.map((im) => (
+        {currentImages.map((im) => (
           <div key={im.id} style={{ pointerEvents: 'auto' }}>
-            <ImageShape image={im} isSelected={selectedId === im.id} onSelect={() => setSelectedId(im.id)} />
+            <ImageShape
+              image={im}
+              isSelected={selectedType === 'image' && selectedIds.includes(im.id)}
+              isSingleSelected={selectedType === 'image' && selectedIds.length === 1 && selectedIds[0] === im.id}
+              onSelect={(isShift) => {
+                if (isShift) {
+                  toggleSelected(im.id, 'image')
+                } else {
+                  setSelected([im.id], 'image')
+                }
+              }}
+              onContextMenu={(e) => {
+                if (!selectedIds.includes(im.id)) {
+                  setSelected([im.id], 'image')
+                }
+                setContextMenu({
+                  visible: true,
+                  x: e.clientX,
+                  y: e.clientY,
+                  targetId: im.id,
+                  targetType: 'image',
+                })
+              }}
+            />
           </div>
         ))}
 
-        {/* 选中控制器手柄 Overlay */}
-        {selectedImage && <SelectionOverlay image={selectedImage} />}
+        {/* 文本图元列表 */}
+        {currentTexts.map((txt) => (
+          <div key={txt.id} style={{ pointerEvents: 'auto' }}>
+            <TextShape
+              text={txt}
+              isSelected={selectedType === 'text' && selectedIds.includes(txt.id)}
+              onSelect={(isShift) => {
+                if (isShift) {
+                  toggleSelected(txt.id, 'text')
+                } else {
+                  setSelected([txt.id], 'text')
+                }
+              }}
+              onContextMenu={(e) => {
+                if (!selectedIds.includes(txt.id)) {
+                  setSelected([txt.id], 'text')
+                }
+                setContextMenu({
+                  visible: true,
+                  x: e.clientX,
+                  y: e.clientY,
+                  targetId: txt.id,
+                  targetType: 'text',
+                })
+              }}
+            />
+          </div>
+        ))}
+
+        {/* 智能磁吸辅助线（位于世界坐标系） */}
+        <SnapGuides lines={snapLines} />
+
+        {/* 单选中图片的变换拉伸手柄 Overlay */}
+        {singleSelectedImage && !outpaintingImageId && (
+          <SelectionOverlay
+            image={singleSelectedImage}
+            onSnapLinesChange={setSnapLines}
+          />
+        )}
+
+        {/* 智能扩图交互外框 */}
+        {outpaintingTarget && (
+          <OutpaintingOverlay
+            image={outpaintingTarget}
+            onClose={() => setOutpaintingImageId(null)}
+          />
+        )}
       </div>
 
+      {/* 框选矩形浮层 */}
+      <MarqueeSelection startScreen={marqueeStart} currentScreen={marqueeCurrent} />
+
       {/* 选中图元的浮动工具条（位于屏幕坐标系） */}
-      {selectedImage && <FloatingToolbar image={selectedImage} />}
+      {!outpaintingImageId && (
+        <ContextualToolbar
+          onStartOutpainting={(id) => setOutpaintingImageId(id)}
+        />
+      )}
+
+      {/* 自定义右键上下文菜单 */}
+      <ContextMenu
+        menuState={contextMenu}
+        onClose={() => setContextMenu((m) => ({ ...m, visible: false }))}
+      />
+
+      {/* 竖向浮动右侧工具坞 */}
+      <BottomToolbar />
+
+      {/* 左下角鸟瞰图 / Minimap 导航器 */}
+      <Minimap />
 
       {/* 右下角缩放控制条 */}
       <CanvasZoomBar />

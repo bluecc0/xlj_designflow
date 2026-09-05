@@ -29,7 +29,7 @@ function CanvasGridInner({ zoom, panX, panY }: Props) {
     >
       <defs>
         <pattern
-          id="kun-dot-grid"
+          id="canvas-dot-grid"
           width={dotSize}
           height={dotSize}
           x={offsetX}
@@ -39,7 +39,7 @@ function CanvasGridInner({ zoom, panX, panY }: Props) {
           <circle cx={dotSize / 2} cy={dotSize / 2} r={dotRadius} fill={dotColor} />
         </pattern>
       </defs>
-      <rect width="100%" height="100%" fill="url(#kun-dot-grid)" />
+      <rect width="100%" height="100%" fill="url(#canvas-dot-grid)" />
     </svg>
   )
 }

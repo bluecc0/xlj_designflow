@@ -2,9 +2,11 @@ import React, { useRef, useState, useEffect } from 'react'
 import type { CanvasImage, ResizeHandle } from '../types'
 import { useViewportStore } from '../store/viewportStore'
 import { useCanvasStore } from '../store/canvasStore'
+import { calculateSnap, type SnapLine, type RectBox } from '../utils/snapping'
 
 interface Props {
   image: CanvasImage
+  onSnapLinesChange?: (lines: SnapLine[]) => void
 }
 
 const HANDLES: { pos: ResizeHandle; cursor: string; style: React.CSSProperties }[] = [
@@ -18,10 +20,13 @@ const HANDLES: { pos: ResizeHandle; cursor: string; style: React.CSSProperties }
   { pos: 'w', cursor: 'ew-resize', style: { top: '50%', left: -4, marginTop: -4 } },
 ]
 
-export function SelectionOverlay({ image }: Props) {
+export function SelectionOverlay({ image, onSnapLinesChange }: Props) {
   const zoom = useViewportStore((s) => s.zoom)
   const screenToCanvas = useViewportStore((s) => s.screenToCanvas)
   const updateImage = useCanvasStore((s) => s.updateImage)
+  const frames = useCanvasStore((s) => s.frames)
+  const images = useCanvasStore((s) => s.images)
+  const activePageId = useCanvasStore((s) => s.activePageId)
 
   const [isDragging, setIsDragging] = useState(false)
   const [activeHandle, setActiveHandle] = useState<ResizeHandle | null>(null)
@@ -38,6 +43,10 @@ export function SelectionOverlay({ image }: Props) {
   // 1. 拖拽移动
   const handleMoveMouseDown = (e: React.MouseEvent) => {
     e.stopPropagation()
+    if (e.shiftKey || e.metaKey) {
+      useCanvasStore.getState().toggleSelected(image.id, 'image')
+      return
+    }
     setIsDragging(true)
     dragStartRef.current = {
       clientX: e.clientX,
@@ -73,11 +82,31 @@ export function SelectionOverlay({ image }: Props) {
       const dy = (e.clientY - dragStartRef.current.clientY) / zoom
 
       if (isDragging) {
+        const rawX = dragStartRef.current.imgX + dx
+        const rawY = dragStartRef.current.imgY + dy
+
+        // 收集对齐候选框：当前页面的画板与其他图片
+        const currentFrames = frames.filter((f) => f.pageId === activePageId)
+        const currentImages = images.filter((im) => im.pageId === activePageId && im.id !== image.id)
+        const targetBoxes: RectBox[] = [
+          ...currentFrames.map((f) => ({ id: f.id, x: f.x, y: f.y, width: f.width, height: f.height })),
+          ...currentImages.map((im) => ({ id: im.id, x: im.x, y: im.y, width: im.width, height: im.height })),
+        ]
+
+        const snap = calculateSnap(
+          { id: image.id, x: rawX, y: rawY, width: image.width, height: image.height },
+          targetBoxes,
+          zoom
+        )
+
+        onSnapLinesChange?.(snap.lines)
+
         updateImage(image.id, {
-          x: Math.round(dragStartRef.current.imgX + dx),
-          y: Math.round(dragStartRef.current.imgY + dy),
+          x: Math.round(snap.snappedX),
+          y: Math.round(snap.snappedY),
         })
       } else if (activeHandle) {
+        onSnapLinesChange?.([])
         const { imgX, imgY, imgW, imgH, aspect } = dragStartRef.current
         let nextW = imgW
         let nextH = imgH
@@ -113,8 +142,12 @@ export function SelectionOverlay({ image }: Props) {
     }
 
     const onMouseUp = () => {
+      if (isDragging) {
+        useCanvasStore.getState().recalcFrameAttachment('image', [image.id])
+      }
       setIsDragging(false)
       setActiveHandle(null)
+      onSnapLinesChange?.([])
     }
 
     window.addEventListener('mousemove', onMouseMove)
@@ -123,7 +156,7 @@ export function SelectionOverlay({ image }: Props) {
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
     }
-  }, [isDragging, activeHandle, image.id, zoom, updateImage])
+  }, [isDragging, activeHandle, image.id, zoom, updateImage, frames, images, activePageId, onSnapLinesChange])
 
   return (
     <div
@@ -139,13 +172,13 @@ export function SelectionOverlay({ image }: Props) {
         zIndex: 50,
       }}
     >
-      {/* 蓝色选中外框 */}
+      {/* 选中外框（极简暗色，无蓝色） */}
       <div
         onMouseDown={handleMoveMouseDown}
         style={{
           position: 'absolute',
           inset: -1,
-          border: '1.5px solid #4f46e5',
+          border: '1.5px solid #181b24',
           pointerEvents: 'auto',
           cursor: 'move',
         }}
@@ -181,7 +214,7 @@ export function SelectionOverlay({ image }: Props) {
             width: 8,
             height: 8,
             backgroundColor: '#ffffff',
-            border: '1.5px solid #4f46e5',
+            border: '1.5px solid #181b24',
             borderRadius: 1,
             pointerEvents: 'auto',
             cursor,
