@@ -497,7 +497,9 @@ if _editor_beta_dist.exists():
         name="editor-beta",
     )
 
-_editor_canvas_dist = Path(__file__).parent.parent / "editor-lab-kun" / "dist"
+_editor_canvas_dist = Path(__file__).parent.parent / "editor-canvas" / "dist"
+if not _editor_canvas_dist.exists():
+    _editor_canvas_dist = Path(__file__).parent.parent / "editor-lab-kun" / "dist"
 if _editor_canvas_dist.exists():
     app.mount(
         "/editor-canvas",

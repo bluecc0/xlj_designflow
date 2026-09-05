@@ -29,7 +29,7 @@ interface CanvasState {
   deletePage: (pageId: string) => void
 
   // 画板操作
-  addFrame: (frame: Omit<CanvasFrame, 'pageId'>) => CanvasFrame
+  addFrame: (frame: Omit<CanvasFrame, 'pageId' | 'name'> & { name?: string }) => CanvasFrame
   updateFrame: (id: string, patch: Partial<CanvasFrame>, moveChildren?: boolean) => void
   deleteFrame: (id: string) => void
 
@@ -81,7 +81,7 @@ const DEFAULT_PAGE: CanvasPage = {
 const DEFAULT_FRAME: CanvasFrame = {
   id: 'frame-1',
   pageId: 'page-1',
-  name: '主画板',
+  name: '画板 1',
   x: 0,
   y: 0,
   width: 1080,
@@ -165,9 +165,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   // ─── 画板管理 ─────────────────────────────────────────────
   addFrame: (frameData) => {
     recordHistory(get)
-    const { activePageId } = get()
+    const { activePageId, frames } = get()
+    let name = frameData.name
+    if (!name || name === '画板') {
+      const pageFrames = frames.filter((f) => f.pageId === activePageId)
+      let maxNum = 0
+      for (const f of pageFrames) {
+        const m = (f.name || '').match(/^画板\s*(\d+)$/)
+        if (m) {
+          const n = parseInt(m[1], 10)
+          if (n > maxNum) maxNum = n
+        }
+      }
+      name = `画板 ${maxNum ? maxNum + 1 : pageFrames.length + 1}`
+    }
     const newFrame: CanvasFrame = {
       ...frameData,
+      name,
       pageId: activePageId,
     }
     set((s) => ({

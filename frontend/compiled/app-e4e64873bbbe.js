@@ -1797,7 +1797,7 @@ const Canvas = ({
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
 
-  // 清除 URL 中的历史参数 (如 ?canvas=kun) 与 localStorage 残留
+  // 清除 URL 中的历史遗留参数与 localStorage 残留
   React.useEffect(() => {
     try {
       localStorage.removeItem('designflow_canvas_engine');

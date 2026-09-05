@@ -111,14 +111,13 @@ export function BottomToolbar() {
     e.target.value = ''
   }
 
-  const handleCreateFrame = (w = 1080, h = 1080, name = '画板') => {
+  const handleCreateFrame = (w = 1080, h = 1080) => {
     const center = screenToCanvas({
       x: window.innerWidth / 2,
       y: window.innerHeight / 2,
     })
     addFrame({
       id: 'frame-' + Math.random().toString(36).slice(2, 10),
-      name,
       x: Math.round(center.x - w / 2),
       y: Math.round(center.y - h / 2),
       width: w,
@@ -326,36 +325,36 @@ export function BottomToolbar() {
               }}
             >
               <div
-                onClick={() => handleCreateFrame(1080, 1080, '1:1 方图')}
+                onClick={() => handleCreateFrame(1080, 1080)}
                 style={presetItemStyle}
                 onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#eef1f6')}
                 onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
               >
-                1:1 方图
+                1:1
               </div>
               <div
-                onClick={() => handleCreateFrame(750, 1000, '3:4 主图')}
+                onClick={() => handleCreateFrame(750, 1000)}
                 style={presetItemStyle}
                 onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#eef1f6')}
                 onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
               >
-                3:4 主图
+                3:4
               </div>
               <div
-                onClick={() => handleCreateFrame(1920, 1080, '16:9 横版')}
+                onClick={() => handleCreateFrame(1920, 1080)}
                 style={presetItemStyle}
                 onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#eef1f6')}
                 onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
               >
-                16:9 横版
+                16:9
               </div>
               <div
-                onClick={() => handleCreateFrame(1080, 1920, '9:16 竖版')}
+                onClick={() => handleCreateFrame(1080, 1920)}
                 style={presetItemStyle}
                 onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#eef1f6')}
                 onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
               >
-                9:16 竖版
+                9:16
               </div>
             </div>
           )}

@@ -20,9 +20,9 @@
       "port": 8013
     },
     {
-      "name": "editor-kun",
+      "name": "editor-canvas",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "editor-lab-kun"],
+      "runtimeArgs": ["run", "dev", "--prefix", "editor-canvas"],
       "port": 8014
     }
   ]

@@ -104,11 +104,10 @@ export const ContextMenu = memo(function ContextMenu({
   const singleImage = isSingleImage ? images.find((im) => im.id === selectedIds[0]) : null
 
   // 创建画板
-  const handleCreateFrame = (w = 1080, h = 1080, ratioName = '1:1') => {
+  const handleCreateFrame = (w = 1080, h = 1080) => {
     const pt = screenToCanvas({ x: menuState.x, y: menuState.y })
     const newFrame = addFrame({
       id: 'frame-' + Math.random().toString(36).slice(2, 10),
-      name: `画板 ${ratioName}`,
       x: Math.round(pt.x),
       y: Math.round(pt.y),
       width: w,
@@ -570,7 +569,7 @@ export const ContextMenu = memo(function ContextMenu({
                 }}
               >
                 <div
-                  onClick={() => handleCreateFrame(1080, 1080, '1:1')}
+                  onClick={() => handleCreateFrame(1080, 1080)}
                   style={menuItemStyle}
                   onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f4f8')}
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
@@ -578,7 +577,7 @@ export const ContextMenu = memo(function ContextMenu({
                   <span style={{ fontWeight: 600 }}>1:1</span>
                 </div>
                 <div
-                  onClick={() => handleCreateFrame(750, 1000, '3:4')}
+                  onClick={() => handleCreateFrame(750, 1000)}
                   style={menuItemStyle}
                   onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f4f8')}
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
@@ -586,7 +585,7 @@ export const ContextMenu = memo(function ContextMenu({
                   <span style={{ fontWeight: 600 }}>3:4</span>
                 </div>
                 <div
-                  onClick={() => handleCreateFrame(1920, 1080, '16:9')}
+                  onClick={() => handleCreateFrame(1920, 1080)}
                   style={menuItemStyle}
                   onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f4f8')}
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
@@ -594,7 +593,7 @@ export const ContextMenu = memo(function ContextMenu({
                   <span style={{ fontWeight: 600 }}>16:9</span>
                 </div>
                 <div
-                  onClick={() => handleCreateFrame(1080, 1920, '9:16')}
+                  onClick={() => handleCreateFrame(1080, 1920)}
                   style={menuItemStyle}
                   onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f4f8')}
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
