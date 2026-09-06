@@ -77,6 +77,68 @@ const LiteLoginGate = ({ onLogin, loading, error, initialName }) => {
   );
 };
 
+const FlipStage = ({ inspirationOpen, childrenA, childrenB }) => {
+  const stageRef = React.useRef(null);
+  const panelARef = React.useRef(null);
+  const panelBRef = React.useRef(null);
+  const currentRef = React.useRef(inspirationOpen ? 'B' : 'A');
+  const isFirstMount = React.useRef(true);
+
+  React.useEffect(() => {
+    if (isFirstMount.current) {
+      isFirstMount.current = false;
+      return;
+    }
+    const target = inspirationOpen ? 'B' : 'A';
+    if (currentRef.current === target) return;
+
+    const forward = target === 'B';
+    const from = forward ? panelARef.current : panelBRef.current;
+    const to = forward ? panelBRef.current : panelARef.current;
+
+    const reduceMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduceMotion || !from || !to) {
+      if (from) from.className = 'designflow-panel';
+      if (to) to.className = 'designflow-panel active';
+      currentRef.current = target;
+      return;
+    }
+
+    if (stageRef.current) {
+      stageRef.current.style.setProperty('--dir', forward ? '1' : '-1');
+    }
+
+    to.className = 'designflow-panel active entering';
+    from.className = 'designflow-panel active leaving';
+
+    const onAnimEnd = (e) => {
+      if (e.target !== from) return;
+      from.removeEventListener('animationend', onAnimEnd);
+      from.className = 'designflow-panel';
+      to.className = 'designflow-panel active';
+      currentRef.current = target;
+    };
+    from.addEventListener('animationend', onAnimEnd);
+
+    return () => {
+      from.removeEventListener('animationend', onAnimEnd);
+    };
+  }, [inspirationOpen]);
+
+  return (
+    <div className="designflow-stage-wrap">
+      <div className="designflow-stage" ref={stageRef}>
+        <div ref={panelARef} className={`designflow-panel ${!inspirationOpen ? 'active' : ''}`}>
+          {childrenA}
+        </div>
+        <div ref={panelBRef} className={`designflow-panel ${inspirationOpen ? 'active' : ''}`}>
+          {childrenB}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const App = () => {
   const DEFAULT_TWEAKS = { chatState: 'returned', canvasState: 'candidates', theme: 'light' };
   const [tweaks, setTweaks] = React.useState(window.TWEAKS || DEFAULT_TWEAKS);
@@ -426,13 +488,25 @@ const App = () => {
                 <span style={{ transform: 'translateX(-1px)', opacity: templateRevealHovered ? 0.9 : 0.55 }}>{templatePanelCollapsed ? '›' : '‹'}</span>
               </button>
             </div>
-            <Canvas
-              key={'canvas:' + currentUser.id}
-              template={activeTemplate}
-              resultTemplate={resultTemplate}
-              editorCommand={editorCommand}
-              onUseReferenceImages={handleUseCanvasReferences}
-              userId={currentUser.id}
+            <FlipStage
+              inspirationOpen={inspirationOpen}
+              childrenA={
+                <Canvas
+                  key={'canvas:' + currentUser.id}
+                  template={activeTemplate}
+                  resultTemplate={resultTemplate}
+                  editorCommand={editorCommand}
+                  onUseReferenceImages={handleUseCanvasReferences}
+                  userId={currentUser.id}
+                />
+              }
+              childrenB={
+                <InspirationPanel
+                  open={inspirationOpen}
+                  onClose={function() { setInspirationOpen(false); }}
+                  onUsePrompt={handleUseInspirationPrompt}
+                />
+              }
             />
             <Chat
               key={'chat:' + currentUser.id}
@@ -449,12 +523,6 @@ const App = () => {
               canvasReferenceSelection={canvasReferenceSelection}
             />
           </div>
-          {inspirationOpen && (
-            <InspirationPanel
-              onClose={function() { setInspirationOpen(false); }}
-              onUsePrompt={handleUseInspirationPrompt}
-            />
-          )}
           <Tweaks
             visible={tweaksVisible}
             tweaks={tweaks}

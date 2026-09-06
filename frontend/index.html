@@ -421,6 +421,64 @@
   ::-webkit-scrollbar-thumb:hover { background: oklch(0.80 0.008 260); border: 3px solid transparent; background-clip: padding-box; }
   .inspiration-tab-scroll { scrollbar-width: none; -ms-overflow-style: none; }
   .inspiration-tab-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+  /* 3D 翻转舞台机制（参考 panel-flip-reference.html） */
+  .designflow-stage-wrap {
+    perspective: 1300px;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .designflow-stage {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    transform-style: preserve-3d;
+  }
+
+  .designflow-panel {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    backface-visibility: hidden;
+    will-change: transform, opacity;
+  }
+
+  .designflow-panel.active {
+    opacity: 1;
+    pointer-events: auto;
+    z-index: 2;
+  }
+
+  .designflow-panel.leaving {
+    opacity: 1;
+    z-index: 2;
+    animation: flipOut .55s cubic-bezier(.4, 0, .2, 1) forwards;
+  }
+
+  .designflow-panel.entering {
+    opacity: 0;
+    z-index: 3;
+    animation: flipIn .55s cubic-bezier(.4, 0, .2, 1) forwards;
+  }
+
+  @keyframes flipOut {
+    to { transform: rotateY(calc(var(--dir, 1) * -80deg)); opacity: 0; }
+  }
+
+  @keyframes flipIn {
+    from { transform: rotateY(calc(var(--dir, 1) * 80deg)); opacity: 0; }
+    to   { transform: rotateY(0); opacity: 1; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .designflow-panel.leaving, .designflow-panel.entering { animation: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -437,7 +495,7 @@ window.TWEAKS = window.TWEAKS || { chatState: 'returned', canvasState: 'candidat
 </script>
 
 <script src="src/api.js"></script>
-<script src="compiled/app-d792c097a847.js" data-designflow-bundle="true"></script>
+<script src="compiled/app-e4e64873bbbe.js" data-designflow-bundle="true"></script>
 
 </body>
 </html>

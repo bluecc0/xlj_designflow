@@ -1390,6 +1390,31 @@ def _editor_snapshot_stats(snapshot_json: str) -> dict[str, int]:
         snapshot = json.loads(snapshot_json)
     except Exception:
         return {"json_len": len(snapshot_json), "pages": 0, "shapes": 0, "assets": 0}
+
+    # 兼容新版无限画布格式 (version 2)
+    if isinstance(snapshot, dict) and (
+        snapshot.get("version") == 2
+        or "images" in snapshot
+        or "pages" in snapshot
+        or "frames" in snapshot
+    ):
+        raw_pages = snapshot.get("pages") or []
+        raw_images = snapshot.get("images") or []
+        raw_frames = snapshot.get("frames") or []
+        raw_texts = snapshot.get("texts") or []
+        page_cnt = len(raw_pages) if isinstance(raw_pages, list) else 1
+        shapes_cnt = (
+            (len(raw_images) if isinstance(raw_images, list) else 0)
+            + (len(raw_frames) if isinstance(raw_frames, list) else 0)
+            + (len(raw_texts) if isinstance(raw_texts, list) else 0)
+        )
+        return {
+            "json_len": len(snapshot_json),
+            "pages": max(1, page_cnt),
+            "shapes": shapes_cnt,
+            "assets": len(raw_images) if isinstance(raw_images, list) else 0,
+        }
+
     store = {}
     if isinstance(snapshot, dict):
         document = snapshot.get("document")
