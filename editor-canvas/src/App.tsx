@@ -12,6 +12,7 @@ import { ContextualToolbar } from './components/ContextualToolbar'
 import { OutpaintingOverlay } from './components/OutpaintingOverlay'
 import { MarqueeSelection } from './components/MarqueeSelection'
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu'
+import { ImportProductModal } from './components/ImportProductModal'
 import { SnapGuides } from './components/SnapGuides'
 import type { SnapLine } from './utils/snapping'
 import { useViewportStore } from './store/viewportStore'
@@ -82,6 +83,10 @@ export function App() {
 
   // 右键菜单与吸附参考线状态
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0 })
+  const [importModalState, setImportModalState] = useState<{
+    visible: boolean
+    targetPos: { x: number; y: number } | null
+  }>({ visible: false, targetPos: null })
   const [snapLines, setSnapLines] = useState<SnapLine[]>([])
 
   // 1. 快捷键监听
@@ -647,6 +652,17 @@ export function App() {
       <ContextMenu
         menuState={contextMenu}
         onClose={() => setContextMenu((m) => ({ ...m, visible: false }))}
+        onOpenImportModal={(screenPos) => {
+          const pt = screenToCanvas(screenPos)
+          setImportModalState({ visible: true, targetPos: pt })
+        }}
+      />
+
+      {/* 导入产品图输入弹窗 */}
+      <ImportProductModal
+        visible={importModalState.visible}
+        targetPos={importModalState.targetPos}
+        onClose={() => setImportModalState((s) => ({ ...s, visible: false }))}
       />
 
       {/* 竖向浮动右侧工具坞 */}

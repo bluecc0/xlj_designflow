@@ -21,6 +21,7 @@ import {
   Maximize2,
   Focus,
   Maximize,
+  Package,
 } from 'lucide-react'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
@@ -36,6 +37,7 @@ export interface ContextMenuState {
 interface Props {
   menuState: ContextMenuState
   onClose: () => void
+  onOpenImportModal?: (pos: { x: number; y: number }) => void
 }
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
@@ -44,6 +46,7 @@ const MOD = isMac ? '⌘' : 'Ctrl+'
 export const ContextMenu = memo(function ContextMenu({
   menuState,
   onClose,
+  onOpenImportModal,
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null)
@@ -155,6 +158,16 @@ export const ContextMenu = memo(function ContextMenu({
     onClose()
   }
 
+  // 打开导入产品图弹窗
+  const handleOpenImportModal = () => {
+    if (onOpenImportModal) {
+      onOpenImportModal({ x: menuState.x, y: menuState.y })
+    }
+    onClose()
+  }
+
+  if (!menuState.visible) return null
+
   return (
     <div
       ref={menuRef}
@@ -165,24 +178,24 @@ export const ContextMenu = memo(function ContextMenu({
         e.preventDefault()
         e.stopPropagation()
       }}
-      style={{
-        position: 'fixed',
-        left: posX,
-        top: posY,
-        zIndex: 9999,
-        width: menuWidth,
-        padding: '5px',
-        backgroundColor: 'rgba(255, 255, 255, 0.95)',
-        backdropFilter: 'blur(28px)',
-        WebkitBackdropFilter: 'blur(28px)',
-        borderRadius: 12,
-        border: '1px solid #e5e8ee',
-        boxShadow: '0 18px 46px rgba(20, 47, 95, 0.16), 0 2px 8px rgba(20, 47, 95, 0.06)',
-        fontSize: 12,
-        color: '#1e232d',
-        userSelect: 'none',
-      }}
-    >
+          style={{
+            position: 'fixed',
+            left: posX,
+            top: posY,
+            zIndex: 9999,
+            width: menuWidth,
+            padding: '5px',
+            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+            backdropFilter: 'blur(28px)',
+            WebkitBackdropFilter: 'blur(28px)',
+            borderRadius: 12,
+            border: '1px solid #e5e8ee',
+            boxShadow: '0 18px 46px rgba(20, 47, 95, 0.16), 0 2px 8px rgba(20, 47, 95, 0.06)',
+            fontSize: 12,
+            color: '#1e232d',
+            userSelect: 'none',
+          }}
+        >
       {/* ─── 元素选中态菜单项 ─── */}
       {selectedIds.length > 0 ? (
         <>
@@ -525,6 +538,27 @@ export const ContextMenu = memo(function ContextMenu({
       ) : (
         /* ─── 空白画布菜单项 ─── */
         <>
+          {/* 导入产品图 */}
+          <div
+            data-action="import-product"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleOpenImportModal()
+            }}
+            style={{
+              ...menuItemStyle,
+              color: '#0f172a',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#eff6ff')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+          >
+            <Package size={14} color="#2563eb" strokeWidth={2.0} style={{ pointerEvents: 'none' }} />
+            <span style={{ flex: 1, fontWeight: 600 }}>导入产品图</span>
+            <span style={{ ...shortcutStyle, color: '#3b82f6', backgroundColor: '#dbeafe', padding: '1px 5px', borderRadius: 4 }}>SKU</span>
+          </div>
+
+          <div style={dividerStyle} />
+
           {/* 新建画板子菜单 */}
           <div
             onMouseEnter={() => setActiveSubmenu('new-frame')}

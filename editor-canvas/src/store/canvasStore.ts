@@ -35,6 +35,7 @@ interface CanvasState {
 
   // 图片操作
   addImage: (image: Omit<CanvasImage, 'pageId'>) => CanvasImage
+  addImages: (images: Omit<CanvasImage, 'pageId'>[]) => CanvasImage[]
   updateImage: (id: string, patch: Partial<CanvasImage>) => void
   updateImages: (patches: { id: string; patch: Partial<CanvasImage> }[]) => void
   deleteImage: (id: string) => void
@@ -267,6 +268,41 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       isDirty: true,
     }))
     return newImg
+  },
+
+  addImages: (imagesData) => {
+    if (imagesData.length === 0) return []
+    recordHistory(get)
+    const { activePageId, frames } = get()
+    const pageFrames = frames.filter((f) => f.pageId === activePageId)
+
+    const newImgs: CanvasImage[] = imagesData.map((img) => {
+      let frameId = img.frameId ?? null
+      if (frameId === null) {
+        const cx = img.x + img.width / 2
+        const cy = img.y + img.height / 2
+        for (let i = pageFrames.length - 1; i >= 0; i--) {
+          const f = pageFrames[i]
+          if (cx >= f.x && cx <= f.x + f.width && cy >= f.y && cy <= f.y + f.height) {
+            frameId = f.id
+            break
+          }
+        }
+      }
+      return {
+        ...img,
+        frameId,
+        pageId: activePageId,
+      }
+    })
+
+    set((s) => ({
+      images: [...s.images, ...newImgs],
+      selectedIds: newImgs.map((im) => im.id),
+      selectedType: 'image',
+      isDirty: true,
+    }))
+    return newImgs
   },
 
   updateImage: (id, patch) => {
