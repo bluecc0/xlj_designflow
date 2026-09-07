@@ -12,8 +12,8 @@ import {
 const FALLBACK_CONFIG: OutpaintingConfig = {
   enabled: false,
   providerMarginAlignment: 1,
-  maxWidth: 2048,
-  maxHeight: 2048,
+  maxWidth: 4096,
+  maxHeight: 4096,
   maxAreaPixels: 4_194_304,
   recommendedAreaPixels: 2_097_152,
   maxSourceBytes: 20 * 1024 * 1024,
