@@ -282,22 +282,52 @@ class ImagePreparationTest(unittest.TestCase):
 
     def test_geometry_rejects_output_overflow(self) -> None:
         boundary = bfl.validate_geometry(
-            processing_width=2047,
-            processing_height=2048,
+            processing_width=4095,
+            processing_height=1024,
             top=0,
             right=1,
             bottom=0,
             left=0,
         )
-        self.assertEqual((boundary.expected_width, boundary.expected_height), (2048, 2048))
-        self.assertEqual((boundary.provider_width, boundary.provider_height), (2048, 2048))
+        self.assertEqual((boundary.expected_width, boundary.expected_height), (4096, 1024))
+        self.assertEqual((boundary.provider_width, boundary.provider_height), (4096, 1024))
+
+        wide_16_9 = bfl.validate_geometry(
+            processing_width=2729,
+            processing_height=1536,
+            top=0,
+            right=1,
+            bottom=0,
+            left=0,
+        )
+        self.assertEqual((wide_16_9.expected_width, wide_16_9.expected_height), (2730, 1536))
+
+        tall_1_4 = bfl.validate_geometry(
+            processing_width=1024,
+            processing_height=4095,
+            top=1,
+            right=0,
+            bottom=0,
+            left=0,
+        )
+        self.assertEqual((tall_1_4.expected_width, tall_1_4.expected_height), (1024, 4096))
 
         with self.assertRaisesRegex(bfl.OutpaintingValidationError, "不能超过"):
             bfl.validate_geometry(
-                processing_width=2048,
+                processing_width=4096,
                 processing_height=64,
                 top=0,
                 right=1,
+                bottom=0,
+                left=0,
+            )
+
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "不能超过 4194304 像素"):
+            bfl.validate_geometry(
+                processing_width=2048,
+                processing_height=2048,
+                top=1,
+                right=0,
                 bottom=0,
                 left=0,
             )
@@ -724,12 +754,15 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             patch.object(app_main.settings, "bfl_outpainting_enabled", True),
             patch.object(app_main.settings, "bfl_api_key", "super-secret"),
             patch.object(app_main.settings, "bfl_outpainting_mode", "fast"),
+            patch.object(app_main.settings, "outpaint_max_width", 4096),
+            patch.object(app_main.settings, "outpaint_max_height", 4096),
+            patch.object(app_main.settings, "outpaint_max_area_pixels", 4_194_304),
         ):
             config = app_main.ai_image_outpainting_config()
         self.assertTrue(config["enabled"])
         self.assertEqual(config["snap_pixels"], 1)
-        self.assertEqual(config["max_width"], 2048)
-        self.assertEqual(config["max_height"], 2048)
+        self.assertEqual(config["max_width"], 4096)
+        self.assertEqual(config["max_height"], 4096)
         self.assertEqual(config["max_area_pixels"], 4_194_304)
         self.assertEqual(config["max_source_bytes"], app_main.settings.bfl_outpainting_max_source_bytes)
         self.assertEqual(
