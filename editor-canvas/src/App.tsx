@@ -411,8 +411,9 @@ export function App() {
               setSaveStatus('saved')
             })
           } else if (res.status === 401) {
-            markSaved(baseRev, saveSeq, doc)
-            setSaveStatus('saved')
+            console.warn('[Canvas] 会话未认证或已过期 (401)，保存未执行，保留本地修改')
+            setSaveStatus('error')
+            window.parent.postMessage({ type: 'designflow:auth-required' }, '*')
           } else if (res.status === 409) {
             console.warn('[Canvas] 检测到服务端版本冲突 (409)，暂停保存并拉取远端快照进行三方合并')
             isConflictRef.current = true

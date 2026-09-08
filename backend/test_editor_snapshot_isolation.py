@@ -163,6 +163,38 @@ class EditorSnapshotIsolationTest(unittest.TestCase):
                 self.assertTrue(ok)
                 self.assertEqual(rev2, 2)
 
+    def test_unauthenticated_snapshot_save_is_rejected_without_modifying_db(self) -> None:
+        import json
+        from backend import job_store
+        import tempfile
+        from pathlib import Path
+
+        doc = json.dumps({"version": 2, "pages": [{"id": "p1", "name": "P1", "order": 0}], "images": []})
+        req = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/editor/snapshot",
+                "query_string": b"user_id=operator_a",
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_db = Path(temp_dir) / "test_jobs.db"
+            with patch.object(job_store, "_DB_PATH", test_db):
+                job_store.init_db()
+
+                with patch.object(main, "_current_user", side_effect=HTTPException(401, "请先登录")):
+                    with self.assertRaises(HTTPException) as raised:
+                        import asyncio
+                        asyncio.run(main.editor_save_snapshot(req))
+                    self.assertEqual(raised.exception.status_code, 401)
+
+                # 确保 401 发生时数据库中没有任何未授权的快照记录
+                loaded, rev = job_store.load_editor_snapshot("operator_a")
+                self.assertIsNone(loaded)
+
 
 if __name__ == "__main__":
     unittest.main()

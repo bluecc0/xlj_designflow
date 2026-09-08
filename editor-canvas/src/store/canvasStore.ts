@@ -1167,11 +1167,64 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       texts: [],
     }
 
-    // 基于基线、本地和远端进行真正的 3-Way Merge
-    const mergedPages = threeWayMergeList(baseDoc.pages || [], current.pages, serverDoc.pages || [])
+    // 1. 基于基线、本地和远端进行 3-Way Merge
+    let mergedPages = threeWayMergeList(baseDoc.pages || [], current.pages, serverDoc.pages || [])
     const mergedFrames = threeWayMergeList(baseDoc.frames || [], current.frames, serverDoc.frames || [])
     const mergedImages = threeWayMergeList(baseDoc.images || [], current.images, serverDoc.images || [])
     const mergedTexts = threeWayMergeList(baseDoc.texts || [], current.texts || [], serverDoc.texts || [])
+
+    // 2. 检查并修复页面容器关联完整性：如果保留的图元所属的 pageId 在 mergedPages 中不存在，恢复该页面（优先从 base/local/server 查找）
+    const allKnownPages = new Map<string, CanvasPage>()
+    for (const p of [...(baseDoc.pages || []), ...current.pages, ...(serverDoc.pages || [])]) {
+      if (p && p.id && !allKnownPages.has(p.id)) {
+        allKnownPages.set(p.id, p)
+      }
+    }
+
+    let validPageIds = new Set(mergedPages.map((p) => p.id))
+    const checkAndRestorePage = (pageId: string | undefined) => {
+      if (!pageId) return
+      if (!validPageIds.has(pageId)) {
+        const pageToRestore = allKnownPages.get(pageId)
+        if (pageToRestore) {
+          mergedPages.push(pageToRestore)
+          validPageIds.add(pageId)
+        }
+      }
+    }
+
+    for (const f of mergedFrames) checkAndRestorePage(f.pageId)
+    for (const im of mergedImages) checkAndRestorePage(im.pageId)
+    for (const t of mergedTexts) checkAndRestorePage(t.pageId)
+
+    if (mergedPages.length === 0) {
+      mergedPages = [DEFAULT_PAGE]
+      validPageIds = new Set([DEFAULT_PAGE.id])
+    }
+
+    const fallbackPageId = mergedPages[0].id
+    for (const f of mergedFrames) {
+      if (!validPageIds.has(f.pageId)) f.pageId = fallbackPageId
+    }
+    for (const im of mergedImages) {
+      if (!validPageIds.has(im.pageId)) im.pageId = fallbackPageId
+    }
+    for (const t of mergedTexts) {
+      if (!validPageIds.has(t.pageId)) t.pageId = fallbackPageId
+    }
+
+    // 3. 检查并修复画板容器关联完整性：非空 frameId 必须指向当前有效的 mergedFrames
+    const validFrameIds = new Set(mergedFrames.map((f) => f.id))
+    for (const im of mergedImages) {
+      if (im.frameId && !validFrameIds.has(im.frameId)) {
+        im.frameId = null
+      }
+    }
+    for (const t of mergedTexts) {
+      if (t.frameId && !validFrameIds.has(t.frameId)) {
+        t.frameId = null
+      }
+    }
 
     let activePageId = current.activePageId
     if (!mergedPages.some((p) => p.id === activePageId)) {
@@ -1182,7 +1235,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
     const mergedDoc: CanvasDocument = {
       version: 2,
-      pages: mergedPages.length ? mergedPages : [DEFAULT_PAGE],
+      pages: mergedPages,
       activePageId,
       frames: mergedFrames,
       images: mergedImages,
