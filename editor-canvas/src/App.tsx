@@ -59,6 +59,7 @@ export function App() {
     insertImagesAuto,
     revision,
     isDirty,
+    editSequence,
     markSaved,
     loadDocument,
     restoreHistoryDocument,
@@ -76,6 +77,8 @@ export function App() {
   const pendingHostCommandsRef = useRef<any[]>([])
   const isConflictRef = useRef(false)
   const conflictRetryTimerRef = useRef<any>(null)
+  const saveInFlightRef = useRef(false)
+  const autoSaveRetryTimerRef = useRef<any>(null)
   const wheelTimerRef = useRef<any>(null)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved')
 
@@ -388,11 +391,19 @@ export function App() {
 
     setSaveStatus('saving')
     const timer = setTimeout(() => {
+      if (saveInFlightRef.current) {
+        // 前一个保存请求在途，重新递增序列号排入下一轮调度
+        useCanvasStore.setState((s) => ({ editSequence: (s.editSequence || 0) + 1 }))
+        return
+      }
+
       const state = useCanvasStore.getState()
       const saveSeq = state.editSequence
       const saveIntent = state.lastSaveIntent || 'update'
       const baseRev = state.revision
       const doc = getDocument()
+
+      saveInFlightRef.current = true
 
       fetch(editorSnapshotUrl, {
         method: 'POST',
@@ -406,6 +417,7 @@ export function App() {
         .then((res) => {
           if (res.ok) {
             isConflictRef.current = false
+            clearTimeout(autoSaveRetryTimerRef.current)
             return res.json().then((d) => {
               markSaved(Number(d.revision || baseRev + 1), saveSeq, doc)
               setSaveStatus('saved')
@@ -414,6 +426,12 @@ export function App() {
             console.warn('[Canvas] 会话未认证或已过期 (401)，保存未执行，保留本地修改')
             setSaveStatus('error')
             window.parent.postMessage({ type: 'designflow:auth-required' }, '*')
+            clearTimeout(autoSaveRetryTimerRef.current)
+            autoSaveRetryTimerRef.current = setTimeout(() => {
+              if (useCanvasStore.getState().isDirty && snapshotHydratedRef.current && !isConflictRef.current) {
+                useCanvasStore.setState((s) => ({ editSequence: (s.editSequence || 0) + 1 }))
+              }
+            }, 4000)
           } else if (res.status === 409) {
             console.warn('[Canvas] 检测到服务端版本冲突 (409)，暂停保存并拉取远端快照进行三方合并')
             isConflictRef.current = true
@@ -451,16 +469,35 @@ export function App() {
             resolveConflict()
           } else {
             setSaveStatus('error')
+            clearTimeout(autoSaveRetryTimerRef.current)
+            autoSaveRetryTimerRef.current = setTimeout(() => {
+              if (useCanvasStore.getState().isDirty && snapshotHydratedRef.current && !isConflictRef.current) {
+                useCanvasStore.setState((s) => ({ editSequence: (s.editSequence || 0) + 1 }))
+              }
+            }, 4000)
           }
         })
-        .catch(() => setSaveStatus('error'))
+        .catch((err) => {
+          console.warn('[Canvas] 保存网络失败:', err)
+          setSaveStatus('error')
+          clearTimeout(autoSaveRetryTimerRef.current)
+          autoSaveRetryTimerRef.current = setTimeout(() => {
+            if (useCanvasStore.getState().isDirty && snapshotHydratedRef.current && !isConflictRef.current) {
+              useCanvasStore.setState((s) => ({ editSequence: (s.editSequence || 0) + 1 }))
+            }
+          }, 4000)
+        })
+        .finally(() => {
+          saveInFlightRef.current = false
+        })
     }, 800)
 
     return () => {
       clearTimeout(timer)
       clearTimeout(conflictRetryTimerRef.current)
+      clearTimeout(autoSaveRetryTimerRef.current)
     }
-  }, [isDirty, revision, getDocument, markSaved, mergeConflictDocument])
+  }, [isDirty, editSequence, revision, getDocument, markSaved, mergeConflictDocument])
 
   // 6. 主站握手与 postMessage
   const notifyReady = useCallback(() => {
@@ -476,6 +513,15 @@ export function App() {
         if (snapshotHydratedRef.current) {
           notifyReady()
         }
+        return
+      }
+
+      if (data.type === 'designflow:auth-restored') {
+        isConflictRef.current = false
+        useCanvasStore.setState((s) => ({
+          editSequence: (s.editSequence || 0) + 1,
+          isDirty: true,
+        }))
         return
       }
 

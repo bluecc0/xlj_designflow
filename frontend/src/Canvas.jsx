@@ -50,6 +50,8 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
       if (!data || typeof data !== 'object') return;
       if (data.type === 'designflow:editor-ready') {
         markEditorReady();
+      } else if (data.type === 'designflow:auth-required') {
+        window.dispatchEvent(new CustomEvent('designflow-auth-required'));
       } else if (data.type === 'designflow:editor-inserted') {
         setEditorInsertState({ status: 'done', message: '已放入画布' });
       } else if (data.type === 'designflow:editor-error') {
@@ -102,20 +104,25 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
         return value;
       }
     };
-    const message = editorCommand.type === 'insert-images'
-      ? {
-          type: 'designflow:insert-image',
-          urls: (editorCommand.urls || []).map(normalizeAssetUrl).filter(Boolean),
-          mode: editorCommand.mode,
-          name: editorCommand.name,
-        }
-      : {
-          type: 'designflow:new-canvas',
-          pageName: editorCommand.pageName || t?.name || '画板 1',
-        };
-
+    let message = null;
     if (editorCommand.type === 'insert-images') {
+      message = {
+        type: 'designflow:insert-image',
+        urls: (editorCommand.urls || []).map(normalizeAssetUrl).filter(Boolean),
+        mode: editorCommand.mode,
+        name: editorCommand.name,
+      };
       setEditorInsertState({ status: 'running', message: '正在放入画布' });
+    } else if (editorCommand.type === 'auth-restored') {
+      message = {
+        type: 'designflow:auth-restored',
+        user: editorCommand.user,
+      };
+    } else if (editorCommand.type === 'new-canvas') {
+      message = {
+        type: 'designflow:new-canvas',
+        pageName: editorCommand.pageName || t?.name || '画板 1',
+      };
     }
 
     if (editorReadyRef.current) {

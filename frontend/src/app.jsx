@@ -214,6 +214,7 @@ const App = () => {
       return '';
     }
   });
+  const [reauthOpen, setReauthOpen] = React.useState(false);
 
   const updateTweaks = (partial) => {
     const next = { ...tweaks, ...partial };
@@ -305,6 +306,9 @@ const App = () => {
       if (!d || typeof d !== 'object') return;
       if (d.type === '__activate_edit_mode') setTweaksVisible(true);
       if (d.type === '__deactivate_edit_mode') setTweaksVisible(false);
+      if (d.type === 'designflow:auth-required') {
+        window.dispatchEvent(new CustomEvent('designflow-auth-required'));
+      }
     };
     window.addEventListener('message', handler);
     try {
@@ -315,10 +319,9 @@ const App = () => {
 
   React.useEffect(() => {
     const handleAuthRequired = () => {
-      setCurrentUser(null);
-      setResultTemplate(null);
       setAuthLoading(false);
       setAuthError('登录状态已失效，请重新输入用户名和密码。');
+      setReauthOpen(true);
     };
     window.addEventListener('designflow-auth-required', handleAuthRequired);
     return () => window.removeEventListener('designflow-auth-required', handleAuthRequired);
@@ -372,21 +375,31 @@ const App = () => {
     setAuthError('');
     try {
       const user = await window.API.loginLite(username, password);
+      const isSameUser = currentUser && String(currentUser.id) === String(user.id);
       rememberUser(user);
-      setResultTemplate(null);
-      setEditorCommand(null);
+      setReauthOpen(false);
+      if (!isSameUser) {
+        setResultTemplate(null);
+        setEditorCommand(null);
+      }
+      setEditorCommand({
+        key: Date.now() + Math.random(),
+        type: 'auth-restored',
+        user,
+      });
     } catch (err) {
       setAuthError(err && err.message ? err.message : '进入失败，请重试');
     } finally {
       setAuthLoading(false);
     }
-  }, [rememberUser]);
+  }, [rememberUser, currentUser]);
 
   const handleSwitchUser = React.useCallback(async () => {
     try {
       await window.API.logout();
     } catch (e) {}
     setCurrentUser(null);
+    setReauthOpen(false);
     setResultTemplate(null);
     setEditorCommand(null);
     setAuthError('');
@@ -415,12 +428,12 @@ const App = () => {
       height: '100vh', display: 'flex', flexDirection: 'column',
       overflow: 'hidden',
     }}>
-      {!currentUser && (
+      {(!currentUser || reauthOpen) && (
         <LiteLoginGate
           onLogin={handleLogin}
           loading={authLoading}
           error={authError}
-          initialName={lastUsername}
+          initialName={lastUsername || (currentUser ? currentUser.username : '')}
         />
       )}
       {currentUser && showAdmin && (
