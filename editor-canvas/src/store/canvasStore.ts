@@ -76,7 +76,7 @@ interface CanvasState {
   restoreHistoryDocument: (doc: any) => void
   mergeConflictDocument: (serverDoc: any, serverRev: number) => void
   getDocument: () => CanvasDocument
-  markSaved: (rev: number, savedSequence?: number) => void
+  markSaved: (rev: number, savedSequence?: number, savedDoc?: CanvasDocument) => void
 }
 
 const DEFAULT_PAGE: CanvasPage = {
@@ -102,6 +102,14 @@ function isEntityEqual<T>(a: T | undefined | null, b: T | undefined | null): boo
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
+function arraysEqual<T>(a: T[], b: T[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
 function threeWayMergeList<T extends { id: string }>(
   baseList: T[] = [],
   localList: T[] = [],
@@ -117,7 +125,7 @@ function threeWayMergeList<T extends { id: string }>(
     ...serverMap.keys(),
   ])
 
-  const result: T[] = []
+  const mergedEntities = new Map<string, T>()
 
   for (const id of allIds) {
     const base = baseMap.get(id)
@@ -130,23 +138,23 @@ function threeWayMergeList<T extends { id: string }>(
 
       if (localChanged && !serverChanged) {
         // 本地修改了，服务端未变 -> 保留本地修改
-        result.push(local)
+        mergedEntities.set(id, local)
       } else if (!localChanged && serverChanged) {
         // 服务端修改了，本地未变 -> 保留服务端修改
-        result.push(server)
+        mergedEntities.set(id, server)
       } else if (localChanged && serverChanged) {
         // 两端均修改：优先保留本地当前编辑版本
-        result.push(local)
+        mergedEntities.set(id, local)
       } else {
         // 两端均无修改
-        result.push(server)
+        mergedEntities.set(id, server)
       }
     } else if (base && !local && server) {
       // 存在于基线，本地删除了
       const serverChanged = !isEntityEqual(server, base)
       if (serverChanged) {
         // 服务端在删除前有新修改 -> 保留服务端新版防丢
-        result.push(server)
+        mergedEntities.set(id, server)
       } else {
         // 服务端未变，本地明确删除 -> 保持删除
       }
@@ -155,23 +163,58 @@ function threeWayMergeList<T extends { id: string }>(
       const localChanged = !isEntityEqual(local, base)
       if (localChanged) {
         // 本地在服务端删除后仍进行了主动修改 -> 保留本地修改
-        result.push(local)
+        mergedEntities.set(id, local)
       } else {
         // 本地未变，服务端删除了 -> 保持删除
       }
     } else if (!base && local && !server) {
       // 本地新增
-      result.push(local)
+      mergedEntities.set(id, local)
     } else if (!base && !local && server) {
       // 服务端新增
-      result.push(server)
+      mergedEntities.set(id, server)
     } else if (!base && local && server) {
       // 两端同时新增
-      result.push(local)
+      mergedEntities.set(id, local)
     }
   }
 
-  return result
+  // 顺序三方合并：检查单端是否主动调整了图层/元素顺序
+  const baseOrder = baseList.map((x) => x.id)
+  const localOrder = localList.map((x) => x.id)
+  const serverOrder = serverList.map((x) => x.id)
+
+  const baseCommonWithServer = baseOrder.filter((id) => serverMap.has(id))
+  const serverCommonWithBase = serverOrder.filter((id) => baseMap.has(id))
+  const serverReordered = !arraysEqual(baseCommonWithServer, serverCommonWithBase)
+
+  const baseCommonWithLocal = baseOrder.filter((id) => localMap.has(id))
+  const localCommonWithBase = localOrder.filter((id) => baseMap.has(id))
+  const localReordered = !arraysEqual(baseCommonWithLocal, localCommonWithBase)
+
+  let finalOrder: string[] = []
+
+  if (serverReordered && !localReordered) {
+    // 仅远端调整了顺序：优先按远端顺序排列
+    const serverInMerged = serverOrder.filter((id) => mergedEntities.has(id))
+    const localRemaining = localOrder.filter((id) => mergedEntities.has(id) && !serverOrder.includes(id))
+    finalOrder = [...serverInMerged, ...localRemaining]
+  } else {
+    // 本地调整了顺序或双方均调整：优先保留本地视口当前的顺序
+    const localInMerged = localOrder.filter((id) => mergedEntities.has(id))
+    const serverRemaining = serverOrder.filter((id) => mergedEntities.has(id) && !localOrder.includes(id))
+    finalOrder = [...localInMerged, ...serverRemaining]
+  }
+
+  // 确保所有存在于 mergedEntities 的 ID 都在 finalOrder 中
+  const orderSet = new Set(finalOrder)
+  for (const id of mergedEntities.keys()) {
+    if (!orderSet.has(id)) {
+      finalOrder.push(id)
+    }
+  }
+
+  return finalOrder.map((id) => mergedEntities.get(id)!).filter(Boolean)
 }
 
 // 记录历史操作快照
@@ -1152,6 +1195,20 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       || !isEntityEqual(mergedDoc.texts, serverDoc.texts)
       || !isEntityEqual(mergedDoc.pages, serverDoc.pages)
 
+    const serverShapes = (serverDoc.images?.length || 0) + (serverDoc.texts?.length || 0) + (serverDoc.frames?.length || 0)
+    const mergedShapes = (mergedDoc.images?.length || 0) + (mergedDoc.texts?.length || 0) + (mergedDoc.frames?.length || 0)
+    const serverPages = serverDoc.pages?.length || 0
+    const mergedPagesCount = mergedDoc.pages.length
+
+    const isDeletingServerContent =
+      current.lastSaveIntent === 'user_delete' ||
+      (serverShapes >= 3 && mergedShapes === 0) ||
+      ((serverDoc.images?.length || 0) > 0 && (mergedDoc.images?.length || 0) === 0) ||
+      mergedShapes < serverShapes ||
+      (serverPages > 1 && mergedPagesCount < serverPages)
+
+    const nextIntent: 'update' | 'user_delete' = isDeletingServerContent ? 'user_delete' : 'update'
+
     set({
       pages: mergedDoc.pages,
       activePageId,
@@ -1162,7 +1219,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       revision: serverRev,
       isDirty,
       editSequence: (current.editSequence || 0) + 1,
-      lastSaveIntent: 'update',
+      lastSaveIntent: nextIntent,
     })
   },
 
@@ -1184,18 +1241,26 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
   },
 
-  markSaved: (rev, savedSequence) => {
+  markSaved: (rev, savedSequence, savedDoc) => {
     const { editSequence } = get()
     const currentDoc = get().getDocument()
+    const nextBase = savedDoc
+      ? JSON.parse(JSON.stringify(savedDoc))
+      : JSON.parse(JSON.stringify(currentDoc))
+
     if (savedSequence !== undefined && editSequence > savedSequence) {
-      set({ revision: rev, lastSavedSequence: savedSequence })
+      set({
+        revision: rev,
+        lastSavedSequence: savedSequence,
+        baseDocument: nextBase,
+      })
     } else {
       set({
         isDirty: false,
         revision: rev,
         lastSavedSequence: editSequence,
         lastSaveIntent: 'update',
-        baseDocument: JSON.parse(JSON.stringify(currentDoc)),
+        baseDocument: nextBase,
       })
     }
   },

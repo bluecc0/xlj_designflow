@@ -407,11 +407,11 @@ export function App() {
           if (res.ok) {
             isConflictRef.current = false
             return res.json().then((d) => {
-              markSaved(Number(d.revision || baseRev + 1), saveSeq)
+              markSaved(Number(d.revision || baseRev + 1), saveSeq, doc)
               setSaveStatus('saved')
             })
           } else if (res.status === 401) {
-            markSaved(baseRev, saveSeq)
+            markSaved(baseRev, saveSeq, doc)
             setSaveStatus('saved')
           } else if (res.status === 409) {
             console.warn('[Canvas] 检测到服务端版本冲突 (409)，暂停保存并拉取远端快照进行三方合并')
