@@ -76,6 +76,7 @@ export function App() {
   const snapshotHydratedRef = useRef(false)
   const pendingHostCommandsRef = useRef<any[]>([])
   const isConflictRef = useRef(false)
+  const isResolvingConflictRef = useRef(false)
   const conflictRetryTimerRef = useRef<any>(null)
   const saveInFlightRef = useRef(false)
   const autoSaveRetryTimerRef = useRef<any>(null)
@@ -384,6 +385,68 @@ export function App() {
     }
   }, [insertImagesAuto, createPage, renamePage, loadDocument])
 
+  // 冲突解决控制器：生命周期独立于防抖保存 effect，重试循环不受每次编辑 cleanup 的影响
+  const resolveConflict = useCallback(() => {
+    if (!editorUserId || !isConflictRef.current) {
+      isResolvingConflictRef.current = false
+      return
+    }
+
+    isResolvingConflictRef.current = true
+
+    fetch(editorSnapshotUrl)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!isConflictRef.current) {
+          isResolvingConflictRef.current = false
+          return
+        }
+        if (data && data.snapshot) {
+          try {
+            const parsed = typeof data.snapshot === 'string' ? JSON.parse(data.snapshot) : data.snapshot
+            const converted = convertLegacyTldrawSnapshot(parsed)
+            if (converted) {
+              isConflictRef.current = false
+              isResolvingConflictRef.current = false
+              clearTimeout(conflictRetryTimerRef.current)
+              mergeConflictDocument(converted, Number(data.revision || useCanvasStore.getState().revision + 1))
+              setSaveStatus('saving')
+              return
+            }
+          } catch (err) {
+            console.warn('[Canvas] 冲突快照解析错误:', err)
+          }
+        }
+        // 远端快照尚未拉取成功，排定独立重试
+        if (isConflictRef.current) {
+          clearTimeout(conflictRetryTimerRef.current)
+          conflictRetryTimerRef.current = setTimeout(resolveConflict, 2000)
+        }
+      })
+      .catch((err) => {
+        console.warn('[Canvas] 冲突快照拉取网络失败:', err)
+        if (isConflictRef.current) {
+          clearTimeout(conflictRetryTimerRef.current)
+          conflictRetryTimerRef.current = setTimeout(resolveConflict, 2000)
+        }
+      })
+  }, [mergeConflictDocument])
+
+  const startConflictResolution = useCallback(() => {
+    isConflictRef.current = true
+    setSaveStatus('error')
+    if (isResolvingConflictRef.current) return
+    clearTimeout(conflictRetryTimerRef.current)
+    resolveConflict()
+  }, [resolveConflict])
+
+  // 组件卸载时清理独立冲突定时器
+  useEffect(() => {
+    return () => {
+      clearTimeout(conflictRetryTimerRef.current)
+    }
+  }, [])
+
   // 5. 自动防抖存盘
   useEffect(() => {
     if (!isDirty || !snapshotHydratedRef.current || !editorUserId) return
@@ -433,40 +496,8 @@ export function App() {
               }
             }, 4000)
           } else if (res.status === 409) {
-            console.warn('[Canvas] 检测到服务端版本冲突 (409)，暂停保存并拉取远端快照进行三方合并')
-            isConflictRef.current = true
-            setSaveStatus('error')
-
-            const resolveConflict = () => {
-              fetch(editorSnapshotUrl)
-                .then((r) => (r.ok ? r.json() : null))
-                .then((data) => {
-                  if (data && data.snapshot) {
-                    try {
-                      const parsed = typeof data.snapshot === 'string' ? JSON.parse(data.snapshot) : data.snapshot
-                      const converted = convertLegacyTldrawSnapshot(parsed)
-                      if (converted) {
-                        isConflictRef.current = false
-                        mergeConflictDocument(converted, Number(data.revision || baseRev + 1))
-                        setSaveStatus('saved')
-                        return
-                      }
-                    } catch (err) {
-                      console.warn('[Canvas] 冲突快照解析错误:', err)
-                    }
-                  }
-                  // 远端快照尚未拉取成功，继续保持冲突暂停状态，保留原基线版本号，稍后重试
-                  clearTimeout(conflictRetryTimerRef.current)
-                  conflictRetryTimerRef.current = setTimeout(resolveConflict, 2000)
-                })
-                .catch((err) => {
-                  console.warn('[Canvas] 冲突快照拉取网络失败:', err)
-                  clearTimeout(conflictRetryTimerRef.current)
-                  conflictRetryTimerRef.current = setTimeout(resolveConflict, 2000)
-                })
-            }
-
-            resolveConflict()
+            console.warn('[Canvas] 检测到服务端版本冲突 (409)，启动独立冲突解决控制器')
+            startConflictResolution()
           } else {
             setSaveStatus('error')
             clearTimeout(autoSaveRetryTimerRef.current)
@@ -494,10 +525,9 @@ export function App() {
 
     return () => {
       clearTimeout(timer)
-      clearTimeout(conflictRetryTimerRef.current)
       clearTimeout(autoSaveRetryTimerRef.current)
     }
-  }, [isDirty, editSequence, revision, getDocument, markSaved, mergeConflictDocument])
+  }, [isDirty, editSequence, revision, getDocument, markSaved, startConflictResolution])
 
   // 6. 主站握手与 postMessage
   const notifyReady = useCallback(() => {
@@ -517,11 +547,14 @@ export function App() {
       }
 
       if (data.type === 'designflow:auth-restored') {
-        isConflictRef.current = false
-        useCanvasStore.setState((s) => ({
-          editSequence: (s.editSequence || 0) + 1,
-          isDirty: true,
-        }))
+        if (isConflictRef.current) {
+          startConflictResolution()
+        } else {
+          useCanvasStore.setState((s) => ({
+            editSequence: (s.editSequence || 0) + 1,
+            isDirty: true,
+          }))
+        }
         return
       }
 
