@@ -61,6 +61,7 @@ export function App() {
     isDirty,
     markSaved,
     loadDocument,
+    restoreHistoryDocument,
     getDocument,
   } = useCanvasStore()
 
@@ -71,6 +72,7 @@ export function App() {
   const isMouseDownRef = useRef(false)
   const lastMousePosRef = useRef({ x: 0, y: 0 })
   const snapshotHydratedRef = useRef(false)
+  const pendingHostCommandsRef = useRef<any[]>([])
   const wheelTimerRef = useRef<any>(null)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved')
 
@@ -116,7 +118,7 @@ export function App() {
         e.preventDefault()
         const doc = getDocument()
         const prev = undo(doc)
-        if (prev) loadDocument(prev)
+        if (prev) restoreHistoryDocument(prev)
       } else if (
         (e.metaKey || e.ctrlKey) &&
         (e.shiftKey && (e.key === 'z' || e.key === 'Z') || e.key === 'y' || e.key === 'Y')
@@ -124,7 +126,7 @@ export function App() {
         e.preventDefault()
         const doc = getDocument()
         const next = redo(doc)
-        if (next) loadDocument(next)
+        if (next) restoreHistoryDocument(next)
       }
 
       // 复制
@@ -322,12 +324,36 @@ export function App() {
     if (!editorUserId) return
     let active = true
 
+    const drainPendingCommandsAndNotify = () => {
+      snapshotHydratedRef.current = true
+      const queued = pendingHostCommandsRef.current
+      pendingHostCommandsRef.current = []
+      for (const cmd of queued) {
+        if (cmd.type === 'designflow:insert-image') {
+          const urls: string[] = Array.isArray(cmd.urls) && cmd.urls.length
+            ? cmd.urls
+            : cmd.url
+            ? [cmd.url]
+            : []
+          if (urls.length > 0) {
+            insertImagesAuto(urls, cmd.mode, cmd.name)
+            window.parent.postMessage({ type: 'designflow:editor-inserted', urls, mode: cmd.mode }, '*')
+          }
+        } else if (cmd.type === 'designflow:new-canvas') {
+          createPage(cmd.pageName)
+        } else if (cmd.type === 'designflow:set-page-name' && cmd.name) {
+          renamePage(useCanvasStore.getState().activePageId, cmd.name)
+        }
+      }
+      notifyReady()
+    }
+
     fetch(editorSnapshotUrl)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (!active || !data || !data.snapshot) {
-          snapshotHydratedRef.current = true
-          notifyReady()
+        if (!active) return
+        if (!data || !data.snapshot) {
+          drainPendingCommandsAndNotify()
           return
         }
         try {
@@ -339,20 +365,18 @@ export function App() {
         } catch (err) {
           console.warn('[Canvas] 快照解析错误:', err)
         } finally {
-          snapshotHydratedRef.current = true
-          notifyReady()
+          drainPendingCommandsAndNotify()
         }
       })
       .catch((err) => {
         console.warn('[Canvas] 快照加载失败:', err)
-        snapshotHydratedRef.current = true
-        notifyReady()
+        if (active) drainPendingCommandsAndNotify()
       })
 
     return () => {
       active = false
     }
-  }, [])
+  }, [insertImagesAuto, createPage, renamePage, loadDocument])
 
   // 5. 自动防抖存盘
   useEffect(() => {
@@ -360,32 +384,52 @@ export function App() {
 
     setSaveStatus('saving')
     const timer = setTimeout(() => {
+      const state = useCanvasStore.getState()
+      const saveSeq = state.editSequence
+      const saveIntent = state.lastSaveIntent || 'update'
+      const baseRev = state.revision
       const doc = getDocument()
+
       fetch(editorSnapshotUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           snapshot: JSON.stringify(doc),
-          base_revision: revision,
-          intent: 'update',
+          base_revision: baseRev,
+          intent: saveIntent,
         }),
       })
         .then((res) => {
           if (res.ok) {
             return res.json().then((d) => {
-              markSaved(Number(d.revision || revision + 1))
+              markSaved(Number(d.revision || baseRev + 1), saveSeq)
               setSaveStatus('saved')
             })
           } else if (res.status === 401) {
-            markSaved(revision)
+            markSaved(baseRev, saveSeq)
             setSaveStatus('saved')
+          } else if (res.status === 409) {
+            console.warn('[Canvas] 检测到服务端版本冲突 (409)，重新拉取服务端最新快照')
+            fetch(editorSnapshotUrl)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((data) => {
+                if (data && data.snapshot) {
+                  try {
+                    const parsed = typeof data.snapshot === 'string' ? JSON.parse(data.snapshot) : data.snapshot
+                    const converted = convertLegacyTldrawSnapshot(parsed)
+                    if (converted) {
+                      loadDocument(converted, Number(data.revision || 1))
+                      setSaveStatus('saved')
+                      return
+                    }
+                  } catch (err) {
+                    console.warn('[Canvas] 冲突快照解析错误:', err)
+                  }
+                }
+                setSaveStatus('error')
+              })
+              .catch(() => setSaveStatus('error'))
           } else {
-            res.json().then((d) => {
-              const currentRev = d?.detail?.current_revision
-              if (currentRev && Number(currentRev) > revision) {
-                markSaved(Number(currentRev))
-              }
-            }).catch(() => {})
             setSaveStatus('error')
           }
         })
@@ -393,7 +437,7 @@ export function App() {
     }, 800)
 
     return () => clearTimeout(timer)
-  }, [isDirty, revision, getDocument, markSaved])
+  }, [isDirty, revision, getDocument, markSaved, loadDocument])
 
   // 6. 主站握手与 postMessage
   const notifyReady = useCallback(() => {
@@ -406,11 +450,17 @@ export function App() {
       if (!data || typeof data !== 'object') return
 
       if (data.type === 'designflow:ping') {
-        notifyReady()
+        if (snapshotHydratedRef.current) {
+          notifyReady()
+        }
         return
       }
 
       if (data.type === 'designflow:insert-image') {
+        if (!snapshotHydratedRef.current) {
+          pendingHostCommandsRef.current.push(data)
+          return
+        }
         const urls: string[] = Array.isArray(data.urls) && data.urls.length
           ? data.urls
           : data.url
@@ -424,11 +474,19 @@ export function App() {
       }
 
       if (data.type === 'designflow:new-canvas') {
+        if (!snapshotHydratedRef.current) {
+          pendingHostCommandsRef.current.push(data)
+          return
+        }
         createPage(data.pageName)
         return
       }
 
       if (data.type === 'designflow:set-page-name') {
+        if (!snapshotHydratedRef.current) {
+          pendingHostCommandsRef.current.push(data)
+          return
+        }
         if (data.name) {
           renamePage(activePageId, data.name)
         }
@@ -437,7 +495,6 @@ export function App() {
     }
 
     window.addEventListener('message', handleHostMessage)
-    notifyReady()
     return () => window.removeEventListener('message', handleHostMessage)
   }, [notifyReady, insertImagesAuto, createPage, renamePage, activePageId])
 

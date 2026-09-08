@@ -21,6 +21,9 @@ interface CanvasState {
   // 持久化与状态
   revision: number
   isDirty: boolean
+  editSequence: number
+  lastSavedSequence: number
+  lastSaveIntent: 'update' | 'user_delete'
 
   // 页面操作
   createPage: (name?: string) => string
@@ -69,8 +72,9 @@ interface CanvasState {
 
   // 快照与保存
   loadDocument: (doc: any, rev?: number) => void
+  restoreHistoryDocument: (doc: any) => void
   getDocument: () => CanvasDocument
-  markSaved: (rev: number) => void
+  markSaved: (rev: number, savedSequence?: number) => void
 }
 
 const DEFAULT_PAGE: CanvasPage = {
@@ -95,6 +99,19 @@ function recordHistory(get: () => CanvasState) {
   useHistoryStore.getState().record(doc)
 }
 
+function withMutation<T extends Partial<CanvasState>>(
+  s: CanvasState,
+  patch: T,
+  intent: 'update' | 'user_delete' = 'update'
+): T & { isDirty: boolean; editSequence: number; lastSaveIntent: 'update' | 'user_delete' } {
+  return {
+    ...patch,
+    isDirty: true,
+    editSequence: (s.editSequence || 0) + 1,
+    lastSaveIntent: intent === 'user_delete' ? 'user_delete' : (patch.lastSaveIntent || s.lastSaveIntent || 'update'),
+  }
+}
+
 export const useCanvasStore = create<CanvasState>((set, get) => ({
   pages: [DEFAULT_PAGE],
   activePageId: 'page-1',
@@ -106,6 +123,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   activeTool: 'select',
   revision: 1,
   isDirty: false,
+  editSequence: 0,
+  lastSavedSequence: 0,
+  lastSaveIntent: 'update',
 
   // ─── 页面管理 ─────────────────────────────────────────────
   createPage: (name) => {
@@ -118,12 +138,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       name: newPageName,
       order: pages.length,
     }
-    set((s) => ({
+    set((s) => withMutation(s, {
       pages: [...s.pages, newPage],
       activePageId: newPageId,
       selectedIds: [],
       selectedType: null,
-      isDirty: true,
     }))
     return newPageId
   },
@@ -138,9 +157,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   renamePage: (pageId, name) => {
     recordHistory(get)
-    set((s) => ({
+    set((s) => withMutation(s, {
       pages: s.pages.map((p) => (p.id === pageId ? { ...p, name: name.trim() || p.name } : p)),
-      isDirty: true,
     }))
   },
 
@@ -152,15 +170,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const remainingPages = pages.filter((p) => p.id !== pageId)
     const nextActive = activePageId === pageId ? remainingPages[0].id : activePageId
 
-    set((s) => ({
+    set((s) => withMutation(s, {
       pages: remainingPages,
       activePageId: nextActive,
       frames: s.frames.filter((f) => f.pageId !== pageId),
       images: s.images.filter((im) => im.pageId !== pageId),
       selectedIds: [],
       selectedType: null,
-      isDirty: true,
-    }))
+    }, 'user_delete'))
   },
 
   // ─── 画板管理 ─────────────────────────────────────────────
@@ -228,15 +245,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   deleteFrame: (id) => {
     recordHistory(get)
-    set((s) => ({
+    set((s) => withMutation(s, {
       frames: s.frames.filter((f) => f.id !== id),
       // 画板删除后，原画板内部图片与文本解绑成为画布自由排版图元，不强制丢失
       images: s.images.map((im) => (im.frameId === id ? { ...im, frameId: null } : im)),
       texts: s.texts.map((t) => (t.frameId === id ? { ...t, frameId: null } : t)),
       selectedIds: s.selectedIds.filter((selId) => selId !== id),
       selectedType: s.selectedIds.includes(id) ? null : s.selectedType,
-      isDirty: true,
-    }))
+    }, 'user_delete'))
   },
 
   // ─── 图片管理 ─────────────────────────────────────────────
@@ -325,12 +341,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   deleteImage: (id) => {
     recordHistory(get)
-    set((s) => ({
+    set((s) => withMutation(s, {
       images: s.images.filter((im) => im.id !== id),
       selectedIds: s.selectedIds.filter((selId) => selId !== id),
       selectedType: s.selectedIds.includes(id) && s.selectedIds.length === 1 ? null : s.selectedType,
-      isDirty: true,
-    }))
+    }, 'user_delete'))
   },
 
   // ─── 文本操作 ─────────────────────────────────────────────
@@ -385,12 +400,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   deleteText: (id) => {
     recordHistory(get)
-    set((s) => ({
+    set((s) => withMutation(s, {
       texts: s.texts.filter((t) => t.id !== id),
       selectedIds: s.selectedIds.filter((selId) => selId !== id),
       selectedType: s.selectedIds.includes(id) && s.selectedIds.length === 1 ? null : s.selectedType,
-      isDirty: true,
-    }))
+    }, 'user_delete'))
   },
 
   deleteSelected: () => {
@@ -403,20 +417,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       get().deleteFrame(frameId)
     } else if (selectedType === 'text') {
       const idSet = new Set(selectedIds)
-      set((s) => ({
+      set((s) => withMutation(s, {
         texts: s.texts.filter((t) => !idSet.has(t.id)),
         selectedIds: [],
         selectedType: null,
-        isDirty: true,
-      }))
+      }, 'user_delete'))
     } else {
       const idSet = new Set(selectedIds)
-      set((s) => ({
+      set((s) => withMutation(s, {
         images: s.images.filter((im) => !idSet.has(im.id)),
         selectedIds: [],
         selectedType: null,
-        isDirty: true,
-      }))
+      }, 'user_delete'))
     }
   },
 
@@ -899,11 +911,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     })
 
     recordHistory(get)
-    set((s) => ({
+    set((s) => withMutation(s, {
       images: [...s.images, ...createdImages],
       selectedIds: createdImages.map((im) => im.id),
       selectedType: 'image',
-      isDirty: true,
     }))
 
     return createdImages
@@ -954,6 +965,54 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       selectedType: null,
       revision: rev,
       isDirty: false,
+      editSequence: 0,
+      lastSavedSequence: 0,
+      lastSaveIntent: 'update',
+    })
+  },
+
+  restoreHistoryDocument: (doc) => {
+    if (!doc || typeof doc !== 'object') return
+    const { revision, editSequence } = get()
+
+    let pages: CanvasPage[] = Array.isArray(doc.pages) && doc.pages.length ? doc.pages : []
+    if (pages.length === 0) {
+      pages = [DEFAULT_PAGE]
+    }
+    const activePageId = doc.activePageId || pages[0].id
+
+    const frames: CanvasFrame[] = (Array.isArray(doc.frames) ? doc.frames : []).map((f: any) => ({
+      ...f,
+      pageId: f.pageId || pages[0].id,
+    }))
+
+    const images: CanvasImage[] = (Array.isArray(doc.images) ? doc.images : []).map((im: any) => ({
+      ...im,
+      pageId: im.pageId || pages[0].id,
+    }))
+
+    const texts: CanvasText[] = (Array.isArray(doc.texts) ? doc.texts : []).map((t: any) => ({
+      ...t,
+      pageId: t.pageId || pages[0].id,
+    }))
+
+    if (doc.viewport && typeof doc.viewport.zoom === 'number') {
+      useViewportStore.getState().setZoom(doc.viewport.zoom)
+      useViewportStore.getState().setPan(doc.viewport.panX, doc.viewport.panY)
+    }
+
+    set({
+      pages,
+      activePageId,
+      frames,
+      images,
+      texts,
+      selectedIds: [],
+      selectedType: null,
+      revision, // 保留当前服务器版本号
+      isDirty: true,
+      editSequence: (editSequence || 0) + 1,
+      lastSaveIntent: 'update',
     })
   },
 
@@ -975,5 +1034,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
   },
 
-  markSaved: (rev) => set({ isDirty: false, revision: rev }),
+  markSaved: (rev, savedSequence) => {
+    const { editSequence } = get()
+    if (savedSequence !== undefined && editSequence > savedSequence) {
+      set({ revision: rev, lastSavedSequence: savedSequence })
+    } else {
+      set({
+        isDirty: false,
+        revision: rev,
+        lastSavedSequence: editSequence,
+        lastSaveIntent: 'update',
+      })
+    }
+  },
 }))

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import functools
+import html
 import json
 import logging
 import re
@@ -525,7 +526,9 @@ _AUTH_EXEMPT_PREFIXES = (
     "/auth/options",
     "/health",
     "/product-library",
-    "/products/",
+    "/products/reference-image",
+    "/products/mock-image",
+    "/products/resolve-references",
     "/avatars",
     "/editor-beta",
     "/editor-canvas",
@@ -1916,10 +1919,13 @@ def _normalize_editor_snapshot_assets(snapshot: dict | None) -> dict | None:
     # 兼容新版无限画布格式
     if isinstance(snapshot.get("images"), list):
         for im in snapshot["images"]:
-            if isinstance(im, dict) and "src" in im:
-                normalized = _normalize_public_asset_url(im["src"])
-                if normalized:
-                    im["src"] = normalized
+            if isinstance(im, dict):
+                for key in ("url", "src"):
+                    val = im.get(key)
+                    if isinstance(val, str) and val.strip():
+                        normalized = _normalize_public_asset_url(val)
+                        if normalized and normalized != val:
+                            im[key] = normalized
         return snapshot
 
     document = snapshot.get("document")
@@ -3589,6 +3595,8 @@ def get_product_mock_image(sku: str = "DEMO", asset_type: str = "white"):
         "root": "图库原图",
     }
     type_label = type_names.get(asset_type.lower(), asset_type or "白底图")
+    escaped_sku = html.escape(clean_sku, quote=True)
+    escaped_type_label = html.escape(type_label, quote=True)
 
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
   <defs>
@@ -3615,8 +3623,8 @@ def get_product_mock_image(sku: str = "DEMO", asset_type: str = "white"):
   </g>
   <!-- 货号与信息 -->
   <rect x="220" y="470" width="360" height="46" rx="23" fill="url(#badge)"/>
-  <text x="400" y="500" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle">SKU: {clean_sku}</text>
-  <text x="400" y="555" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="600" fill="#334155" text-anchor="middle">类型：{type_label}（开发模拟图）</text>
+  <text x="400" y="500" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle">SKU: {escaped_sku}</text>
+  <text x="400" y="555" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="600" fill="#334155" text-anchor="middle">类型：{escaped_type_label}（开发模拟图）</text>
   <text x="400" y="588" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" fill="#94a3b8" text-anchor="middle">尺寸：800 × 800 px · 连入真实素材库时自动载入高清原图</text>
 </svg>"""
     return Response(content=svg, media_type="image/svg+xml")
@@ -6134,16 +6142,18 @@ def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[
         for im in snapshot["images"]:
             if not isinstance(im, dict):
                 continue
-            src = str(im.get("src") or "")
+            raw_url = str(im.get("url") or im.get("src") or "").strip()
+            if not raw_url:
+                continue
             try:
-                path = urlsplit(src).path if "://" in src else src.split("?", 1)[0]
+                path = urlsplit(raw_url).path if "://" in raw_url else raw_url.split("?", 1)[0]
             except Exception:
-                path = src
+                path = raw_url
             if not path.startswith(prefix):
                 continue
             owner = unquote(path[len(prefix):].split("/", 1)[0])
             if owner and owner != user_id:
-                foreign.append(src)
+                foreign.append(raw_url)
         return foreign
 
     store = snapshot.get("store")

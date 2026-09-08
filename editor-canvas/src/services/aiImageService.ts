@@ -138,6 +138,17 @@ export async function runVectorize(
   return { imageUrl: finalUrl, svgUrl: finalUrl, ...dims }
 }
 
+function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
 /**
  * 智能扩图 (FLUX Outpainting)
  */
@@ -148,16 +159,21 @@ export async function runOutpainting(
   margins: OutpaintMargins,
   onProgress?: (msg: string, progress?: number) => void
 ): Promise<{ imageUrl: string; width: number; height: number }> {
+  const clientRequestId = generateUUID()
   onProgress?.('正在提交扩图任务...')
   const resp = await fetch('/ai-image/outpainting', {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Client-Request-Id': clientRequestId,
+    },
     body: JSON.stringify({
       image_url: imageUrl,
       processing_width: processingWidth,
       processing_height: processingHeight,
       outpaint: margins,
+      client_request_id: clientRequestId,
     }),
   })
   if (!resp.ok) {
@@ -180,7 +196,10 @@ export async function runOutpainting(
 export async function runLayerExtract(
   imageUrl: string,
   onProgress?: (msg: string) => void
-): Promise<{ psdUrl: string; layers?: Array<{ url: string; x: number; y: number; width: number; height: number }> }> {
+): Promise<{
+  psdUrl: string
+  layers?: Array<{ url: string; x: number; y: number; width: number; height: number; name?: string }>
+}> {
   onProgress?.('正在提交图层分离任务...')
   const resp = await fetch('/ai-image/layer-extract', {
     method: 'POST',
@@ -197,8 +216,37 @@ export async function runLayerExtract(
 
   onProgress?.('正在分解 PSD 图层...')
   const result = await pollJob(job_id, 300, onProgress)
+  const extract = (result && typeof result.layer_extract === 'object' && result.layer_extract) || {}
+  const psdUrl = normalizeAssetUrl(extract.psd_url || result.psd_url || result.image_url || '')
+  const prefix = String(extract.layers_url_prefix || '').replace(/\/+$/, '')
+
+  const rawLayers: any[] = Array.isArray(extract.layers)
+    ? extract.layers
+    : Array.isArray(result.layers)
+    ? result.layers
+    : []
+
+  const formattedLayers = rawLayers
+    .map((l: any) => {
+      if (!l || typeof l !== 'object') return null
+      let url = String(l.url || '').trim()
+      if (!url && l.path && prefix) {
+        url = `${prefix}/${String(l.path).replace(/^\/+/, '')}`
+      }
+      if (!url) return null
+      return {
+        url: normalizeAssetUrl(url),
+        x: Number(l.x) || 0,
+        y: Number(l.y) || 0,
+        width: Number(l.width) || 0,
+        height: Number(l.height) || 0,
+        name: typeof l.name === 'string' ? l.name : undefined,
+      }
+    })
+    .filter(Boolean) as Array<{ url: string; x: number; y: number; width: number; height: number; name?: string }>
+
   return {
-    psdUrl: normalizeAssetUrl(result.psd_url || result.image_url),
-    layers: result.layers,
+    psdUrl,
+    layers: formattedLayers,
   }
 }

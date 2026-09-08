@@ -74,24 +74,90 @@ export function convertLegacyTldrawSnapshot(raw: any): CanvasDocument | null {
     })
   }
 
+  const pageIdSet = new Set(pages.map((p) => p.id))
   const activePageId = pages[0].id
 
-  // 提取 shape:image & shape:text
+  // 建立 shape 查找表
+  const shapesById = new Map<string, any>()
   for (const item of Object.values(store) as any[]) {
-    if (!item || item.typeName !== 'shape') continue
-    const parentPageId = pages.some((p) => p.id === item.parentId) ? item.parentId : activePageId
+    if (item && item.typeName === 'shape') {
+      shapesById.set(item.id, item)
+    }
+  }
 
+  // 解析 shape 的父级链条：累加相对坐标转换为世界坐标，解析所属 frameId 与 pageId
+  const resolveShapeHierarchy = (shapeId: string) => {
+    const cur = shapesById.get(shapeId)
+    if (!cur) return { worldX: 0, worldY: 0, pageId: activePageId, frameId: null as string | null }
+
+    let worldX = cur.x || 0
+    let worldY = cur.y || 0
+    let frameId: string | null = null
+    let pageId: string | null = null
+
+    let parentId = cur.parentId
+    const visited = new Set<string>([shapeId])
+
+    while (parentId) {
+      if (pageIdSet.has(parentId)) {
+        pageId = parentId
+        break
+      }
+      if (visited.has(parentId)) break
+      visited.add(parentId)
+
+      const parentShape = shapesById.get(parentId)
+      if (!parentShape) break
+
+      worldX += parentShape.x || 0
+      worldY += parentShape.y || 0
+      if (parentShape.type === 'frame' && !frameId) {
+        frameId = parentShape.id
+      }
+      parentId = parentShape.parentId
+    }
+
+    return {
+      worldX,
+      worldY,
+      pageId: pageId || activePageId,
+      frameId,
+    }
+  }
+
+  // 1. 提取 frame（画板容器）
+  let frameIdx = 0
+  for (const item of shapesById.values()) {
+    if (item.type === 'frame') {
+      const { worldX, worldY, pageId } = resolveShapeHierarchy(item.id)
+      frames.push({
+        id: item.id,
+        pageId,
+        name: item.props?.name || `画板 ${frameIdx + 1}`,
+        x: worldX,
+        y: worldY,
+        width: item.props?.w || 800,
+        height: item.props?.h || 600,
+      })
+      frameIdx++
+    }
+  }
+
+  // 2. 提取 shape:image & shape:text
+  for (const item of shapesById.values()) {
     if (item.type === 'image') {
       const assetId = item.props?.assetId
       const src = assets[assetId] || item.props?.url || ''
       if (!src) continue
 
+      const { worldX, worldY, pageId, frameId } = resolveShapeHierarchy(item.id)
+
       images.push({
         id: item.id,
-        pageId: parentPageId,
-        frameId: null, // 默认作为自由图片
-        x: item.x || 0,
-        y: item.y || 0,
+        pageId,
+        frameId,
+        x: worldX,
+        y: worldY,
         width: item.props?.w || 400,
         height: item.props?.h || 400,
         rotation: item.rotation || 0,
@@ -104,12 +170,15 @@ export function convertLegacyTldrawSnapshot(raw: any): CanvasDocument | null {
     } else if (item.type === 'text') {
       const content = item.props?.text || ''
       if (!content.trim()) continue
+
+      const { worldX, worldY, pageId, frameId } = resolveShapeHierarchy(item.id)
+
       texts.push({
         id: item.id,
-        pageId: parentPageId,
-        frameId: null,
-        x: item.x || 0,
-        y: item.y || 0,
+        pageId,
+        frameId,
+        x: worldX,
+        y: worldY,
         width: item.props?.w || 200,
         height: item.props?.h || 40,
         text: content,
