@@ -74,6 +74,8 @@ export function App() {
   const lastMousePosRef = useRef({ x: 0, y: 0 })
   const snapshotHydratedRef = useRef(false)
   const pendingHostCommandsRef = useRef<any[]>([])
+  const isConflictRef = useRef(false)
+  const conflictRetryTimerRef = useRef<any>(null)
   const wheelTimerRef = useRef<any>(null)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved')
 
@@ -382,6 +384,7 @@ export function App() {
   // 5. 自动防抖存盘
   useEffect(() => {
     if (!isDirty || !snapshotHydratedRef.current || !editorUserId) return
+    if (isConflictRef.current) return // 冲突等待处理中时暂停主动保存
 
     setSaveStatus('saving')
     const timer = setTimeout(() => {
@@ -402,6 +405,7 @@ export function App() {
       })
         .then((res) => {
           if (res.ok) {
+            isConflictRef.current = false
             return res.json().then((d) => {
               markSaved(Number(d.revision || baseRev + 1), saveSeq)
               setSaveStatus('saved')
@@ -410,36 +414,40 @@ export function App() {
             markSaved(baseRev, saveSeq)
             setSaveStatus('saved')
           } else if (res.status === 409) {
-            console.warn('[Canvas] 检测到服务端版本冲突 (409)，拉取服务端快照并执行安全合并')
-            res.json().then(async (d) => {
-              const currentRev = Number(d?.detail?.current_revision || baseRev + 1)
-              try {
-                const getRes = await fetch(editorSnapshotUrl)
-                if (getRes.ok) {
-                  const data = await getRes.json()
-                  if (data?.snapshot) {
-                    const parsed = typeof data.snapshot === 'string' ? JSON.parse(data.snapshot) : data.snapshot
-                    const converted = convertLegacyTldrawSnapshot(parsed)
-                    if (converted) {
-                      mergeConflictDocument(converted, Number(data.revision || currentRev))
-                      setSaveStatus('saving')
-                      return
+            console.warn('[Canvas] 检测到服务端版本冲突 (409)，暂停保存并拉取远端快照进行三方合并')
+            isConflictRef.current = true
+            setSaveStatus('error')
+
+            const resolveConflict = () => {
+              fetch(editorSnapshotUrl)
+                .then((r) => (r.ok ? r.json() : null))
+                .then((data) => {
+                  if (data && data.snapshot) {
+                    try {
+                      const parsed = typeof data.snapshot === 'string' ? JSON.parse(data.snapshot) : data.snapshot
+                      const converted = convertLegacyTldrawSnapshot(parsed)
+                      if (converted) {
+                        isConflictRef.current = false
+                        mergeConflictDocument(converted, Number(data.revision || baseRev + 1))
+                        setSaveStatus('saved')
+                        return
+                      }
+                    } catch (err) {
+                      console.warn('[Canvas] 冲突快照解析错误:', err)
                     }
                   }
-                }
-              } catch (err) {
-                console.warn('[Canvas] 冲突快照拉取/合并失败:', err)
-              }
-              // GET 失败或异常时的降级保护：保留本地全部未存图元，更新 revision，保持 isDirty 触发重试
-              useCanvasStore.setState((s) => ({
-                revision: currentRev,
-                isDirty: true,
-                editSequence: (s.editSequence || 0) + 1,
-              }))
-              setSaveStatus('error')
-            }).catch(() => {
-              setSaveStatus('error')
-            })
+                  // 远端快照尚未拉取成功，继续保持冲突暂停状态，保留原基线版本号，稍后重试
+                  clearTimeout(conflictRetryTimerRef.current)
+                  conflictRetryTimerRef.current = setTimeout(resolveConflict, 2000)
+                })
+                .catch((err) => {
+                  console.warn('[Canvas] 冲突快照拉取网络失败:', err)
+                  clearTimeout(conflictRetryTimerRef.current)
+                  conflictRetryTimerRef.current = setTimeout(resolveConflict, 2000)
+                })
+            }
+
+            resolveConflict()
           } else {
             setSaveStatus('error')
           }
@@ -447,7 +455,10 @@ export function App() {
         .catch(() => setSaveStatus('error'))
     }, 800)
 
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      clearTimeout(conflictRetryTimerRef.current)
+    }
   }, [isDirty, revision, getDocument, markSaved, mergeConflictDocument])
 
   // 6. 主站握手与 postMessage

@@ -24,6 +24,7 @@ interface CanvasState {
   editSequence: number
   lastSavedSequence: number
   lastSaveIntent: 'update' | 'user_delete'
+  baseDocument: CanvasDocument | null
 
   // 页面操作
   createPage: (name?: string) => string
@@ -94,6 +95,85 @@ const DEFAULT_FRAME: CanvasFrame = {
   height: 1080,
 }
 
+// 2D 实体深度比较与三方合并
+function isEntityEqual<T>(a: T | undefined | null, b: T | undefined | null): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+function threeWayMergeList<T extends { id: string }>(
+  baseList: T[] = [],
+  localList: T[] = [],
+  serverList: T[] = []
+): T[] {
+  const baseMap = new Map(baseList.map((x) => [x.id, x]))
+  const localMap = new Map(localList.map((x) => [x.id, x]))
+  const serverMap = new Map(serverList.map((x) => [x.id, x]))
+
+  const allIds = new Set([
+    ...baseMap.keys(),
+    ...localMap.keys(),
+    ...serverMap.keys(),
+  ])
+
+  const result: T[] = []
+
+  for (const id of allIds) {
+    const base = baseMap.get(id)
+    const local = localMap.get(id)
+    const server = serverMap.get(id)
+
+    if (base && local && server) {
+      const localChanged = !isEntityEqual(local, base)
+      const serverChanged = !isEntityEqual(server, base)
+
+      if (localChanged && !serverChanged) {
+        // 本地修改了，服务端未变 -> 保留本地修改
+        result.push(local)
+      } else if (!localChanged && serverChanged) {
+        // 服务端修改了，本地未变 -> 保留服务端修改
+        result.push(server)
+      } else if (localChanged && serverChanged) {
+        // 两端均修改：优先保留本地当前编辑版本
+        result.push(local)
+      } else {
+        // 两端均无修改
+        result.push(server)
+      }
+    } else if (base && !local && server) {
+      // 存在于基线，本地删除了
+      const serverChanged = !isEntityEqual(server, base)
+      if (serverChanged) {
+        // 服务端在删除前有新修改 -> 保留服务端新版防丢
+        result.push(server)
+      } else {
+        // 服务端未变，本地明确删除 -> 保持删除
+      }
+    } else if (base && local && !server) {
+      // 存在于基线，服务端删除了
+      const localChanged = !isEntityEqual(local, base)
+      if (localChanged) {
+        // 本地在服务端删除后仍进行了主动修改 -> 保留本地修改
+        result.push(local)
+      } else {
+        // 本地未变，服务端删除了 -> 保持删除
+      }
+    } else if (!base && local && !server) {
+      // 本地新增
+      result.push(local)
+    } else if (!base && !local && server) {
+      // 服务端新增
+      result.push(server)
+    } else if (!base && local && server) {
+      // 两端同时新增
+      result.push(local)
+    }
+  }
+
+  return result
+}
+
 // 记录历史操作快照
 function recordHistory(get: () => CanvasState) {
   const doc = get().getDocument()
@@ -127,6 +207,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   editSequence: 0,
   lastSavedSequence: 0,
   lastSaveIntent: 'update',
+
+    baseDocument: null,
 
   // ─── 页面管理 ─────────────────────────────────────────────
   createPage: (name) => {
@@ -203,11 +285,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       name,
       pageId: activePageId,
     }
-    set((s) => ({
+    set((s) => withMutation(s, {
       frames: [...s.frames, newFrame],
       selectedIds: [newFrame.id],
       selectedType: 'frame',
-      isDirty: true,
     }))
     return newFrame
   },
@@ -236,11 +317,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
     }
 
-    set((s) => ({
+    set((s) => withMutation(s, {
       frames: s.frames.map((f) => (f.id === id ? { ...f, ...patch } : f)),
       images: nextImages,
       texts: nextTexts,
-      isDirty: true,
     }))
   },
 
@@ -960,6 +1040,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       editSequence: 0,
       lastSavedSequence: 0,
       lastSaveIntent: 'update',
+      baseDocument: {
+        version: 2,
+        pages: JSON.parse(JSON.stringify(pages)),
+        activePageId,
+        frames: JSON.parse(JSON.stringify(frames)),
+        images: JSON.parse(JSON.stringify(images)),
+        texts: JSON.parse(JSON.stringify(texts)),
+        viewport: doc.viewport,
+      },
     })
   },
 
@@ -1026,61 +1115,55 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   mergeConflictDocument: (serverDoc, serverRev) => {
     if (!serverDoc || typeof serverDoc !== 'object') return
     const current = get()
-
-    // 1. 合并页面（本地页面优先保留，远端独有页面追加）
-    const localPages = current.pages
-    const serverPages = Array.isArray(serverDoc.pages) ? serverDoc.pages : []
-    const localPageIds = new Set(localPages.map((p) => p.id))
-    const mergedPages = [...localPages]
-    for (const sp of serverPages) {
-      if (!localPageIds.has(sp.id)) {
-        mergedPages.push(sp)
-      }
+    const baseDoc = current.baseDocument || {
+      version: 2,
+      pages: [DEFAULT_PAGE],
+      activePageId: 'page-1',
+      frames: [],
+      images: [],
+      texts: [],
     }
 
-    // 2. 合并画板
-    const localFrames = current.frames
-    const serverFrames = Array.isArray(serverDoc.frames) ? serverDoc.frames : []
-    const localFrameIds = new Set(localFrames.map((f) => f.id))
-    const mergedFrames = [...localFrames]
-    for (const sf of serverFrames) {
-      if (!localFrameIds.has(sf.id)) {
-        mergedFrames.push(sf)
-      }
+    // 基于基线、本地和远端进行真正的 3-Way Merge
+    const mergedPages = threeWayMergeList(baseDoc.pages || [], current.pages, serverDoc.pages || [])
+    const mergedFrames = threeWayMergeList(baseDoc.frames || [], current.frames, serverDoc.frames || [])
+    const mergedImages = threeWayMergeList(baseDoc.images || [], current.images, serverDoc.images || [])
+    const mergedTexts = threeWayMergeList(baseDoc.texts || [], current.texts || [], serverDoc.texts || [])
+
+    let activePageId = current.activePageId
+    if (!mergedPages.some((p) => p.id === activePageId)) {
+      activePageId = serverDoc.activePageId && mergedPages.some((p) => p.id === serverDoc.activePageId)
+        ? serverDoc.activePageId
+        : (mergedPages[0]?.id || 'page-1')
     }
 
-    // 3. 合并图片（本地图片保留本地位置/修改/新增，远端独有图片追加保留）
-    const localImages = current.images
-    const serverImages = Array.isArray(serverDoc.images) ? serverDoc.images : []
-    const localImageIds = new Set(localImages.map((im) => im.id))
-    const mergedImages = [...localImages]
-    for (const sim of serverImages) {
-      if (!localImageIds.has(sim.id)) {
-        mergedImages.push(sim)
-      }
-    }
-
-    // 4. 合并文本
-    const localTexts = current.texts
-    const serverTexts = Array.isArray(serverDoc.texts) ? serverDoc.texts : []
-    const localTextIds = new Set(localTexts.map((t) => t.id))
-    const mergedTexts = [...localTexts]
-    for (const st of serverTexts) {
-      if (!localTextIds.has(st.id)) {
-        mergedTexts.push(st)
-      }
-    }
-
-    set((s) => ({
-      pages: mergedPages,
+    const mergedDoc: CanvasDocument = {
+      version: 2,
+      pages: mergedPages.length ? mergedPages : [DEFAULT_PAGE],
+      activePageId,
       frames: mergedFrames,
       images: mergedImages,
       texts: mergedTexts,
+      viewport: current.getDocument().viewport,
+    }
+
+    const isDirty = !isEntityEqual(mergedDoc.images, serverDoc.images)
+      || !isEntityEqual(mergedDoc.frames, serverDoc.frames)
+      || !isEntityEqual(mergedDoc.texts, serverDoc.texts)
+      || !isEntityEqual(mergedDoc.pages, serverDoc.pages)
+
+    set({
+      pages: mergedDoc.pages,
+      activePageId,
+      frames: mergedDoc.frames,
+      images: mergedDoc.images,
+      texts: mergedDoc.texts,
+      baseDocument: JSON.parse(JSON.stringify(serverDoc)),
       revision: serverRev,
-      isDirty: true,
-      editSequence: (s.editSequence || 0) + 1,
+      isDirty,
+      editSequence: (current.editSequence || 0) + 1,
       lastSaveIntent: 'update',
-    }))
+    })
   },
 
   getDocument: () => {
@@ -1103,6 +1186,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   markSaved: (rev, savedSequence) => {
     const { editSequence } = get()
+    const currentDoc = get().getDocument()
     if (savedSequence !== undefined && editSequence > savedSequence) {
       set({ revision: rev, lastSavedSequence: savedSequence })
     } else {
@@ -1111,6 +1195,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         revision: rev,
         lastSavedSequence: editSequence,
         lastSaveIntent: 'update',
+        baseDocument: JSON.parse(JSON.stringify(currentDoc)),
       })
     }
   },
