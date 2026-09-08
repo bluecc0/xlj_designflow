@@ -106,6 +106,63 @@ class EditorSnapshotIsolationTest(unittest.TestCase):
         self.assertIn("&lt;script&gt;", body)
         self.assertIn("&quot;", body)
 
+    def test_user_delete_intent_allows_clearing_content_while_update_is_rejected(self) -> None:
+        import json
+        from backend import job_store
+        import tempfile
+        from pathlib import Path
+
+        doc_with_images = json.dumps({
+            "version": 2,
+            "pages": [{"id": "p1", "name": "P1", "order": 0}],
+            "activePageId": "p1",
+            "frames": [],
+            "images": [
+                {"id": "img-1", "url": "/a.png"},
+                {"id": "img-2", "url": "/b.png"},
+                {"id": "img-3", "url": "/c.png"},
+            ],
+            "texts": [],
+        })
+        empty_doc = json.dumps({
+            "version": 2,
+            "pages": [{"id": "p1", "name": "P1", "order": 0}],
+            "activePageId": "p1",
+            "frames": [],
+            "images": [],
+            "texts": [],
+        })
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_db = Path(temp_dir) / "test_jobs.db"
+            with patch.object(job_store, "_DB_PATH", test_db):
+                job_store.init_db()
+
+                # 初始保存 3 张图片
+                ok, rev1, reason = job_store.save_editor_snapshot("test_user", doc_with_images)
+                self.assertTrue(ok)
+                self.assertEqual(rev1, 1)
+
+                # 使用默认 intent='update' 清空，触发防误清空保护被拒绝
+                ok, rev_rej, reason = job_store.save_editor_snapshot(
+                    "test_user",
+                    empty_doc,
+                    base_revision=1,
+                    intent="update",
+                )
+                self.assertFalse(ok)
+                self.assertIn("overwrite_rejected", str(reason))
+
+                # 使用 intent='user_delete' 清空（用户显式删除或撤销插入），成功持久化
+                ok, rev2, reason = job_store.save_editor_snapshot(
+                    "test_user",
+                    empty_doc,
+                    base_revision=1,
+                    intent="user_delete",
+                )
+                self.assertTrue(ok)
+                self.assertEqual(rev2, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

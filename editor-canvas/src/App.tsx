@@ -62,6 +62,7 @@ export function App() {
     markSaved,
     loadDocument,
     restoreHistoryDocument,
+    mergeConflictDocument,
     getDocument,
   } = useCanvasStore()
 
@@ -197,7 +198,7 @@ export function App() {
       // 视角变动后防抖触发存盘
       clearTimeout(wheelTimerRef.current)
       wheelTimerRef.current = setTimeout(() => {
-        useCanvasStore.setState({ isDirty: true })
+        useCanvasStore.setState((s) => ({ isDirty: true, editSequence: (s.editSequence || 0) + 1 }))
       }, 1000)
     }
 
@@ -276,7 +277,7 @@ export function App() {
     if (isPanning) {
       clearTimeout(wheelTimerRef.current)
       wheelTimerRef.current = setTimeout(() => {
-        useCanvasStore.setState({ isDirty: true })
+        useCanvasStore.setState((s) => ({ isDirty: true, editSequence: (s.editSequence || 0) + 1 }))
       }, 1000)
     }
 
@@ -409,26 +410,36 @@ export function App() {
             markSaved(baseRev, saveSeq)
             setSaveStatus('saved')
           } else if (res.status === 409) {
-            console.warn('[Canvas] 检测到服务端版本冲突 (409)，重新拉取服务端最新快照')
-            fetch(editorSnapshotUrl)
-              .then((r) => (r.ok ? r.json() : null))
-              .then((data) => {
-                if (data && data.snapshot) {
-                  try {
+            console.warn('[Canvas] 检测到服务端版本冲突 (409)，拉取服务端快照并执行安全合并')
+            res.json().then(async (d) => {
+              const currentRev = Number(d?.detail?.current_revision || baseRev + 1)
+              try {
+                const getRes = await fetch(editorSnapshotUrl)
+                if (getRes.ok) {
+                  const data = await getRes.json()
+                  if (data?.snapshot) {
                     const parsed = typeof data.snapshot === 'string' ? JSON.parse(data.snapshot) : data.snapshot
                     const converted = convertLegacyTldrawSnapshot(parsed)
                     if (converted) {
-                      loadDocument(converted, Number(data.revision || 1))
-                      setSaveStatus('saved')
+                      mergeConflictDocument(converted, Number(data.revision || currentRev))
+                      setSaveStatus('saving')
                       return
                     }
-                  } catch (err) {
-                    console.warn('[Canvas] 冲突快照解析错误:', err)
                   }
                 }
-                setSaveStatus('error')
-              })
-              .catch(() => setSaveStatus('error'))
+              } catch (err) {
+                console.warn('[Canvas] 冲突快照拉取/合并失败:', err)
+              }
+              // GET 失败或异常时的降级保护：保留本地全部未存图元，更新 revision，保持 isDirty 触发重试
+              useCanvasStore.setState((s) => ({
+                revision: currentRev,
+                isDirty: true,
+                editSequence: (s.editSequence || 0) + 1,
+              }))
+              setSaveStatus('error')
+            }).catch(() => {
+              setSaveStatus('error')
+            })
           } else {
             setSaveStatus('error')
           }
@@ -437,7 +448,7 @@ export function App() {
     }, 800)
 
     return () => clearTimeout(timer)
-  }, [isDirty, revision, getDocument, markSaved, loadDocument])
+  }, [isDirty, revision, getDocument, markSaved, mergeConflictDocument])
 
   // 6. 主站握手与 postMessage
   const notifyReady = useCallback(() => {

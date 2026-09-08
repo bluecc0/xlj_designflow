@@ -1,5 +1,43 @@
 import type { CanvasDocument, CanvasFrame, CanvasImage, CanvasPage, CanvasText } from '../types'
 
+// 2D 仿射变换矩阵
+type Mat2D = {
+  a: number
+  b: number
+  c: number
+  d: number
+  e: number
+  f: number
+}
+
+function identityMat(): Mat2D {
+  return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }
+}
+
+function makeTransform(x: number, y: number, rotationRad: number): Mat2D {
+  const cos = Math.cos(rotationRad)
+  const sin = Math.sin(rotationRad)
+  return {
+    a: cos,
+    b: sin,
+    c: -sin,
+    d: cos,
+    e: x,
+    f: y,
+  }
+}
+
+function multiplyTransforms(m1: Mat2D, m2: Mat2D): Mat2D {
+  return {
+    a: m1.a * m2.a + m1.c * m2.b,
+    b: m1.b * m2.a + m1.d * m2.b,
+    c: m1.a * m2.c + m1.c * m2.d,
+    d: m1.b * m2.c + m1.d * m2.d,
+    e: m1.a * m2.e + m1.c * m2.f + m1.e,
+    f: m1.b * m2.e + m1.d * m2.f + m1.f,
+  }
+}
+
 /**
  * 将旧版 tldraw snapshot 转换为新版通用的 CanvasDocument
  */
@@ -85,41 +123,73 @@ export function convertLegacyTldrawSnapshot(raw: any): CanvasDocument | null {
     }
   }
 
-  // 解析 shape 的父级链条：累加相对坐标转换为世界坐标，解析所属 frameId 与 pageId
-  const resolveShapeHierarchy = (shapeId: string) => {
-    const cur = shapesById.get(shapeId)
-    if (!cur) return { worldX: 0, worldY: 0, pageId: activePageId, frameId: null as string | null }
+  // 解析 shape 的父级链条与组合 2D 仿射变换
+  const resolveShapeHierarchy = (shapeId: string, width: number = 0, height: number = 0) => {
+    const item = shapesById.get(shapeId)
+    if (!item) {
+      return {
+        x: 0,
+        y: 0,
+        rotationDeg: 0,
+        pageId: activePageId,
+        frameId: null as string | null,
+      }
+    }
 
-    let worldX = cur.x || 0
-    let worldY = cur.y || 0
-    let frameId: string | null = null
+    const chain: any[] = []
+    let curr = item
+    const visited = new Set<string>()
     let pageId: string | null = null
+    let frameId: string | null = null
 
-    let parentId = cur.parentId
-    const visited = new Set<string>([shapeId])
+    while (curr) {
+      if (visited.has(curr.id)) break
+      visited.add(curr.id)
+      chain.unshift(curr) // 祖先在前，子元素在后
 
-    while (parentId) {
+      const parentId = curr.parentId
+      if (!parentId) break
+
       if (pageIdSet.has(parentId)) {
         pageId = parentId
         break
       }
-      if (visited.has(parentId)) break
-      visited.add(parentId)
 
       const parentShape = shapesById.get(parentId)
       if (!parentShape) break
 
-      worldX += parentShape.x || 0
-      worldY += parentShape.y || 0
       if (parentShape.type === 'frame' && !frameId) {
         frameId = parentShape.id
       }
-      parentId = parentShape.parentId
+      curr = parentShape
     }
 
+    // 从顶层祖先开始逐级乘累积变换矩阵
+    let M = identityMat()
+    for (const node of chain) {
+      const nodeMat = makeTransform(node.x || 0, node.y || 0, node.rotation || 0)
+      M = multiplyTransforms(M, nodeMat)
+    }
+
+    // 在子元素局部坐标系中，中心点位于 (width / 2, height / 2)
+    const localCenterX = width / 2
+    const localCenterY = height / 2
+    const worldCenterX = M.a * localCenterX + M.c * localCenterY + M.e
+    const worldCenterY = M.b * localCenterX + M.d * localCenterY + M.f
+
+    const worldRad = Math.atan2(M.b, M.a)
+    const worldDeg = worldRad * (180 / Math.PI)
+    const normalizedDeg = Number((((worldDeg % 360) + 360) % 360).toFixed(2))
+
+    // 新 ImageShape 采用 CSS transform: rotate(...) 绕中心旋转 (transform-origin: center center)
+    // 故其包围盒左上角应为 (worldCenterX - width / 2, worldCenterY - height / 2)
+    const x = Math.round(worldCenterX - width / 2)
+    const y = Math.round(worldCenterY - height / 2)
+
     return {
-      worldX,
-      worldY,
+      x,
+      y,
+      rotationDeg: normalizedDeg,
       pageId: pageId || activePageId,
       frameId,
     }
@@ -129,15 +199,17 @@ export function convertLegacyTldrawSnapshot(raw: any): CanvasDocument | null {
   let frameIdx = 0
   for (const item of shapesById.values()) {
     if (item.type === 'frame') {
-      const { worldX, worldY, pageId } = resolveShapeHierarchy(item.id)
+      const w = item.props?.w || 800
+      const h = item.props?.h || 600
+      const { x, y, pageId } = resolveShapeHierarchy(item.id, w, h)
       frames.push({
         id: item.id,
         pageId,
         name: item.props?.name || `画板 ${frameIdx + 1}`,
-        x: worldX,
-        y: worldY,
-        width: item.props?.w || 800,
-        height: item.props?.h || 600,
+        x,
+        y,
+        width: w,
+        height: h,
       })
       frameIdx++
     }
@@ -150,17 +222,19 @@ export function convertLegacyTldrawSnapshot(raw: any): CanvasDocument | null {
       const src = assets[assetId] || item.props?.url || ''
       if (!src) continue
 
-      const { worldX, worldY, pageId, frameId } = resolveShapeHierarchy(item.id)
+      const w = item.props?.w || 400
+      const h = item.props?.h || 400
+      const { x, y, rotationDeg, pageId, frameId } = resolveShapeHierarchy(item.id, w, h)
 
       images.push({
         id: item.id,
         pageId,
         frameId,
-        x: worldX,
-        y: worldY,
-        width: item.props?.w || 400,
-        height: item.props?.h || 400,
-        rotation: item.rotation || 0,
+        x,
+        y,
+        width: w,
+        height: h,
+        rotation: rotationDeg,
         url: src,
         name: item.props?.name || '导入图片',
         locked: Boolean(item.isLocked),
@@ -171,16 +245,18 @@ export function convertLegacyTldrawSnapshot(raw: any): CanvasDocument | null {
       const content = item.props?.text || ''
       if (!content.trim()) continue
 
-      const { worldX, worldY, pageId, frameId } = resolveShapeHierarchy(item.id)
+      const w = item.props?.w || 200
+      const h = item.props?.h || 40
+      const { x, y, pageId, frameId } = resolveShapeHierarchy(item.id, w, h)
 
       texts.push({
         id: item.id,
         pageId,
         frameId,
-        x: worldX,
-        y: worldY,
-        width: item.props?.w || 200,
-        height: item.props?.h || 40,
+        x,
+        y,
+        width: w,
+        height: h,
         text: content,
         fontSize: item.props?.size === 's' ? 14 : item.props?.size === 'm' ? 18 : item.props?.size === 'xl' ? 32 : 24,
         color: '#1e293b',

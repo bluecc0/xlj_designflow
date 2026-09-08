@@ -73,6 +73,7 @@ interface CanvasState {
   // 快照与保存
   loadDocument: (doc: any, rev?: number) => void
   restoreHistoryDocument: (doc: any) => void
+  mergeConflictDocument: (serverDoc: any, serverRev: number) => void
   getDocument: () => CanvasDocument
   markSaved: (rev: number, savedSequence?: number) => void
 }
@@ -277,11 +278,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       frameId,
       pageId: activePageId,
     }
-    set((s) => ({
+    set((s) => withMutation(s, {
       images: [...s.images, newImg],
       selectedIds: [newImg.id],
       selectedType: 'image',
-      isDirty: true,
     }))
     return newImg
   },
@@ -312,30 +312,27 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
     })
 
-    set((s) => ({
+    set((s) => withMutation(s, {
       images: [...s.images, ...newImgs],
       selectedIds: newImgs.map((im) => im.id),
       selectedType: 'image',
-      isDirty: true,
     }))
     return newImgs
   },
 
   updateImage: (id, patch) => {
-    set((s) => ({
+    set((s) => withMutation(s, {
       images: s.images.map((im) => (im.id === id ? { ...im, ...patch } : im)),
-      isDirty: true,
     }))
   },
 
   updateImages: (patches) => {
     const patchMap = new Map(patches.map((p) => [p.id, p.patch]))
-    set((s) => ({
+    set((s) => withMutation(s, {
       images: s.images.map((im) => {
         const patch = patchMap.get(im.id)
         return patch ? { ...im, ...patch } : im
       }),
-      isDirty: true,
     }))
   },
 
@@ -382,19 +379,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       textAlign: text.textAlign || 'left',
       locked: false,
     }
-    set((s) => ({
+    set((s) => withMutation(s, {
       texts: [...s.texts, newText],
       selectedIds: [newText.id],
       selectedType: 'text',
-      isDirty: true,
     }))
     return newText
   },
 
   updateText: (id, patch) => {
-    set((s) => ({
+    set((s) => withMutation(s, {
       texts: s.texts.map((t) => (t.id === id ? { ...t, ...patch } : t)),
-      isDirty: true,
     }))
   },
 
@@ -468,13 +463,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         y: t.y + offset,
       }))
 
-      set((s) => ({
+      set((s) => withMutation(s, {
         frames: [...s.frames, newFrame],
         images: [...s.images, ...newImages],
         texts: [...s.texts, ...newTexts],
         selectedIds: [newFrameId],
         selectedType: 'frame',
-        isDirty: true,
       }))
       return
     }
@@ -489,11 +483,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         y: t.y + 20,
         pageId: activePageId,
       }))
-      set((s) => ({
+      set((s) => withMutation(s, {
         texts: [...s.texts, ...duplicates],
         selectedIds: duplicates.map((d) => d.id),
         selectedType: 'text',
-        isDirty: true,
       }))
       return
     }
@@ -510,11 +503,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       pageId: activePageId,
     }))
 
-    set((s) => ({
+    set((s) => withMutation(s, {
       images: [...s.images, ...duplicates],
       selectedIds: duplicates.map((d) => d.id),
       selectedType: 'image',
-      isDirty: true,
     }))
   },
 
@@ -526,20 +518,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const idx = s.images.findIndex((im) => im.id === id)
         if (idx === -1 || idx === s.images.length - 1) return s
         const target = s.images[idx]
-        return {
+        return withMutation(s, {
           images: s.images.filter((im) => im.id !== id).concat(target),
-          isDirty: true,
-        }
+        })
       }
       const isTxt = s.texts.some((t) => t.id === id)
       if (isTxt) {
         const idx = s.texts.findIndex((t) => t.id === id)
         if (idx === -1 || idx === s.texts.length - 1) return s
         const target = s.texts[idx]
-        return {
+        return withMutation(s, {
           texts: s.texts.filter((t) => t.id !== id).concat(target),
-          isDirty: true,
-        }
+        })
       }
       return s
     })
@@ -556,7 +546,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const temp = nextImages[idx]
         nextImages[idx] = nextImages[idx + 1]
         nextImages[idx + 1] = temp
-        return { images: nextImages, isDirty: true }
+        return withMutation(s, { images: nextImages })
       }
       const isTxt = s.texts.some((t) => t.id === id)
       if (isTxt) {
@@ -566,7 +556,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const temp = nextTexts[idx]
         nextTexts[idx] = nextTexts[idx + 1]
         nextTexts[idx + 1] = temp
-        return { texts: nextTexts, isDirty: true }
+        return withMutation(s, { texts: nextTexts })
       }
       return s
     })
@@ -583,7 +573,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const temp = nextImages[idx]
         nextImages[idx] = nextImages[idx - 1]
         nextImages[idx - 1] = temp
-        return { images: nextImages, isDirty: true }
+        return withMutation(s, { images: nextImages })
       }
       const isTxt = s.texts.some((t) => t.id === id)
       if (isTxt) {
@@ -593,7 +583,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const temp = nextTexts[idx]
         nextTexts[idx] = nextTexts[idx - 1]
         nextTexts[idx - 1] = temp
-        return { texts: nextTexts, isDirty: true }
+        return withMutation(s, { texts: nextTexts })
       }
       return s
     })
@@ -607,20 +597,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const idx = s.images.findIndex((im) => im.id === id)
         if (idx === -1 || idx === 0) return s
         const target = s.images[idx]
-        return {
+        return withMutation(s, {
           images: [target].concat(s.images.filter((im) => im.id !== id)),
-          isDirty: true,
-        }
+        })
       }
       const isTxt = s.texts.some((t) => t.id === id)
       if (isTxt) {
         const idx = s.texts.findIndex((t) => t.id === id)
         if (idx === -1 || idx === 0) return s
         const target = s.texts[idx]
-        return {
+        return withMutation(s, {
           texts: [target].concat(s.texts.filter((t) => t.id !== id)),
-          isDirty: true,
-        }
+        })
       }
       return s
     })
@@ -827,41 +815,45 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const idSet = new Set(ids)
 
     if (type === 'image') {
-      set((s) => ({
-        images: s.images.map((im) => {
-          if (!idSet.has(im.id)) return im
-          const cx = im.x + im.width / 2
-          const cy = im.y + im.height / 2
-          let matchedFrameId: string | null = null
-          for (let i = pageFrames.length - 1; i >= 0; i--) {
-            const f = pageFrames[i]
-            if (cx >= f.x && cx <= f.x + f.width && cy >= f.y && cy <= f.y + f.height) {
-              matchedFrameId = f.id
-              break
-            }
+      let changed = false
+      const nextImages = get().images.map((im) => {
+        if (!idSet.has(im.id)) return im
+        const cx = im.x + im.width / 2
+        const cy = im.y + im.height / 2
+        let matchedFrameId: string | null = null
+        for (let i = pageFrames.length - 1; i >= 0; i--) {
+          const f = pageFrames[i]
+          if (cx >= f.x && cx <= f.x + f.width && cy >= f.y && cy <= f.y + f.height) {
+            matchedFrameId = f.id
+            break
           }
-          return im.frameId !== matchedFrameId ? { ...im, frameId: matchedFrameId } : im
-        }),
-        isDirty: true,
-      }))
+        }
+        if (im.frameId !== matchedFrameId) changed = true
+        return im.frameId !== matchedFrameId ? { ...im, frameId: matchedFrameId } : im
+      })
+      if (changed) {
+        set((s) => withMutation(s, { images: nextImages }))
+      }
     } else if (type === 'text') {
-      set((s) => ({
-        texts: s.texts.map((t) => {
-          if (!idSet.has(t.id)) return t
-          const cx = t.x + t.width / 2
-          const cy = t.y + t.height / 2
-          let matchedFrameId: string | null = null
-          for (let i = pageFrames.length - 1; i >= 0; i--) {
-            const f = pageFrames[i]
-            if (cx >= f.x && cx <= f.x + f.width && cy >= f.y && cy <= f.y + f.height) {
-              matchedFrameId = f.id
-              break
-            }
+      let changed = false
+      const nextTexts = get().texts.map((t) => {
+        if (!idSet.has(t.id)) return t
+        const cx = t.x + t.width / 2
+        const cy = t.y + t.height / 2
+        let matchedFrameId: string | null = null
+        for (let i = pageFrames.length - 1; i >= 0; i--) {
+          const f = pageFrames[i]
+          if (cx >= f.x && cx <= f.x + f.width && cy >= f.y && cy <= f.y + f.height) {
+            matchedFrameId = f.id
+            break
           }
-          return t.frameId !== matchedFrameId ? { ...t, frameId: matchedFrameId } : t
-        }),
-        isDirty: true,
-      }))
+        }
+        if (t.frameId !== matchedFrameId) changed = true
+        return t.frameId !== matchedFrameId ? { ...t, frameId: matchedFrameId } : t
+      })
+      if (changed) {
+        set((s) => withMutation(s, { texts: nextTexts }))
+      }
     }
   },
 
@@ -973,7 +965,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   restoreHistoryDocument: (doc) => {
     if (!doc || typeof doc !== 'object') return
-    const { revision, editSequence } = get()
+    const current = get()
+    const { revision, editSequence } = current
 
     let pages: CanvasPage[] = Array.isArray(doc.pages) && doc.pages.length ? doc.pages : []
     if (pages.length === 0) {
@@ -1001,6 +994,20 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       useViewportStore.getState().setPan(doc.viewport.panX, doc.viewport.panY)
     }
 
+    // 判断是否为减少/清空内容的撤销/重做
+    const currentShapes = current.images.length + current.texts.length + current.frames.length
+    const restoredShapes = images.length + texts.length + frames.length
+    const currentPages = current.pages.length
+    const restoredPages = pages.length
+
+    const isContentDeleted =
+      restoredShapes < currentShapes ||
+      restoredPages < currentPages ||
+      restoredShapes === 0 ||
+      images.length === 0
+
+    const intent: 'update' | 'user_delete' = isContentDeleted ? 'user_delete' : 'update'
+
     set({
       pages,
       activePageId,
@@ -1012,8 +1019,68 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       revision, // 保留当前服务器版本号
       isDirty: true,
       editSequence: (editSequence || 0) + 1,
-      lastSaveIntent: 'update',
+      lastSaveIntent: intent,
     })
+  },
+
+  mergeConflictDocument: (serverDoc, serverRev) => {
+    if (!serverDoc || typeof serverDoc !== 'object') return
+    const current = get()
+
+    // 1. 合并页面（本地页面优先保留，远端独有页面追加）
+    const localPages = current.pages
+    const serverPages = Array.isArray(serverDoc.pages) ? serverDoc.pages : []
+    const localPageIds = new Set(localPages.map((p) => p.id))
+    const mergedPages = [...localPages]
+    for (const sp of serverPages) {
+      if (!localPageIds.has(sp.id)) {
+        mergedPages.push(sp)
+      }
+    }
+
+    // 2. 合并画板
+    const localFrames = current.frames
+    const serverFrames = Array.isArray(serverDoc.frames) ? serverDoc.frames : []
+    const localFrameIds = new Set(localFrames.map((f) => f.id))
+    const mergedFrames = [...localFrames]
+    for (const sf of serverFrames) {
+      if (!localFrameIds.has(sf.id)) {
+        mergedFrames.push(sf)
+      }
+    }
+
+    // 3. 合并图片（本地图片保留本地位置/修改/新增，远端独有图片追加保留）
+    const localImages = current.images
+    const serverImages = Array.isArray(serverDoc.images) ? serverDoc.images : []
+    const localImageIds = new Set(localImages.map((im) => im.id))
+    const mergedImages = [...localImages]
+    for (const sim of serverImages) {
+      if (!localImageIds.has(sim.id)) {
+        mergedImages.push(sim)
+      }
+    }
+
+    // 4. 合并文本
+    const localTexts = current.texts
+    const serverTexts = Array.isArray(serverDoc.texts) ? serverDoc.texts : []
+    const localTextIds = new Set(localTexts.map((t) => t.id))
+    const mergedTexts = [...localTexts]
+    for (const st of serverTexts) {
+      if (!localTextIds.has(st.id)) {
+        mergedTexts.push(st)
+      }
+    }
+
+    set((s) => ({
+      pages: mergedPages,
+      frames: mergedFrames,
+      images: mergedImages,
+      texts: mergedTexts,
+      revision: serverRev,
+      isDirty: true,
+      editSequence: (s.editSequence || 0) + 1,
+      lastSaveIntent: 'update',
+    }))
   },
 
   getDocument: () => {
