@@ -129,7 +129,16 @@ export function PageDropdown() {
           </div>
 
           {/* 页面列表 */}
-          <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <div
+            style={{
+              maxHeight: 200,
+              overflowY: 'auto',
+              overscrollBehavior: 'contain',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1,
+            }}
+          >
             {pages.map((page) => {
               const isActive = page.id === activePageId
               const isEditing = editingId === page.id

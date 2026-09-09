@@ -188,6 +188,31 @@ export function App() {
     if (!container) return
 
     const handleNativeWheel = (e: WheelEvent) => {
+      // 检查滚轮事件是否发生在下拉框、弹出层或具有滚动条的子元素内，避免拦截子区域的原生滚动
+      let el = e.target as HTMLElement | null
+      while (el && el !== container) {
+        const style = window.getComputedStyle(el)
+        const overflowY = style.overflowY
+        const overflowX = style.overflowX
+        const isScrollableY =
+          (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') &&
+          el.scrollHeight > el.clientHeight
+        const isScrollableX =
+          (overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'overlay') &&
+          el.scrollWidth > el.clientWidth
+
+        if (
+          isScrollableY ||
+          isScrollableX ||
+          el.tagName === 'TEXTAREA' ||
+          el.tagName === 'INPUT' ||
+          el.tagName === 'SELECT'
+        ) {
+          return
+        }
+        el = el.parentElement
+      }
+
       e.preventDefault()
       e.stopPropagation()
 
