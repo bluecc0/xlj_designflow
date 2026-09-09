@@ -884,6 +884,7 @@ function formatAiModelName(model) {
   if (!model) return 'AI 生图';
   var map = {
     'gpt-image-2': 'Gpt image 2',
+    'gpt-image-2.5': 'Gpt image 2.5',
     'gemini-3-pro-image-preview': 'Nano Banano pro'
   };
   return map[model] || model;
@@ -2414,7 +2415,7 @@ const SLASH_COMMANDS = [{
   group: 'Generation',
   available: true
 }, {
-  cmd: '/Gpt image 2',
+  cmd: '/Gpt image 2.5',
   cn: 'AI 生图',
   desc: '文生图，超强中文渲染和语义理解',
   icon: 'image',
@@ -4875,7 +4876,7 @@ const ChatReturned = ({
         fontWeight: 500,
         color: 'var(--ink)'
       }
-    }, m.status === 'done' ? batchImages && batchOkCount < batchImages.length ? '生图完成（' + batchOkCount + '/' + batchImages.length + ' 成功）' : '生图完成' : m.status === 'failed' ? '生图失败' : m.status === 'skill-planning' ? '正在执行 Skill：$' + m.activeSkill + '…' : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 Image 2…' : m.status === 'queued' ? '正在提交到「' + (m.model || 'AI') + '」…' : m.activeSkill && !m.promptTrace && (m.progress || 0) < 20 ? '正在解读需求并整理生图 Prompt…' : (m.progress || 0) < 20 ? '「' + (m.model || 'AI') + '」正在处理…' : (m.progress || 0) < 90 ? '「' + (m.model || 'AI') + '」生成中 ' + (m.progress || 0) + '%' : '处理完成，正在下载…'), m.finalElapsed != null ? React.createElement('span', {
+    }, m.status === 'done' ? batchImages && batchOkCount < batchImages.length ? '生图完成（' + batchOkCount + '/' + batchImages.length + ' 成功）' : '生图完成' : m.status === 'failed' ? '生图失败' : m.status === 'skill-planning' ? '正在执行 Skill：$' + m.activeSkill + '…' : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 Image 2.5…' : m.status === 'queued' ? '正在提交到「' + (m.model || 'AI') + '」…' : m.activeSkill && !m.promptTrace && (m.progress || 0) < 20 ? '正在解读需求并整理生图 Prompt…' : (m.progress || 0) < 20 ? '「' + (m.model || 'AI') + '」正在处理…' : (m.progress || 0) < 90 ? '「' + (m.model || 'AI') + '」生成中 ' + (m.progress || 0) + '%' : '处理完成，正在下载…'), m.finalElapsed != null ? React.createElement('span', {
       className: 'mono',
       style: {
         fontSize: 10,
@@ -4897,6 +4898,7 @@ const ChatReturned = ({
       }
     }, '已自动切换到「' + ({
       sub2api: '订阅',
+      tuzi: 'Tuzi',
       adobe2api: 'Adobe',
       apimart: 'APIMart'
     }[m.provider] || m.provider || '备用') + '」线路'), showPromptTrace && React.createElement(PromptTraceBlock, {
@@ -6049,7 +6051,7 @@ const CHAT_INSPIRATION_CATEGORIES = [{
 
 // ---------- Composer ----------
 
-const DEFAULT_COMPOSER_COMMAND = '/Gpt image 2';
+const DEFAULT_COMPOSER_COMMAND = '/Gpt image 2.5';
 const Composer = ({
   onSend,
   onParseTable,
@@ -6072,6 +6074,7 @@ const Composer = ({
   const [imageType, setImageType] = React.useState('png');
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
+  const [aiVariant, setAiVariant] = React.useState('flare');
   const [aiProvider, setAiProvider] = React.useState('auto');
   const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [smartDistributeMode, setSmartDistributeMode] = React.useState('full');
@@ -6100,10 +6103,10 @@ const Composer = ({
   const STATUS_COMPOSER_HEIGHT = 208;
   const MAX_COMPOSER_HEIGHT = 500;
   const minComposerHeightRef = React.useRef(COLLAPSED_COMPOSER_HEIGHT);
-  const COMMANDS = React.useMemo(() => ['/花瓣下载', '/特殊品（完整）', '/特殊品', '/Nano Banana pro', '/Gpt image 2'], []);
+  const COMMANDS = React.useMemo(() => ['/花瓣下载', '/特殊品（完整）', '/特殊品', '/Nano Banana pro', '/Gpt image 2.5'], []);
   const cmdToWorkflow = React.useCallback(function (cmd) {
     const clean = String(cmd || '').trim();
-    if (clean === '/Gpt image 2' || clean === '/Nano Banana pro') return 'ai-image';
+    if (clean === '/Gpt image 2.5' || clean === '/Gpt image 2' || clean === '/Nano Banana pro') return 'ai-image';
     if (clean === '/特殊品' || clean === '/特殊品（完整）') return 'special';
     if (clean === '/花瓣下载') return 'download';
     return 'chat';
@@ -6386,7 +6389,7 @@ const Composer = ({
   // 外部触发：从灵感页"生成同款"传过来，自动锁定 /Gpt image 2 并填入 prompt
   React.useEffect(() => {
     if (!seedPrompt) return;
-    setLockedCommand('/Gpt image 2');
+    setLockedCommand('/Gpt image 2.5');
     setSelectedSkill('');
     setSelectedWorkflow('ai-image');
     setPrototypePanel('');
@@ -6545,8 +6548,8 @@ const Composer = ({
     return raw;
   })();
   // activeAiModel: 只看 lockedCommand (UI 选的任务, 用户不再手动打前缀)
-  const activeAiModel = lockedCommand === '/Gpt image 2' ? 'gpt-image-2' : lockedCommand === '/Nano Banana pro' ? 'nano-banana-pro' : '';
-  const activeMode = lockedCommand === '/Gpt image 2' || lockedCommand === '/Nano Banana pro' ? 'ai-image' : lockedCommand === '/特殊品（完整）' ? 'special_full' : lockedCommand === '/特殊品' ? 'special' : selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
+  const activeAiModel = lockedCommand === '/Gpt image 2.5' || lockedCommand === '/Gpt image 2' ? 'gpt-image-2.5' : lockedCommand === '/Nano Banana pro' ? 'nano-banana-pro' : '';
+  const activeMode = lockedCommand === '/Gpt image 2.5' || lockedCommand === '/Gpt image 2' || lockedCommand === '/Nano Banana pro' ? 'ai-image' : lockedCommand === '/特殊品（完整）' ? 'special_full' : lockedCommand === '/特殊品' ? 'special' : selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
   const aiOptionMap = AI_OPTIONS;
@@ -6668,10 +6671,11 @@ const Composer = ({
     onSend(sendMessage, imagesToSend, {
       size: aiImageSize,
       resolution: aiQuality,
+      variant: aiVariant,
       provider: aiProvider,
       workflow: selectedWorkflow,
       lockedCommand: lockedCommand,
-      batchCount: selectedWorkflow === 'ai-image' ? normalizedBatchCount : 1,
+      batchCount: activeMode === 'ai-image' ? normalizedBatchCount : 1,
       skill: skillInvocation.skill || '',
       skillPrompt: executionMessage
     });
@@ -7044,12 +7048,12 @@ const Composer = ({
       workflow: 'chat'
     }, {
       id: 'gpt-image',
-      label: 'GPT Image 2',
+      label: 'GPT Image 2.5',
       desc: '文生图，中文语义和文字更强',
       iconKey: 'image',
       iconSrc: 'src/icon/openai.png',
-      cmd: '/Gpt image 2',
-      available: available('/Gpt image 2')
+      cmd: '/Gpt image 2.5',
+      available: available('/Gpt image 2.5')
     }, {
       id: 'nano-banana',
       label: 'Nano Banana Pro',
@@ -7083,11 +7087,11 @@ const Composer = ({
   const getTaskIcon = React.useCallback(function (iconKey) {
     return I[iconKey] || I.sparkles;
   }, []);
-  const activeTaskLabel = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : 'GPT Image 2' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '默认';
+  const activeTaskLabel = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : 'GPT Image 2.5' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '默认';
   const activeTaskIconKey = activeMode === 'ai-image' ? 'image' : activeMode === 'special' || activeMode === 'special_full' ? 'layers' : selectedWorkflow === 'compose' || selectedWorkflow === 'distribute' ? 'grid' : selectedWorkflow === 'download' ? 'download' : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
   const activeTaskIconSrc = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
-  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 普通' : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
+  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + ' · ' + aiVariant : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 普通' : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
   const selectedSettingBits = [activeSkillInfo ? '$' + activeSkillInfo.name : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? '⚡ 智能' : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
   const composerPlaceholder = agentEnabled ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）' : activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(text.trim() || lockedCommand || modeParamLabel || refImages.length > 0 || files.length > 0 || activeSkillInfo || skillMenuOpen || !agentEnabled && prototypePanel);
@@ -7492,6 +7496,42 @@ const Composer = ({
           }
         }, item[1]));
       })), React.createElement('div', {
+        style: {
+          marginTop: 12
+        }
+      }, imageFieldLabel('类型'), React.createElement('div', {
+        style: {
+          display: 'flex',
+          width: '100%',
+          alignItems: 'stretch',
+          border: '1px solid var(--line)',
+          borderRadius: 9,
+          overflow: 'hidden',
+          background: 'var(--panel)'
+        }
+      }, [['flare', 'Flare'], ['sunburst', 'Sunburst']].map(function (item, idx) {
+        const active = aiVariant === item[0];
+        return React.createElement('button', {
+          key: item[0],
+          type: 'button',
+          onClick: function () {
+            setAiVariant(item[0]);
+          },
+          style: {
+            flex: 1,
+            height: 30,
+            padding: 0,
+            border: 'none',
+            borderLeft: idx === 0 ? 'none' : '1px solid var(--line)',
+            background: active ? 'var(--ink)' : 'transparent',
+            color: active ? 'var(--panel)' : 'var(--ink-2)',
+            fontSize: 12,
+            fontWeight: active ? 700 : 550,
+            cursor: 'pointer',
+            letterSpacing: '-0.01em'
+          }
+        }, item[1]);
+      }))), React.createElement('div', {
         style: {
           height: 1,
           background: 'var(--line)',
@@ -8614,6 +8654,7 @@ const Chat = ({
           model: m.model,
           size: m.size,
           resolution: m.resolution,
+          variant: m.variant || 'flare',
           provider: m.provider
         };
       }
@@ -8624,7 +8665,7 @@ const Chat = ({
     const value = String(model || '').trim().toLowerCase();
     if (!value) return '';
     if (value.includes('nano') || value.includes('banana') || value.includes('gemini')) return 'nano-banana-pro';
-    if (value.includes('gpt') || value.includes('image')) return 'gpt-image-2';
+    if (value.includes('gpt') || value.includes('image')) return 'gpt-image-2.5';
     return value;
   }, []);
   const hasDoneAiImageInCurrentThread = React.useCallback(function () {
@@ -8771,6 +8812,7 @@ const Chat = ({
     var refPreviews = [];
     var lastSize = aiOptions.size || '1024x1024';
     var lastResolution = aiOptions.resolution || '1K';
+    var variant = aiOptions.variant || 'flare';
     var provider = aiOptions.provider || 'auto';
     var activeSkill = String(aiOptions.skill || '').trim();
     var plannedPrompt = String(aiOptions.plannedPrompt || '').trim();
@@ -8827,6 +8869,7 @@ const Chat = ({
         prompt,
         size: lastSize,
         resolution: lastResolution,
+        variant: variant,
         status: 'failed',
         failPhase: 'prepare',
         clientRequestId: prepClientId,
@@ -8855,6 +8898,7 @@ const Chat = ({
       prompt,
       size: lastSize,
       resolution: lastResolution,
+      variant: variant,
       status: activeSkill ? 'skill-planning' : 'running',
       startedAt: baseAt,
       progress: 0,
@@ -8940,6 +8984,7 @@ const Chat = ({
         fd.append('prompt', finalPrompt);
         fd.append('size', aiOptions.size || '1024x1024');
         fd.append('resolution', aiOptions.resolution || '1K');
+        fd.append('variant', aiOptions.variant || 'flare');
         if (activeSkill) fd.append('skill', activeSkill);
         if (plannedPrompt) fd.append('planned_prompt', plannedPrompt);
         if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
@@ -9093,6 +9138,7 @@ const Chat = ({
                   originalPrompt: statusData.original_prompt || m.originalPrompt,
                   resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt,
                   promptTrace: statusData.prompt_trace || m.promptTrace,
+                  variant: statusData.variant || m.variant || 'flare',
                   jobId: jobId,
                   taskId: statusData.task_id || m.taskId,
                   clientRequestId: clientRequestId
@@ -9174,6 +9220,7 @@ const Chat = ({
         fd.append('prompt', finalPrompt);
         fd.append('size', aiOptions.size || '1024x1024');
         fd.append('resolution', aiOptions.resolution || '1K');
+        fd.append('variant', aiOptions.variant || 'flare');
         if (activeSkill) fd.append('skill', activeSkill);
         if (plannedPrompt) fd.append('planned_prompt', plannedPrompt);
         if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
@@ -9268,6 +9315,7 @@ const Chat = ({
                 progress: Math.max(m.progress || 0, Math.min(agg, 99)),
                 status: m.status === 'skill-parsed' ? m.status : 'processing',
                 provider: patch.provider || m.provider,
+                variant: patch.variant || m.variant || 'flare',
                 providerSwitched: patch.providerSwitched || m.providerSwitched
               });
             }));
@@ -9338,12 +9386,14 @@ const Chat = ({
               previewUrl: t.previewUrl,
               progress: 100,
               provider: t.provider,
+              variant: t.variant,
               providerSwitched: t.providerSwitched
             } : {
               status: 'failed',
               error: t.error,
               progress: 100,
               provider: t.provider,
+              variant: t.variant,
               providerSwitched: t.providerSwitched
             });
             finishIfAllTerminal();
@@ -9383,6 +9433,7 @@ const Chat = ({
                     url: sd.image_url,
                     previewUrl: sd.preview_url || sd.image_url,
                     provider: sd.provider,
+                    variant: sd.variant,
                     providerSwitched: sd.providerSwitched
                   });
                 } else if (sd.status === 'done' && !sd.image_url) {
@@ -9397,12 +9448,14 @@ const Chat = ({
                     status: 'failed',
                     error: formatAiImageError(sd.error || '生图失败', jid),
                     provider: sd.provider,
+                    variant: sd.variant,
                     providerSwitched: sd.providerSwitched
                   });
                 } else {
                   patchImage(jid, {
                     progress: sd.progress || 0,
                     provider: sd.provider,
+                    variant: sd.variant,
                     providerSwitched: sd.providerSwitched
                   });
                 }
@@ -9600,7 +9653,7 @@ const Chat = ({
               }
               if (payload && (payload.type === 'GENERATE' || payload.type === 'REFINE')) {
                 var promptModel = payload.prompt && payload.prompt.model ? payload.prompt.model : 'agent';
-                var modelLabel = promptModel === 'nano banana pro' ? 'Nano Banana' : promptModel === 'gpt image 2' ? 'GPT Image 2' : promptModel;
+                var modelLabel = promptModel === 'nano banana pro' ? 'Nano Banana' : promptModel === 'gpt image 2' || promptModel === 'gpt image 2.5' ? 'GPT Image 2.5' : promptModel;
                 var actionLabel = payload.type === 'REFINE' ? '修改' : '生成';
                 setMessages(function (msgs) {
                   if (imageIdx == null) imageIdx = msgs.length;
@@ -9931,8 +9984,11 @@ const Chat = ({
       prefix: '/Nano Banana pro',
       model: 'nano-banana-pro'
     }, {
+      prefix: '/Gpt image 2.5',
+      model: 'gpt-image-2.5'
+    }, {
       prefix: '/Gpt image 2',
-      model: 'gpt-image-2'
+      model: 'gpt-image-2.5'
     }];
     const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
     const lockedAiCmd = AI_IMAGE_CMDS.find(function (c) {
@@ -9963,7 +10019,7 @@ const Chat = ({
         refMeta: userRefMeta,
         activeSkill: activeSkill
       }]);
-      await runAiImageGeneration('gpt-image-2', executionText, text.trim(), refImages, skillImageOptions);
+      await runAiImageGeneration('gpt-image-2.5', executionText, text.trim(), refImages, skillImageOptions);
       return;
     }
 
@@ -9974,11 +10030,12 @@ const Chat = ({
       const rest = rawPrompt.slice(freshMatch.length).trim();
       const freshPrompt = rest || '重新生成';
       const lastOpts = getLastAiImageOptions();
-      const model = aiCmd ? aiCmd.model : lastOpts?.model || 'gpt-image-2';
+      const model = aiCmd ? aiCmd.model : lastOpts?.model || 'gpt-image-2.5';
       const opts = aiCmd ? aiOptions : {
         ...aiOptions,
         size: lastOpts?.size || aiOptions.size,
         resolution: lastOpts?.resolution || aiOptions.resolution,
+        variant: lastOpts?.variant || aiOptions.variant || 'flare',
         provider: aiOptions.provider
       };
       setMessages(msgs => [...msgs, {
@@ -10021,11 +10078,12 @@ const Chat = ({
     // 后端会结合 chat_session_id 的历史 prompt，并自动把上一张结果图作为参考图。
     if (currentAiChatId && hasDoneAiImageInCurrentThread() && isLikelyAiImageFollowup(text)) {
       const lastOpts = getLastAiImageOptions();
-      const model = normalizeAiImageModel(lastOpts?.model) || 'gpt-image-2';
+      const model = normalizeAiImageModel(lastOpts?.model) || 'gpt-image-2.5';
       const opts = {
         ...aiOptions,
         size: lastOpts?.size || aiOptions.size,
         resolution: lastOpts?.resolution || aiOptions.resolution,
+        variant: lastOpts?.variant || aiOptions.variant || 'flare',
         provider: aiOptions.provider
       };
       setMessages(msgs => [...msgs, {

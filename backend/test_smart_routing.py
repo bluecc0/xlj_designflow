@@ -48,6 +48,44 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             banana_candidates = ai_image.get_smart_route_candidates("nano-banana-pro")
             self.assertEqual(banana_candidates, ["apimart", "adobe2api"])
 
+    def test_gpt_image_25_default_flare_route(self) -> None:
+        with patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api:8080"), \
+             patch.object(ai_image.settings, "cliproxy_api_key", "sk-sub2api"), \
+             patch.object(ai_image.settings, "tuzi_base_url", "https://api.tu-zi.com"), \
+             patch.object(ai_image.settings, "tuzi_api_key", "sk-tuzi"), \
+             patch.object(ai_image.settings, "adobe2api_base_url", ""), \
+             patch.object(ai_image.settings, "adobe2api_api_key", ""), \
+             patch.object(ai_image.settings, "ai_image_api_key", "sk-apimart"):
+            self.assertEqual(
+                ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K"),
+                ["sub2api", "tuzi", "apimart"],
+            )
+            self.assertEqual(
+                ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="2K"),
+                ["apimart"],
+            )
+            self.assertEqual(
+                ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", variant="sunburst"),
+                ["apimart"],
+            )
+
+    def test_gpt_image_25_route_ignores_adobe(self) -> None:
+        with patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api:8080"), \
+             patch.object(ai_image.settings, "cliproxy_api_key", "sk-sub2api"), \
+             patch.object(ai_image.settings, "tuzi_base_url", "https://api.tu-zi.com"), \
+             patch.object(ai_image.settings, "tuzi_api_key", "sk-tuzi"), \
+             patch.object(ai_image.settings, "adobe2api_base_url", "http://adobe:6001"), \
+             patch.object(ai_image.settings, "adobe2api_api_key", "sk-adobe"), \
+             patch.object(ai_image.settings, "ai_image_api_key", "sk-apimart"):
+            self.assertEqual(
+                ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K"),
+                ["sub2api", "tuzi", "apimart"],
+            )
+            self.assertEqual(
+                ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="2K"),
+                ["apimart"],
+            )
+
     def test_custom_routing_rules_json_override(self) -> None:
         custom_json = '{"gpt-image-2": ["adobe2api", "sub2api"]}'
         with patch.object(ai_image.settings, "smart_routing_rules_json", custom_json), \
@@ -88,6 +126,44 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["provider"], "adobe2api")
             self.assertTrue(result.get("provider_switched"))
             self.assertEqual(attempts, ["sub2api", "adobe2api"])
+
+    async def test_gpt_image_25_uses_legacy_image2_on_sub2api(self) -> None:
+        calls = []
+
+        async def mock_sub2api(*args, **kwargs):
+            calls.append(("sub2api", kwargs["model"]))
+            return {"url": "/x.png", "provider": "sub2api", "model": "gpt-image-2"}
+
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api"]):
+            result = await ai_image.smart_generate_image_async(
+                model="gpt-image-2.5",
+                prompt="test prompt",
+                user_id="test_user",
+            )
+
+        self.assertEqual(result["provider"], "sub2api")
+        self.assertEqual(calls, [("sub2api", "gpt-image-2")])
+
+    async def test_smart_route_passes_variant_to_apimart(self) -> None:
+        calls = []
+
+        async def mock_apimart(*args, **kwargs):
+            calls.append(kwargs.get("variant"))
+            return {"url": "/x.png", "provider": "apimart"}
+
+        with patch.object(ai_image, "generate_image_async", side_effect=mock_apimart), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["apimart"]):
+            result = await ai_image.smart_generate_image_async(
+                model="gpt-image-2.5",
+                prompt="test prompt",
+                user_id="test_user",
+                resolution="1K",
+                variant="sunburst",
+            )
+
+        self.assertEqual(result["provider"], "apimart")
+        self.assertEqual(calls, ["sunburst"])
 
     def test_empty_candidates_are_not_repopulated(self) -> None:
         with patch.object(ai_image.settings, "smart_routing_rules_json", ""), \
@@ -202,6 +278,73 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIsInstance(ctx.exception, ai_image.AmbiguousUpstreamError)
         self.assertIn("HTTP 504", str(ctx.exception))
         self.assertTrue(ai_image.is_transient_provider_error(ctx.exception))
+
+    async def test_apimart_gpt_image_25_payload_uses_documented_model(self) -> None:
+        captured = {}
+
+        class FakeResponse:
+            is_success = True
+            status_code = 200
+            text = '{"code":200,"data":[{"status":"submitted","task_id":"task-25"}]}'
+
+            def json(self):
+                return {"code": 200, "data": [{"status": "submitted", "task_id": "task-25"}]}
+
+        class FakeClient:
+            async def post(self, *args, **kwargs):
+                captured.update(kwargs)
+                return FakeResponse()
+
+        with patch.object(ai_image.settings, "ai_image_gpt_25_model", "gpt-image-2.5-flare"), \
+             patch.object(ai_image.settings, "ai_image_gpt_25_quality", "medium"):
+            task_id = await ai_image._submit_generation_task(
+                FakeClient(),
+                base_url="http://apimart",
+                headers={"Authorization": "Bearer test"},
+                model="gpt-image-2.5",
+                prompt="a cute cat",
+                size="auto",
+                resolution="1K",
+            )
+
+        self.assertEqual(task_id, "task-25")
+        self.assertEqual(captured["json"]["model"], "gpt-image-2.5-flare")
+        self.assertEqual(captured["json"]["resolution"], "1k")
+        self.assertEqual(captured["json"]["quality"], "medium")
+        self.assertNotIn("official_fallback", captured["json"])
+
+    async def test_apimart_gpt_image_25_sunburst_payload_uses_variant_model(self) -> None:
+        captured = {}
+
+        class FakeResponse:
+            is_success = True
+            status_code = 200
+            text = '{"code":200,"data":[{"status":"submitted","task_id":"task-sunburst"}]}'
+
+            def json(self):
+                return {"code": 200, "data": [{"status": "submitted", "task_id": "task-sunburst"}]}
+
+        class FakeClient:
+            async def post(self, *args, **kwargs):
+                captured.update(kwargs)
+                return FakeResponse()
+
+        with patch.object(ai_image.settings, "ai_image_gpt_25_quality", "high"):
+            task_id = await ai_image._submit_generation_task(
+                FakeClient(),
+                base_url="http://apimart",
+                headers={"Authorization": "Bearer test"},
+                model="gpt-image-2.5",
+                prompt="a cute cat",
+                size="auto",
+                resolution="1K",
+                variant="sunburst",
+            )
+
+        self.assertEqual(task_id, "task-sunburst")
+        self.assertEqual(captured["json"]["model"], "gpt-image-2.5-sunburst")
+        self.assertEqual(captured["json"]["resolution"], "1k")
+        self.assertEqual(captured["json"]["quality"], "high")
 
     async def test_sub2api_http_500_failovers_silently(self) -> None:
         """POST 后明确 HTTP 500：用户无感切线，不抛 ambiguous。"""

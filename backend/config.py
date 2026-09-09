@@ -78,11 +78,19 @@ class Settings:
     ai_image_provider: str = os.getenv("AI_IMAGE_PROVIDER", "auto")
     ai_image_base_url: str = os.getenv("AI_IMAGE_BASE_URL", "https://api.apimart.ai")
     ai_image_api_key: str = os.getenv("AI_IMAGE_API_KEY", "")
+    ai_image_gpt_25_model: str = os.getenv("AI_IMAGE_GPT_25_MODEL", "gpt-image-2.5-flare")
+    ai_image_gpt_25_quality: str = os.getenv("AI_IMAGE_GPT_25_QUALITY", "medium")
     ai_image_job_timeout_seconds: int = int(os.getenv("AI_IMAGE_JOB_TIMEOUT_SECONDS", "600"))
 
     # AI 生图 API（adobe2api）
     adobe2api_base_url: str = os.getenv("ADOBE2API_BASE_URL", "http://77.73.8.142:6001/v1")
     adobe2api_api_key: str = os.getenv("ADOBE2API_API_KEY", "")
+
+    # AI 生图 API（Tuzi GPT Image 2.5；默认不参与智能路由）
+    tuzi_base_url: str = os.getenv("TUZI_BASE_URL", "https://api.tu-zi.com")
+    tuzi_api_key: str = os.getenv("TUZI_API_KEY", "")
+    tuzi_model: str = os.getenv("TUZI_MODEL", "gpt-image-2.5")
+    tuzi_proxy_url: str = os.getenv("TUZI_PROXY_URL", "").strip()
 
     # 智能路由模型自定义优先级规则 JSON（可选，用于动态覆写）
     smart_routing_rules_json: str = os.getenv("SMART_ROUTING_RULES_JSON", "")
@@ -100,6 +108,7 @@ class Settings:
     bfl_outpainting_enabled: bool = os.getenv("BFL_OUTPAINTING_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
     bfl_api_key: str = os.getenv("BFL_API_KEY", "").strip()
     bfl_api_url: str = os.getenv("BFL_API_URL", "https://api.bfl.ai").strip()
+    bfl_outpainting_proxy_url: str = os.getenv("BFL_OUTPAINTING_PROXY_URL", "").strip()
     bfl_outpainting_mode: str = os.getenv("BFL_OUTPAINTING_MODE", "fast").strip().lower() or "fast"
     bfl_outpainting_output_format: str = os.getenv("BFL_OUTPAINTING_OUTPUT_FORMAT", "PNG").strip().upper() or "PNG"
     bfl_outpainting_auto_crop: bool = os.getenv("BFL_OUTPAINTING_AUTO_CROP", "false").strip().lower() in {"1", "true", "yes", "on"}
@@ -142,7 +151,7 @@ class Settings:
     agent_llm_api_key: str = os.getenv("AGENT_LLM_API_KEY", "") or cliproxy_api_key
     agent_llm_timeout_seconds: int = int(os.getenv("AGENT_LLM_TIMEOUT_SECONDS", "60"))
 
-    agent_image_model: str = os.getenv("AGENT_IMAGE_MODEL", "gpt image 2")
+    agent_image_model: str = os.getenv("AGENT_IMAGE_MODEL", "gpt image 2.5")
     agent_refine_model: str = os.getenv("AGENT_REFINE_MODEL", "nano banana pro")
     agent_image_size: str = os.getenv("AGENT_IMAGE_SIZE", "auto")
     agent_image_resolution: str = os.getenv("AGENT_IMAGE_RESOLUTION", "")

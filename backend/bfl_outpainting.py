@@ -1162,6 +1162,7 @@ async def run_outpainting(
     api_key: str,
     api_url: str = BFL_API_URL,
     mode: str,
+    proxy_url: str = "",
     output_format: str = "png",
     auto_crop: bool = False,
     result_host_suffixes: tuple[str, ...] = ("delivery.bfl.ai", "bfl.ai"),
@@ -1256,7 +1257,8 @@ async def run_outpainting(
             geometry.provider_height,
         )
 
-    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+    proxy = str(proxy_url or "").strip() or None
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False, proxy=proxy) as client:
         if submit_request:
             assert prepared is not None
             submission_body = {

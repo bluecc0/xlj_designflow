@@ -4,6 +4,7 @@ function formatAiModelName(model) {
   if (!model) return 'AI 生图';
   var map = {
     'gpt-image-2': 'Gpt image 2',
+    'gpt-image-2.5': 'Gpt image 2.5',
     'gemini-3-pro-image-preview': 'Nano Banano pro',
   };
   return map[model] || model;
