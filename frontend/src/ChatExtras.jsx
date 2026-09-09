@@ -3,7 +3,7 @@
 const SLASH_COMMANDS = [
   { cmd: '/generate',   cn: '开始生图',   desc: 'Generate variations from current parameters', icon: 'zap',     shortcut: '⌘⏎',  group: 'Generation', available: false },
   { cmd: '/Nano Banana pro', cn: 'AI 生图',  desc: '图生图超强一致性，改图更强',          icon: 'image',   group: 'Generation', available: true },
-  { cmd: '/Gpt image 2',    cn: 'AI 生图',  desc: '文生图，超强中文渲染和语义理解',      icon: 'image',   group: 'Generation', available: true },
+  { cmd: '/Gpt image 2.5',  cn: 'AI 生图',  desc: '文生图，超强中文渲染和语义理解',      icon: 'image',   group: 'Generation', available: true },
   { cmd: '/花瓣下载',       cn: '花瓣下载',  desc: '输入项目id即可解析素材完成下载', icon: 'download', group: 'Tools', available: true },
   { cmd: '/转PSD',           cn: '图片分层',  desc: '上传图片后按描述重绘透明图层并合成 PSD', icon: 'layers',  group: 'Tools', available: false },
   { cmd: '/特殊品',        cn: '特殊品合成',      desc: '无素材特殊品模板',                   icon: 'grid',   group: 'Generation', available: true },

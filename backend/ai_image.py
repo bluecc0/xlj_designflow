@@ -79,10 +79,13 @@ SLASH_MODEL_MAP: dict[str, str] = {
     "nano-banana-pro": "gemini-3-pro-image-preview",
     "gpt image 2": "gpt-image-2",
     "gpt-image-2": "gpt-image-2",
+    "gpt image 2.5": "gpt-image-2.5",
+    "gpt-image-2.5": "gpt-image-2.5",
 }
 
 PROVIDER_APIMART = "apimart"
 PROVIDER_ADOBE2API = "adobe2api"
+PROVIDER_TUZI = "tuzi"
 
 _OUTPUT_DIR = settings.output_path / "ai-images"
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -349,6 +352,8 @@ def normalize_provider(provider: str | None = None) -> str:
         return PROVIDER_SUB2API
     if clean in ("adobe2api", "adobe-2api", "adobe"):
         return PROVIDER_ADOBE2API
+    if clean in ("tuzi", "tu-zi", "兔子", "兔子api"):
+        return PROVIDER_TUZI
     raise ValueError(f"未知生图线路: {provider}")
 
 
@@ -357,6 +362,24 @@ def _normalize_model_name(model: str) -> str:
     if not clean:
         raise ValueError("model 不能为空")
     return SLASH_MODEL_MAP.get(clean.casefold(), clean)
+
+
+_APIMART_GPT_IMAGE_25_MODELS = {"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
+
+
+def _apimart_model_name(model: str, variant: str = "") -> str:
+    """将逻辑模型和类型映射为 APIMart 文档要求的实际模型名。"""
+    model_name = _normalize_model_name(model)
+    if model_name != "gpt-image-2.5":
+        return model_name
+    requested_variant = (variant or "").strip().lower()
+    if requested_variant in {"flare", "sunburst"}:
+        return f"gpt-image-2.5-{requested_variant}"
+    configured = (getattr(settings, "ai_image_gpt_25_model", "") or "gpt-image-2.5-flare").strip().lower()
+    if configured not in _APIMART_GPT_IMAGE_25_MODELS:
+        logger.warning("未知的 AI_IMAGE_GPT_25_MODEL=%s，回退到 gpt-image-2.5-flare", configured)
+        return "gpt-image-2.5-flare"
+    return configured
 
 
 def _normalize_size(size: str, resolution: str = "") -> tuple[str, str]:
@@ -759,12 +782,13 @@ async def _submit_generation_task(
     prompt: str,
     size: str,
     resolution: str = "",
+    variant: str = "flare",
     reference_urls: list[str] | None = None,
 ) -> str:
-    model_name = _normalize_model_name(model)
+    model_name = _apimart_model_name(model, variant)
     ratio, resolution = _normalize_size(size, resolution)
-    # GPT Image 2 要求 resolution 小写（1k/2k/4k），Gemini 用大写（1K/2K/4K）
-    if model_name == "gpt-image-2":
+    # APIMart 文档要求 GPT Image 2/2.5 的 resolution 使用小写。
+    if model_name == "gpt-image-2" or model_name in _APIMART_GPT_IMAGE_25_MODELS:
         resolution = resolution.lower()
     final_prompt = normalize_reference_prompt(prompt) if reference_urls else prompt
     payload: dict[str, Any] = {
@@ -775,6 +799,11 @@ async def _submit_generation_task(
     }
     if model_name == "gpt-image-2":
         payload["official_fallback"] = True
+    elif model_name in _APIMART_GPT_IMAGE_25_MODELS:
+        quality = (getattr(settings, "ai_image_gpt_25_quality", "medium") or "medium").strip().lower()
+        if quality not in {"low", "medium", "high", "xhigh", "max"}:
+            quality = "medium"
+        payload["quality"] = quality
     if reference_urls:
         payload["image_urls"] = reference_urls
     endpoint = f"{base_url}/v1/images/generations"
@@ -972,6 +1001,7 @@ async def generate_image(
     size: str = "1024x1024",
     resolution: str = "",
     user_id: str = "anonymous",
+    variant: str = "flare",
 ) -> dict:
     model_name = _normalize_model_name(model)
     base_url, api_key = _model_credentials(model_name)
@@ -988,6 +1018,7 @@ async def generate_image(
             prompt=prompt,
             size=size,
             resolution=resolution,
+            variant=variant,
         )
         result_url, _, _task_detail = await _wait_for_task_result(
             client,
@@ -1018,6 +1049,7 @@ async def generate_image_with_reference(
     size: str = "1024x1024",
     resolution: str = "",
     user_id: str = "anonymous",
+    variant: str = "flare",
 ) -> dict:
     model_name = _normalize_model_name(model)
     base_url, api_key = _model_credentials(model_name)
@@ -1041,6 +1073,7 @@ async def generate_image_with_reference(
             size=size,
             resolution=resolution,
             reference_urls=reference_urls,
+            variant=variant,
         )
         result_url, _, _task_detail = await _wait_for_task_result(
             client,
@@ -1071,6 +1104,7 @@ async def generate_image_async(
     size: str = "1024x1024",
     resolution: str = "",
     user_id: str = "anonymous",
+    variant: str = "flare",
     on_progress: Callable[[int, str], Any] | None = None,
     on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
@@ -1094,6 +1128,7 @@ async def generate_image_async(
             prompt=prompt,
             size=size,
             resolution=resolution,
+            variant=variant,
         )
         if on_accepted:
             on_accepted(str(task_id))
@@ -1129,6 +1164,7 @@ async def generate_image_with_reference_async(
     size: str = "1024x1024",
     resolution: str = "",
     user_id: str = "anonymous",
+    variant: str = "flare",
     on_progress: Callable[[int], Any] | None = None,
     on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
@@ -1155,6 +1191,7 @@ async def generate_image_with_reference_async(
             size=size,
             resolution=resolution,
             reference_urls=reference_urls,
+            variant=variant,
         )
         if on_accepted:
             on_accepted(str(task_id))
@@ -1464,6 +1501,152 @@ async def generate_sub2api_async(
     }
 
 
+# ── Tuzi GPT Image 2.5（仅智能路由 1K） ─────────────────────────────────────────
+
+async def _download_tuzi_image(image_url: str, *, user_id: str, api_key: str) -> str:
+    timeout = httpx.Timeout(300.0, connect=30.0)
+    client_kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False, "follow_redirects": True}
+    if settings.tuzi_proxy_url:
+        client_kwargs["proxy"] = settings.tuzi_proxy_url
+    async with httpx.AsyncClient(**client_kwargs) as client:
+        resp = await client.get(image_url)
+        if resp.status_code in (401, 403):
+            resp = await client.get(image_url, headers={"Authorization": f"Bearer {api_key}"})
+        if not resp.is_success:
+            raise RuntimeError(f"下载 Tuzi 结果图片失败：HTTP {resp.status_code}")
+        out_dir = _ensure_user_dated_output_dir(user_id)
+        out_path = out_dir / f"{uuid.uuid4().hex}.png"
+        out_path.write_bytes(resp.content)
+        return _ai_image_public_url(out_path)
+
+
+async def _save_tuzi_response_image(data: Any, *, user_id: str, api_key: str) -> tuple[str, dict[str, Any]]:
+    """兼容 Tuzi 文档中的 data[] 和旧 default 分组 data.images[] 响应。"""
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Tuzi 响应格式异常: {str(data)[:300]}")
+    if data.get("error"):
+        raise RuntimeError(f"Tuzi 生图失败: {str(data.get('error'))[:300]}")
+    raw_items = data.get("data")
+    if isinstance(raw_items, dict):
+        raw_items = raw_items.get("images") or raw_items.get("data")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise RuntimeError(f"Tuzi 响应中没有图片 data: {str(data)[:300]}")
+    item = raw_items[0]
+    if not isinstance(item, dict):
+        raise RuntimeError(f"Tuzi 图片条目格式异常: {str(item)[:200]}")
+    if item.get("b64_json"):
+        return _save_base64_image(str(item["b64_json"]), user_id=user_id), item
+    image_url = item.get("url") or item.get("image_url")
+    if image_url:
+        return await _download_tuzi_image(str(image_url), user_id=user_id, api_key=api_key), item
+    raise RuntimeError(f"Tuzi 图片条目没有 url 或 b64_json: {str(item)[:300]}")
+
+
+async def generate_tuzi_async(
+    model: str,
+    prompt: str,
+    images: list[tuple[bytes, str]] | None = None,
+    size: str = "1024x1024",
+    resolution: str = "",
+    user_id: str = "anonymous",
+    variant: str = "flare",
+    on_progress: Callable[[int, str], Any] | None = None,
+    on_accepted: Callable[[str], Any] | None = None,
+) -> dict:
+    """Tuzi OpenAI-compatible synchronous image endpoint for the 1K route."""
+    base_url = settings.tuzi_base_url.rstrip("/")
+    if not base_url.endswith("/v1"):
+        base_url = f"{base_url}/v1"
+    api_key = settings.tuzi_api_key.strip()
+    if not base_url or not api_key:
+        raise RuntimeError("Tuzi 未配置：请检查 TUZI_BASE_URL/TUZI_API_KEY")
+
+    ratio, res_clean = _normalize_size(size, resolution)
+    if res_clean.upper() != "1K":
+        raise RuntimeError("Tuzi GPT Image 2.5 仅配置到 1K 智能路由")
+    model_name = settings.tuzi_model.strip() or "gpt-image-2.5"
+    mapped_size = _cliproxy_size(ratio, "1K")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "User-Agent": "DesignFlow/tuzi-image",
+    }
+    timeout = httpx.Timeout(900.0, connect=30.0)
+    refs = (images or [])[:9]
+    final_prompt = normalize_reference_prompt(prompt) if refs else prompt
+
+    if on_progress:
+        on_progress(5, "starting")
+    client_kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False}
+    if settings.tuzi_proxy_url:
+        client_kwargs["proxy"] = settings.tuzi_proxy_url
+    try:
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            if refs:
+                endpoint = f"{base_url}/images/edits"
+                form = {
+                    "model": model_name,
+                    "prompt": final_prompt,
+                    "size": mapped_size,
+                    "n": "1",
+                    "response_format": "url",
+                }
+                files = [
+                    ("image", (filename or f"reference-{idx + 1}.png", content, _mime_from_filename(filename)))
+                    for idx, (content, filename) in enumerate(refs)
+                ]
+                resp = await client.post(endpoint, data=form, files=files, headers=headers)
+            else:
+                endpoint = f"{base_url}/images/generations"
+                payload = {
+                    "model": model_name,
+                    "prompt": prompt,
+                    "n": 1,
+                    "size": mapped_size,
+                    "response_format": "url",
+                }
+                resp = await client.post(endpoint, json=payload, headers={**headers, "Content-Type": "application/json"})
+    except httpx.RequestError as exc:
+        kind = classify_httpx_transport_error(exc)
+        if kind == "connect":
+            raise RuntimeError(f"Tuzi 连接失败：{exc}") from exc
+        if kind == "ambiguous":
+            raise AmbiguousUpstreamError(
+                f"Tuzi 请求响应超时/中断（未收到受理确认）：{exc}",
+                provider=PROVIDER_TUZI,
+            ) from exc
+        raise RuntimeError(f"Tuzi 请求失败：{exc}") from exc
+
+    if not resp.is_success:
+        raise RuntimeError(f"Tuzi 生图失败：{_api_error_msg(resp.status_code, resp.text[:500])}")
+    try:
+        data = resp.json()
+    except Exception as exc:
+        raise AmbiguousUpstreamError(
+            f"Tuzi POST 成功但返回不是 JSON，上游状态无法确认：{resp.text[:300]}",
+            provider=PROVIDER_TUZI,
+        ) from exc
+    upstream_id = str(data.get("id") or data.get("request_id") or "").strip() if isinstance(data, dict) else ""
+    if on_accepted:
+        on_accepted(upstream_id)
+    if on_progress:
+        on_progress(85, "saving")
+    local_url, item = await _save_tuzi_response_image(data, user_id=user_id, api_key=api_key)
+    if on_progress:
+        on_progress(100, "done")
+    return {
+        "url": local_url,
+        "provider": PROVIDER_TUZI,
+        "model": model_name,
+        "prompt": prompt,
+        "size": mapped_size,
+        "requested_size": size,
+        "resolution": res_clean,
+        "task_id": upstream_id or None,
+        "revised_prompt": item.get("revised_prompt"),
+    }
+
+
 # ── adobe2api (Firefly / OpenAI 兼容接口) ───────────────────────────────────────────────
 
 async def generate_adobe2api_async(
@@ -1704,12 +1887,13 @@ def is_safety_review_error(exc: BaseException | str | None) -> bool:
 
 # 默认模型选路优先级表：映射标准模型名到首选/降级线路
 DEFAULT_MODEL_ROUTING_RULES: dict[str, list[str]] = {
-    "default": [PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_ADOBE2API],
+    "default": [PROVIDER_SUB2API, PROVIDER_TUZI, PROVIDER_APIMART],
 }
 
 # 服务商能力集合：定义各线路真正支持的模型 (None/空集代表支持全量模型)
 PROVIDER_MODEL_CAPABILITIES: dict[str, set[str] | None] = {
     PROVIDER_SUB2API: {"gpt-image-2"},  # Sub2API 当前仅支持 gpt-image-2
+    PROVIDER_TUZI: {"gpt-image-2.5"},
     PROVIDER_ADOBE2API: {"gemini-3-pro-image-preview", "gpt-image-2"},
     PROVIDER_APIMART: None,  # APIMart 适配通用架构，全支持
 }
@@ -1731,9 +1915,17 @@ def _get_custom_rules() -> dict[str, list[str]]:
     return rules
 
 
-def get_smart_route_candidates(model: str, resolution: str = "", size: str = "1024x1024") -> list[str]:
-    """根据请求模型、清晰度、能力表与静态 Key 配置，动态计算选路序列"""
+def get_smart_route_candidates(
+    model: str,
+    resolution: str = "",
+    size: str = "1024x1024",
+    variant: str = "flare",
+) -> list[str]:
+    """根据模型、清晰度和类型计算选路序列，并过滤未配置的线路。"""
     model_name = _normalize_model_name(model).lower()
+    variant_name = (variant or "flare").strip().lower()
+    if variant_name not in {"flare", "sunburst"}:
+        variant_name = "flare"
     custom_rules = _get_custom_rules()
 
     # 显式 resolution 优先；仅当未传时才从 size 像素串推断（_normalize_size 在命中 _SIZE_MAP 时会忽略 resolution）
@@ -1745,6 +1937,11 @@ def get_smart_route_candidates(model: str, resolution: str = "", size: str = "10
     # 1. 根据模型与画质分辨率选择匹配规则（环境 JSON 显式规则优先）
     if custom_rules and model_name in custom_rules:
         preferred_order = custom_rules[model_name]
+    elif model_name == "gpt-image-2.5":
+        if res_upper == "1K" and variant_name == "flare":
+            preferred_order = [PROVIDER_SUB2API, PROVIDER_TUZI, PROVIDER_APIMART]
+        else:
+            preferred_order = [PROVIDER_APIMART]
     elif model_name == "gpt-image-2":
         if res_upper in ("2K", "4K"):
             preferred_order = [PROVIDER_APIMART, PROVIDER_ADOBE2API]
@@ -1753,7 +1950,7 @@ def get_smart_route_candidates(model: str, resolution: str = "", size: str = "10
     elif "banana" in model_name or "gemini" in model_name:
         preferred_order = [PROVIDER_APIMART, PROVIDER_ADOBE2API]
     else:
-        preferred_order = (custom_rules and custom_rules.get("default")) or [PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_ADOBE2API]
+        preferred_order = (custom_rules and custom_rules.get("default")) or DEFAULT_MODEL_ROUTING_RULES["default"]
 
     candidates: list[str] = []
 
@@ -1761,13 +1958,18 @@ def get_smart_route_candidates(model: str, resolution: str = "", size: str = "10
     for provider in preferred_order:
         # 校验 2.1: 线路是否支持该模型
         supported = PROVIDER_MODEL_CAPABILITIES.get(provider)
-        if supported is not None and model_name not in supported:
-            logger.debug("[smart-routing] Provider %s skipped for model %s (not supported by capability matrix)", provider, model_name)
+        # Sub2API/Adobe 仍使用其兼容的 gpt-image-2；Tuzi/APIMart 使用 2.5。
+        provider_model = "gpt-image-2" if model_name == "gpt-image-2.5" and provider not in (PROVIDER_TUZI, PROVIDER_APIMART) else model_name
+        if supported is not None and provider_model not in supported:
+            logger.debug("[smart-routing] Provider %s skipped for model %s (provider model %s not supported)", provider, model_name, provider_model)
             continue
 
         # 校验 2.2: 线路是否有配置 Key
         if provider == PROVIDER_SUB2API:
             if settings.cliproxy_base_url and settings.cliproxy_api_key:
+                candidates.append(provider)
+        elif provider == PROVIDER_TUZI:
+            if settings.tuzi_base_url and settings.tuzi_api_key:
                 candidates.append(provider)
         elif provider == PROVIDER_ADOBE2API:
             if settings.adobe2api_base_url and settings.adobe2api_api_key:
@@ -1797,6 +1999,7 @@ async def smart_generate_image_async(
     size: str = "1024x1024",
     resolution: str = "",
     user_id: str = "anonymous",
+    variant: str = "flare",
     on_progress: Callable[[int, str], Any] | None = None,
     on_attempt: Callable[[str], Any] | None = None,
     on_accepted: Callable[[str, str], Any] | None = None,
@@ -1809,9 +2012,9 @@ async def smart_generate_image_async(
     前端只有两个失败出口：明确的上游安全审核拦截，或全部线路完成两轮后仍失败。
     是否已提交上游由各 provider 的 on_accepted 明确信号决定；已接受的同一线路不重复提交。
     """
-    candidates = get_smart_route_candidates(model, resolution=resolution, size=size)
-    logger.info("[smart-routing] Candidate providers for model=%s res=%s size=%s: %s",
-                model, resolution, size, candidates)
+    candidates = get_smart_route_candidates(model, resolution=resolution, size=size, variant=variant)
+    logger.info("[smart-routing] Candidate providers for model=%s variant=%s res=%s size=%s: %s",
+                model, variant, resolution, size, candidates)
     if not candidates:
         raise AllProvidersFailedError(public_generation_error())
 
@@ -1862,33 +2065,47 @@ async def smart_generate_image_async(
                 except Exception as cb_exc:
                     logger.warning("[smart-routing] on_attempt callback failed: %s", cb_exc)
             attempt_count += 1
+            canonical_model = _normalize_model_name(model).lower()
+            provider_model = (
+                "gpt-image-2"
+                if canonical_model == "gpt-image-2.5" and provider not in (PROVIDER_TUZI, PROVIDER_APIMART)
+                else model
+            )
             logger.info(
                 "[smart-routing] Attempting provider %s (round %d/%d, step %d/%d)",
                 provider, round_no, SMART_ROUTE_ROUNDS, index + 1, len(schedule),
             )
             if provider == PROVIDER_SUB2API:
                 result = await generate_sub2api_async(
-                    model=model, prompt=prompt, images=images,
+                    model=provider_model, prompt=prompt, images=images,
+                    size=size, resolution=resolution, user_id=user_id,
+                    on_progress=on_progress, on_accepted=provider_on_accepted,
+                )
+            elif provider == PROVIDER_TUZI:
+                result = await generate_tuzi_async(
+                    model=provider_model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
                     on_progress=on_progress, on_accepted=provider_on_accepted,
                 )
             elif provider == PROVIDER_ADOBE2API:
                 result = await generate_adobe2api_async(
-                    model=model, prompt=prompt, images=images,
+                    model=provider_model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
                     on_progress=on_progress, on_accepted=provider_on_accepted,
                 )
             else:  # APIMart
                 if images:
                     result = await generate_image_with_reference_async(
-                        model=model, prompt=prompt, images=images,
+                        model=provider_model, prompt=prompt, images=images,
                         size=size, resolution=resolution, user_id=user_id,
+                        variant=variant,
                         on_progress=on_progress, on_accepted=provider_on_accepted,
                     )
                 else:
                     result = await generate_image_async(
-                        model=model, prompt=prompt,
+                        model=provider_model, prompt=prompt,
                         size=size, resolution=resolution, user_id=user_id,
+                        variant=variant,
                         on_progress=on_progress, on_accepted=provider_on_accepted,
                     )
 

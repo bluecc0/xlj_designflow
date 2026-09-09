@@ -46,6 +46,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .ai_image import (
     PROVIDER_SUB2API,
+    PROVIDER_TUZI,
     PROVIDER_ADOBE2API,
     PROVIDER_APIMART,
     PROVIDER_AUTO,
@@ -57,6 +58,7 @@ from .ai_image import (
     generate_image_async,
     generate_image_with_reference_async,
     generate_sub2api_async,
+    generate_tuzi_async,
     generate_adobe2api_async,
     smart_generate_image_async,
     generate_inspiration_thumb,
@@ -1398,6 +1400,7 @@ async def _run_outpainting_background(
             result = await run_outpainting(
                 api_key=settings.bfl_api_key,
                 api_url=settings.bfl_api_url,
+                proxy_url=settings.bfl_outpainting_proxy_url,
                 mode=settings.bfl_outpainting_mode,
                 output_format=settings.bfl_outpainting_output_format,
                 auto_crop=settings.bfl_outpainting_auto_crop,
@@ -1580,6 +1583,65 @@ async def _run_outpainting_background(
                 resume_only=True,
                 polling_url=accepted["polling_url"],
                 acceptance_resume_attempts=acceptance_resume_attempts - 1,
+            )
+            return
+        # The provider task is already accepted at this point. A transient
+        # poll transport failure must remain recoverable so a restart can poll
+        # the same task instead of deleting the source snapshot and reporting
+        # a terminal failure to the user.
+        diagnostic_text = str(getattr(exc, "diagnostic", "") or "")
+        is_transient_poll_failure = (
+            accepted["provider_task_id"]
+            and accepted["polling_url"]
+            and isinstance(exc, BflOutpaintingError)
+            and (
+                diagnostic_text.startswith("poll request retries=")
+                or diagnostic_text.startswith("poll HTTP 408")
+                or diagnostic_text.startswith("poll HTTP 425")
+                or diagnostic_text.startswith("poll HTTP 429")
+                or diagnostic_text.startswith("poll HTTP 500")
+                or diagnostic_text.startswith("poll HTTP 502")
+                or diagnostic_text.startswith("poll HTTP 503")
+                or diagnostic_text.startswith("poll HTTP 504")
+            )
+        )
+        if is_transient_poll_failure:
+            retry_meta = {
+                **request_meta,
+                "phase": "polling_retry",
+                "last_poll_diagnostic": diagnostic_text[:500],
+            }
+            try:
+                await _save_outpainting_job_with_retries(
+                    job_id=job_id,
+                    user_id=user_id,
+                    status="processing",
+                    model=BFL_OUTPAINTING_MODEL,
+                    provider="bfl",
+                    prompt=prompt,
+                    original_prompt=prompt,
+                    resolved_prompt=prompt,
+                    size=f"{geometry.expected_width}x{geometry.expected_height}",
+                    resolution="",
+                    has_reference=True,
+                    reference_count=1,
+                    request_meta=retry_meta,
+                    task_id=accepted["provider_task_id"],
+                    progress=75,
+                    created_at=created_at,
+                )
+            except Exception:
+                logger.exception(
+                    "BFL outpainting poll failure recovery persistence failed: job=%s task=%s",
+                    job_id,
+                    accepted["provider_task_id"],
+                )
+            logger.warning(
+                "BFL outpainting poll failed transiently; keeping task recoverable: "
+                "job=%s task=%s diagnostic=%s",
+                job_id,
+                accepted["provider_task_id"],
+                diagnostic_text[:500],
             )
             return
         if isinstance(exc, BflOutpaintingError):
@@ -4353,7 +4415,7 @@ def _build_skill_planner_prompt(
 {{
   "steps": ["你如何理解用户需求", "你从 Skill 中采用哪些规则", "你如何转换给生图模型"],
   "applied_rules": ["具体采用的 Skill 规则，3-6 条"],
-  "final_prompt": "最终传给 gpt-image-2 的完整生图 prompt，要求具体、可执行、不要提到 SKILL.md 文件名或文档本身",
+  "final_prompt": "最终传给 gpt-image-2.5 的完整生图 prompt，要求具体、可执行、不要提到 SKILL.md 文件名或文档本身",
   "negative_prompt": "需要避免的画面问题"
 }}
 
@@ -4466,6 +4528,7 @@ async def _run_ai_image_background(
     batch_id: str = "",
     batch_index: int = 0,
     batch_count: int = 1,
+    variant: str = "flare",
 ):
     """后台异步生图：轮询进度 → 更新 DB → 下载结果 → 写聊天记录"""
     stage = "init"
@@ -4541,6 +4604,7 @@ async def _run_ai_image_background(
                 model=model, prompt=prompt,
                 images=refs if refs else None,
                 size=size, resolution=resolution, user_id=user_id,
+                variant=variant,
                 on_progress=on_progress, on_attempt=on_attempt, on_accepted=on_accepted,
             )
         elif provider == PROVIDER_SUB2API:
@@ -4549,6 +4613,13 @@ async def _run_ai_image_background(
                 images=refs if refs else None,
                 size=size, resolution=resolution, user_id=user_id,
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_SUB2API, tid),
+            )
+        elif provider == PROVIDER_TUZI:
+            result = await generate_tuzi_async(
+                model=model, prompt=prompt, images=refs if refs else None,
+                size=size, resolution=resolution, user_id=user_id,
+                variant=variant,
+                on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_TUZI, tid),
             )
         elif provider == PROVIDER_ADOBE2API:
             result = await generate_adobe2api_async(
@@ -4561,12 +4632,14 @@ async def _run_ai_image_background(
             result = await generate_image_with_reference_async(
                 model=model, prompt=prompt, images=refs,
                 size=size, resolution=resolution, user_id=user_id,
+                variant=variant,
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_APIMART, tid),
             )
         else:
             result = await generate_image_async(
                 model=model, prompt=prompt,
                 size=size, resolution=resolution, user_id=user_id,
+                variant=variant,
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_APIMART, tid),
             )
         actual_provider = str(result.get("provider") or provider)
@@ -4606,6 +4679,7 @@ async def _run_ai_image_background(
                 detail=f"job={job_id[:8]} model={model} size={size} result=done{cost_str}{time_str}{usage_str} image={result.get('url', '?')[:60]}",
                 payload=json.dumps({
                     "job_id": job_id, "model": model, "size": size, "result": "done",
+                    "variant": variant,
                     "image_url": result.get("url", ""), "cost": result.get("cost"), "usage": usage,
                     "provider": actual_provider, "provider_switched": provider_switched,
                     "upstream_task_id": upstream_task_id,
@@ -4621,6 +4695,7 @@ async def _run_ai_image_background(
                 meta={
                     "job_id": job_id,
                     "model": model, "prompt": prompt,
+                    "variant": variant,
                     "resolvedPrompt": resolved_prompt or prompt,
                     "promptTrace": prompt_trace,
                     "provider": actual_provider,
@@ -4679,6 +4754,7 @@ async def _run_ai_image_background(
             detail=f"job={job_id[:8]} model={model} size={size} result=cancelled stage={stage}",
             payload=json.dumps({
                 "job_id": job_id, "model": model, "size": size, "result": "cancelled",
+                "variant": variant,
                 "error": error_msg, "stage": stage, "provider": cancel_provider,
                 "upstream_task_id": upstream_task_id,
             }, ensure_ascii=False),
@@ -4690,6 +4766,7 @@ async def _run_ai_image_background(
             meta={
                 "job_id": job_id,
                 "model": model, "prompt": prompt,
+                "variant": variant,
                 "provider": cancel_provider,
                 "status": "failed", "error": error_msg,
                 "hasReference": has_reference,
@@ -4768,6 +4845,7 @@ async def _run_ai_image_background(
             meta={
                 "job_id": job_id,
                 "model": model, "prompt": prompt,
+                "variant": variant,
                 "provider": fail_provider,
                 "status": "failed", "error": error_msg,
                 "hasReference": has_reference,
@@ -5363,6 +5441,7 @@ def ai_image_status(request: Request, job_id: str):
         "prompt_trace": job.get("prompt_trace") or "",
         "task_id": job.get("task_id"),
         "model": job.get("model"),
+        "variant": request_meta.get("variant") or "flare",
         "provider": job.get("provider"),
         "error": error_text or None,
         "providerSwitched": bool(job.get("provider_switched")),
@@ -5391,9 +5470,13 @@ async def ai_image_retry(request: Request):
     prompt = (old_job.get("prompt") or "").strip()
     original_prompt = (old_job.get("original_prompt") or "").strip()
     resolved_prompt = (old_job.get("resolved_prompt") or prompt).strip()
-    model = (old_job.get("model") or "gpt-image-2").strip()
+    model = (old_job.get("model") or "gpt-image-2.5").strip()
     size = (old_job.get("size") or "1024x1024").strip()
     resolution = (old_job.get("resolution") or "").strip()
+    request_meta = old_job.get("request_meta") if isinstance(old_job.get("request_meta"), dict) else {}
+    variant = str(request_meta.get("variant") or "flare").strip().lower()
+    if variant not in {"flare", "sunburst"}:
+        variant = "flare"
 
     # 1. 从磁盘加载用户上传的参考图
     user_refs = load_user_refs(user["id"], job_id)
@@ -5429,6 +5512,7 @@ async def ai_image_retry(request: Request):
         request_meta={
             "chat_session_id": session_id,
             "retry_from": job_id,
+            "variant": variant,
             "manual_reference_count": len(user_refs),
             "context_reference_count": len(context_ref_bytes),
             "reference_names": [name for _content, name in all_refs],
@@ -5449,12 +5533,14 @@ async def ai_image_retry(request: Request):
             provider=PROVIDER_AUTO,
             model=model, prompt=prompt,
             size=size, resolution=resolution,
+            variant=variant,
             refs=all_refs, has_reference=has_reference, created_at=created_at,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt,
             ref_previews=[],
             request_meta={
                 "chat_session_id": session_id,
                 "retry_from": job_id,
+                "variant": variant,
                 "manual_reference_count": len(user_refs),
                 "context_reference_count": len(context_ref_bytes),
                 "reference_names": [name for _content, name in all_refs],
@@ -5585,7 +5671,7 @@ async def publish_inspiration(request: Request):
         prompt=job.get("prompt") or "",
         original_prompt=job.get("original_prompt") or "",
         resolved_prompt=job.get("resolved_prompt") or job.get("prompt") or "",
-        model=job.get("model") or "gpt-image-2",
+        model=job.get("model") or "gpt-image-2.5",
         size=job.get("size") or "1024x1024",
         resolution=job.get("resolution") or "",
         has_ref=bool(job.get("has_reference")),
@@ -6070,6 +6156,7 @@ async def ai_image_endpoint(
     prompt: str = Form(...),
     size: str = Form("1024x1024"),
     resolution: str = Form(""),
+    variant: str = Form("flare"),
     skill: str = Form(""),
     planned_prompt: str = Form(""),
     prompt_trace: str = Form(""),
@@ -6095,9 +6182,10 @@ async def ai_image_endpoint(
     )
     user_early = getattr(request.state, "user", None) or {}
     logger.info(
-        "ai_image_endpoint_enter client=%s model=%s provider=%s size=%s batch=%s refs=%s user=%s",
+        "ai_image_endpoint_enter client=%s model=%s variant=%s provider=%s size=%s batch=%s refs=%s user=%s",
         client_req,
         model,
+        variant,
         provider or "-",
         size,
         batch_count,
@@ -6105,6 +6193,9 @@ async def ai_image_endpoint(
         user_early.get("username") or user_early.get("id") or "-",
     )
     batch_count = max(1, min(int(batch_count or 1), 4))
+    variant = (variant or "flare").strip().lower()
+    if variant not in {"flare", "sunburst"}:
+        variant = "flare"
     original_prompt = prompt.strip()
     ref_previews_list = []
     try:
@@ -6149,7 +6240,7 @@ async def ai_image_endpoint(
         role="user",
         type="user_text",
         text=original_prompt,
-        meta={"model": resolved, "size": size, "resolution": resolution, "refPreviews": ref_previews_list, "batchCount": batch_count, "skill": active_skill_name},
+        meta={"model": resolved, "size": size, "resolution": resolution, "variant": variant, "refPreviews": ref_previews_list, "batchCount": batch_count, "skill": active_skill_name},
         created_at=created_at,
     )
     try:
@@ -6225,6 +6316,7 @@ async def ai_image_endpoint(
                 "client_request_id": client_req,
                 "chat_session_id": session_id,
                 "skill": active_skill_name,
+                "variant": variant,
                 "batch_id": batch_id,
                 "batch_index": _idx,
                 "batch_count": batch_count,
@@ -6257,9 +6349,9 @@ async def ai_image_endpoint(
             log_operation(
                 user_id=user["id"], username=user["username"],
                 action="ai_image",
-                detail=f"job={jid[:8]} client={client_req} model={resolved} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(all_refs_batch)} batch={batch_count}",
+                detail=f"job={jid[:8]} client={client_req} model={resolved} variant={variant} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(all_refs_batch)} batch={batch_count}",
                 payload=json.dumps({
-                    "job_id": jid, "client_request_id": client_req, "model": resolved, "size": size,
+                    "job_id": jid, "client_request_id": client_req, "model": resolved, "variant": variant, "size": size,
                     "prompt": original_prompt[:200], "refs": len(all_refs_batch),
                     "provider": resolved_provider, "batch_count": batch_count, "skill": active_skill_name,
                 }, ensure_ascii=False),
@@ -6271,6 +6363,7 @@ async def ai_image_endpoint(
                     provider=resolved_provider,
                     model=resolved, prompt=enriched_prompt,
                     size=size, resolution=resolution,
+                    variant=variant,
                     refs=all_refs_batch, has_reference=has_reference, created_at=created_at,
                     original_prompt=original_prompt, resolved_prompt=enriched_prompt,
                     prompt_trace=json.dumps(prompt_trace_payload, ensure_ascii=False) if prompt_trace_payload else prompt_trace_text,
@@ -6333,6 +6426,7 @@ async def ai_image_endpoint(
                     "client_request_id": client_req,
                     "chat_session_id": session_id,
                     "skill": active_skill_name,
+                    "variant": variant,
                     "batch_count": batch_count,
                     "stage": "submit",
                 },

@@ -1316,6 +1316,7 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
                     "who": "ai",
                     "type": "ai-image-generating",
                     "model": meta.get("model"),
+                    "variant": meta.get("variant") or "flare",
                     "prompt": meta.get("prompt") or (row["text"] or ""),
                     "status": meta.get("status") or "done",
                     "imageUrl": row["image_url"],
