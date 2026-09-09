@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
 import { useAIOperationStore } from '../store/aiOperationStore'
 import { TextToolbar } from './TextToolbar'
+import type { OutpaintMargins } from '../types'
 import {
   runMatting,
   runUpscale,
@@ -11,7 +12,11 @@ import {
 } from '../services/aiImageService'
 
 interface Props {
+  isOutpainting?: boolean
+  outpaintMargins?: OutpaintMargins
   onStartOutpainting: (imageId: string) => void
+  onExecuteOutpainting?: () => void
+  onCancelOutpainting?: () => void
 }
 
 /**
@@ -99,7 +104,13 @@ function DesignflowToolbarIcon({ name }: { name: 'download' | 'outpaint' | 'upsc
   return null
 }
 
-export function ContextualToolbar({ onStartOutpainting }: Props) {
+export function ContextualToolbar({
+  isOutpainting = false,
+  outpaintMargins,
+  onStartOutpainting,
+  onExecuteOutpainting,
+  onCancelOutpainting,
+}: Props) {
   const selectedIds = useCanvasStore((s) => s.selectedIds)
   const selectedType = useCanvasStore((s) => s.selectedType)
   const images = useCanvasStore((s) => s.images)
@@ -143,6 +154,13 @@ export function ContextualToolbar({ onStartOutpainting }: Props) {
   }
 
   if (minX === Infinity) return null
+
+  if (isOutpainting && outpaintMargins) {
+    minX -= outpaintMargins.left
+    maxX += outpaintMargins.right
+    minY -= outpaintMargins.top
+    maxY += outpaintMargins.bottom
+  }
 
   const screenCenterX = ((minX + maxX) / 2) * zoom + panX
   const screenTopY = minY * zoom + panY - 52
@@ -340,6 +358,7 @@ export function ContextualToolbar({ onStartOutpainting }: Props) {
   const isSingleImage = selectedImages.length === 1
   const firstImage = selectedImages[0]
   const isAiBusy = aiState.status === 'running'
+  const isOutpaintBusy = isAiBusy && aiState.type === 'outpainting'
 
   return (
     <div
@@ -349,7 +368,7 @@ export function ContextualToolbar({ onStartOutpainting }: Props) {
         left: clampedX,
         top: clampedY,
         transform: 'translateX(-50%)',
-        zIndex: 92,
+        zIndex: 100,
       }}
     >
       <div className="designflow-upscale-toolbar">
@@ -360,6 +379,7 @@ export function ContextualToolbar({ onStartOutpainting }: Props) {
               onClick={() => handleDownloadSingle(firstImage)}
               className="designflow-toolbar-button"
               title="下载原图"
+              disabled={isAiBusy || isOutpainting}
             >
               <DesignflowToolbarIcon name="download" />
               <span className="designflow-toolbar-label">下载原图</span>
@@ -367,17 +387,52 @@ export function ContextualToolbar({ onStartOutpainting }: Props) {
 
             <span className="designflow-toolbar-divider" />
 
-            {/* 2. 智能扩图 */}
-            <button
-              onClick={() => onStartOutpainting(firstImage.id)}
-              className="designflow-toolbar-button designflow-toolbar-button-ai"
-              title="智能扩图 (FLUX Outpainting)"
-              disabled={isAiBusy}
-            >
-              <DesignflowToolbarIcon name="outpaint" />
-              <span className="designflow-toolbar-label">扩图</span>
-              <span className="designflow-ai-dot" />
-            </button>
+            {/* 2. 智能扩图 / 生成 */}
+            {isOutpainting ? (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                <button
+                  onClick={onExecuteOutpainting}
+                  className="designflow-toolbar-button designflow-toolbar-button-ai"
+                  data-composing="true"
+                  title="点击开始 FLUX 扩图 (Enter)"
+                  disabled={isAiBusy}
+                >
+                  {isOutpaintBusy ? (
+                    <span className="designflow-upscale-spinner" />
+                  ) : (
+                    <DesignflowToolbarIcon name="outpaint" />
+                  )}
+                  <span className="designflow-toolbar-label">
+                    {isOutpaintBusy ? '生成中...' : '生成'}
+                  </span>
+                  <span className="designflow-ai-dot" />
+                </button>
+
+                <button
+                  onClick={onCancelOutpainting}
+                  className="designflow-toolbar-button"
+                  title="取消扩图 (Esc)"
+                  disabled={isAiBusy}
+                  style={{ width: 28, height: 28, padding: 0, color: '#94a3b8' }}
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => onStartOutpainting(firstImage.id)}
+                className="designflow-toolbar-button designflow-toolbar-button-ai"
+                title="智能扩图 (FLUX Outpainting)"
+                disabled={isAiBusy}
+              >
+                <DesignflowToolbarIcon name="outpaint" />
+                <span className="designflow-toolbar-label">扩图</span>
+                <span className="designflow-ai-dot" />
+              </button>
+            )}
 
             <span className="designflow-toolbar-divider" />
 
@@ -386,7 +441,7 @@ export function ContextualToolbar({ onStartOutpainting }: Props) {
               onClick={handleUpscale}
               className="designflow-toolbar-button"
               title="高清放大 2x"
-              disabled={isAiBusy}
+              disabled={isAiBusy || isOutpainting}
             >
               {aiState.type === 'upscale' && isAiBusy ? (
                 <span className="designflow-upscale-spinner" />
@@ -403,7 +458,7 @@ export function ContextualToolbar({ onStartOutpainting }: Props) {
               onClick={handleVectorize}
               className="designflow-toolbar-button"
               title="转为 SVG"
-              disabled={isAiBusy}
+              disabled={isAiBusy || isOutpainting}
             >
               {aiState.type === 'vectorize' && isAiBusy ? (
                 <span className="designflow-upscale-spinner" />
@@ -420,7 +475,7 @@ export function ContextualToolbar({ onStartOutpainting }: Props) {
               onClick={handleMatting}
               className="designflow-toolbar-button"
               title="智能抠图 (消除背景)"
-              disabled={isAiBusy}
+              disabled={isAiBusy || isOutpainting}
             >
               {aiState.type === 'matting' && isAiBusy ? (
                 <span className="designflow-upscale-spinner" />
@@ -437,7 +492,7 @@ export function ContextualToolbar({ onStartOutpainting }: Props) {
               onClick={handleLayerExtract}
               className="designflow-toolbar-button"
               title="图层分离 (导出 PSD)"
-              disabled={isAiBusy}
+              disabled={isAiBusy || isOutpainting}
             >
               {aiState.type === 'layer-extract' && isAiBusy ? (
                 <span className="designflow-upscale-spinner" />

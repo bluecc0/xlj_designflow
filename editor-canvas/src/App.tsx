@@ -15,9 +15,12 @@ import { ContextMenu, type ContextMenuState } from './components/ContextMenu'
 import { ImportProductModal } from './components/ImportProductModal'
 import { SnapGuides } from './components/SnapGuides'
 import type { SnapLine } from './utils/snapping'
+import type { OutpaintMargins } from './types'
 import { useViewportStore } from './store/viewportStore'
 import { useCanvasStore } from './store/canvasStore'
 import { useHistoryStore } from './store/historyStore'
+import { useAIOperationStore } from './store/aiOperationStore'
+import { runOutpainting } from './services/aiImageService'
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 
 const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
@@ -56,6 +59,8 @@ export function App() {
     createPage,
     renamePage,
     addText,
+    addImage,
+    addImages,
     insertImagesAuto,
     revision,
     isDirty,
@@ -73,6 +78,7 @@ export function App() {
   const containerRef = useRef<HTMLDivElement>(null)
   const isMouseDownRef = useRef(false)
   const lastMousePosRef = useRef({ x: 0, y: 0 })
+  const mousePosRef = useRef<{ x: number; y: number } | null>(null)
   const snapshotHydratedRef = useRef(false)
   const pendingHostCommandsRef = useRef<any[]>([])
   const isConflictRef = useRef(false)
@@ -83,8 +89,19 @@ export function App() {
   const wheelTimerRef = useRef<any>(null)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved')
 
-  // 扩图状态
+  const claimOperation = useAIOperationStore((s) => s.claimOperation)
+  const updateOperation = useAIOperationStore((s) => s.updateOperation)
+  const releaseOperation = useAIOperationStore((s) => s.releaseOperation)
+  const aiState = useAIOperationStore((s) => s.state)
+
+  // 扩图状态与边距
   const [outpaintingImageId, setOutpaintingImageId] = useState<string | null>(null)
+  const [outpaintMargins, setOutpaintMargins] = useState<OutpaintMargins>({
+    top: 120,
+    right: 120,
+    bottom: 120,
+    left: 120,
+  })
 
   // 框选状态
   const [marqueeStart, setMarqueeStart] = useState<{ x: number; y: number } | null>(null)
@@ -98,6 +115,75 @@ export function App() {
   }>({ visible: false, targetPos: null })
   const [snapLines, setSnapLines] = useState<SnapLine[]>([])
 
+  const handleStartOutpainting = useCallback((id: string) => {
+    setOutpaintingImageId(id)
+    setOutpaintMargins({
+      top: 120,
+      right: 120,
+      bottom: 120,
+      left: 120,
+    })
+  }, [])
+
+  const handleCancelOutpainting = useCallback(() => {
+    setOutpaintingImageId(null)
+  }, [])
+
+  const handleExecuteOutpainting = useCallback(async () => {
+    if (!outpaintingImageId) return
+    const target = images.find((im) => im.id === outpaintingImageId)
+    if (!target) return
+
+    const totalOutpaint = outpaintMargins.top + outpaintMargins.right + outpaintMargins.bottom + outpaintMargins.left
+    if (totalOutpaint <= 0) {
+      alert('请先向外拖拽扩图手柄以设定扩展边距')
+      return
+    }
+
+    if (!claimOperation('outpainting', '正在准备扩图...')) {
+      alert('已有 AI 任务在进行中，请等待完成')
+      return
+    }
+
+    try {
+      const result = await runOutpainting(
+        target.url,
+        target.width,
+        target.height,
+        outpaintMargins,
+        (msg, progress) => {
+          updateOperation({ message: msg, progress })
+        }
+      )
+
+      const newX = target.x - outpaintMargins.left
+      const newY = target.y - outpaintMargins.top
+      const newWidth = target.width + outpaintMargins.left + outpaintMargins.right
+      const newHeight = target.height + outpaintMargins.top + outpaintMargins.bottom
+
+      const newImg = addImage({
+        id: 'img-' + Math.random().toString(36).slice(2, 10),
+        frameId: target.frameId,
+        x: newX,
+        y: newY,
+        width: newWidth,
+        height: newHeight,
+        rotation: target.rotation || 0,
+        url: result.imageUrl,
+        name: `${target.name}-扩图`,
+        locked: false,
+        opacity: 1,
+      })
+
+      setOutpaintingImageId(null)
+      setSelected([newImg.id], 'image')
+    } catch (err: any) {
+      alert(`扩图失败: ${err.message}`)
+    } finally {
+      releaseOperation()
+    }
+  }, [outpaintingImageId, images, outpaintMargins, claimOperation, updateOperation, releaseOperation, addImage, setSelected])
+
   // 1. 快捷键监听
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -107,6 +193,21 @@ export function App() {
 
       if (e.code === 'Space' && !e.repeat) {
         setSpacePressed(true)
+      }
+
+      // 退出扩图 (Escape) / 确认扩图 (Enter)
+      if (e.key === 'Escape') {
+        if (outpaintingImageId) {
+          e.preventDefault()
+          setOutpaintingImageId(null)
+          return
+        }
+      } else if (e.key === 'Enter') {
+        if (outpaintingImageId && aiState.status !== 'running') {
+          e.preventDefault()
+          handleExecuteOutpainting()
+          return
+        }
       }
 
       // 工具快捷键
@@ -164,9 +265,215 @@ export function App() {
 
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
+
+    // 实时记录鼠标屏幕坐标
+    const onMouseMoveWindow = (e: MouseEvent) => {
+      mousePosRef.current = { x: e.clientX, y: e.clientY }
+    }
+    const onMouseLeaveWindow = () => {
+      mousePosRef.current = null
+    }
+
+    // 剪贴板粘贴图片处理
+    const onPasteWindow = async (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const isInput =
+        target &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)
+
+      const clipboardData = e.clipboardData
+      if (!clipboardData) return
+
+      const items = Array.from(clipboardData.items || [])
+      const files = Array.from(clipboardData.files || [])
+
+      // 提取图片文件项
+      const imageFiles: File[] = []
+      for (const item of items) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const f = item.getAsFile()
+          if (f) imageFiles.push(f)
+        }
+      }
+      if (imageFiles.length === 0) {
+        for (const file of files) {
+          if (file.type.startsWith('image/')) {
+            imageFiles.push(file)
+          }
+        }
+      }
+
+      // 如果在输入框中且剪贴板没有图片，放行原生文本输入
+      if (isInput && imageFiles.length === 0) {
+        return
+      }
+
+      // 1. 处理剪贴板图片文件（截图或复制的文件）
+      if (imageFiles.length > 0) {
+        e.preventDefault()
+        e.stopPropagation()
+
+        const screenCenter = mousePosRef.current || {
+          x: window.innerWidth / 2,
+          y: window.innerHeight / 2,
+        }
+        const center = screenToCanvas(screenCenter)
+
+        const MAX_DIM = 800
+        const GAP = 24
+        const loadedImages: Array<{
+          url: string
+          name: string
+          w: number
+          h: number
+        }> = []
+
+        for (const file of imageFiles) {
+          try {
+            const dataUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader()
+              reader.onload = () => resolve(reader.result as string)
+              reader.onerror = reject
+              reader.readAsDataURL(file)
+            })
+
+            const dims = await new Promise<{ w: number; h: number }>((resolve) => {
+              const img = new Image()
+              img.onload = () => {
+                const nw = img.naturalWidth || img.width || 400
+                const nh = img.naturalHeight || img.height || 400
+                const scale = Math.min(1, MAX_DIM / Math.max(nw, nh))
+                resolve({
+                  w: Math.round(nw * scale),
+                  h: Math.round(nh * scale),
+                })
+              }
+              img.onerror = () => resolve({ w: 400, h: 400 })
+              img.src = dataUrl
+            })
+
+            loadedImages.push({
+              url: dataUrl,
+              name: file.name ? file.name.replace(/\.[^/.]+$/, '') : '粘贴图片',
+              w: dims.w,
+              h: dims.h,
+            })
+          } catch (err) {
+            console.warn('[Canvas] 粘贴图片读取失败:', err)
+          }
+        }
+
+        if (loadedImages.length === 0) return
+
+        if (loadedImages.length === 1) {
+          const item = loadedImages[0]
+          addImages([
+            {
+              id: 'img-' + Math.random().toString(36).slice(2, 10),
+              frameId: null,
+              x: Math.round(center.x - item.w / 2),
+              y: Math.round(center.y - item.h / 2),
+              width: item.w,
+              height: item.h,
+              rotation: 0,
+              url: item.url,
+              name: item.name,
+              locked: false,
+              opacity: 1,
+            },
+          ])
+          return
+        }
+
+        const cols = Math.min(3, loadedImages.length)
+        const curX = center.x - ((cols * (loadedImages[0].w + GAP) - GAP) / 2)
+        const curY = center.y - (loadedImages[0].h / 2)
+
+        const imagesToCreate = loadedImages.map((item, idx) => {
+          const col = idx % cols
+          const row = Math.floor(idx / cols)
+          return {
+            id: 'img-' + Math.random().toString(36).slice(2, 10),
+            frameId: null,
+            x: Math.round(curX + col * (item.w + GAP)),
+            y: Math.round(curY + row * (item.h + GAP)),
+            width: item.w,
+            height: item.h,
+            rotation: 0,
+            url: item.url,
+            name: `${item.name} ${idx + 1}`,
+            locked: false,
+            opacity: 1,
+          }
+        })
+
+        addImages(imagesToCreate)
+        return
+      }
+
+      // 2. 处理剪贴板纯文本为图片 URL 的情况
+      const text = (clipboardData.getData('text/plain') || '').trim()
+      const isImageUrl = (url: string) => {
+        if (!url) return false
+        if (url.startsWith('data:image/')) return true
+        if (/^\/(ai-images|output|results|avatars|products\/reference-image|products\/mock-image)/.test(url)) return true
+        if (/^https?:\/\/.+\.(png|jpe?g|webp|gif|svg|bmp)(\?.*)?$/i.test(url)) return true
+        return false
+      }
+
+      if (text && isImageUrl(text) && !isInput) {
+        e.preventDefault()
+        e.stopPropagation()
+
+        const screenCenter = mousePosRef.current || {
+          x: window.innerWidth / 2,
+          y: window.innerHeight / 2,
+        }
+        const center = screenToCanvas(screenCenter)
+
+        const img = new Image()
+        img.crossOrigin = 'anonymous'
+        img.onload = () => {
+          const MAX_DIM = 800
+          const nw = img.naturalWidth || img.width || 400
+          const nh = img.naturalHeight || img.height || 400
+          const scale = Math.min(1, MAX_DIM / Math.max(nw, nh))
+          const w = Math.round(nw * scale)
+          const h = Math.round(nh * scale)
+
+          addImages([
+            {
+              id: 'img-' + Math.random().toString(36).slice(2, 10),
+              frameId: null,
+              x: Math.round(center.x - w / 2),
+              y: Math.round(center.y - h / 2),
+              width: w,
+              height: h,
+              rotation: 0,
+              url: text,
+              name: '粘贴图片',
+              locked: false,
+              opacity: 1,
+            },
+          ])
+        }
+        img.onerror = () => {
+          console.warn('[Canvas] 粘贴图片链接加载失败:', text)
+        }
+        img.src = text
+      }
+    }
+
+    window.addEventListener('mousemove', onMouseMoveWindow)
+    window.addEventListener('mouseleave', onMouseLeaveWindow)
+    window.addEventListener('paste', onPasteWindow)
+
     return () => {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('mousemove', onMouseMoveWindow)
+      window.removeEventListener('mouseleave', onMouseLeaveWindow)
+      window.removeEventListener('paste', onPasteWindow)
     }
   }, [
     selectedIds,
@@ -179,7 +486,9 @@ export function App() {
     undo,
     redo,
     getDocument,
-    loadDocument,
+    restoreHistoryDocument,
+    addImages,
+    screenToCanvas,
   ])
 
   // 2. 原生非 passive 滚轮与手势监听（彻底杜绝放大整个浏览器界面）
@@ -817,7 +1126,9 @@ export function App() {
         {outpaintingTarget && (
           <OutpaintingOverlay
             image={outpaintingTarget}
-            onClose={() => setOutpaintingImageId(null)}
+            margins={outpaintMargins}
+            onMarginsChange={setOutpaintMargins}
+            isSubmitting={aiState.status === 'running' && aiState.type === 'outpainting'}
           />
         )}
       </div>
@@ -826,11 +1137,13 @@ export function App() {
       <MarqueeSelection startScreen={marqueeStart} currentScreen={marqueeCurrent} />
 
       {/* 选中图元的浮动工具条（位于屏幕坐标系） */}
-      {!outpaintingImageId && (
-        <ContextualToolbar
-          onStartOutpainting={(id) => setOutpaintingImageId(id)}
-        />
-      )}
+      <ContextualToolbar
+        isOutpainting={Boolean(outpaintingImageId)}
+        outpaintMargins={outpaintMargins}
+        onStartOutpainting={handleStartOutpainting}
+        onExecuteOutpainting={handleExecuteOutpainting}
+        onCancelOutpainting={handleCancelOutpainting}
+      />
 
       {/* 自定义右键上下文菜单 */}
       <ContextMenu
