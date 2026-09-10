@@ -167,18 +167,95 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         base_time = 1000.0
 
         # 第 1 次失败，尚未达到阈值 2，不冻结
-        frozen = ai_image.record_provider_failure("sub2api", now=base_time)
+        frozen = ai_image.record_provider_failure("sub2api", model="gpt-image-2", now=base_time)
         self.assertFalse(frozen)
-        self.assertFalse(ai_image.is_provider_frozen("sub2api", now=base_time))
+        self.assertFalse(ai_image.is_provider_frozen("sub2api", model="gpt-image-2", now=base_time))
 
         # 第 2 次连续失败，触发 30 分钟冻结
-        frozen = ai_image.record_provider_failure("sub2api", now=base_time + 10)
+        frozen = ai_image.record_provider_failure("sub2api", model="gpt-image-2", now=base_time + 10)
         self.assertTrue(frozen)
-        self.assertTrue(ai_image.is_provider_frozen("sub2api", now=base_time + 10))
-        self.assertTrue(ai_image.is_provider_frozen("sub2api", now=base_time + 1799))
+        self.assertTrue(ai_image.is_provider_frozen("sub2api", model="gpt-image-2", now=base_time + 10))
+        self.assertTrue(ai_image.is_provider_frozen("sub2api", model="gpt-image-2", now=base_time + 1799))
 
         # 30 分钟（1800 秒）后自动解冻并恢复
-        self.assertFalse(ai_image.is_provider_frozen("sub2api", now=base_time + 10 + 1801))
+        self.assertFalse(ai_image.is_provider_frozen("sub2api", model="gpt-image-2", now=base_time + 10 + 1801))
+
+    def test_provider_freeze_is_model_family_isolated(self) -> None:
+        base_time = 1000.0
+
+        # 在 gpt-image-2.5 连续失败 2 次，冻结 gpt-image-2.5
+        ai_image.record_provider_failure("sub2api", model="gpt-image-2.5-flare", now=base_time)
+        ai_image.record_provider_failure("sub2api", model="gpt-image-2.5-sunburst", now=base_time + 1)
+
+        # gpt-image-2.5 家族被冻结
+        self.assertTrue(ai_image.is_provider_frozen("sub2api", model="gpt-image-2.5", now=base_time + 2))
+        self.assertTrue(ai_image.is_provider_frozen("sub2api", model="gpt-image-2.5-flare", now=base_time + 2))
+
+        # 但 gpt-image-2 和其他模型不被误连带冻结！
+        self.assertFalse(ai_image.is_provider_frozen("sub2api", model="gpt-image-2", now=base_time + 2))
+        self.assertFalse(ai_image.is_provider_frozen("sub2api", model="gemini-3-pro-image-preview", now=base_time + 2))
+
+    def test_is_freezable_provider_error_classifies_correctly(self) -> None:
+        # 4xx 参数/模型/鉴权/安全错误：不触发冻结
+        self.assertFalse(ai_image.is_freezable_provider_error(RuntimeError("HTTP 400 - invalid prompt")))
+        self.assertFalse(ai_image.is_freezable_provider_error(RuntimeError("HTTP 401 - unauthorized")))
+        self.assertFalse(ai_image.is_freezable_provider_error(RuntimeError("HTTP 404 - model not found")))
+        self.assertFalse(ai_image.is_freezable_provider_error(RuntimeError("HTTP 413 - payload too large")))
+        self.assertFalse(ai_image.is_freezable_provider_error(RuntimeError("HTTP 422 - unprocessable entity")))
+        self.assertFalse(ai_image.is_freezable_provider_error(RuntimeError("HTTP 400: content_policy_violation")))
+        self.assertFalse(ai_image.is_freezable_provider_error(ai_image.SafetyReviewError("审核拦截")))
+
+        # 5xx 服务端错误 / 429 速率限制 / 连接中断：触发冻结
+        self.assertTrue(ai_image.is_freezable_provider_error(RuntimeError("HTTP 500 - internal server error")))
+        self.assertTrue(ai_image.is_freezable_provider_error(RuntimeError("HTTP 502 - bad gateway")))
+        self.assertTrue(ai_image.is_freezable_provider_error(RuntimeError("HTTP 503 - service unavailable")))
+        self.assertTrue(ai_image.is_freezable_provider_error(RuntimeError("HTTP 504 - gateway timeout")))
+        self.assertTrue(ai_image.is_freezable_provider_error(RuntimeError("HTTP 429 - rate limit exceeded")))
+        self.assertTrue(ai_image.is_freezable_provider_error(RuntimeError("CLIProxyAPI 连接失败：ConnectError")))
+        self.assertTrue(ai_image.is_freezable_provider_error(RuntimeError("connection refused")))
+        self.assertTrue(ai_image.is_freezable_provider_error(ai_image.AmbiguousUpstreamError("断连")))
+
+    async def test_client_4xx_does_not_trigger_circuit_freeze(self) -> None:
+        """连续出现 HTTP 400/404 等请求错误时，不触发冻结，保留第一顺位。"""
+        attempts = []
+
+        async def mock_sub2api_400(*args, **kwargs):
+            raise RuntimeError("CLIProxyAPI 生图失败：HTTP 400 - invalid prompt parameter")
+
+        async def mock_apimart(*args, **kwargs):
+            return {"url": "/res.png", "provider": "apimart"}
+
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api_400), \
+             patch.object(ai_image, "generate_image_async", side_effect=mock_apimart), \
+             patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api:8080"), \
+             patch.object(ai_image.settings, "cliproxy_api_key", "sk-sub2api"), \
+             patch.object(ai_image.settings, "ai_image_api_key", "sk-apimart"):
+
+            # 任务 1: Sub2API 400 失败，切线到 APIMart 成功
+            res1 = await ai_image.smart_generate_image_async(
+                model="gpt-image-2.5",
+                prompt="bad prompt 1",
+                user_id="u1",
+                on_attempt=attempts.append,
+            )
+            self.assertEqual(res1["provider"], "apimart")
+
+            # 任务 2: Sub2API 再次 400 失败
+            res2 = await ai_image.smart_generate_image_async(
+                model="gpt-image-2.5",
+                prompt="bad prompt 2",
+                user_id="u1",
+                on_attempt=attempts.append,
+            )
+            self.assertEqual(res2["provider"], "apimart")
+
+            # 验证：Sub2API 未被冻结，连续失败计数仍为 0
+            self.assertFalse(ai_image.is_provider_frozen("sub2api", model="gpt-image-2.5"))
+            self.assertEqual(ai_image._provider_consecutive_failures.get("sub2api:gpt-image-2.5", 0), 0)
+
+            # 任务 3: 候选列表仍以 Sub2API 为第一顺位
+            candidates = ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K")
+            self.assertEqual(candidates[0], "sub2api")
 
     def test_smart_routing_skips_frozen_provider_and_picks_next(self) -> None:
         base_time = 1000.0
@@ -193,8 +270,8 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(candidates, ["sub2api", "apimart", "adobe2api"])
 
             # 连续失败 2 次，冻结 sub2api
-            ai_image.record_provider_failure("sub2api", now=base_time)
-            ai_image.record_provider_failure("sub2api", now=base_time + 1)
+            ai_image.record_provider_failure("sub2api", model="gpt-image-2", now=base_time)
+            ai_image.record_provider_failure("sub2api", model="gpt-image-2", now=base_time + 1)
 
             # 第三次任务：sub2api 被过滤，直接使用 apimart 作为第一顺位
             candidates_frozen = ai_image.get_smart_route_candidates("gpt-image-2", resolution="1K", now=base_time + 2)
@@ -207,15 +284,15 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
     def test_provider_success_resets_failure_count(self) -> None:
         base_time = 1000.0
         # 失败 1 次
-        ai_image.record_provider_failure("sub2api", now=base_time)
-        self.assertFalse(ai_image.is_provider_frozen("sub2api", now=base_time))
+        ai_image.record_provider_failure("sub2api", model="gpt-image-2", now=base_time)
+        self.assertFalse(ai_image.is_provider_frozen("sub2api", model="gpt-image-2", now=base_time))
 
         # 随后成功 1 次，重置失败计数
-        ai_image.record_provider_success("sub2api")
+        ai_image.record_provider_success("sub2api", model="gpt-image-2")
 
         # 再次失败 1 次，计数应为 1，不达到阈值 2，不触发冻结
-        ai_image.record_provider_failure("sub2api", now=base_time + 10)
-        self.assertFalse(ai_image.is_provider_frozen("sub2api", now=base_time + 10))
+        ai_image.record_provider_failure("sub2api", model="gpt-image-2", now=base_time + 10)
+        self.assertFalse(ai_image.is_provider_frozen("sub2api", model="gpt-image-2", now=base_time + 10))
 
     async def test_smart_route_passes_variant_to_apimart(self) -> None:
         calls = []
