@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import random
+import threading
 import time
 import uuid
 from datetime import date
@@ -81,6 +82,12 @@ SLASH_MODEL_MAP: dict[str, str] = {
     "gpt-image-2": "gpt-image-2",
     "gpt image 2.5": "gpt-image-2.5",
     "gpt-image-2.5": "gpt-image-2.5",
+    "gpt-image-2.5-flare": "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst": "gpt-image-2.5-sunburst",
+    "gpt image 2.5 flare": "gpt-image-2.5-flare",
+    "gpt image 2.5 sunburst": "gpt-image-2.5-sunburst",
+    "gpt image 2.5-flare": "gpt-image-2.5-flare",
+    "gpt image 2.5-sunburst": "gpt-image-2.5-sunburst",
 }
 
 PROVIDER_APIMART = "apimart"
@@ -1383,6 +1390,28 @@ async def _save_cliproxy_response_image(data: dict[str, Any], *, user_id: str, a
     raise RuntimeError(f"CLIProxyAPI 图片条目没有 b64_json 或 url: {str(item)[:300]}")
 
 
+_SUB2API_GPT_IMAGE_25_MODELS = {"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
+_SUB2API_ALLOWED_MODELS = {"gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
+
+
+def _sub2api_model_name(model: str, variant: str = "") -> str:
+    """将逻辑模型和变体映射为 Sub2API/CLIProxyAPI 实际模型名。"""
+    model_name = _normalize_model_name(model)
+    if model_name in _SUB2API_GPT_IMAGE_25_MODELS:
+        return model_name
+    if model_name == "gpt-image-2.5":
+        requested_variant = (variant or "").strip().lower()
+        if requested_variant in {"flare", "sunburst"}:
+            return f"gpt-image-2.5-{requested_variant}"
+        configured = (getattr(settings, "ai_image_gpt_25_model", "") or "gpt-image-2.5-flare").strip().lower()
+        if configured in _SUB2API_GPT_IMAGE_25_MODELS:
+            return configured
+        return "gpt-image-2.5-flare"
+    if model_name == "gpt-image-2":
+        return "gpt-image-2"
+    return model_name
+
+
 async def generate_sub2api_async(
     model: str,
     prompt: str,
@@ -1390,6 +1419,7 @@ async def generate_sub2api_async(
     size: str = "1024x1024",
     resolution: str = "",
     user_id: str = "anonymous",
+    variant: str = "flare",
     on_progress: Callable[[int, str], Any] | None = None,
     on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
@@ -1403,9 +1433,9 @@ async def generate_sub2api_async(
     else:
         api_base = f"{base_url}/v1"
 
-    model_name = _normalize_model_name(model)
-    if model_name != "gpt-image-2":
-        raise RuntimeError("CLIProxyAPI 订阅线路当前仅支持 gpt-image-2")
+    model_name = _sub2api_model_name(model, variant)
+    if model_name not in _SUB2API_ALLOWED_MODELS:
+        raise RuntimeError(f"CLIProxyAPI 订阅线路当前不支持模型 {model}")
 
     refs = (images or [])[:9]
     mapped_size = _cliproxy_size(size, resolution)
@@ -1892,11 +1922,91 @@ DEFAULT_MODEL_ROUTING_RULES: dict[str, list[str]] = {
 
 # 服务商能力集合：定义各线路真正支持的模型 (None/空集代表支持全量模型)
 PROVIDER_MODEL_CAPABILITIES: dict[str, set[str] | None] = {
-    PROVIDER_SUB2API: {"gpt-image-2"},  # Sub2API 当前仅支持 gpt-image-2
-    PROVIDER_TUZI: {"gpt-image-2.5"},
+    PROVIDER_SUB2API: {"gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"},
+    PROVIDER_TUZI: {"gpt-image-2.5", "gpt-image-2.5-flare"},
     PROVIDER_ADOBE2API: {"gemini-3-pro-image-preview", "gpt-image-2"},
     PROVIDER_APIMART: None,  # APIMart 适配通用架构，全支持
 }
+
+# ── 供应商熔断与冻结机制（连续失败2次冻结30分钟） ────────────────────────────────
+PROVIDER_FREEZE_DURATION_SECONDS = 30 * 60  # 30 minutes
+PROVIDER_FAILURE_THRESHOLD = 2              # 2 consecutive failures
+
+_provider_circuit_lock = threading.Lock()
+_provider_consecutive_failures: dict[str, int] = {}
+_provider_frozen_until: dict[str, float] = {}
+
+
+def record_provider_failure(provider: str, *, now: float | None = None) -> bool:
+    """记录一次供应商失败。若连续失败达到阈值（2次），冻结30分钟并返回 True。"""
+    curr = time.time() if now is None else now
+    with _provider_circuit_lock:
+        count = _provider_consecutive_failures.get(provider, 0) + 1
+        _provider_consecutive_failures[provider] = count
+        if count >= PROVIDER_FAILURE_THRESHOLD:
+            frozen_until = curr + PROVIDER_FREEZE_DURATION_SECONDS
+            _provider_frozen_until[provider] = frozen_until
+            logger.warning(
+                "[smart-routing] Provider %s has failed %d consecutive times; frozen for %ds (until %s)",
+                provider,
+                count,
+                PROVIDER_FREEZE_DURATION_SECONDS,
+                time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(frozen_until)),
+            )
+            return True
+    return False
+
+
+def record_provider_success(provider: str) -> None:
+    """记录一次供应商成功。清空连续失败计数并解除冻结。"""
+    with _provider_circuit_lock:
+        if _provider_consecutive_failures.get(provider, 0) > 0 or provider in _provider_frozen_until:
+            logger.info("[smart-routing] Provider %s succeeded; resetting failure count and freeze", provider)
+        _provider_consecutive_failures[provider] = 0
+        _provider_frozen_until.pop(provider, None)
+
+
+def is_provider_frozen(provider: str, *, now: float | None = None) -> bool:
+    """检查供应商当前是否处于30分钟冻结期。若过期则自动解冻。"""
+    curr = time.time() if now is None else now
+    with _provider_circuit_lock:
+        frozen_until = _provider_frozen_until.get(provider, 0)
+        if frozen_until <= 0:
+            return False
+        if curr >= frozen_until:
+            _provider_frozen_until.pop(provider, None)
+            _provider_consecutive_failures[provider] = 0
+            logger.info("[smart-routing] Provider %s freeze period expired; restored to routing", provider)
+            return False
+        return True
+
+
+def get_provider_freeze_status(*, now: float | None = None) -> dict[str, dict[str, Any]]:
+    """获取所有供应商的连续失败与冻结状态字典。"""
+    curr = time.time() if now is None else now
+    status: dict[str, dict[str, Any]] = {}
+    with _provider_circuit_lock:
+        for p in (PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_ADOBE2API, PROVIDER_TUZI):
+            fails = _provider_consecutive_failures.get(p, 0)
+            until = _provider_frozen_until.get(p, 0)
+            is_frozen = bool(until > curr)
+            status[p] = {
+                "consecutive_failures": fails,
+                "is_frozen": is_frozen,
+                "remaining_seconds": max(0, int(until - curr)) if is_frozen else 0,
+            }
+    return status
+
+
+def reset_provider_freeze(provider: str | None = None) -> None:
+    """重置指定或全部供应商的失败计数与冻结状态（用于测试或管理员重置）。"""
+    with _provider_circuit_lock:
+        if provider:
+            _provider_consecutive_failures.pop(provider, None)
+            _provider_frozen_until.pop(provider, None)
+        else:
+            _provider_consecutive_failures.clear()
+            _provider_frozen_until.clear()
 
 
 def _get_custom_rules() -> dict[str, list[str]]:
@@ -1920,8 +2030,11 @@ def get_smart_route_candidates(
     resolution: str = "",
     size: str = "1024x1024",
     variant: str = "flare",
+    *,
+    filter_frozen: bool = True,
+    now: float | None = None,
 ) -> list[str]:
-    """根据模型、清晰度和类型计算选路序列，并过滤未配置的线路。"""
+    """根据模型、清晰度和类型计算选路序列，并过滤未配置或被冻结的线路。"""
     model_name = _normalize_model_name(model).lower()
     variant_name = (variant or "flare").strip().lower()
     if variant_name not in {"flare", "sunburst"}:
@@ -1937,9 +2050,13 @@ def get_smart_route_candidates(
     # 1. 根据模型与画质分辨率选择匹配规则（环境 JSON 显式规则优先）
     if custom_rules and model_name in custom_rules:
         preferred_order = custom_rules[model_name]
-    elif model_name == "gpt-image-2.5":
-        if res_upper == "1K" and variant_name == "flare":
-            preferred_order = [PROVIDER_SUB2API, PROVIDER_TUZI, PROVIDER_APIMART]
+    elif model_name == "gpt-image-2.5" or model_name in _APIMART_GPT_IMAGE_25_MODELS:
+        effective_variant = "sunburst" if (variant_name == "sunburst" or model_name == "gpt-image-2.5-sunburst") else "flare"
+        if res_upper == "1K":
+            if effective_variant == "flare":
+                preferred_order = [PROVIDER_SUB2API, PROVIDER_TUZI, PROVIDER_APIMART]
+            else:
+                preferred_order = [PROVIDER_SUB2API, PROVIDER_APIMART]
         else:
             preferred_order = [PROVIDER_APIMART]
     elif model_name == "gpt-image-2":
@@ -1958,8 +2075,8 @@ def get_smart_route_candidates(
     for provider in preferred_order:
         # 校验 2.1: 线路是否支持该模型
         supported = PROVIDER_MODEL_CAPABILITIES.get(provider)
-        # Sub2API/Adobe 仍使用其兼容的 gpt-image-2；Tuzi/APIMart 使用 2.5。
-        provider_model = "gpt-image-2" if model_name == "gpt-image-2.5" and provider not in (PROVIDER_TUZI, PROVIDER_APIMART) else model_name
+        # Adobe 仅支持其兼容的 gpt-image-2；Sub2API/Tuzi/APIMart 均已支持 2.5
+        provider_model = "gpt-image-2" if model_name == "gpt-image-2.5" and provider == PROVIDER_ADOBE2API else model_name
         if supported is not None and provider_model not in supported:
             logger.debug("[smart-routing] Provider %s skipped for model %s (provider model %s not supported)", provider, model_name, provider_model)
             continue
@@ -1977,6 +2094,17 @@ def get_smart_route_candidates(
         elif provider == PROVIDER_APIMART:
             if settings.ai_image_api_key:
                 candidates.append(provider)
+
+    # 3. 动态过滤处于 30 分钟冻结期（连续失败 >= 2 次）的线路
+    if filter_frozen and candidates:
+        active_candidates = [p for p in candidates if not is_provider_frozen(p, now=now)]
+        if active_candidates:
+            return active_candidates
+        logger.warning(
+            "[smart-routing] All candidate providers %s for model=%s are frozen; "
+            "falling back to all candidates to prevent total outage",
+            candidates, model_name,
+        )
 
     return candidates
 
@@ -2066,11 +2194,15 @@ async def smart_generate_image_async(
                     logger.warning("[smart-routing] on_attempt callback failed: %s", cb_exc)
             attempt_count += 1
             canonical_model = _normalize_model_name(model).lower()
-            provider_model = (
-                "gpt-image-2"
-                if canonical_model == "gpt-image-2.5" and provider not in (PROVIDER_TUZI, PROVIDER_APIMART)
-                else model
-            )
+            if canonical_model == "gpt-image-2.5":
+                if provider == PROVIDER_ADOBE2API:
+                    provider_model = "gpt-image-2"
+                elif provider == PROVIDER_SUB2API:
+                    provider_model = _sub2api_model_name(model, variant)
+                else:
+                    provider_model = model
+            else:
+                provider_model = model
             logger.info(
                 "[smart-routing] Attempting provider %s (round %d/%d, step %d/%d)",
                 provider, round_no, SMART_ROUTE_ROUNDS, index + 1, len(schedule),
@@ -2079,6 +2211,7 @@ async def smart_generate_image_async(
                 result = await generate_sub2api_async(
                     model=provider_model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
+                    variant=variant,
                     on_progress=on_progress, on_accepted=provider_on_accepted,
                 )
             elif provider == PROVIDER_TUZI:
@@ -2109,6 +2242,7 @@ async def smart_generate_image_async(
                         on_progress=on_progress, on_accepted=provider_on_accepted,
                     )
 
+            record_provider_success(provider)
             result["provider"] = provider
             accepted_tid = (accepted.get(provider) or "").strip()
             if accepted_tid and not result.get("task_id"):
@@ -2130,6 +2264,9 @@ async def smart_generate_image_async(
                 provider, round_no, err_msg,
             )
             errors.append(f"R{round_no}/{provider}: {err_msg}")
+
+            if not is_safety_review_error(exc):
+                record_provider_failure(provider)
 
             if is_safety_review_error(exc):
                 logger.warning(

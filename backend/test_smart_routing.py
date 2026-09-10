@@ -17,8 +17,10 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.original_db_path = job_store._DB_PATH
         job_store._DB_PATH = Path(self.temp_dir.name) / "smart-routing-test.db"
         job_store.init_db()
+        ai_image.reset_provider_freeze()
 
     def tearDown(self) -> None:
+        ai_image.reset_provider_freeze()
         job_store._DB_PATH = self.original_db_path
         self.temp_dir.cleanup()
 
@@ -64,9 +66,10 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                 ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="2K"),
                 ["apimart"],
             )
+            # 1K sunburst 变体下，Sub2API 同样作为第一顺位，APIMart 作为降级
             self.assertEqual(
                 ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", variant="sunburst"),
-                ["apimart"],
+                ["sub2api", "apimart"],
             )
 
     def test_gpt_image_25_route_ignores_adobe(self) -> None:
@@ -127,23 +130,92 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result.get("provider_switched"))
             self.assertEqual(attempts, ["sub2api", "adobe2api"])
 
-    async def test_gpt_image_25_uses_legacy_image2_on_sub2api(self) -> None:
+    def test_sub2api_model_name_resolution(self) -> None:
+        self.assertEqual(ai_image._sub2api_model_name("gpt-image-2"), "gpt-image-2")
+        self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.5", "flare"), "gpt-image-2.5-flare")
+        self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.5", "sunburst"), "gpt-image-2.5-sunburst")
+        self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.5-sunburst"), "gpt-image-2.5-sunburst")
+        self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.5-flare"), "gpt-image-2.5-flare")
+
+    async def test_gpt_image_25_uses_sub2api_variant_models(self) -> None:
         calls = []
 
         async def mock_sub2api(*args, **kwargs):
             calls.append(("sub2api", kwargs["model"]))
-            return {"url": "/x.png", "provider": "sub2api", "model": "gpt-image-2"}
+            return {"url": "/x.png", "provider": "sub2api", "model": kwargs["model"]}
 
         with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
              patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api"]):
-            result = await ai_image.smart_generate_image_async(
+            result_flare = await ai_image.smart_generate_image_async(
                 model="gpt-image-2.5",
                 prompt="test prompt",
                 user_id="test_user",
+                variant="flare",
+            )
+            result_sunburst = await ai_image.smart_generate_image_async(
+                model="gpt-image-2.5",
+                prompt="test prompt",
+                user_id="test_user",
+                variant="sunburst",
             )
 
-        self.assertEqual(result["provider"], "sub2api")
-        self.assertEqual(calls, [("sub2api", "gpt-image-2")])
+        self.assertEqual(result_flare["provider"], "sub2api")
+        self.assertEqual(result_sunburst["provider"], "sub2api")
+        self.assertEqual(calls, [("sub2api", "gpt-image-2.5-flare"), ("sub2api", "gpt-image-2.5-sunburst")])
+
+    def test_provider_freeze_after_two_consecutive_failures(self) -> None:
+        base_time = 1000.0
+
+        # 第 1 次失败，尚未达到阈值 2，不冻结
+        frozen = ai_image.record_provider_failure("sub2api", now=base_time)
+        self.assertFalse(frozen)
+        self.assertFalse(ai_image.is_provider_frozen("sub2api", now=base_time))
+
+        # 第 2 次连续失败，触发 30 分钟冻结
+        frozen = ai_image.record_provider_failure("sub2api", now=base_time + 10)
+        self.assertTrue(frozen)
+        self.assertTrue(ai_image.is_provider_frozen("sub2api", now=base_time + 10))
+        self.assertTrue(ai_image.is_provider_frozen("sub2api", now=base_time + 1799))
+
+        # 30 分钟（1800 秒）后自动解冻并恢复
+        self.assertFalse(ai_image.is_provider_frozen("sub2api", now=base_time + 10 + 1801))
+
+    def test_smart_routing_skips_frozen_provider_and_picks_next(self) -> None:
+        base_time = 1000.0
+        with patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api:8080"), \
+             patch.object(ai_image.settings, "cliproxy_api_key", "sk-sub2api"), \
+             patch.object(ai_image.settings, "ai_image_api_key", "sk-apimart"), \
+             patch.object(ai_image.settings, "adobe2api_base_url", "http://adobe:6001"), \
+             patch.object(ai_image.settings, "adobe2api_api_key", "sk-adobe"):
+
+            # 正常情况下：Sub2API 第一顺位
+            candidates = ai_image.get_smart_route_candidates("gpt-image-2", resolution="1K", now=base_time)
+            self.assertEqual(candidates, ["sub2api", "apimart", "adobe2api"])
+
+            # 连续失败 2 次，冻结 sub2api
+            ai_image.record_provider_failure("sub2api", now=base_time)
+            ai_image.record_provider_failure("sub2api", now=base_time + 1)
+
+            # 第三次任务：sub2api 被过滤，直接使用 apimart 作为第一顺位
+            candidates_frozen = ai_image.get_smart_route_candidates("gpt-image-2", resolution="1K", now=base_time + 2)
+            self.assertEqual(candidates_frozen, ["apimart", "adobe2api"])
+
+            # 30 分钟后（1800s）：sub2api 自动解冻并恢复到第一顺位
+            candidates_restored = ai_image.get_smart_route_candidates("gpt-image-2", resolution="1K", now=base_time + 1802)
+            self.assertEqual(candidates_restored, ["sub2api", "apimart", "adobe2api"])
+
+    def test_provider_success_resets_failure_count(self) -> None:
+        base_time = 1000.0
+        # 失败 1 次
+        ai_image.record_provider_failure("sub2api", now=base_time)
+        self.assertFalse(ai_image.is_provider_frozen("sub2api", now=base_time))
+
+        # 随后成功 1 次，重置失败计数
+        ai_image.record_provider_success("sub2api")
+
+        # 再次失败 1 次，计数应为 1，不达到阈值 2，不触发冻结
+        ai_image.record_provider_failure("sub2api", now=base_time + 10)
+        self.assertFalse(ai_image.is_provider_frozen("sub2api", now=base_time + 10))
 
     async def test_smart_route_passes_variant_to_apimart(self) -> None:
         calls = []
