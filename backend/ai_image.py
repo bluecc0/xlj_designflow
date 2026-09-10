@@ -1928,7 +1928,7 @@ PROVIDER_MODEL_CAPABILITIES: dict[str, set[str] | None] = {
     PROVIDER_APIMART: None,  # APIMart 适配通用架构，全支持
 }
 
-# ── 供应商熔断与冻结机制（连续失败2次冻结30分钟） ────────────────────────────────
+# ── 供应商熔断与冻结机制（暂态错误连续失败2次冻结30分钟，按 provider+model 隔离） ──
 PROVIDER_FREEZE_DURATION_SECONDS = 30 * 60  # 30 minutes
 PROVIDER_FAILURE_THRESHOLD = 2              # 2 consecutive failures
 
@@ -1937,18 +1937,91 @@ _provider_consecutive_failures: dict[str, int] = {}
 _provider_frozen_until: dict[str, float] = {}
 
 
-def record_provider_failure(provider: str, *, now: float | None = None) -> bool:
+def _circuit_key(provider: str, model: str = "") -> str:
+    """生成熔断隔离 key：若提供 model，按 (provider:model_family) 隔离；否则按 provider 隔离。"""
+    clean_provider = str(provider or "").strip().lower()
+    if not model:
+        return clean_provider
+    try:
+        clean_model = _normalize_model_name(model).lower()
+    except Exception:
+        clean_model = str(model).strip().lower()
+    if clean_model in ("gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"):
+        clean_model = "gpt-image-2.5"
+    return f"{clean_provider}:{clean_model}"
+
+
+def is_freezable_provider_error(exc: BaseException | str | None) -> bool:
+    """判断错误是否属于应触发供应商熔断冻结的暂态/基础设施级故障。
+
+    触发冻结：
+    - 连接异常（ConnectTimeout, ConnectError, ConnectionRefused, DNS failure 等）
+    - 服务端内部错误与网关故障（HTTP 500, 502, 503, 504, 520-524 等）
+    - 速率限制或超时（HTTP 408, 429）
+    - 读写超时 / 传输中断（AmbiguousUpstreamError）
+
+    不触发冻结（避免单次请求或模型参数问题误封整条线路）：
+    - 内容安全审核拦截（SafetyReviewError / policy_violation）
+    - 客户端请求参数/格式错误（HTTP 400, 404, 413, 422 等）
+    - 业务层鉴权/余额异常（HTTP 401, 402, 403）
+    """
+    if exc is None:
+        return False
+    if isinstance(exc, SafetyReviewError) or is_safety_review_error(exc):
+        return False
+    if isinstance(exc, AmbiguousUpstreamError):
+        return True
+    if isinstance(exc, httpx.RequestError):
+        return True
+
+    raw = str(exc).strip()
+    if not raw:
+        return False
+    low = raw.lower()
+
+    # 如果包含明确的内容安全违规关键词，绝不冻结
+    if any(marker in low for marker in (
+        "content_policy_violation", "policy_violation", "safety", "moderation", "审核", "违规", "涉黄"
+    )):
+        return False
+
+    # 检查 HTTP 状态码
+    m = re.search(r"\bHTTP\s*(\d{3})\b", raw, re.IGNORECASE)
+    if m:
+        code = int(m.group(1))
+        # 400, 401, 402, 403, 404, 413, 422 等 4xx 业务/参数/鉴权错误不触发冻结
+        if code in (400, 401, 402, 403, 404, 413, 422):
+            return False
+        if code in _TRANSIENT_TASK_STATUS_CODES or code >= 500:
+            return True
+
+    if any(k in low for k in ("rate limit", "too many requests", "请求过于频繁", "429")):
+        return True
+
+    if any(k in low for k in (
+        "连接失败", "connecterror", "connecttimeout", "connection refused",
+        "dns", "name or service not known", "nodename nor servname",
+        "network is unreachable", "getaddrinfo", "timed out", "timeout", "超时",
+        "bad gateway", "502", "503", "504", "gateway timeout", "service unavailable",
+    )):
+        return True
+
+    return False
+
+
+def record_provider_failure(provider: str, model: str = "", *, now: float | None = None) -> bool:
     """记录一次供应商失败。若连续失败达到阈值（2次），冻结30分钟并返回 True。"""
     curr = time.time() if now is None else now
+    key = _circuit_key(provider, model)
     with _provider_circuit_lock:
-        count = _provider_consecutive_failures.get(provider, 0) + 1
-        _provider_consecutive_failures[provider] = count
+        count = _provider_consecutive_failures.get(key, 0) + 1
+        _provider_consecutive_failures[key] = count
         if count >= PROVIDER_FAILURE_THRESHOLD:
             frozen_until = curr + PROVIDER_FREEZE_DURATION_SECONDS
-            _provider_frozen_until[provider] = frozen_until
+            _provider_frozen_until[key] = frozen_until
             logger.warning(
-                "[smart-routing] Provider %s has failed %d consecutive times; frozen for %ds (until %s)",
-                provider,
+                "[smart-routing] Provider circuit %s has failed %d consecutive times; frozen for %ds (until %s)",
+                key,
                 count,
                 PROVIDER_FREEZE_DURATION_SECONDS,
                 time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(frozen_until)),
@@ -1957,28 +2030,33 @@ def record_provider_failure(provider: str, *, now: float | None = None) -> bool:
     return False
 
 
-def record_provider_success(provider: str) -> None:
+def record_provider_success(provider: str, model: str = "") -> None:
     """记录一次供应商成功。清空连续失败计数并解除冻结。"""
+    key = _circuit_key(provider, model)
     with _provider_circuit_lock:
-        if _provider_consecutive_failures.get(provider, 0) > 0 or provider in _provider_frozen_until:
-            logger.info("[smart-routing] Provider %s succeeded; resetting failure count and freeze", provider)
-        _provider_consecutive_failures[provider] = 0
-        _provider_frozen_until.pop(provider, None)
+        for k in (key, provider):
+            if _provider_consecutive_failures.get(k, 0) > 0 or k in _provider_frozen_until:
+                logger.info("[smart-routing] Provider circuit %s succeeded; resetting failure count and freeze", k)
+            _provider_consecutive_failures.pop(k, None)
+            _provider_frozen_until.pop(k, None)
 
 
-def is_provider_frozen(provider: str, *, now: float | None = None) -> bool:
-    """检查供应商当前是否处于30分钟冻结期。若过期则自动解冻。"""
+def is_provider_frozen(provider: str, model: str = "", *, now: float | None = None) -> bool:
+    """检查供应商在当前模型下是否处于30分钟冻结期。若过期则自动解冻。"""
     curr = time.time() if now is None else now
+    key = _circuit_key(provider, model)
     with _provider_circuit_lock:
-        frozen_until = _provider_frozen_until.get(provider, 0)
-        if frozen_until <= 0:
-            return False
-        if curr >= frozen_until:
-            _provider_frozen_until.pop(provider, None)
-            _provider_consecutive_failures[provider] = 0
-            logger.info("[smart-routing] Provider %s freeze period expired; restored to routing", provider)
-            return False
-        return True
+        # 先检查特定模型是否冻结，再检查整条线路是否全局冻结
+        for k in (key, provider):
+            frozen_until = _provider_frozen_until.get(k, 0)
+            if frozen_until > 0:
+                if curr >= frozen_until:
+                    _provider_frozen_until.pop(k, None)
+                    _provider_consecutive_failures.pop(k, None)
+                    logger.info("[smart-routing] Provider circuit %s freeze period expired; restored to routing", k)
+                else:
+                    return True
+        return False
 
 
 def get_provider_freeze_status(*, now: float | None = None) -> dict[str, dict[str, Any]]:
@@ -1986,11 +2064,14 @@ def get_provider_freeze_status(*, now: float | None = None) -> dict[str, dict[st
     curr = time.time() if now is None else now
     status: dict[str, dict[str, Any]] = {}
     with _provider_circuit_lock:
+        all_keys = set(_provider_consecutive_failures.keys()) | set(_provider_frozen_until.keys())
         for p in (PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_ADOBE2API, PROVIDER_TUZI):
-            fails = _provider_consecutive_failures.get(p, 0)
-            until = _provider_frozen_until.get(p, 0)
+            all_keys.add(p)
+        for k in all_keys:
+            fails = _provider_consecutive_failures.get(k, 0)
+            until = _provider_frozen_until.get(k, 0)
             is_frozen = bool(until > curr)
-            status[p] = {
+            status[k] = {
                 "consecutive_failures": fails,
                 "is_frozen": is_frozen,
                 "remaining_seconds": max(0, int(until - curr)) if is_frozen else 0,
@@ -1998,12 +2079,16 @@ def get_provider_freeze_status(*, now: float | None = None) -> dict[str, dict[st
     return status
 
 
-def reset_provider_freeze(provider: str | None = None) -> None:
+def reset_provider_freeze(provider: str | None = None, model: str = "") -> None:
     """重置指定或全部供应商的失败计数与冻结状态（用于测试或管理员重置）。"""
     with _provider_circuit_lock:
         if provider:
-            _provider_consecutive_failures.pop(provider, None)
-            _provider_frozen_until.pop(provider, None)
+            key = _circuit_key(provider, model)
+            _provider_consecutive_failures.pop(key, None)
+            _provider_frozen_until.pop(key, None)
+            if model:
+                _provider_consecutive_failures.pop(provider, None)
+                _provider_frozen_until.pop(provider, None)
         else:
             _provider_consecutive_failures.clear()
             _provider_frozen_until.clear()
@@ -2097,7 +2182,7 @@ def get_smart_route_candidates(
 
     # 3. 动态过滤处于 30 分钟冻结期（连续失败 >= 2 次）的线路
     if filter_frozen and candidates:
-        active_candidates = [p for p in candidates if not is_provider_frozen(p, now=now)]
+        active_candidates = [p for p in candidates if not is_provider_frozen(p, model=model_name, now=now)]
         if active_candidates:
             return active_candidates
         logger.warning(
@@ -2242,7 +2327,7 @@ async def smart_generate_image_async(
                         on_progress=on_progress, on_accepted=provider_on_accepted,
                     )
 
-            record_provider_success(provider)
+            record_provider_success(provider, model=model)
             result["provider"] = provider
             accepted_tid = (accepted.get(provider) or "").strip()
             if accepted_tid and not result.get("task_id"):
@@ -2265,8 +2350,8 @@ async def smart_generate_image_async(
             )
             errors.append(f"R{round_no}/{provider}: {err_msg}")
 
-            if not is_safety_review_error(exc):
-                record_provider_failure(provider)
+            if is_freezable_provider_error(exc):
+                record_provider_failure(provider, model=model)
 
             if is_safety_review_error(exc):
                 logger.warning(
