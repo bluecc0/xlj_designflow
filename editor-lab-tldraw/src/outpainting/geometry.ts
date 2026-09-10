@@ -18,23 +18,17 @@ export function getExpectedOutpaintSize(input: Size, margins: OutpaintMargins): 
 
 export function getWorkingSizeForOutpainting(
   natural: Size,
-  display: Size,
+  _display?: Size,
   minSide: number = MIN_PROCESSING_SIDE
 ): Size {
   const naturalWidth = Math.max(1, Math.round(natural.w))
   const naturalHeight = Math.max(1, Math.round(natural.h))
-  const displayWidth = Math.round(display.w)
-  const displayHeight = Math.round(display.h)
   const minProcessing = Math.max(1, Math.round(minSide))
-  let scale = 1
-  if (displayWidth > 0 && displayHeight > 0) {
-    scale = Math.min(1, displayWidth / naturalWidth, displayHeight / naturalHeight)
-  }
   const minScale = Math.min(
     1,
     Math.max(minProcessing / naturalWidth, minProcessing / naturalHeight)
   )
-  scale = Math.min(1, Math.max(scale, minScale))
+  const scale = Math.min(1, Math.max(1, minScale))
   return {
     w: Math.max(1, Math.round(naturalWidth * scale)),
     h: Math.max(1, Math.round(naturalHeight * scale)),
