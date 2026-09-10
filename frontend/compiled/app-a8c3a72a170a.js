@@ -6130,6 +6130,7 @@ const Composer = ({
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
   const [aiVariant, setAiVariant] = React.useState('flare');
+  const [aiQualityTier, setAiQualityTier] = React.useState('auto');
   const [aiProvider, setAiProvider] = React.useState('auto');
   const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [smartDistributeMode, setSmartDistributeMode] = React.useState('full');
@@ -6727,6 +6728,7 @@ const Composer = ({
       size: aiImageSize,
       resolution: aiQuality,
       variant: aiVariant,
+      quality: aiQualityTier,
       provider: aiProvider,
       workflow: selectedWorkflow,
       lockedCommand: lockedCommand,
@@ -7146,7 +7148,14 @@ const Composer = ({
   const activeTaskIconKey = activeMode === 'ai-image' ? 'image' : activeMode === 'special' || activeMode === 'special_full' ? 'layers' : selectedWorkflow === 'compose' || selectedWorkflow === 'distribute' ? 'grid' : selectedWorkflow === 'download' ? 'download' : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
   const activeTaskIconSrc = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
-  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + ' · ' + aiVariant : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 普通' : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
+  const qualityMap = {
+    auto: '自动',
+    medium: '中等',
+    xhigh: '高',
+    max: '最高'
+  };
+  const qualityTag = activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto' ? ' · ' + (qualityMap[aiQualityTier] || aiQualityTier) : '';
+  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + (activeAiModel === 'gpt-image-2.5' ? ' · ' + aiVariant + qualityTag : '') : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 普通' : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
   const selectedSettingBits = [activeSkillInfo ? '$' + activeSkillInfo.name : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? '⚡ 智能' : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
   const composerPlaceholder = agentEnabled ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）' : activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(text.trim() || lockedCommand || modeParamLabel || refImages.length > 0 || files.length > 0 || activeSkillInfo || skillMenuOpen || !agentEnabled && prototypePanel);
@@ -7552,9 +7561,13 @@ const Composer = ({
         }, item[1]));
       })), activeAiModel === 'gpt-image-2.5' && React.createElement('div', {
         style: {
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 16,
+          alignItems: 'start',
           marginTop: 12
         }
-      }, imageFieldLabel('类型'), React.createElement('div', {
+      }, React.createElement('div', null, imageFieldLabel('类型'), React.createElement('div', {
         style: {
           display: 'flex',
           width: '100%',
@@ -7564,7 +7577,7 @@ const Composer = ({
           overflow: 'hidden',
           background: 'var(--panel)'
         }
-      }, [['flare', 'Flare（更快）'], ['sunburst', 'Sunburst（更好）']].map(function (item, idx) {
+      }, [['flare', 'Flare'], ['sunburst', 'Sunburst']].map(function (item, idx) {
         const active = aiVariant === item[0];
         return React.createElement('button', {
           key: item[0],
@@ -7586,7 +7599,39 @@ const Composer = ({
             letterSpacing: '-0.01em'
           }
         }, item[1]);
-      }))), React.createElement('div', {
+      }))), React.createElement('div', null, imageFieldLabel('质量'), React.createElement('div', {
+        style: {
+          display: 'flex',
+          width: '100%',
+          alignItems: 'stretch',
+          border: '1px solid var(--line)',
+          borderRadius: 9,
+          overflow: 'hidden',
+          background: 'var(--panel)'
+        }
+      }, [['auto', '自动'], ['medium', '中等'], ['xhigh', '高'], ['max', '最高']].map(function (item, idx) {
+        const active = aiQualityTier === item[0];
+        return React.createElement('button', {
+          key: item[0],
+          type: 'button',
+          onClick: function () {
+            setAiQualityTier(item[0]);
+          },
+          style: {
+            flex: 1,
+            height: 30,
+            padding: 0,
+            border: 'none',
+            borderLeft: idx === 0 ? 'none' : '1px solid var(--line)',
+            background: active ? 'var(--ink)' : 'transparent',
+            color: active ? 'var(--panel)' : 'var(--ink-2)',
+            fontSize: 12,
+            fontWeight: active ? 700 : 550,
+            cursor: 'pointer',
+            letterSpacing: '-0.01em'
+          }
+        }, item[1]);
+      })))), React.createElement('div', {
         style: {
           height: 1,
           background: 'var(--line)',
@@ -8710,6 +8755,7 @@ const Chat = ({
           size: m.size,
           resolution: m.resolution,
           variant: m.variant || 'flare',
+          quality: m.quality || 'auto',
           provider: m.provider
         };
       }
@@ -8868,6 +8914,7 @@ const Chat = ({
     var lastSize = aiOptions.size || '1024x1024';
     var lastResolution = aiOptions.resolution || '1K';
     var variant = aiOptions.variant || 'flare';
+    var quality = aiOptions.quality || 'auto';
     var provider = aiOptions.provider || 'auto';
     var activeSkill = String(aiOptions.skill || '').trim();
     var plannedPrompt = String(aiOptions.plannedPrompt || '').trim();
@@ -8925,6 +8972,7 @@ const Chat = ({
         size: lastSize,
         resolution: lastResolution,
         variant: variant,
+        quality: quality,
         status: 'failed',
         failPhase: 'prepare',
         clientRequestId: prepClientId,
@@ -8954,6 +9002,7 @@ const Chat = ({
       size: lastSize,
       resolution: lastResolution,
       variant: variant,
+      quality: quality,
       status: activeSkill ? 'skill-planning' : 'running',
       startedAt: baseAt,
       progress: 0,
@@ -9040,6 +9089,7 @@ const Chat = ({
         fd.append('size', aiOptions.size || '1024x1024');
         fd.append('resolution', aiOptions.resolution || '1K');
         fd.append('variant', aiOptions.variant || 'flare');
+        fd.append('quality', quality);
         if (activeSkill) fd.append('skill', activeSkill);
         if (plannedPrompt) fd.append('planned_prompt', plannedPrompt);
         if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
@@ -9276,6 +9326,7 @@ const Chat = ({
         fd.append('size', aiOptions.size || '1024x1024');
         fd.append('resolution', aiOptions.resolution || '1K');
         fd.append('variant', aiOptions.variant || 'flare');
+        fd.append('quality', quality);
         if (activeSkill) fd.append('skill', activeSkill);
         if (plannedPrompt) fd.append('planned_prompt', plannedPrompt);
         if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
@@ -9371,6 +9422,7 @@ const Chat = ({
                 status: m.status === 'skill-parsed' ? m.status : 'processing',
                 provider: patch.provider || m.provider,
                 variant: patch.variant || m.variant || 'flare',
+                quality: patch.quality || m.quality || 'auto',
                 providerSwitched: patch.providerSwitched || m.providerSwitched
               });
             }));
@@ -9442,6 +9494,7 @@ const Chat = ({
               progress: 100,
               provider: t.provider,
               variant: t.variant,
+              quality: t.quality,
               providerSwitched: t.providerSwitched
             } : {
               status: 'failed',
@@ -9449,6 +9502,7 @@ const Chat = ({
               progress: 100,
               provider: t.provider,
               variant: t.variant,
+              quality: t.quality,
               providerSwitched: t.providerSwitched
             });
             finishIfAllTerminal();
@@ -9489,6 +9543,7 @@ const Chat = ({
                     previewUrl: sd.preview_url || sd.image_url,
                     provider: sd.provider,
                     variant: sd.variant,
+                    quality: sd.quality,
                     providerSwitched: sd.providerSwitched
                   });
                 } else if (sd.status === 'done' && !sd.image_url) {
@@ -9504,6 +9559,7 @@ const Chat = ({
                     error: formatAiImageError(sd.error || '生图失败', jid),
                     provider: sd.provider,
                     variant: sd.variant,
+                    quality: sd.quality,
                     providerSwitched: sd.providerSwitched
                   });
                 } else {
@@ -9511,6 +9567,7 @@ const Chat = ({
                     progress: sd.progress || 0,
                     provider: sd.provider,
                     variant: sd.variant,
+                    quality: sd.quality,
                     providerSwitched: sd.providerSwitched
                   });
                 }
@@ -10064,6 +10121,7 @@ const Chat = ({
         provider: 'auto',
         size: 'auto',
         resolution: aiOptions.resolution || '1K',
+        quality: aiOptions.quality || 'auto',
         batchCount: 1,
         skill: activeSkill
       });
@@ -10091,6 +10149,7 @@ const Chat = ({
         size: lastOpts?.size || aiOptions.size,
         resolution: lastOpts?.resolution || aiOptions.resolution,
         variant: lastOpts?.variant || aiOptions.variant || 'flare',
+        quality: lastOpts?.quality || aiOptions.quality || 'auto',
         provider: aiOptions.provider
       };
       setMessages(msgs => [...msgs, {
@@ -10139,6 +10198,7 @@ const Chat = ({
         size: lastOpts?.size || aiOptions.size,
         resolution: lastOpts?.resolution || aiOptions.resolution,
         variant: lastOpts?.variant || aiOptions.variant || 'flare',
+        quality: lastOpts?.quality || aiOptions.quality || 'auto',
         provider: aiOptions.provider
       };
       setMessages(msgs => [...msgs, {

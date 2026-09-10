@@ -9,8 +9,8 @@
     },
     {
       "name": "backend",
-      "runtimeExecutable": "uvicorn",
-      "runtimeArgs": ["backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+      "runtimeExecutable": "C:\\Users\\Admin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000"],
       "port": 8000
     },
     {

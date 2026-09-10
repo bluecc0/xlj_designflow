@@ -790,6 +790,7 @@ async def _submit_generation_task(
     size: str,
     resolution: str = "",
     variant: str = "flare",
+    quality: str = "",
     reference_urls: list[str] | None = None,
 ) -> str:
     model_name = _apimart_model_name(model, variant)
@@ -807,10 +808,10 @@ async def _submit_generation_task(
     if model_name == "gpt-image-2":
         payload["official_fallback"] = True
     elif model_name in _APIMART_GPT_IMAGE_25_MODELS:
-        quality = (getattr(settings, "ai_image_gpt_25_quality", "medium") or "medium").strip().lower()
-        if quality not in {"low", "medium", "high", "xhigh", "max"}:
-            quality = "medium"
-        payload["quality"] = quality
+        clean_quality = (quality or getattr(settings, "ai_image_gpt_25_quality", "auto") or "auto").strip().lower()
+        if clean_quality not in {"auto", "low", "medium", "high", "xhigh", "max"}:
+            clean_quality = "auto"
+        payload["quality"] = clean_quality
     if reference_urls:
         payload["image_urls"] = reference_urls
     endpoint = f"{base_url}/v1/images/generations"
@@ -1009,6 +1010,7 @@ async def generate_image(
     resolution: str = "",
     user_id: str = "anonymous",
     variant: str = "flare",
+    quality: str = "",
 ) -> dict:
     model_name = _normalize_model_name(model)
     base_url, api_key = _model_credentials(model_name)
@@ -1026,6 +1028,7 @@ async def generate_image(
             size=size,
             resolution=resolution,
             variant=variant,
+            quality=quality,
         )
         result_url, _, _task_detail = await _wait_for_task_result(
             client,
@@ -1057,6 +1060,7 @@ async def generate_image_with_reference(
     resolution: str = "",
     user_id: str = "anonymous",
     variant: str = "flare",
+    quality: str = "",
 ) -> dict:
     model_name = _normalize_model_name(model)
     base_url, api_key = _model_credentials(model_name)
@@ -1081,6 +1085,7 @@ async def generate_image_with_reference(
             resolution=resolution,
             reference_urls=reference_urls,
             variant=variant,
+            quality=quality,
         )
         result_url, _, _task_detail = await _wait_for_task_result(
             client,
@@ -1112,6 +1117,7 @@ async def generate_image_async(
     resolution: str = "",
     user_id: str = "anonymous",
     variant: str = "flare",
+    quality: str = "",
     on_progress: Callable[[int, str], Any] | None = None,
     on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
@@ -1136,6 +1142,7 @@ async def generate_image_async(
             size=size,
             resolution=resolution,
             variant=variant,
+            quality=quality,
         )
         if on_accepted:
             on_accepted(str(task_id))
@@ -1172,6 +1179,7 @@ async def generate_image_with_reference_async(
     resolution: str = "",
     user_id: str = "anonymous",
     variant: str = "flare",
+    quality: str = "",
     on_progress: Callable[[int], Any] | None = None,
     on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
@@ -1199,6 +1207,7 @@ async def generate_image_with_reference_async(
             resolution=resolution,
             reference_urls=reference_urls,
             variant=variant,
+            quality=quality,
         )
         if on_accepted:
             on_accepted(str(task_id))
@@ -1420,6 +1429,7 @@ async def generate_sub2api_async(
     resolution: str = "",
     user_id: str = "anonymous",
     variant: str = "flare",
+    quality: str = "",
     on_progress: Callable[[int, str], Any] | None = None,
     on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
@@ -1457,9 +1467,7 @@ async def generate_sub2api_async(
                     "prompt": final_prompt,
                     "size": mapped_size,
                     "n": "1",
-                    "quality": "auto",
                     "output_format": "png",
-                    "moderation": "auto",
                 }
                 files = [
                     ("image", (filename or f"reference-{idx + 1}.png", image_bytes, _mime_from_filename(filename)))
@@ -1473,9 +1481,7 @@ async def generate_sub2api_async(
                     "prompt": prompt,
                     "size": mapped_size,
                     "n": 1,
-                    "quality": "auto",
                     "output_format": "png",
-                    "moderation": "auto",
                 }
                 endpoint = f"{api_base}/images/generations"
                 resp = await client.post(endpoint, json=payload, headers=_cliproxy_headers(api_key, json_request=True))
@@ -1580,6 +1586,7 @@ async def generate_tuzi_async(
     resolution: str = "",
     user_id: str = "anonymous",
     variant: str = "flare",
+    quality: str = "",
     on_progress: Callable[[int, str], Any] | None = None,
     on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
@@ -1686,6 +1693,8 @@ async def generate_adobe2api_async(
     size: str = "1024x1024",
     resolution: str = "",
     user_id: str = "anonymous",
+    variant: str = "flare",
+    quality: str = "",
     on_progress: Callable[[int, str], Any] | None = None,
     on_accepted: Callable[[str], Any] | None = None,
 ) -> dict:
@@ -2213,6 +2222,7 @@ async def smart_generate_image_async(
     resolution: str = "",
     user_id: str = "anonymous",
     variant: str = "flare",
+    quality: str = "",
     on_progress: Callable[[int, str], Any] | None = None,
     on_attempt: Callable[[str], Any] | None = None,
     on_accepted: Callable[[str, str], Any] | None = None,
@@ -2316,14 +2326,14 @@ async def smart_generate_image_async(
                     result = await generate_image_with_reference_async(
                         model=provider_model, prompt=prompt, images=images,
                         size=size, resolution=resolution, user_id=user_id,
-                        variant=variant,
+                        variant=variant, quality=quality,
                         on_progress=on_progress, on_accepted=provider_on_accepted,
                     )
                 else:
                     result = await generate_image_async(
                         model=provider_model, prompt=prompt,
                         size=size, resolution=resolution, user_id=user_id,
-                        variant=variant,
+                        variant=variant, quality=quality,
                         on_progress=on_progress, on_accepted=provider_on_accepted,
                     )
 
