@@ -7495,7 +7495,7 @@ const Composer = ({
             whiteSpace: 'nowrap'
           }
         }, item[1]));
-      })), React.createElement('div', {
+      })), activeAiModel === 'gpt-image-2.5' && React.createElement('div', {
         style: {
           marginTop: 12
         }
@@ -7509,7 +7509,7 @@ const Composer = ({
           overflow: 'hidden',
           background: 'var(--panel)'
         }
-      }, [['flare', 'Flare'], ['sunburst', 'Sunburst']].map(function (item, idx) {
+      }, [['flare', 'Flare（更快）'], ['sunburst', 'Sunburst（更好）']].map(function (item, idx) {
         const active = aiVariant === item[0];
         return React.createElement('button', {
           key: item[0],

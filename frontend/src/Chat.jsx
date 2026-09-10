@@ -3151,7 +3151,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
               );
             })
           ),
-          React.createElement('div', { style: { marginTop: 12 } },
+          activeAiModel === 'gpt-image-2.5' && React.createElement('div', { style: { marginTop: 12 } },
             imageFieldLabel('类型'),
             React.createElement('div', {
               style: {
@@ -3164,7 +3164,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
                 background: 'var(--panel)',
               }
             },
-              [['flare', 'Flare'], ['sunburst', 'Sunburst']].map(function(item, idx) {
+              [['flare', 'Flare（更快）'], ['sunburst', 'Sunburst（更好）']].map(function(item, idx) {
                 const active = aiVariant === item[0];
                 return React.createElement('button', {
                   key: item[0],

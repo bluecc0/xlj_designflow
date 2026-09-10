@@ -4798,6 +4798,7 @@ async def _run_ai_image_background(
                 model=model, prompt=prompt,
                 images=refs if refs else None,
                 size=size, resolution=resolution, user_id=user_id,
+                variant=variant,
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_SUB2API, tid),
             )
         elif provider == PROVIDER_TUZI:
