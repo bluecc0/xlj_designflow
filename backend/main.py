@@ -5467,6 +5467,21 @@ def ai_image_status(request: Request, job_id: str):
     }
 
 
+def _expected_retry_reference_count(
+    old_job: dict[str, Any], request_meta: dict[str, Any]
+) -> int:
+    """返回重试时应校验的参考图数量，优先以任务实际保存数量为准。"""
+    expected_manual_count = int(request_meta.get("manual_reference_count") or 0)
+    expected_context_count = int(request_meta.get("context_reference_count") or 0)
+    stored_reference_count = int(old_job.get("reference_count") or 0)
+    if stored_reference_count > 0:
+        return stored_reference_count
+    return max(
+        expected_manual_count + expected_context_count,
+        1 if old_job.get("has_reference") else 0,
+    )
+
+
 @app.post("/ai-image/retry")
 async def ai_image_retry(request: Request):
     """生图失败或重新生成时触发智能重试。复用上下文集成后的完整 prompt + 磁盘参考图 + 上下文参考图。"""
@@ -5509,11 +5524,7 @@ async def ai_image_retry(request: Request):
     all_refs: list[tuple[bytes, str]] = []
     expected_manual_count = int(request_meta.get("manual_reference_count") or 0)
     expected_context_count = int(request_meta.get("context_reference_count") or 0)
-    expected_reference_count = max(
-        int(old_job.get("reference_count") or 0),
-        expected_manual_count + expected_context_count,
-        1 if old_job.get("has_reference") else 0,
-    )
+    expected_reference_count = _expected_retry_reference_count(old_job, request_meta)
     if persisted_refs:
         # 原任务持久化目录完好，直接准确复用原参考图，顺序严格一致
         all_refs = persisted_refs[:9]
@@ -6414,6 +6425,9 @@ async def ai_image_endpoint(
             # 会话续图的隐藏上下文图追加在后。
             all_refs_batch: list[tuple[bytes, str]] = user_refs + context_ref_bytes
             all_refs_batch = all_refs_batch[:9]  # 总共最多 9 张
+            # 截断后记录实际参与本任务的分类数量，避免重试把截断前数量当成完整性要求。
+            actual_manual_count = min(len(user_refs), len(all_refs_batch))
+            actual_context_count = max(0, len(all_refs_batch) - actual_manual_count)
             # 同一批任务共享参考图目录，避免为每个 job 重复保存大文件。
             reference_storage_id = batch_id or jid
             if all_refs_batch and reference_storage_id != saved_reference_storage_id:
@@ -6432,8 +6446,8 @@ async def ai_image_endpoint(
                 "batch_index": _idx,
                 "batch_count": batch_count,
                 "reference_storage_job_id": reference_storage_id,
-                "manual_reference_count": len(user_refs),
-                "context_reference_count": len(context_ref_bytes),
+                "manual_reference_count": actual_manual_count,
+                "context_reference_count": actual_context_count,
                 "context_image_url": prev_url if (context_ref_bytes and prev_url) else "",
                 "reference_names": [name for _content, name in all_refs_batch],
                 # data URL 缩略图体积很大，不写入任务库；站内 URL 可以安全保留用于排障。

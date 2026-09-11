@@ -13,7 +13,11 @@ from unittest.mock import AsyncMock
 from fastapi import HTTPException
 
 from backend import ai_image
-from backend.main import MAX_REFERENCE_IMAGE_BYTES, _aread_reference_upload
+from backend.main import (
+    MAX_REFERENCE_IMAGE_BYTES,
+    _aread_reference_upload,
+    _expected_retry_reference_count,
+)
 
 
 class NormalizeReferencePromptTest(unittest.TestCase):
@@ -53,6 +57,29 @@ class ReferenceMergeOrderTest(unittest.TestCase):
             ai_image.normalize_reference_prompt("把@图片1 放到@图片2 的场景"),
             "把[image 1] 放到[image 2] 的场景",
         )
+
+    def test_retry_reference_count_uses_truncated_set(self) -> None:
+        """9 张手动图再追加上下文图时，重试只校验实际保存的前 9 张。"""
+        user_refs = [(f"u{i}".encode(), f"user{i}.png") for i in range(9)]
+        context_refs = [(b"context", "context.png")]
+        all_refs = (user_refs + context_refs)[:9]
+
+        actual_manual_count = min(len(user_refs), len(all_refs))
+        actual_context_count = max(0, len(all_refs) - actual_manual_count)
+        old_job = {
+            "has_reference": True,
+            "reference_count": len(all_refs),
+        }
+        request_meta = {
+            # 覆盖旧版本曾记录的截断前数量，确保任务 reference_count 是权威值。
+            "manual_reference_count": len(user_refs),
+            "context_reference_count": len(context_refs),
+        }
+
+        self.assertEqual(len(all_refs), 9)
+        self.assertEqual(actual_manual_count, 9)
+        self.assertEqual(actual_context_count, 0)
+        self.assertEqual(_expected_retry_reference_count(old_job, request_meta), 9)
 
 
 class ReferenceUploadLimitTest(unittest.IsolatedAsyncioTestCase):
