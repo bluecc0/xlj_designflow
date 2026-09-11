@@ -6086,23 +6086,17 @@ const ChatReturned = ({
         if (messages[j].who === 'user') break;
       }
     }
+    const canRetryImage = Boolean(onRetryAiImage && targetAiGen);
     return /*#__PURE__*/React.createElement(CopyableTextBubble, {
       who: m.who,
       text: m.text,
       markdown: true,
-      canRetry: Boolean(onRetryAiImage && (targetAiGen || m.who === 'user')),
+      canRetry: canRetryImage,
       isRetrying: isGenerating,
-      retryTitle: targetAiGen ? "重试本次生图任务（复用集成 Prompt）" : "重新发送",
+      retryTitle: "\u91CD\u8BD5\u672C\u6B21\u751F\u56FE\u4EFB\u52A1\uFF08\u590D\u7528\u96C6\u6210 Prompt\uFF09",
       onRetry: () => {
-        if (onRetryAiImage) {
-          if (targetAiGen) {
-            onRetryAiImage(targetAiGen);
-          } else {
-            onRetryAiImage({
-              prompt: m.text,
-              resolvedPrompt: m.text
-            });
-          }
+        if (onRetryAiImage && targetAiGen) {
+          onRetryAiImage(targetAiGen);
         }
       }
     });
@@ -9949,6 +9943,14 @@ const Chat = ({
           progress: 15
         }) : m));
         let pollFails = 0;
+        const stopPoll = errorMsg => {
+          clearInterval(pollInterval);
+          setIsLoading(false);
+          setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
+            status: 'failed',
+            error: errorMsg || '生图失败'
+          }) : m));
+        };
         const pollInterval = setInterval(() => {
           fetch(apiBase + '/ai-image/' + newJobId, {
             credentials: 'include',
@@ -9957,8 +9959,20 @@ const Chat = ({
             }
           }).then(r => {
             if (!r.ok) {
-              if (r.status === 404 || r.status >= 500) pollFails += 1;
-              return null;
+              pollFails += 1;
+              return r.json().catch(() => ({})).then(errBody => {
+                let detail = errBody && (errBody.detail || errBody.message || errBody.error) || '';
+                if (typeof detail === 'object' && detail) detail = detail.message || JSON.stringify(detail);
+                if (isTerminalAiImagePollStatus(r.status)) {
+                  stopPoll(detail || '查询任务状态失败 HTTP ' + r.status);
+                  return null;
+                }
+                if (pollFails > 15) {
+                  stopPoll(detail || '状态轮询超时或服务异常（HTTP ' + r.status + '）');
+                  return null;
+                }
+                return null;
+              });
             }
             pollFails = 0;
             return r.json();
@@ -9995,29 +10009,14 @@ const Chat = ({
               }) : m));
               loadAiChatHistory();
             } else if (statusData.status === 'done' && !statusData.image_url) {
-              clearInterval(pollInterval);
-              setIsLoading(false);
-              setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
-                status: 'failed',
-                error: '任务完成但未返回图片地址'
-              }) : m));
+              stopPoll('任务完成但未返回图片地址');
             } else if (statusData.status === 'failed') {
-              clearInterval(pollInterval);
-              setIsLoading(false);
-              setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
-                status: 'failed',
-                error: statusData.error || '生图失败'
-              }) : m));
+              stopPoll(statusData.error || '生图失败');
             }
           }).catch(pollErr => {
             pollFails += 1;
             if (pollFails > 15) {
-              clearInterval(pollInterval);
-              setIsLoading(false);
-              setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
-                status: 'failed',
-                error: '状态轮询超时或网络中断'
-              }) : m));
+              stopPoll('状态轮询超时或网络中断');
             }
           });
         }, 2000);

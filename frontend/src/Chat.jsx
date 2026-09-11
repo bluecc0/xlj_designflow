@@ -1826,21 +1826,18 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                       if (messages[j].who === 'user') break;
                     }
                   }
+                  const canRetryImage = Boolean(onRetryAiImage && targetAiGen);
                   return (
                     <CopyableTextBubble
                       who={m.who}
                       text={m.text}
                       markdown
-                      canRetry={Boolean(onRetryAiImage && (targetAiGen || m.who === 'user'))}
+                      canRetry={canRetryImage}
                       isRetrying={isGenerating}
-                      retryTitle={targetAiGen ? "重试本次生图任务（复用集成 Prompt）" : "重新发送"}
+                      retryTitle="重试本次生图任务（复用集成 Prompt）"
                       onRetry={() => {
-                        if (onRetryAiImage) {
-                          if (targetAiGen) {
-                            onRetryAiImage(targetAiGen);
-                          } else {
-                            onRetryAiImage({ prompt: m.text, resolvedPrompt: m.text });
-                          }
+                        if (onRetryAiImage && targetAiGen) {
+                          onRetryAiImage(targetAiGen);
                         }
                       }}
                     />
@@ -5321,6 +5318,16 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         ));
 
         let pollFails = 0;
+        const stopPoll = (errorMsg) => {
+          clearInterval(pollInterval);
+          setIsLoading(false);
+          setMessages(msgs => msgs.map(m =>
+            m.type === 'ai-image-generating' && m.startedAt === slotAt
+              ? Object.assign({}, m, { status: 'failed', error: errorMsg || '生图失败' })
+              : m
+          ));
+        };
+
         const pollInterval = setInterval(() => {
           fetch(apiBase + '/ai-image/' + newJobId, {
             credentials: 'include',
@@ -5328,8 +5335,20 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
           })
             .then(r => {
               if (!r.ok) {
-                if (r.status === 404 || r.status >= 500) pollFails += 1;
-                return null;
+                pollFails += 1;
+                return r.json().catch(() => ({})).then(errBody => {
+                  let detail = (errBody && (errBody.detail || errBody.message || errBody.error)) || '';
+                  if (typeof detail === 'object' && detail) detail = detail.message || JSON.stringify(detail);
+                  if (isTerminalAiImagePollStatus(r.status)) {
+                    stopPoll(detail || ('查询任务状态失败 HTTP ' + r.status));
+                    return null;
+                  }
+                  if (pollFails > 15) {
+                    stopPoll(detail || ('状态轮询超时或服务异常（HTTP ' + r.status + '）'));
+                    return null;
+                  }
+                  return null;
+                });
               }
               pollFails = 0;
               return r.json();
@@ -5376,33 +5395,15 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                 ));
                 loadAiChatHistory();
               } else if (statusData.status === 'done' && !statusData.image_url) {
-                clearInterval(pollInterval);
-                setIsLoading(false);
-                setMessages(msgs => msgs.map(m =>
-                  m.type === 'ai-image-generating' && m.startedAt === slotAt
-                    ? Object.assign({}, m, { status: 'failed', error: '任务完成但未返回图片地址' })
-                    : m
-                ));
+                stopPoll('任务完成但未返回图片地址');
               } else if (statusData.status === 'failed') {
-                clearInterval(pollInterval);
-                setIsLoading(false);
-                setMessages(msgs => msgs.map(m =>
-                  m.type === 'ai-image-generating' && m.startedAt === slotAt
-                    ? Object.assign({}, m, { status: 'failed', error: statusData.error || '生图失败' })
-                    : m
-                ));
+                stopPoll(statusData.error || '生图失败');
               }
             })
             .catch(pollErr => {
               pollFails += 1;
               if (pollFails > 15) {
-                clearInterval(pollInterval);
-                setIsLoading(false);
-                setMessages(msgs => msgs.map(m =>
-                  m.type === 'ai-image-generating' && m.startedAt === slotAt
-                    ? Object.assign({}, m, { status: 'failed', error: '状态轮询超时或网络中断' })
-                    : m
-                ));
+                stopPoll('状态轮询超时或网络中断');
               }
             });
         }, 2000);

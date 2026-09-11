@@ -449,9 +449,9 @@ def main() -> int:
         layer for index, layer in enumerate(result_layers)
         if index != background_index
     ]
-    # 限制前景最多 7 层，配合背景共最多 8 层，避免过度碎片化
-    if len(foreground_layers) > 7:
-        foreground_layers = foreground_layers[:7]
+    # 限制总层数最多 7 层（包含背景层 1 层 + 前景最多 6 层），避免过度碎片化
+    if len(foreground_layers) > 6:
+        foreground_layers = foreground_layers[:6]
 
     background_path = out_dir / "00-background.png"
     background_status = _prepare_background(

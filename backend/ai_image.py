@@ -301,12 +301,13 @@ def get_inspiration_thumb_url_if_exists(image_url: str, user_id: str, job_id: st
 
 
 def save_user_refs(user_id: str, job_id: str, refs: list[tuple[bytes, str]]) -> list[str]:
-    """持久化用户上传的参考图到磁盘，返回相对路径列表。"""
+    """持久化任务使用的参考图到磁盘，返回相对路径列表。"""
     ref_dir = _ensure_user_output_dir(user_id) / "refs" / job_id
     ref_dir.mkdir(parents=True, exist_ok=True)
     paths: list[str] = []
     for i, (ref_bytes, ref_name) in enumerate(refs):
-        safe_name = f"ref_{i}.png" if not ref_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")) else f"ref_{i}{Path(ref_name).suffix}"
+        ext = Path(ref_name).suffix if ref_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")) else ".png"
+        safe_name = f"ref_{i:02d}{ext}"
         ref_path = ref_dir / safe_name
         ref_path.write_bytes(ref_bytes)
         paths.append(str(ref_path))
@@ -314,12 +315,12 @@ def save_user_refs(user_id: str, job_id: str, refs: list[tuple[bytes, str]]) -> 
 
 
 def load_user_refs(user_id: str, job_id: str) -> list[tuple[bytes, str]]:
-    """从磁盘加载用户上传的参考图。"""
+    """从磁盘加载任务使用的参考图，严格保持索引顺序。"""
     ref_dir = _ensure_user_output_dir(user_id) / "refs" / job_id
     if not ref_dir.exists():
         return []
     refs: list[tuple[bytes, str]] = []
-    for p in sorted(ref_dir.iterdir()):
+    for p in sorted(ref_dir.iterdir(), key=lambda path: path.name):
         if p.is_file():
             refs.append((p.read_bytes(), p.name))
     return refs

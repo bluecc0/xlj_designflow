@@ -77,5 +77,34 @@ class ReferenceUploadLimitTest(unittest.IsolatedAsyncioTestCase):
         upload.read.assert_awaited_once_with(MAX_REFERENCE_IMAGE_BYTES + 1)
 
 
+class PersistAndLoadTaskReferencesTest(unittest.TestCase):
+    def test_save_and_load_refs_exact_order(self) -> None:
+        import tempfile
+        import shutil
+        from pathlib import Path
+
+        test_dir = Path(tempfile.mkdtemp())
+        try:
+            with unittest.mock.patch("backend.ai_image._ensure_user_output_dir", return_value=test_dir):
+                refs = [
+                    (b"ref-0", "first.png"),
+                    (b"ref-1", "second.jpg"),
+                    (b"ref-2", "third.webp"),
+                ]
+                paths = ai_image.save_user_refs("test-user", "job-123", refs)
+                self.assertEqual(len(paths), 3)
+
+                loaded = ai_image.load_user_refs("test-user", "job-123")
+                self.assertEqual(len(loaded), 3)
+                self.assertEqual(loaded[0][0], b"ref-0")
+                self.assertEqual(loaded[1][0], b"ref-1")
+                self.assertEqual(loaded[2][0], b"ref-2")
+                self.assertTrue(loaded[0][1].startswith("ref_00"))
+                self.assertTrue(loaded[1][1].startswith("ref_01"))
+                self.assertTrue(loaded[2][1].startswith("ref_02"))
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

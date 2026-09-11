@@ -4725,11 +4725,7 @@ async def _run_ai_image_background(
             )
         except Exception:
             logger.exception("failed to append success chat message: job_id=%s", job_id)
-        # 成功后清理持久化的参考图
-        try:
-            cleanup_user_refs(user_id, job_id)
-        except Exception:
-            pass
+        # 注意：参考图目录需保留供重试/复用任务读取，不在此处删除
     except asyncio.CancelledError:
         # Uvicorn reload / server shutdown can cancel in-flight background tasks.
         # Without explicitly persisting this, the UI keeps polling a permanent
@@ -5500,39 +5496,49 @@ async def ai_image_retry(request: Request):
     if quality not in {"auto", "low", "medium", "high", "xhigh", "max"}:
         quality = "auto"
 
-    # 1. 从磁盘加载用户上传的参考图
-    user_refs = load_user_refs(user["id"], job_id)
+    # 1. 优先加载原任务完整持久化的准确参考图集合
+    persisted_refs = load_user_refs(user["id"], job_id)
+    all_refs: list[tuple[bytes, str]] = []
+    if persisted_refs:
+        # 原任务持久化目录完好，直接准确复用原参考图，顺序严格一致
+        all_refs = persisted_refs[:9]
+    else:
+        # 兼容旧任务（历史已清理任务）：若记录有上下文参考图，严格从原任务之前的消息查找，绝不向后取新图
+        context_ref_bytes: list[tuple[bytes, str]] = []
+        context_url = str(request_meta.get("context_image_url") or "").strip()
+        if not context_url and session_id and request_meta.get("context_reference_count"):
+            prev_messages = load_ai_chat_messages(session_id, user_id=user["id"])
+            job_idx = -1
+            for idx_m, m in enumerate(prev_messages):
+                if (m.get("jobId") or m.get("id")) == job_id:
+                    job_idx = idx_m
+                    break
+            search_scope = prev_messages[:job_idx] if job_idx > 0 else prev_messages
+            for m in reversed(search_scope):
+                if (m.get("jobId") or m.get("id")) == job_id:
+                    continue
+                p_url = m.get("imageUrl") or ""
+                if p_url and p_url.startswith("/ai-images/"):
+                    context_url = p_url
+                    break
+        if context_url and context_url.startswith("/ai-images/"):
+            local_path = settings.output_path / "ai-images" / context_url[len("/ai-images/"):]
+            try:
+                if local_path.exists():
+                    context_ref_bytes.append((local_path.read_bytes(), local_path.name))
+            except Exception:
+                pass
+        all_refs = context_ref_bytes[:9]
 
-    # 2. 取上一张成功生成的图片作为上下文参考图（若原任务本就无上下文参考图，或自身生成图，则不注入）
-    context_ref_bytes: list[tuple[bytes, str]] = []
-    allow_context_ref = True
-    if "context_reference_count" in request_meta:
-        allow_context_ref = int(request_meta.get("context_reference_count") or 0) > 0
-    elif not bool(old_job.get("has_reference")):
-        allow_context_ref = False
-
-    if session_id and allow_context_ref:
-        prev_messages = load_ai_chat_messages(session_id, user_id=user["id"])
-        for m in reversed(prev_messages):
-            if (m.get("jobId") or m.get("id")) == job_id:
-                continue
-            prev_url = m.get("imageUrl") or ""
-            if prev_url and prev_url.startswith("/ai-images/"):
-                local_path = settings.output_path / "ai-images" / prev_url[len("/ai-images/"):]
-                try:
-                    if local_path.exists():
-                        context_ref_bytes.append((local_path.read_bytes(), local_path.name))
-                        break
-                except Exception:
-                    pass
-
-    # 3. 合并参考图：用户可见参考图在前，保持 @图片N 与前端编号一致；
-    # 会话续图的隐藏上下文图追加在后。
-    all_refs = user_refs + context_ref_bytes
-    all_refs = all_refs[:9]
     has_reference = bool(all_refs)
-
     new_job_id = uuid.uuid4().hex
+    # 2. 为新生成的重试任务独立持久化参考图副本，确保链式重试依然准确
+    if all_refs:
+        try:
+            save_user_refs(user["id"], new_job_id, all_refs)
+        except Exception:
+            logger.warning("Failed to save refs for retried job %s", new_job_id)
+
     created_at = time.time()
     save_ai_image_job(
         job_id=new_job_id, user_id=user["id"], status="processing",
@@ -5546,8 +5552,9 @@ async def ai_image_retry(request: Request):
             "retry_from": job_id,
             "variant": variant,
             "quality": quality,
-            "manual_reference_count": len(user_refs),
-            "context_reference_count": len(context_ref_bytes),
+            "manual_reference_count": int(request_meta.get("manual_reference_count") or len(all_refs)),
+            "context_reference_count": int(request_meta.get("context_reference_count") or 0),
+            "context_image_url": str(request_meta.get("context_image_url") or ""),
             "reference_names": [name for _content, name in all_refs],
         },
         created_at=created_at,
@@ -5576,8 +5583,9 @@ async def ai_image_retry(request: Request):
                 "retry_from": job_id,
                 "variant": variant,
                 "quality": quality,
-                "manual_reference_count": len(user_refs),
-                "context_reference_count": len(context_ref_bytes),
+                "manual_reference_count": int(request_meta.get("manual_reference_count") or len(all_refs)),
+                "context_reference_count": int(request_meta.get("context_reference_count") or 0),
+                "context_image_url": str(request_meta.get("context_image_url") or ""),
                 "reference_names": [name for _content, name in all_refs],
             },
         )
@@ -6354,16 +6362,16 @@ async def ai_image_endpoint(
         for _idx in range(batch_count):
             jid = uuid.uuid4().hex
             job_ids.append(jid)
-            # 持久化用户参考图（每个 job 各存一份，避免并发覆盖）
-            if user_refs:
-                try:
-                    save_user_refs(user["id"], jid, user_refs)
-                except Exception:
-                    logger.warning("Failed to save user refs for job %s", jid)
             # 用户可见参考图在前，保持 @图片N 与前端编号一致；
             # 会话续图的隐藏上下文图追加在后。
             all_refs_batch: list[tuple[bytes, str]] = user_refs + context_ref_bytes
             all_refs_batch = all_refs_batch[:9]  # 总共最多 9 张
+            # 持久化任务完整参考图集合（用户图+上下文图均保留供重试准确复用）
+            if all_refs_batch:
+                try:
+                    save_user_refs(user["id"], jid, all_refs_batch)
+                except Exception:
+                    logger.warning("Failed to save user refs for job %s", jid)
             request_meta = {
                 "client_request_id": client_req,
                 "chat_session_id": session_id,
@@ -6374,6 +6382,8 @@ async def ai_image_endpoint(
                 "batch_index": _idx,
                 "batch_count": batch_count,
                 "manual_reference_count": len(user_refs),
+                "context_reference_count": len(context_ref_bytes),
+                "context_image_url": prev_url if (context_ref_bytes and prev_url) else "",
                 "context_reference_count": len(context_ref_bytes),
                 "reference_names": [name for _content, name in all_refs_batch],
                 # data URL 缩略图体积很大，不写入任务库；站内 URL 可以安全保留用于排障。

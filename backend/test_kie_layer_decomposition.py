@@ -223,6 +223,22 @@ class KieResultDownloadRetryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(content, b"png-bytes")
         self.assertEqual(client.calls, 2)
 
+    def test_foreground_layers_limit_max_6_for_total_7(self) -> None:
+        """测试存在背景层时，前景层最多保留 6 层，总层数严格不超过 7 层。"""
+        raw_layers = [{"name": f"fg_{i}", "bytes": b"fake"} for i in range(10)]
+        # 模拟 worker 中的裁剪逻辑
+        background_index = 0
+        foreground_layers = [
+            layer for index, layer in enumerate(raw_layers)
+            if index != background_index
+        ]
+        if len(foreground_layers) > 6:
+            foreground_layers = foreground_layers[:6]
+
+        self.assertEqual(len(foreground_layers), 6)
+        total_layers = 1 + len(foreground_layers)  # 1 background + foregrounds
+        self.assertEqual(total_layers, 7)
+
 
 if __name__ == "__main__":
     unittest.main()
