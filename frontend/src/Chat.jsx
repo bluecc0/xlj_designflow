@@ -1850,6 +1850,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const [manualRefImages, setManualRefImages] = React.useState([]);
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
+  const [typeTipVisible, setTypeTipVisible] = React.useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = React.useState('chat');
   const [agentSkills, setAgentSkills] = React.useState([]);
   const [selectedSkill, setSelectedSkill] = React.useState('');
@@ -2767,9 +2768,11 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
     : null;
   const qualityMap = { auto: '自动', medium: '中等', xhigh: '高', max: '最高' };
+  const variantMap = { flare: '更快', sunburst: '更好' };
   const qualityTag = (activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto') ? (' · ' + (qualityMap[aiQualityTier] || aiQualityTier)) : '';
+  const variantTag = (activeAiModel === 'gpt-image-2.5') ? (' · ' + (variantMap[aiVariant] || aiVariant)) : '';
   const modeParamLabel = activeMode === 'ai-image'
-    ? (aiRatio + ' · ' + aiQuality + (activeAiModel === 'gpt-image-2.5' ? (' · ' + aiVariant + qualityTag) : ''))
+    ? (aiRatio + ' · ' + aiQuality + variantTag + qualityTag)
     : activeMode === 'special_full'
       ? '线路 完整'
       : activeMode === 'special'
@@ -3073,15 +3076,26 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       const isDistributeParams = activeMode === 'distribute';
       const paramsTitle = isImageParams ? '生图参数' : isSpecialParams ? '特殊品参数' : isComposeParams ? '合成参数' : isDistributeParams ? '铺货参数' : '问答参数';
       const batchCountValue = normalizeBatchCount(aiBatchCount);
-      const imageFieldLabel = function(text, extraStyle) {
+      const imageFieldLabel = function(text, extraPropsOrStyle) {
+        let titleAttr = undefined;
+        let styleObj = {};
+        if (extraPropsOrStyle) {
+          if (extraPropsOrStyle.title) {
+            titleAttr = extraPropsOrStyle.title;
+          }
+          const rest = Object.assign({}, extraPropsOrStyle);
+          delete rest.title;
+          styleObj = rest;
+        }
         return React.createElement('div', {
+          title: titleAttr,
           style: Object.assign({
             fontSize: 12,
             fontWeight: 500,
             color: 'var(--ink-2)',
             letterSpacing: '-0.01em',
             marginBottom: 8,
-          }, extraStyle || {})
+          }, styleObj)
         }, text);
       };
       return protoPanelShell(React.createElement(React.Fragment, null,
@@ -3164,8 +3178,73 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
               marginTop: 12,
             }
           },
-            React.createElement('div', null,
-              imageFieldLabel('类型'),
+            React.createElement('div', { style: { position: 'relative' } },
+              React.createElement('div', {
+                onMouseEnter: function() { setTypeTipVisible(true); },
+                onMouseLeave: function() { setTypeTipVisible(false); },
+                style: {
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  cursor: 'help',
+                  marginBottom: 8,
+                  userSelect: 'none',
+                }
+              },
+                React.createElement('span', {
+                  style: {
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: 'var(--ink-2)',
+                    letterSpacing: '-0.01em',
+                    borderBottom: '1px dashed var(--ink-4)',
+                    paddingBottom: 1,
+                  }
+                }, '类型'),
+                React.createElement('svg', {
+                  width: 12,
+                  height: 12,
+                  viewBox: '0 0 16 16',
+                  fill: 'none',
+                  style: { color: 'var(--ink-3)', opacity: 0.85, flexShrink: 0, transform: 'translateY(-1px)' }
+                },
+                  React.createElement('circle', { cx: 8, cy: 8, r: 7, stroke: 'currentColor', strokeWidth: 1.5 }),
+                  React.createElement('path', { d: 'M8 7v4.5M8 4.5v.5', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' })
+                )
+              ),
+              typeTipVisible && React.createElement('div', {
+                style: {
+                  position: 'absolute',
+                  bottom: 'calc(100% - 2px)',
+                  left: 0,
+                  zIndex: 60,
+                  padding: '5px 9px',
+                  borderRadius: 6,
+                  background: 'var(--ink)',
+                  color: 'var(--panel)',
+                  fontSize: 11,
+                  fontWeight: 500,
+                  lineHeight: 1.4,
+                  whiteSpace: 'nowrap',
+                  boxShadow: '0 6px 18px rgba(0, 0, 0, 0.18)',
+                  pointerEvents: 'none',
+                  transition: 'opacity 0.15s ease',
+                }
+              },
+                '更快对应 Flare 模型，更好对应 Sunburst 模型',
+                React.createElement('div', {
+                  style: {
+                    position: 'absolute',
+                    top: '100%',
+                    left: 14,
+                    width: 0,
+                    height: 0,
+                    borderLeft: '4px solid transparent',
+                    borderRight: '4px solid transparent',
+                    borderTop: '4px solid var(--ink)',
+                  }
+                })
+              ),
               React.createElement('div', {
                 style: {
                   display: 'flex',
@@ -3177,11 +3256,12 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
                   background: 'var(--panel)',
                 }
               },
-                [['flare', 'Flare'], ['sunburst', 'Sunburst']].map(function(item, idx) {
+                [['flare', '更快', '对应 Flare 模型，生成速度更快'], ['sunburst', '更好', '对应 Sunburst 模型，生成效果更好']].map(function(item, idx) {
                   const active = aiVariant === item[0];
                   return React.createElement('button', {
                     key: item[0],
                     type: 'button',
+                    title: item[2],
                     onClick: function() { setAiVariant(item[0]); },
                     style: {
                       flex: 1,

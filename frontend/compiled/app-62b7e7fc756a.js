@@ -6137,6 +6137,7 @@ const Composer = ({
   const [manualRefImages, setManualRefImages] = React.useState([]);
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
+  const [typeTipVisible, setTypeTipVisible] = React.useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = React.useState('chat');
   const [agentSkills, setAgentSkills] = React.useState([]);
   const [selectedSkill, setSelectedSkill] = React.useState('');
@@ -7154,8 +7155,13 @@ const Composer = ({
     xhigh: '高',
     max: '最高'
   };
+  const variantMap = {
+    flare: '更快',
+    sunburst: '更好'
+  };
   const qualityTag = activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto' ? ' · ' + (qualityMap[aiQualityTier] || aiQualityTier) : '';
-  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + (activeAiModel === 'gpt-image-2.5' ? ' · ' + aiVariant + qualityTag : '') : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 普通' : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
+  const variantTag = activeAiModel === 'gpt-image-2.5' ? ' · ' + (variantMap[aiVariant] || aiVariant) : '';
+  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + variantTag + qualityTag : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 普通' : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
   const selectedSettingBits = [activeSkillInfo ? '$' + activeSkillInfo.name : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? '⚡ 智能' : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
   const composerPlaceholder = agentEnabled ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）' : activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(text.trim() || lockedCommand || modeParamLabel || refImages.length > 0 || files.length > 0 || activeSkillInfo || skillMenuOpen || !agentEnabled && prototypePanel);
@@ -7479,15 +7485,26 @@ const Composer = ({
       const isDistributeParams = activeMode === 'distribute';
       const paramsTitle = isImageParams ? '生图参数' : isSpecialParams ? '特殊品参数' : isComposeParams ? '合成参数' : isDistributeParams ? '铺货参数' : '问答参数';
       const batchCountValue = normalizeBatchCount(aiBatchCount);
-      const imageFieldLabel = function (text, extraStyle) {
+      const imageFieldLabel = function (text, extraPropsOrStyle) {
+        let titleAttr = undefined;
+        let styleObj = {};
+        if (extraPropsOrStyle) {
+          if (extraPropsOrStyle.title) {
+            titleAttr = extraPropsOrStyle.title;
+          }
+          const rest = Object.assign({}, extraPropsOrStyle);
+          delete rest.title;
+          styleObj = rest;
+        }
         return React.createElement('div', {
+          title: titleAttr,
           style: Object.assign({
             fontSize: 12,
             fontWeight: 500,
             color: 'var(--ink-2)',
             letterSpacing: '-0.01em',
             marginBottom: 8
-          }, extraStyle || {})
+          }, styleObj)
         }, text);
       };
       return protoPanelShell(React.createElement(React.Fragment, null, !isImageParams && React.createElement('div', {
@@ -7567,7 +7584,86 @@ const Composer = ({
           alignItems: 'start',
           marginTop: 12
         }
-      }, React.createElement('div', null, imageFieldLabel('类型'), React.createElement('div', {
+      }, React.createElement('div', {
+        style: {
+          position: 'relative'
+        }
+      }, React.createElement('div', {
+        onMouseEnter: function () {
+          setTypeTipVisible(true);
+        },
+        onMouseLeave: function () {
+          setTypeTipVisible(false);
+        },
+        style: {
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          cursor: 'help',
+          marginBottom: 8,
+          userSelect: 'none'
+        }
+      }, React.createElement('span', {
+        style: {
+          fontSize: 12,
+          fontWeight: 500,
+          color: 'var(--ink-2)',
+          letterSpacing: '-0.01em',
+          borderBottom: '1px dashed var(--ink-4)',
+          paddingBottom: 1
+        }
+      }, '类型'), React.createElement('svg', {
+        width: 12,
+        height: 12,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        style: {
+          color: 'var(--ink-3)',
+          opacity: 0.85,
+          flexShrink: 0,
+          transform: 'translateY(-1px)'
+        }
+      }, React.createElement('circle', {
+        cx: 8,
+        cy: 8,
+        r: 7,
+        stroke: 'currentColor',
+        strokeWidth: 1.5
+      }), React.createElement('path', {
+        d: 'M8 7v4.5M8 4.5v.5',
+        stroke: 'currentColor',
+        strokeWidth: 1.5,
+        strokeLinecap: 'round'
+      }))), typeTipVisible && React.createElement('div', {
+        style: {
+          position: 'absolute',
+          bottom: 'calc(100% - 2px)',
+          left: 0,
+          zIndex: 60,
+          padding: '5px 9px',
+          borderRadius: 6,
+          background: 'var(--ink)',
+          color: 'var(--panel)',
+          fontSize: 11,
+          fontWeight: 500,
+          lineHeight: 1.4,
+          whiteSpace: 'nowrap',
+          boxShadow: '0 6px 18px rgba(0, 0, 0, 0.18)',
+          pointerEvents: 'none',
+          transition: 'opacity 0.15s ease'
+        }
+      }, '更快对应 Flare 模型，更好对应 Sunburst 模型', React.createElement('div', {
+        style: {
+          position: 'absolute',
+          top: '100%',
+          left: 14,
+          width: 0,
+          height: 0,
+          borderLeft: '4px solid transparent',
+          borderRight: '4px solid transparent',
+          borderTop: '4px solid var(--ink)'
+        }
+      })), React.createElement('div', {
         style: {
           display: 'flex',
           width: '100%',
@@ -7577,11 +7673,12 @@ const Composer = ({
           overflow: 'hidden',
           background: 'var(--panel)'
         }
-      }, [['flare', 'Flare'], ['sunburst', 'Sunburst']].map(function (item, idx) {
+      }, [['flare', '更快', '对应 Flare 模型，生成速度更快'], ['sunburst', '更好', '对应 Sunburst 模型，生成效果更好']].map(function (item, idx) {
         const active = aiVariant === item[0];
         return React.createElement('button', {
           key: item[0],
           type: 'button',
+          title: item[2],
           onClick: function () {
             setAiVariant(item[0]);
           },

@@ -966,6 +966,24 @@ function useLayerExtractSelectedImage() {
       return false
     }
 
+    if (layers.length > 1) {
+      try {
+        const jobShapeIds = editor
+          .getCurrentPageShapes()
+          .filter((s) => {
+            if (s.type !== 'image') return false
+            const meta = (s.meta || {}) as any
+            return String(meta.layerExtractJobId || '') === job.jobId
+          })
+          .map((s) => s.id)
+        if (jobShapeIds.length > 1) {
+          editor.groupShapes(jobShapeIds)
+        }
+      } catch (groupError) {
+        console.warn('Failed to group layer extract shapes:', groupError)
+      }
+    }
+
     forgetPendingLayerExtractJob(job.jobId)
     setLayerExtractState({
       loading: false,

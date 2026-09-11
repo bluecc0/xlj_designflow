@@ -1,9 +1,9 @@
-"""使用 Kie Seedream 5 Pro 图层分离结果导出 PSD。
+"""使用 APIMart Seedream 5.0 Pro 图层分离结果导出 PSD。
 
 链路：
-1. 把原图提交给 ``seedream/5-pro-layer-decomposition``；
-2. 下载 Kie 返回的图层图片、z_index 和 bounding_box；
-3. 按 Kie 返回的坐标生成 manifest，再复用 layer_psd 导出 PSD。
+1. 把原图提交给 APIMart ``seedream-5-0-pro`` 图层分离接口；
+2. 下载模型返回的图层切片、z_index 和 bounding_box；
+3. 按返回的坐标生成 manifest，再复用 layer_psd 导出 PSD。
 
 这个文件由 backend.main 作为子进程调用。stdout 最后一行必须是 JSON，诊断
 信息写入 stderr，避免破坏主进程的结果解析。
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import io
 import json
 import logging
@@ -24,6 +25,10 @@ import httpx
 from PIL import Image
 
 from backend.config import settings
+from backend.apimart_layer_decomposition import (
+    ApimartLayerDecompositionClient,
+    ApimartLayerDecompositionError,
+)
 from backend.kie_layer_decomposition import (
     KieLayerDecompositionClient,
     KieLayerDecompositionError,
@@ -33,16 +38,16 @@ from backend.layer_psd import export_psd
 
 logger = logging.getLogger("layer_extract_worker")
 
-# 这是发给 Kie 分层模型的固定任务说明，不是 VLM 预识别结果，也不包含
-# 前端或本地推断的图层数量、坐标。元素识别和坐标返回全部由 Kie 完成。
+# 这是发给图层分离模型的固定任务说明，限制最多拆分 7 层，避免细碎过度拆分。
 LAYER_DECOMPOSITION_PROMPT = (
     "Separate this image into independent editable Photoshop layers. "
-    "Return one full-canvas background layer first, followed by each visually "
-    "independent foreground object, person, product, text group, logo, shadow, "
-    "or decoration. Preserve the original canvas and composition. Return exact "
-    "bounding boxes and z-order for every layer, keep foreground layers tightly "
-    "cropped with transparency outside visible content, and do not invent or "
-    "redesign any content."
+    "Limit the decomposition to at most 7 layers in total (including the background layer). "
+    "Return one full-canvas background layer first, followed by the primary visually "
+    "independent foreground objects, person, product, text group, logo, shadow, "
+    "or decoration. Merge tiny fragments and decorations into their corresponding "
+    "main element to avoid over-segmentation. Preserve the original canvas and composition. "
+    "Return exact bounding boxes and z-order for every layer, keep foreground layers tightly "
+    "cropped with transparency outside visible content, and do not invent or redesign any content."
 )
 
 
@@ -59,6 +64,13 @@ async def _download_result_layer(
     index: int,
     retries: int,
 ) -> bytes:
+    if url.startswith("data:image/"):
+        try:
+            _, b64_data = url.split(",", 1)
+            return base64.b64decode(b64_data)
+        except Exception as exc:
+            raise RuntimeError(f"Base64 图层 {index} 解码失败: {exc}") from exc
+
     max_attempts = max(0, int(retries or 0)) + 1
     last_error = ""
     for attempt in range(1, max_attempts + 1):
@@ -77,11 +89,11 @@ async def _download_result_layer(
             retryable = True
         else:
             if not retryable:
-                raise RuntimeError(f"下载 Kie 图层 {index} 失败: {last_error}")
+                raise RuntimeError(f"下载图层 {index} 失败: {last_error}")
         if attempt < max_attempts:
             await asyncio.sleep(min(2.0, 0.5 * attempt))
     raise RuntimeError(
-        f"下载 Kie 图层 {index} 失败: {last_error}（已重试 {max_attempts - 1} 次）"
+        f"下载图层 {index} 失败: {last_error}（已重试 {max_attempts - 1} 次）"
     )
 
 
@@ -208,27 +220,31 @@ def _select_background_index(
     result_layers: list[dict[str, Any]],
     source_size: tuple[int, int],
 ) -> int | None:
-    """选择 Kie 返回的全画布背景，避免把局部图拉伸成背景。
+    """选择返回的全画布背景，避免把局部图拉伸成背景。
 
-    当前 Kie 返回的背景通常是无名称、z_index=0 的全画布 PNG；部分响应
-    还会额外返回带 bounding_box 的局部背景（例如地面），后者必须保留为
-    普通前景层，不能覆盖主背景。
+    Seedream / 图层分离模型通常以 name="background" 或 z_index=0 的全画布 PNG 作为底图；
+    部分响应还会额外返回带 bounding_box 的局部背景（例如地面），后者必须保留为普通前景层。
     """
     width, height = source_size
     for index, layer in enumerate(result_layers):
         raw = layer.get("bytes")
         if not raw:
             continue
+        name = str(layer.get("name") or "").strip().lower()
+        if name in ("background", "背景"):
+            return index
         bbox = _layer_bbox(layer, width, height)
         try:
             z_index = int(layer.get("z_index", index))
         except (TypeError, ValueError):
             z_index = index
-        # Kie identifies the full-canvas output as z_index=0. Its output
-        # resolution may differ from the uploaded image, so dimensions and
-        # aspect ratio must not gate background selection.
         if z_index == 0 and bbox is None:
             return index
+
+    if result_layers and result_layers[0].get("bytes"):
+        bbox = _layer_bbox(result_layers[0], width, height)
+        if bbox is None or bbox == [0, 0, width, height]:
+            return 0
     return None
 
 
@@ -305,6 +321,37 @@ def _prepare_foreground(
 
 
 async def _run_remote_decomposition(source_copy: Path) -> dict[str, Any]:
+    provider = getattr(settings, "layer_extract_provider", "apimart").lower()
+    if provider == "apimart":
+        if not settings.layer_extract_api_key:
+            raise ApimartLayerDecompositionError("未配置图层分离 API 密钥（AI_IMAGE_API_KEY / LAYER_EXTRACT_API_KEY）")
+        client = ApimartLayerDecompositionClient(
+            api_key=settings.layer_extract_api_key,
+            base_url=settings.layer_extract_base_url,
+            model=settings.layer_extract_model,
+            size=settings.layer_extract_size,
+            timeout_seconds=settings.layer_extract_timeout_seconds,
+            poll_interval_seconds=settings.layer_extract_poll_interval_seconds,
+            download_retries=settings.layer_extract_download_retries,
+        )
+        result = await client.run(
+            source_copy,
+            prompt=LAYER_DECOMPOSITION_PROMPT,
+        )
+        result_layers = await _download_result_layers(
+            result["result_layers"],
+            settings.layer_extract_timeout_seconds,
+            settings.layer_extract_download_retries,
+        )
+        return {
+            "provider": "apimart",
+            "model": settings.layer_extract_model,
+            "task_id": result.get("task_id", ""),
+            "raw_result": result,
+            "result_layers": result_layers,
+        }
+
+    # 兼容历史 kie 模式
     if not settings.kie_api_key:
         raise KieLayerDecompositionError("未配置 KIE_API_KEY，请先在 .env 中填写")
     client = KieLayerDecompositionClient(
@@ -318,9 +365,7 @@ async def _run_remote_decomposition(source_copy: Path) -> dict[str, Any]:
         poll_interval_seconds=settings.kie_poll_interval_seconds,
         input_download_retries=settings.kie_input_download_retries,
     )
-    # Kie 文档提示相同 fileName 可能覆盖并命中旧缓存；job 目录名保证每次输入唯一。
     upload_filename = f"designflow-layer-{source_copy.parent.name}.png"
-    # Kie 负责元素识别和坐标返回；这里仅提供固定任务说明，不做 VLM 预识别。
     result = await client.run(
         source_copy,
         prompt=LAYER_DECOMPOSITION_PROMPT,
@@ -332,7 +377,10 @@ async def _run_remote_decomposition(source_copy: Path) -> dict[str, Any]:
         settings.kie_result_download_retries,
     )
     return {
-        "kie": result,
+        "provider": "kie",
+        "model": settings.kie_layer_model,
+        "task_id": result.get("task_id", ""),
+        "raw_result": result,
         "result_layers": result_layers,
     }
 
@@ -360,34 +408,39 @@ def main() -> int:
 
     try:
         remote = asyncio.run(_run_remote_decomposition(source_copy))
-    except (KieLayerDecompositionError, RuntimeError, OSError) as exc:
+    except (ApimartLayerDecompositionError, KieLayerDecompositionError, RuntimeError, OSError) as exc:
         _emit({"ok": False, "error": str(exc)})
         return 2
     except Exception as exc:
-        logger.exception("Kie 图层分离未预期异常")
-        _emit({"ok": False, "error": f"Kie 图层分离异常: {exc}"})
+        logger.exception("图层分离未预期异常")
+        _emit({"ok": False, "error": f"图层分离异常: {exc}"})
         return 2
 
+    provider = remote.get("provider", "apimart")
+    model_name = remote.get("model", "")
+    task_id = remote.get("task_id", "")
     result_layers: list[dict[str, Any]] = remote["result_layers"]
     if not result_layers:
         _emit({
             "ok": False,
-            "error": "Kie 任务成功但没有可下载的图层",
-            "kie_task_id": remote["kie"].get("task_id", ""),
+            "error": "任务成功但没有可下载的图层",
+            "task_id": task_id,
+            "kie_task_id": task_id,
+            "decomposition_provider": provider,
         })
         return 3
 
-    # Kie 的 layers_data 通常以 z_index=0 的全画布图作为底图；不再根据
-    # 外部模型预估数量匹配，而是完整消费 Kie 返回的所有图层。
+    # 图层分离模型通常以 background 或 z_index=0 的全画布图作为底图
     source_size = (source_width, source_height)
     background_index = _select_background_index(result_layers, source_size)
     if background_index is None and len(result_layers) <= 2:
         _emit({
             "ok": False,
-            "error": f"Kie 任务只返回 {len(result_layers)} 个图层，无法组成 PSD",
+            "error": f"任务只返回 {len(result_layers)} 个图层，无法组成 PSD",
             "background_status": "missing",
-            "decomposition_provider": "kie",
-            "kie_task_id": remote["kie"].get("task_id", ""),
+            "decomposition_provider": provider,
+            "task_id": task_id,
+            "kie_task_id": task_id,
         })
         return 3
     background_layer = result_layers[background_index] if background_index is not None else {}
@@ -396,8 +449,11 @@ def main() -> int:
         layer for index, layer in enumerate(result_layers)
         if index != background_index
     ]
+    # 限制前景最多 7 层，配合背景共最多 8 层，避免过度碎片化
+    if len(foreground_layers) > 7:
+        foreground_layers = foreground_layers[:7]
 
-    background_path = out_dir / "00-background-kie.png"
+    background_path = out_dir / "00-background.png"
     background_status = _prepare_background(
         background_bytes, source, source_width, source_height, background_path
     )
@@ -408,7 +464,7 @@ def main() -> int:
     background_manifest_layer = {
         "id": "background",
         "name": str(background_layer.get("name") or "背景"),
-        "kind": "kie-background" if background_index is not None else "source-background",
+        "kind": f"{provider}-background" if background_index is not None else "source-background",
         "index": 0,
         "z_index": background_z_index,
         "path": background_path.name,
@@ -457,28 +513,35 @@ def main() -> int:
             "path": background_path.name,
             "completedPath": background_path.name,
             "status": background_status,
-            "provider": "kie" if background_index is not None else "source",
+            "provider": provider if background_index is not None else "source",
             "layer": background_manifest_layer,
         },
         "layers": layers,
         "layerExtraction": {
-            "provider": "kie",
-            "model": settings.kie_layer_model,
-            "taskId": remote["kie"].get("task_id", ""),
+            "provider": provider,
+            "model": model_name,
+            "taskId": task_id,
             "resultCount": len(result_layers),
             "resultLayers": serialized_result_layers,
         },
     }
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    result_meta = {
+        "task_id": task_id,
+        "provider": provider,
+        "model": model_name,
+        "result_count": len(result_layers),
+        "result_layers": serialized_result_layers,
+        "raw": remote.get("raw_result", {}),
+    }
+    (out_dir / "layer-result.json").write_text(
+        json.dumps(result_meta, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     (out_dir / "kie-result.json").write_text(
-        json.dumps({
-            "task_id": remote["kie"].get("task_id", ""),
-            "source_url": remote["kie"].get("source_url", ""),
-            "result_count": len(result_layers),
-            "result_layers": serialized_result_layers,
-            "task": remote["kie"].get("task", {}),
-        }, ensure_ascii=False, indent=2),
+        json.dumps(result_meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
@@ -494,8 +557,10 @@ def main() -> int:
         "manifest_path": str(manifest_path),
         "source_size": [source_width, source_height],
         "background_status": background_status,
-        "decomposition_provider": "kie",
-        "kie_task_id": remote["kie"].get("task_id", ""),
+        "decomposition_provider": provider,
+        "task_id": task_id,
+        "kie_task_id": task_id,
+        "result_layers": serialized_result_layers,
         "kie_layers": serialized_result_layers,
         "layers": layers,
     })

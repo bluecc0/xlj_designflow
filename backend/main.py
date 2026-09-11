@@ -1837,6 +1837,7 @@ def _run_local_layer_extract(src_path: Path, out_dir: Path, user_id: str) -> dic
         timeout=max(
             120,
             int(settings.ai_image_job_timeout_seconds or 600),
+            int(getattr(settings, "layer_extract_timeout_seconds", 900)) + 45,
             int(settings.kie_timeout_seconds or 900) + 45,
         ),
         check=False,
@@ -1847,20 +1848,23 @@ def _run_local_layer_extract(src_path: Path, out_dir: Path, user_id: str) -> dic
         payload = {}
     if proc.returncode != 0 or not payload.get("ok"):
         detail = str(payload.get("error") or (proc.stderr or proc.stdout or "").strip()[-1200:])
-        if payload.get("kie_task_id"):
-            detail = f"{detail} task_id={payload['kie_task_id']}"
+        task_id = payload.get("task_id") or payload.get("kie_task_id")
+        if task_id:
+            detail = f"{detail} task_id={task_id}"
         raise RuntimeError(detail or f"layer-extract 子进程退出码 {proc.returncode}")
     return payload
 
 
 async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path, created_at: float) -> None:
-    prompt = "Kie Seedream 5 Pro 图层分离并导出 PSD"
+    provider = getattr(settings, "layer_extract_provider", "apimart")
+    model_name = getattr(settings, "layer_extract_model", "seedream-5-0-pro")
+    prompt = "Seedream 5.0 Pro 图层分离并导出 PSD"
     out_dir = settings.output_path / "ai-images" / user["id"] / "layer-extract" / job_id
     try:
         save_ai_image_job(
             job_id=job_id, user_id=user["id"], status="processing",
             model="layer-extract", prompt=prompt, size="",
-            provider="kie",
+            provider=provider,
             original_prompt=prompt, resolved_prompt=prompt,
             has_reference=True, progress=15, created_at=created_at,
         )
@@ -1875,6 +1879,7 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
         manifest_url = f"/ai-images/{quote(manifest_rel.as_posix())}"
         # 图层 PNG 目录对外 URL 前缀（job 目录 URL，前端拼 prefix + '/' + layer.path）
         layers_url_prefix = f"/ai-images/{quote((out_dir.relative_to(settings.output_path / 'ai-images')).as_posix())}"
+        task_id = payload.get("task_id") or payload.get("kie_task_id", "")
         # 先完整组装 prompt_trace，再一次性写入 done，避免前端轮询读到
         # done 但 layer_extract 尚未准备好的中间状态。
         extra = {
@@ -1882,10 +1887,13 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
             "manifest_url": manifest_url,
             "layers_url_prefix": layers_url_prefix,
             "background_status": payload.get("background_status", ""),
-            "decomposition_provider": payload.get("decomposition_provider", "kie"),
-            "kie_task_id": payload.get("kie_task_id", ""),
+            "decomposition_provider": payload.get("decomposition_provider", provider),
+            "task_id": task_id,
+            "kie_task_id": task_id,
+            "model": model_name,
+            "kie_model": model_name,
+            "result_layers": payload.get("result_layers") or payload.get("kie_layers", []),
             "kie_layers": payload.get("kie_layers", []),
-            "kie_model": settings.kie_layer_model,
             "layers": payload.get("layers", []),
             "source_size": payload.get("source_size", []),
         }
@@ -1893,10 +1901,10 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
             job_id=job_id, user_id=user["id"], status="done",
             model="layer-extract", prompt=prompt,
             size=f"{payload['source_size'][0]}x{payload['source_size'][1]}",
-            provider="kie",
+            provider=provider,
             original_prompt=prompt, resolved_prompt=prompt,
             image_url=psd_url, prompt_trace=json.dumps(extra, ensure_ascii=False),
-            task_id=payload.get("kie_task_id") or None,
+            task_id=task_id or None,
             has_reference=True, progress=100, created_at=created_at,
         )
         # 任务已经持久化为 done；操作日志只能 best-effort，不能因为
@@ -1915,7 +1923,7 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
         save_ai_image_job(
             job_id=job_id, user_id=user["id"], status="failed",
             model="layer-extract", prompt=prompt, size="",
-            provider="kie",
+            provider=provider,
             original_prompt=prompt, resolved_prompt=prompt,
             has_reference=True, error=str(exc), progress=100, created_at=created_at,
             task_id=task_match.group(1) if task_match else None,
@@ -5227,7 +5235,7 @@ async def ai_image_matting(request: Request):
 
 @app.post("/ai-image/layer-extract")
 async def ai_image_layer_extract(request: Request):
-    """对站内图片执行"转分层 PSD"：Kie 分层 → 本地按坐标导出 PSD。"""
+    """对站内图片执行"转分层 PSD"：Seedream 图层分离 → 本地按坐标导出 PSD。"""
     user = _current_user(request)
     body = await request.json()
     image_url = str(body.get("image_url") or "").strip()
@@ -5237,15 +5245,17 @@ async def ai_image_layer_extract(request: Request):
         src_path = _persist_data_url_image(image_url, user_id=user["id"], job_id=job_id)
     else:
         src_path = _resolve_public_asset_path(image_url, user)
-    prompt = "Kie Seedream 5 Pro 图层分离并导出 PSD"
+    provider = getattr(settings, "layer_extract_provider", "apimart")
+    model_name = getattr(settings, "layer_extract_model", "seedream-5-0-pro")
+    prompt = "Seedream 5.0 Pro 图层分离并导出 PSD"
     save_ai_image_job(
         job_id=job_id, user_id=user["id"], status="processing",
         model="layer-extract", prompt=prompt, size="",
-        provider="kie", reference_count=1,
+        provider=provider, reference_count=1,
         request_meta={
             "operation": "layer_extract",
-            "provider": "kie",
-            "model": settings.kie_layer_model,
+            "provider": provider,
+            "model": model_name,
             "source_image_url": image_url,
         },
         original_prompt=prompt, resolved_prompt=prompt,
@@ -5408,8 +5418,9 @@ def ai_image_status(request: Request, job_id: str):
         }
     error_text = job.get("error") or ""
     # Smart-routed generation errors use a generic two-round message. Operation-specific
-    # workers already persist bounded public errors and must not be rewritten here.
-    if job.get("status") == "failed" and operation != "outpainting":
+    # workers (layer_extract, outpainting, matting, upscale, vectorize) already persist
+    # bounded public errors and must not be rewritten here.
+    if job.get("status") == "failed" and operation in {"", "generate"}:
         public_error = public_generation_error(error_text)
         should_update_error = str(error_text).strip() != public_error
         error_text = public_error
