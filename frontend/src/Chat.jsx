@@ -446,7 +446,7 @@ const copyTextToClipboard = async (text) => {
   return ok;
 };
 
-const CopyableTextBubble = ({ who, text, markdown }) => {
+const CopyableTextBubble = ({ who, text, markdown, onRetry, canRetry, retryTitle, isRetrying }) => {
   const [hovered, setHovered] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const copyValue = String(text || '');
@@ -472,33 +472,68 @@ const CopyableTextBubble = ({ who, text, markdown }) => {
     >
       <TextBubble who={who} markdown={markdown}>{copyValue}</TextBubble>
       {copyValue && (
-        <button
-          type="button"
-          title={copied ? '已复制' : '复制消息'}
-          aria-label={copied ? '已复制' : '复制消息'}
-          onClick={onCopy}
-          style={{
-            height: 22,
-            width: 22,
-            padding: 0,
-            borderRadius: 7,
-            border: '1px solid var(--line-2)',
-            background: who === 'user' ? 'var(--panel)' : 'transparent',
-            color: copied ? 'var(--ok)' : 'var(--ink-2)',
-            display: 'grid',
-            placeItems: 'center',
-            cursor: 'pointer',
-            opacity: hovered || copied ? 1 : 0,
-            transform: hovered || copied ? 'translateY(0)' : 'translateY(-2px)',
-            pointerEvents: hovered || copied ? 'auto' : 'none',
-            boxShadow: 'none',
-            transition: 'opacity 120ms ease, transform 120ms ease, color 120ms ease',
-            fontSize: 10.5,
-            lineHeight: 1,
-          }}
-        >
-          {copied ? <I.check size={11}/> : <I.copy size={11}/>}
-        </button>
+        <div style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 3,
+          opacity: hovered || copied ? 1 : 0,
+          transform: hovered || copied ? 'translateY(0)' : 'translateY(-2px)',
+          pointerEvents: hovered || copied ? 'auto' : 'none',
+          boxShadow: 'none',
+          transition: 'opacity 120ms ease, transform 120ms ease, color 120ms ease',
+        }}>
+          <button
+            type="button"
+            title={copied ? '已复制' : '复制消息'}
+            aria-label={copied ? '已复制' : '复制消息'}
+            onClick={onCopy}
+            style={{
+              height: 22,
+              width: 22,
+              padding: 0,
+              borderRadius: 7,
+              border: '1px solid var(--line-2)',
+              background: who === 'user' ? 'var(--panel)' : 'transparent',
+              color: copied ? 'var(--ok)' : 'var(--ink-2)',
+              display: 'grid',
+              placeItems: 'center',
+              cursor: 'pointer',
+              fontSize: 10.5,
+              lineHeight: 1,
+            }}
+          >
+            {copied ? <I.check size={11}/> : <I.copy size={11}/>}
+          </button>
+          {canRetry && (
+            <button
+              type="button"
+              disabled={isRetrying}
+              title={retryTitle || '重试此任务'}
+              aria-label={retryTitle || '重试此任务'}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (onRetry) onRetry();
+              }}
+              style={{
+                height: 22,
+                width: 22,
+                padding: 0,
+                borderRadius: 7,
+                border: '1px solid var(--line-2)',
+                background: who === 'user' ? 'var(--panel)' : 'transparent',
+                color: isRetrying ? 'var(--ink-3)' : 'var(--ink-2)',
+                display: 'grid',
+                placeItems: 'center',
+                cursor: isRetrying ? 'default' : 'pointer',
+                fontSize: 10.5,
+                lineHeight: 1,
+              }}
+            >
+              <I.refresh size={11}/>
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -892,9 +927,10 @@ const ThinkingBlock = ({ text }) => {
   );
 };
 
-const PromptTraceBlock = ({ title, text }) => {
+const PromptTraceBlock = ({ title, text, onRetry, isRetrying }) => {
   var _s = React.useState(true);
   var open = _s[0]; var setOpen = _s[1];
+  const [copied, setCopied] = React.useState(false);
   const userToggledRef = React.useRef(false);
   const bodyRef = React.useRef(null);
   React.useEffect(function() {
@@ -907,20 +943,92 @@ const PromptTraceBlock = ({ title, text }) => {
   const rules = parsed && Array.isArray(parsed.applied_rules) ? parsed.applied_rules : [];
   const finalPrompt = parsed && parsed.final_prompt ? String(parsed.final_prompt) : String(text);
   const negativePrompt = parsed && parsed.negative_prompt ? String(parsed.negative_prompt) : '';
+
+  const onCopy = React.useCallback(async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      const ok = await copyTextToClipboard(finalPrompt);
+      if (ok) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      }
+    } catch (err) {
+      console.warn('copy prompt failed', err);
+    }
+  }, [finalPrompt]);
+
   return (
     <div style={{ borderRadius: 8, border: '1px solid var(--line-2)', background: 'var(--panel-2)', overflow: 'hidden', marginBottom: 6 }}>
       <div
-        onClick={function() { userToggledRef.current = true; setOpen(!open); }}
         style={{
-          padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 6,
-          cursor: 'pointer', userSelect: 'none',
+          padding: '6px 10px 6px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6,
+          userSelect: 'none',
           borderBottom: open ? '1px solid var(--line-2)' : 'none',
         }}
       >
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--ink-3)" strokeWidth="2" strokeLinecap="round" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 200ms' }}>
-          <path d="m9 18 6-6-6-6"/>
-        </svg>
-        <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{title || '生图 Prompt'}</span>
+        <div
+          onClick={function() { userToggledRef.current = true; setOpen(!open); }}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flex: 1, minWidth: 0 }}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--ink-3)" strokeWidth="2" strokeLinecap="round" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 200ms' }}>
+            <path d="m9 18 6-6-6-6"/>
+          </svg>
+          <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 500 }}>{title || '生图 Prompt'}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button
+            type="button"
+            title={copied ? '已复制 Prompt' : '复制 Prompt'}
+            onClick={onCopy}
+            style={{
+              height: 20,
+              padding: '0 6px',
+              borderRadius: 5,
+              border: '1px solid var(--line-2)',
+              background: 'var(--panel)',
+              color: copied ? 'var(--ok)' : 'var(--ink-2)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+              cursor: 'pointer',
+              fontSize: 10,
+              lineHeight: 1,
+            }}
+          >
+            {copied ? <I.check size={10}/> : <I.copy size={10}/>}
+            <span>{copied ? '已复制' : '复制'}</span>
+          </button>
+          {onRetry && (
+            <button
+              type="button"
+              disabled={isRetrying}
+              title="重试生图（复用集成后的完整 Prompt）"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onRetry();
+              }}
+              style={{
+                height: 20,
+                padding: '0 6px',
+                borderRadius: 5,
+                border: '1px solid var(--line-2)',
+                background: 'var(--panel)',
+                color: isRetrying ? 'var(--ink-3)' : 'var(--ink-2)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+                cursor: isRetrying ? 'default' : 'pointer',
+                fontSize: 10,
+                lineHeight: 1,
+              }}
+            >
+              <I.refresh size={10}/>
+              <span>重试</span>
+            </button>
+          )}
+        </div>
       </div>
       {open && (
         <div ref={bodyRef} style={{
@@ -1142,7 +1250,7 @@ const ChatSessionBar = ({ messages, historyControl }) => {
   );
 };
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greetingKey, onQuickReply, agentEnabled, onPublishInspiration, onUnpublishInspiration }) => {
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greetingKey, onQuickReply, agentEnabled, onPublishInspiration, onUnpublishInspiration, onRetryAiImage }) => {
   const bottomRef = React.useRef(null);
   const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
 
@@ -1228,6 +1336,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
               showPromptTrace && React.createElement(PromptTraceBlock, {
                 title: m.activeSkill ? ('Skill 解析 · $' + m.activeSkill) : '生图 Prompt',
                 text: promptTraceText || resolvedPromptText,
+                onRetry: onRetryAiImage ? function() { onRetryAiImage(m); } : null,
+                isRetrying: isGenerating,
               }),
               agentEnabled && promptInstruction && React.createElement('div', {
                 style: {
@@ -1364,9 +1474,22 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   padding: '8px 10px', borderRadius: 6, background: 'var(--panel)',
                   border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)',
                   lineHeight: 1.45, wordBreak: 'break-word',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
                 }
               },
-                formatAiImageError(m.error, m.jobId || m.job_id)
+                React.createElement('span', { style: { flex: 1 } }, formatAiImageError(m.error, m.jobId || m.job_id)),
+                onRetryAiImage ? React.createElement('button', {
+                  type: 'button',
+                  disabled: isGenerating,
+                  title: '重试生图（复用集成 Prompt）',
+                  onClick: function() { onRetryAiImage(m); },
+                  style: {
+                    padding: '3px 8px', borderRadius: 5, background: 'var(--warn)',
+                    color: 'white', border: 'none', cursor: isGenerating ? 'default' : 'pointer', fontSize: 11,
+                    display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
+                    opacity: isGenerating ? 0.6 : 1,
+                  }
+                }, React.createElement(I.refresh, { size: 10 }), '重试') : null
               ),
             );
           })() : m.type === 'parse-result' ? (() => {
@@ -1692,7 +1815,37 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 {m.thinking ? (
                   <ThinkingBlock text={m.thinking}/>
                 ) : null}
-                <CopyableTextBubble who={m.who} text={m.text} markdown/>
+                {(() => {
+                  let targetAiGen = null;
+                  if (m.who === 'user') {
+                    for (let j = i + 1; j < messages.length; j++) {
+                      if (messages[j].type === 'ai-image-generating') {
+                        targetAiGen = messages[j];
+                        break;
+                      }
+                      if (messages[j].who === 'user') break;
+                    }
+                  }
+                  return (
+                    <CopyableTextBubble
+                      who={m.who}
+                      text={m.text}
+                      markdown
+                      canRetry={Boolean(onRetryAiImage && (targetAiGen || m.who === 'user'))}
+                      isRetrying={isGenerating}
+                      retryTitle={targetAiGen ? "重试本次生图任务（复用集成 Prompt）" : "重新发送"}
+                      onRetry={() => {
+                        if (onRetryAiImage) {
+                          if (targetAiGen) {
+                            onRetryAiImage(targetAiGen);
+                          } else {
+                            onRetryAiImage({ prompt: m.text, resolvedPrompt: m.text });
+                          }
+                        }
+                      }}
+                    />
+                  );
+                })()}
                 {/* Agent CONFIRM 阶段的创意方案卡片 */}
                 {m.brief || m.contract ? (
                   <BriefCard brief={m.brief} contract={m.contract} completeness={m.completeness}/>
@@ -5103,6 +5256,187 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
   }, [currentAiChatId, enhancePromptWithProductRefs, loadAiChatHistory, loadResolvedRefFiles, onComposeComplete, parseProductRefs]);
 
+  const handleRetryAiImage = React.useCallback(async (target) => {
+    if (!target || isLoading) return;
+    const jobId = target.jobId || target.job_id || '';
+    const rawPrompt = target.prompt || target.text || '';
+    const resolvedPrompt = target.resolvedPrompt || rawPrompt;
+    const effectivePrompt = (resolvedPrompt || rawPrompt).trim();
+    if (!effectivePrompt) return;
+
+    const model = target.model || 'gpt-image-2.5';
+    const size = target.size || '1024x1024';
+    const resolution = target.resolution || '1K';
+    const variant = target.variant || 'flare';
+    const quality = target.quality || 'auto';
+    const provider = target.provider || 'auto';
+    const promptTrace = target.promptTrace || '';
+    const refPreviews = target.refPreviews || [];
+
+    setIsLoading(true);
+
+    // 1. 如果有历史 jobId，优先调用后端智能重试（可自动继承磁盘参考图及上下文隐藏参考图，并使用 resolvedPrompt）
+    if (jobId && window.API && window.API.retryAiImage) {
+      const slotAt = Date.now();
+      const clientRequestId = 'retry-' + slotAt + '-' + Math.random().toString(36).slice(2, 8);
+      const apiBase = window.API_BASE || '';
+
+      setMessages(msgs => [...msgs, {
+        who: 'ai',
+        type: 'ai-image-generating',
+        status: 'processing',
+        model: model,
+        prompt: target.originalPrompt || target.prompt || effectivePrompt,
+        resolvedPrompt: effectivePrompt,
+        promptTrace: promptTrace,
+        startedAt: slotAt,
+        progress: 12,
+        provider: provider,
+        variant: variant,
+        quality: quality,
+        size: size,
+        resolution: resolution,
+        refPreviews: refPreviews,
+        clientRequestId: clientRequestId,
+      }]);
+
+      try {
+        const retryRes = await window.API.retryAiImage(jobId, currentAiChatId);
+        const newJobId = retryRes.job_id;
+        if (!newJobId) throw new Error(retryRes.detail || '重试任务创建失败');
+
+        setMessages(msgs => msgs.map(m =>
+          m.type === 'ai-image-generating' && m.startedAt === slotAt
+            ? Object.assign({}, m, {
+                jobId: newJobId,
+                resolvedPrompt: retryRes.resolved_prompt || m.resolvedPrompt,
+                originalPrompt: retryRes.original_prompt || m.originalPrompt,
+                promptTrace: retryRes.prompt_trace || m.promptTrace,
+                model: retryRes.model || m.model,
+                size: retryRes.size || m.size,
+                status: 'processing',
+                progress: 15,
+              })
+            : m
+        ));
+
+        let pollFails = 0;
+        const pollInterval = setInterval(() => {
+          fetch(apiBase + '/ai-image/' + newJobId, {
+            credentials: 'include',
+            headers: { 'X-Client-Request-Id': clientRequestId },
+          })
+            .then(r => {
+              if (!r.ok) {
+                if (r.status === 404 || r.status >= 500) pollFails += 1;
+                return null;
+              }
+              pollFails = 0;
+              return r.json();
+            })
+            .then(statusData => {
+              if (!statusData) return;
+              setMessages(msgs => msgs.map(m =>
+                m.type === 'ai-image-generating' && m.startedAt === slotAt
+                  ? Object.assign({}, m, {
+                      status: statusData.status === 'failed' || statusData.status === 'done' ? statusData.status : (statusData.status || m.status),
+                      progress: statusData.progress || m.progress,
+                      originalPrompt: statusData.original_prompt || m.originalPrompt,
+                      resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt,
+                      promptTrace: statusData.prompt_trace || m.promptTrace,
+                      provider: statusData.provider || m.provider,
+                      providerSwitched: statusData.providerSwitched || m.providerSwitched,
+                      taskId: statusData.task_id || m.taskId,
+                      jobId: newJobId,
+                    })
+                  : m
+              ));
+
+              if (statusData.status === 'done' && statusData.image_url) {
+                clearInterval(pollInterval);
+                setIsLoading(false);
+                const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
+                setMessages(msgs => msgs.map(m =>
+                  m.type === 'ai-image-generating' && m.startedAt === slotAt
+                    ? Object.assign({}, m, {
+                        status: 'done',
+                        imageUrl: statusData.image_url,
+                        previewUrl: statusData.preview_url || statusData.image_url,
+                        finalElapsed: finalElapsed,
+                        progress: 100,
+                        refPreviews: refPreviews.length ? refPreviews : m.refPreviews,
+                        originalPrompt: statusData.original_prompt || m.originalPrompt,
+                        resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt,
+                        promptTrace: statusData.prompt_trace || m.promptTrace,
+                        variant: statusData.variant || m.variant || 'flare',
+                        jobId: newJobId,
+                        taskId: statusData.task_id || m.taskId,
+                      })
+                    : m
+                ));
+                loadAiChatHistory();
+              } else if (statusData.status === 'done' && !statusData.image_url) {
+                clearInterval(pollInterval);
+                setIsLoading(false);
+                setMessages(msgs => msgs.map(m =>
+                  m.type === 'ai-image-generating' && m.startedAt === slotAt
+                    ? Object.assign({}, m, { status: 'failed', error: '任务完成但未返回图片地址' })
+                    : m
+                ));
+              } else if (statusData.status === 'failed') {
+                clearInterval(pollInterval);
+                setIsLoading(false);
+                setMessages(msgs => msgs.map(m =>
+                  m.type === 'ai-image-generating' && m.startedAt === slotAt
+                    ? Object.assign({}, m, { status: 'failed', error: statusData.error || '生图失败' })
+                    : m
+                ));
+              }
+            })
+            .catch(pollErr => {
+              pollFails += 1;
+              if (pollFails > 15) {
+                clearInterval(pollInterval);
+                setIsLoading(false);
+                setMessages(msgs => msgs.map(m =>
+                  m.type === 'ai-image-generating' && m.startedAt === slotAt
+                    ? Object.assign({}, m, { status: 'failed', error: '状态轮询超时或网络中断' })
+                    : m
+                ));
+              }
+            });
+        }, 2000);
+        return;
+      } catch (retryErr) {
+        console.warn('retryAiImage failed, falling back to runAiImageGeneration', retryErr);
+        setMessages(msgs => msgs.filter(m => !(m.type === 'ai-image-generating' && m.startedAt === slotAt)));
+      }
+    }
+
+    // 2. 兜底直接调用 runAiImageGeneration，明确将集成后的 Prompt 作为 plannedPrompt 传入，跳过二次推演改写
+    try {
+      await runAiImageGeneration(
+        model,
+        effectivePrompt,
+        rawPrompt,
+        [],
+        {
+          size: size,
+          resolution: resolution,
+          variant: variant,
+          quality: quality,
+          provider: provider,
+          plannedPrompt: effectivePrompt,
+          promptTrace: promptTrace,
+        }
+      );
+    } catch (e) {
+      console.error('fallback runAiImageGeneration retry failed', e);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [currentAiChatId, isLoading, loadAiChatHistory, runAiImageGeneration]);
+
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
     if (!text.trim() || isLoading) return;
     const activeSkill = String(aiOptions.skill || '').trim();
@@ -6205,9 +6539,9 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       )}
 
       {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration} onRetryAiImage={handleRetryAiImage}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration} onRetryAiImage={handleRetryAiImage}/>}
 
       <Composer
         onSend={handleSend}

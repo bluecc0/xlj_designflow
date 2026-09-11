@@ -5467,12 +5467,12 @@ def ai_image_status(request: Request, job_id: str):
 
 @app.post("/ai-image/retry")
 async def ai_image_retry(request: Request):
-    """生图失败后触发智能重试。复用原 prompt + 磁盘参考图 + 上下文参考图。"""
+    """生图失败或重新生成时触发智能重试。复用上下文集成后的完整 prompt + 磁盘参考图 + 上下文参考图。"""
     body = await request.json()
     job_id = (body.get("job_id") or "").strip()
     session_id = (body.get("session_id") or "").strip()
-    if not job_id or not session_id:
-        raise HTTPException(400, "job_id 和 session_id 不能为空")
+    if not job_id:
+        raise HTTPException(400, "job_id 不能为空")
 
     user = _current_user(request)
     old_job = load_ai_image_job(job_id)
@@ -5481,13 +5481,18 @@ async def ai_image_retry(request: Request):
     if old_job.get("user_id") != user["id"]:
         raise HTTPException(404, "任务不存在")
 
+    request_meta = old_job.get("request_meta") if isinstance(old_job.get("request_meta"), dict) else {}
+    if not session_id:
+        session_id = str(request_meta.get("chat_session_id") or "").strip()
+
     prompt = (old_job.get("prompt") or "").strip()
     original_prompt = (old_job.get("original_prompt") or "").strip()
     resolved_prompt = (old_job.get("resolved_prompt") or prompt).strip()
+    effective_prompt = resolved_prompt or prompt
+    prompt_trace = old_job.get("prompt_trace") or ""
     model = (old_job.get("model") or "gpt-image-2.5").strip()
     size = (old_job.get("size") or "1024x1024").strip()
     resolution = (old_job.get("resolution") or "").strip()
-    request_meta = old_job.get("request_meta") if isinstance(old_job.get("request_meta"), dict) else {}
     variant = str(request_meta.get("variant") or "flare").strip().lower()
     if variant not in {"flare", "sunburst"}:
         variant = "flare"
@@ -5498,19 +5503,28 @@ async def ai_image_retry(request: Request):
     # 1. 从磁盘加载用户上传的参考图
     user_refs = load_user_refs(user["id"], job_id)
 
-    # 2. 取上一张成功生成的图片作为上下文参考图
+    # 2. 取上一张成功生成的图片作为上下文参考图（若原任务本就无上下文参考图，或自身生成图，则不注入）
     context_ref_bytes: list[tuple[bytes, str]] = []
-    prev_messages = load_ai_chat_messages(session_id, user_id=user["id"])
-    for m in reversed(prev_messages):
-        prev_url = m.get("imageUrl") or ""
-        if prev_url and prev_url.startswith("/ai-images/"):
-            local_path = settings.output_path / "ai-images" / prev_url[len("/ai-images/"):]
-            try:
-                if local_path.exists():
-                    context_ref_bytes.append((local_path.read_bytes(), local_path.name))
-                    break
-            except Exception:
-                pass
+    allow_context_ref = True
+    if "context_reference_count" in request_meta:
+        allow_context_ref = int(request_meta.get("context_reference_count") or 0) > 0
+    elif not bool(old_job.get("has_reference")):
+        allow_context_ref = False
+
+    if session_id and allow_context_ref:
+        prev_messages = load_ai_chat_messages(session_id, user_id=user["id"])
+        for m in reversed(prev_messages):
+            if (m.get("jobId") or m.get("id")) == job_id:
+                continue
+            prev_url = m.get("imageUrl") or ""
+            if prev_url and prev_url.startswith("/ai-images/"):
+                local_path = settings.output_path / "ai-images" / prev_url[len("/ai-images/"):]
+                try:
+                    if local_path.exists():
+                        context_ref_bytes.append((local_path.read_bytes(), local_path.name))
+                        break
+                except Exception:
+                    pass
 
     # 3. 合并参考图：用户可见参考图在前，保持 @图片N 与前端编号一致；
     # 会话续图的隐藏上下文图追加在后。
@@ -5522,9 +5536,10 @@ async def ai_image_retry(request: Request):
     created_at = time.time()
     save_ai_image_job(
         job_id=new_job_id, user_id=user["id"], status="processing",
-        model=model, prompt=prompt, size=size,
+        model=model, prompt=effective_prompt, size=size,
         provider=PROVIDER_AUTO, resolution=resolution,
-        original_prompt=original_prompt, resolved_prompt=resolved_prompt,
+        original_prompt=original_prompt or prompt, resolved_prompt=effective_prompt,
+        prompt_trace=prompt_trace,
         has_reference=has_reference, reference_count=len(all_refs),
         request_meta={
             "chat_session_id": session_id,
@@ -5549,12 +5564,13 @@ async def ai_image_retry(request: Request):
             job_id=new_job_id, user_id=user["id"], username=user["username"],
             session_id=session_id,
             provider=PROVIDER_AUTO,
-            model=model, prompt=prompt,
+            model=model, prompt=effective_prompt,
             size=size, resolution=resolution,
             variant=variant, quality=quality,
             refs=all_refs, has_reference=has_reference, created_at=created_at,
-            original_prompt=original_prompt, resolved_prompt=resolved_prompt,
+            original_prompt=original_prompt or prompt, resolved_prompt=effective_prompt,
             ref_previews=[],
+            prompt_trace=prompt_trace,
             request_meta={
                 "chat_session_id": session_id,
                 "retry_from": job_id,
@@ -5566,7 +5582,19 @@ async def ai_image_retry(request: Request):
             },
         )
     )
-    return {"job_id": new_job_id, "status": "processing", "provider": PROVIDER_AUTO}
+    return {
+        "job_id": new_job_id,
+        "status": "processing",
+        "provider": PROVIDER_AUTO,
+        "resolved_prompt": effective_prompt,
+        "original_prompt": original_prompt or prompt,
+        "prompt_trace": prompt_trace,
+        "model": model,
+        "size": size,
+        "resolution": resolution,
+        "variant": variant,
+        "quality": quality,
+    }
 
 
 # ─── 灵感（inspiration） ──────────────────────────────────────────────────────

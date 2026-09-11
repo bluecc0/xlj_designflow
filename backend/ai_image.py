@@ -2124,6 +2124,7 @@ def get_smart_route_candidates(
     resolution: str = "",
     size: str = "1024x1024",
     variant: str = "flare",
+    quality: str = "",
     *,
     filter_frozen: bool = True,
     now: float | None = None,
@@ -2133,6 +2134,7 @@ def get_smart_route_candidates(
     variant_name = (variant or "flare").strip().lower()
     if variant_name not in {"flare", "sunburst"}:
         variant_name = "flare"
+    quality_clean = (quality or "").strip().lower()
     custom_rules = _get_custom_rules()
 
     # 显式 resolution 优先；仅当未传时才从 size 像素串推断（_normalize_size 在命中 _SIZE_MAP 时会忽略 resolution）
@@ -2146,7 +2148,10 @@ def get_smart_route_candidates(
         preferred_order = custom_rules[model_name]
     elif model_name == "gpt-image-2.5" or model_name in _APIMART_GPT_IMAGE_25_MODELS:
         effective_variant = "sunburst" if (variant_name == "sunburst" or model_name == "gpt-image-2.5-sunburst") else "flare"
-        if res_upper == "1K":
+        if quality_clean in ("high", "xhigh", "max"):
+            # Sub2API / Tuzi 等非官方渠道无高/最高画质档位，必须定向路由至 APIMart
+            preferred_order = [PROVIDER_APIMART]
+        elif res_upper == "1K":
             if effective_variant == "flare":
                 preferred_order = [PROVIDER_SUB2API, PROVIDER_TUZI, PROVIDER_APIMART]
             else:
@@ -2235,9 +2240,15 @@ async def smart_generate_image_async(
     前端只有两个失败出口：明确的上游安全审核拦截，或全部线路完成两轮后仍失败。
     是否已提交上游由各 provider 的 on_accepted 明确信号决定；已接受的同一线路不重复提交。
     """
-    candidates = get_smart_route_candidates(model, resolution=resolution, size=size, variant=variant)
-    logger.info("[smart-routing] Candidate providers for model=%s variant=%s res=%s size=%s: %s",
-                model, variant, resolution, size, candidates)
+    candidates = get_smart_route_candidates(
+        model,
+        resolution=resolution,
+        size=size,
+        variant=variant,
+        quality=quality,
+    )
+    logger.info("[smart-routing] Candidate providers for model=%s variant=%s res=%s size=%s quality=%s: %s",
+                model, variant, resolution, size, quality, candidates)
     if not candidates:
         raise AllProvidersFailedError(public_generation_error())
 

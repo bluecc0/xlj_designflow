@@ -701,8 +701,13 @@ def _raise_bfl_http_error(
 ) -> None:
     payload = payload if payload is not None else _json_payload(response)
     detail = _bfl_error_detail(payload)
+    detail_lower = detail.lower()
+    if response.status_code == 422 and ("api key" in detail_lower or "api_key" in detail_lower or "unauthorized" in detail_lower):
+        public_msg = "扩图服务鉴权失败（API Key 格式无效），请检查 BFL_API_KEY 配置"
+    else:
+        public_msg = public_error_for_status(response.status_code)
     raise BflOutpaintingError(
-        public_error_for_status(response.status_code),
+        public_msg,
         diagnostic=f"HTTP {response.status_code} {detail}".strip(),
         http_status=response.status_code,
     )
