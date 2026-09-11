@@ -2768,7 +2768,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
     : null;
   const qualityMap = { auto: '自动', medium: '中等', xhigh: '高', max: '最高' };
-  const variantMap = { flare: '更快', sunburst: '更好' };
+  const variantMap = { flare: '快速', sunburst: '优质' };
   const qualityTag = (activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto') ? (' · ' + (qualityMap[aiQualityTier] || aiQualityTier)) : '';
   const variantTag = (activeAiModel === 'gpt-image-2.5') ? (' · ' + (variantMap[aiVariant] || aiVariant)) : '';
   const modeParamLabel = activeMode === 'ai-image'
@@ -3231,7 +3231,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
                   transition: 'opacity 0.15s ease',
                 }
               },
-                '更快对应 Flare 模型，更好对应 Sunburst 模型',
+                '快速对应更快（Flare），优质对应更好（Sunburst）',
                 React.createElement('div', {
                   style: {
                     position: 'absolute',
@@ -3256,7 +3256,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
                   background: 'var(--panel)',
                 }
               },
-                [['flare', '更快', '对应 Flare 模型，生成速度更快'], ['sunburst', '更好', '对应 Sunburst 模型，生成效果更好']].map(function(item, idx) {
+                [['flare', '快速', '快速对应更快（Flare 模型）'], ['sunburst', '优质', '优质对应更好（Sunburst 模型）']].map(function(item, idx) {
                   const active = aiVariant === item[0];
                   return React.createElement('button', {
                     key: item[0],

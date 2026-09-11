@@ -7156,8 +7156,8 @@ const Composer = ({
     max: '最高'
   };
   const variantMap = {
-    flare: '更快',
-    sunburst: '更好'
+    flare: '快速',
+    sunburst: '优质'
   };
   const qualityTag = activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto' ? ' · ' + (qualityMap[aiQualityTier] || aiQualityTier) : '';
   const variantTag = activeAiModel === 'gpt-image-2.5' ? ' · ' + (variantMap[aiVariant] || aiVariant) : '';
@@ -7652,7 +7652,7 @@ const Composer = ({
           pointerEvents: 'none',
           transition: 'opacity 0.15s ease'
         }
-      }, '更快对应 Flare 模型，更好对应 Sunburst 模型', React.createElement('div', {
+      }, '快速对应更快（Flare），优质对应更好（Sunburst）', React.createElement('div', {
         style: {
           position: 'absolute',
           top: '100%',
@@ -7673,7 +7673,7 @@ const Composer = ({
           overflow: 'hidden',
           background: 'var(--panel)'
         }
-      }, [['flare', '更快', '对应 Flare 模型，生成速度更快'], ['sunburst', '更好', '对应 Sunburst 模型，生成效果更好']].map(function (item, idx) {
+      }, [['flare', '快速', '快速对应更快（Flare 模型）'], ['sunburst', '优质', '优质对应更好（Sunburst 模型）']].map(function (item, idx) {
         const active = aiVariant === item[0];
         return React.createElement('button', {
           key: item[0],
