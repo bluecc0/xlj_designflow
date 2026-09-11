@@ -4715,6 +4715,7 @@ async def _run_ai_image_background(
     batch_index: int = 0,
     batch_count: int = 1,
     variant: str = "flare",
+    quality: str = "auto",
 ):
     """后台异步生图：轮询进度 → 更新 DB → 下载结果 → 写聊天记录"""
     stage = "init"
@@ -4790,7 +4791,7 @@ async def _run_ai_image_background(
                 model=model, prompt=prompt,
                 images=refs if refs else None,
                 size=size, resolution=resolution, user_id=user_id,
-                variant=variant,
+                variant=variant, quality=quality,
                 on_progress=on_progress, on_attempt=on_attempt, on_accepted=on_accepted,
             )
         elif provider == PROVIDER_SUB2API:
@@ -4798,14 +4799,14 @@ async def _run_ai_image_background(
                 model=model, prompt=prompt,
                 images=refs if refs else None,
                 size=size, resolution=resolution, user_id=user_id,
-                variant=variant,
+                variant=variant, quality=quality,
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_SUB2API, tid),
             )
         elif provider == PROVIDER_TUZI:
             result = await generate_tuzi_async(
                 model=model, prompt=prompt, images=refs if refs else None,
                 size=size, resolution=resolution, user_id=user_id,
-                variant=variant,
+                variant=variant, quality=quality,
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_TUZI, tid),
             )
         elif provider == PROVIDER_ADOBE2API:
@@ -4819,14 +4820,14 @@ async def _run_ai_image_background(
             result = await generate_image_with_reference_async(
                 model=model, prompt=prompt, images=refs,
                 size=size, resolution=resolution, user_id=user_id,
-                variant=variant,
+                variant=variant, quality=quality,
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_APIMART, tid),
             )
         else:
             result = await generate_image_async(
                 model=model, prompt=prompt,
                 size=size, resolution=resolution, user_id=user_id,
-                variant=variant,
+                variant=variant, quality=quality,
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_APIMART, tid),
             )
         actual_provider = str(result.get("provider") or provider)
@@ -4866,7 +4867,7 @@ async def _run_ai_image_background(
                 detail=f"job={job_id[:8]} model={model} size={size} result=done{cost_str}{time_str}{usage_str} image={result.get('url', '?')[:60]}",
                 payload=json.dumps({
                     "job_id": job_id, "model": model, "size": size, "result": "done",
-                    "variant": variant,
+                    "variant": variant, "quality": quality,
                     "image_url": result.get("url", ""), "cost": result.get("cost"), "usage": usage,
                     "provider": actual_provider, "provider_switched": provider_switched,
                     "upstream_task_id": upstream_task_id,
@@ -4882,7 +4883,7 @@ async def _run_ai_image_background(
                 meta={
                     "job_id": job_id,
                     "model": model, "prompt": prompt,
-                    "variant": variant,
+                    "variant": variant, "quality": quality,
                     "resolvedPrompt": resolved_prompt or prompt,
                     "promptTrace": prompt_trace,
                     "provider": actual_provider,
@@ -4941,7 +4942,7 @@ async def _run_ai_image_background(
             detail=f"job={job_id[:8]} model={model} size={size} result=cancelled stage={stage}",
             payload=json.dumps({
                 "job_id": job_id, "model": model, "size": size, "result": "cancelled",
-                "variant": variant,
+                "variant": variant, "quality": quality,
                 "error": error_msg, "stage": stage, "provider": cancel_provider,
                 "upstream_task_id": upstream_task_id,
             }, ensure_ascii=False),
@@ -5629,6 +5630,7 @@ def ai_image_status(request: Request, job_id: str):
         "task_id": job.get("task_id"),
         "model": job.get("model"),
         "variant": request_meta.get("variant") or "flare",
+        "quality": request_meta.get("quality") or "auto",
         "provider": job.get("provider"),
         "error": error_text or None,
         "providerSwitched": bool(job.get("provider_switched")),
@@ -5664,6 +5666,9 @@ async def ai_image_retry(request: Request):
     variant = str(request_meta.get("variant") or "flare").strip().lower()
     if variant not in {"flare", "sunburst"}:
         variant = "flare"
+    quality = str(request_meta.get("quality") or "auto").strip().lower()
+    if quality not in {"auto", "low", "medium", "high", "xhigh", "max"}:
+        quality = "auto"
 
     # 1. 从磁盘加载用户上传的参考图
     user_refs = load_user_refs(user["id"], job_id)
@@ -5700,6 +5705,7 @@ async def ai_image_retry(request: Request):
             "chat_session_id": session_id,
             "retry_from": job_id,
             "variant": variant,
+            "quality": quality,
             "manual_reference_count": len(user_refs),
             "context_reference_count": len(context_ref_bytes),
             "reference_names": [name for _content, name in all_refs],
@@ -5720,7 +5726,7 @@ async def ai_image_retry(request: Request):
             provider=PROVIDER_AUTO,
             model=model, prompt=prompt,
             size=size, resolution=resolution,
-            variant=variant,
+            variant=variant, quality=quality,
             refs=all_refs, has_reference=has_reference, created_at=created_at,
             original_prompt=original_prompt, resolved_prompt=resolved_prompt,
             ref_previews=[],
@@ -5728,6 +5734,7 @@ async def ai_image_retry(request: Request):
                 "chat_session_id": session_id,
                 "retry_from": job_id,
                 "variant": variant,
+                "quality": quality,
                 "manual_reference_count": len(user_refs),
                 "context_reference_count": len(context_ref_bytes),
                 "reference_names": [name for _content, name in all_refs],
@@ -6370,6 +6377,7 @@ async def ai_image_endpoint(
     size: str = Form("1024x1024"),
     resolution: str = Form(""),
     variant: str = Form("flare"),
+    quality: str = Form("auto"),
     skill: str = Form(""),
     planned_prompt: str = Form(""),
     prompt_trace: str = Form(""),
@@ -6395,10 +6403,11 @@ async def ai_image_endpoint(
     )
     user_early = getattr(request.state, "user", None) or {}
     logger.info(
-        "ai_image_endpoint_enter client=%s model=%s variant=%s provider=%s size=%s batch=%s refs=%s user=%s",
+        "ai_image_endpoint_enter client=%s model=%s variant=%s quality=%s provider=%s size=%s batch=%s refs=%s user=%s",
         client_req,
         model,
         variant,
+        quality,
         provider or "-",
         size,
         batch_count,
@@ -6409,6 +6418,9 @@ async def ai_image_endpoint(
     variant = (variant or "flare").strip().lower()
     if variant not in {"flare", "sunburst"}:
         variant = "flare"
+    quality = (quality or "auto").strip().lower()
+    if quality not in {"auto", "low", "medium", "high", "xhigh", "max"}:
+        quality = "auto"
     original_prompt = prompt.strip()
     ref_previews_list = []
     try:
@@ -6453,7 +6465,7 @@ async def ai_image_endpoint(
         role="user",
         type="user_text",
         text=original_prompt,
-        meta={"model": resolved, "size": size, "resolution": resolution, "variant": variant, "refPreviews": ref_previews_list, "batchCount": batch_count, "skill": active_skill_name},
+        meta={"model": resolved, "size": size, "resolution": resolution, "variant": variant, "quality": quality, "refPreviews": ref_previews_list, "batchCount": batch_count, "skill": active_skill_name},
         created_at=created_at,
     )
     try:
@@ -6530,6 +6542,7 @@ async def ai_image_endpoint(
                 "chat_session_id": session_id,
                 "skill": active_skill_name,
                 "variant": variant,
+                "quality": quality,
                 "batch_id": batch_id,
                 "batch_index": _idx,
                 "batch_count": batch_count,
@@ -6562,9 +6575,9 @@ async def ai_image_endpoint(
             log_operation(
                 user_id=user["id"], username=user["username"],
                 action="ai_image",
-                detail=f"job={jid[:8]} client={client_req} model={resolved} variant={variant} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(all_refs_batch)} batch={batch_count}",
+                detail=f"job={jid[:8]} client={client_req} model={resolved} variant={variant} quality={quality} size={size} prompt={original_prompt[:50]}{'...' if len(original_prompt) > 50 else ''} refs={len(all_refs_batch)} batch={batch_count}",
                 payload=json.dumps({
-                    "job_id": jid, "client_request_id": client_req, "model": resolved, "variant": variant, "size": size,
+                    "job_id": jid, "client_request_id": client_req, "model": resolved, "variant": variant, "quality": quality, "size": size,
                     "prompt": original_prompt[:200], "refs": len(all_refs_batch),
                     "provider": resolved_provider, "batch_count": batch_count, "skill": active_skill_name,
                 }, ensure_ascii=False),
@@ -6576,7 +6589,7 @@ async def ai_image_endpoint(
                     provider=resolved_provider,
                     model=resolved, prompt=enriched_prompt,
                     size=size, resolution=resolution,
-                    variant=variant,
+                    variant=variant, quality=quality,
                     refs=all_refs_batch, has_reference=has_reference, created_at=created_at,
                     original_prompt=original_prompt, resolved_prompt=enriched_prompt,
                     prompt_trace=json.dumps(prompt_trace_payload, ensure_ascii=False) if prompt_trace_payload else prompt_trace_text,

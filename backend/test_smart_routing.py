@@ -495,6 +495,78 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["json"]["resolution"], "1k")
         self.assertEqual(captured["json"]["quality"], "high")
 
+    async def test_apimart_gpt_image_25_explicit_quality_options(self) -> None:
+        captured = {}
+
+        class FakeResponse:
+            is_success = True
+            status_code = 200
+            text = '{"code":200,"data":[{"status":"submitted","task_id":"task-q"}]}'
+
+            def json(self):
+                return {"code": 200, "data": [{"status": "submitted", "task_id": "task-q"}]}
+
+        class FakeClient:
+            async def post(self, *args, **kwargs):
+                captured.update(kwargs)
+                return FakeResponse()
+
+        for q in ("auto", "medium", "xhigh", "max"):
+            await ai_image._submit_generation_task(
+                FakeClient(),
+                base_url="http://apimart",
+                headers={"Authorization": "Bearer test"},
+                model="gpt-image-2.5",
+                prompt="a cute cat",
+                size="auto",
+                resolution="1K",
+                variant="flare",
+                quality=q,
+            )
+            self.assertEqual(captured["json"]["quality"], q)
+
+    async def test_sub2api_omits_quality_parameter(self) -> None:
+        captured = {}
+
+        class FakeResponse:
+            is_success = True
+            status_code = 200
+            text = '{"data":[{"url":"http://sub2api/img.png"}]}'
+
+            def json(self):
+                return {"data": [{"url": "http://sub2api/img.png"}]}
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, *args, **kwargs):
+                captured.update(kwargs)
+                return FakeResponse()
+
+        with patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api/v1"), \
+             patch.object(ai_image.settings, "cliproxy_api_key", "sk-test"), \
+             patch("backend.ai_image.httpx.AsyncClient", FakeClient), \
+             patch("backend.ai_image._save_cliproxy_response_image", return_value=("/local.png", {})):
+            await ai_image.generate_sub2api_async(
+                model="gpt-image-2.5",
+                prompt="a prompt",
+                size="auto",
+                resolution="1K",
+                variant="flare",
+                quality="xhigh",
+            )
+
+        self.assertIn("json", captured)
+        self.assertNotIn("quality", captured["json"])
+        self.assertEqual(captured["json"]["model"], "gpt-image-2.5-flare")
+
     async def test_sub2api_http_500_failovers_silently(self) -> None:
         """POST 后明确 HTTP 500：用户无感切线，不抛 ambiguous。"""
         adobe_calls = 0

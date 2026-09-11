@@ -1843,6 +1843,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const [aiRatio, setAiRatio] = React.useState('auto');
   const [aiQuality, setAiQuality] = React.useState('1K');
   const [aiVariant, setAiVariant] = React.useState('flare');
+  const [aiQualityTier, setAiQualityTier] = React.useState('auto');
   const [aiProvider, setAiProvider] = React.useState('auto');
   const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [smartDistributeMode, setSmartDistributeMode] = React.useState('full');
@@ -2345,6 +2346,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       size: aiImageSize,
       resolution: aiQuality,
       variant: aiVariant,
+      quality: aiQualityTier,
       provider: aiProvider,
       workflow: selectedWorkflow,
       lockedCommand: lockedCommand,
@@ -2764,8 +2766,10 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const activeTaskIconSrc = activeMode === 'ai-image'
     ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
     : null;
+  const qualityMap = { auto: '自动', medium: '中等', xhigh: '高', max: '最高' };
+  const qualityTag = (activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto') ? (' · ' + (qualityMap[aiQualityTier] || aiQualityTier)) : '';
   const modeParamLabel = activeMode === 'ai-image'
-    ? (aiRatio + ' · ' + aiQuality + ' · ' + aiVariant)
+    ? (aiRatio + ' · ' + aiQuality + (activeAiModel === 'gpt-image-2.5' ? (' · ' + aiVariant + qualityTag) : ''))
     : activeMode === 'special_full'
       ? '线路 完整'
       : activeMode === 'special'
@@ -3151,40 +3155,86 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
               );
             })
           ),
-          activeAiModel === 'gpt-image-2.5' && React.createElement('div', { style: { marginTop: 12 } },
-            imageFieldLabel('类型'),
-            React.createElement('div', {
-              style: {
-                display: 'flex',
-                width: '100%',
-                alignItems: 'stretch',
-                border: '1px solid var(--line)',
-                borderRadius: 9,
-                overflow: 'hidden',
-                background: 'var(--panel)',
-              }
-            },
-              [['flare', 'Flare（更快）'], ['sunburst', 'Sunburst（更好）']].map(function(item, idx) {
-                const active = aiVariant === item[0];
-                return React.createElement('button', {
-                  key: item[0],
-                  type: 'button',
-                  onClick: function() { setAiVariant(item[0]); },
-                  style: {
-                    flex: 1,
-                    height: 30,
-                    padding: 0,
-                    border: 'none',
-                    borderLeft: idx === 0 ? 'none' : '1px solid var(--line)',
-                    background: active ? 'var(--ink)' : 'transparent',
-                    color: active ? 'var(--panel)' : 'var(--ink-2)',
-                    fontSize: 12,
-                    fontWeight: active ? 700 : 550,
-                    cursor: 'pointer',
-                    letterSpacing: '-0.01em',
-                  }
-                }, item[1]);
-              })
+          activeAiModel === 'gpt-image-2.5' && React.createElement('div', {
+            style: {
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: 16,
+              alignItems: 'start',
+              marginTop: 12,
+            }
+          },
+            React.createElement('div', null,
+              imageFieldLabel('类型'),
+              React.createElement('div', {
+                style: {
+                  display: 'flex',
+                  width: '100%',
+                  alignItems: 'stretch',
+                  border: '1px solid var(--line)',
+                  borderRadius: 9,
+                  overflow: 'hidden',
+                  background: 'var(--panel)',
+                }
+              },
+                [['flare', 'Flare'], ['sunburst', 'Sunburst']].map(function(item, idx) {
+                  const active = aiVariant === item[0];
+                  return React.createElement('button', {
+                    key: item[0],
+                    type: 'button',
+                    onClick: function() { setAiVariant(item[0]); },
+                    style: {
+                      flex: 1,
+                      height: 30,
+                      padding: 0,
+                      border: 'none',
+                      borderLeft: idx === 0 ? 'none' : '1px solid var(--line)',
+                      background: active ? 'var(--ink)' : 'transparent',
+                      color: active ? 'var(--panel)' : 'var(--ink-2)',
+                      fontSize: 12,
+                      fontWeight: active ? 700 : 550,
+                      cursor: 'pointer',
+                      letterSpacing: '-0.01em',
+                    }
+                  }, item[1]);
+                })
+              )
+            ),
+            React.createElement('div', null,
+              imageFieldLabel('质量'),
+              React.createElement('div', {
+                style: {
+                  display: 'flex',
+                  width: '100%',
+                  alignItems: 'stretch',
+                  border: '1px solid var(--line)',
+                  borderRadius: 9,
+                  overflow: 'hidden',
+                  background: 'var(--panel)',
+                }
+              },
+                [['auto', '自动'], ['medium', '中等'], ['xhigh', '高'], ['max', '最高']].map(function(item, idx) {
+                  const active = aiQualityTier === item[0];
+                  return React.createElement('button', {
+                    key: item[0],
+                    type: 'button',
+                    onClick: function() { setAiQualityTier(item[0]); },
+                    style: {
+                      flex: 1,
+                      height: 30,
+                      padding: 0,
+                      border: 'none',
+                      borderLeft: idx === 0 ? 'none' : '1px solid var(--line)',
+                      background: active ? 'var(--ink)' : 'transparent',
+                      color: active ? 'var(--panel)' : 'var(--ink-2)',
+                      fontSize: 12,
+                      fontWeight: active ? 700 : 550,
+                      cursor: 'pointer',
+                      letterSpacing: '-0.01em',
+                    }
+                  }, item[1]);
+                })
+              )
             )
           ),
           React.createElement('div', {
@@ -4186,7 +4236,14 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
       if (m && m.type === 'ai-image-generating' && m.model) {
-        return { model: m.model, size: m.size, resolution: m.resolution, variant: m.variant || 'flare', provider: m.provider };
+        return {
+          model: m.model,
+          size: m.size,
+          resolution: m.resolution,
+          variant: m.variant || 'flare',
+          quality: m.quality || 'auto',
+          provider: m.provider,
+        };
       }
     }
     return null;
@@ -4303,6 +4360,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     var lastSize = aiOptions.size || '1024x1024';
     var lastResolution = aiOptions.resolution || '1K';
     var variant = aiOptions.variant || 'flare';
+    var quality = aiOptions.quality || 'auto';
     var provider = aiOptions.provider || 'auto';
     var activeSkill = String(aiOptions.skill || '').trim();
     var plannedPrompt = String(aiOptions.plannedPrompt || '').trim();
@@ -4352,7 +4410,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       });
       setMessages(msgs => [...msgs, {
         who: 'ai', type: 'ai-image-generating',
-        model, provider, prompt, size: lastSize, resolution: lastResolution, variant: variant,
+        model, provider, prompt, size: lastSize, resolution: lastResolution, variant: variant, quality: quality,
         status: 'failed',
         failPhase: 'prepare',
         clientRequestId: prepClientId,
@@ -4371,7 +4429,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     slots.push(baseAt);
     setMessages(msgs => [...msgs, {
       who: 'ai', type: 'ai-image-generating',
-      model, provider, prompt, size: lastSize, resolution: lastResolution, variant: variant,
+      model, provider, prompt, size: lastSize, resolution: lastResolution, variant: variant, quality: quality,
       status: activeSkill ? 'skill-planning' : 'running', startedAt: baseAt, progress: 0,
       activeSkill: activeSkill,
       meta: batchCount > 1 ? 'Loom · ×' + batchCount : 'Loom',
@@ -4466,6 +4524,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         fd.append('size', aiOptions.size || '1024x1024');
         fd.append('resolution', aiOptions.resolution || '1K');
         fd.append('variant', aiOptions.variant || 'flare');
+        fd.append('quality', quality);
         if (activeSkill) fd.append('skill', activeSkill);
         if (plannedPrompt) fd.append('planned_prompt', plannedPrompt);
         if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
@@ -4703,6 +4762,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         fd.append('size', aiOptions.size || '1024x1024');
         fd.append('resolution', aiOptions.resolution || '1K');
         fd.append('variant', aiOptions.variant || 'flare');
+        fd.append('quality', quality);
         if (activeSkill) fd.append('skill', activeSkill);
         if (plannedPrompt) fd.append('planned_prompt', plannedPrompt);
         if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
@@ -4803,6 +4863,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                   status: m.status === 'skill-parsed' ? m.status : 'processing',
                   provider: patch.provider || m.provider,
                   variant: patch.variant || m.variant || 'flare',
+                  quality: patch.quality || m.quality || 'auto',
                   providerSwitched: patch.providerSwitched || m.providerSwitched,
                 });
               }));
@@ -4866,8 +4927,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
               if (terminal[jid]) return;
               terminal[jid] = t;
               patchImage(jid, t.status === 'done'
-                ? { status: 'done', url: t.url, previewUrl: t.previewUrl, progress: 100, provider: t.provider, variant: t.variant, providerSwitched: t.providerSwitched }
-                : { status: 'failed', error: t.error, progress: 100, provider: t.provider, variant: t.variant, providerSwitched: t.providerSwitched });
+                ? { status: 'done', url: t.url, previewUrl: t.previewUrl, progress: 100, provider: t.provider, variant: t.variant, quality: t.quality, providerSwitched: t.providerSwitched }
+                : { status: 'failed', error: t.error, progress: 100, provider: t.provider, variant: t.variant, quality: t.quality, providerSwitched: t.providerSwitched });
               finishIfAllTerminal();
             };
 
@@ -4896,13 +4957,13 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                   .then(function(sd) {
                     if (!sd) return;
                     if (sd.status === 'done' && sd.image_url) {
-                      markTerminal(jid, { status: 'done', url: sd.image_url, previewUrl: sd.preview_url || sd.image_url, provider: sd.provider, variant: sd.variant, providerSwitched: sd.providerSwitched });
+                      markTerminal(jid, { status: 'done', url: sd.image_url, previewUrl: sd.preview_url || sd.image_url, provider: sd.provider, variant: sd.variant, quality: sd.quality, providerSwitched: sd.providerSwitched });
                     } else if (sd.status === 'done' && !sd.image_url) {
                       markTerminal(jid, { status: 'failed', error: formatAiImageError('任务标记完成但未返回图片地址', jid), provider: sd.provider, providerSwitched: sd.providerSwitched });
                     } else if (sd.status === 'failed') {
-                      markTerminal(jid, { status: 'failed', error: formatAiImageError(sd.error || '生图失败', jid), provider: sd.provider, variant: sd.variant, providerSwitched: sd.providerSwitched });
+                      markTerminal(jid, { status: 'failed', error: formatAiImageError(sd.error || '生图失败', jid), provider: sd.provider, variant: sd.variant, quality: sd.quality, providerSwitched: sd.providerSwitched });
                     } else {
-                      patchImage(jid, { progress: sd.progress || 0, provider: sd.provider, variant: sd.variant, providerSwitched: sd.providerSwitched });
+                      patchImage(jid, { progress: sd.progress || 0, provider: sd.provider, variant: sd.variant, quality: sd.quality, providerSwitched: sd.providerSwitched });
                     }
                   })
                   .catch(function(pollErr) {
@@ -5371,6 +5432,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         provider: 'auto',
         size: 'auto',
         resolution: aiOptions.resolution || '1K',
+        quality: aiOptions.quality || 'auto',
         batchCount: 1,
         skill: activeSkill,
       });
@@ -5387,7 +5449,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const freshPrompt = rest || '重新生成';
       const lastOpts = getLastAiImageOptions();
       const model = aiCmd ? aiCmd.model : (lastOpts?.model || 'gpt-image-2.5');
-      const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, variant: lastOpts?.variant || aiOptions.variant || 'flare', provider: aiOptions.provider };
+      const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, variant: lastOpts?.variant || aiOptions.variant || 'flare', quality: lastOpts?.quality || aiOptions.quality || 'auto', provider: aiOptions.provider };
       setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? rawPrompt : text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       await runAiImageGeneration(model, freshPrompt, freshPrompt, refImages, opts);
       return;
@@ -5422,6 +5484,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         size: lastOpts?.size || aiOptions.size,
         resolution: lastOpts?.resolution || aiOptions.resolution,
         variant: lastOpts?.variant || aiOptions.variant || 'flare',
+        quality: lastOpts?.quality || aiOptions.quality || 'auto',
         provider: aiOptions.provider,
       };
       setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
