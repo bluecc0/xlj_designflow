@@ -326,12 +326,54 @@ def load_user_refs(user_id: str, job_id: str) -> list[tuple[bytes, str]]:
     return refs
 
 
+def touch_user_refs(user_id: str, job_id: str) -> None:
+    """更新参考图目录的修改时间，延长保留期限。"""
+    try:
+        ref_dir = _ensure_user_output_dir(user_id) / "refs" / job_id
+        if ref_dir.exists():
+            ref_dir.touch()
+            for p in ref_dir.iterdir():
+                if p.is_file():
+                    p.touch()
+    except Exception:
+        pass
+
+
 def cleanup_user_refs(user_id: str, job_id: str) -> None:
     """删除用户参考图临时目录。"""
     import shutil
     ref_dir = _ensure_user_output_dir(user_id) / "refs" / job_id
     if ref_dir.exists():
-        shutil.rmtree(ref_dir)
+        shutil.rmtree(ref_dir, ignore_errors=True)
+
+
+def cleanup_expired_user_refs(max_age_days: int = 7) -> int:
+    """清理超过保留期限（默认 7 天）的参考图目录，返回清理的目录数量。"""
+    import shutil
+    cutoff = time.time() - (max(1, int(max_age_days)) * 86400)
+    cleaned = 0
+    try:
+        if not _OUTPUT_DIR.exists():
+            return 0
+        for user_dir in _OUTPUT_DIR.iterdir():
+            if not user_dir.is_dir():
+                continue
+            refs_root = user_dir / "refs"
+            if not refs_root.is_dir():
+                continue
+            for job_ref_dir in list(refs_root.iterdir()):
+                if not job_ref_dir.is_dir():
+                    continue
+                try:
+                    stat = job_ref_dir.stat()
+                    if stat.st_mtime < cutoff:
+                        shutil.rmtree(job_ref_dir, ignore_errors=True)
+                        cleaned += 1
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning("cleanup_expired_user_refs encountered error: %s", e)
+    return cleaned
 
 
 def _model_credentials(model: str) -> tuple[str, str]:

@@ -9906,7 +9906,7 @@ const Chat = ({
     setIsLoading(true);
 
     // 1. 如果有历史 jobId，优先调用后端智能重试（可自动继承磁盘参考图及上下文隐藏参考图，并使用 resolvedPrompt）
-    if (jobId && window.API && window.API.retryAiImage) {
+    if (jobId) {
       const slotAt = Date.now();
       const clientRequestId = 'retry-' + slotAt + '-' + Math.random().toString(36).slice(2, 8);
       const apiBase = window.API_BASE || '';
@@ -9929,6 +9929,9 @@ const Chat = ({
         clientRequestId: clientRequestId
       }]);
       try {
+        if (!window.API || !window.API.retryAiImage) {
+          throw new Error('重试接口不可用，请稍后再试');
+        }
         const retryRes = await window.API.retryAiImage(jobId, currentAiChatId);
         const newJobId = retryRes.job_id;
         if (!newJobId) throw new Error(retryRes.detail || '重试任务创建失败');
@@ -10022,12 +10025,21 @@ const Chat = ({
         }, 2000);
         return;
       } catch (retryErr) {
-        console.warn('retryAiImage failed, falling back to runAiImageGeneration', retryErr);
-        setMessages(msgs => msgs.filter(m => !(m.type === 'ai-image-generating' && m.startedAt === slotAt)));
+        const retryMessage = retryErr && retryErr.message ? retryErr.message : '重试任务创建失败，请稍后再试';
+        console.error('retryAiImage failed', retryErr);
+        setIsLoading(false);
+        setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
+          status: 'failed',
+          error: retryMessage
+        }) : m));
+        // 已有历史 jobId 的重试请求失败时不得降级为无参考图的新任务，
+        // 避免生成错误内容或在请求状态不明确时重复计费。
+        return;
       }
     }
 
-    // 2. 兜底直接调用 runAiImageGeneration，明确将集成后的 Prompt 作为 plannedPrompt 传入，跳过二次推演改写
+    // 2. 无历史 jobId 时才直接调用 runAiImageGeneration，明确将集成后的 Prompt
+    // 作为 plannedPrompt 传入，跳过二次推演改写。
     try {
       await runAiImageGeneration(model, effectivePrompt, rawPrompt, [], {
         size: size,

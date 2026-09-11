@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
+import tempfile
+import time
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -79,10 +84,6 @@ class ReferenceUploadLimitTest(unittest.IsolatedAsyncioTestCase):
 
 class PersistAndLoadTaskReferencesTest(unittest.TestCase):
     def test_save_and_load_refs_exact_order(self) -> None:
-        import tempfile
-        import shutil
-        from pathlib import Path
-
         test_dir = Path(tempfile.mkdtemp())
         try:
             with unittest.mock.patch("backend.ai_image._ensure_user_output_dir", return_value=test_dir):
@@ -104,6 +105,28 @@ class PersistAndLoadTaskReferencesTest(unittest.TestCase):
                 self.assertTrue(loaded[2][1].startswith("ref_02"))
         finally:
             shutil.rmtree(test_dir, ignore_errors=True)
+
+    def test_cleanup_expired_refs_keeps_recent_and_removes_old(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        try:
+            old_dir = root / "user-a" / "refs" / "old-job"
+            recent_dir = root / "user-a" / "refs" / "recent-job"
+            old_dir.mkdir(parents=True)
+            recent_dir.mkdir(parents=True)
+            (old_dir / "ref_00.png").write_bytes(b"old")
+            (recent_dir / "ref_00.png").write_bytes(b"recent")
+            old_timestamp = time.time() - (8 * 86400)
+            for path in (old_dir, old_dir / "ref_00.png"):
+                os.utime(path, (old_timestamp, old_timestamp))
+
+            with unittest.mock.patch.object(ai_image, "_OUTPUT_DIR", root):
+                cleaned = ai_image.cleanup_expired_user_refs(max_age_days=7)
+
+            self.assertEqual(cleaned, 1)
+            self.assertFalse(old_dir.exists())
+            self.assertTrue(recent_dir.exists())
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
 
 
 if __name__ == "__main__":
