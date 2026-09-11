@@ -11,15 +11,15 @@ interface Props {
   onContextMenu?: (e: React.MouseEvent) => void
 }
 
-const FRAME_RESIZE_HANDLES: { pos: ResizeHandle; cursor: string; style: React.CSSProperties }[] = [
-  { pos: 'nw', cursor: 'nwse-resize', style: { top: -5, left: -5 } },
-  { pos: 'n', cursor: 'ns-resize', style: { top: -5, left: '50%', marginLeft: -5 } },
-  { pos: 'ne', cursor: 'nesw-resize', style: { top: -5, right: -5 } },
-  { pos: 'e', cursor: 'ew-resize', style: { top: '50%', right: -5, marginTop: -5 } },
-  { pos: 'se', cursor: 'nwse-resize', style: { bottom: -5, right: -5 } },
-  { pos: 's', cursor: 'ns-resize', style: { bottom: -5, left: '50%', marginLeft: -5 } },
-  { pos: 'sw', cursor: 'nesw-resize', style: { bottom: -5, left: -5 } },
-  { pos: 'w', cursor: 'ew-resize', style: { top: '50%', left: -5, marginTop: -5 } },
+const FRAME_RESIZE_HANDLES: { pos: ResizeHandle; cursor: string; x: string; y: string }[] = [
+  { pos: 'nw', cursor: 'nwse-resize', x: '0%', y: '0%' },
+  { pos: 'n', cursor: 'ns-resize', x: '50%', y: '0%' },
+  { pos: 'ne', cursor: 'nesw-resize', x: '100%', y: '0%' },
+  { pos: 'e', cursor: 'ew-resize', x: '100%', y: '50%' },
+  { pos: 'se', cursor: 'nwse-resize', x: '100%', y: '100%' },
+  { pos: 's', cursor: 'ns-resize', x: '50%', y: '100%' },
+  { pos: 'sw', cursor: 'nesw-resize', x: '0%', y: '100%' },
+  { pos: 'w', cursor: 'ew-resize', x: '0%', y: '50%' },
 ]
 
 export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props) {
@@ -208,35 +208,39 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
         height: frame.height,
         backgroundColor: frame.background || '#ffffff',
         boxShadow: isSelected
-          ? '0 0 0 1.5px #181b24, 0 16px 40px -8px rgba(0, 0, 0, 0.12)'
-          : '0 4px 24px -2px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.05)',
+          ? `0 0 0 ${1.5 / zoom}px #181b24, 0 16px 40px -8px rgba(0, 0, 0, 0.12)`
+          : `0 4px 24px -2px rgba(0, 0, 0, 0.06), 0 0 0 ${1 / zoom}px rgba(0, 0, 0, 0.08)`,
         borderRadius: 4,
         userSelect: 'none',
         pointerEvents: 'auto',
       }}
     >
-      {/* 顶部画板标题栏 */}
+      {/* 顶部画板标题栏：抗锯齿保持矢量清晰度 */}
       <div
         onMouseDown={handleHeaderMouseDown}
         style={{
           position: 'absolute',
-          top: -30,
+          bottom: '100%',
           left: 0,
-          height: 26,
+          marginBottom: 6 / zoom,
+          height: 24,
           display: 'flex',
           alignItems: 'center',
           gap: 6,
           padding: '2px 8px',
           borderRadius: 4,
-          backgroundColor: isSelected ? '#181b24' : 'rgba(255,255,255,0.85)',
-          color: isSelected ? '#ffffff' : '#475569',
-          boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
-          backdropFilter: 'blur(4px)',
+          backgroundColor: isSelected ? '#181b24' : '#ffffff',
+          color: isSelected ? '#ffffff' : '#334155',
+          border: isSelected ? '1px solid #181b24' : '1px solid #cbd5e1',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
           fontSize: 11,
           fontWeight: 600,
           cursor: 'grab',
           whiteSpace: 'nowrap',
           zIndex: 10,
+          transform: `scale(${1 / zoom})`,
+          transformOrigin: 'bottom left',
+          WebkitFontSmoothing: 'antialiased',
         }}
       >
         <GripHorizontal size={12} opacity={0.6} />
@@ -317,16 +321,19 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
             onMouseDown={(e) => handleResizeHandleMouseDown(h.pos, e)}
             style={{
               position: 'absolute',
-              width: 10,
-              height: 10,
+              left: h.x,
+              top: h.y,
+              width: 8,
+              height: 8,
               backgroundColor: '#ffffff',
               border: '1.5px solid #181b24',
-              borderRadius: 2,
+              borderRadius: 1.5,
               boxShadow: '0 1px 3px rgba(0, 0, 0, 0.2)',
               cursor: h.cursor,
               zIndex: 20,
               boxSizing: 'border-box',
-              ...h.style,
+              transform: `translate(-50%, -50%) scale(${1 / zoom})`,
+              transformOrigin: 'center center',
             }}
           />
         ))}

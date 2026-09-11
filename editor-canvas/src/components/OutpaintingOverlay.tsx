@@ -101,7 +101,7 @@ export function OutpaintingOverlay({ image, margins, onMarginsChange, isSubmitti
       {/* 4 个角手柄 */}
       <div
         className="designflow-outpaint-corner-handle"
-        style={{ left: 0, top: 0, cursor: 'nwse-resize' }}
+        style={{ left: 0, top: 0, cursor: 'nwse-resize', transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
         onMouseDown={(e) => handleMouseDown(e, 'tl')}
         title="向外拖拽扩展左上角"
       >
@@ -109,7 +109,7 @@ export function OutpaintingOverlay({ image, margins, onMarginsChange, isSubmitti
       </div>
       <div
         className="designflow-outpaint-corner-handle"
-        style={{ left: expandedWidth, top: 0, cursor: 'nesw-resize' }}
+        style={{ left: expandedWidth, top: 0, cursor: 'nesw-resize', transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
         onMouseDown={(e) => handleMouseDown(e, 'tr')}
         title="向外拖拽扩展右上角"
       >
@@ -117,7 +117,7 @@ export function OutpaintingOverlay({ image, margins, onMarginsChange, isSubmitti
       </div>
       <div
         className="designflow-outpaint-corner-handle"
-        style={{ left: expandedWidth, top: expandedHeight, cursor: 'nwse-resize' }}
+        style={{ left: expandedWidth, top: expandedHeight, cursor: 'nwse-resize', transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
         onMouseDown={(e) => handleMouseDown(e, 'br')}
         title="向外拖拽扩展右下角"
       >
@@ -125,7 +125,7 @@ export function OutpaintingOverlay({ image, margins, onMarginsChange, isSubmitti
       </div>
       <div
         className="designflow-outpaint-corner-handle"
-        style={{ left: 0, top: expandedHeight, cursor: 'nesw-resize' }}
+        style={{ left: 0, top: expandedHeight, cursor: 'nesw-resize', transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
         onMouseDown={(e) => handleMouseDown(e, 'bl')}
         title="向外拖拽扩展左下角"
       >
@@ -138,7 +138,7 @@ export function OutpaintingOverlay({ image, margins, onMarginsChange, isSubmitti
         style={{
           left: '50%',
           top: 0,
-          transform: 'translate(-50%, -50%)',
+          transform: `translate(-50%, -50%) scale(${1 / zoom})`,
           width: 36,
           height: 16,
           cursor: 'ns-resize',
@@ -153,7 +153,7 @@ export function OutpaintingOverlay({ image, margins, onMarginsChange, isSubmitti
         style={{
           left: expandedWidth,
           top: '50%',
-          transform: 'translate(-50%, -50%)',
+          transform: `translate(-50%, -50%) scale(${1 / zoom})`,
           width: 16,
           height: 36,
           cursor: 'ew-resize',
@@ -168,7 +168,7 @@ export function OutpaintingOverlay({ image, margins, onMarginsChange, isSubmitti
         style={{
           left: '50%',
           top: expandedHeight,
-          transform: 'translate(-50%, -50%)',
+          transform: `translate(-50%, -50%) scale(${1 / zoom})`,
           width: 36,
           height: 16,
           cursor: 'ns-resize',
@@ -183,7 +183,7 @@ export function OutpaintingOverlay({ image, margins, onMarginsChange, isSubmitti
         style={{
           left: 0,
           top: '50%',
-          transform: 'translate(-50%, -50%)',
+          transform: `translate(-50%, -50%) scale(${1 / zoom})`,
           width: 16,
           height: 36,
           cursor: 'ew-resize',
@@ -198,7 +198,7 @@ export function OutpaintingOverlay({ image, margins, onMarginsChange, isSubmitti
       {margins.top > 0 && (
         <div
           className="designflow-outpaint-margin-badge"
-          style={{ left: '50%', top: margins.top / 2 }}
+          style={{ left: '50%', top: margins.top / 2, transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
         >
           +{margins.top}px
         </div>
@@ -206,7 +206,7 @@ export function OutpaintingOverlay({ image, margins, onMarginsChange, isSubmitti
       {margins.bottom > 0 && (
         <div
           className="designflow-outpaint-margin-badge"
-          style={{ left: '50%', top: margins.top + image.height + margins.bottom / 2 }}
+          style={{ left: '50%', top: margins.top + image.height + margins.bottom / 2, transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
         >
           +{margins.bottom}px
         </div>
@@ -214,7 +214,7 @@ export function OutpaintingOverlay({ image, margins, onMarginsChange, isSubmitti
       {margins.left > 0 && (
         <div
           className="designflow-outpaint-margin-badge"
-          style={{ left: margins.left / 2, top: '50%' }}
+          style={{ left: margins.left / 2, top: '50%', transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
         >
           +{margins.left}px
         </div>
@@ -222,14 +222,20 @@ export function OutpaintingOverlay({ image, margins, onMarginsChange, isSubmitti
       {margins.right > 0 && (
         <div
           className="designflow-outpaint-margin-badge"
-          style={{ left: margins.left + image.width + margins.right / 2, top: '50%' }}
+          style={{ left: margins.left + image.width + margins.right / 2, top: '50%', transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
         >
           +{margins.right}px
         </div>
       )}
 
       {/* 预计生成总尺寸徽标 */}
-      <div className="designflow-outpaint-size-badge">
+      <div
+        className="designflow-outpaint-size-badge"
+        style={{
+          transform: `translateX(-50%) scale(${1 / zoom})`,
+          bottom: -28 / zoom,
+        }}
+      >
         预计 {expandedWidth} × {expandedHeight} px
       </div>
     </div>

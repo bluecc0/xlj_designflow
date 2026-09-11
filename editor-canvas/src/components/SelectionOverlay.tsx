@@ -9,15 +9,15 @@ interface Props {
   onSnapLinesChange?: (lines: SnapLine[]) => void
 }
 
-const HANDLES: { pos: ResizeHandle; cursor: string; style: React.CSSProperties }[] = [
-  { pos: 'nw', cursor: 'nwse-resize', style: { top: -4, left: -4 } },
-  { pos: 'n', cursor: 'ns-resize', style: { top: -4, left: '50%', marginLeft: -4 } },
-  { pos: 'ne', cursor: 'nesw-resize', style: { top: -4, right: -4 } },
-  { pos: 'e', cursor: 'ew-resize', style: { top: '50%', right: -4, marginTop: -4 } },
-  { pos: 'se', cursor: 'nwse-resize', style: { bottom: -4, right: -4 } },
-  { pos: 's', cursor: 'ns-resize', style: { bottom: -4, left: '50%', marginLeft: -4 } },
-  { pos: 'sw', cursor: 'nesw-resize', style: { bottom: -4, left: -4 } },
-  { pos: 'w', cursor: 'ew-resize', style: { top: '50%', left: -4, marginTop: -4 } },
+const HANDLES: { pos: ResizeHandle; cursor: string; x: string; y: string }[] = [
+  { pos: 'nw', cursor: 'nwse-resize', x: '0%', y: '0%' },
+  { pos: 'n', cursor: 'ns-resize', x: '50%', y: '0%' },
+  { pos: 'ne', cursor: 'nesw-resize', x: '100%', y: '0%' },
+  { pos: 'e', cursor: 'ew-resize', x: '100%', y: '50%' },
+  { pos: 'se', cursor: 'nwse-resize', x: '100%', y: '100%' },
+  { pos: 's', cursor: 'ns-resize', x: '50%', y: '100%' },
+  { pos: 'sw', cursor: 'nesw-resize', x: '0%', y: '100%' },
+  { pos: 'w', cursor: 'ew-resize', x: '0%', y: '50%' },
 ]
 
 export function SelectionOverlay({ image, onSnapLinesChange }: Props) {
@@ -172,25 +172,27 @@ export function SelectionOverlay({ image, onSnapLinesChange }: Props) {
         zIndex: 50,
       }}
     >
-      {/* 选中外框（极简暗色，无蓝色） */}
+      {/* 选中外框（极简暗色，无蓝色，边框保持 1.5px 屏幕像素） */}
       <div
         onMouseDown={handleMoveMouseDown}
         style={{
           position: 'absolute',
-          inset: -1,
-          border: '1.5px solid #181b24',
+          inset: 0,
+          border: `${1.5 / zoom}px solid #181b24`,
           pointerEvents: 'auto',
           cursor: 'move',
         }}
       />
 
-      {/* 实时尺寸提示 */}
+      {/* 实时尺寸提示（保持 1x 矢量文本清晰度） */}
       <div
         style={{
           position: 'absolute',
-          bottom: -22,
+          top: '100%',
           left: '50%',
-          transform: 'translateX(-50%)',
+          marginTop: 6 / zoom,
+          transform: `translateX(-50%) scale(${1 / zoom})`,
+          transformOrigin: 'top center',
           backgroundColor: '#1e293b',
           color: '#ffffff',
           fontSize: 10,
@@ -199,27 +201,34 @@ export function SelectionOverlay({ image, onSnapLinesChange }: Props) {
           whiteSpace: 'nowrap',
           fontFamily: 'monospace',
           pointerEvents: 'none',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+          WebkitFontSmoothing: 'antialiased',
         }}
       >
         {Math.round(image.width)} × {Math.round(image.height)}
       </div>
 
-      {/* 8 个控制手柄 */}
-      {HANDLES.map(({ pos, cursor, style }) => (
+      {/* 8 个控制手柄（保持 8px 屏幕像素与清晰边框） */}
+      {HANDLES.map(({ pos, cursor, x, y }) => (
         <div
           key={pos}
           onMouseDown={(e) => handleResizeMouseDown(pos, e)}
           style={{
             position: 'absolute',
+            left: x,
+            top: y,
             width: 8,
             height: 8,
             backgroundColor: '#ffffff',
             border: '1.5px solid #181b24',
-            borderRadius: 1,
+            borderRadius: 1.5,
             pointerEvents: 'auto',
             cursor,
             zIndex: 60,
-            ...style,
+            boxSizing: 'border-box',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+            transform: `translate(-50%, -50%) scale(${1 / zoom})`,
+            transformOrigin: 'center center',
           }}
         />
       ))}

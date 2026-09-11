@@ -1,12 +1,16 @@
 import React, { memo } from 'react'
 import type { SnapLine } from '../utils/snapping'
+import { useViewportStore } from '../store/viewportStore'
 
 interface Props {
   lines: SnapLine[]
 }
 
 function SnapGuidesInner({ lines }: Props) {
+  const zoom = useViewportStore((s) => s.zoom)
   if (!lines || lines.length === 0) return null
+
+  const lineWidth = Math.max(0.5, 1 / zoom)
 
   return (
     <div
@@ -31,11 +35,10 @@ function SnapGuidesInner({ lines }: Props) {
                 position: 'absolute',
                 left: line.pos,
                 top,
-                width: 1,
+                width: lineWidth,
                 height,
                 backgroundColor: '#2563eb',
-                boxShadow: '0 0 2px rgba(37, 99, 235, 0.4)',
-                transform: 'translateX(-0.5px)',
+                transform: 'translateX(-50%)',
               }}
             />
           )
@@ -51,10 +54,9 @@ function SnapGuidesInner({ lines }: Props) {
               left,
               top: line.pos,
               width,
-              height: 1,
+              height: lineWidth,
               backgroundColor: '#2563eb',
-              boxShadow: '0 0 2px rgba(37, 99, 235, 0.4)',
-              transform: 'translateY(-0.5px)',
+              transform: 'translateY(-50%)',
             }}
           />
         )
