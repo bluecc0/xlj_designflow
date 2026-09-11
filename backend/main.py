@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import functools
+import html
 import json
 import logging
 import re
@@ -499,6 +500,22 @@ if _editor_beta_dist.exists():
         name="editor-beta",
     )
 
+_editor_canvas_dist = Path(__file__).parent.parent / "editor-canvas" / "dist"
+if not _editor_canvas_dist.exists():
+    _editor_canvas_dist = Path(__file__).parent.parent / "editor-lab-kun" / "dist"
+if _editor_canvas_dist.exists():
+    app.mount(
+        "/editor-canvas",
+        CacheAwareStaticFiles(directory=str(_editor_canvas_dist), html=True),
+        name="editor-canvas",
+    )
+    # 兼容旧路径
+    app.mount(
+        "/editor-kun",
+        CacheAwareStaticFiles(directory=str(_editor_canvas_dist), html=True),
+        name="editor-kun",
+    )
+
 # ─── 内存任务存储（PoC 阶段，后续换 Redis / DB）────────────────────────────────
 _jobs: dict[str, ComposeJob] = {}
 _jobs_lock = threading.Lock()
@@ -512,9 +529,12 @@ _AUTH_EXEMPT_PREFIXES = (
     "/health",
     "/product-library",
     "/products/reference-image",
+    "/products/mock-image",
     "/products/resolve-references",
     "/avatars",
     "/editor-beta",
+    "/editor-canvas",
+    "/editor-kun",
     "/ui",
     "/docs",
     "/redoc",
@@ -1957,6 +1977,19 @@ def _normalize_agent_images_for_api(images: list[dict]) -> list[dict]:
 def _normalize_editor_snapshot_assets(snapshot: dict | None) -> dict | None:
     if not isinstance(snapshot, dict):
         return snapshot
+
+    # 兼容新版无限画布格式
+    if isinstance(snapshot.get("images"), list):
+        for im in snapshot["images"]:
+            if isinstance(im, dict):
+                for key in ("url", "src"):
+                    val = im.get(key)
+                    if isinstance(val, str) and val.strip():
+                        normalized = _normalize_public_asset_url(val)
+                        if normalized and normalized != val:
+                            im[key] = normalized
+        return snapshot
+
     document = snapshot.get("document")
     store = snapshot.get("store")
     if not isinstance(store, dict) and isinstance(document, dict):
@@ -3451,19 +3484,6 @@ async def upload_product(file: UploadFile = File(...)):
     }
 
 
-@app.delete("/products/{filename}")
-def delete_product(filename: str):
-    """从图库中删除指定图片文件"""
-    # 防止路径穿越
-    if "/" in filename or "\\" in filename or ".." in filename:
-        raise HTTPException(400, "非法文件名")
-    path = settings.product_library_path / filename
-    if not path.exists():
-        raise HTTPException(404, "文件不存在")
-    path.unlink()
-    return {"deleted": filename}
-
-
 @app.get("/products/find")
 def find_product(name: str):
     """按名称搜索产品图片"""
@@ -3541,6 +3561,137 @@ def resolve_product_references(payload: dict):
     return {"refs": results}
 
 
+@app.get("/products/search-sku")
+def search_product_sku(sku: str):
+    """
+    查询货号在素材库中各类型子目录的匹配情况。
+    支持多个 SKU，以中英文逗号、换行或空格分割。
+    返回每个 SKU 的各类匹配资源，以及全局最优 URL。
+    """
+    raw_input = (sku or "").strip()
+    if not raw_input:
+        raise HTTPException(400, "SKU 不能为空")
+
+    # 分割多个 SKU（支持中英文逗号、换行、空格）
+    raw_skus = [s.strip() for s in re.split(r'[,，\s\n\r]+', raw_input) if s.strip()]
+    # 保留顺序去重
+    sku_list = list(dict.fromkeys(raw_skus))
+    if not sku_list:
+        raise HTTPException(400, "未解析到有效 SKU")
+
+    library = ProductLibrary(settings.product_library_path)
+    library_exists = settings.product_library_path.exists()
+
+    priority_types = [
+        ("white", "白底图", "White_Base"),
+        ("png", "透明背景图", "PNG"),
+        ("white2x", "一双鞋角度", "White_Basex2"),
+        ("shadow", "阴影图", "PNG_Shadow"),
+        ("model", "模特图", "Model_Images"),
+    ]
+
+    all_results = []
+    for clean_sku in sku_list:
+        found_assets = []
+        for atype, label, folder_name in priority_types:
+            folder = settings.IMAGE_TYPE_FOLDERS.get(atype, folder_name)
+            matched = library.find_in_folder(clean_sku, folder) if library_exists else None
+            if matched:
+                p = Path(matched)
+                found_assets.append({
+                    "asset_type": atype,
+                    "label": label,
+                    "folder": folder,
+                    "filename": p.name,
+                    "url": f"/products/reference-image?sku={quote(clean_sku)}&asset_type={quote(atype)}",
+                })
+
+        # 尝试根目录查找
+        if library_exists:
+            root_matched = library.find(clean_sku)
+            if root_matched:
+                p = Path(root_matched)
+                if not any(a["filename"] == p.name for a in found_assets):
+                    found_assets.append({
+                        "asset_type": "root",
+                        "label": "图库根目录",
+                        "folder": "",
+                        "filename": p.name,
+                        "url": f"/products/reference-image?sku={quote(clean_sku)}&asset_type=root",
+                    })
+
+        mock_url = f"/products/mock-image?sku={quote(clean_sku)}&asset_type=white"
+        all_results.append({
+            "sku": clean_sku,
+            "found": len(found_assets) > 0,
+            "assets": found_assets,
+            "best_url": found_assets[0]["url"] if found_assets else mock_url,
+            "mock_url": mock_url,
+        })
+
+    first = all_results[0] if all_results else {}
+    return {
+        "sku": first.get("sku", ""),
+        "found": any(r["found"] for r in all_results),
+        "assets": first.get("assets", []),
+        "best_url": first.get("best_url", ""),
+        "mock_url": first.get("mock_url", ""),
+        "library_exists": library_exists,
+        "library_path": str(settings.product_library_path),
+        "items": all_results,
+    }
+
+
+@app.get("/products/mock-image")
+def get_product_mock_image(sku: str = "DEMO", asset_type: str = "white"):
+    """
+    开发机未挂载真实素材库时，生成优雅的商品 SVG 占位图供测试导入画布。
+    """
+    clean_sku = (sku or "DEMO").strip()
+    type_names = {
+        "white": "白底图",
+        "png": "透明背景图",
+        "white2x": "一双鞋角度",
+        "shadow": "阴影图",
+        "model": "模特图",
+        "root": "图库原图",
+    }
+    type_label = type_names.get(asset_type.lower(), asset_type or "白底图")
+    escaped_sku = html.escape(clean_sku, quote=True)
+    escaped_type_label = html.escape(type_label, quote=True)
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#edf2f7"/>
+    </linearGradient>
+    <linearGradient id="badge" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#0f172a" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+  <rect width="800" height="800" fill="url(#bg)"/>
+  <rect x="40" y="40" width="720" height="720" rx="24" fill="#ffffff" filter="url(#shadow)" stroke="#e2e8f0" stroke-width="2"/>
+  <g transform="translate(400, 330)">
+    <!-- 示意鞋履/商品剪影 -->
+    <path d="M-160,80 C-170,40 -150,-10 -110,-50 C-70,-90 -20,-110 30,-100 C70,-90 120,-60 160,-20 C180,0 200,40 180,80 C150,110 -100,110 -160,80 Z" fill="#e2e8f0" opacity="0.8"/>
+    <path d="M-150,75 C-140,45 -120,-5 -80,-40 C-40,-75 0,-95 40,-85 C75,-75 115,-45 150,-10 C165,10 180,45 165,75 C140,95 -80,95 -150,75 Z" fill="#cbd5e1" opacity="0.6"/>
+    <!-- 装饰线 -->
+    <path d="M-120,40 Q10,-20 120,30" fill="none" stroke="#94a3b8" stroke-width="4" stroke-linecap="round" stroke-dasharray="6,6"/>
+  </g>
+  <!-- 货号与信息 -->
+  <rect x="220" y="470" width="360" height="46" rx="23" fill="url(#badge)"/>
+  <text x="400" y="500" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle">SKU: {escaped_sku}</text>
+  <text x="400" y="555" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="600" fill="#334155" text-anchor="middle">类型：{escaped_type_label}（开发模拟图）</text>
+  <text x="400" y="588" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" fill="#94a3b8" text-anchor="middle">尺寸：800 × 800 px · 连入真实素材库时自动载入高清原图</text>
+</svg>"""
+    return Response(content=svg, media_type="image/svg+xml")
+
+
 @app.get("/products/reference-image")
 def get_product_reference_image(request: Request, sku: str, asset_type: str = "white"):
     alias_map = {
@@ -3555,16 +3706,51 @@ def get_product_reference_image(request: Request, sku: str, asset_type: str = "w
         "white_basex2": "white2x",
         "whitebasex2": "white2x",
         "一双鞋角度": "white2x",
+        "png": "png",
+        "shadow": "shadow",
+        "model": "model",
     }
-    normalized_key = alias_map.get((asset_type or "").strip().casefold(), "") or "white"
+    clean_sku = (sku or "").strip()
+    clean_type = (asset_type or "").strip().casefold()
+    normalized_key = alias_map.get(clean_type, clean_type) or "white"
     folder = settings.IMAGE_TYPE_FOLDERS.get(normalized_key)
     library = ProductLibrary(settings.product_library_path)
-    matched_path = library.find_in_folder((sku or "").strip(), folder) if folder else None
+
+    matched_path = None
+    # 1. 尝试从指定文件夹查找
+    if folder:
+        matched_path = library.find_in_folder(clean_sku, folder)
+
+    # 2. 如果未指定具体类型或没找到，按常规优先级 fallback 查找
+    if not matched_path and normalized_key in ("white", "auto", "default"):
+        for fallback_key in ("White_Base", "PNG", "White_Basex2", "PNG_Shadow"):
+            matched_path = library.find_in_folder(clean_sku, fallback_key)
+            if matched_path:
+                break
+
+    # 3. 根目录查找
+    if not matched_path:
+        matched_path = library.find(clean_sku)
+
     if not matched_path:
         raise HTTPException(404, "素材图不存在")
+
     path = Path(matched_path)
     media_type = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
     return FileResponse(str(path), media_type=media_type, filename=path.name)
+
+
+@app.delete("/products/{filename}")
+def delete_product(filename: str):
+    """从图库中删除指定图片文件"""
+    # 防止路径穿越
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(400, "非法文件名")
+    path = settings.product_library_path / filename
+    if not path.exists():
+        raise HTTPException(404, "文件不存在")
+    path.unlink()
+    return {"deleted": filename}
 
 
 @app.get("/templates/{template_id}/thumbnail")
@@ -6034,8 +6220,36 @@ def editor_load_snapshot(request: Request):
 
 
 def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[str]:
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except Exception:
+            return []
     if not isinstance(snapshot, dict):
         return []
+
+    prefix = "/ai-images/"
+    foreign: list[str] = []
+
+    # 兼容新版无限画布格式 (version 2)
+    if isinstance(snapshot.get("images"), list):
+        for im in snapshot["images"]:
+            if not isinstance(im, dict):
+                continue
+            raw_url = str(im.get("url") or im.get("src") or "").strip()
+            if not raw_url:
+                continue
+            try:
+                path = urlsplit(raw_url).path if "://" in raw_url else raw_url.split("?", 1)[0]
+            except Exception:
+                path = raw_url
+            if not path.startswith(prefix):
+                continue
+            owner = unquote(path[len(prefix):].split("/", 1)[0])
+            if owner and owner != user_id:
+                foreign.append(raw_url)
+        return foreign
+
     store = snapshot.get("store")
     document = snapshot.get("document")
     if not isinstance(store, dict) and isinstance(document, dict):
@@ -6043,8 +6257,6 @@ def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[
     if not isinstance(store, dict):
         return []
 
-    prefix = "/ai-images/"
-    foreign: list[str] = []
     for record in store.values():
         if not isinstance(record, dict) or record.get("typeName") != "asset":
             continue

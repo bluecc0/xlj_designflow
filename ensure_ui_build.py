@@ -19,6 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 FRONTEND = ROOT / "frontend"
 TLDRAW = ROOT / "editor-lab-tldraw"
+EDITOR_CANVAS = ROOT / "editor-canvas"
 MTIME_EPS = 0.01
 
 
@@ -135,6 +136,63 @@ def tldraw_status() -> tuple[bool, str]:
     return False, "fresh"
 
 
+def editor_canvas_sources() -> list[Path]:
+    if not EDITOR_CANVAS.is_dir():
+        return []
+    files = walk_files(EDITOR_CANVAS / "src")
+    files.extend(walk_files(EDITOR_CANVAS / "public"))
+    for name in (
+        "package.json",
+        "package-lock.json",
+        "vite.config.ts",
+        "tsconfig.json",
+        "index.html",
+    ):
+        path = EDITOR_CANVAS / name
+        if path.is_file():
+            files.append(path)
+    return files
+
+
+def editor_canvas_status() -> tuple[bool, str]:
+    if not EDITOR_CANVAS.is_dir():
+        return False, "absent"
+    dist = EDITOR_CANVAS / "dist" / "index.html"
+    if not dist.is_file():
+        return True, "missing dist/index.html"
+    if newest_mtime(editor_canvas_sources()) > dist.stat().st_mtime + MTIME_EPS:
+        return True, "sources newer than dist"
+    return False, "fresh"
+
+
+def ensure_npm_canvas() -> None:
+    if not EDITOR_CANVAS.is_dir():
+        return
+    node_modules = EDITOR_CANVAS / "node_modules"
+    marker = node_modules / "zustand"
+    lock = EDITOR_CANVAS / "package-lock.json"
+    package = EDITOR_CANVAS / "package.json"
+    need_install = not marker.exists()
+    if not need_install and node_modules.is_dir():
+        baseline = node_modules.stat().st_mtime
+        for path in (lock, package):
+            if path.is_file() and path.stat().st_mtime > baseline + MTIME_EPS:
+                need_install = True
+                break
+    if need_install:
+        print("[UI] npm install editor-canvas")
+        run([resolve_cmd("npm"), "install"], EDITOR_CANVAS)
+
+
+def rebuild_editor_canvas() -> None:
+    if not EDITOR_CANVAS.is_dir():
+        return
+    if not shutil.which("node") and not shutil.which("node.exe"):
+        raise RuntimeError("Node.js is required to build editor-canvas")
+    ensure_npm_canvas()
+    run([resolve_cmd("npm"), "run", "build"], EDITOR_CANVAS)
+
+
 def ensure_npm() -> None:
     node_modules = TLDRAW / "node_modules"
     marker = node_modules / "tldraw"
@@ -212,6 +270,13 @@ def main() -> int:
             rebuild_tldraw()
         else:
             print("[UI] canvas up to date")
+
+        need_editor_canvas, editor_canvas_reason = editor_canvas_status()
+        if args.force or need_editor_canvas:
+            print(f"[UI] rebuild editor-canvas ({('forced' if args.force else editor_canvas_reason)})")
+            rebuild_editor_canvas()
+        elif EDITOR_CANVAS.is_dir():
+            print("[UI] editor-canvas up to date")
     except subprocess.CalledProcessError as exc:
         print(f"[UI] rebuild failed with exit {exc.returncode}")
         return exc.returncode or 1

@@ -77,6 +77,68 @@ const LiteLoginGate = ({ onLogin, loading, error, initialName }) => {
   );
 };
 
+const FlipStage = ({ inspirationOpen, childrenA, childrenB }) => {
+  const stageRef = React.useRef(null);
+  const panelARef = React.useRef(null);
+  const panelBRef = React.useRef(null);
+  const currentRef = React.useRef(inspirationOpen ? 'B' : 'A');
+  const isFirstMount = React.useRef(true);
+
+  React.useEffect(() => {
+    if (isFirstMount.current) {
+      isFirstMount.current = false;
+      return;
+    }
+    const target = inspirationOpen ? 'B' : 'A';
+    if (currentRef.current === target) return;
+
+    const forward = target === 'B';
+    const from = forward ? panelARef.current : panelBRef.current;
+    const to = forward ? panelBRef.current : panelARef.current;
+
+    const reduceMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduceMotion || !from || !to) {
+      if (from) from.className = 'designflow-panel';
+      if (to) to.className = 'designflow-panel active';
+      currentRef.current = target;
+      return;
+    }
+
+    if (stageRef.current) {
+      stageRef.current.style.setProperty('--dir', forward ? '1' : '-1');
+    }
+
+    to.className = 'designflow-panel active entering';
+    from.className = 'designflow-panel active leaving';
+
+    const onAnimEnd = (e) => {
+      if (e.target !== from) return;
+      from.removeEventListener('animationend', onAnimEnd);
+      from.className = 'designflow-panel';
+      to.className = 'designflow-panel active';
+      currentRef.current = target;
+    };
+    from.addEventListener('animationend', onAnimEnd);
+
+    return () => {
+      from.removeEventListener('animationend', onAnimEnd);
+    };
+  }, [inspirationOpen]);
+
+  return (
+    <div className="designflow-stage-wrap">
+      <div className="designflow-stage" ref={stageRef}>
+        <div ref={panelARef} className={`designflow-panel ${!inspirationOpen ? 'active' : ''}`}>
+          {childrenA}
+        </div>
+        <div ref={panelBRef} className={`designflow-panel ${inspirationOpen ? 'active' : ''}`}>
+          {childrenB}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const App = () => {
   const DEFAULT_TWEAKS = { chatState: 'returned', canvasState: 'candidates', theme: 'light' };
   const [tweaks, setTweaks] = React.useState(window.TWEAKS || DEFAULT_TWEAKS);
@@ -152,6 +214,7 @@ const App = () => {
       return '';
     }
   });
+  const [reauthOpen, setReauthOpen] = React.useState(false);
 
   const updateTweaks = (partial) => {
     const next = { ...tweaks, ...partial };
@@ -243,6 +306,9 @@ const App = () => {
       if (!d || typeof d !== 'object') return;
       if (d.type === '__activate_edit_mode') setTweaksVisible(true);
       if (d.type === '__deactivate_edit_mode') setTweaksVisible(false);
+      if (d.type === 'designflow:auth-required') {
+        window.dispatchEvent(new CustomEvent('designflow-auth-required'));
+      }
     };
     window.addEventListener('message', handler);
     try {
@@ -253,10 +319,9 @@ const App = () => {
 
   React.useEffect(() => {
     const handleAuthRequired = () => {
-      setCurrentUser(null);
-      setResultTemplate(null);
       setAuthLoading(false);
       setAuthError('登录状态已失效，请重新输入用户名和密码。');
+      setReauthOpen(true);
     };
     window.addEventListener('designflow-auth-required', handleAuthRequired);
     return () => window.removeEventListener('designflow-auth-required', handleAuthRequired);
@@ -310,21 +375,31 @@ const App = () => {
     setAuthError('');
     try {
       const user = await window.API.loginLite(username, password);
+      const isSameUser = currentUser && String(currentUser.id) === String(user.id);
       rememberUser(user);
-      setResultTemplate(null);
-      setEditorCommand(null);
+      setReauthOpen(false);
+      if (!isSameUser) {
+        setResultTemplate(null);
+        setEditorCommand(null);
+      }
+      setEditorCommand({
+        key: Date.now() + Math.random(),
+        type: 'auth-restored',
+        user,
+      });
     } catch (err) {
       setAuthError(err && err.message ? err.message : '进入失败，请重试');
     } finally {
       setAuthLoading(false);
     }
-  }, [rememberUser]);
+  }, [rememberUser, currentUser]);
 
   const handleSwitchUser = React.useCallback(async () => {
     try {
       await window.API.logout();
     } catch (e) {}
     setCurrentUser(null);
+    setReauthOpen(false);
     setResultTemplate(null);
     setEditorCommand(null);
     setAuthError('');
@@ -353,12 +428,12 @@ const App = () => {
       height: '100vh', display: 'flex', flexDirection: 'column',
       overflow: 'hidden',
     }}>
-      {!currentUser && (
+      {(!currentUser || reauthOpen) && (
         <LiteLoginGate
           onLogin={handleLogin}
           loading={authLoading}
           error={authError}
-          initialName={lastUsername}
+          initialName={lastUsername || (currentUser ? currentUser.username : '')}
         />
       )}
       {currentUser && showAdmin && (
@@ -426,13 +501,25 @@ const App = () => {
                 <span style={{ transform: 'translateX(-1px)', opacity: templateRevealHovered ? 0.9 : 0.55 }}>{templatePanelCollapsed ? '›' : '‹'}</span>
               </button>
             </div>
-            <Canvas
-              key={'canvas:' + currentUser.id}
-              template={activeTemplate}
-              resultTemplate={resultTemplate}
-              editorCommand={editorCommand}
-              onUseReferenceImages={handleUseCanvasReferences}
-              userId={currentUser.id}
+            <FlipStage
+              inspirationOpen={inspirationOpen}
+              childrenA={
+                <Canvas
+                  key={'canvas:' + currentUser.id}
+                  template={activeTemplate}
+                  resultTemplate={resultTemplate}
+                  editorCommand={editorCommand}
+                  onUseReferenceImages={handleUseCanvasReferences}
+                  userId={currentUser.id}
+                />
+              }
+              childrenB={
+                <InspirationPanel
+                  open={inspirationOpen}
+                  onClose={function() { setInspirationOpen(false); }}
+                  onUsePrompt={handleUseInspirationPrompt}
+                />
+              }
             />
             <Chat
               key={'chat:' + currentUser.id}
@@ -449,12 +536,6 @@ const App = () => {
               canvasReferenceSelection={canvasReferenceSelection}
             />
           </div>
-          {inspirationOpen && (
-            <InspirationPanel
-              onClose={function() { setInspirationOpen(false); }}
-              onUsePrompt={handleUseInspirationPrompt}
-            />
-          )}
           <Tweaks
             visible={tweaksVisible}
             tweaks={tweaks}
