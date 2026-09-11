@@ -1007,9 +1007,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
       const x = startX + col * (CELL_W + GAP)
       const y = startY + row * (CELL_H + GAP)
+      const imgId = 'img-' + Math.random().toString(36).slice(2, 10)
 
       const img: CanvasImage = {
-        id: 'img-' + Math.random().toString(36).slice(2, 10),
+        id: imgId,
         pageId: activePageId,
         frameId: null, // 默认按自由排版
         x,
@@ -1023,6 +1024,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         opacity: 1,
       }
       createdImages.push(img)
+
+      // 异步读取原图天然分辨率，自适应保持原图真实宽高比
+      const probe = new Image()
+      probe.crossOrigin = 'anonymous'
+      probe.onload = () => {
+        const nw = probe.naturalWidth || probe.width
+        const nh = probe.naturalHeight || probe.height
+        if (nw > 0 && nh > 0) {
+          const aspect = nw / nh
+          let w = CELL_W
+          let h = Math.round(CELL_W / aspect)
+          if (h > CELL_H * 1.25) {
+            h = CELL_H
+            w = Math.round(CELL_H * aspect)
+          }
+          get().updateImage(imgId, {
+            naturalWidth: nw,
+            naturalHeight: nh,
+            width: w,
+            height: h,
+          })
+        }
+      }
+      probe.src = url
     })
 
     recordHistory(get)

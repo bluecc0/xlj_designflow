@@ -20,7 +20,7 @@ import { useViewportStore } from './store/viewportStore'
 import { useCanvasStore } from './store/canvasStore'
 import { useHistoryStore } from './store/historyStore'
 import { useAIOperationStore } from './store/aiOperationStore'
-import { runOutpainting } from './services/aiImageService'
+import { runOutpainting, getImageDimensions } from './services/aiImageService'
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 
 const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
@@ -146,11 +146,38 @@ export function App() {
     }
 
     try {
+      // 1. 获取原图真实物理尺寸 (naturalWidth / naturalHeight)
+      let naturalW = target.naturalWidth
+      let naturalH = target.naturalHeight
+      if (!naturalW || !naturalH) {
+        try {
+          const dims = await getImageDimensions(target.url)
+          naturalW = dims.width
+          naturalH = dims.height
+        } catch {
+          naturalW = target.width
+          naturalH = target.height
+        }
+      }
+
+      // 2. 计算画布显示尺寸到原图物理像素的比例
+      const scaleX = (naturalW || target.width) / target.width
+      const scaleY = (naturalH || target.height) / target.height
+
+      // 3. 将画布拉伸的视觉边距精确换算为原图物理像素边距
+      const naturalMargins: OutpaintMargins = {
+        top: Math.max(0, Math.round(outpaintMargins.top * scaleY)),
+        right: Math.max(0, Math.round(outpaintMargins.right * scaleX)),
+        bottom: Math.max(0, Math.round(outpaintMargins.bottom * scaleY)),
+        left: Math.max(0, Math.round(outpaintMargins.left * scaleX)),
+      }
+
+      // 4. 以原图原始清晰度向后端提交扩图
       const result = await runOutpainting(
         target.url,
-        target.width,
-        target.height,
-        outpaintMargins,
+        naturalW,
+        naturalH,
+        naturalMargins,
         (msg, progress) => {
           updateOperation({ message: msg, progress })
         }
@@ -171,6 +198,8 @@ export function App() {
         rotation: target.rotation || 0,
         url: result.imageUrl,
         name: `${target.name}-扩图`,
+        naturalWidth: result.width,
+        naturalHeight: result.height,
         locked: false,
         opacity: 1,
       })

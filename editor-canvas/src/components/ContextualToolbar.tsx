@@ -215,6 +215,8 @@ export function ContextualToolbar({
         rotation: 0,
         url: res.imageUrl,
         name: `${target.name}-抠图`,
+        naturalWidth: res.width,
+        naturalHeight: res.height,
         locked: false,
         opacity: 1,
       })
@@ -253,6 +255,8 @@ export function ContextualToolbar({
         rotation: 0,
         url: res.imageUrl,
         name: `${target.name}-2x高清`,
+        naturalWidth: res.width,
+        naturalHeight: res.height,
         locked: false,
         opacity: 1,
       })
