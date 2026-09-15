@@ -343,8 +343,76 @@ const Swatch = ({
     textOverflow: 'ellipsis'
   }
 }, label));
+
+// 从后端 TemplateInfo 推导显示用的 cat / ratio / tone / tag
+function deriveTemplateMeta(t) {
+  if (!t) return {};
+  const {
+    width = 400,
+    height = 400,
+    slots = []
+  } = t;
+  const gcd = (a, b) => b === 0 ? a : gcd(b, a % b);
+  const g = gcd(Math.round(width), Math.round(height)) || 1;
+  const ratio = width / g + '/' + height / g;
+  const productSlots = (slots || []).filter(function (s) {
+    return (s.name || '').replace(/ /g, '').startsWith('slot/product_');
+  });
+  const uniqGroups = new Set(productSlots.map(function (s) {
+    return (s.name || '').split('/')[1];
+  })).size;
+  return {
+    ratio: ratio,
+    tone: 'neutral',
+    tag: uniqGroups > 0 ? uniqGroups + '格' : ratio,
+    cat: 'E-commerce'
+  };
+}
+
+// 统一将后端返回的扁平画板列表聚合为带 frames 的模板组
+function aggregateTemplates(data) {
+  if (!Array.isArray(data)) return [];
+  const raw = data.map(function (t) {
+    return Object.assign({}, t, deriveTemplateMeta(t));
+  });
+  const groupMap = {};
+  const groupOrder = [];
+  raw.forEach(function (t) {
+    const gname = t.group_name || t.name;
+    const gkey = (t.file_id || '') + ':' + gname;
+    if (!groupMap[gkey]) {
+      groupMap[gkey] = {
+        id: t.id,
+        name: gname,
+        group_name: gname,
+        page_id: t.page_id,
+        file_id: t.file_id,
+        width: t.width,
+        height: t.height,
+        ratio: t.ratio,
+        tone: t.tone,
+        tag: t.tag,
+        cat: t.cat,
+        slots: t.slots,
+        is_special: t.is_special || false,
+        is_special_full: t.is_special_full || false,
+        frames: []
+      };
+      groupOrder.push(gkey);
+    }
+    groupMap[gkey].frames.push(t);
+    if (t.slots && (!groupMap[gkey].slots || t.slots.length > groupMap[gkey].slots.length)) {
+      groupMap[gkey].slots = t.slots;
+    }
+  });
+  return groupOrder.map(function (gkey) {
+    return groupMap[gkey];
+  });
+}
 window.Stripe = Stripe;
 window.Swatch = Swatch;
+window.deriveTemplateMeta = deriveTemplateMeta;
+window.aggregateTemplates = aggregateTemplates;
 
 // src/TopBar.jsx
 // Polls /health every 30s and renders compact status icons.
@@ -890,30 +958,6 @@ function formatAiModelName(model) {
   return map[model] || model;
 }
 
-// 从后端 TemplateInfo 推导显示用的 cat / ratio / tone / tag
-function deriveTemplateMeta(t) {
-  const {
-    width = 400,
-    height = 400,
-    slots = []
-  } = t;
-  const gcd = (a, b) => b === 0 ? a : gcd(b, a % b);
-  const g = gcd(Math.round(width), Math.round(height));
-  const ratio = width / g + '/' + height / g;
-  const productSlots = (slots || []).filter(function (s) {
-    return (s.name || '').replace(/ /g, '').startsWith('slot/product_');
-  });
-  const uniqGroups = new Set(productSlots.map(function (s) {
-    return (s.name || '').split('/')[1];
-  })).size;
-  return {
-    ratio: ratio,
-    tone: 'neutral',
-    tag: uniqGroups > 0 ? uniqGroups + '格' : ratio,
-    cat: 'E-commerce'
-  };
-}
-
 // 初始为空，API返回后填充（见 useEffect）
 const TEMPLATES = [];
 
@@ -1126,45 +1170,7 @@ var TemplatePanel = function (_ref2) {
     setLoading(true);
     setLoadErr(null);
     window.API.fetchTemplates().then(function (data) {
-      var raw = (data || []).map(function (t) {
-        return Object.assign({}, t, deriveTemplateMeta(t));
-      });
-
-      // ── 按 file_id + group_name 聚合，跨文件同名 page 不互相干扰 ──────────
-      var groupMap = {};
-      var groupOrder = [];
-      raw.forEach(function (t) {
-        var gname = t.group_name || t.name;
-        // 分组 key 带 file_id，防止不同文件的同名 page 被错误合并
-        var gkey = (t.file_id || '') + ':' + gname;
-        if (!groupMap[gkey]) {
-          groupMap[gkey] = {
-            id: t.id,
-            name: gname,
-            group_name: gname,
-            page_id: t.page_id,
-            file_id: t.file_id,
-            width: t.width,
-            height: t.height,
-            ratio: t.ratio,
-            tone: t.tone,
-            tag: t.tag,
-            cat: t.cat,
-            slots: t.slots,
-            is_special: t.is_special || false,
-            is_special_full: t.is_special_full || false,
-            frames: []
-          };
-          groupOrder.push(gkey);
-        }
-        groupMap[gkey].frames.push(t);
-        if (t.slots && t.slots.length > groupMap[gkey].slots.length) {
-          groupMap[gkey].slots = t.slots;
-        }
-      });
-      var groups = groupOrder.map(function (gkey) {
-        return groupMap[gkey];
-      });
+      var groups = typeof aggregateTemplates === 'function' ? aggregateTemplates(data) : window.aggregateTemplates ? window.aggregateTemplates(data) : data;
       setTemplates(groups);
       window.TEMPLATES = groups;
     }).catch(function (err) {
@@ -10769,8 +10775,9 @@ const Chat = ({
           try {
             const fetched = await window.API.fetchTemplates();
             if (Array.isArray(fetched)) {
-              templates = fetched;
-              window.TEMPLATES = fetched;
+              const aggregated = typeof aggregateTemplates === 'function' ? aggregateTemplates(fetched) : window.aggregateTemplates ? window.aggregateTemplates(fetched) : fetched;
+              templates = aggregated;
+              window.TEMPLATES = aggregated;
             }
           } catch (e) {
             console.warn('Failed to fetch templates as fallback:', e);
@@ -10790,11 +10797,6 @@ const Chat = ({
             const normalTpl = templates.find(t => t.is_special && !t.is_special_full);
             if (normalTpl) effectiveTemplate = normalTpl;
           }
-        }
-        if (onRequestSpecialTemplate) {
-          try {
-            onRequestSpecialTemplate(isFull ? 'full' : 'normal');
-          } catch (e) {}
         }
         if (!effectiveTemplate) {
           throw new Error(isFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板');
@@ -15148,11 +15150,6 @@ const App = () => {
     });
     if (target) {
       setActiveTemplate(target);
-      setSlashTrigger({
-        cmd: kind === 'full' ? '特殊品（完整）' : '特殊品',
-        mode: kind,
-        key: Date.now()
-      });
     }
   }, []);
   const showAdmin = currentView === 'admin' && currentUser && currentUser.role === 'admin';

@@ -2742,8 +2742,10 @@ def list_templates(file_id: Optional[str] = None):
             for p in team_projects:
                 pid = p.get("id") or p.get("~:id", "")
                 pname = p.get("name") or p.get("~:name", "")
-                # 排除系统 Drafts 草稿箱
+                # 项目层过滤：排除系统 Drafts 草稿箱，且项目名必须包含「模板」或「测试」
                 if not pid or (pname or "").strip().lower() == "drafts":
+                    continue
+                if not any(m in (pname or "") for m in TEMPLATE_MARKERS):
                     continue
                 try:
                     proj_files = client.get_project_files(pid)
@@ -2803,7 +2805,7 @@ def debug_scan():
                 pid = p.get("id") or p.get("~:id", "")
                 pname = p.get("name") or p.get("~:name", "")
                 is_drafts = (pname or "").strip().lower() == "drafts"
-                has_marker = not is_drafts
+                has_marker = (not is_drafts) and any(m in (pname or "") for m in TEMPLATE_MARKERS)
                 proj_entry = {"id": pid, "name": pname, "has_marker": has_marker, "files": []}
                 try:
                     proj_files = client.get_project_files(pid)

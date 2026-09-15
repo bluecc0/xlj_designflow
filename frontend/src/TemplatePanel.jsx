@@ -10,24 +10,6 @@ function formatAiModelName(model) {
   return map[model] || model;
 }
 
-// 从后端 TemplateInfo 推导显示用的 cat / ratio / tone / tag
-function deriveTemplateMeta(t) {
-  const { width = 400, height = 400, slots = [] } = t;
-  const gcd = (a, b) => b === 0 ? a : gcd(b, a % b);
-  const g = gcd(Math.round(width), Math.round(height));
-  const ratio = (width / g) + '/' + (height / g);
-  const productSlots = (slots || []).filter(function(s) {
-    return (s.name || '').replace(/ /g, '').startsWith('slot/product_');
-  });
-  const uniqGroups = new Set(productSlots.map(function(s) { return (s.name || '').split('/')[1]; })).size;
-  return {
-    ratio: ratio,
-    tone: 'neutral',
-    tag: uniqGroups > 0 ? uniqGroups + '格' : ratio,
-    cat: 'E-commerce',
-  };
-}
-
 // 初始为空，API返回后填充（见 useEffect）
 const TEMPLATES = [];
 
@@ -132,44 +114,9 @@ var TemplatePanel = function(_ref2) {
     setLoadErr(null);
     window.API.fetchTemplates()
       .then(function(data) {
-        var raw = (data || []).map(function(t) {
-          return Object.assign({}, t, deriveTemplateMeta(t));
-        });
-
-        // ── 按 file_id + group_name 聚合，跨文件同名 page 不互相干扰 ──────────
-        var groupMap = {};
-        var groupOrder = [];
-        raw.forEach(function(t) {
-          var gname = t.group_name || t.name;
-          // 分组 key 带 file_id，防止不同文件的同名 page 被错误合并
-          var gkey = (t.file_id || '') + ':' + gname;
-          if (!groupMap[gkey]) {
-            groupMap[gkey] = {
-              id: t.id,
-              name: gname,
-              group_name: gname,
-              page_id: t.page_id,
-              file_id: t.file_id,
-              width: t.width,
-              height: t.height,
-              ratio: t.ratio,
-              tone: t.tone,
-              tag: t.tag,
-              cat: t.cat,
-              slots: t.slots,
-              is_special: t.is_special || false,
-              is_special_full: t.is_special_full || false,
-              frames: [],
-            };
-            groupOrder.push(gkey);
-          }
-          groupMap[gkey].frames.push(t);
-          if (t.slots && t.slots.length > groupMap[gkey].slots.length) {
-            groupMap[gkey].slots = t.slots;
-          }
-        });
-
-        var groups = groupOrder.map(function(gkey) { return groupMap[gkey]; });
+        var groups = typeof aggregateTemplates === 'function'
+          ? aggregateTemplates(data)
+          : (window.aggregateTemplates ? window.aggregateTemplates(data) : data);
         setTemplates(groups);
         window.TEMPLATES = groups;
       })

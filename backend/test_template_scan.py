@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
+from backend.config import settings
 from backend.main import app
 
 
@@ -24,8 +25,10 @@ class TemplateScanMarkerTest(unittest.TestCase):
             {"id": "proj-1", "name": "模板项目"},
             {"id": "proj-2", "name": "临时测试项目"},
             {"id": "proj-3", "name": "其他无关项目"},
+            {"id": "proj-drafts", "name": "Drafts"},
         ]
         # proj-1 下有普通模板、新测试模板，以及合成工作副本
+        # proj-3 下即使有名字带测试的文件，也会因项目名不匹配而被排除
         def mock_get_project_files(pid: str):
             if pid == "proj-1":
                 return [
@@ -37,6 +40,14 @@ class TemplateScanMarkerTest(unittest.TestCase):
             if pid == "proj-2":
                 return [
                     {"id": "file-5", "name": "新测试画板模板"},
+                ]
+            if pid == "proj-3":
+                return [
+                    {"id": "file-6", "name": "无关项目下的测试文件"},
+                ]
+            if pid == "proj-drafts":
+                return [
+                    {"id": "file-7", "name": "Drafts中的测试模板"},
                 ]
             return []
 
@@ -56,9 +67,10 @@ class TemplateScanMarkerTest(unittest.TestCase):
         ]
         client_mock.parse_slots.return_value = []
 
-        resp = self.client.get("/templates")
-        self.assertEqual(resp.status_code, 200)
-        templates = resp.json()
+        with patch.object(settings, "penpot_file_id", "test-main-file"):
+            resp = self.client.get("/templates?file_id=test-main-file")
+            self.assertEqual(resp.status_code, 200)
+            templates = resp.json()
 
         file_names = [t["group_name"] for t in templates]
         self.assertIn("特殊品完整_测试", file_names)
@@ -66,6 +78,8 @@ class TemplateScanMarkerTest(unittest.TestCase):
         self.assertIn("常规电商模板", file_names)
         self.assertIn("新测试画板模板", file_names)
         self.assertNotIn("合成-20260914-12345678", file_names)
+        self.assertNotIn("无关项目下的测试文件", file_names)
+        self.assertNotIn("Drafts中的测试模板", file_names)
 
         full_tpl = next(t for t in templates if t["group_name"] == "特殊品完整_测试")
         self.assertTrue(full_tpl["is_special_full"])

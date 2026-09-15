@@ -6026,8 +6026,11 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
           try {
             const fetched = await window.API.fetchTemplates();
             if (Array.isArray(fetched)) {
-              templates = fetched;
-              window.TEMPLATES = fetched;
+              const aggregated = typeof aggregateTemplates === 'function'
+                ? aggregateTemplates(fetched)
+                : (window.aggregateTemplates ? window.aggregateTemplates(fetched) : fetched);
+              templates = aggregated;
+              window.TEMPLATES = aggregated;
             }
           } catch (e) {
             console.warn('Failed to fetch templates as fallback:', e);
@@ -6047,10 +6050,6 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
             const normalTpl = templates.find(t => t.is_special && !t.is_special_full);
             if (normalTpl) effectiveTemplate = normalTpl;
           }
-        }
-
-        if (onRequestSpecialTemplate) {
-          try { onRequestSpecialTemplate(isFull ? 'full' : 'normal'); } catch (e) {}
         }
 
         if (!effectiveTemplate) {

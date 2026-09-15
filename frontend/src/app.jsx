@@ -345,7 +345,6 @@ const App = () => {
     });
     if (target) {
       setActiveTemplate(target);
-      setSlashTrigger({ cmd: kind === 'full' ? '特殊品（完整）' : '特殊品', mode: kind, key: Date.now() });
     }
   }, []);
 
