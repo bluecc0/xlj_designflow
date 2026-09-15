@@ -6306,6 +6306,7 @@ const Composer = ({
   const [aiProvider, setAiProvider] = React.useState('auto');
   const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [smartDistributeMode, setSmartDistributeMode] = React.useState('full');
+  const [specialRouteMode, setSpecialRouteMode] = React.useState('auto'); // 'auto' | 'normal' | 'full'
   const [manualRefImages, setManualRefImages] = React.useState([]);
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
@@ -6457,6 +6458,7 @@ const Composer = ({
     setSelectedSkill('');
     setLockedCommand(DEFAULT_COMPOSER_COMMAND);
     setSelectedWorkflow('chat');
+    setSpecialRouteMode('auto');
     setFiles([]);
     clearRefImages();
     setPrototypePanel('');
@@ -6601,10 +6603,23 @@ const Composer = ({
       });
       return;
     }
-    const nextCmd = '/' + slashTrigger.cmd;
-    setLockedCommand(nextCmd);
-    setSelectedSkill('');
-    setSelectedWorkflow(cmdToWorkflow(nextCmd));
+    const isSpecialCmd = slashTrigger.cmd === '特殊品（完整）' || slashTrigger.cmd === '特殊品';
+    if (isSpecialCmd) {
+      if (slashTrigger.mode) {
+        setSpecialRouteMode(slashTrigger.mode);
+        setLockedCommand(slashTrigger.mode === 'full' ? '/特殊品（完整）' : '/特殊品');
+      } else {
+        setSpecialRouteMode('auto');
+        setLockedCommand('/特殊品');
+      }
+      setSelectedSkill('');
+      setSelectedWorkflow('special');
+    } else {
+      const nextCmd = '/' + slashTrigger.cmd;
+      setLockedCommand(nextCmd);
+      setSelectedSkill('');
+      setSelectedWorkflow(cmdToWorkflow(nextCmd));
+    }
     setPrototypePanel('');
     setText('');
     setTimeout(() => {
@@ -6639,7 +6654,8 @@ const Composer = ({
     }
   }, [agentEnabled]);
   React.useEffect(() => {
-    if (template && (template.is_special || template.is_special_full)) return;
+    // 只有当用户显式选择了一个非特殊品模板时，才重置特殊品锁定；未选模板（null）时保留特殊品模式
+    if (!template || template.is_special || template.is_special_full) return;
     setLockedCommand(function (prev) {
       if (cmdToWorkflow(prev) === 'special') {
         setSelectedWorkflow('chat');
@@ -6810,6 +6826,10 @@ const Composer = ({
       setLockedCommand(cmd);
       setSelectedSkill('');
       setSelectedWorkflow(cmdToWorkflow(cmd));
+      if (next && (next.id === 'special' || cmd.startsWith('/特殊品'))) {
+        setSpecialRouteMode('auto');
+        setLockedCommand('/特殊品');
+      }
       setPrototypePanel('');
       setTimeout(() => {
         const el = taRef.current;
@@ -6905,6 +6925,7 @@ const Composer = ({
       provider: aiProvider,
       workflow: selectedWorkflow,
       lockedCommand: lockedCommand,
+      specialRouteMode: specialRouteMode,
       batchCount: activeMode === 'ai-image' ? normalizedBatchCount : 1,
       skill: skillInvocation.skill || '',
       skillPrompt: executionMessage
@@ -6913,6 +6934,10 @@ const Composer = ({
     setText('');
     setSelectedSkill('');
     clearRefImages();
+    if (activeMode === 'special' || activeMode === 'special_full') {
+      setSpecialRouteMode('auto');
+      setLockedCommand('/特殊品');
+    }
   };
   const overlayRef = React.useRef(null);
   const hasRefTag = React.useMemo(() => /([@＃#](?:图片|图)?\d+|(?:图|图片)\d+)/.test(text), [text]);
@@ -7227,6 +7252,7 @@ const Composer = ({
     setSelectedSkill('');
     setLockedCommand(DEFAULT_COMPOSER_COMMAND);
     setSelectedWorkflow('chat');
+    setSpecialRouteMode('auto');
     setFiles([]);
     clearRefImages();
     setTimeout(() => {
@@ -7301,10 +7327,10 @@ const Composer = ({
     }, {
       id: 'special',
       label: '特殊品',
-      desc: '使用特殊品模板合成结果',
+      desc: '自动识别素材并合成多画板',
       iconKey: 'layers',
-      cmd: template && template.is_special_full ? '/特殊品（完整）' : '/特殊品',
-      available: available(template && template.is_special_full ? '/特殊品（完整）' : '/特殊品')
+      cmd: '/特殊品',
+      available: available('/特殊品') || available('/特殊品（完整）')
     }, {
       id: 'download',
       label: '花瓣下载',
@@ -7333,7 +7359,7 @@ const Composer = ({
   };
   const qualityTag = activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto' ? ' · ' + (qualityMap[aiQualityTier] || aiQualityTier) : '';
   const variantTag = activeAiModel === 'gpt-image-2.5' ? ' · ' + (variantMap[aiVariant] || aiVariant) : '';
-  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + variantTag + qualityTag : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 普通' : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
+  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + variantTag + qualityTag : activeMode === 'special' || activeMode === 'special_full' ? '线路 ' + (specialRouteMode === 'auto' ? '自动' : specialRouteMode === 'full' ? '完整' : '普通') : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
   const selectedSettingBits = [activeSkillInfo ? '$' + activeSkillInfo.name : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? '⚡ 智能' : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
   const composerPlaceholder = agentEnabled ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）' : activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(text.trim() || lockedCommand || modeParamLabel || refImages.length > 0 || files.length > 0 || activeSkillInfo || skillMenuOpen || !agentEnabled && prototypePanel);
@@ -8073,27 +8099,39 @@ const Composer = ({
       }))), isSpecialParams && React.createElement(React.Fragment, null, protoSectionLabel('模板线路'), React.createElement('div', {
         style: {
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          gridTemplateColumns: 'repeat(3, 1fr)',
           gap: 7
         }
       }, [{
-        cmd: '/特殊品',
-        label: '普通'
+        mode: 'auto',
+        label: '自动',
+        desc: '智能匹配素材'
       }, {
-        cmd: '/特殊品（完整）',
-        label: '完整'
+        mode: 'normal',
+        label: '普通',
+        desc: '无场景图主图'
+      }, {
+        mode: 'full',
+        label: '完整',
+        desc: '含场景海报'
       }].map(function (item) {
-        const active = lockedCommand === item.cmd;
+        const active = specialRouteMode === item.mode;
         return React.createElement('button', {
-          key: item.cmd,
+          key: item.mode,
           type: 'button',
           onClick: function () {
-            setLockedCommand(item.cmd);
-            setSelectedSkill('');
-            setSelectedWorkflow(cmdToWorkflow(item.cmd));
-            if (onRequestSpecialTemplate) {
-              onRequestSpecialTemplate(item.cmd === '/特殊品（完整）' ? 'full' : 'normal');
+            setSpecialRouteMode(item.mode);
+            if (item.mode === 'full') {
+              setLockedCommand('/特殊品（完整）');
+              if (onRequestSpecialTemplate) onRequestSpecialTemplate('full');
+            } else if (item.mode === 'normal') {
+              setLockedCommand('/特殊品');
+              if (onRequestSpecialTemplate) onRequestSpecialTemplate('normal');
+            } else {
+              setLockedCommand('/特殊品');
             }
+            setSelectedSkill('');
+            setSelectedWorkflow('special');
             setPrototypePanel('');
             setTimeout(function () {
               const el = taRef.current;
@@ -10648,16 +10686,12 @@ const Chat = ({
       return;
     }
 
-    // ── 特殊品（完整）流程 ────────────────────────────────────────────────────
-    const _isSpecialFull = text.trimStart().startsWith('/特殊品（完整）');
-    const _isSpecial = !_isSpecialFull && text.trimStart().startsWith('/特殊品');
-    if (_isSpecial || _isSpecialFull) {
-      const _cmdLabel = _isSpecialFull ? '特殊品（完整）' : '特殊品';
-      const _endpoint = _isSpecialFull ? '/special-compose-full' : '/special-compose';
-      const _pollBase = _isSpecialFull ? '/special-compose-full' : '/special-compose';
-      const _argRegex = _isSpecialFull ? /^\/特殊品（完整）\s*/ : /^\/特殊品\s*/;
-      const _errHint = _isSpecialFull ? '请提供 SKU，格式：/特殊品（完整） SKU，文案，时间文案' : '请提供 SKU，格式：/特殊品 SKU，文案，时间文案';
-      const _tplHint = _isSpecialFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板';
+    // ── 特殊品（完整/普通/自动）流程 ──────────────────────────────────────────
+    const _isExplicitSpecialFull = text.trimStart().startsWith('/特殊品（完整）');
+    const _isSpecial = _isExplicitSpecialFull || text.trimStart().startsWith('/特殊品');
+    if (_isSpecial) {
+      const _routeMode = aiOptions.specialRouteMode || 'auto';
+      const _argRegex = /^\/(特殊品（完整）|特殊品)\s*/;
       const displayText = text.replace(_argRegex, '').trim() || text;
       setMessages(msgs => [...msgs, {
         who: 'user',
@@ -10666,6 +10700,22 @@ const Chat = ({
         refMeta: userRefMeta
       }]);
       setIsLoading(true);
+      const args = text.replace(_argRegex, '').trim();
+      const parts = args.split('，').map(s => s.trim());
+      const sku = parts[0] || '';
+      const fields = {
+        name: parts[1] || '',
+        time: parts[2] || ''
+      };
+      if (!sku) {
+        setIsLoading(false);
+        setMessages(msgs => [...msgs, {
+          who: 'ai',
+          text: '请提供 SKU，格式：/特殊品 SKU，文案，时间文案'
+        }]);
+        return;
+      }
+
       // 先插入 generating 消息占位
       let specialMsgIdx = null;
       setMessages(msgs => {
@@ -10673,25 +10723,99 @@ const Chat = ({
         return [...msgs, {
           who: 'ai',
           type: 'generating',
-          logs: [`正在启动${_cmdLabel}合成…`],
+          logs: ['正在启动特殊品合成…'],
           status: 'running',
-          meta: `Loom · ${_cmdLabel}`,
+          meta: 'Loom · 特殊品',
           startedAt: Date.now()
         }];
       });
       try {
-        const args = text.replace(_argRegex, '').trim();
-        const parts = args.split('，').map(s => s.trim());
-        const sku = parts[0] || '';
-        const fields = {
-          name: parts[1] || '',
-          time: parts[2] || ''
-        };
-        if (!sku) throw new Error(_errHint);
-        if (!template) throw new Error(_tplHint);
-        const frameIds = template.frames ? template.frames.map(f => f.id) : [template.id];
-        const fileId = template.file_id || template.frames && template.frames[0]?.file_id;
-        const pageId = template.page_id || template.frames && template.frames[0]?.page_id;
+        // 判断目标线路：'full' 还是 'normal'
+        let targetFlow = 'normal';
+        let autoDetectNote = '';
+        if (_isExplicitSpecialFull || _routeMode === 'full') {
+          targetFlow = 'full';
+        } else if (_routeMode === 'normal') {
+          targetFlow = 'normal';
+        } else {
+          // 'auto' 智能模式：毫秒级探测素材库中的场景图（Banner/Poster）
+          try {
+            const apiBase = window.API_BASE || window.location.origin;
+            const detectResp = await fetch(`${apiBase}/special-compose/detect?sku=${encodeURIComponent(sku)}`, {
+              credentials: 'include'
+            });
+            if (detectResp.ok) {
+              const detectData = await detectResp.json();
+              if (detectData.has_scene) {
+                targetFlow = 'full';
+                autoDetectNote = '🔍 检测到场景图素材（Banner/Poster），已自动启用完整版画板（含场景海报）';
+              } else {
+                targetFlow = 'normal';
+                autoDetectNote = '🔍 未检测到场景图素材，自动使用标准版特殊品画板';
+              }
+            }
+          } catch (e) {
+            console.warn('Detect special materials failed, falling back to normal:', e);
+          }
+        }
+        const isFull = targetFlow === 'full';
+        const _cmdLabel = isFull ? '特殊品（完整）' : '特殊品';
+        const _endpoint = isFull ? '/special-compose-full' : '/special-compose';
+        const _pollBase = isFull ? '/special-compose-full' : '/special-compose';
+
+        // 匹配对应模板：支持自动从全局模板列表匹配与兜底
+        let templates = Array.isArray(window.TEMPLATES) ? window.TEMPLATES : [];
+        if (templates.length === 0 && window.API && window.API.fetchTemplates) {
+          try {
+            const fetched = await window.API.fetchTemplates();
+            if (Array.isArray(fetched)) {
+              templates = fetched;
+              window.TEMPLATES = fetched;
+            }
+          } catch (e) {
+            console.warn('Failed to fetch templates as fallback:', e);
+          }
+        }
+        let effectiveTemplate = template;
+        if (!effectiveTemplate || !effectiveTemplate.is_special && !effectiveTemplate.is_special_full) {
+          effectiveTemplate = templates.find(function (t) {
+            return isFull ? t.is_special_full : t.is_special && !t.is_special_full;
+          }) || (isFull ? templates.find(t => t.is_special) : null);
+        } else {
+          // 若已有 template 但与目标线路版本不一致，自动切换至对应版本
+          if (isFull && !effectiveTemplate.is_special_full) {
+            const fullTpl = templates.find(t => t.is_special_full);
+            if (fullTpl) effectiveTemplate = fullTpl;
+          } else if (!isFull && effectiveTemplate.is_special_full) {
+            const normalTpl = templates.find(t => t.is_special && !t.is_special_full);
+            if (normalTpl) effectiveTemplate = normalTpl;
+          }
+        }
+        if (onRequestSpecialTemplate) {
+          try {
+            onRequestSpecialTemplate(isFull ? 'full' : 'normal');
+          } catch (e) {}
+        }
+        if (!effectiveTemplate) {
+          throw new Error(isFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板');
+        }
+
+        // 更新日志通知用户匹配结果
+        const initialLogs = [`正在启动${_cmdLabel}合成…`];
+        if (autoDetectNote) {
+          initialLogs.push(autoDetectNote);
+        }
+        setMessages(msgs => msgs.map((m, idx) => {
+          if (idx !== specialMsgIdx) return m;
+          return {
+            ...m,
+            logs: initialLogs,
+            meta: `Loom · ${_cmdLabel}`
+          };
+        }));
+        const frameIds = effectiveTemplate.frames ? effectiveTemplate.frames.map(f => f.id) : [effectiveTemplate.id];
+        const fileId = effectiveTemplate.file_id || effectiveTemplate.frames && effectiveTemplate.frames[0]?.file_id;
+        const pageId = effectiveTemplate.page_id || effectiveTemplate.frames && effectiveTemplate.frames[0]?.page_id;
         const resp = await fetch(_endpoint, {
           method: 'POST',
           headers: {
@@ -10744,7 +10868,7 @@ const Chat = ({
               return frameIds.map((_, i) => `/results/${job['id']}/frame_${i}.png`);
             };
             const urls = buildUrls();
-            const frameNames = (template.frames && template.frames.length > 0 ? template.frames : [template]).map(f => f.name || f.variant || '画板');
+            const frameNames = (effectiveTemplate.frames && effectiveTemplate.frames.length > 0 ? effectiveTemplate.frames : [effectiveTemplate]).map(f => f.name || f.variant || '画板');
             const zipUrl = `${_pollBase}/${job['id']}/download-zip?names=${encodeURIComponent(frameNames.join(','))}`;
             setMessages(msgs => msgs.map((m, idx) => {
               if (idx !== specialMsgIdx) return m;
@@ -10757,8 +10881,8 @@ const Chat = ({
               };
             }));
             // 构建 resultTpl 供画布预览
-            if (onComposeComplete && urls.length > 0 && template) {
-              const base = structuredClone(template);
+            if (onComposeComplete && urls.length > 0 && effectiveTemplate) {
+              const base = structuredClone(effectiveTemplate);
               const baseFrames = base.frames && base.frames.length > 0 ? base.frames : [base];
               base.frames = urls.map((url, i) => ({
                 ...(baseFrames[i % baseFrames.length] || baseFrames[0]),
@@ -15022,8 +15146,15 @@ const App = () => {
     const target = templates.find(function (t) {
       return kind === 'full' ? t.is_special_full : t.is_special && !t.is_special_full;
     });
-    if (target) selectTemplate(target);
-  }, [selectTemplate]);
+    if (target) {
+      setActiveTemplate(target);
+      setSlashTrigger({
+        cmd: kind === 'full' ? '特殊品（完整）' : '特殊品',
+        mode: kind,
+        key: Date.now()
+      });
+    }
+  }, []);
   const showAdmin = currentView === 'admin' && currentUser && currentUser.role === 'admin';
   return /*#__PURE__*/React.createElement("div", {
     style: {

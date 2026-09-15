@@ -103,7 +103,10 @@ def _run_inner(job: SpecialFullComposeJob) -> None:
         merged_fields.setdefault("time", time_expanded["time"])
         merged_fields["time_month"] = time_expanded["time_month"]
         merged_fields["time_hour"] = time_expanded["time_hour"]
+        merged_fields["time_hour_c"] = time_expanded["time_hour_c"]
         merged_fields["time_c"] = time_expanded["time_c"]
+        merged_fields["time_cn"] = time_expanded["time_cn"]
+        merged_fields["time_4"] = time_expanded["time_4"]
         if raw_time and time_expanded["time"] != raw_time:
             merged_fields["time"] = time_expanded["time"]
             merged_fields.setdefault("time_raw", raw_time)

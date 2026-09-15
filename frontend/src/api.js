@@ -95,6 +95,7 @@
     getCompose: function(jobId) { return request('/compose/' + jobId); },
     listComposes: function(limit) { return request('/compose?limit=' + (limit || 20)); },
     listSpecialComposes: function(limit) { return request('/special-compose/history?limit=' + (limit || 20)); },
+    detectSpecialMaterials: function(sku) { return request('/special-compose/detect?sku=' + encodeURIComponent(sku || '')); },
     listAiImages: function(limit) { return request('/history/ai-images?limit=' + (limit || 20)); },
     listAiChats: function(limit) { return request('/history/ai-chats?limit=' + (limit || 20)).then(function(res) { return res.sessions || []; }); },
     getAiChat: function(sessionId) { return request('/history/ai-chats/' + encodeURIComponent(sessionId)); },

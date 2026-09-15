@@ -17,7 +17,10 @@ Slot 字段映射（特殊品版）：
   slot/product_1/name_2        → 文案第二段（最后空格后）
   slot/product_1/time          → 格式化全时间：如 "3/28 10:00发售"
   slot/product_1/time_month    → 仅日期部分：如 "3/28"
-  slot/product_1/time_hour     → 仅时间部分：如 "10点发售"
+  slot/product_1/time_hour     → 仅时间部分：如 "10:00发售"
+  slot/product_1/time_hour_c   → 中文时间部分：如 "10点发售"
+  slot/product_1/time_cn       → 纯中文文本时间（无后缀）：如 "8月15日 10:00"
+  slot/product_1/time_4        → 日期+火爆发售中：如 "9/19 火爆发售中"
 
 与主流程的隔离：
 - 入口为 POST /special-compose，独立端点
@@ -95,6 +98,36 @@ def parse_special_command(text: str) -> Optional[dict]:
     return None
 
 
+def detect_special_materials(sku: str) -> dict:
+    """
+    检查指定 SKU 在素材库中是否存在场景图素材（Banner/Poster）。
+    只做 exists 路径探测，不扫描目录，响应在毫秒级。
+    """
+    clean_sku = (sku or "").strip()
+    if not clean_sku:
+        return {
+            "sku": "",
+            "has_scene": False,
+            "banner_found": False,
+            "poster_found": False,
+            "recommended_flow": "special",
+        }
+    library = ProductLibrary(settings.product_library_path)
+    banner_folder = settings.IMAGE_TYPE_FOLDERS.get("banner", "场景图/Banner")
+    poster_folder = settings.IMAGE_TYPE_FOLDERS.get("poster", "场景图/Poster")
+
+    banner_path = library.find_in_folder(clean_sku, banner_folder)
+    poster_path = library.find_in_folder(clean_sku, poster_folder)
+    has_scene = bool(banner_path or poster_path)
+    return {
+        "sku": clean_sku,
+        "has_scene": has_scene,
+        "banner_found": bool(banner_path),
+        "poster_found": bool(poster_path),
+        "recommended_flow": "special_full" if has_scene else "special",
+    }
+
+
 def _split_on_last_space(text: str) -> tuple[str, str]:
     """
     按最后一个空格切割文案，返回 (前半段, 后半段)。
@@ -162,13 +195,25 @@ def expand_time_fields(raw_time: str) -> dict[str, str]:
     # 尝试把 "N点" 转为 "N:00"，让 time 字段更标准
     hour_formatted = hour_part
     hour_num_m = re.match(r"(\d{1,2})点(.*)", hour_part)
+    colon_num_m = re.match(r"(\d{1,2}):(\d{2})(.*)", hour_part)
+
+    # time_hour_c: 中文格式，如 "10点发售"
+    hour_c_formatted = ""
     if hour_num_m:
         hh = int(hour_num_m.group(1))
-        suffix = hour_num_m.group(2)  # e.g. "发售"
+        suffix = hour_num_m.group(2).strip()
+        hour_c_formatted = f"{hh}点{suffix or '发售'}"
         hour_formatted = f"{hh:02d}:00{suffix}"
+    elif colon_num_m:
+        hh = int(colon_num_m.group(1))
+        suffix = colon_num_m.group(3).strip()
+        hour_c_formatted = f"{hh}点{suffix or '发售'}"
+    elif hour_part:
+        hour_c_formatted = hour_part
 
-    # time_hour 也统一用格式化后的小时文案，例如 "10:00发售"
+    # time_hour 统一用格式化后的小时文案，例如 "10:00发售"
     result["time_hour"] = hour_formatted
+    result["time_hour_c"] = hour_c_formatted
 
     if date_part and hour_formatted:
         result["time"] = f"{date_part} {hour_formatted}"
@@ -187,6 +232,44 @@ def expand_time_fields(raw_time: str) -> dict[str, str]:
         result["time_c"] = f"{cn_date} {hour_formatted}".strip() if hour_formatted else cn_date
     else:
         result["time_c"] = f"{date_part} {hour_formatted}".strip() if date_part or hour_formatted else raw
+
+    # time_4：取日期部分 + " 火爆发售中"
+    # 例："9月19日10点发售" → "9/19 火爆发售中"
+    if date_part:
+        result["time_4"] = f"{date_part} 火爆发售中"
+    elif raw:
+        result["time_4"] = f"{raw} 火爆发售中"
+    else:
+        result["time_4"] = ""
+
+    # time_cn：纯中文文本时间，如 "8月15日 10:00" 或 "8月15日"（不带发售/首发等后缀）
+    pure_clock = ""
+    if hour_num_m:
+        hh = int(hour_num_m.group(1))
+        pure_clock = f"{hh:02d}:00"
+    elif colon_num_m:
+        hh = int(colon_num_m.group(1))
+        mm = colon_num_m.group(2)
+        pure_clock = f"{hh:02d}:{mm}"
+
+    cn_date_pure = ""
+    if month_day_m:
+        cn_date_pure = f"{month_day_m.group(1)}月{month_day_m.group(2)}日"
+    elif slash_day_m:
+        cn_date_pure = f"{slash_day_m.group(1)}月{slash_day_m.group(2)}日"
+    elif date_part:
+        cn_date_pure = date_part
+
+    if cn_date_pure and pure_clock:
+        result["time_cn"] = f"{cn_date_pure} {pure_clock}"
+    elif cn_date_pure:
+        result["time_cn"] = cn_date_pure
+    elif pure_clock:
+        result["time_cn"] = pure_clock
+    elif raw:
+        result["time_cn"] = raw
+    else:
+        result["time_cn"] = ""
 
     return result
 
@@ -222,7 +305,10 @@ def _run_inner(job: SpecialComposeJob) -> None:
         merged_fields.setdefault("time", time_expanded["time"])       # 格式化 time，用户没传时使用
         merged_fields["time_month"] = time_expanded["time_month"]     # 始终覆盖（派生字段）
         merged_fields["time_hour"] = time_expanded["time_hour"]       # 始终覆盖（派生字段）
+        merged_fields["time_hour_c"] = time_expanded["time_hour_c"]   # 始终覆盖（中文小时文案）
         merged_fields["time_c"] = time_expanded["time_c"]             # 完整中文原始时间
+        merged_fields["time_cn"] = time_expanded["time_cn"]           # 纯中文文本时间（无后缀，如 8月15日 10:00）
+        merged_fields["time_4"] = time_expanded["time_4"]             # 日期 + 火爆发售中
         # 如果 time slot 需要的是格式化版本（如"3/28 10:00发售"），此处覆盖
         if raw_time and time_expanded["time"] != raw_time:
             # 用户传入了原始时间文案，将格式化版本存到 time，原始文案存到 time_raw

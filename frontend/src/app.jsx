@@ -343,8 +343,11 @@ const App = () => {
     const target = templates.find(function(t) {
       return kind === 'full' ? t.is_special_full : (t.is_special && !t.is_special_full);
     });
-    if (target) selectTemplate(target);
-  }, [selectTemplate]);
+    if (target) {
+      setActiveTemplate(target);
+      setSlashTrigger({ cmd: kind === 'full' ? '特殊品（完整）' : '特殊品', mode: kind, key: Date.now() });
+    }
+  }, []);
 
   const showAdmin = currentView === 'admin' && currentUser && currentUser.role === 'admin';
 

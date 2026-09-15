@@ -25,6 +25,12 @@ def _free_port() -> int:
 
 def _find_browser() -> Optional[str]:
     candidates = [
+        # macOS
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        # Windows
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
@@ -33,6 +39,10 @@ def _find_browser() -> Optional[str]:
     for candidate in candidates:
         if Path(candidate).exists():
             return candidate
+    for cmd in ("google-chrome", "chrome", "chromium", "msedge"):
+        found = shutil.which(cmd)
+        if found:
+            return found
     return None
 
 

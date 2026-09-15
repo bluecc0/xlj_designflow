@@ -206,7 +206,7 @@ from .models import (
 )
 from .product_library import ProductLibrary
 from .slot_schema import schema as slot_schema
-from .special_compose import parse_special_command, run_special_compose
+from .special_compose import detect_special_materials, parse_special_command, run_special_compose
 from .proxy_download_relay import inspect_url as proxy_download_inspect_url, download_url as proxy_download_download_url, stop as proxy_download_stop, check_login_status as proxy_download_check_login, login_shell as proxy_download_login_shell
 
 
@@ -2559,7 +2559,7 @@ def debug_team_scan():
     except Exception as e:
         return {"error": str(e)}
 
-    TEMPLATE_MARKER = "模板"
+    TEMPLATE_MARKERS = ("模板", "测试")
     for team in all_teams:
         tid = team.get("id") or team.get("~:id", "")
         tname = team.get("name") or team.get("~:name", "")
@@ -2570,7 +2570,7 @@ def debug_team_scan():
             for p in projects:
                 pid = p.get("id") or p.get("~:id", "")
                 pname = p.get("name") or p.get("~:name", "")
-                matched = TEMPLATE_MARKER in (pname or "")
+                matched = any(m in (pname or "") for m in TEMPLATE_MARKERS)
                 proj_entry = {"id": pid, "name": pname, "is_template_project": matched, "files": []}
                 if matched:
                     try:
@@ -2706,11 +2706,12 @@ def list_templates(file_id: Optional[str] = None):
     扫描策略：
     1. 从 PENPOT_FILE_ID 主文件获取 team_id
     2. 枚举该团队下所有 project 的所有文件
-    3. 只扫 project 名含「[模板]」的 project 下的所有文件
-    4. 每个文件里的每个 Board（frame）作为一个独立模板条目
+    3. 只扫 project 名含「模板」或「测试」的 project 下的所有文件
+    4. 二级过滤：文件名也必须包含「模板」或「测试」
+    5. 每个文件里的每个 Board（frame）作为一个独立模板条目
 
-    团队协作约定：在 Penpot 里新建一个 project，命名包含「模板」
-    （如「测试模板」「电商模板库」），把所有模板文件放进去即可被自动识别。
+    团队协作约定：在 Penpot 里新建一个 project，命名包含「模板」或「测试」
+    （如「测试模板」「电商模板库」），把模板文件放进去即可被自动识别。
     合成副本统一放 Drafts，不会出现在模板库中。
     """
     fid = file_id or settings.penpot_file_id
@@ -2724,7 +2725,7 @@ def list_templates(file_id: Optional[str] = None):
         raise HTTPException(503, f"Penpot 连接失败: {e}")
 
     # Step 1: 获取该账号下所有团队（含个人团队）
-    TEMPLATE_MARKER = "模板"
+    TEMPLATE_MARKERS = ("模板", "测试")
     template_file_ids: list[str] = []
 
     try:
@@ -2741,16 +2742,17 @@ def list_templates(file_id: Optional[str] = None):
             for p in team_projects:
                 pid = p.get("id") or p.get("~:id", "")
                 pname = p.get("name") or p.get("~:name", "")
-                if not pid or TEMPLATE_MARKER not in pname:
+                # 排除系统 Drafts 草稿箱
+                if not pid or (pname or "").strip().lower() == "drafts":
                     continue
                 try:
                     proj_files = client.get_project_files(pid)
                     for pf in proj_files:
                         pf_id = pf.get("id") or pf.get("~:id", "")
                         pf_name = pf.get("name") or pf.get("~:name", "")
-                        # 二级过滤：文件名本身也必须含「模板」才认定为模板文件
-                        # 避免合成时 duplicate_file 产生的副本（副本名称不含「模板」）被误识别
-                        if pf_id and TEMPLATE_MARKER in pf_name:
+                        # 二级过滤：文件名必须含「模板」或「测试」才认定为模板文件
+                        # 避免合成时产生的副本（如 ABAW003_特殊品、新建文件等）被误识别
+                        if pf_id and any(m in (pf_name or "") for m in TEMPLATE_MARKERS):
                             template_file_ids.append((pf_id, pf_name))
                 except Exception:
                     continue
@@ -2782,7 +2784,7 @@ def debug_scan():
     except Exception as e:
         raise HTTPException(503, f"Penpot 连接失败: {e}")
 
-    TEMPLATE_MARKER = "模板"
+    TEMPLATE_MARKERS = ("模板", "测试")
     result = {"teams": [], "template_files": [], "penpot_file_id": settings.penpot_file_id}
 
     try:
@@ -2800,25 +2802,27 @@ def debug_scan():
             for p in team_projects:
                 pid = p.get("id") or p.get("~:id", "")
                 pname = p.get("name") or p.get("~:name", "")
-                has_marker = TEMPLATE_MARKER in pname
+                is_drafts = (pname or "").strip().lower() == "drafts"
+                has_marker = not is_drafts
                 proj_entry = {"id": pid, "name": pname, "has_marker": has_marker, "files": []}
                 try:
                     proj_files = client.get_project_files(pid)
                     for pf in proj_files:
                         pf_id = pf.get("id") or pf.get("~:id", "")
                         pf_name = pf.get("name") or pf.get("~:name", "")
-                        file_has_marker = TEMPLATE_MARKER in pf_name
+                        file_has_marker = any(m in (pf_name or "") for m in TEMPLATE_MARKERS)
                         proj_entry["files"].append({"id": pf_id, "name": pf_name, "file_has_marker": file_has_marker})
                         if has_marker and file_has_marker:
                             fd = client.get_file(pf_id)
                             frames = client.parse_frames(fd)
                             fname = fd.get("name") or fd.get("~:name") or ""
+                            fname_target = pf_name or fname
                             result["template_files"].append({
                                 "file_id": pf_id,
                                 "file_name": pf_name,
                                 "penpot_name": fname,
-                                "is_special": "特殊品" in fname and "完整" not in fname,
-                                "is_special_full": "特殊品" in fname and "完整" in fname,
+                                "is_special": "特殊品" in fname_target and "完整" not in fname_target,
+                                "is_special_full": "特殊品" in fname_target and "完整" in fname_target,
                                 "frame_count": len(frames),
                                 "frame_names": [f["name"] for f in frames[:10]],
                             })
@@ -3121,6 +3125,17 @@ def list_special_composes(request: Request, limit: int = 20):
     """
     user = _current_user(request)
     return load_special_jobs(limit, None if _is_admin(user) else user["id"])
+
+
+@app.get("/special-compose/detect")
+def detect_special_materials_endpoint(sku: str, request: Request):
+    """
+    检测指定 SKU 是否在素材库中包含场景图素材（Banner/Poster）。
+    只做 exists 路径探测，响应在毫秒级。
+    必须写在 /{job_id} 前面，避免 "detect" 被误当成 job_id 路由。
+    """
+    _current_user(request)
+    return detect_special_materials(sku)
 
 
 @app.get("/special-compose/{job_id}", response_model=SpecialComposeJob)
