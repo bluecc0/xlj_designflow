@@ -1153,27 +1153,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       pageId: t.pageId || pages[0].id,
     }))
 
-    // 智能画板纠正：如果当前 activePageId 没有图元但历史页面有图元，优先激活最近有内容的画板
-    const activeHasContent = images.some((im) => im.pageId === activePageId) ||
-      texts.some((t) => t.pageId === activePageId)
-    if (!activeHasContent) {
-      const lastContentPage = [...pages].reverse().find((p) =>
-        images.some((im) => im.pageId === p.id) || texts.some((t) => t.pageId === p.id)
-      )
-      if (lastContentPage) {
-        activePageId = lastContentPage.id
-      }
-    }
-
-    // 清理因历史 new-canvas 累积的大量同名空页面，保留当前页面和有内容的页面
-    const meaningfulPages = pages.filter((p) => {
-      if (p.id === activePageId) return true
-      return images.some((im) => im.pageId === p.id) || texts.some((t) => t.pageId === p.id)
-    })
-    if (meaningfulPages.length > 0) {
-      pages = meaningfulPages
-    }
-
     // 视口水合恢复
     if (doc.viewport && typeof doc.viewport.zoom === 'number') {
       useViewportStore.getState().setZoom(doc.viewport.zoom)
