@@ -250,3 +250,94 @@ export async function runLayerExtract(
     layers: formattedLayers,
   }
 }
+
+export interface ImageMetadataResponse {
+  url: string
+  fileName?: string
+  fileSize?: number | null
+  fileSizeFormatted?: string
+  mimeType?: string
+  isAiGenerated: boolean
+  aiMetadata?: {
+    jobId?: string
+    prompt?: string
+    originalPrompt?: string
+    resolvedPrompt?: string
+    promptTrace?: string
+    model?: string
+    provider?: string
+    size?: string
+    resolution?: string
+    hasReference?: boolean
+    createdAt?: number
+    requestMeta?: Record<string, any>
+  } | null
+}
+
+/**
+ * 获取图片详细元数据及 AI 生图 Prompt 信息
+ */
+export async function fetchImageMetadata(imageUrl: string): Promise<ImageMetadataResponse | null> {
+  const normalized = normalizeAssetUrl(imageUrl)
+  if (!normalized) return null
+
+  try {
+    const resp = await fetch(`/ai-image/metadata?url=${encodeURIComponent(normalized)}`, {
+      credentials: 'include',
+    })
+    if (resp.ok) {
+      const data = await resp.json()
+      return {
+        url: data.url || normalized,
+        fileName: data.file_name,
+        fileSize: data.file_size,
+        fileSizeFormatted: data.file_size_formatted,
+        mimeType: data.mime_type,
+        isAiGenerated: Boolean(data.is_ai_generated),
+        aiMetadata: data.ai_metadata
+          ? {
+              jobId: data.ai_metadata.job_id,
+              prompt: data.ai_metadata.prompt,
+              originalPrompt: data.ai_metadata.original_prompt,
+              resolvedPrompt: data.ai_metadata.resolved_prompt,
+              promptTrace: data.ai_metadata.prompt_trace,
+              model: data.ai_metadata.model,
+              provider: data.ai_metadata.provider,
+              size: data.ai_metadata.size,
+              resolution: data.ai_metadata.resolution,
+              hasReference: data.ai_metadata.has_reference,
+              createdAt: data.ai_metadata.created_at,
+              requestMeta: data.ai_metadata.request_meta,
+            }
+          : null,
+      }
+    }
+  } catch (e) {
+    // 忽略异常，降级通过 HEAD 请求探测
+  }
+
+  // 降级：通过 HEAD 请求探测文件大小
+  try {
+    const headResp = await fetch(normalized, { method: 'HEAD' })
+    const lenHeader = headResp.headers.get('content-length')
+    const mime = headResp.headers.get('content-type') || ''
+    const size = lenHeader ? parseInt(lenHeader, 10) : null
+    let sizeFormatted = ''
+    if (size !== null && !isNaN(size)) {
+      if (size < 1024) sizeFormatted = `${size} B`
+      else if (size < 1024 * 1024) sizeFormatted = `${(size / 1024).toFixed(1)} KB`
+      else sizeFormatted = `${(size / (1024 * 1024)).toFixed(2)} MB`
+    }
+    return {
+      url: normalized,
+      fileSize: size,
+      fileSizeFormatted: sizeFormatted,
+      mimeType: mime,
+      isAiGenerated: false,
+      aiMetadata: null,
+    }
+  } catch (e) {
+    return null
+  }
+}
+

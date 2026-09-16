@@ -1794,7 +1794,7 @@ const Canvas = ({
   const hasResult = resultTemplate != null;
   const iframeRef = React.useRef(null);
   const editorReadyRef = React.useRef(false);
-  const pendingMessageRef = React.useRef(null);
+  const pendingMessagesRef = React.useRef([]);
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
 
@@ -1825,9 +1825,11 @@ const Canvas = ({
   }, []);
   const markEditorReady = React.useCallback(() => {
     editorReadyRef.current = true;
-    if (pendingMessageRef.current) {
-      postToEditor(pendingMessageRef.current);
-      pendingMessageRef.current = null;
+    if (pendingMessagesRef.current && pendingMessagesRef.current.length > 0) {
+      pendingMessagesRef.current.forEach(msg => {
+        postToEditor(msg);
+      });
+      pendingMessagesRef.current = [];
     }
   }, [postToEditor]);
 
@@ -1877,7 +1879,7 @@ const Canvas = ({
   }, [markEditorReady, onUseReferenceImages, postToEditor]);
   React.useEffect(() => {
     editorReadyRef.current = false;
-  }, [iframeNonce, t && t.id]);
+  }, [iframeNonce]);
   React.useEffect(() => {
     if (!editorCommand) return;
     const normalizeAssetUrl = rawUrl => {
@@ -1900,6 +1902,18 @@ const Canvas = ({
       message = {
         type: 'designflow:insert-image',
         urls: (editorCommand.urls || []).map(normalizeAssetUrl).filter(Boolean),
+        images: (editorCommand.images || []).map(function (img) {
+          if (typeof img === 'object' && img !== null && img.url) {
+            return Object.assign({}, img, {
+              url: normalizeAssetUrl(img.url)
+            });
+          }
+          return {
+            url: normalizeAssetUrl(img)
+          };
+        }).filter(function (x) {
+          return Boolean(x.url);
+        }),
         mode: editorCommand.mode,
         name: editorCommand.name
       };
@@ -1921,7 +1935,7 @@ const Canvas = ({
     if (editorReadyRef.current) {
       postToEditor(message);
     } else {
-      pendingMessageRef.current = message;
+      pendingMessagesRef.current.push(message);
       postToEditor({
         type: 'designflow:ping'
       });
@@ -4958,77 +4972,80 @@ const ChatReturned = ({
         fontSize: 10,
         color: 'var(--ink-3)'
       }
-    }, 'ratio=', promptParams.aspectRatio || promptParams.size || 'auto', ' · size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认') : null), m.status === 'done' && fullImageUrl && !batchImages && React.createElement('div', null, React.createElement('img', {
-      src: displayImageUrl || fullImageUrl,
-      alt: m.prompt,
-      style: {
-        width: '100%',
-        borderRadius: 10,
-        display: 'block',
-        border: '1px solid var(--line-2)',
-        cursor: 'pointer'
-      },
-      onClick: () => window.open(fullImageUrl, '_blank')
-    }), React.createElement('div', {
-      style: {
-        marginTop: 6,
-        display: 'flex',
-        gap: 6,
-        flexWrap: 'wrap'
-      }
-    }, React.createElement('a', {
-      href: fullImageUrl,
-      download: true,
-      style: {
-        fontSize: 11,
-        padding: '4px 10px',
-        borderRadius: 5,
-        background: 'var(--ink)',
-        color: 'white',
-        textDecoration: 'none',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4
-      }
-    }, React.createElement(I.download, {
-      size: 10
-    }), '下载'), m.inspirationPostId ? React.createElement('button', {
-      onClick: function () {
-        onUnpublishInspiration(m);
-      },
-      style: {
-        fontSize: 11,
-        padding: '4px 10px',
-        borderRadius: 5,
-        background: 'var(--panel)',
-        color: 'var(--ok)',
-        border: '1px solid var(--ok)',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4,
-        cursor: 'pointer'
-      }
-    }, React.createElement(I.check, {
-      size: 10
-    }), '已发布 · 取消') : React.createElement('button', {
-      onClick: function () {
-        onPublishInspiration(m);
-      },
-      style: {
-        fontSize: 11,
-        padding: '4px 10px',
-        borderRadius: 5,
-        background: 'var(--panel)',
-        color: 'var(--ink-2)',
-        border: '1px solid var(--line)',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4,
-        cursor: 'pointer'
-      }
-    }, React.createElement(I.sparkles, {
-      size: 10
-    }), '发布到灵感'))),
+    }, 'ratio=', promptParams.aspectRatio || promptParams.size || 'auto', ' · size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认') : null), m.status === 'done' && fullImageUrl && !batchImages && function () {
+      return React.createElement('div', null, React.createElement('img', {
+        src: displayImageUrl || fullImageUrl,
+        alt: m.prompt,
+        style: {
+          width: '100%',
+          borderRadius: 10,
+          display: 'block',
+          border: '1px solid var(--line-2)',
+          cursor: 'pointer'
+        },
+        onClick: () => window.open(fullImageUrl, '_blank')
+      }), React.createElement('div', {
+        style: {
+          marginTop: 6,
+          display: 'flex',
+          gap: 6,
+          flexWrap: 'wrap',
+          alignItems: 'center'
+        }
+      }, React.createElement('a', {
+        href: fullImageUrl,
+        download: true,
+        style: {
+          fontSize: 11,
+          padding: '4px 10px',
+          borderRadius: 5,
+          background: 'var(--ink)',
+          color: 'white',
+          textDecoration: 'none',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4
+        }
+      }, React.createElement(I.download, {
+        size: 10
+      }), '下载'), m.inspirationPostId ? React.createElement('button', {
+        onClick: function () {
+          onUnpublishInspiration(m);
+        },
+        style: {
+          fontSize: 11,
+          padding: '4px 10px',
+          borderRadius: 5,
+          background: 'var(--panel)',
+          color: 'var(--ok)',
+          border: '1px solid var(--ok)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          cursor: 'pointer'
+        }
+      }, React.createElement(I.check, {
+        size: 10
+      }), '已发布 · 取消') : React.createElement('button', {
+        onClick: function () {
+          onPublishInspiration(m);
+        },
+        style: {
+          fontSize: 11,
+          padding: '4px 10px',
+          borderRadius: 5,
+          background: 'var(--panel)',
+          color: 'var(--ink-2)',
+          border: '1px solid var(--line)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          cursor: 'pointer'
+        }
+      }, React.createElement(I.sparkles, {
+        size: 10
+      }), '发布到灵感')));
+    }(),
     // 批量卡：n 张图的网格，生成中/失败/完成分别渲染
     batchImages && React.createElement('div', {
       style: {
@@ -5065,7 +5082,8 @@ const ChatReturned = ({
           style: {
             display: 'flex',
             gap: 4,
-            flexWrap: 'wrap'
+            flexWrap: 'wrap',
+            alignItems: 'center'
           }
         }, React.createElement('a', {
           href: imFull,
@@ -8853,7 +8871,8 @@ const Chat = ({
   const runAiImageGeneration = React.useCallback(async (model, prompt, displayText, refImages, aiOptions) => {
     const batchCount = Math.max(1, Math.min(parseInt(aiOptions.batchCount) || 1, 4));
     setIsLoading(true);
-    var finalPrompt = prompt;
+    var originalPrompt = prompt || '';
+    var finalPrompt = prompt || '';
     var finalRefImages = Array.isArray(refImages) ? refImages.slice() : [];
     var refPreviews = [];
     var lastSize = aiOptions.size || '1024x1024';
@@ -9010,12 +9029,10 @@ const Chat = ({
     const tryFlushCollected = function () {
       doneCount++;
       if (doneCount === batchCount && onComposeComplete && collected.length > 0) {
-        const sortedUrls = collected.slice().sort(function (a, b) {
+        const sorted = collected.slice().sort(function (a, b) {
           return a.index - b.index;
-        }).map(function (x) {
-          return x.url;
         });
-        onComposeComplete(null, null, sortedUrls, null);
+        onComposeComplete(null, null, sorted, null);
       }
     };
     const submitOne = function (slotAt, index) {
@@ -9196,7 +9213,16 @@ const Chat = ({
                 loadAiChatHistory();
                 collected.push({
                   url: statusData.image_url,
-                  index: index
+                  index: index,
+                  prompt: finalPrompt,
+                  originalPrompt: statusData && statusData.original_prompt || originalPrompt || finalPrompt,
+                  resolvedPrompt: statusData && statusData.resolved_prompt || plannedPrompt || finalPrompt,
+                  model: model,
+                  provider: statusData && statusData.provider || provider,
+                  jobId: jobId,
+                  size: aiOptions.size || '1024x1024',
+                  resolution: aiOptions.resolution || '1K',
+                  createdAt: Date.now()
                 });
                 tryFlushCollected();
                 resolve();
@@ -9383,10 +9409,21 @@ const Chat = ({
             var okOrdered = [];
             jobIds.forEach(function (jid, i) {
               var t = terminal[jid];
-              if (t.status === 'done' && t.url) okOrdered.push({
-                url: t.url,
-                index: i
-              });
+              if (t.status === 'done' && t.url) {
+                okOrdered.push({
+                  url: t.url,
+                  index: i,
+                  prompt: finalPrompt,
+                  originalPrompt: t && t.original_prompt || originalPrompt || finalPrompt,
+                  resolvedPrompt: plannedPrompt || finalPrompt,
+                  model: model,
+                  provider: t.provider || provider,
+                  jobId: jid,
+                  size: aiOptions.size || '1024x1024',
+                  resolution: aiOptions.resolution || '1K',
+                  createdAt: Date.now()
+                });
+              }
             });
             var failCount = jobIds.length - okOrdered.length;
             var firstErr = null;
@@ -9423,9 +9460,7 @@ const Chat = ({
             }
             loadAiChatHistory();
             if (okOrdered.length && onComposeComplete) {
-              onComposeComplete(null, null, okOrdered.map(function (x) {
-                return x.url;
-              }), null);
+              onComposeComplete(null, null, okOrdered, null);
             }
             resolve();
           };
@@ -9797,7 +9832,16 @@ const Chat = ({
                 });
               });
               if (onComposeComplete) {
-                onComposeComplete(null, null, [payload.image.image_url], null);
+                const agentPrompt = payload && payload.generationInstruction && (payload.generationInstruction.prompt || payload.generationInstruction.text) || payload && payload.image && payload.image.prompt && (payload.image.prompt.prompt || payload.image.prompt.generationInstruction) || '';
+                onComposeComplete(null, null, [{
+                  url: payload.image.image_url,
+                  prompt: agentPrompt,
+                  originalPrompt: agentPrompt,
+                  model: payload && payload.image && payload.image.model || 'agent',
+                  provider: payload && payload.image && payload.image.provider || '',
+                  jobId: payload && payload.image && payload.image.id || '',
+                  createdAt: Date.now()
+                }], null);
               }
             }
             if (projectId) {
@@ -14340,6 +14384,7 @@ const App = () => {
   const [templatePanelCollapsed, setTemplatePanelCollapsed] = React.useState(true);
   const [templateRevealHovered, setTemplateRevealHovered] = React.useState(false);
   const [whatsNewRelease, setWhatsNewRelease] = React.useState(null);
+  const isFirstTemplateMountRef = React.useRef(true);
   const handleUseInspirationPrompt = React.useCallback(function (post) {
     setInspirationOpen(false);
     setSeedPrompt(post.vlm_prompt || post.resolved_prompt || post.prompt || post.original_prompt || '');
@@ -14419,10 +14464,27 @@ const App = () => {
     } catch (e) {}
   }, []);
   const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl, sourceUserId) => {
-    if (!sourceUserId || String(sourceUserId) !== currentUserIdRef.current) return;
+    if (sourceUserId && currentUserIdRef.current && String(sourceUserId) !== currentUserIdRef.current) return;
     const explicitClear = !jobId && !resultTpl && Array.isArray(directImageUrls) && directImageUrls.length === 0;
-    const rawUrls = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : directImageUrls ? [directImageUrls] : [];
-    const urls = (rawUrls.length ? rawUrls : jobId ? ['/compose/' + encodeURIComponent(jobId) + '/image'] : []).map(normalizeDesignflowAssetUrl).filter(Boolean);
+    const rawItems = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : directImageUrls ? [directImageUrls] : [];
+    const normalizedItems = rawItems.map(function (item) {
+      if (typeof item === 'string') {
+        const u = normalizeDesignflowAssetUrl(item);
+        return u ? {
+          url: u
+        } : null;
+      }
+      if (item && typeof item === 'object' && item.url) {
+        const u = normalizeDesignflowAssetUrl(item.url);
+        return u ? Object.assign({}, item, {
+          url: u
+        }) : null;
+      }
+      return null;
+    }).filter(Boolean);
+    const urls = (normalizedItems.length ? normalizedItems.map(function (x) {
+      return x.url;
+    }) : jobId ? ['/compose/' + encodeURIComponent(jobId) + '/image'] : []).map(normalizeDesignflowAssetUrl).filter(Boolean);
     if (explicitClear) {
       setResultTemplate(null);
       setEditorCommand({
@@ -14460,11 +14522,17 @@ const App = () => {
       });
     }
     if (urls.length > 0) {
+      setInspirationOpen(false);
       setEditorCommand({
         key: Date.now() + Math.random(),
         type: 'insert-images',
         mode: 'image',
         urls,
+        images: normalizedItems.length > 0 ? normalizedItems : urls.map(function (u) {
+          return {
+            url: u
+          };
+        }),
         name: resultTpl && resultTpl.name || '生成结果'
       });
     }
@@ -14473,6 +14541,10 @@ const App = () => {
     }
   }, [activeTemplate, normalizeDesignflowAssetUrl]);
   React.useEffect(() => {
+    if (isFirstTemplateMountRef.current) {
+      isFirstTemplateMountRef.current = false;
+      return;
+    }
     setResultTemplate(null);
     setEditorCommand({
       key: Date.now() + Math.random(),

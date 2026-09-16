@@ -69,7 +69,7 @@ interface CanvasState {
   recalcFrameAttachment: (type: 'image' | 'text', ids: string[]) => void
 
   // 自动排版插入
-  insertImagesAuto: (urls: string[], mode?: string, name?: string) => CanvasImage[]
+  insertImagesAuto: (items: (string | { url: string; name?: string; [key: string]: any })[], mode?: string, name?: string) => CanvasImage[]
 
   // 快照与保存
   loadDocument: (doc: any, rev?: number) => void
@@ -270,6 +270,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       selectedIds: [],
       selectedType: null,
     }))
+    if (typeof window !== 'undefined') {
+      try {
+        useViewportStore.getState().setPan(120, 80)
+        useViewportStore.getState().setZoom(0.8)
+      } catch (e) {}
+    }
     return newPageId
   },
 
@@ -981,7 +987,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   // ─── 自动排版插入（4列网格） ──────────────────────────────
-  insertImagesAuto: (urls, mode, name) => {
+  insertImagesAuto: (items, mode, name) => {
     const { activePageId, frames, images } = get()
     const activeFrame = frames.find((f) => f.pageId === activePageId)
 
@@ -1000,7 +1006,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
     const createdImages: CanvasImage[] = []
 
-    urls.forEach((url, idx) => {
+    items.forEach((item, idx) => {
+      const isObj = typeof item === 'object' && item !== null
+      const url = isObj ? item.url : item
+      if (!url) return
+      const itemName = (isObj && item.name) || name
+      const meta = isObj ? { ...item } : undefined
+      if (meta) {
+        delete (meta as any).url
+        delete (meta as any).name
+        delete (meta as any).index
+      }
+
       const currentIndex = startIndex + idx
       const col = currentIndex % GRID_COLS
       const row = Math.floor(currentIndex / GRID_COLS)
@@ -1019,9 +1036,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         height: CELL_H,
         rotation: 0,
         url,
-        name: name || `生成图片 ${currentIndex + 1}`,
+        name: itemName || `生成图片 ${currentIndex + 1}`,
         locked: false,
         opacity: 1,
+        meta: meta && Object.keys(meta).length > 0 ? meta : undefined,
       }
       createdImages.push(img)
 
@@ -1057,6 +1075,52 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       selectedType: 'image',
     }))
 
+    // 自动平移视口并适度缩放，确保新插入的图片完整居中展示在可视区域内
+    if (createdImages.length > 0 && typeof window !== 'undefined') {
+      try {
+        const minX = Math.min(...createdImages.map((im) => im.x))
+        const minY = Math.min(...createdImages.map((im) => im.y))
+        const maxX = Math.max(...createdImages.map((im) => im.x + im.width))
+        const maxY = Math.max(...createdImages.map((im) => im.y + im.height))
+        const vp = useViewportStore.getState()
+        const vpWidth = window.innerWidth || 1000
+        const vpHeight = window.innerHeight || 800
+
+        const sMinX = minX * vp.zoom + vp.panX
+        const sMinY = minY * vp.zoom + vp.panY
+        const sMaxX = maxX * vp.zoom + vp.panX
+        const sMaxY = maxY * vp.zoom + vp.panY
+
+        const isVisible =
+          sMinX >= 60 &&
+          sMinY >= 80 &&
+          sMaxX <= vpWidth - 60 &&
+          sMaxY <= vpHeight - 80
+
+        if (!isVisible) {
+          const boxW = Math.max(100, maxX - minX)
+          const boxH = Math.max(100, maxY - minY)
+          const availW = Math.max(200, vpWidth - 200)
+          const availH = Math.max(200, vpHeight - 180)
+
+          let targetZoom = vp.zoom
+          if (boxW * targetZoom > availW || boxH * targetZoom > availH) {
+            targetZoom = Math.max(0.15, Math.min(1.0, Math.min(availW / boxW, availH / boxH)))
+          }
+
+          const centerX = (minX + maxX) / 2
+          const centerY = (minY + maxY) / 2
+          const targetPanX = Math.round(vpWidth / 2 - centerX * targetZoom)
+          const targetPanY = Math.round(vpHeight / 2 - centerY * targetZoom)
+
+          vp.setZoom(targetZoom)
+          vp.setPan(targetPanX, targetPanY)
+        }
+      } catch (err) {
+        console.warn('Auto focus viewport failed:', err)
+      }
+    }
+
     return createdImages
   },
 
@@ -1069,7 +1133,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (pages.length === 0) {
       pages = [DEFAULT_PAGE]
     }
-    const activePageId = doc.activePageId || pages[0].id
+    let activePageId = doc.activePageId || pages[0].id
 
     // 画板水合（支持为空 []）
     const frames: CanvasFrame[] = (Array.isArray(doc.frames) ? doc.frames : []).map((f: any) => ({
@@ -1088,6 +1152,27 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       ...t,
       pageId: t.pageId || pages[0].id,
     }))
+
+    // 智能画板纠正：如果当前 activePageId 没有图元但历史页面有图元，优先激活最近有内容的画板
+    const activeHasContent = images.some((im) => im.pageId === activePageId) ||
+      texts.some((t) => t.pageId === activePageId)
+    if (!activeHasContent) {
+      const lastContentPage = [...pages].reverse().find((p) =>
+        images.some((im) => im.pageId === p.id) || texts.some((t) => t.pageId === p.id)
+      )
+      if (lastContentPage) {
+        activePageId = lastContentPage.id
+      }
+    }
+
+    // 清理因历史 new-canvas 累积的大量同名空页面，保留当前页面和有内容的页面
+    const meaningfulPages = pages.filter((p) => {
+      if (p.id === activePageId) return true
+      return images.some((im) => im.pageId === p.id) || texts.some((t) => t.pageId === p.id)
+    })
+    if (meaningfulPages.length > 0) {
+      pages = meaningfulPages
+    }
 
     // 视口水合恢复
     if (doc.viewport && typeof doc.viewport.zoom === 'number') {

@@ -158,6 +158,7 @@ const App = () => {
   const [templatePanelCollapsed, setTemplatePanelCollapsed] = React.useState(true);
   const [templateRevealHovered, setTemplateRevealHovered] = React.useState(false);
   const [whatsNewRelease, setWhatsNewRelease] = React.useState(null);
+  const isFirstTemplateMountRef = React.useRef(true);
 
   const handleUseInspirationPrompt = React.useCallback(function(post) {
     setInspirationOpen(false);
@@ -235,10 +236,22 @@ const App = () => {
   }, []);
 
   const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl, sourceUserId) => {
-    if (!sourceUserId || String(sourceUserId) !== currentUserIdRef.current) return;
+    if (sourceUserId && currentUserIdRef.current && String(sourceUserId) !== currentUserIdRef.current) return;
     const explicitClear = !jobId && !resultTpl && Array.isArray(directImageUrls) && directImageUrls.length === 0;
-    const rawUrls = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : (directImageUrls ? [directImageUrls] : []);
-    const urls = (rawUrls.length ? rawUrls : (jobId ? ['/compose/' + encodeURIComponent(jobId) + '/image'] : []))
+    const rawItems = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : (directImageUrls ? [directImageUrls] : []);
+    const normalizedItems = rawItems.map(function(item) {
+      if (typeof item === 'string') {
+        const u = normalizeDesignflowAssetUrl(item);
+        return u ? { url: u } : null;
+      }
+      if (item && typeof item === 'object' && item.url) {
+        const u = normalizeDesignflowAssetUrl(item.url);
+        return u ? Object.assign({}, item, { url: u }) : null;
+      }
+      return null;
+    }).filter(Boolean);
+
+    const urls = (normalizedItems.length ? normalizedItems.map(function(x) { return x.url; }) : (jobId ? ['/compose/' + encodeURIComponent(jobId) + '/image'] : []))
       .map(normalizeDesignflowAssetUrl)
       .filter(Boolean);
     if (explicitClear) {
@@ -278,11 +291,13 @@ const App = () => {
       });
     }
     if (urls.length > 0) {
+      setInspirationOpen(false);
       setEditorCommand({
         key: Date.now() + Math.random(),
         type: 'insert-images',
         mode: 'image',
         urls,
+        images: normalizedItems.length > 0 ? normalizedItems : urls.map(function(u) { return { url: u }; }),
         name: (resultTpl && resultTpl.name) || '生成结果',
       });
     }
@@ -292,6 +307,10 @@ const App = () => {
   }, [activeTemplate, normalizeDesignflowAssetUrl]);
 
   React.useEffect(() => {
+    if (isFirstTemplateMountRef.current) {
+      isFirstTemplateMountRef.current = false;
+      return;
+    }
     setResultTemplate(null);
     setEditorCommand({
       key: Date.now() + Math.random(),

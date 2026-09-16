@@ -31,6 +31,22 @@ export interface CanvasFrame {
   background?: string
 }
 
+export interface CanvasImageMeta {
+  prompt?: string
+  originalPrompt?: string
+  resolvedPrompt?: string
+  promptTrace?: string
+  model?: string
+  provider?: string
+  jobId?: string
+  createdAt?: number | string
+  size?: string
+  resolution?: string
+  fileSize?: number
+  mimeType?: string
+  [key: string]: any
+}
+
 export interface CanvasImage {
   id: string
   pageId: string
@@ -46,7 +62,7 @@ export interface CanvasImage {
   name?: string
   locked?: boolean
   opacity?: number
-  meta?: Record<string, any>
+  meta?: CanvasImageMeta
 }
 
 export interface CanvasText {

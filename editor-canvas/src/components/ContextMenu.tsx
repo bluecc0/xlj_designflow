@@ -22,9 +22,11 @@ import {
   Focus,
   Maximize,
   Package,
+  Info,
 } from 'lucide-react'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
+import type { CanvasImage } from '../types'
 
 export interface ContextMenuState {
   visible: boolean
@@ -38,6 +40,7 @@ interface Props {
   menuState: ContextMenuState
   onClose: () => void
   onOpenImportModal?: (pos: { x: number; y: number }) => void
+  onOpenPropertiesModal?: (image: CanvasImage) => void
 }
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
@@ -47,6 +50,7 @@ export const ContextMenu = memo(function ContextMenu({
   menuState,
   onClose,
   onOpenImportModal,
+  onOpenPropertiesModal,
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null)
@@ -534,6 +538,27 @@ export const ContextMenu = memo(function ContextMenu({
               </>
             )}
           </div>
+
+          {/* 单张图片：属性卡片（置于菜单最底部） */}
+          {isSingleImage && singleImage && (
+            <>
+              <div style={dividerStyle} />
+              <div
+                data-action="image-properties"
+                onClick={() => {
+                  onOpenPropertiesModal?.(singleImage)
+                  onClose()
+                }}
+                style={menuItemStyle}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#eff6ff')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              >
+                <Info size={14} color="#2563eb" strokeWidth={2.0} style={{ pointerEvents: 'none' }} />
+                <span style={{ flex: 1, color: '#0f172a', fontWeight: 600 }}>属性</span>
+                <span style={{ ...shortcutStyle, color: '#2563eb' }}>{isMac ? '⌥I' : 'Alt+I'}</span>
+              </div>
+            </>
+          )}
         </>
       ) : (
         /* ─── 空白画布菜单项 ─── */

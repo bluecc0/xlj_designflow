@@ -7,6 +7,7 @@ import { calculateSnap, type SnapLine, type RectBox } from '../utils/snapping'
 interface Props {
   image: CanvasImage
   onSnapLinesChange?: (lines: SnapLine[]) => void
+  onContextMenu?: (e: React.MouseEvent) => void
 }
 
 const HANDLES: { pos: ResizeHandle; cursor: string; x: string; y: string }[] = [
@@ -20,7 +21,7 @@ const HANDLES: { pos: ResizeHandle; cursor: string; x: string; y: string }[] = [
   { pos: 'w', cursor: 'ew-resize', x: '0%', y: '50%' },
 ]
 
-export function SelectionOverlay({ image, onSnapLinesChange }: Props) {
+export function SelectionOverlay({ image, onSnapLinesChange, onContextMenu }: Props) {
   const zoom = useViewportStore((s) => s.zoom)
   const screenToCanvas = useViewportStore((s) => s.screenToCanvas)
   const updateImage = useCanvasStore((s) => s.updateImage)
@@ -175,6 +176,11 @@ export function SelectionOverlay({ image, onSnapLinesChange }: Props) {
       {/* 选中外框（极简暗色，无蓝色，边框保持 1.5px 屏幕像素） */}
       <div
         onMouseDown={handleMoveMouseDown}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          onContextMenu?.(e)
+        }}
         style={{
           position: 'absolute',
           inset: 0,

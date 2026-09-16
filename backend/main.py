@@ -18,6 +18,7 @@ import functools
 import html
 import json
 import logging
+import mimetypes
 import re
 import shutil
 import sqlite3
@@ -5544,6 +5545,81 @@ async def ai_image_client_event(request: Request):
     return {"ok": True, "client_request_id": client_req}
 
 
+@app.get("/ai-image/metadata")
+def ai_image_metadata(request: Request, url: str):
+    """查询图片元数据（文件体积、物理分辨率、MIME类型及AI生图Prompt/模型信息）"""
+    clean_url = (url or "").strip()
+    if not clean_url:
+        raise HTTPException(400, "图片地址不能为空")
+
+    user = None
+    try:
+        user = _current_user(request)
+    except Exception:
+        pass
+
+    split = urlsplit(clean_url)
+    path = split.path or clean_url
+
+    # 1. 尝试反查 AI 生图任务 (ai_image_jobs 或 agent_images)
+    job = load_ai_image_job_by_image_url(path, None if (not user or _is_admin(user)) else user["id"])
+    if not job and user:
+        job = load_ai_image_job_by_image_url(path)
+
+    # 2. 尝试解析本地磁盘文件以获取物理大小与 MIME
+    file_size = None
+    file_size_formatted = ""
+    file_name = Path(path).name
+    mime_type = mimetypes.guess_type(path)[0] or "image/png"
+
+    try:
+        candidate = _resolve_public_asset_path(path)
+        if candidate and candidate.exists() and candidate.is_file():
+            file_size = candidate.stat().st_size
+            file_name = candidate.name
+            guessed_mime = mimetypes.guess_type(candidate.name)[0]
+            if guessed_mime:
+                mime_type = guessed_mime
+    except Exception:
+        pass
+
+    if file_size is not None:
+        if file_size < 1024:
+            file_size_formatted = f"{file_size} B"
+        elif file_size < 1024 * 1024:
+            file_size_formatted = f"{file_size / 1024:.1f} KB"
+        else:
+            file_size_formatted = f"{file_size / (1024 * 1024):.2f} MB"
+
+    is_ai = bool(job)
+    ai_metadata = None
+    if job:
+        ai_metadata = {
+            "job_id": job.get("id"),
+            "prompt": job.get("prompt") or "",
+            "original_prompt": job.get("original_prompt") or "",
+            "resolved_prompt": job.get("resolved_prompt") or "",
+            "prompt_trace": job.get("prompt_trace") or "",
+            "model": job.get("model") or "",
+            "provider": job.get("provider") or "",
+            "size": job.get("size") or "",
+            "resolution": job.get("resolution") or "",
+            "has_reference": bool(job.get("has_reference")),
+            "created_at": job.get("created_at"),
+            "request_meta": job.get("request_meta") or {},
+        }
+
+    return {
+        "url": clean_url,
+        "file_name": file_name,
+        "file_size": file_size,
+        "file_size_formatted": file_size_formatted,
+        "mime_type": mime_type,
+        "is_ai_generated": is_ai,
+        "ai_metadata": ai_metadata,
+    }
+
+
 @app.get("/ai-image/{job_id}")
 def ai_image_status(request: Request, job_id: str):
     """查询生图任务状态，前端轮询此接口获取进度"""
@@ -6245,7 +6321,10 @@ def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[
                 path = raw_url
             if not path.startswith(prefix):
                 continue
-            owner = unquote(path[len(prefix):].split("/", 1)[0])
+            after_prefix = path[len(prefix):]
+            if "/" not in after_prefix:
+                continue
+            owner = unquote(after_prefix.split("/", 1)[0])
             if owner and owner != user_id:
                 foreign.append(raw_url)
         return foreign
@@ -6268,7 +6347,10 @@ def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[
             path = src
         if not path.startswith(prefix):
             continue
-        owner = unquote(path[len(prefix):].split("/", 1)[0])
+        after_prefix = path[len(prefix):]
+        if "/" not in after_prefix:
+            continue
+        owner = unquote(after_prefix.split("/", 1)[0])
         if owner and owner != user_id:
             foreign.append(src)
     return foreign

@@ -5,7 +5,7 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
   const hasResult = resultTemplate != null;
   const iframeRef = React.useRef(null);
   const editorReadyRef = React.useRef(false);
-  const pendingMessageRef = React.useRef(null);
+  const pendingMessagesRef = React.useRef([]);
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
 
@@ -37,9 +37,11 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
 
   const markEditorReady = React.useCallback(() => {
     editorReadyRef.current = true;
-    if (pendingMessageRef.current) {
-      postToEditor(pendingMessageRef.current);
-      pendingMessageRef.current = null;
+    if (pendingMessagesRef.current && pendingMessagesRef.current.length > 0) {
+      pendingMessagesRef.current.forEach((msg) => {
+        postToEditor(msg);
+      });
+      pendingMessagesRef.current = [];
     }
   }, [postToEditor]);
 
@@ -83,7 +85,7 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
 
   React.useEffect(() => {
     editorReadyRef.current = false;
-  }, [iframeNonce, t && t.id]);
+  }, [iframeNonce]);
 
   React.useEffect(() => {
     if (!editorCommand) return;
@@ -109,6 +111,12 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
       message = {
         type: 'designflow:insert-image',
         urls: (editorCommand.urls || []).map(normalizeAssetUrl).filter(Boolean),
+        images: (editorCommand.images || []).map(function(img) {
+          if (typeof img === 'object' && img !== null && img.url) {
+            return Object.assign({}, img, { url: normalizeAssetUrl(img.url) });
+          }
+          return { url: normalizeAssetUrl(img) };
+        }).filter(function(x) { return Boolean(x.url); }),
         mode: editorCommand.mode,
         name: editorCommand.name,
       };
@@ -128,7 +136,7 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
     if (editorReadyRef.current) {
       postToEditor(message);
     } else {
-      pendingMessageRef.current = message;
+      pendingMessagesRef.current.push(message);
       postToEditor({ type: 'designflow:ping' });
     }
 

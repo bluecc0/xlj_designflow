@@ -13,6 +13,7 @@ import { OutpaintingOverlay } from './components/OutpaintingOverlay'
 import { MarqueeSelection } from './components/MarqueeSelection'
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu'
 import { ImportProductModal } from './components/ImportProductModal'
+import { ImagePropertiesModal } from './components/ImagePropertiesModal'
 import { SnapGuides } from './components/SnapGuides'
 import type { SnapLine } from './utils/snapping'
 import type { OutpaintMargins } from './types'
@@ -113,6 +114,7 @@ export function App() {
     visible: boolean
     targetPos: { x: number; y: number } | null
   }>({ visible: false, targetPos: null })
+  const [propertiesModalImage, setPropertiesModalImage] = useState<any>(null)
   const [snapLines, setSnapLines] = useState<SnapLine[]>([])
 
   const handleStartOutpainting = useCallback((id: string) => {
@@ -276,6 +278,18 @@ export function App() {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) {
         e.preventDefault()
         selectAll()
+      }
+
+      // 查看图片属性 (Alt+I / Option+I)
+      if (e.altKey && (e.key === 'i' || e.key === 'I')) {
+        if (selectedType === 'image' && selectedIds.length === 1) {
+          const targetImg = images.find((im) => im.id === selectedIds[0])
+          if (targetImg) {
+            e.preventDefault()
+            setPropertiesModalImage(targetImg)
+            return
+          }
+        }
       }
 
       // 删除
@@ -506,6 +520,8 @@ export function App() {
     }
   }, [
     selectedIds,
+    selectedType,
+    images,
     deleteSelected,
     duplicateSelected,
     selectAll,
@@ -691,7 +707,6 @@ export function App() {
 
   // 4. 恢复快照
   useEffect(() => {
-    if (!editorUserId) return
     let active = true
 
     const drainPendingCommandsAndNotify = () => {
@@ -700,22 +715,37 @@ export function App() {
       pendingHostCommandsRef.current = []
       for (const cmd of queued) {
         if (cmd.type === 'designflow:insert-image') {
-          const urls: string[] = Array.isArray(cmd.urls) && cmd.urls.length
+          const items: any[] = Array.isArray(cmd.images) && cmd.images.length
+            ? cmd.images
+            : Array.isArray(cmd.urls) && cmd.urls.length
             ? cmd.urls
             : cmd.url
             ? [cmd.url]
             : []
-          if (urls.length > 0) {
-            insertImagesAuto(urls, cmd.mode, cmd.name)
-            window.parent.postMessage({ type: 'designflow:editor-inserted', urls, mode: cmd.mode }, '*')
+          if (items.length > 0) {
+            insertImagesAuto(items, cmd.mode, cmd.name)
+            const insertedUrls = items.map((it) => (typeof it === 'string' ? it : it?.url || ''))
+            window.parent.postMessage({ type: 'designflow:editor-inserted', urls: insertedUrls, mode: cmd.mode }, '*')
           }
         } else if (cmd.type === 'designflow:new-canvas') {
-          createPage(cmd.pageName)
+          const { activePageId, images, texts } = useCanvasStore.getState()
+          const pageImages = images.filter((im) => im.pageId === activePageId)
+          const pageTexts = texts.filter((t) => t.pageId === activePageId)
+          if (pageImages.length === 0 && pageTexts.length === 0) {
+            renamePage(activePageId, cmd.pageName || '画板 1')
+          } else {
+            createPage(cmd.pageName)
+          }
         } else if (cmd.type === 'designflow:set-page-name' && cmd.name) {
           renamePage(useCanvasStore.getState().activePageId, cmd.name)
         }
       }
       notifyReady()
+    }
+
+    if (!editorUserId) {
+      drainPendingCommandsAndNotify()
+      return
     }
 
     fetch(editorSnapshotUrl)
@@ -892,6 +922,33 @@ export function App() {
     }
   }, [isDirty, editSequence, revision, getDocument, markSaved, startConflictResolution])
 
+  // 页面卸载或刷新时，如有未保存的修改，发起 keepalive 同步存盘，避免刷新丢数据
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      const state = useCanvasStore.getState()
+      if (!state.isDirty || !snapshotHydratedRef.current || !editorUserId || isConflictRef.current) {
+        return
+      }
+      const doc = getDocument()
+      const payload = JSON.stringify({
+        snapshot: JSON.stringify(doc),
+        base_revision: state.revision,
+        intent: state.lastSaveIntent || 'update',
+      })
+      try {
+        fetch(editorSnapshotUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload,
+          keepalive: true,
+        }).catch(() => {})
+      } catch (e) {}
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [getDocument])
+
   // 6. 主站握手与 postMessage
   const notifyReady = useCallback(() => {
     window.parent.postMessage({ type: 'designflow:editor-ready' }, '*')
@@ -926,14 +983,17 @@ export function App() {
           pendingHostCommandsRef.current.push(data)
           return
         }
-        const urls: string[] = Array.isArray(data.urls) && data.urls.length
+        const items: any[] = Array.isArray(data.images) && data.images.length
+          ? data.images
+          : Array.isArray(data.urls) && data.urls.length
           ? data.urls
           : data.url
           ? [data.url]
           : []
-        if (urls.length > 0) {
-          insertImagesAuto(urls, data.mode, data.name)
-          window.parent.postMessage({ type: 'designflow:editor-inserted', urls, mode: data.mode }, '*')
+        if (items.length > 0) {
+          insertImagesAuto(items, data.mode, data.name)
+          const insertedUrls = items.map((it) => (typeof it === 'string' ? it : it?.url || ''))
+          window.parent.postMessage({ type: 'designflow:editor-inserted', urls: insertedUrls, mode: data.mode }, '*')
         }
         return
       }
@@ -943,7 +1003,14 @@ export function App() {
           pendingHostCommandsRef.current.push(data)
           return
         }
-        createPage(data.pageName)
+        const { activePageId: currPageId, images: currImages, texts: currTexts } = useCanvasStore.getState()
+        const pageImages = currImages.filter((im) => im.pageId === currPageId)
+        const pageTexts = currTexts.filter((t) => t.pageId === currPageId)
+        if (pageImages.length === 0 && pageTexts.length === 0) {
+          renamePage(currPageId, data.pageName || '画板 1')
+        } else {
+          createPage(data.pageName)
+        }
         return
       }
 
@@ -1148,6 +1215,15 @@ export function App() {
           <SelectionOverlay
             image={singleSelectedImage}
             onSnapLinesChange={setSnapLines}
+            onContextMenu={(e) => {
+              setContextMenu({
+                visible: true,
+                x: e.clientX,
+                y: e.clientY,
+                targetId: singleSelectedImage.id,
+                targetType: 'image',
+              })
+            }}
           />
         )}
 
@@ -1182,6 +1258,7 @@ export function App() {
           const pt = screenToCanvas(screenPos)
           setImportModalState({ visible: true, targetPos: pt })
         }}
+        onOpenPropertiesModal={(img) => setPropertiesModalImage(img)}
       />
 
       {/* 导入产品图输入弹窗 */}
@@ -1190,6 +1267,14 @@ export function App() {
         targetPos={importModalState.targetPos}
         onClose={() => setImportModalState((s) => ({ ...s, visible: false }))}
       />
+
+      {/* 图片详细属性及 AI Prompt 弹窗 */}
+      {propertiesModalImage && (
+        <ImagePropertiesModal
+          image={propertiesModalImage}
+          onClose={() => setPropertiesModalImage(null)}
+        />
+      )}
 
       {/* 竖向浮动右侧工具坞 */}
       <BottomToolbar />

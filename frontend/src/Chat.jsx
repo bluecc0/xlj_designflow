@@ -1267,29 +1267,31 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   'ratio=', promptParams.aspectRatio || promptParams.size || 'auto', ' · size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认'
                 ) : null
               ),
-              m.status === 'done' && fullImageUrl && !batchImages && React.createElement('div', null,
-                React.createElement('img', {
-                  src: displayImageUrl || fullImageUrl,
-                  alt: m.prompt,
-                  style: { width: '100%', borderRadius: 10, display: 'block', border: '1px solid var(--line-2)', cursor: 'pointer' },
-                  onClick: () => window.open(fullImageUrl, '_blank'),
-                }),
-                React.createElement('div', { style: { marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' } },
-                  React.createElement('a', {
-                    href: fullImageUrl, download: true,
-                    style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 },
-                  }, React.createElement(I.download, { size: 10 }), '下载'),
-                  m.inspirationPostId
-                    ? React.createElement('button', {
-                        onClick: function() { onUnpublishInspiration(m); },
-                        style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ok)', border: '1px solid var(--ok)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
-                      }, React.createElement(I.check, { size: 10 }), '已发布 · 取消')
-                    : React.createElement('button', {
-                        onClick: function() { onPublishInspiration(m); },
-                        style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ink-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
-                      }, React.createElement(I.sparkles, { size: 10 }), '发布到灵感')
-                )
-              ),
+              m.status === 'done' && fullImageUrl && !batchImages && (function() {
+                return React.createElement('div', null,
+                  React.createElement('img', {
+                    src: displayImageUrl || fullImageUrl,
+                    alt: m.prompt,
+                    style: { width: '100%', borderRadius: 10, display: 'block', border: '1px solid var(--line-2)', cursor: 'pointer' },
+                    onClick: () => window.open(fullImageUrl, '_blank'),
+                  }),
+                  React.createElement('div', { style: { marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
+                    React.createElement('a', {
+                      href: fullImageUrl, download: true,
+                      style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 },
+                    }, React.createElement(I.download, { size: 10 }), '下载'),
+                    m.inspirationPostId
+                      ? React.createElement('button', {
+                          onClick: function() { onUnpublishInspiration(m); },
+                          style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ok)', border: '1px solid var(--ok)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
+                        }, React.createElement(I.check, { size: 10 }), '已发布 · 取消')
+                      : React.createElement('button', {
+                          onClick: function() { onPublishInspiration(m); },
+                          style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ink-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
+                        }, React.createElement(I.sparkles, { size: 10 }), '发布到灵感')
+                  )
+                );
+              })(),
               // 批量卡：n 张图的网格，生成中/失败/完成分别渲染
               batchImages && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } },
                 batchImages.map(function(im, bi) {
@@ -1306,7 +1308,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                         style: { width: '100%', borderRadius: 8, display: 'block', border: '1px solid var(--line-2)', cursor: 'pointer' },
                         onClick: function() { window.open(imFull, '_blank'); },
                       }),
-                      React.createElement('div', { style: { display: 'flex', gap: 4, flexWrap: 'wrap' } },
+                      React.createElement('div', { style: { display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' } },
                         React.createElement('a', {
                           href: imFull, download: true,
                           style: { fontSize: 10, padding: '3px 8px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 },
@@ -4353,7 +4355,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
   const runAiImageGeneration = React.useCallback(async (model, prompt, displayText, refImages, aiOptions) => {
     const batchCount = Math.max(1, Math.min(parseInt(aiOptions.batchCount) || 1, 4));
     setIsLoading(true);
-    var finalPrompt = prompt;
+    var originalPrompt = prompt || '';
+    var finalPrompt = prompt || '';
     var finalRefImages = Array.isArray(refImages) ? refImages.slice() : [];
 
     var refPreviews = [];
@@ -4500,8 +4503,8 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     const tryFlushCollected = function() {
       doneCount++;
       if (doneCount === batchCount && onComposeComplete && collected.length > 0) {
-        const sortedUrls = collected.slice().sort(function(a, b) { return a.index - b.index; }).map(function(x) { return x.url; });
-        onComposeComplete(null, null, sortedUrls, null);
+        const sorted = collected.slice().sort(function(a, b) { return a.index - b.index; });
+        onComposeComplete(null, null, sorted, null);
       }
     };
     const submitOne = function(slotAt, index) {
@@ -4683,7 +4686,19 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                         : m
                     ));
                     loadAiChatHistory();
-                    collected.push({ url: statusData.image_url, index: index });
+                    collected.push({
+                      url: statusData.image_url,
+                      index: index,
+                      prompt: finalPrompt,
+                      originalPrompt: (statusData && statusData.original_prompt) || originalPrompt || finalPrompt,
+                      resolvedPrompt: (statusData && statusData.resolved_prompt) || plannedPrompt || finalPrompt,
+                      model: model,
+                      provider: (statusData && statusData.provider) || provider,
+                      jobId: jobId,
+                      size: aiOptions.size || '1024x1024',
+                      resolution: aiOptions.resolution || '1K',
+                      createdAt: Date.now(),
+                    });
                     tryFlushCollected();
                     resolve();
                   } else if (statusData.status === 'done' && !statusData.image_url) {
@@ -4878,7 +4893,21 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
               var okOrdered = [];
               jobIds.forEach(function(jid, i) {
                 var t = terminal[jid];
-                if (t.status === 'done' && t.url) okOrdered.push({ url: t.url, index: i });
+                if (t.status === 'done' && t.url) {
+                  okOrdered.push({
+                    url: t.url,
+                    index: i,
+                    prompt: finalPrompt,
+                    originalPrompt: (t && t.original_prompt) || originalPrompt || finalPrompt,
+                    resolvedPrompt: plannedPrompt || finalPrompt,
+                    model: model,
+                    provider: t.provider || provider,
+                    jobId: jid,
+                    size: aiOptions.size || '1024x1024',
+                    resolution: aiOptions.resolution || '1K',
+                    createdAt: Date.now(),
+                  });
+                }
               });
               var failCount = jobIds.length - okOrdered.length;
               var firstErr = null;
@@ -4918,7 +4947,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
               }
               loadAiChatHistory();
               if (okOrdered.length && onComposeComplete) {
-                onComposeComplete(null, null, okOrdered.map(function(x) { return x.url; }), null);
+                onComposeComplete(null, null, okOrdered, null);
               }
               resolve();
             };
@@ -5228,7 +5257,18 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                 });
               });
               if (onComposeComplete) {
-                onComposeComplete(null, null, [payload.image.image_url], null);
+                const agentPrompt = (payload && payload.generationInstruction && (payload.generationInstruction.prompt || payload.generationInstruction.text))
+                  || (payload && payload.image && payload.image.prompt && (payload.image.prompt.prompt || payload.image.prompt.generationInstruction))
+                  || '';
+                onComposeComplete(null, null, [{
+                  url: payload.image.image_url,
+                  prompt: agentPrompt,
+                  originalPrompt: agentPrompt,
+                  model: (payload && payload.image && payload.image.model) || 'agent',
+                  provider: (payload && payload.image && payload.image.provider) || '',
+                  jobId: (payload && payload.image && payload.image.id) || '',
+                  createdAt: Date.now(),
+                }], null);
               }
             }
             if (projectId) {
