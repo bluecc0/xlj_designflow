@@ -5,13 +5,27 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
   const hasResult = resultTemplate != null;
   const iframeRef = React.useRef(null);
   const editorReadyRef = React.useRef(false);
-  const pendingMessageRef = React.useRef(null);
+  const pendingMessagesRef = React.useRef([]);
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
+
+  // 清除 URL 中的历史遗留参数与 localStorage 残留
+  React.useEffect(() => {
+    try {
+      localStorage.removeItem('designflow_canvas_engine');
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('canvas')) {
+        url.searchParams.delete('canvas');
+        const cleanPath = url.pathname + (url.searchParams.toString() ? '?' + url.searchParams.toString() : '') + url.hash;
+        window.history.replaceState({}, '', cleanPath);
+      }
+    } catch (e) {}
+  }, []);
+
   const editorSrc = React.useMemo(() => {
     const params = new URLSearchParams({ v: String(Date.now()) });
     if (userId) params.set('user_id', String(userId));
-    return `/editor-beta/index.html?${params.toString()}`;
+    return `/editor-canvas/index.html?${params.toString()}`;
   }, [userId]);
 
   const postToEditor = React.useCallback((message) => {
@@ -23,9 +37,11 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
 
   const markEditorReady = React.useCallback(() => {
     editorReadyRef.current = true;
-    if (pendingMessageRef.current) {
-      postToEditor(pendingMessageRef.current);
-      pendingMessageRef.current = null;
+    if (pendingMessagesRef.current && pendingMessagesRef.current.length > 0) {
+      pendingMessagesRef.current.forEach((msg) => {
+        postToEditor(msg);
+      });
+      pendingMessagesRef.current = [];
     }
   }, [postToEditor]);
 
@@ -36,6 +52,8 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
       if (!data || typeof data !== 'object') return;
       if (data.type === 'designflow:editor-ready') {
         markEditorReady();
+      } else if (data.type === 'designflow:auth-required') {
+        window.dispatchEvent(new CustomEvent('designflow-auth-required'));
       } else if (data.type === 'designflow:editor-inserted') {
         setEditorInsertState({ status: 'done', message: '已放入画布' });
       } else if (data.type === 'designflow:editor-error') {
@@ -67,7 +85,7 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
 
   React.useEffect(() => {
     editorReadyRef.current = false;
-  }, [iframeNonce, t && t.id]);
+  }, [iframeNonce]);
 
   React.useEffect(() => {
     if (!editorCommand) return;
@@ -88,26 +106,37 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
         return value;
       }
     };
-    const message = editorCommand.type === 'insert-images'
-      ? {
-          type: 'designflow:insert-image',
-          urls: (editorCommand.urls || []).map(normalizeAssetUrl).filter(Boolean),
-          mode: editorCommand.mode,
-          name: editorCommand.name,
-        }
-      : {
-          type: 'designflow:new-canvas',
-          pageName: editorCommand.pageName || t?.name || '画板 1',
-        };
-
+    let message = null;
     if (editorCommand.type === 'insert-images') {
+      message = {
+        type: 'designflow:insert-image',
+        urls: (editorCommand.urls || []).map(normalizeAssetUrl).filter(Boolean),
+        images: (editorCommand.images || []).map(function(img) {
+          if (typeof img === 'object' && img !== null && img.url) {
+            return Object.assign({}, img, { url: normalizeAssetUrl(img.url) });
+          }
+          return { url: normalizeAssetUrl(img) };
+        }).filter(function(x) { return Boolean(x.url); }),
+        mode: editorCommand.mode,
+        name: editorCommand.name,
+      };
       setEditorInsertState({ status: 'running', message: '正在放入画布' });
+    } else if (editorCommand.type === 'auth-restored') {
+      message = {
+        type: 'designflow:auth-restored',
+        user: editorCommand.user,
+      };
+    } else if (editorCommand.type === 'new-canvas') {
+      message = {
+        type: 'designflow:new-canvas',
+        pageName: editorCommand.pageName || t?.name || '画板 1',
+      };
     }
 
     if (editorReadyRef.current) {
       postToEditor(message);
     } else {
-      pendingMessageRef.current = message;
+      pendingMessagesRef.current.push(message);
       postToEditor({ type: 'designflow:ping' });
     }
 
@@ -123,75 +152,32 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
   }, [editorCommand, postToEditor, t]);
 
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0,
-      overflow: 'hidden',
-      background: 'var(--panel-2)',
-    }}>
-      <div style={{
-        height: 44, flexShrink: 0,
-        borderBottom: '1px solid var(--line)',
-        display: 'flex', alignItems: 'center',
-        padding: '0 16px', gap: 10,
-        background: 'var(--panel)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-          <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>编辑器</span>
-          <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{t?.name || '空白画布'}</span>
-          {hasResult && (
-            <span className="mono" style={{ fontSize: 10, color: 'var(--ok)', padding: '2px 6px', borderRadius: 4, background: 'rgba(0,128,96,0.08)', border: '1px solid rgba(0,128,96,0.16)' }}>
-              已接收结果图
-            </span>
-          )}
-          {editorInsertState && (
-            <span
-              className="mono"
-              title={editorInsertState.message}
-              style={{
-                fontSize: 10,
-                color: editorInsertState.status === 'failed' ? 'var(--warn)' : (editorInsertState.status === 'done' ? 'var(--ok)' : 'var(--ink-3)'),
-                padding: '2px 6px',
-                borderRadius: 4,
-                background: editorInsertState.status === 'failed' ? 'rgba(180,35,24,0.08)' : 'rgba(0,128,96,0.08)',
-                border: editorInsertState.status === 'failed' ? '1px solid rgba(180,35,24,0.16)' : '1px solid rgba(0,128,96,0.16)',
-              }}
-            >
-              {editorInsertState.message}
-            </span>
-          )}
-        </div>
-        <div style={{ flex: 1 }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {window.lastComposeJobId && (
-            <button
-              onClick={() => {
-                const frames = (resultTemplate && resultTemplate._frameNames) || ((resultTemplate?.frames || []).map(f => f.name || f.variant || '画板'));
-                const names = frames.join(',');
-                const ep = window.lastComposeEndpoint || '/special-compose';
-                window.open(`${ep}/${window.lastComposeJobId}/download-zip?names=${encodeURIComponent(names)}`, '_blank');
-              }}
-              style={canvasActionSecondaryStyle}
-            >
-              打包下载
-            </button>
-          )}
-          {window.resultPenpotUrl && (
-            <button onClick={() => window.open(window.resultPenpotUrl, '_blank')} style={canvasActionSecondaryStyle}>
-              Penpot
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div style={{ flex: 1, minHeight: 0, position: 'relative', background: 'oklch(0.98 0.003 260)' }}>
-        <iframe
-          key={iframeNonce}
-          ref={iframeRef}
-          src={editorSrc}
-          title="Designflow Editor"
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', background: 'transparent' }}
-        />
-      </div>
+    <div
+      id="designflow-canvas-container"
+      style={{
+        position: 'relative',
+        minWidth: 0,
+        minHeight: 0,
+        width: '100%',
+        height: '100%',
+        overflow: 'hidden',
+        background: 'oklch(0.98 0.003 260)',
+      }}
+    >
+      <iframe
+        key={iframeNonce}
+        ref={iframeRef}
+        src={editorSrc}
+        title="Designflow Editor"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          border: 'none',
+          background: 'transparent',
+        }}
+      />
     </div>
   );
 };

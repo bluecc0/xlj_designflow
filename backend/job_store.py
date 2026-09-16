@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import bcrypt
 
@@ -1071,37 +1071,111 @@ def mark_ai_image_job_provider_switched(job_id: str, switched: bool = True) -> N
 
 
 def load_ai_image_job_by_image_url(image_url: str, user_id: str | None = None) -> dict | None:
-    """通过 image_url 反查 ai_image_jobs（用于从历史消息中点发布时拿 job_id）。"""
-    with _connect() as conn:
-        if user_id:
-            row = conn.execute(
-                "SELECT * FROM ai_image_jobs WHERE image_url = ? AND user_id = ? ORDER BY created_at DESC LIMIT 1",
-                (image_url, user_id),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT * FROM ai_image_jobs WHERE image_url = ? ORDER BY created_at DESC LIMIT 1",
-                (image_url,),
-            ).fetchone()
-    if not row:
+    """通过 image_url 反查 ai_image_jobs 或 agent_images。"""
+    if not image_url:
         return None
-    return {
-        "id": row["id"],
-        "user_id": row["user_id"],
-        "status": row["status"],
-        "model": row["model"],
-        "prompt": row["prompt"],
-        "original_prompt": row["original_prompt"] if "original_prompt" in row.keys() else "",
-        "resolved_prompt": row["resolved_prompt"] if "resolved_prompt" in row.keys() else "",
-        "size": row["size"],
-        "image_url": row["image_url"],
-        "has_reference": bool(row["has_reference"]),
-        "error": row["error"],
-        "task_id": row["task_id"],
-        "progress": int(row["progress"] or 0),
-        "resolution": row["resolution"] if "resolution" in row.keys() else "",
-        "created_at": row["created_at"],
-    }
+
+    raw_url = str(image_url).strip()
+    split = urlsplit(raw_url)
+    path = split.path or raw_url
+
+    candidates: set[str] = {raw_url, path}
+    try:
+        candidates.add(unquote(raw_url))
+        candidates.add(unquote(path))
+        candidates.add(quote(unquote(path)))
+    except Exception:
+        pass
+
+    candidate_list = [c for c in candidates if c]
+    if not candidate_list:
+        return None
+
+    with _connect() as conn:
+        placeholders = ",".join("?" for _ in candidate_list)
+        if user_id:
+            query = f"SELECT * FROM ai_image_jobs WHERE image_url IN ({placeholders}) AND user_id = ? ORDER BY created_at DESC LIMIT 1"
+            row = conn.execute(query, (*candidate_list, user_id)).fetchone()
+        else:
+            query = f"SELECT * FROM ai_image_jobs WHERE image_url IN ({placeholders}) ORDER BY created_at DESC LIMIT 1"
+            row = conn.execute(query, tuple(candidate_list)).fetchone()
+
+        if row:
+            keys = row.keys()
+            request_meta = {}
+            if "request_meta_json" in keys and row["request_meta_json"]:
+                try:
+                    request_meta = json.loads(row["request_meta_json"])
+                except Exception:
+                    request_meta = {}
+            return {
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "status": row["status"],
+                "model": row["model"],
+                "provider": row["provider"] if "provider" in keys else "",
+                "prompt": row["prompt"],
+                "original_prompt": row["original_prompt"] if "original_prompt" in keys else "",
+                "resolved_prompt": row["resolved_prompt"] if "resolved_prompt" in keys else "",
+                "prompt_trace": row["prompt_trace"] if "prompt_trace" in keys else "",
+                "size": row["size"],
+                "image_url": row["image_url"],
+                "has_reference": bool(row["has_reference"]),
+                "error": row["error"],
+                "task_id": row["task_id"],
+                "progress": int(row["progress"] or 0),
+                "resolution": row["resolution"] if "resolution" in keys else "",
+                "request_meta": request_meta,
+                "created_at": row["created_at"],
+            }
+
+        # 尝试反查 agent_images 表
+        try:
+            if user_id:
+                agent_query = f"SELECT * FROM agent_images WHERE image_url IN ({placeholders}) AND user_id = ? ORDER BY created_at DESC LIMIT 1"
+                agent_row = conn.execute(agent_query, (*candidate_list, user_id)).fetchone()
+            else:
+                agent_query = f"SELECT * FROM agent_images WHERE image_url IN ({placeholders}) ORDER BY created_at DESC LIMIT 1"
+                agent_row = conn.execute(agent_query, tuple(candidate_list)).fetchone()
+
+            if agent_row:
+                prompt_json = agent_row["prompt_json"]
+                prompt_data = {}
+                if prompt_json:
+                    try:
+                        prompt_data = json.loads(prompt_json) if isinstance(prompt_json, str) else prompt_json
+                    except Exception:
+                        prompt_data = {}
+                prompt_text = ""
+                if isinstance(prompt_data, dict):
+                    prompt_text = prompt_data.get("generationInstruction") or prompt_data.get("prompt") or prompt_data.get("positive") or ""
+                elif isinstance(prompt_data, str):
+                    prompt_text = prompt_data
+
+                return {
+                    "id": agent_row["id"],
+                    "user_id": agent_row["user_id"],
+                    "status": "done",
+                    "model": agent_row["model"] or "agent",
+                    "provider": agent_row["provider"] or "",
+                    "prompt": prompt_text,
+                    "original_prompt": prompt_text,
+                    "resolved_prompt": prompt_text,
+                    "prompt_trace": "agent",
+                    "size": "",
+                    "image_url": agent_row["image_url"],
+                    "has_reference": bool(agent_row["parent_image_id"]),
+                    "error": None,
+                    "task_id": agent_row["project_id"],
+                    "progress": 100,
+                    "resolution": "",
+                    "request_meta": {"project_id": agent_row["project_id"]},
+                    "created_at": agent_row["created_at"],
+                }
+        except Exception:
+            pass
+
+    return None
 
 
 def create_ai_chat_session(*, user_id: str, title: str, created_at: float | None = None) -> dict:
@@ -1391,6 +1465,31 @@ def _editor_snapshot_stats(snapshot_json: str) -> dict[str, int]:
         snapshot = json.loads(snapshot_json)
     except Exception:
         return {"json_len": len(snapshot_json), "pages": 0, "shapes": 0, "assets": 0}
+
+    # 兼容新版无限画布格式 (version 2)
+    if isinstance(snapshot, dict) and (
+        snapshot.get("version") == 2
+        or "images" in snapshot
+        or "pages" in snapshot
+        or "frames" in snapshot
+    ):
+        raw_pages = snapshot.get("pages") or []
+        raw_images = snapshot.get("images") or []
+        raw_frames = snapshot.get("frames") or []
+        raw_texts = snapshot.get("texts") or []
+        page_cnt = len(raw_pages) if isinstance(raw_pages, list) else 1
+        shapes_cnt = (
+            (len(raw_images) if isinstance(raw_images, list) else 0)
+            + (len(raw_frames) if isinstance(raw_frames, list) else 0)
+            + (len(raw_texts) if isinstance(raw_texts, list) else 0)
+        )
+        return {
+            "json_len": len(snapshot_json),
+            "pages": max(1, page_cnt),
+            "shapes": shapes_cnt,
+            "assets": len(raw_images) if isinstance(raw_images, list) else 0,
+        }
+
     store = {}
     if isinstance(snapshot, dict):
         document = snapshot.get("document")
