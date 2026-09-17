@@ -15,7 +15,6 @@ import { ContextMenu, type ContextMenuState } from './components/ContextMenu'
 import { ImportProductModal } from './components/ImportProductModal'
 import { ImagePropertiesModal } from './components/ImagePropertiesModal'
 import { SnapGuides } from './components/SnapGuides'
-import type { SnapLine } from './utils/snapping'
 import type { OutpaintMargins } from './types'
 import { useViewportStore } from './store/viewportStore'
 import { useCanvasStore } from './store/canvasStore'
@@ -117,7 +116,6 @@ export function App() {
     targetPos: { x: number; y: number } | null
   }>({ visible: false, targetPos: null })
   const [propertiesModalImage, setPropertiesModalImage] = useState<any>(null)
-  const [snapLines, setSnapLines] = useState<SnapLine[]>([])
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const dragDepthRef = useRef(0)
 
@@ -1198,13 +1196,12 @@ export function App() {
         ))}
 
         {/* 智能磁吸辅助线（位于世界坐标系） */}
-        <SnapGuides lines={snapLines} />
+        <SnapGuides />
 
         {/* 单选中图片的变换拉伸手柄 Overlay */}
         {singleSelectedImage && !outpaintingImageId && (
           <SelectionOverlay
             image={singleSelectedImage}
-            onSnapLinesChange={setSnapLines}
             onContextMenu={(e) => {
               setContextMenu({
                 visible: true,

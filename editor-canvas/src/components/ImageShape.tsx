@@ -2,6 +2,8 @@ import React, { memo, useRef } from 'react'
 import type { CanvasImage } from '../types'
 import { useViewportStore } from '../store/viewportStore'
 import { useCanvasStore } from '../store/canvasStore'
+import { calculateSnap, getSnapTargets } from '../utils/snapping'
+import { useSnapStore } from '../store/snapStore'
 
 interface Props {
   image: CanvasImage
@@ -48,9 +50,25 @@ function ImageShapeInner({
     const { selectedIds, selectedType, images } = useCanvasStore.getState()
     const isMulti = isSelected && selectedType === 'image' && selectedIds.length > 1
     const targetIds = isMulti ? selectedIds : [image.id]
-    const initialPositions = images
-      .filter((im) => targetIds.includes(im.id))
-      .map((im) => ({ id: im.id, x: im.x, y: im.y }))
+    const targetImages = images.filter((im) => targetIds.includes(im.id))
+    const initialPositions = targetImages.map((im) => ({ id: im.id, x: im.x, y: im.y }))
+
+    // 计算待移动整体的基准包围盒
+    let baseMinX = Infinity
+    let baseMinY = Infinity
+    let baseMaxX = -Infinity
+    let baseMaxY = -Infinity
+    for (const im of targetImages) {
+      baseMinX = Math.min(baseMinX, im.x)
+      baseMinY = Math.min(baseMinY, im.y)
+      baseMaxX = Math.max(baseMaxX, im.x + im.width)
+      baseMaxY = Math.max(baseMaxY, im.y + im.height)
+    }
+    const baseBoxWidth = baseMaxX - baseMinX
+    const baseBoxHeight = baseMaxY - baseMinY
+
+    // 预先收集排除选中目标后的对齐参考目标
+    const snapTargets = getSnapTargets(targetIds, image.pageId)
 
     const onMouseMove = (moveEvt: MouseEvent) => {
       const dist = Math.hypot(moveEvt.clientX - startClientX, moveEvt.clientY - startClientY)
@@ -58,15 +76,36 @@ function ImageShapeInner({
         hasMoved = true
       }
       if (hasMoved) {
-        const dx = (moveEvt.clientX - startClientX) / zoom
-        const dy = (moveEvt.clientY - startClientY) / zoom
+        const rawDx = (moveEvt.clientX - startClientX) / zoom
+        const rawDy = (moveEvt.clientY - startClientY) / zoom
+
+        // 磁吸计算（支持按住 Alt / Option 临时关闭吸附）
+        let effectiveDx = rawDx
+        let effectiveDy = rawDy
+
+        if (!moveEvt.altKey) {
+          const currentDragBox = {
+            id: targetIds.length === 1 ? targetIds[0] : undefined,
+            x: baseMinX + rawDx,
+            y: baseMinY + rawDy,
+            width: baseBoxWidth,
+            height: baseBoxHeight,
+          }
+
+          const snap = calculateSnap(currentDragBox, snapTargets, zoom)
+          useSnapStore.getState().setSnapLines(snap.lines)
+          effectiveDx = snap.snappedX - baseMinX
+          effectiveDy = snap.snappedY - baseMinY
+        } else {
+          useSnapStore.getState().clearSnapLines()
+        }
 
         updateImages(
           initialPositions.map((pos) => ({
             id: pos.id,
             patch: {
-              x: Math.round(pos.x + dx),
-              y: Math.round(pos.y + dy),
+              x: Math.round(pos.x + effectiveDx),
+              y: Math.round(pos.y + effectiveDy),
             },
           }))
         )
@@ -76,6 +115,7 @@ function ImageShapeInner({
     const onMouseUp = () => {
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
+      useSnapStore.getState().clearSnapLines()
       if (hasMoved) {
         useCanvasStore.getState().recalcFrameAttachment('image', targetIds)
       }
