@@ -4,6 +4,7 @@ import { useViewportStore } from '../store/viewportStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { calculateSnap, getSnapTargets } from '../utils/snapping'
 import { useSnapStore } from '../store/snapStore'
+import { useHistoryStore } from '../store/historyStore'
 
 interface Props {
   text: CanvasText
@@ -48,8 +49,10 @@ function TextShapeInner({
     const trimmed = editingValue.trim()
     if (!trimmed) {
       // 如果完全清空则移除该文本
+      useCanvasStore.getState().recordHistory()
       deleteText(text.id)
-    } else {
+    } else if (trimmed !== text.text) {
+      useCanvasStore.getState().recordHistory()
       updateText(text.id, { text: editingValue })
     }
   }
@@ -81,6 +84,8 @@ function TextShapeInner({
     const textHeight = Math.max(24, (text.fontSize || 16) * (text.lineHeight || 1.3))
     const snapTargets = getSnapTargets([text.id], text.pageId)
     let hasMoved = false
+    const snapshotBeforeDrag = useCanvasStore.getState().getDocument()
+    let hasRecordedHistory = false
 
     const onMouseMove = (moveEvt: MouseEvent) => {
       const dist = Math.hypot(moveEvt.clientX - startClientX, moveEvt.clientY - startClientY)
@@ -88,6 +93,10 @@ function TextShapeInner({
         hasMoved = true
       }
       if (hasMoved) {
+        if (!hasRecordedHistory) {
+          useHistoryStore.getState().record(snapshotBeforeDrag)
+          hasRecordedHistory = true
+        }
         const rawDx = (moveEvt.clientX - startClientX) / zoom
         const rawDy = (moveEvt.clientY - startClientY) / zoom
 

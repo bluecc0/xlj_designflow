@@ -83,6 +83,29 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
     return () => window.removeEventListener('message', handleMessage);
   }, [markEditorReady, onUseReferenceImages, postToEditor]);
 
+  // 宿主全局快捷键穿透中继（当焦点不在输入框时，透传 Cmd/Ctrl+Z 撤销与重做到画布）
+  React.useEffect(() => {
+    const handleHostKeyDown = (e) => {
+      const activeTag = document.activeElement ? document.activeElement.tagName : '';
+      const isInput = activeTag === 'INPUT' || activeTag === 'TEXTAREA' || (document.activeElement && document.activeElement.isContentEditable);
+      if (isInput) return;
+
+      const isMetaOrCtrl = e.metaKey || e.ctrlKey;
+      if (isMetaOrCtrl && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        postToEditor({ type: 'designflow:undo' });
+      } else if (
+        isMetaOrCtrl &&
+        ((e.shiftKey && (e.key === 'z' || e.key === 'Z')) || e.key === 'y' || e.key === 'Y')
+      ) {
+        e.preventDefault();
+        postToEditor({ type: 'designflow:redo' });
+      }
+    };
+    window.addEventListener('keydown', handleHostKeyDown);
+    return () => window.removeEventListener('keydown', handleHostKeyDown);
+  }, [postToEditor]);
+
   React.useEffect(() => {
     editorReadyRef.current = false;
   }, [iframeNonce]);

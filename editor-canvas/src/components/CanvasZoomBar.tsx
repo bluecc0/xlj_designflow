@@ -27,7 +27,7 @@ export const CanvasZoomBar = memo(function CanvasZoomBar() {
   const redo = useHistoryStore((s) => s.redo)
 
   const getDocument = useCanvasStore((s) => s.getDocument)
-  const loadDocument = useCanvasStore((s) => s.loadDocument)
+  const restoreHistoryDocument = useCanvasStore((s) => s.restoreHistoryDocument)
   const frames = useCanvasStore((s) => s.frames)
   const images = useCanvasStore((s) => s.images)
   const activePageId = useCanvasStore((s) => s.activePageId)
@@ -52,14 +52,14 @@ export const CanvasZoomBar = memo(function CanvasZoomBar() {
   const handleUndo = useCallback(() => {
     const doc = getDocument()
     const prev = undo(doc)
-    if (prev) loadDocument(prev)
-  }, [getDocument, undo, loadDocument])
+    if (prev) restoreHistoryDocument(prev)
+  }, [getDocument, undo, restoreHistoryDocument])
 
   const handleRedo = useCallback(() => {
     const doc = getDocument()
     const next = redo(doc)
-    if (next) loadDocument(next)
-  }, [getDocument, redo, loadDocument])
+    if (next) restoreHistoryDocument(next)
+  }, [getDocument, redo, restoreHistoryDocument])
 
   const zoomIn = useCallback(() => {
     setZoom(zoom * 1.2)
