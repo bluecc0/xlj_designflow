@@ -1012,11 +1012,25 @@ export function App() {
         }
         return
       }
+
+      if (data.type === 'designflow:undo') {
+        const doc = getDocument()
+        const prev = undo(doc)
+        if (prev) restoreHistoryDocument(prev)
+        return
+      }
+
+      if (data.type === 'designflow:redo') {
+        const doc = getDocument()
+        const next = redo(doc)
+        if (next) restoreHistoryDocument(next)
+        return
+      }
     }
 
     window.addEventListener('message', handleHostMessage)
     return () => window.removeEventListener('message', handleHostMessage)
-  }, [notifyReady, insertImagesAuto, createPage, renamePage, activePageId])
+  }, [notifyReady, insertImagesAuto, createPage, renamePage, activePageId, undo, redo, getDocument, restoreHistoryDocument])
 
   // 7. 自动同步画布选中的图片给主站聊天框作为参考图；点选空白或非图片时，通知主站清空自动参考图
   useEffect(() => {

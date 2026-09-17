@@ -2,6 +2,7 @@ import React, { useRef, useState, useEffect } from 'react'
 import type { CanvasImage, ResizeHandle } from '../types'
 import { useViewportStore } from '../store/viewportStore'
 import { useCanvasStore } from '../store/canvasStore'
+import { useHistoryStore } from '../store/historyStore'
 import { calculateSnap, calculateResizeSnap, getSnapTargets, type SnapLine, type RectBox } from '../utils/snapping'
 import { useSnapStore } from '../store/snapStore'
 
@@ -31,6 +32,8 @@ export function SelectionOverlay({ image, onContextMenu }: Props) {
 
   const [isDragging, setIsDragging] = useState(false)
   const [activeHandle, setActiveHandle] = useState<ResizeHandle | null>(null)
+  const snapshotBeforeActionRef = useRef<any>(null)
+  const hasRecordedActionRef = useRef(false)
   const dragStartRef = useRef<{
     clientX: number
     clientY: number
@@ -48,6 +51,8 @@ export function SelectionOverlay({ image, onContextMenu }: Props) {
       useCanvasStore.getState().toggleSelected(image.id, 'image')
       return
     }
+    snapshotBeforeActionRef.current = useCanvasStore.getState().getDocument()
+    hasRecordedActionRef.current = false
     setIsDragging(true)
     dragStartRef.current = {
       clientX: e.clientX,
@@ -63,6 +68,8 @@ export function SelectionOverlay({ image, onContextMenu }: Props) {
   // 2. 拖拽缩放
   const handleResizeMouseDown = (handle: ResizeHandle, e: React.MouseEvent) => {
     e.stopPropagation()
+    snapshotBeforeActionRef.current = useCanvasStore.getState().getDocument()
+    hasRecordedActionRef.current = false
     setActiveHandle(handle)
     dragStartRef.current = {
       clientX: e.clientX,
@@ -79,6 +86,12 @@ export function SelectionOverlay({ image, onContextMenu }: Props) {
     if (!isDragging && !activeHandle) return
 
     const onMouseMove = (e: MouseEvent) => {
+      const dist = Math.hypot(e.clientX - dragStartRef.current.clientX, e.clientY - dragStartRef.current.clientY)
+      if (dist > 3 && !hasRecordedActionRef.current && snapshotBeforeActionRef.current) {
+        useHistoryStore.getState().record(snapshotBeforeActionRef.current)
+        hasRecordedActionRef.current = true
+      }
+
       const dx = (e.clientX - dragStartRef.current.clientX) / zoom
       const dy = (e.clientY - dragStartRef.current.clientY) / zoom
 

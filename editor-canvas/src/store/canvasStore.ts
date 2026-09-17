@@ -73,6 +73,7 @@ interface CanvasState {
   reflowSequentialImages: (pageId?: string) => void
 
   // 快照与保存
+  recordHistory: (snapshot?: CanvasDocument) => void
   loadDocument: (doc: any, rev?: number) => void
   restoreHistoryDocument: (doc: any) => void
   mergeConflictDocument: (serverDoc: any, serverRev: number) => void
@@ -1381,6 +1382,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     })
   },
 
+  recordHistory: (snapshot) => {
+    if (snapshot) {
+      useHistoryStore.getState().record(snapshot)
+    } else {
+      recordHistory(get)
+    }
+  },
+
   restoreHistoryDocument: (doc) => {
     if (!doc || typeof doc !== 'object') return
     const current = get()
@@ -1407,7 +1416,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       pageId: t.pageId || pages[0].id,
     }))
 
-    if (doc.viewport && typeof doc.viewport.zoom === 'number') {
+    // 仅在跨页面撤销或明确需要时恢复视口；同一页面内撤销保持用户当前视口缩放与平移稳定
+    if (activePageId !== current.activePageId && doc.viewport && typeof doc.viewport.zoom === 'number') {
       useViewportStore.getState().setZoom(doc.viewport.zoom)
       useViewportStore.getState().setPan(doc.viewport.panX, doc.viewport.panY)
     }

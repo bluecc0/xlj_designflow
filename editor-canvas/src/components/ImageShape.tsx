@@ -2,6 +2,7 @@ import React, { memo, useRef } from 'react'
 import type { CanvasImage } from '../types'
 import { useViewportStore } from '../store/viewportStore'
 import { useCanvasStore } from '../store/canvasStore'
+import { useHistoryStore } from '../store/historyStore'
 import { calculateSnap, getSnapTargets } from '../utils/snapping'
 import { useSnapStore } from '../store/snapStore'
 
@@ -45,6 +46,8 @@ function ImageShapeInner({
     const startClientX = e.clientX
     const startClientY = e.clientY
     let hasMoved = false
+    const snapshotBeforeDrag = useCanvasStore.getState().getDocument()
+    let hasRecordedHistory = false
 
     // 获取当前选区内的所有图片及其初始坐标
     const { selectedIds, selectedType, images } = useCanvasStore.getState()
@@ -76,6 +79,10 @@ function ImageShapeInner({
         hasMoved = true
       }
       if (hasMoved) {
+        if (!hasRecordedHistory) {
+          useHistoryStore.getState().record(snapshotBeforeDrag)
+          hasRecordedHistory = true
+        }
         const rawDx = (moveEvt.clientX - startClientX) / zoom
         const rawDy = (moveEvt.clientY - startClientY) / zoom
 

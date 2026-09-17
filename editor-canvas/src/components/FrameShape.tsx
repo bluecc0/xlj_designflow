@@ -5,6 +5,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
 import { calculateSnap, calculateResizeSnap, getSnapTargets } from '../utils/snapping'
 import { useSnapStore } from '../store/snapStore'
+import { useHistoryStore } from '../store/historyStore'
 
 interface Props {
   frame: CanvasFrame
@@ -49,6 +50,8 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
 
   // 画板尺寸拉伸状态
   const [activeResizeHandle, setActiveResizeHandle] = useState<ResizeHandle | null>(null)
+  const snapshotBeforeResizeRef = useRef<any>(null)
+  const hasRecordedResizeRef = useRef(false)
   const resizeStartRef = useRef<{
     clientX: number
     clientY: number
@@ -66,10 +69,18 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
     isDraggingRef.current = true
     dragStartPosRef.current = { x: e.clientX, y: e.clientY }
     frameStartPosRef.current = { x: frame.x, y: frame.y }
+    const snapshotBeforeMove = useCanvasStore.getState().getDocument()
+    let hasRecordedMoveHistory = false
     const snapTargets = getSnapTargets([frame.id], frame.pageId)
 
     const onMouseMove = (moveEvent: MouseEvent) => {
       if (!isDraggingRef.current) return
+      const dist = Math.hypot(moveEvent.clientX - dragStartPosRef.current.x, moveEvent.clientY - dragStartPosRef.current.y)
+      if (dist > 3 && !hasRecordedMoveHistory) {
+        useHistoryStore.getState().record(snapshotBeforeMove)
+        hasRecordedMoveHistory = true
+      }
+
       const dx = (moveEvent.clientX - dragStartPosRef.current.x) / zoom
       const dy = (moveEvent.clientY - dragStartPosRef.current.y) / zoom
 
@@ -114,6 +125,8 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
   const handleResizeHandleMouseDown = (handle: ResizeHandle, e: React.MouseEvent) => {
     e.stopPropagation()
     onSelect()
+    snapshotBeforeResizeRef.current = useCanvasStore.getState().getDocument()
+    hasRecordedResizeRef.current = false
     setActiveResizeHandle(handle)
     resizeStartRef.current = {
       clientX: e.clientX,
@@ -132,6 +145,12 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
     const snapTargets = getSnapTargets([frame.id], frame.pageId)
 
     const onMouseMove = (e: MouseEvent) => {
+      const dist = Math.hypot(e.clientX - resizeStartRef.current.clientX, e.clientY - resizeStartRef.current.clientY)
+      if (dist > 3 && !hasRecordedResizeRef.current && snapshotBeforeResizeRef.current) {
+        useHistoryStore.getState().record(snapshotBeforeResizeRef.current)
+        hasRecordedResizeRef.current = true
+      }
+
       const dx = (e.clientX - resizeStartRef.current.clientX) / zoom
       const dy = (e.clientY - resizeStartRef.current.clientY) / zoom
 
