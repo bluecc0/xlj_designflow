@@ -38,11 +38,38 @@ function multiplyTransforms(m1: Mat2D, m2: Mat2D): Mat2D {
   }
 }
 
+function richTextToPlainText(value: any): string {
+  if (!value || typeof value !== 'object') return ''
+  if (typeof value.text === 'string') return value.text
+  if (!Array.isArray(value.content)) return ''
+
+  const parts = value.content.map((child: any) => {
+    if (child?.type === 'hardBreak') return '\n'
+    return richTextToPlainText(child)
+  })
+  const text = parts.join('')
+  return value.type === 'paragraph' ? `${text}\n` : text
+}
+
+function richTextHasMark(value: any, markType: string): boolean {
+  if (!value || typeof value !== 'object') return false
+  if (Array.isArray(value.marks) && value.marks.some((mark: any) => mark?.type === markType)) {
+    return true
+  }
+  return Array.isArray(value.content) && value.content.some((child: any) => richTextHasMark(child, markType))
+}
+
 /**
  * 将旧版 tldraw snapshot 转换为新版通用的 CanvasDocument
  */
 export function convertLegacyTldrawSnapshot(raw: any): CanvasDocument | null {
   if (!raw || typeof raw !== 'object') return null
+
+  // The backend embeds the lossless V2 document in a tldraw-compatible snapshot
+  // so either editor can take over the same cloned database.
+  if (raw.designflowCanvasDocument?.version === 2) {
+    return convertLegacyTldrawSnapshot(raw.designflowCanvasDocument)
+  }
 
   // 1. 如果本身已经是新版格式
   if (raw.version === 2 && Array.isArray(raw.images)) {
@@ -242,12 +269,18 @@ export function convertLegacyTldrawSnapshot(raw: any): CanvasDocument | null {
         meta: item.meta,
       })
     } else if (item.type === 'text') {
-      const content = item.props?.text || ''
+      const richText = item.props?.richText
+      const content = typeof item.props?.text === 'string'
+        ? item.props.text
+        : richTextToPlainText(richText).replace(/\n$/, '')
       if (!content.trim()) continue
 
-      const w = item.props?.w || 200
-      const h = item.props?.h || 40
+      const scale = Number(item.props?.scale) > 0 ? Number(item.props.scale) : 1
+      const w = (item.props?.w || 200) * scale
+      const h = (item.props?.h || 40) * scale
       const { x, y, pageId, frameId } = resolveShapeHierarchy(item.id, w, h)
+
+      const baseFontSize = item.props?.size === 's' ? 14 : item.props?.size === 'm' ? 18 : item.props?.size === 'xl' ? 32 : 24
 
       texts.push({
         id: item.id,
@@ -258,9 +291,10 @@ export function convertLegacyTldrawSnapshot(raw: any): CanvasDocument | null {
         width: w,
         height: h,
         text: content,
-        fontSize: item.props?.size === 's' ? 14 : item.props?.size === 'm' ? 18 : item.props?.size === 'xl' ? 32 : 24,
+        fontSize: Math.round(baseFontSize * scale),
         color: '#1e293b',
-        fontWeight: 'normal',
+        fontWeight: richTextHasMark(richText, 'bold') ? 'bold' : 'normal',
+        fontStyle: richTextHasMark(richText, 'italic') ? 'italic' : 'normal',
       })
     }
   }

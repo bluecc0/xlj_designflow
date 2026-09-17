@@ -126,7 +126,7 @@ export function BottomToolbar() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/png,image/jpeg,image/webp,image/gif"
         multiple
         style={{ display: 'none' }}
         onChange={handleUploadFiles}

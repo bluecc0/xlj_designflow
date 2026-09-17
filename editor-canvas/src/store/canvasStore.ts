@@ -355,7 +355,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   selectedIds: [],
   selectedType: null,
   activeTool: 'select',
-  revision: 1,
+  revision: 0,
   isDirty: false,
   editSequence: 0,
   lastSavedSequence: 0,

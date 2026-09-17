@@ -195,6 +195,65 @@ class EditorSnapshotIsolationTest(unittest.TestCase):
                 loaded, rev = job_store.load_editor_snapshot("operator_a")
                 self.assertIsNone(loaded)
 
+    def test_v2_snapshot_is_stored_in_legacy_compatible_form(self) -> None:
+        import json
+        import tempfile
+        from pathlib import Path
+        from backend import job_store
+
+        legacy = {
+            "document": {
+                "schema": {"schemaVersion": 2, "sequences": {}},
+                "store": {
+                    "document:document": {"id": "document:document", "typeName": "document"},
+                    "page:old": {"id": "page:old", "typeName": "page", "name": "旧画板", "index": "a1", "meta": {}},
+                },
+            },
+            "session": {"version": 0, "currentPageId": "page:old", "pageStates": []},
+        }
+        canvas = {
+            "version": 2,
+            "pages": [{"id": "page:old", "name": "新版画板", "order": 0}],
+            "activePageId": "page:old",
+            "frames": [],
+            "images": [{
+                "id": "image-1", "pageId": "page:old", "x": 10, "y": 20,
+                "width": 300, "height": 200, "rotation": 0,
+                "url": "/ai-images/test_user/editor-assets/demo.png",
+            }],
+            "texts": [{
+                "id": "text-1", "pageId": "page:old", "x": 30, "y": 40,
+                "width": 200, "height": 40, "text": "兼容文本", "fontSize": 18,
+            }],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(job_store, "_DB_PATH", Path(temp_dir) / "jobs.db"):
+                job_store.init_db()
+                self.assertTrue(job_store.save_editor_snapshot("test_user", json.dumps(legacy))[0])
+                ok, revision, reason = job_store.save_editor_snapshot(
+                    "test_user", json.dumps(canvas, ensure_ascii=False), base_revision=1
+                )
+                self.assertTrue(ok, reason)
+                self.assertEqual(revision, 2)
+                stored_raw, _ = job_store.load_editor_snapshot("test_user")
+
+                # A newly created user can reuse the schema shell without inheriting
+                # any of the first user's pages, shapes or assets.
+                ok, _, reason = job_store.save_editor_snapshot(
+                    "new_user", json.dumps(canvas, ensure_ascii=False)
+                )
+                self.assertTrue(ok, reason)
+                new_user_raw, _ = job_store.load_editor_snapshot("new_user")
+
+        stored = json.loads(stored_raw or "{}")
+        self.assertEqual(stored["designflowCanvasDocument"], canvas)
+        records = list(stored["document"]["store"].values())
+        self.assertTrue(any(record.get("typeName") == "page" for record in records))
+        self.assertTrue(any(record.get("type") == "image" and record.get("typeName") == "shape" for record in records))
+        self.assertTrue(any(record.get("type") == "text" and record.get("typeName") == "shape" for record in records))
+        self.assertEqual(json.loads(new_user_raw or "{}")["designflowCanvasDocument"], canvas)
+
 
 if __name__ == "__main__":
     unittest.main()

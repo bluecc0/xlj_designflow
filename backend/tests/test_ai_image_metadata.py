@@ -25,6 +25,16 @@ def _request(url: str = "") -> Request:
 
 
 class AiImageMetadataTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path_patcher = patch.object(job_store, "_DB_PATH", Path(self.temp_dir.name) / "jobs.db")
+        self.db_path_patcher.start()
+        job_store.init_db()
+
+    def tearDown(self) -> None:
+        self.db_path_patcher.stop()
+        self.temp_dir.cleanup()
+
     def test_rejects_empty_url(self) -> None:
         with self.assertRaises(HTTPException) as raised:
             main.ai_image_metadata(_request(""), "")
@@ -70,7 +80,8 @@ class AiImageMetadataTest(unittest.TestCase):
 
         try:
             with (
-                patch.object(job_store, "load_ai_image_job_by_image_url", return_value=None),
+                patch.object(main, "load_ai_image_job_by_image_url", return_value=None),
+                patch.object(main, "_current_user", return_value={"id": "test_user", "role": "user"}),
                 patch.object(main, "_resolve_public_asset_path", return_value=temp_path),
             ):
                 res = main.ai_image_metadata(
@@ -84,6 +95,20 @@ class AiImageMetadataTest(unittest.TestCase):
             self.assertIn("B", res["file_size_formatted"])
         finally:
             temp_path.unlink(missing_ok=True)
+
+    def test_does_not_disclose_another_users_ai_metadata(self) -> None:
+        with (
+            patch.object(main, "_current_user", return_value={"id": "user_b", "role": "user"}),
+            patch.object(main, "load_ai_image_job_by_image_url") as loader,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                main.ai_image_metadata(
+                    _request("/ai-images/user_a/private.png"),
+                    "/ai-images/user_a/private.png",
+                )
+
+        self.assertEqual(raised.exception.status_code, 404)
+        loader.assert_not_called()
 
     def test_load_ai_image_job_by_image_url_handles_encoded_and_full_urls(self) -> None:
         test_id = "test_url_norm_job"

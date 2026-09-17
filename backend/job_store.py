@@ -1511,6 +1511,200 @@ def _editor_snapshot_stats(snapshot_json: str) -> dict[str, int]:
     return {"json_len": len(snapshot_json), "pages": pages, "shapes": shapes, "assets": assets}
 
 
+def _canvas_record_id(prefix: str, value: object) -> str:
+    raw = str(value or "")
+    if raw.startswith(f"{prefix}:"):
+        return raw
+    stable = uuid.uuid5(uuid.NAMESPACE_URL, f"designflow-canvas:{prefix}:{raw}").hex
+    return f"{prefix}:{stable}"
+
+
+def _canvas_document_to_tldraw_snapshot(canvas: dict, template: dict) -> dict:
+    """Encode CanvasDocument as tldraw while retaining a lossless V2 payload."""
+    result = json.loads(json.dumps(template, ensure_ascii=False))
+    document = result.setdefault("document", {})
+    old_store = document.get("store") if isinstance(document.get("store"), dict) else result.get("store")
+    if not isinstance(old_store, dict):
+        raise ValueError("legacy snapshot template has no store")
+
+    store = {
+        record_id: record
+        for record_id, record in old_store.items()
+        if isinstance(record, dict) and record.get("typeName") not in {"page", "shape", "asset"}
+    }
+    document["store"] = store
+    result.pop("store", None)
+    result["designflowCanvasDocument"] = canvas
+
+    pages = canvas.get("pages") if isinstance(canvas.get("pages"), list) else []
+    if not pages:
+        pages = [{"id": "page-1", "name": "画板 1", "order": 0}]
+    page_ids: dict[str, str] = {}
+    for index, page in enumerate(pages):
+        source_id = str(page.get("id") or f"page-{index + 1}")
+        page_id = _canvas_record_id("page", source_id)
+        page_ids[source_id] = page_id
+        store[page_id] = {
+            "meta": {},
+            "id": page_id,
+            "name": str(page.get("name") or f"画板 {index + 1}"),
+            "index": f"a{index + 1}",
+            "typeName": "page",
+        }
+
+    first_page_id = next(iter(page_ids.values()))
+    frame_ids: dict[str, str] = {}
+    frames = canvas.get("frames") if isinstance(canvas.get("frames"), list) else []
+    for index, frame in enumerate(frames):
+        source_id = str(frame.get("id") or f"frame-{index + 1}")
+        shape_id = _canvas_record_id("shape", source_id)
+        frame_ids[source_id] = shape_id
+        store[shape_id] = {
+            "x": float(frame.get("x") or 0),
+            "y": float(frame.get("y") or 0),
+            "rotation": 0,
+            "isLocked": False,
+            "opacity": 1,
+            "meta": {"designflowCanvasFrame": True},
+            "id": shape_id,
+            "type": "frame",
+            "props": {
+                "w": max(1, float(frame.get("width") or 800)),
+                "h": max(1, float(frame.get("height") or 600)),
+                "name": str(frame.get("name") or f"画板 {index + 1}"),
+            },
+            "parentId": page_ids.get(str(frame.get("pageId")), first_page_id),
+            "index": f"a{index + 1}",
+            "typeName": "shape",
+        }
+
+    images = canvas.get("images") if isinstance(canvas.get("images"), list) else []
+    for index, image in enumerate(images):
+        source_id = str(image.get("id") or f"image-{index + 1}")
+        shape_id = _canvas_record_id("shape", source_id)
+        asset_id = _canvas_record_id("asset", source_id)
+        width = max(1, float(image.get("width") or 400))
+        height = max(1, float(image.get("height") or 400))
+        natural_width = max(1, float(image.get("naturalWidth") or width))
+        natural_height = max(1, float(image.get("naturalHeight") or height))
+        store[asset_id] = {
+            "id": asset_id,
+            "typeName": "asset",
+            "type": "image",
+            "props": {
+                "w": natural_width,
+                "h": natural_height,
+                "name": str(image.get("name") or "导入图片"),
+                "isAnimated": False,
+                "mimeType": str((image.get("meta") or {}).get("mimeType") or "image/png"),
+                "src": str(image.get("url") or ""),
+                "fileSize": (image.get("meta") or {}).get("fileSize"),
+            },
+            "meta": {},
+        }
+        store[shape_id] = {
+            "x": float(image.get("x") or 0),
+            "y": float(image.get("y") or 0),
+            "rotation": float(image.get("rotation") or 0) * 3.141592653589793 / 180,
+            "isLocked": bool(image.get("locked")),
+            "opacity": float(image.get("opacity") if image.get("opacity") is not None else 1),
+            "meta": image.get("meta") if isinstance(image.get("meta"), dict) else {},
+            "id": shape_id,
+            "type": "image",
+            "props": {
+                "w": width,
+                "h": height,
+                "assetId": asset_id,
+                "playing": True,
+                "url": "",
+                "crop": None,
+                "flipX": False,
+                "flipY": False,
+                "altText": str(image.get("name") or "导入图片"),
+            },
+            "parentId": page_ids.get(str(image.get("pageId")), first_page_id),
+            "index": f"a{len(frames) + index + 1}",
+            "typeName": "shape",
+        }
+
+    texts = canvas.get("texts") if isinstance(canvas.get("texts"), list) else []
+    for index, text in enumerate(texts):
+        source_id = str(text.get("id") or f"text-{index + 1}")
+        shape_id = _canvas_record_id("shape", source_id)
+        content = str(text.get("text") or "")
+        paragraphs = content.split("\n") or [""]
+        rich_content = []
+        for paragraph in paragraphs:
+            node = {"type": "paragraph", "attrs": {"dir": "auto"}}
+            if paragraph:
+                text_node = {"type": "text", "text": paragraph}
+                marks = []
+                if text.get("fontWeight") == "bold":
+                    marks.append({"type": "bold"})
+                if text.get("fontStyle") == "italic":
+                    marks.append({"type": "italic"})
+                if marks:
+                    text_node["marks"] = marks
+                node["content"] = [text_node]
+            rich_content.append(node)
+        store[shape_id] = {
+            "x": float(text.get("x") or 0),
+            "y": float(text.get("y") or 0),
+            "rotation": 0,
+            "isLocked": bool(text.get("locked")),
+            "opacity": 1,
+            "meta": {"designflowCanvasText": True},
+            "id": shape_id,
+            "type": "text",
+            "props": {
+                "color": "black",
+                "size": "m",
+                "w": max(1, float(text.get("width") or 200)),
+                "font": "draw",
+                "textAlign": str(text.get("textAlign") or "left").replace("left", "start").replace("right", "end"),
+                "autoSize": False,
+                "scale": max(0.1, float(text.get("fontSize") or 18) / 18),
+                "richText": {"type": "doc", "attrs": {"dir": "auto"}, "content": rich_content},
+            },
+            "parentId": page_ids.get(str(text.get("pageId")), first_page_id),
+            "index": f"a{len(frames) + len(images) + index + 1}",
+            "typeName": "shape",
+        }
+
+    active_page_id = page_ids.get(str(canvas.get("activePageId")), first_page_id)
+    session = result.setdefault("session", {})
+    session["currentPageId"] = active_page_id
+    session["pageStates"] = [
+        {
+            "pageId": page_id,
+            "camera": {"x": 0, "y": 0, "z": 1},
+            "selectedShapeIds": [],
+            "focusedGroupId": None,
+        }
+        for page_id in page_ids.values()
+    ]
+    return result
+
+
+def _legacy_compatible_editor_snapshot(new_json: str, old_json: str | None) -> str:
+    try:
+        new_snapshot = json.loads(new_json)
+        old_snapshot = json.loads(old_json) if old_json else None
+    except Exception:
+        return new_json
+    if not isinstance(new_snapshot, dict) or new_snapshot.get("version") != 2:
+        return new_json
+    if not isinstance(old_snapshot, dict):
+        return new_json
+    old_store = (old_snapshot.get("document") or {}).get("store") or old_snapshot.get("store")
+    if not isinstance(old_store, dict):
+        return new_json
+    return json.dumps(
+        _canvas_document_to_tldraw_snapshot(new_snapshot, old_snapshot),
+        ensure_ascii=False,
+    )
+
+
 def _should_reject_editor_snapshot_overwrite(old_json: str | None, new_json: str) -> bool:
     if not old_json:
         return False
@@ -1552,6 +1746,16 @@ def save_editor_snapshot(
         ).fetchone()
 
         if not existing:
+            # A new user in a migrated database has no personal legacy template yet.
+            # Reuse only the tldraw schema shell from an existing row; the converter
+            # removes every page, shape and asset before inserting this user's data.
+            template_row = conn.execute(
+                "SELECT snapshot_json FROM editor_snapshots ORDER BY updated_at DESC LIMIT 1"
+            ).fetchone()
+            snapshot_json = _legacy_compatible_editor_snapshot(
+                snapshot_json,
+                template_row["snapshot_json"] if template_row else None,
+            )
             conn.execute(
                 """
                 INSERT INTO editor_snapshots (user_id, snapshot_json, updated_at, revision)
@@ -1564,6 +1768,7 @@ def save_editor_snapshot(
 
         old_json = existing["snapshot_json"]
         old_revision = int(existing["revision"] or 1)
+        snapshot_json = _legacy_compatible_editor_snapshot(snapshot_json, old_json)
         new_stats = _editor_snapshot_stats(snapshot_json)
 
         # 1. 无效结构拦截

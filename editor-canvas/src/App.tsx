@@ -90,6 +90,7 @@ export function App() {
   const autoSaveRetryTimerRef = useRef<any>(null)
   const wheelTimerRef = useRef<any>(null)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved')
+  const [snapshotStatus, setSnapshotStatus] = useState<'loading' | 'ready' | 'error'>('loading')
 
   const claimOperation = useAIOperationStore((s) => s.claimOperation)
   const updateOperation = useAIOperationStore((s) => s.updateOperation)
@@ -221,6 +222,7 @@ export function App() {
   // 1. 快捷键监听
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!snapshotHydratedRef.current) return
       // 忽略在输入框内的快捷键
       const isInput = ['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)
       if (isInput) return
@@ -322,6 +324,7 @@ export function App() {
 
     // 剪贴板粘贴图片处理
     const onPasteWindow = async (e: ClipboardEvent) => {
+      if (!snapshotHydratedRef.current) return
       const target = e.target as HTMLElement | null
       const isInput =
         target &&
@@ -452,6 +455,7 @@ export function App() {
   // 1.1 外部多图片文件拖拽置入画布 (Drag & Drop)
   useEffect(() => {
     const onDragEnter = (e: DragEvent) => {
+      if (!snapshotHydratedRef.current) return
       if (e.dataTransfer?.types?.includes('Files')) {
         dragDepthRef.current++
         e.preventDefault()
@@ -460,6 +464,7 @@ export function App() {
     }
 
     const onDragOver = (e: DragEvent) => {
+      if (!snapshotHydratedRef.current) return
       if (e.dataTransfer?.types?.includes('Files')) {
         e.preventDefault()
         if (e.dataTransfer) {
@@ -479,6 +484,7 @@ export function App() {
     }
 
     const onDrop = async (e: DragEvent) => {
+      if (!snapshotHydratedRef.current) return
       dragDepthRef.current = 0
       setIsDraggingFiles(false)
 
@@ -679,9 +685,11 @@ export function App() {
   // 4. 恢复快照
   useEffect(() => {
     let active = true
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
 
     const drainPendingCommandsAndNotify = () => {
       snapshotHydratedRef.current = true
+      setSnapshotStatus('ready')
       const queued = pendingHostCommandsRef.current
       pendingHostCommandsRef.current = []
       for (const cmd of queued) {
@@ -719,33 +727,44 @@ export function App() {
       return
     }
 
-    fetch(editorSnapshotUrl)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
+    const scheduleRetry = () => {
+      if (!active) return
+      setSnapshotStatus('error')
+      retryTimer = setTimeout(loadSnapshot, 2000)
+    }
+
+    const loadSnapshot = async () => {
+      try {
+        const response = await fetch(editorSnapshotUrl)
         if (!active) return
-        if (!data || !data.snapshot) {
-          drainPendingCommandsAndNotify()
-          return
+        if (!response.ok) {
+          if (response.status === 401) {
+            window.parent.postMessage({ type: 'designflow:auth-required' }, '*')
+          }
+          throw new Error(`快照请求失败 (${response.status})`)
         }
-        try {
+        const data = await response.json()
+        if (!active) return
+        if (data.snapshot) {
           const parsed = typeof data.snapshot === 'string' ? JSON.parse(data.snapshot) : data.snapshot
           const converted = convertLegacyTldrawSnapshot(parsed)
-          if (converted) {
-            loadDocument(converted, Number(data.revision || 1))
-          }
-        } catch (err) {
-          console.warn('[Canvas] 快照解析错误:', err)
-        } finally {
-          drainPendingCommandsAndNotify()
+          if (!converted) throw new Error('无法识别快照格式')
+          loadDocument(converted, Number(data.revision || 0))
+        } else {
+          loadDocument(useCanvasStore.getState().getDocument(), Number(data.revision || 0))
         }
-      })
-      .catch((err) => {
+        drainPendingCommandsAndNotify()
+      } catch (err) {
         console.warn('[Canvas] 快照加载失败:', err)
-        if (active) drainPendingCommandsAndNotify()
-      })
+        scheduleRetry()
+      }
+    }
+
+    loadSnapshot()
 
     return () => {
       active = false
+      if (retryTimer) clearTimeout(retryTimer)
     }
   }, [insertImagesAuto, createPage, renamePage, loadDocument])
 
@@ -1299,6 +1318,27 @@ export function App() {
           </div>
           <div style={{ fontSize: 16, fontWeight: 600 }}>松开鼠标，自动排版置入图片</div>
           <div style={{ fontSize: 13, color: '#3b82f6' }}>支持批量多图导入，自动按 4 列流式网格排版并适配视野</div>
+        </div>
+      )}
+
+      {snapshotStatus !== 'ready' && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 2000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(248, 250, 252, 0.94)',
+            color: '#334155',
+            fontSize: 14,
+            fontWeight: 600,
+          }}
+        >
+          {snapshotStatus === 'loading' ? '正在加载画板…' : '画板加载失败，正在重试…'}
         </div>
       )}
     </div>

@@ -136,6 +136,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
     const total = loadedImages.length
     const cols = total <= 1 ? 1 : total <= 4 ? 2 : total <= 9 ? 3 : 4
     const CARD_MAX_W = 460
+    const CARD_MAX_H = 560
     const GAP = 28
 
     let originX = 0
@@ -154,7 +155,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
     }
 
     const newCanvasImages = loadedImages.map((img, idx) => {
-      const scale = img.naturalW > CARD_MAX_W ? CARD_MAX_W / img.naturalW : 1
+      const scale = Math.min(1, CARD_MAX_W / img.naturalW, CARD_MAX_H / img.naturalH)
       const w = Math.round(img.naturalW * scale)
       const h = Math.round(img.naturalH * scale)
 
@@ -162,7 +163,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
       const row = Math.floor(idx / cols)
 
       const x = Math.round(originX + col * (CARD_MAX_W + GAP))
-      const y = Math.round(originY + row * (CARD_MAX_W + GAP))
+      const y = Math.round(originY + row * (CARD_MAX_H + GAP))
 
       return {
         id: 'prod-' + Math.random().toString(36).slice(2, 10),

@@ -5581,19 +5581,17 @@ def ai_image_metadata(request: Request, url: str):
     if not clean_url:
         raise HTTPException(400, "图片地址不能为空")
 
-    user = None
-    try:
-        user = _current_user(request)
-    except Exception:
-        pass
+    user = _current_user(request)
 
     split = urlsplit(clean_url)
     path = split.path or clean_url
 
     # 1. 尝试反查 AI 生图任务 (ai_image_jobs 或 agent_images)
-    job = load_ai_image_job_by_image_url(path, None if (not user or _is_admin(user)) else user["id"])
-    if not job and user:
-        job = load_ai_image_job_by_image_url(path)
+    if not _is_admin(user):
+        owner_match = re.match(r"^/ai-images/([^/]+)/", path)
+        if owner_match and unquote(owner_match.group(1)) != str(user["id"]):
+            raise HTTPException(404, "图片文件不存在")
+    job = load_ai_image_job_by_image_url(path, None if _is_admin(user) else user["id"])
 
     # 2. 尝试解析本地磁盘文件以获取物理大小与 MIME
     file_size = None
@@ -5602,7 +5600,7 @@ def ai_image_metadata(request: Request, url: str):
     mime_type = mimetypes.guess_type(path)[0] or "image/png"
 
     try:
-        candidate = _resolve_public_asset_path(path)
+        candidate = _resolve_public_asset_path(path, user)
         if candidate and candidate.exists() and candidate.is_file():
             file_size = candidate.stat().st_size
             file_name = candidate.name
