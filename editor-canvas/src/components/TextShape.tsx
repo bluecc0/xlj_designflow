@@ -49,7 +49,6 @@ function TextShapeInner({
     const trimmed = editingValue.trim()
     if (!trimmed) {
       // 如果完全清空则移除该文本
-      useCanvasStore.getState().recordHistory()
       deleteText(text.id)
     } else if (trimmed !== text.text) {
       useCanvasStore.getState().recordHistory()
