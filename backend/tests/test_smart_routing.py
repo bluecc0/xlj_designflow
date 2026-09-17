@@ -693,7 +693,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
 
     def test_skill_generation_uses_smart_routing(self) -> None:
         chat_source = (
-            Path(__file__).resolve().parents[1] / "frontend" / "src" / "Chat.jsx"
+            Path(__file__).resolve().parents[2] / "frontend" / "src" / "Chat.jsx"
         ).read_text(encoding="utf-8")
         branch_start = chat_source.index(
             "if (activeSkill && !aiCmd && aiOptions.workflow !== 'download')"

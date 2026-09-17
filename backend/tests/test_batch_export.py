@@ -23,7 +23,7 @@ import zipfile
 from pathlib import Path
 
 # ── 把项目根加到 path ──────────────────────────────────────────────────────────
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from backend.config import settings

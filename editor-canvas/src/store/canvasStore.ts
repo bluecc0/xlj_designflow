@@ -68,8 +68,9 @@ interface CanvasState {
   setActiveTool: (tool: CanvasTool) => void
   recalcFrameAttachment: (type: 'image' | 'text', ids: string[]) => void
 
-  // 自动排版插入
+  // 自动排版与流式重排
   insertImagesAuto: (items: (string | { url: string; name?: string; [key: string]: any })[], mode?: string, name?: string) => CanvasImage[]
+  reflowSequentialImages: (pageId?: string) => void
 
   // 快照与保存
   loadDocument: (doc: any, rev?: number) => void
@@ -216,6 +217,115 @@ function threeWayMergeList<T extends { id: string }>(
 
   return finalOrder.map((id) => mergedEntities.get(id)!).filter(Boolean)
 }
+
+// ─── 4列流式网格排版规范与辅助算法（对齐旧版 Tldraw 规格） ───────────────────
+export const DESIGNFLOW_GRID_COLUMNS = 4
+export const DESIGNFLOW_GRID_ROWS_PER_BLOCK = 20
+export const DESIGNFLOW_GRID_CELL_WIDTH = 420
+export const DESIGNFLOW_GRID_CELL_HEIGHT = 560
+export const DESIGNFLOW_GRID_GAP = 40
+
+export function isSequentialLayoutImage(img: CanvasImage, pageId: string): boolean {
+  if (img.pageId !== pageId) return false
+  if (img.locked) return false
+  if (img.frameId) return false // 画板内图层不参与无限画布自由流式重排
+  const meta = img.meta || {}
+  if (meta.designflowLayoutExcluded || meta.layerExtractFrom) return false
+  return true
+}
+
+export function getVisualImageOrder(images: CanvasImage[]): CanvasImage[] {
+  return images.slice().sort((a, b) => {
+    const yDiff = a.y - b.y
+    if (Math.abs(yDiff) > 1) return yDiff
+    const xDiff = a.x - b.x
+    if (Math.abs(xDiff) > 1) return xDiff
+    return a.id.localeCompare(b.id)
+  })
+}
+
+export function getSortedSequentialImages(images: CanvasImage[], pageId: string): CanvasImage[] {
+  const targetImages = images.filter((img) => isSequentialLayoutImage(img, pageId))
+  if (targetImages.length === 0) return []
+
+  const visualOrder = getVisualImageOrder(targetImages)
+
+  return targetImages.slice().sort((a, b) => {
+    const aOrder = Number(a.meta?.designflowLayoutOrder)
+    const bOrder = Number(b.meta?.designflowLayoutOrder)
+    const aValid = Number.isFinite(aOrder) && aOrder > 0
+    const bValid = Number.isFinite(bOrder) && bOrder > 0
+    if (aValid && bValid && aOrder !== bOrder) return aOrder - bOrder
+    if (aValid !== bValid) return aValid ? -1 : 1
+    return visualOrder.indexOf(a) - visualOrder.indexOf(b)
+  })
+}
+
+export function getSequentialLayoutContext(
+  images: CanvasImage[],
+  frames: CanvasFrame[],
+  pageId: string
+): { anchorX: number; anchorY: number; nextOrder: number } {
+  const ordered = getSortedSequentialImages(images, pageId)
+
+  if (ordered.length > 0) {
+    const first = ordered[0]
+    const firstMeta = first.meta || {}
+    let anchorX = Number(firstMeta.designflowLayoutAnchorX)
+    let anchorY = Number(firstMeta.designflowLayoutAnchorY)
+    if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY)) {
+      const naturalW = Math.min(first.width, DESIGNFLOW_GRID_CELL_WIDTH)
+      anchorX = Math.round(first.x - (DESIGNFLOW_GRID_CELL_WIDTH - naturalW) / 2)
+      anchorY = Math.round(first.y)
+    }
+    const maxOrder = ordered.reduce((max, im) => {
+      const ord = Number(im.meta?.designflowLayoutOrder)
+      return Number.isFinite(ord) && ord > max ? ord : max
+    }, 0)
+    return {
+      anchorX,
+      anchorY,
+      nextOrder: maxOrder + 1,
+    }
+  }
+
+  // 若无已有流式图片，优先检查画板
+  const pageFrames = frames.filter((f) => f.pageId === pageId)
+  if (pageFrames.length > 0) {
+    const minFrameY = Math.min(...pageFrames.map((f) => f.y))
+    const maxFrameRight = Math.max(...pageFrames.map((f) => f.x + f.width))
+    return {
+      anchorX: maxFrameRight + 80,
+      anchorY: minFrameY,
+      nextOrder: 1,
+    }
+  }
+
+  // 既无图片也无画板，取当前视口中心
+  let anchorX = 0
+  let anchorY = 0
+  if (typeof window !== 'undefined') {
+    const vp = useViewportStore.getState()
+    const vpW = window.innerWidth || 1200
+    const vpH = window.innerHeight || 800
+    const centerX = (vpW / 2 - vp.panX) / vp.zoom
+    const centerY = (vpH / 2 - vp.panY) / vp.zoom
+    const totalGridW =
+      DESIGNFLOW_GRID_COLUMNS * DESIGNFLOW_GRID_CELL_WIDTH +
+      (DESIGNFLOW_GRID_COLUMNS - 1) * DESIGNFLOW_GRID_GAP
+    anchorX = Math.round(centerX - totalGridW / 2)
+    anchorY = Math.round(centerY - DESIGNFLOW_GRID_CELL_HEIGHT / 2)
+  }
+
+  return {
+    anchorX,
+    anchorY,
+    nextOrder: 1,
+  }
+}
+
+// 异步探测加载图片尺寸的防抖重排计时器
+let autoReflowTimer: number | null = null
 
 // 记录历史操作快照
 function recordHistory(get: () => CanvasState) {
@@ -986,23 +1096,69 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
   },
 
-  // ─── 自动排版插入（4列网格） ──────────────────────────────
+  // ─── 4列流式网格自动排版引擎（对齐旧版 Tldraw 规格） ────────────
+  reflowSequentialImages: (pageId?: string) => {
+    const targetPageId = pageId || get().activePageId
+    const { images, frames } = get()
+    const ordered = getSortedSequentialImages(images, targetPageId)
+    if (ordered.length === 0) return
+
+    const context = getSequentialLayoutContext(images, frames, targetPageId)
+    const itemsPerBlock = DESIGNFLOW_GRID_COLUMNS * DESIGNFLOW_GRID_ROWS_PER_BLOCK
+    const blockWidth = DESIGNFLOW_GRID_COLUMNS * (DESIGNFLOW_GRID_CELL_WIDTH + DESIGNFLOW_GRID_GAP)
+
+    const updatedImagesMap = new Map<string, Partial<CanvasImage>>()
+
+    ordered.forEach((img, index) => {
+      const meta = img.meta || {}
+      const rawW = Math.max(1, Number(img.naturalWidth || meta.designflowOriginalWidth || img.width || 1))
+      const rawH = Math.max(1, Number(img.naturalHeight || meta.designflowOriginalHeight || img.height || 1))
+
+      const scale = Math.min(1, DESIGNFLOW_GRID_CELL_WIDTH / rawW, DESIGNFLOW_GRID_CELL_HEIGHT / rawH)
+      const width = Math.max(1, Math.round(rawW * scale))
+      const height = Math.max(1, Math.round(rawH * scale))
+
+      const block = Math.floor(index / itemsPerBlock)
+      const indexInBlock = index % itemsPerBlock
+      const col = indexInBlock % DESIGNFLOW_GRID_COLUMNS
+      const row = Math.floor(indexInBlock / DESIGNFLOW_GRID_COLUMNS)
+
+      const cellX = context.anchorX + block * blockWidth + col * (DESIGNFLOW_GRID_CELL_WIDTH + DESIGNFLOW_GRID_GAP)
+      const cellY = context.anchorY + row * (DESIGNFLOW_GRID_CELL_HEIGHT + DESIGNFLOW_GRID_GAP)
+
+      // 420px 单元格内严格水平居中
+      const x = cellX + Math.round((DESIGNFLOW_GRID_CELL_WIDTH - width) / 2)
+      const y = cellY
+
+      updatedImagesMap.set(img.id, {
+        x,
+        y,
+        width,
+        height,
+        meta: {
+          ...meta,
+          designflowLayoutOrder: index + 1,
+          designflowLayoutAnchorX: context.anchorX,
+          designflowLayoutAnchorY: context.anchorY,
+          designflowOriginalWidth: rawW,
+          designflowOriginalHeight: rawH,
+        },
+      })
+    })
+
+    set((s) =>
+      withMutation(s, {
+        images: s.images.map((im) => {
+          const patch = updatedImagesMap.get(im.id)
+          return patch ? { ...im, ...patch } : im
+        }),
+      })
+    )
+  },
+
   insertImagesAuto: (items, mode, name) => {
-    const { activePageId, frames, images } = get()
-    const activeFrame = frames.find((f) => f.pageId === activePageId)
-
-    const GRID_COLS = 4
-    const CELL_W = 420
-    const CELL_H = 560
-    const GAP = 36
-
-    // 确定起始排版基准位置
-    const startX = activeFrame ? activeFrame.x + activeFrame.width + 80 : 0
-    const startY = activeFrame ? activeFrame.y : 0
-
-    // 计算已有自动排版图片的数量
-    const existingAutoImgs = images.filter((im) => im.pageId === activePageId && !im.frameId)
-    const startIndex = existingAutoImgs.length
+    const { activePageId, frames, images, reflowSequentialImages } = get()
+    const context = getSequentialLayoutContext(images, frames, activePageId)
 
     const createdImages: CanvasImage[] = []
 
@@ -1018,70 +1174,111 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         delete (meta as any).index
       }
 
-      const currentIndex = startIndex + idx
-      const col = currentIndex % GRID_COLS
-      const row = Math.floor(currentIndex / GRID_COLS)
-
-      const x = startX + col * (CELL_W + GAP)
-      const y = startY + row * (CELL_H + GAP)
+      const order = context.nextOrder + idx
       const imgId = 'img-' + Math.random().toString(36).slice(2, 10)
+
+      // 提取初始真实宽高（若已有）
+      const rawW = Number(isObj && (item.naturalWidth || item.naturalW || item.width)) || DESIGNFLOW_GRID_CELL_WIDTH
+      const rawH = Number(isObj && (item.naturalHeight || item.naturalH || item.height)) || DESIGNFLOW_GRID_CELL_HEIGHT
+      const scale = Math.min(1, DESIGNFLOW_GRID_CELL_WIDTH / rawW, DESIGNFLOW_GRID_CELL_HEIGHT / rawH)
+      const w = Math.max(1, Math.round(rawW * scale))
+      const h = Math.max(1, Math.round(rawH * scale))
+
+      // 初始占位坐标（由紧接着的 reflow 统一定位）
+      const itemsPerBlock = DESIGNFLOW_GRID_COLUMNS * DESIGNFLOW_GRID_ROWS_PER_BLOCK
+      const blockWidth = DESIGNFLOW_GRID_COLUMNS * (DESIGNFLOW_GRID_CELL_WIDTH + DESIGNFLOW_GRID_GAP)
+      const index = order - 1
+      const block = Math.floor(index / itemsPerBlock)
+      const indexInBlock = index % itemsPerBlock
+      const col = indexInBlock % DESIGNFLOW_GRID_COLUMNS
+      const row = Math.floor(indexInBlock / DESIGNFLOW_GRID_COLUMNS)
+      const cellX = context.anchorX + block * blockWidth + col * (DESIGNFLOW_GRID_CELL_WIDTH + DESIGNFLOW_GRID_GAP)
+      const cellY = context.anchorY + row * (DESIGNFLOW_GRID_CELL_HEIGHT + DESIGNFLOW_GRID_GAP)
+      const x = cellX + Math.round((DESIGNFLOW_GRID_CELL_WIDTH - w) / 2)
+      const y = cellY
 
       const img: CanvasImage = {
         id: imgId,
         pageId: activePageId,
-        frameId: null, // 默认按自由排版
+        frameId: null, // 自由流式排版
         x,
         y,
-        width: CELL_W,
-        height: CELL_H,
+        width: w,
+        height: h,
         rotation: 0,
         url,
-        name: itemName || `生成图片 ${currentIndex + 1}`,
+        name: itemName || `图片 ${order}`,
         locked: false,
         opacity: 1,
-        meta: meta && Object.keys(meta).length > 0 ? meta : undefined,
+        naturalWidth: rawW !== DESIGNFLOW_GRID_CELL_WIDTH ? rawW : undefined,
+        naturalHeight: rawH !== DESIGNFLOW_GRID_CELL_HEIGHT ? rawH : undefined,
+        meta: {
+          ...(meta || {}),
+          designflowLayoutOrder: order,
+          designflowLayoutAnchorX: context.anchorX,
+          designflowLayoutAnchorY: context.anchorY,
+          designflowOriginalWidth: rawW,
+          designflowOriginalHeight: rawH,
+        },
       }
       createdImages.push(img)
 
-      // 异步读取原图天然分辨率，自适应保持原图真实宽高比
-      const probe = new Image()
-      probe.crossOrigin = 'anonymous'
-      probe.onload = () => {
-        const nw = probe.naturalWidth || probe.width
-        const nh = probe.naturalHeight || probe.height
-        if (nw > 0 && nh > 0) {
-          const aspect = nw / nh
-          let w = CELL_W
-          let h = Math.round(CELL_W / aspect)
-          if (h > CELL_H * 1.25) {
-            h = CELL_H
-            w = Math.round(CELL_H * aspect)
+      // 异步探测图片天然尺寸，自适应保持真实比例并触发防抖重排
+      if (typeof window !== 'undefined') {
+        const probe = new Image()
+        probe.crossOrigin = 'anonymous'
+        probe.onload = () => {
+          const nw = probe.naturalWidth || probe.width
+          const nh = probe.naturalHeight || probe.height
+          if (nw > 0 && nh > 0) {
+            const currentImg = get().images.find((im) => im.id === imgId)
+            if (currentImg) {
+              get().updateImage(imgId, {
+                naturalWidth: nw,
+                naturalHeight: nh,
+                meta: {
+                  ...(currentImg.meta || {}),
+                  designflowOriginalWidth: nw,
+                  designflowOriginalHeight: nh,
+                },
+              })
+              if (autoReflowTimer !== null) {
+                window.clearTimeout(autoReflowTimer)
+              }
+              autoReflowTimer = window.setTimeout(() => {
+                autoReflowTimer = null
+                get().reflowSequentialImages(get().activePageId)
+              }, 60)
+            }
           }
-          get().updateImage(imgId, {
-            naturalWidth: nw,
-            naturalHeight: nh,
-            width: w,
-            height: h,
-          })
         }
+        probe.src = url
       }
-      probe.src = url
     })
 
+    if (createdImages.length === 0) return []
+
     recordHistory(get)
-    set((s) => withMutation(s, {
-      images: [...s.images, ...createdImages],
-      selectedIds: createdImages.map((im) => im.id),
-      selectedType: 'image',
-    }))
+    set((s) =>
+      withMutation(s, {
+        images: [...s.images, ...createdImages],
+        selectedIds: createdImages.map((im) => im.id),
+        selectedType: 'image',
+      })
+    )
+
+    // 立即执行一次全量网格重排，确保顺序和居中严丝合缝
+    reflowSequentialImages(activePageId)
 
     // 自动平移视口并适度缩放，确保新插入的图片完整居中展示在可视区域内
-    if (createdImages.length > 0 && typeof window !== 'undefined') {
+    if (typeof window !== 'undefined') {
       try {
-        const minX = Math.min(...createdImages.map((im) => im.x))
-        const minY = Math.min(...createdImages.map((im) => im.y))
-        const maxX = Math.max(...createdImages.map((im) => im.x + im.width))
-        const maxY = Math.max(...createdImages.map((im) => im.y + im.height))
+        const latestImages = get().images.filter((im) => createdImages.some((c) => c.id === im.id))
+        const boxes = latestImages.length > 0 ? latestImages : createdImages
+        const minX = Math.min(...boxes.map((im) => im.x))
+        const minY = Math.min(...boxes.map((im) => im.y))
+        const maxX = Math.max(...boxes.map((im) => im.x + im.width))
+        const maxY = Math.max(...boxes.map((im) => im.y + im.height))
         const vp = useViewportStore.getState()
         const vpWidth = window.innerWidth || 1000
         const vpHeight = window.innerHeight || 800
@@ -1092,20 +1289,20 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const sMaxY = maxY * vp.zoom + vp.panY
 
         const isVisible =
-          sMinX >= 60 &&
+          sMinX >= 80 &&
           sMinY >= 80 &&
-          sMaxX <= vpWidth - 60 &&
+          sMaxX <= vpWidth - 80 &&
           sMaxY <= vpHeight - 80
 
         if (!isVisible) {
           const boxW = Math.max(100, maxX - minX)
           const boxH = Math.max(100, maxY - minY)
-          const availW = Math.max(200, vpWidth - 200)
-          const availH = Math.max(200, vpHeight - 180)
+          const availW = Math.max(200, vpWidth - 220)
+          const availH = Math.max(200, vpHeight - 200)
 
           let targetZoom = vp.zoom
           if (boxW * targetZoom > availW || boxH * targetZoom > availH) {
-            targetZoom = Math.max(0.15, Math.min(1.0, Math.min(availW / boxW, availH / boxH)))
+            targetZoom = Math.max(0.12, Math.min(1.0, Math.min(availW / boxW, availH / boxH)))
           }
 
           const centerX = (minX + maxX) / 2

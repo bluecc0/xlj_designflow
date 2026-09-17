@@ -171,9 +171,6 @@ class PenpotClient:
             headers["Content-Type"] = "application/transit+json"
             encoded = to_transit(params or {})
             body = json.dumps(encoded)
-            if command == "update-file":
-                with open("backend/debug_transit.txt", "a", encoding="utf-8") as _f:
-                    _f.write("\n--- CALL ---\n" + body[:3000])
             resp = self._session.post(url, headers=headers, data=body, timeout=60)
         else:
             headers["Content-Type"] = "application/json"

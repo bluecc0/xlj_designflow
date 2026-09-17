@@ -23,6 +23,7 @@ import { useHistoryStore } from './store/historyStore'
 import { useAIOperationStore } from './store/aiOperationStore'
 import { runOutpainting, getImageDimensions } from './services/aiImageService'
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
+import { loadImagesFromFiles } from './utils/imageLoader'
 
 const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
 const editorSnapshotUrl = `/editor/snapshot?user_id=${encodeURIComponent(editorUserId)}`
@@ -116,6 +117,8 @@ export function App() {
   }>({ visible: false, targetPos: null })
   const [propertiesModalImage, setPropertiesModalImage] = useState<any>(null)
   const [snapLines, setSnapLines] = useState<SnapLine[]>([])
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false)
+  const dragDepthRef = useRef(0)
 
   const handleStartOutpainting = useCallback((id: string) => {
     setOutpaintingImageId(id)
@@ -351,106 +354,16 @@ export function App() {
         return
       }
 
-      // 1. 处理剪贴板图片文件（截图或复制的文件）
+      // 1. 处理剪贴板图片文件（截图或复制的文件，支持多张，自动走网格流式排版）
       if (imageFiles.length > 0) {
         e.preventDefault()
         e.stopPropagation()
 
-        const screenCenter = mousePosRef.current || {
-          x: window.innerWidth / 2,
-          y: window.innerHeight / 2,
-        }
-        const center = screenToCanvas(screenCenter)
-
-        const MAX_DIM = 800
-        const GAP = 24
-        const loadedImages: Array<{
-          url: string
-          name: string
-          w: number
-          h: number
-        }> = []
-
-        for (const file of imageFiles) {
-          try {
-            const dataUrl = await new Promise<string>((resolve, reject) => {
-              const reader = new FileReader()
-              reader.onload = () => resolve(reader.result as string)
-              reader.onerror = reject
-              reader.readAsDataURL(file)
-            })
-
-            const dims = await new Promise<{ w: number; h: number }>((resolve) => {
-              const img = new Image()
-              img.onload = () => {
-                const nw = img.naturalWidth || img.width || 400
-                const nh = img.naturalHeight || img.height || 400
-                const scale = Math.min(1, MAX_DIM / Math.max(nw, nh))
-                resolve({
-                  w: Math.round(nw * scale),
-                  h: Math.round(nh * scale),
-                })
-              }
-              img.onerror = () => resolve({ w: 400, h: 400 })
-              img.src = dataUrl
-            })
-
-            loadedImages.push({
-              url: dataUrl,
-              name: file.name ? file.name.replace(/\.[^/.]+$/, '') : '粘贴图片',
-              w: dims.w,
-              h: dims.h,
-            })
-          } catch (err) {
-            console.warn('[Canvas] 粘贴图片读取失败:', err)
-          }
-        }
-
-        if (loadedImages.length === 0) return
-
-        if (loadedImages.length === 1) {
-          const item = loadedImages[0]
-          addImages([
-            {
-              id: 'img-' + Math.random().toString(36).slice(2, 10),
-              frameId: null,
-              x: Math.round(center.x - item.w / 2),
-              y: Math.round(center.y - item.h / 2),
-              width: item.w,
-              height: item.h,
-              rotation: 0,
-              url: item.url,
-              name: item.name,
-              locked: false,
-              opacity: 1,
-            },
-          ])
-          return
-        }
-
-        const cols = Math.min(3, loadedImages.length)
-        const curX = center.x - ((cols * (loadedImages[0].w + GAP) - GAP) / 2)
-        const curY = center.y - (loadedImages[0].h / 2)
-
-        const imagesToCreate = loadedImages.map((item, idx) => {
-          const col = idx % cols
-          const row = Math.floor(idx / cols)
-          return {
-            id: 'img-' + Math.random().toString(36).slice(2, 10),
-            frameId: null,
-            x: Math.round(curX + col * (item.w + GAP)),
-            y: Math.round(curY + row * (item.h + GAP)),
-            width: item.w,
-            height: item.h,
-            rotation: 0,
-            url: item.url,
-            name: `${item.name} ${idx + 1}`,
-            locked: false,
-            opacity: 1,
+        loadImagesFromFiles(imageFiles).then((loaded) => {
+          if (loaded.length > 0) {
+            insertImagesAuto(loaded)
           }
         })
-
-        addImages(imagesToCreate)
         return
       }
 
@@ -535,6 +448,64 @@ export function App() {
     addImages,
     screenToCanvas,
   ])
+
+  // 1.1 外部多图片文件拖拽置入画布 (Drag & Drop)
+  useEffect(() => {
+    const onDragEnter = (e: DragEvent) => {
+      if (e.dataTransfer?.types?.includes('Files')) {
+        dragDepthRef.current++
+        e.preventDefault()
+        setIsDraggingFiles(true)
+      }
+    }
+
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types?.includes('Files')) {
+        e.preventDefault()
+        if (e.dataTransfer) {
+          e.dataTransfer.dropEffect = 'copy'
+        }
+      }
+    }
+
+    const onDragLeave = (e: DragEvent) => {
+      if (e.dataTransfer?.types?.includes('Files')) {
+        dragDepthRef.current--
+        if (dragDepthRef.current <= 0) {
+          dragDepthRef.current = 0
+          setIsDraggingFiles(false)
+        }
+      }
+    }
+
+    const onDrop = async (e: DragEvent) => {
+      dragDepthRef.current = 0
+      setIsDraggingFiles(false)
+
+      const files = e.dataTransfer?.files
+      if (!files || files.length === 0) return
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      const loaded = await loadImagesFromFiles(files)
+      if (loaded.length > 0) {
+        insertImagesAuto(loaded)
+      }
+    }
+
+    window.addEventListener('dragenter', onDragEnter)
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('dragleave', onDragLeave)
+    window.addEventListener('drop', onDrop)
+
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter)
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragleave', onDragLeave)
+      window.removeEventListener('drop', onDrop)
+    }
+  }, [insertImagesAuto])
 
   // 2. 原生非 passive 滚轮与手势监听（彻底杜绝放大整个浏览器界面）
   useEffect(() => {
@@ -1284,6 +1255,52 @@ export function App() {
 
       {/* 右下角缩放控制条 */}
       <CanvasZoomBar />
+
+      {/* 外部多图拖拽放置指示浮层 */}
+      {isDraggingFiles && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 12,
+            borderRadius: 16,
+            border: '2px dashed #3b82f6',
+            backgroundColor: 'rgba(239, 246, 255, 0.76)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 12,
+            zIndex: 999,
+            pointerEvents: 'none',
+            color: '#1d4ed8',
+            boxShadow: '0 16px 40px rgba(37, 99, 235, 0.12)',
+          }}
+        >
+          <div
+            style={{
+              width: 56,
+              height: 56,
+              borderRadius: 28,
+              backgroundColor: '#dbeafe',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#2563eb',
+              boxShadow: '0 4px 14px rgba(37, 99, 235, 0.18)',
+            }}
+          >
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+          </div>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>松开鼠标，自动排版置入图片</div>
+          <div style={{ fontSize: 13, color: '#3b82f6' }}>支持批量多图导入，自动按 4 列流式网格排版并适配视野</div>
+        </div>
+      )}
     </div>
   )
 }

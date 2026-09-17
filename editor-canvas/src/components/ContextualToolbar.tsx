@@ -10,6 +10,7 @@ import {
   runVectorize,
   runLayerExtract,
 } from '../services/aiImageService'
+import { downloadImagesAsZip } from '../utils/zipDownload'
 
 interface Props {
   isOutpainting?: boolean
@@ -117,6 +118,8 @@ export function ContextualToolbar({
   const addImage = useCanvasStore((s) => s.addImage)
   const alignSelected = useCanvasStore((s) => s.alignSelected)
   const tidyUpSelected = useCanvasStore((s) => s.tidyUpSelected)
+  const reflowSequentialImages = useCanvasStore((s) => s.reflowSequentialImages)
+  const activePageId = useCanvasStore((s) => s.activePageId)
 
   const zoom = useViewportStore((s) => s.zoom)
   const panX = useViewportStore((s) => s.panX)
@@ -129,6 +132,8 @@ export function ContextualToolbar({
 
   const [activeTaskMsg, setActiveTaskMsg] = useState<string | null>(null)
   const [tidyGap, setTidyGap] = useState(24)
+  const [isZipping, setIsZipping] = useState(false)
+  const [zipProgress, setZipProgress] = useState<{ current: number; total: number } | null>(null)
 
   const selectedImages = images.filter((im) => selectedIds.includes(im.id))
 
@@ -165,7 +170,8 @@ export function ContextualToolbar({
   const screenCenterX = ((minX + maxX) / 2) * zoom + panX
   const screenTopY = minY * zoom + panY - 52
 
-  const clampedX = Math.max(180, Math.min(window.innerWidth - 180, screenCenterX))
+  const halfWidth = selectedImages.length === 1 ? 200 : 280
+  const clampedX = Math.max(halfWidth + 16, Math.min(window.innerWidth - (halfWidth + 16), screenCenterX))
   const clampedY = Math.max(62, screenTopY)
 
   // 1. 下载单张图片
@@ -178,13 +184,30 @@ export function ContextualToolbar({
     document.body.removeChild(a)
   }
 
-  // 2. 批量下载
+  // 2. 批量打包下载为 ZIP
   const handleBatchDownload = async () => {
-    for (let i = 0; i < selectedImages.length; i++) {
-      handleDownloadSingle(selectedImages[i])
-      if (i < selectedImages.length - 1) {
-        await new Promise((r) => setTimeout(r, 280))
-      }
+    if (isZipping || selectedImages.length === 0) return
+    setIsZipping(true)
+    setZipProgress({ current: 0, total: selectedImages.length })
+
+    try {
+      await downloadImagesAsZip(
+        selectedImages.map((im) => ({
+          url: im.url,
+          name: im.name || 'image',
+        })),
+        {
+          onProgress: (current, total) => {
+            setZipProgress({ current, total })
+          },
+        }
+      )
+    } catch (err) {
+      console.error('打包下载失败:', err)
+      alert('打包下载失败，请重试')
+    } finally {
+      setIsZipping(false)
+      setZipProgress(null)
     }
   }
 
@@ -507,16 +530,30 @@ export function ContextualToolbar({
             </button>
           </>
         ) : (
-          /* 多图选中：批量下载与对齐操作组 */
+          /* 多图选中：批量打包下载与对齐操作组 */
           <>
             <button
               onClick={handleBatchDownload}
               className="designflow-toolbar-button"
-              title={`下载选中图片 (${selectedImages.length})`}
+              title={
+                isZipping
+                  ? `正在打包下载 (${zipProgress?.current || 0}/${selectedImages.length})...`
+                  : `打包下载选中图片 (${selectedImages.length})`
+              }
+              disabled={isZipping}
             >
-              <DesignflowToolbarIcon name="download" />
-              <span className="designflow-toolbar-label" style={{ maxWidth: 100, opacity: 1, marginInlineStart: 6 }}>
-                下载图片 ({selectedImages.length})
+              {isZipping ? (
+                <span className="designflow-upscale-spinner" />
+              ) : (
+                <DesignflowToolbarIcon name="download" />
+              )}
+              <span
+                className="designflow-toolbar-label"
+                style={{ maxWidth: 130, opacity: 1, marginInlineStart: 6 }}
+              >
+                {isZipping
+                  ? `打包中 ${zipProgress ? `${zipProgress.current}/${zipProgress.total}` : ''}`
+                  : `打包下载 (${selectedImages.length})`}
               </span>
             </button>
 
@@ -634,6 +671,18 @@ export function ContextualToolbar({
                 <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
                 <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
                 <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
+              </svg>
+            </button>
+
+            <button
+              onClick={() => reflowSequentialImages(activePageId)}
+              className="designflow-toolbar-button"
+              title="一键整理 (4 列自动流式网格排版)"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="7" height="18" rx="1.5" />
+                <rect x="14" y="3" width="7" height="7.5" rx="1.5" />
+                <rect x="14" y="13.5" width="7" height="7.5" rx="1.5" />
               </svg>
             </button>
 

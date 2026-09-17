@@ -1,16 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
+import { loadImagesFromFiles } from '../utils/imageLoader'
 
 export function BottomToolbar() {
   const activeTool = useCanvasStore((s) => s.activeTool)
   const setActiveTool = useCanvasStore((s) => s.setActiveTool)
   const addFrame = useCanvasStore((s) => s.addFrame)
   const addImage = useCanvasStore((s) => s.addImage)
+  const insertImagesAuto = useCanvasStore((s) => s.insertImagesAuto)
   const frames = useCanvasStore((s) => s.frames)
   const images = useCanvasStore((s) => s.images)
   const activePageId = useCanvasStore((s) => s.activePageId)
   const getDocument = useCanvasStore((s) => s.getDocument)
+  const reflowSequentialImages = useCanvasStore((s) => s.reflowSequentialImages)
 
   const setZoom = useViewportStore((s) => s.setZoom)
   const setPan = useViewportStore((s) => s.setPan)
@@ -71,43 +74,21 @@ export function BottomToolbar() {
     setPan(nextPanX, nextPanY)
   }
 
-  const handleUploadFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+  const handleReflowGrid = () => {
+    reflowSequentialImages(activePageId)
+    setTimeout(() => {
+      handleFitAll()
+    }, 60)
+  }
 
-    const reader = new FileReader()
-    reader.onload = (evt) => {
-      const dataUrl = evt.target?.result as string
-      if (!dataUrl) return
+  const handleUploadFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
 
-      const img = new Image()
-      img.onload = () => {
-        const center = screenToCanvas({
-          x: window.innerWidth / 2,
-          y: window.innerHeight / 2,
-        })
-        const maxDim = 600
-        const scale = Math.min(1, maxDim / Math.max(img.width, img.height))
-        const w = Math.round(img.width * scale)
-        const h = Math.round(img.height * scale)
-
-        addImage({
-          id: 'img-' + Math.random().toString(36).slice(2, 10),
-          frameId: null,
-          x: center.x - w / 2,
-          y: center.y - h / 2,
-          width: w,
-          height: h,
-          rotation: 0,
-          url: dataUrl,
-          name: file.name.replace(/\.[^/.]+$/, ''),
-          locked: false,
-          opacity: 1,
-        })
-      }
-      img.src = dataUrl
+    const loaded = await loadImagesFromFiles(files)
+    if (loaded.length > 0) {
+      insertImagesAuto(loaded)
     }
-    reader.readAsDataURL(file)
     e.target.value = ''
   }
 
@@ -133,7 +114,7 @@ export function BottomToolbar() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `designflow-canvas-${Date.now()}.json`
+    a.download = `xlj_studio-canvas-${Date.now()}.json`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -146,8 +127,9 @@ export function BottomToolbar() {
         ref={fileInputRef}
         type="file"
         accept="image/*"
+        multiple
         style={{ display: 'none' }}
-        onChange={handleUploadFile}
+        onChange={handleUploadFiles}
       />
 
       {/* 竖向浮动右侧工具坞 (Pill Dock) */}
@@ -382,7 +364,30 @@ export function BottomToolbar() {
           </svg>
         </button>
 
-        {/* 5. 导入图片 (Image Plus) */}
+        {/* 5. 一键4列流式自动排版整理 (Tidy Up / Reflow Grid) */}
+        <button
+          type="button"
+          onClick={handleReflowGrid}
+          style={dockBtnStyle}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = '#eef1f6'
+            e.currentTarget.style.color = '#20242d'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'transparent'
+            e.currentTarget.style.color = '#687083'
+          }}
+          title="一键整理排版 (4 列流式网格)"
+        >
+          {/* Figma / Canvas 经典 Tidy Up 整理图标：左长矩形与右规整排列方块 */}
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="7" height="18" rx="1.5" />
+            <rect x="14" y="3" width="7" height="7.5" rx="1.5" />
+            <rect x="14" y="13.5" width="7" height="7.5" rx="1.5" />
+          </svg>
+        </button>
+
+        {/* 6. 导入图片 (Image Plus) */}
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
@@ -395,7 +400,7 @@ export function BottomToolbar() {
             e.currentTarget.style.backgroundColor = 'transparent'
             e.currentTarget.style.color = '#687083'
           }}
-          title="导入本地图片"
+          title="导入本地图片 (支持多选)"
         >
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7" />
