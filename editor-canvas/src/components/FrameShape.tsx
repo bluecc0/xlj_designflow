@@ -3,6 +3,8 @@ import { Trash2, GripHorizontal } from 'lucide-react'
 import type { CanvasFrame, ResizeHandle } from '../types'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
+import { calculateSnap, calculateResizeSnap, getSnapTargets } from '../utils/snapping'
+import { useSnapStore } from '../store/snapStore'
 
 interface Props {
   frame: CanvasFrame
@@ -64,16 +66,34 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
     isDraggingRef.current = true
     dragStartPosRef.current = { x: e.clientX, y: e.clientY }
     frameStartPosRef.current = { x: frame.x, y: frame.y }
+    const snapTargets = getSnapTargets([frame.id], frame.pageId)
 
     const onMouseMove = (moveEvent: MouseEvent) => {
       if (!isDraggingRef.current) return
       const dx = (moveEvent.clientX - dragStartPosRef.current.x) / zoom
       const dy = (moveEvent.clientY - dragStartPosRef.current.y) / zoom
+
+      let finalX = frameStartPosRef.current.x + dx
+      let finalY = frameStartPosRef.current.y + dy
+
+      if (!moveEvent.altKey) {
+        const snap = calculateSnap(
+          { id: frame.id, x: finalX, y: finalY, width: frame.width, height: frame.height },
+          snapTargets,
+          zoom
+        )
+        useSnapStore.getState().setSnapLines(snap.lines)
+        finalX = snap.snappedX
+        finalY = snap.snappedY
+      } else {
+        useSnapStore.getState().clearSnapLines()
+      }
+
       updateFrame(
         frame.id,
         {
-          x: Math.round(frameStartPosRef.current.x + dx),
-          y: Math.round(frameStartPosRef.current.y + dy),
+          x: Math.round(finalX),
+          y: Math.round(finalY),
         },
         true // 同步移动内部包含的图片与文本
       )
@@ -83,6 +103,7 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
       isDraggingRef.current = false
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
+      useSnapStore.getState().clearSnapLines()
     }
 
     window.addEventListener('mousemove', onMouseMove)
@@ -107,6 +128,8 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
 
   useEffect(() => {
     if (!activeResizeHandle) return
+
+    const snapTargets = getSnapTargets([frame.id], frame.pageId)
 
     const onMouseMove = (e: MouseEvent) => {
       const dx = (e.clientX - resizeStartRef.current.clientX) / zoom
@@ -133,9 +156,27 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
         nextH = possibleH
       }
 
-      // 按住 Shift 键等比缩放
-      if (e.shiftKey && ['se', 'ne', 'sw', 'nw'].includes(activeResizeHandle)) {
-        nextH = Math.round(nextW / aspect)
+      const isCorner = ['se', 'ne', 'sw', 'nw'].includes(activeResizeHandle)
+      const keepAspect = e.shiftKey && isCorner
+
+      if (!e.altKey) {
+        const resizeSnap = calculateResizeSnap(
+          activeResizeHandle,
+          { id: frame.id, x: nextX, y: nextY, width: nextW, height: nextH },
+          snapTargets,
+          zoom,
+          keepAspect ? aspect : undefined
+        )
+        nextX = resizeSnap.box.x
+        nextY = resizeSnap.box.y
+        nextW = resizeSnap.box.width
+        nextH = resizeSnap.box.height
+        useSnapStore.getState().setSnapLines(resizeSnap.lines)
+      } else {
+        if (keepAspect) {
+          nextH = Math.round(nextW / aspect)
+        }
+        useSnapStore.getState().clearSnapLines()
       }
 
       updateFrame(
@@ -152,6 +193,7 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
 
     const onMouseUp = () => {
       setActiveResizeHandle(null)
+      useSnapStore.getState().clearSnapLines()
       const pageImages = images.filter((im) => im.pageId === frame.pageId)
       const pageTexts = (texts || []).filter((t) => t.pageId === frame.pageId)
       if (pageImages.length > 0) recalcFrameAttachment('image', pageImages.map((im) => im.id))

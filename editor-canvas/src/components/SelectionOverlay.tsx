@@ -2,11 +2,11 @@ import React, { useRef, useState, useEffect } from 'react'
 import type { CanvasImage, ResizeHandle } from '../types'
 import { useViewportStore } from '../store/viewportStore'
 import { useCanvasStore } from '../store/canvasStore'
-import { calculateSnap, type SnapLine, type RectBox } from '../utils/snapping'
+import { calculateSnap, calculateResizeSnap, getSnapTargets, type SnapLine, type RectBox } from '../utils/snapping'
+import { useSnapStore } from '../store/snapStore'
 
 interface Props {
   image: CanvasImage
-  onSnapLinesChange?: (lines: SnapLine[]) => void
   onContextMenu?: (e: React.MouseEvent) => void
 }
 
@@ -21,7 +21,7 @@ const HANDLES: { pos: ResizeHandle; cursor: string; x: string; y: string }[] = [
   { pos: 'w', cursor: 'ew-resize', x: '0%', y: '50%' },
 ]
 
-export function SelectionOverlay({ image, onSnapLinesChange, onContextMenu }: Props) {
+export function SelectionOverlay({ image, onContextMenu }: Props) {
   const zoom = useViewportStore((s) => s.zoom)
   const screenToCanvas = useViewportStore((s) => s.screenToCanvas)
   const updateImage = useCanvasStore((s) => s.updateImage)
@@ -82,32 +82,34 @@ export function SelectionOverlay({ image, onSnapLinesChange, onContextMenu }: Pr
       const dx = (e.clientX - dragStartRef.current.clientX) / zoom
       const dy = (e.clientY - dragStartRef.current.clientY) / zoom
 
+      // 统一收集对齐目标
+      const snapTargets = getSnapTargets([image.id], image.pageId)
+
       if (isDragging) {
         const rawX = dragStartRef.current.imgX + dx
         const rawY = dragStartRef.current.imgY + dy
 
-        // 收集对齐候选框：当前页面的画板与其他图片
-        const currentFrames = frames.filter((f) => f.pageId === activePageId)
-        const currentImages = images.filter((im) => im.pageId === activePageId && im.id !== image.id)
-        const targetBoxes: RectBox[] = [
-          ...currentFrames.map((f) => ({ id: f.id, x: f.x, y: f.y, width: f.width, height: f.height })),
-          ...currentImages.map((im) => ({ id: im.id, x: im.x, y: im.y, width: im.width, height: im.height })),
-        ]
+        let finalX = rawX
+        let finalY = rawY
 
-        const snap = calculateSnap(
-          { id: image.id, x: rawX, y: rawY, width: image.width, height: image.height },
-          targetBoxes,
-          zoom
-        )
-
-        onSnapLinesChange?.(snap.lines)
+        if (!e.altKey) {
+          const snap = calculateSnap(
+            { id: image.id, x: rawX, y: rawY, width: image.width, height: image.height },
+            snapTargets,
+            zoom
+          )
+          useSnapStore.getState().setSnapLines(snap.lines)
+          finalX = snap.snappedX
+          finalY = snap.snappedY
+        } else {
+          useSnapStore.getState().clearSnapLines()
+        }
 
         updateImage(image.id, {
-          x: Math.round(snap.snappedX),
-          y: Math.round(snap.snappedY),
+          x: Math.round(finalX),
+          y: Math.round(finalY),
         })
       } else if (activeHandle) {
-        onSnapLinesChange?.([])
         const { imgX, imgY, imgW, imgH, aspect } = dragStartRef.current
         let nextW = imgW
         let nextH = imgH
@@ -128,9 +130,27 @@ export function SelectionOverlay({ image, onSnapLinesChange, onContextMenu }: Pr
           nextH = possibleH
         }
 
-        // Shift 键锁定等比缩放
-        if (e.shiftKey && (activeHandle === 'se' || activeHandle === 'ne' || activeHandle === 'sw' || activeHandle === 'nw')) {
-          nextH = Math.round(nextW / aspect)
+        const isCorner = activeHandle === 'se' || activeHandle === 'ne' || activeHandle === 'sw' || activeHandle === 'nw'
+        const keepAspect = e.shiftKey && isCorner
+
+        if (!e.altKey) {
+          const resizeSnap = calculateResizeSnap(
+            activeHandle,
+            { id: image.id, x: nextX, y: nextY, width: nextW, height: nextH },
+            snapTargets,
+            zoom,
+            keepAspect ? aspect : undefined
+          )
+          nextX = resizeSnap.box.x
+          nextY = resizeSnap.box.y
+          nextW = resizeSnap.box.width
+          nextH = resizeSnap.box.height
+          useSnapStore.getState().setSnapLines(resizeSnap.lines)
+        } else {
+          if (keepAspect) {
+            nextH = Math.round(nextW / aspect)
+          }
+          useSnapStore.getState().clearSnapLines()
         }
 
         updateImage(image.id, {
@@ -148,7 +168,7 @@ export function SelectionOverlay({ image, onSnapLinesChange, onContextMenu }: Pr
       }
       setIsDragging(false)
       setActiveHandle(null)
-      onSnapLinesChange?.([])
+      useSnapStore.getState().clearSnapLines()
     }
 
     window.addEventListener('mousemove', onMouseMove)
@@ -157,7 +177,7 @@ export function SelectionOverlay({ image, onSnapLinesChange, onContextMenu }: Pr
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
     }
-  }, [isDragging, activeHandle, image.id, zoom, updateImage, frames, images, activePageId, onSnapLinesChange])
+  }, [isDragging, activeHandle, image.id, zoom, updateImage, frames, images, activePageId])
 
   return (
     <div

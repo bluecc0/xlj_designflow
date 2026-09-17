@@ -2,6 +2,8 @@ import React, { memo, useRef, useState, useEffect } from 'react'
 import type { CanvasText } from '../types'
 import { useViewportStore } from '../store/viewportStore'
 import { useCanvasStore } from '../store/canvasStore'
+import { calculateSnap, getSnapTargets } from '../utils/snapping'
+import { useSnapStore } from '../store/snapStore'
 
 interface Props {
   text: CanvasText
@@ -75,6 +77,9 @@ function TextShapeInner({
     const startClientY = e.clientY
     const startX = text.x
     const startY = text.y
+    const textWidth = Math.max(40, (text.text?.length || 2) * (text.fontSize || 16) * 0.8)
+    const textHeight = Math.max(24, (text.fontSize || 16) * (text.lineHeight || 1.3))
+    const snapTargets = getSnapTargets([text.id], text.pageId)
     let hasMoved = false
 
     const onMouseMove = (moveEvt: MouseEvent) => {
@@ -83,11 +88,28 @@ function TextShapeInner({
         hasMoved = true
       }
       if (hasMoved) {
-        const dx = (moveEvt.clientX - startClientX) / zoom
-        const dy = (moveEvt.clientY - startClientY) / zoom
+        const rawDx = (moveEvt.clientX - startClientX) / zoom
+        const rawDy = (moveEvt.clientY - startClientY) / zoom
+
+        let finalX = startX + rawDx
+        let finalY = startY + rawDy
+
+        if (!moveEvt.altKey) {
+          const snap = calculateSnap(
+            { id: text.id, x: finalX, y: finalY, width: textWidth, height: textHeight },
+            snapTargets,
+            zoom
+          )
+          useSnapStore.getState().setSnapLines(snap.lines)
+          finalX = snap.snappedX
+          finalY = snap.snappedY
+        } else {
+          useSnapStore.getState().clearSnapLines()
+        }
+
         updateText(text.id, {
-          x: Math.round(startX + dx),
-          y: Math.round(startY + dy),
+          x: Math.round(finalX),
+          y: Math.round(finalY),
         })
       }
     }
@@ -95,6 +117,7 @@ function TextShapeInner({
     const onMouseUp = () => {
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
+      useSnapStore.getState().clearSnapLines()
       if (hasMoved) {
         useCanvasStore.getState().recalcFrameAttachment('text', [text.id])
       }
