@@ -43,6 +43,7 @@ export function SelectionOverlay({ image, onSnapLinesChange, onContextMenu }: Pr
 
   // 1. 拖拽移动
   const handleMoveMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return
     e.stopPropagation()
     if (e.shiftKey || e.metaKey) {
       useCanvasStore.getState().toggleSelected(image.id, 'image')
@@ -62,6 +63,7 @@ export function SelectionOverlay({ image, onSnapLinesChange, onContextMenu }: Pr
 
   // 2. 拖拽缩放
   const handleResizeMouseDown = (handle: ResizeHandle, e: React.MouseEvent) => {
+    if (e.button !== 0) return
     e.stopPropagation()
     setActiveHandle(handle)
     dragStartRef.current = {

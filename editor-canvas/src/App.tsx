@@ -219,11 +219,18 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       // 忽略在输入框内的快捷键
-      const isInput = ['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)
+      const target = e.target as HTMLElement | null
+      const isInput =
+        target &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)
       if (isInput) return
 
       if (e.code === 'Space' && !e.repeat) {
+        e.preventDefault()
         setSpacePressed(true)
+        if (mousePosRef.current) {
+          lastMousePosRef.current = { x: mousePosRef.current.x, y: mousePosRef.current.y }
+        }
       }
 
       // 退出扩图 (Escape) / 确认扩图 (Enter)
@@ -301,18 +308,53 @@ export function App() {
 
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
+        e.preventDefault()
         setSpacePressed(false)
-        setIsPanning(false)
+        if (!isMouseDownRef.current) {
+          setIsPanning(false)
+        }
       }
     }
 
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
 
-    // 实时记录鼠标屏幕坐标
+    // 实时记录鼠标屏幕坐标与平移追踪（保障零瞬移跳跃）
     const onMouseMoveWindow = (e: MouseEvent) => {
       mousePosRef.current = { x: e.clientX, y: e.clientY }
+
+      // 仅在鼠标真正按下且处于平移状态时执行平移
+      if (isMouseDownRef.current && useViewportStore.getState().isPanning) {
+        const dx = e.clientX - lastMousePosRef.current.x
+        const dy = e.clientY - lastMousePosRef.current.y
+        lastMousePosRef.current = { x: e.clientX, y: e.clientY }
+        if (dx !== 0 || dy !== 0) {
+          panBy(dx, dy)
+        }
+        return
+      }
+
+      // 鼠标未按下时，始终与指针实时同步坐标，彻底杜绝下一次按键或按下时的瞬移跳跃
+      lastMousePosRef.current = { x: e.clientX, y: e.clientY }
     }
+
+    const onMouseUpWindow = () => {
+      if (isMouseDownRef.current && useViewportStore.getState().isPanning) {
+        setIsPanning(false)
+        clearTimeout(wheelTimerRef.current)
+        wheelTimerRef.current = setTimeout(() => {
+          useCanvasStore.setState((s) => ({ isDirty: true, editSequence: (s.editSequence || 0) + 1 }))
+        }, 1000)
+      }
+      isMouseDownRef.current = false
+    }
+
+    const onBlurWindow = () => {
+      setSpacePressed(false)
+      setIsPanning(false)
+      isMouseDownRef.current = false
+    }
+
     const onMouseLeaveWindow = () => {
       mousePosRef.current = null
     }
@@ -508,6 +550,8 @@ export function App() {
     }
 
     window.addEventListener('mousemove', onMouseMoveWindow)
+    window.addEventListener('mouseup', onMouseUpWindow)
+    window.addEventListener('blur', onBlurWindow)
     window.addEventListener('mouseleave', onMouseLeaveWindow)
     window.addEventListener('paste', onPasteWindow)
 
@@ -515,6 +559,8 @@ export function App() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('mousemove', onMouseMoveWindow)
+      window.removeEventListener('mouseup', onMouseUpWindow)
+      window.removeEventListener('blur', onBlurWindow)
       window.removeEventListener('mouseleave', onMouseLeaveWindow)
       window.removeEventListener('paste', onPasteWindow)
     }
@@ -610,8 +656,9 @@ export function App() {
       setContextMenu((m) => ({ ...m, visible: false }))
     }
 
-    // 中键、空格或当前是抓手工具：触发平移
-    if (e.button === 1 || isSpacePressed || activeTool === 'hand') {
+    // 中键平移、或者按住空格键点左键、或者抓手工具点左键：触发平移
+    if (e.button === 1 || (e.button === 0 && (isSpacePressed || activeTool === 'hand'))) {
+      e.preventDefault()
       isMouseDownRef.current = true
       setIsPanning(true)
       lastMousePosRef.current = { x: e.clientX, y: e.clientY }
@@ -636,7 +683,7 @@ export function App() {
         return
       }
 
-      if (activeTool === 'select') {
+      if (activeTool === 'select' && e.button === 0) {
         // 开启框选
         setMarqueeStart({ x: e.clientX, y: e.clientY })
         setMarqueeCurrent({ x: e.clientX, y: e.clientY })
@@ -645,14 +692,6 @@ export function App() {
   }
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (isPanning || isSpacePressed) {
-      const dx = e.clientX - lastMousePosRef.current.x
-      const dy = e.clientY - lastMousePosRef.current.y
-      lastMousePosRef.current = { x: e.clientX, y: e.clientY }
-      panBy(dx, dy)
-      return
-    }
-
     if (marqueeStart) {
       setMarqueeCurrent({ x: e.clientX, y: e.clientY })
     }
@@ -1076,6 +1115,9 @@ export function App() {
       ? currentImages.find((im) => im.id === selectedIds[0])
       : null
 
+  // 抓手或平移交互模式（在此模式下子图元不截断点击与移动事件，支持画布全局统一抓取）
+  const isHandOrPanMode = isSpacePressed || activeTool === 'hand' || isPanning
+
   return (
     <div
       ref={containerRef}
@@ -1104,12 +1146,22 @@ export function App() {
         overflow: 'hidden',
         touchAction: 'none',
         overscrollBehavior: 'none',
-        cursor: isPanning || isSpacePressed || activeTool === 'hand' ? 'grab' : activeTool === 'text' ? 'text' : 'default',
+        cursor: isPanning
+          ? 'grabbing'
+          : isSpacePressed || activeTool === 'hand'
+          ? 'grab'
+          : activeTool === 'text'
+          ? 'text'
+          : 'default',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
         backgroundColor: '#f8fafc',
       }}
     >
       {/* 顶部多画板标签栏与存盘指示 */}
-      <TopBar saveStatus={saveStatus} />
+      <div style={{ pointerEvents: isPanning ? 'none' : 'auto' }}>
+        <TopBar saveStatus={saveStatus} />
+      </div>
 
       {/* 点阵网格背景 */}
       <CanvasGrid zoom={zoom} panX={panX} panY={panY} />
@@ -1129,7 +1181,7 @@ export function App() {
       >
         {/* 画板列表 */}
         {currentFrames.map((frame) => (
-          <div key={frame.id} style={{ pointerEvents: 'auto' }}>
+          <div key={frame.id} style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
             <FrameShape
               frame={frame}
               isSelected={selectedType === 'frame' && selectedIds.includes(frame.id)}
@@ -1150,7 +1202,7 @@ export function App() {
 
         {/* 图片图元列表 */}
         {currentImages.map((im) => (
-          <div key={im.id} style={{ pointerEvents: 'auto' }}>
+          <div key={im.id} style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
             <ImageShape
               image={im}
               isSelected={selectedType === 'image' && selectedIds.includes(im.id)}
@@ -1180,7 +1232,7 @@ export function App() {
 
         {/* 文本图元列表 */}
         {currentTexts.map((txt) => (
-          <div key={txt.id} style={{ pointerEvents: 'auto' }}>
+          <div key={txt.id} style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
             <TextShape
               text={txt}
               isSelected={selectedType === 'text' && selectedIds.includes(txt.id)}
@@ -1212,29 +1264,33 @@ export function App() {
 
         {/* 单选中图片的变换拉伸手柄 Overlay */}
         {singleSelectedImage && !outpaintingImageId && (
-          <SelectionOverlay
-            image={singleSelectedImage}
-            onSnapLinesChange={setSnapLines}
-            onContextMenu={(e) => {
-              setContextMenu({
-                visible: true,
-                x: e.clientX,
-                y: e.clientY,
-                targetId: singleSelectedImage.id,
-                targetType: 'image',
-              })
-            }}
-          />
+          <div style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
+            <SelectionOverlay
+              image={singleSelectedImage}
+              onSnapLinesChange={setSnapLines}
+              onContextMenu={(e) => {
+                setContextMenu({
+                  visible: true,
+                  x: e.clientX,
+                  y: e.clientY,
+                  targetId: singleSelectedImage.id,
+                  targetType: 'image',
+                })
+              }}
+            />
+          </div>
         )}
 
         {/* 智能扩图交互外框 */}
         {outpaintingTarget && (
-          <OutpaintingOverlay
-            image={outpaintingTarget}
-            margins={outpaintMargins}
-            onMarginsChange={setOutpaintMargins}
-            isSubmitting={aiState.status === 'running' && aiState.type === 'outpainting'}
-          />
+          <div style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
+            <OutpaintingOverlay
+              image={outpaintingTarget}
+              margins={outpaintMargins}
+              onMarginsChange={setOutpaintMargins}
+              isSubmitting={aiState.status === 'running' && aiState.type === 'outpainting'}
+            />
+          </div>
         )}
       </div>
 
@@ -1242,13 +1298,15 @@ export function App() {
       <MarqueeSelection startScreen={marqueeStart} currentScreen={marqueeCurrent} />
 
       {/* 选中图元的浮动工具条（位于屏幕坐标系） */}
-      <ContextualToolbar
-        isOutpainting={Boolean(outpaintingImageId)}
-        outpaintMargins={outpaintMargins}
-        onStartOutpainting={handleStartOutpainting}
-        onExecuteOutpainting={handleExecuteOutpainting}
-        onCancelOutpainting={handleCancelOutpainting}
-      />
+      <div style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
+        <ContextualToolbar
+          isOutpainting={Boolean(outpaintingImageId)}
+          outpaintMargins={outpaintMargins}
+          onStartOutpainting={handleStartOutpainting}
+          onExecuteOutpainting={handleExecuteOutpainting}
+          onCancelOutpainting={handleCancelOutpainting}
+        />
+      </div>
 
       {/* 自定义右键上下文菜单 */}
       <ContextMenu
@@ -1277,13 +1335,19 @@ export function App() {
       )}
 
       {/* 竖向浮动右侧工具坞 */}
-      <BottomToolbar />
+      <div style={{ pointerEvents: isPanning ? 'none' : 'auto' }}>
+        <BottomToolbar />
+      </div>
 
       {/* 左下角鸟瞰图 / Minimap 导航器 */}
-      <Minimap />
+      <div style={{ pointerEvents: isPanning ? 'none' : 'auto' }}>
+        <Minimap />
+      </div>
 
       {/* 右下角缩放控制条 */}
-      <CanvasZoomBar />
+      <div style={{ pointerEvents: isPanning ? 'none' : 'auto' }}>
+        <CanvasZoomBar />
+      </div>
     </div>
   )
 }
