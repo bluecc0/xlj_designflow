@@ -487,6 +487,30 @@ def init_db() -> None:
                 )
             )
         """)
+
+        # 常用语 (Quick Prompts)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS quick_prompts (
+                id          TEXT PRIMARY KEY,
+                user_id     TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                content     TEXT NOT NULL,
+                category    TEXT NOT NULL DEFAULT '通用',
+                sort_order  INTEGER NOT NULL DEFAULT 0,
+                created_at  REAL NOT NULL,
+                updated_at  REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_quick_prompts_user
+            ON quick_prompts(user_id, sort_order, created_at)
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS quick_prompt_seeds (
+                user_id     TEXT PRIMARY KEY,
+                seeded_at   REAL NOT NULL
+            )
+        """)
         conn.commit()
 
     try:
@@ -3129,3 +3153,191 @@ def set_inspiration_favorite(post_id: str, user_id: str, favorite: bool) -> bool
             (post_id, user_id),
         )
         return cur.rowcount > 0
+
+
+# ─── 常用语 (Quick Prompts) ───────────────────────────────────────────────────
+
+DEFAULT_QUICK_PROMPTS: list[dict[str, str]] = [
+    {
+        "title": "专业商业静物摄影",
+        "category": "通用",
+        "content": "专业商业静物摄影，极简纯白背景，柔和均匀的影棚双侧柔光箱布光，产品居中，锐利清晰，8K超清画质，无杂物无反光",
+    },
+]
+
+
+def seed_default_quick_prompts(user_id: str, force: bool = False) -> list[dict]:
+    """为用户注入推荐电商常用语预设（默认仅预设一条常用摄影描述）"""
+    clean_user = str(user_id or "").strip()
+    if not clean_user:
+        return []
+    now = time.time()
+    with _lock, _connect() as conn:
+        if not force:
+            row = conn.execute(
+                "SELECT 1 FROM quick_prompt_seeds WHERE user_id = ?",
+                (clean_user,),
+            ).fetchone()
+            if row:
+                return _list_quick_prompts_internal(conn, clean_user)
+        else:
+            conn.execute("DELETE FROM quick_prompts WHERE user_id = ?", (clean_user,))
+
+        conn.execute(
+            "INSERT OR REPLACE INTO quick_prompt_seeds (user_id, seeded_at) VALUES (?, ?)",
+            (clean_user, now),
+        )
+        for idx, item in enumerate(DEFAULT_QUICK_PROMPTS):
+            prompt_id = f"qp_{uuid.uuid4().hex[:12]}"
+            conn.execute(
+                """
+                INSERT INTO quick_prompts (id, user_id, title, content, category, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (prompt_id, clean_user, item["title"], item["content"], item.get("category") or "通用", idx, now, now),
+            )
+        conn.commit()
+        return _list_quick_prompts_internal(conn, clean_user)
+
+
+def _list_quick_prompts_internal(conn: sqlite3.Connection, user_id: str) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT id, user_id, title, content, category, sort_order, created_at, updated_at
+        FROM quick_prompts
+        WHERE user_id = ?
+        ORDER BY sort_order ASC, created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_quick_prompts(user_id: str) -> list[dict]:
+    """查询指定用户的常用语列表。若该用户首次访问且未初始化过，则自动注入默认预设。"""
+    clean_user = str(user_id or "").strip()
+    if not clean_user:
+        return []
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM quick_prompt_seeds WHERE user_id = ?",
+            (clean_user,),
+        ).fetchone()
+        if not row:
+            # 首次访问，注入推荐预设
+            pass
+        else:
+            return _list_quick_prompts_internal(conn, clean_user)
+
+    return seed_default_quick_prompts(clean_user, force=False)
+
+
+def create_quick_prompt(user_id: str, title: str | None = None, content: str = "", category: str = "通用") -> dict:
+    """新建常用语。若未传标题，自动取内容前30字符作为摘要。"""
+    clean_user = str(user_id or "").strip()
+    clean_content = str(content or "").strip()
+    clean_title = str(title or "").strip() or clean_content[:30]
+    clean_category = str(category or "通用").strip() or "通用"
+    if not clean_user:
+        raise ValueError("user_id 不能为空")
+    if not clean_content:
+        raise ValueError("常用语内容不能为空")
+
+    now = time.time()
+    prompt_id = f"qp_{uuid.uuid4().hex[:12]}"
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO quick_prompt_seeds (user_id, seeded_at) VALUES (?, ?)",
+            (clean_user, now),
+        )
+        max_order_row = conn.execute(
+            "SELECT MAX(sort_order) AS max_order FROM quick_prompts WHERE user_id = ?",
+            (clean_user,),
+        ).fetchone()
+        next_order = (max_order_row["max_order"] + 1) if max_order_row and max_order_row["max_order"] is not None else 0
+
+        conn.execute(
+            """
+            INSERT INTO quick_prompts (id, user_id, title, content, category, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (prompt_id, clean_user, clean_title, clean_content, clean_category, next_order, now, now),
+        )
+        conn.commit()
+
+    return {
+        "id": prompt_id,
+        "user_id": clean_user,
+        "title": clean_title,
+        "content": clean_content,
+        "category": clean_category,
+        "sort_order": next_order,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def update_quick_prompt(
+    prompt_id: str,
+    user_id: str,
+    title: str | None = None,
+    content: str | None = None,
+    category: str | None = None,
+    sort_order: int | None = None,
+) -> dict | None:
+    """更新常用语"""
+    clean_user = str(user_id or "").strip()
+    clean_id = str(prompt_id or "").strip()
+    if not clean_user or not clean_id:
+        return None
+
+    now = time.time()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM quick_prompts WHERE id = ? AND user_id = ?",
+            (clean_id, clean_user),
+        ).fetchone()
+        if not row:
+            return None
+
+        new_title = str(title).strip() if title is not None else row["title"]
+        new_content = str(content).strip() if content is not None else row["content"]
+        new_category = str(category).strip() if category is not None else row["category"]
+        new_sort = int(sort_order) if sort_order is not None else row["sort_order"]
+
+        if not new_title:
+            raise ValueError("标题不能为空")
+        if not new_content:
+            raise ValueError("内容不能为空")
+
+        conn.execute(
+            """
+            UPDATE quick_prompts
+            SET title = ?, content = ?, category = ?, sort_order = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (new_title, new_content, new_category, new_sort, now, clean_id, clean_user),
+        )
+        conn.commit()
+
+        updated_row = conn.execute(
+            "SELECT id, user_id, title, content, category, sort_order, created_at, updated_at FROM quick_prompts WHERE id = ? AND user_id = ?",
+            (clean_id, clean_user),
+        ).fetchone()
+        return dict(updated_row) if updated_row else None
+
+
+def delete_quick_prompt(prompt_id: str, user_id: str) -> bool:
+    """删除常用语"""
+    clean_user = str(user_id or "").strip()
+    clean_id = str(prompt_id or "").strip()
+    if not clean_user or not clean_id:
+        return False
+    with _lock, _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM quick_prompts WHERE id = ? AND user_id = ?",
+            (clean_id, clean_user),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+

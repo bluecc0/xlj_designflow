@@ -430,5 +430,32 @@
       if (userId) qs += '&user_id=' + encodeURIComponent(userId);
       return request('/admin/operations' + qs);
     },
+    listQuickPrompts: function() {
+      return request('/quick-prompts').then(function(res) { return res.prompts || []; });
+    },
+    createQuickPrompt: function(data) {
+      return request('/quick-prompts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }).then(function(res) { return res.prompt; });
+    },
+    updateQuickPrompt: function(id, data) {
+      return request('/quick-prompts/' + encodeURIComponent(id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }).then(function(res) { return res.prompt; });
+    },
+    deleteQuickPrompt: function(id) {
+      return request('/quick-prompts/' + encodeURIComponent(id), {
+        method: 'DELETE',
+      });
+    },
+    seedDefaultQuickPrompts: function() {
+      return request('/quick-prompts/seed-defaults', {
+        method: 'POST',
+      }).then(function(res) { return res.prompts || []; });
+    },
   };
 })();

@@ -221,3 +221,20 @@ class SpecialFullComposeJob(BaseModel):
     error: Optional[str] = None
     progress: list[str] = Field(default_factory=list)
     created_at: Optional[float] = None
+
+
+# ─── 常用语 (Quick Prompts) ───────────────────────────────────────────────────
+
+
+class QuickPromptCreateRequest(BaseModel):
+    title: Optional[str] = Field(None, max_length=100)
+    content: str = Field(..., min_length=1, max_length=5000)
+    category: Optional[str] = "通用"
+
+
+class QuickPromptUpdateRequest(BaseModel):
+    title: Optional[str] = Field(None, max_length=100)
+    content: Optional[str] = Field(None, min_length=1, max_length=5000)
+    category: Optional[str] = None
+    sort_order: Optional[int] = None
+

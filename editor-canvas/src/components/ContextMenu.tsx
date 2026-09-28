@@ -550,12 +550,12 @@ export const ContextMenu = memo(function ContextMenu({
                   onClose()
                 }}
                 style={menuItemStyle}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#eff6ff')}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f4f8')}
                 onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
               >
-                <Info size={14} color="#2563eb" strokeWidth={2.0} style={{ pointerEvents: 'none' }} />
-                <span style={{ flex: 1, color: '#0f172a', fontWeight: 600 }}>属性</span>
-                <span style={{ ...shortcutStyle, color: '#2563eb' }}>{isMac ? '⌥I' : 'Alt+I'}</span>
+                <Info size={14} color="#687083" strokeWidth={1.8} style={{ pointerEvents: 'none' }} />
+                <span style={{ flex: 1, color: '#1e232d' }}>属性</span>
+                <span style={shortcutStyle}>{isMac ? '⌥I' : 'Alt+I'}</span>
               </div>
             </>
           )}
@@ -570,16 +570,13 @@ export const ContextMenu = memo(function ContextMenu({
               e.stopPropagation()
               handleOpenImportModal()
             }}
-            style={{
-              ...menuItemStyle,
-              color: '#0f172a',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#eff6ff')}
+            style={menuItemStyle}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f4f8')}
             onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
           >
-            <Package size={14} color="#2563eb" strokeWidth={2.0} style={{ pointerEvents: 'none' }} />
-            <span style={{ flex: 1, fontWeight: 600 }}>导入产品图</span>
-            <span style={{ ...shortcutStyle, color: '#3b82f6', backgroundColor: '#dbeafe', padding: '1px 5px', borderRadius: 4 }}>SKU</span>
+            <Package size={14} color="#687083" strokeWidth={1.8} style={{ pointerEvents: 'none' }} />
+            <span style={{ flex: 1 }}>导入产品图</span>
+            <span style={{ ...shortcutStyle, color: '#475569', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', padding: '1px 5px', borderRadius: 4 }}>SKU</span>
           </div>
 
           <div style={dividerStyle} />

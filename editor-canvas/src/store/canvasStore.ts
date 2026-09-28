@@ -1,11 +1,12 @@
 import { create } from 'zustand'
-import type { CanvasDocument, CanvasFrame, CanvasImage, CanvasPage, CanvasText, CanvasTool } from '../types'
+import type { CanvasDocument, CanvasFrame, CanvasImage, CanvasPage, CanvasPageGroup, CanvasText, CanvasTool } from '../types'
 import { useHistoryStore } from './historyStore'
 import { useViewportStore } from './viewportStore'
 
 interface CanvasState {
-  // 多页面
+  // 多页面与分组
   pages: CanvasPage[]
+  groups: CanvasPageGroup[]
   activePageId: string
 
   // 画板与图元
@@ -27,10 +28,18 @@ interface CanvasState {
   baseDocument: CanvasDocument | null
 
   // 页面操作
-  createPage: (name?: string) => string
+  createPage: (name?: string, groupId?: string | null) => string
   switchPage: (pageId: string) => void
   renamePage: (pageId: string, name: string) => void
   deletePage: (pageId: string) => void
+  archivePage: (pageId: string) => void
+  unarchivePage: (pageId: string) => void
+
+  // 分组操作
+  createGroup: (name?: string) => string
+  renameGroup: (groupId: string, name: string) => void
+  deleteGroup: (groupId: string) => void
+  toggleGroupCollapse: (groupId: string) => void
 
   // 画板操作
   addFrame: (frame: Omit<CanvasFrame, 'pageId' | 'name'> & { name?: string }) => CanvasFrame
@@ -238,6 +247,7 @@ function withMutation<T extends Partial<CanvasState>>(
 
 export const useCanvasStore = create<CanvasState>((set, get) => ({
   pages: [DEFAULT_PAGE],
+  groups: [],
   activePageId: 'page-1',
   frames: [DEFAULT_FRAME],
   images: [],
@@ -254,7 +264,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     baseDocument: null,
 
   // ─── 页面管理 ─────────────────────────────────────────────
-  createPage: (name) => {
+  createPage: (name, groupId = null) => {
     recordHistory(get)
     const { pages } = get()
     const newPageId = 'page-' + Math.random().toString(36).slice(2, 9)
@@ -263,6 +273,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       id: newPageId,
       name: newPageName,
       order: pages.length,
+      archived: false,
+      groupId: groupId || null,
     }
     set((s) => withMutation(s, {
       pages: [...s.pages, newPage],
@@ -294,22 +306,123 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }))
   },
 
+  archivePage: (pageId) => {
+    const { pages, activePageId } = get()
+    const target = pages.find((p) => p.id === pageId)
+    if (!target || target.archived) return
+
+    const unarchived = pages.filter((p) => !p.archived)
+    if (unarchived.length <= 1) return // 至少保留一个未归档画布
+
+    recordHistory(get)
+    const nextPages = pages.map((p) =>
+      p.id === pageId ? { ...p, archived: true, archivedAt: Date.now() } : p
+    )
+    let nextActiveId = activePageId
+    if (activePageId === pageId) {
+      const remainingUnarchived = nextPages.filter((p) => !p.archived && p.id !== pageId)
+      nextActiveId = remainingUnarchived[0]?.id || activePageId
+    }
+
+    set((s) => withMutation(s, {
+      pages: nextPages,
+      activePageId: nextActiveId,
+      selectedIds: activePageId === pageId ? [] : s.selectedIds,
+      selectedType: activePageId === pageId ? null : s.selectedType,
+    }))
+  },
+
+  unarchivePage: (pageId) => {
+    const { pages, groups } = get()
+    const target = pages.find((p) => p.id === pageId)
+    if (!target || !target.archived) return
+
+    recordHistory(get)
+    const validGroupIds = new Set((groups || []).map((g) => g.id))
+    const nextPages = pages.map((p) => {
+      if (p.id !== pageId) return p
+      return {
+        ...p,
+        archived: false,
+        archivedAt: undefined,
+        groupId: p.groupId && validGroupIds.has(p.groupId) ? p.groupId : null,
+      }
+    })
+
+    set((s) => withMutation(s, {
+      pages: nextPages,
+      activePageId: pageId,
+      selectedIds: [],
+      selectedType: null,
+    }))
+  },
+
   deletePage: (pageId) => {
     const { pages, activePageId } = get()
-    if (pages.length <= 1) return // 至少保留一个页面
-    recordHistory(get)
+    const target = pages.find((p) => p.id === pageId)
+    if (!target) return
 
+    const unarchivedPages = pages.filter((p) => !p.archived)
+    if (!target.archived && unarchivedPages.length <= 1) return // 至少保留一个未归档页面
+
+    recordHistory(get)
     const remainingPages = pages.filter((p) => p.id !== pageId)
-    const nextActive = activePageId === pageId ? remainingPages[0].id : activePageId
+    const nextActive = activePageId === pageId
+      ? (remainingPages.find((p) => !p.archived)?.id || remainingPages[0]?.id || 'page-1')
+      : activePageId
 
     set((s) => withMutation(s, {
       pages: remainingPages,
       activePageId: nextActive,
       frames: s.frames.filter((f) => f.pageId !== pageId),
       images: s.images.filter((im) => im.pageId !== pageId),
+      texts: s.texts.filter((t) => t.pageId !== pageId),
       selectedIds: [],
       selectedType: null,
     }, 'user_delete'))
+  },
+
+  // ─── 分组管理 ─────────────────────────────────────────────
+  createGroup: (name) => {
+    recordHistory(get)
+    const { groups = [] } = get()
+    const newGroupId = 'group-' + Math.random().toString(36).slice(2, 9)
+    const newGroupName = name?.trim() || `分组 ${groups.length + 1}`
+    const newGroup: CanvasPageGroup = {
+      id: newGroupId,
+      name: newGroupName,
+      order: groups.length,
+      collapsed: false,
+    }
+    set((s) => withMutation(s, {
+      groups: [...(s.groups || []), newGroup],
+    }))
+    return newGroupId
+  },
+
+  renameGroup: (groupId, name) => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    recordHistory(get)
+    set((s) => withMutation(s, {
+      groups: (s.groups || []).map((g) => (g.id === groupId ? { ...g, name: trimmed } : g)),
+    }))
+  },
+
+  deleteGroup: (groupId) => {
+    recordHistory(get)
+    set((s) => withMutation(s, {
+      groups: (s.groups || []).filter((g) => g.id !== groupId),
+      pages: s.pages.map((p) => (p.groupId === groupId ? { ...p, groupId: null } : p)),
+    }))
+  },
+
+  toggleGroupCollapse: (groupId) => {
+    set((s) => ({
+      groups: (s.groups || []).map((g) =>
+        g.id === groupId ? { ...g, collapsed: !g.collapsed } : g
+      ),
+    }))
   },
 
   // ─── 画板管理 ─────────────────────────────────────────────
@@ -1133,6 +1246,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (pages.length === 0) {
       pages = [DEFAULT_PAGE]
     }
+    const groups: CanvasPageGroup[] = Array.isArray(doc.groups) ? doc.groups : []
     let activePageId = doc.activePageId || pages[0].id
 
     // 画板水合（支持为空 []）
@@ -1165,9 +1279,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
     }
 
-    // 清理因历史 new-canvas 累积的大量同名空页面，保留当前页面和有内容的页面
+    // 清理因历史 new-canvas 累积的大量同名空页面，保留当前页面、已归档页面和有内容的页面
     const meaningfulPages = pages.filter((p) => {
       if (p.id === activePageId) return true
+      if (p.archived) return true
       return images.some((im) => im.pageId === p.id) || texts.some((t) => t.pageId === p.id)
     })
     if (meaningfulPages.length > 0) {
@@ -1182,6 +1297,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
     set({
       pages,
+      groups,
       activePageId,
       frames,
       images,
@@ -1196,6 +1312,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       baseDocument: {
         version: 2,
         pages: JSON.parse(JSON.stringify(pages)),
+        groups: JSON.parse(JSON.stringify(groups)),
         activePageId,
         frames: JSON.parse(JSON.stringify(frames)),
         images: JSON.parse(JSON.stringify(images)),
@@ -1214,6 +1331,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (pages.length === 0) {
       pages = [DEFAULT_PAGE]
     }
+    const groups: CanvasPageGroup[] = Array.isArray(doc.groups) ? doc.groups : (current.groups || [])
     const activePageId = doc.activePageId || pages[0].id
 
     const frames: CanvasFrame[] = (Array.isArray(doc.frames) ? doc.frames : []).map((f: any) => ({
@@ -1252,6 +1370,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
     set({
       pages,
+      groups,
       activePageId,
       frames,
       images,
@@ -1279,9 +1398,19 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
     // 1. 基于基线、本地和远端进行 3-Way Merge
     let mergedPages = threeWayMergeList(baseDoc.pages || [], current.pages, serverDoc.pages || [])
+    const mergedGroups = threeWayMergeList(baseDoc.groups || [], current.groups || [], serverDoc.groups || [])
     const mergedFrames = threeWayMergeList(baseDoc.frames || [], current.frames, serverDoc.frames || [])
     const mergedImages = threeWayMergeList(baseDoc.images || [], current.images, serverDoc.images || [])
     const mergedTexts = threeWayMergeList(baseDoc.texts || [], current.texts || [], serverDoc.texts || [])
+
+    // 修复可能失效的 groupId
+    const validGroupIds = new Set(mergedGroups.map((g) => g.id))
+    mergedPages = mergedPages.map((p) => {
+      if (p.groupId && !validGroupIds.has(p.groupId)) {
+        return { ...p, groupId: null }
+      }
+      return p
+    })
 
     // 2. 检查并修复页面容器关联完整性：如果保留的图元所属的 pageId 在 mergedPages 中不存在，恢复该页面（优先从 base/local/server 查找）
     const allKnownPages = new Map<string, CanvasPage>()
@@ -1346,6 +1475,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const mergedDoc: CanvasDocument = {
       version: 2,
       pages: mergedPages,
+      groups: mergedGroups,
       activePageId,
       frames: mergedFrames,
       images: mergedImages,
@@ -1357,6 +1487,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       || !isEntityEqual(mergedDoc.frames, serverDoc.frames)
       || !isEntityEqual(mergedDoc.texts, serverDoc.texts)
       || !isEntityEqual(mergedDoc.pages, serverDoc.pages)
+      || !isEntityEqual(mergedDoc.groups, serverDoc.groups)
 
     const serverShapes = (serverDoc.images?.length || 0) + (serverDoc.texts?.length || 0) + (serverDoc.frames?.length || 0)
     const mergedShapes = (mergedDoc.images?.length || 0) + (mergedDoc.texts?.length || 0) + (mergedDoc.frames?.length || 0)
@@ -1374,6 +1505,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
     set({
       pages: mergedDoc.pages,
+      groups: mergedDoc.groups || [],
       activePageId,
       frames: mergedDoc.frames,
       images: mergedDoc.images,
@@ -1387,11 +1519,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   getDocument: () => {
-    const { pages, activePageId, frames, images, texts } = get()
+    const { pages, groups, activePageId, frames, images, texts } = get()
     const { zoom, panX, panY } = useViewportStore.getState()
     return {
       version: 2,
       pages,
+      groups: groups || [],
       activePageId,
       frames,
       images,

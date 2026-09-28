@@ -85,7 +85,7 @@ export function FloatingToolbar({ image }: Props) {
         onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
         title="放入右侧聊天框作为生图参考图"
       >
-        <ImageIcon size={14} color="#818cf8" />
+        <ImageIcon size={14} color="#e2e8f0" />
         <span>用作参考图</span>
       </button>
 

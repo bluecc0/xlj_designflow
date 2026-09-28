@@ -321,14 +321,15 @@ const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
                       fontWeight: 600,
                       padding: '1px 5px',
                       borderRadius: 4,
-                      backgroundColor: '#f3e8ff',
-                      color: '#7e22ce',
+                      backgroundColor: '#f1f5f9',
+                      color: '#334155',
+                      border: '1px solid #e2e8f0',
                       display: 'inline-flex',
                       alignItems: 'center',
-                      gap: 2,
+                      gap: 3,
                     }}
                   >
-                    <Sparkles size={9} strokeWidth={2.4} />
+                    <Sparkles size={9} strokeWidth={2.0} color="#475569" />
                     AI 生成
                   </span>
                 )}
@@ -340,15 +341,18 @@ const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
                   title="查看原图"
                   style={{
                     fontSize: 11,
-                    color: '#2563eb',
+                    color: '#64748b',
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: 2,
+                    gap: 3,
                     textDecoration: 'none',
                     marginLeft: 'auto',
+                    transition: 'color 120ms ease',
                   }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = '#0f172a')}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = '#64748b')}
                 >
-                  原图 <ExternalLink size={10} />
+                  原图 <ExternalLink size={10} color="#64748b" />
                 </a>
               </div>
             </div>
@@ -421,8 +425,8 @@ const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
                     padding: '2px 6px',
                     borderRadius: 4,
                     border: '1px solid #e2e8f0',
-                    backgroundColor: copiedPrompt ? '#dcfce7' : '#ffffff',
-                    color: copiedPrompt ? '#15803d' : '#475569',
+                    backgroundColor: copiedPrompt ? '#f1f5f9' : '#ffffff',
+                    color: copiedPrompt ? '#0f172a' : '#475569',
                     cursor: 'pointer',
                   }}
                 >
@@ -433,13 +437,13 @@ const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
 
               <div
                 style={{
-                  backgroundColor: '#faf5ff',
-                  border: '1px solid #f3e8ff',
+                  backgroundColor: '#f8fafc',
+                  border: '1px solid #e2e8f0',
                   borderRadius: 6,
                   padding: '8px 10px',
                   fontSize: 11.5,
                   lineHeight: 1.5,
-                  color: '#3b0764',
+                  color: '#1e293b',
                   maxHeight: 96,
                   overflowY: 'auto',
                   wordBreak: 'break-word',

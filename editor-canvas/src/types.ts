@@ -18,6 +18,16 @@ export interface CanvasPage {
   id: string
   name: string
   order: number
+  archived?: boolean
+  archivedAt?: number
+  groupId?: string | null
+}
+
+export interface CanvasPageGroup {
+  id: string
+  name: string
+  order: number
+  collapsed?: boolean
 }
 
 export interface CanvasFrame {
@@ -86,6 +96,7 @@ export interface CanvasText {
 export interface CanvasDocument {
   version: 2
   pages: CanvasPage[]
+  groups?: CanvasPageGroup[]
   activePageId: string
   frames: CanvasFrame[]
   images: CanvasImage[]

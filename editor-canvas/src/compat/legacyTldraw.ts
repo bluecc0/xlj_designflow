@@ -1,4 +1,4 @@
-import type { CanvasDocument, CanvasFrame, CanvasImage, CanvasPage, CanvasText } from '../types'
+import type { CanvasDocument, CanvasFrame, CanvasImage, CanvasPage, CanvasPageGroup, CanvasText } from '../types'
 
 // 2D 仿射变换矩阵
 type Mat2D = {
@@ -62,10 +62,12 @@ export function convertLegacyTldrawSnapshot(raw: any): CanvasDocument | null {
       ...txt,
       pageId: txt.pageId || activePageId,
     }))
+    const groups: CanvasPageGroup[] = Array.isArray(raw.groups) ? raw.groups : []
 
     return {
       version: 2,
       pages,
+      groups,
       activePageId,
       frames,
       images,

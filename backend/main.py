@@ -188,6 +188,11 @@ from .job_store import (
     is_inspiration_favorited,
     list_inspiration_favorite_ids,
     set_inspiration_favorite,
+    list_quick_prompts,
+    create_quick_prompt,
+    update_quick_prompt,
+    delete_quick_prompt,
+    seed_default_quick_prompts,
 )
 from .models import (
     ComposeJob,
@@ -196,6 +201,8 @@ from .models import (
     ExportRequest,
     GridExportRequest,
     ParseResult,
+    QuickPromptCreateRequest,
+    QuickPromptUpdateRequest,
     SlotInfo,
     SpecialComposeJob,
     SpecialComposeRequest,
@@ -7278,3 +7285,73 @@ def admin_operations(
         "limit": limit,
         "offset": offset,
     }
+
+
+# ─── 常用语 (Quick Prompts) ───────────────────────────────────────────────────
+
+
+@app.get("/quick-prompts")
+def get_quick_prompts_endpoint(request: Request):
+    """获取当前用户的常用语列表。首次访问自动载入默认预设。"""
+    user = _current_user(request)
+    prompts = list_quick_prompts(user["id"])
+    return {"prompts": prompts}
+
+
+@app.post("/quick-prompts")
+def create_quick_prompt_endpoint(request: Request, body: QuickPromptCreateRequest):
+    """创建常用语"""
+    user = _current_user(request)
+    try:
+        prompt = create_quick_prompt(
+            user_id=user["id"],
+            title=body.title,
+            content=body.content,
+            category=body.category or "通用",
+        )
+        return {"prompt": prompt}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/quick-prompts/{prompt_id}")
+def update_quick_prompt_endpoint(
+    request: Request,
+    prompt_id: str,
+    body: QuickPromptUpdateRequest,
+):
+    """修改常用语"""
+    user = _current_user(request)
+    try:
+        updated = update_quick_prompt(
+            prompt_id=prompt_id,
+            user_id=user["id"],
+            title=body.title,
+            content=body.content,
+            category=body.category,
+            sort_order=body.sort_order,
+        )
+        if not updated:
+            raise HTTPException(404, "常用语不存在或无权限修改")
+        return {"prompt": updated}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/quick-prompts/{prompt_id}")
+def delete_quick_prompt_endpoint(request: Request, prompt_id: str):
+    """删除常用语"""
+    user = _current_user(request)
+    ok = delete_quick_prompt(prompt_id=prompt_id, user_id=user["id"])
+    if not ok:
+        raise HTTPException(404, "常用语不存在或无权限删除")
+    return {"deleted": prompt_id}
+
+
+@app.post("/quick-prompts/seed-defaults")
+def seed_default_quick_prompts_endpoint(request: Request):
+    """恢复/重置推荐电商常用语预设"""
+    user = _current_user(request)
+    prompts = seed_default_quick_prompts(user["id"], force=True)
+    return {"prompts": prompts}
+
