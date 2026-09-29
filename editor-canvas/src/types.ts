@@ -41,6 +41,15 @@ export interface CanvasFrame {
   background?: string
 }
 
+export interface ReferenceImageItem {
+  type?: 'manual' | 'context' | 'outpainting_source' | 'preview' | string
+  name?: string
+  url: string
+  label?: string
+  width?: number
+  height?: number
+}
+
 export interface CanvasImageMeta {
   prompt?: string
   originalPrompt?: string
@@ -49,11 +58,19 @@ export interface CanvasImageMeta {
   model?: string
   provider?: string
   jobId?: string
+  clientRequestId?: string
   createdAt?: number | string
   size?: string
   resolution?: string
+  variant?: string
+  quality?: string
+  skill?: string
+  hasReference?: boolean
+  referenceCount?: number
+  referenceImages?: ReferenceImageItem[]
   fileSize?: number
   mimeType?: string
+  requestMeta?: Record<string, any>
   [key: string]: any
 }
 

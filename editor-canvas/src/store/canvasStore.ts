@@ -1124,11 +1124,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const url = isObj ? item.url : item
       if (!url) return
       const itemName = (isObj && item.name) || name
-      const meta = isObj ? { ...item } : undefined
-      if (meta) {
-        delete (meta as any).url
-        delete (meta as any).name
-        delete (meta as any).index
+      let meta: any = undefined
+      if (isObj) {
+        meta = item.meta && typeof item.meta === 'object' ? { ...item.meta, ...item } : { ...item }
+        delete meta.url
+        delete meta.name
+        delete meta.index
+        delete meta.meta
       }
 
       const currentIndex = startIndex + idx

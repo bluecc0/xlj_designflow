@@ -10,6 +10,7 @@ import {
   FolderPlus,
   Archive,
   RotateCcw,
+  Layers,
 } from 'lucide-react'
 import { useCanvasStore } from '../store/canvasStore'
 import type { CanvasPage } from '../types'
@@ -40,12 +41,12 @@ export function PageDropdown() {
 
   const activePage = pages.find((p) => p.id === activePageId) || pages[0] || { id: 'page-1', name: '画布 1' }
 
-  // 分类页面数据
+  // 页面分类
   const unarchivedPages = pages.filter((p) => !p.archived)
   const archivedPages = pages.filter((p) => p.archived)
   const canArchiveOrDeleteActive = unarchivedPages.length > 1
 
-  // 如果当前激活的是已归档画板，默认展开归档专区
+  // 激活归档画布时，默认展开归档抽屉
   useEffect(() => {
     if (activePage?.archived) {
       setIsArchivedOpen(true)
@@ -94,7 +95,7 @@ export function PageDropdown() {
     setEditingGroupId(null)
   }
 
-  // 渲染单张画板条目
+  // 渲染单个画布行
   const renderPageItem = (page: CanvasPage, isArchived = false, isIndented = false) => {
     const isActive = page.id === activePageId
     const isEditing = editingPageId === page.id
@@ -102,6 +103,7 @@ export function PageDropdown() {
     return (
       <div
         key={page.id}
+        className={`canvas-page-item ${isActive ? 'is-selected' : ''}`}
         onClick={() => {
           if (!isEditing) {
             switchPage(page.id)
@@ -112,26 +114,23 @@ export function PageDropdown() {
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          padding: '4px 6px',
-          paddingLeft: isIndented ? 22 : 6,
-          borderRadius: 6,
-          backgroundColor: isActive ? '#f1f5f9' : 'transparent',
-          color: isActive ? '#181b24' : isArchived ? '#8a92a3' : '#4b5563',
-          fontSize: 11,
+          height: 30,
+          padding: '0 8px',
+          paddingLeft: isIndented ? 26 : 8,
+          borderRadius: 8,
+          color: isActive ? '#0f172a' : isArchived ? '#94a3b8' : '#334155',
+          fontSize: 12,
           fontWeight: isActive ? 600 : 500,
           cursor: 'pointer',
-          transition: 'background-color 120ms ease',
-        }}
-        onMouseEnter={(e) => {
-          if (!isActive) e.currentTarget.style.backgroundColor = '#eef1f6'
-        }}
-        onMouseLeave={(e) => {
-          if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'
         }}
       >
-        {/* 选中态指示勾 */}
-        <div style={{ width: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          {isActive ? <Check size={11} strokeWidth={2.4} color="#181b24" /> : null}
+        {/* 左侧选中态对勾指示 */}
+        <div style={{ width: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          {isActive ? (
+            <Check size={12} strokeWidth={2.4} color="#0f172a" />
+          ) : (
+            <div style={{ width: 3, height: 3, borderRadius: '50%', backgroundColor: '#cbd5e1', opacity: 0.5 }} />
+          )}
         </div>
 
         {/* 画板名称 / 重命名输入框 */}
@@ -148,15 +147,15 @@ export function PageDropdown() {
               }}
               onClick={(e) => e.stopPropagation()}
               style={{
-                fontSize: 11,
+                fontSize: 12,
                 fontWeight: 500,
-                padding: '0 4px',
-                height: 18,
-                borderRadius: 3,
-                border: '1px solid #181b24',
+                padding: '1px 6px',
+                height: 22,
+                borderRadius: 4,
+                border: '1px solid #0f172a',
                 outline: 'none',
                 width: '100%',
-                color: '#181b24',
+                color: '#0f172a',
                 backgroundColor: '#ffffff',
                 boxSizing: 'border-box',
               }}
@@ -171,6 +170,7 @@ export function PageDropdown() {
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
                 fontStyle: isArchived ? 'italic' : 'normal',
+                letterSpacing: '-0.01em',
               }}
             >
               {page.name}
@@ -178,28 +178,21 @@ export function PageDropdown() {
           )}
         </div>
 
-        {/* 操作按钮组 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+        {/* 仅在悬浮或重命名时展示操作项（通过 CSS 纯净淡入） */}
+        <div
+          className={`canvas-item-actions ${isEditing ? 'force-visible' : ''}`}
+          onClick={(e) => e.stopPropagation()}
+        >
           {!isEditing && (
             <button
               type="button"
               onClick={(e) => handleStartRenamePage(page.id, page.name, e)}
-              style={{
-                border: 'none',
-                background: 'none',
-                cursor: 'pointer',
-                padding: '2px',
-                borderRadius: 3,
-                color: '#9299a8',
-                display: 'flex',
-                alignItems: 'center',
-                transition: 'color 120ms ease',
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = '#20242d')}
-              onMouseLeave={(e) => (e.currentTarget.style.color = '#9299a8')}
-              title="重命名"
+              style={iconButtonStyle}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              title="重命名画布"
             >
-              <Edit2 size={11} strokeWidth={1.8} />
+              <Edit2 size={12} strokeWidth={1.8} color="#64748b" />
             </button>
           )}
 
@@ -213,25 +206,17 @@ export function PageDropdown() {
                 if (canArchiveOrDeleteActive) archivePage(page.id)
               }}
               style={{
-                border: 'none',
-                background: 'none',
+                ...iconButtonStyle,
                 cursor: canArchiveOrDeleteActive ? 'pointer' : 'not-allowed',
-                padding: '2px',
-                borderRadius: 3,
-                color: canArchiveOrDeleteActive ? '#9299a8' : '#d1d5db',
-                display: 'flex',
-                alignItems: 'center',
-                transition: 'color 120ms ease',
+                opacity: canArchiveOrDeleteActive ? 1 : 0.4,
               }}
               onMouseEnter={(e) => {
-                if (canArchiveOrDeleteActive) e.currentTarget.style.color = '#d97706'
+                if (canArchiveOrDeleteActive) e.currentTarget.style.backgroundColor = '#e2e8f0'
               }}
-              onMouseLeave={(e) => {
-                if (canArchiveOrDeleteActive) e.currentTarget.style.color = '#9299a8'
-              }}
-              title={canArchiveOrDeleteActive ? '归档画布' : '至少保留一个未归档画布'}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              title={canArchiveOrDeleteActive ? '归档此画布' : '至少保留一个未归档画布'}
             >
-              <Archive size={11} strokeWidth={1.8} />
+              <Archive size={12} strokeWidth={1.8} color="#64748b" />
             </button>
           )}
 
@@ -243,22 +228,12 @@ export function PageDropdown() {
                 e.stopPropagation()
                 unarchivePage(page.id)
               }}
-              style={{
-                border: 'none',
-                background: 'none',
-                cursor: 'pointer',
-                padding: '2px',
-                borderRadius: 3,
-                color: '#9299a8',
-                display: 'flex',
-                alignItems: 'center',
-                transition: 'color 120ms ease',
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = '#10b981')}
-              onMouseLeave={(e) => (e.currentTarget.style.color = '#9299a8')}
-              title="恢复画布 (移出归档)"
+              style={iconButtonStyle}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              title="移出归档并恢复"
             >
-              <RotateCcw size={11} strokeWidth={1.8} />
+              <RotateCcw size={12} strokeWidth={1.8} color="#0f172a" />
             </button>
           )}
 
@@ -270,22 +245,20 @@ export function PageDropdown() {
                 e.stopPropagation()
                 deletePage(page.id)
               }}
-              style={{
-                border: 'none',
-                background: 'none',
-                cursor: 'pointer',
-                padding: '2px',
-                borderRadius: 3,
-                color: '#9299a8',
-                display: 'flex',
-                alignItems: 'center',
-                transition: 'color 120ms ease',
+              style={iconButtonStyle}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#fee2e2'
+                const svg = e.currentTarget.querySelector('svg')
+                if (svg) svg.style.stroke = '#ef4444'
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = '#ef4444')}
-              onMouseLeave={(e) => (e.currentTarget.style.color = '#9299a8')}
-              title={isArchived ? '彻底删除画布' : '删除画布'}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent'
+                const svg = e.currentTarget.querySelector('svg')
+                if (svg) svg.style.stroke = '#64748b'
+              }}
+              title={isArchived ? '彻底删除此画布' : '删除画布'}
             >
-              <Trash2 size={11} strokeWidth={1.8} />
+              <Trash2 size={12} strokeWidth={1.8} color="#64748b" />
             </button>
           )}
         </div>
@@ -293,39 +266,41 @@ export function PageDropdown() {
     )
   }
 
-  // 未分组的活跃画板
+  // 根级未分组活跃画布
   const rootPages = unarchivedPages.filter((p) => !p.groupId || !groups.some((g) => g.id === p.groupId))
 
   return (
     <div ref={dropdownRef} style={{ position: 'relative' }}>
-      {/* 触发下拉按钮 */}
+      {/* 顶部触发器胶囊内按钮 */}
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
         style={{
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 5,
-          height: 24,
-          padding: '0 6px',
-          borderRadius: 6,
+          gap: 6,
+          height: 26,
+          padding: '0 8px 0 6px',
+          borderRadius: 7,
           border: 'none',
-          backgroundColor: isOpen ? '#eef1f6' : 'transparent',
-          color: '#20242d',
+          backgroundColor: isOpen ? '#f1f5f9' : 'transparent',
+          color: '#0f172a',
           fontSize: 12,
           fontWeight: 600,
           cursor: 'pointer',
-          transition: 'all 120ms ease',
+          transition: 'all 140ms ease',
           letterSpacing: '-0.01em',
         }}
         onMouseEnter={(e) => {
-          if (!isOpen) e.currentTarget.style.backgroundColor = '#eef1f6'
+          if (!isOpen) e.currentTarget.style.backgroundColor = '#f1f5f9'
         }}
         onMouseLeave={(e) => {
           if (!isOpen) e.currentTarget.style.backgroundColor = 'transparent'
         }}
-        title="点击切换或管理画布"
+        title="点击管理画布与分组"
       >
+        <Layers size={13} strokeWidth={1.8} color="#64748b" style={{ flexShrink: 0 }} />
+
         {activePage.archived && (
           <span
             style={{
@@ -339,19 +314,20 @@ export function PageDropdown() {
               border: '1px solid #e2e8f0',
               fontSize: 10,
               fontWeight: 600,
-              marginRight: 2,
             }}
           >
             已归档
           </span>
         )}
-        <span style={{ maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+
+        <span style={{ maxWidth: 108, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {activePage.name}
         </span>
+
         <ChevronDown
-          size={12}
-          strokeWidth={2}
-          color="#687083"
+          size={11}
+          strokeWidth={2.2}
+          color="#94a3b8"
           style={{
             transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)',
             transition: 'transform 180ms ease',
@@ -359,49 +335,59 @@ export function PageDropdown() {
         />
       </button>
 
-      {/* 下拉浮层 */}
+      {/* 下拉面板 */}
       {isOpen && (
         <div
           style={{
             position: 'absolute',
             top: 'calc(100% + 8px)',
             left: 0,
-            width: 236,
-            padding: '4px',
-            backgroundColor: 'rgba(255, 255, 255, 0.96)',
+            width: 256,
+            padding: '6px',
+            backgroundColor: 'rgba(255, 255, 255, 0.98)',
             backdropFilter: 'blur(24px)',
             WebkitBackdropFilter: 'blur(24px)',
-            borderRadius: 12,
-            border: '1px solid #e7e9ee',
-            boxShadow: '0 16px 40px rgba(20, 47, 95, 0.12), 0 2px 8px rgba(20, 47, 95, 0.04)',
+            borderRadius: 14,
+            border: '1px solid rgba(0, 0, 0, 0.08)',
+            boxShadow: '0 20px 48px -8px rgba(15, 23, 42, 0.14), 0 4px 16px rgba(15, 23, 42, 0.04)',
             zIndex: 100,
             display: 'flex',
             flexDirection: 'column',
-            gap: 1,
+            gap: 2,
           }}
         >
-          {/* 画布列表小标题 */}
+          {/* 面板顶栏提示 */}
           <div
             style={{
-              padding: '4px 6px',
-              fontSize: 10,
-              fontWeight: 600,
-              color: '#9299a8',
-              borderBottom: '1px solid #f0f2f5',
-              marginBottom: 2,
+              padding: '5px 8px 6px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
+              borderBottom: '1px solid #f1f5f9',
+              marginBottom: 3,
             }}
           >
-            <span>画布与分组</span>
-            <span style={{ fontWeight: 500 }}>活跃: {unarchivedPages.length}</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.02em' }}>
+              画布列表
+            </span>
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                color: '#64748b',
+                backgroundColor: '#f1f5f9',
+                padding: '1px 6px',
+                borderRadius: 9999,
+              }}
+            >
+              {unarchivedPages.length}
+            </span>
           </div>
 
-          {/* 活跃画板与分组滚动区域 */}
+          {/* 活跃画布与分组滚动区 */}
           <div
             style={{
-              maxHeight: 240,
+              maxHeight: 250,
               overflowY: 'auto',
               overscrollBehavior: 'contain',
               display: 'flex',
@@ -422,6 +408,7 @@ export function PageDropdown() {
                 <div key={group.id} style={{ display: 'flex', flexDirection: 'column' }}>
                   {/* 分组头部栏 */}
                   <div
+                    className="canvas-group-item"
                     onClick={() => {
                       if (!isGroupEditing) {
                         toggleGroupCollapse(group.id)
@@ -430,35 +417,33 @@ export function PageDropdown() {
                     style={{
                       display: 'flex',
                       alignItems: 'center',
-                      gap: 4,
-                      padding: '4px 6px',
-                      borderRadius: 6,
-                      color: '#475569',
-                      fontSize: 11,
+                      gap: 5,
+                      height: 30,
+                      padding: '0 8px',
+                      borderRadius: 8,
+                      color: '#334155',
+                      fontSize: 12,
                       fontWeight: 600,
                       cursor: 'pointer',
-                      transition: 'background-color 120ms ease',
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f8fafc')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                   >
                     {/* 折叠箭头 */}
-                    <div style={{ width: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <div style={{ width: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                       <ChevronRight
                         size={11}
                         strokeWidth={2.2}
                         color="#94a3b8"
                         style={{
                           transform: isCollapsed ? 'rotate(0deg)' : 'rotate(90deg)',
-                          transition: 'transform 120ms ease',
+                          transition: 'transform 140ms ease',
                         }}
                       />
                     </div>
 
                     {/* 文件夹图标 */}
-                    <Folder size={12} strokeWidth={2} color="#475569" style={{ flexShrink: 0 }} />
+                    <Folder size={13} strokeWidth={1.8} color="#64748b" style={{ flexShrink: 0 }} />
 
-                    {/* 分组名称 / 编辑框 */}
+                    {/* 分组名 / 输入框 */}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {isGroupEditing ? (
                         <input
@@ -472,21 +457,21 @@ export function PageDropdown() {
                           }}
                           onClick={(e) => e.stopPropagation()}
                           style={{
-                            fontSize: 11,
+                            fontSize: 12,
                             fontWeight: 600,
-                            padding: '0 4px',
-                            height: 18,
-                            borderRadius: 3,
-                            border: '1px solid #181b24',
+                            padding: '1px 6px',
+                            height: 22,
+                            borderRadius: 4,
+                            border: '1px solid #0f172a',
                             outline: 'none',
                             width: '100%',
-                            color: '#1e293b',
+                            color: '#0f172a',
                             backgroundColor: '#ffffff',
                             boxSizing: 'border-box',
                           }}
                         />
                       ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                           <span
                             onDoubleClick={(e) => handleStartRenameGroup(group.id, group.name, e)}
                             title="双击重命名分组"
@@ -494,6 +479,7 @@ export function PageDropdown() {
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
                               whiteSpace: 'nowrap',
+                              letterSpacing: '-0.01em',
                             }}
                           >
                             {group.name}
@@ -505,8 +491,11 @@ export function PageDropdown() {
                       )}
                     </div>
 
-                    {/* 分组操作按钮 */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+                    {/* 分组悬浮操作项 */}
+                    <div
+                      className={`canvas-item-actions ${isGroupEditing ? 'force-visible' : ''}`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       {/* 在组内新建画布 */}
                       <button
                         type="button"
@@ -514,22 +503,12 @@ export function PageDropdown() {
                           e.stopPropagation()
                           createPage(undefined, group.id)
                         }}
-                        style={{
-                          border: 'none',
-                          background: 'none',
-                          cursor: 'pointer',
-                          padding: '2px',
-                          borderRadius: 3,
-                          color: '#94a3b8',
-                          display: 'flex',
-                          alignItems: 'center',
-                          transition: 'color 120ms ease',
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.color = '#181b24')}
-                        onMouseLeave={(e) => (e.currentTarget.style.color = '#94a3b8')}
+                        style={iconButtonStyle}
+                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
+                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                         title="在此组内新建画布"
                       >
-                        <Plus size={11} strokeWidth={2.2} />
+                        <Plus size={12} strokeWidth={2.2} color="#0f172a" />
                       </button>
 
                       {/* 重命名分组 */}
@@ -537,22 +516,12 @@ export function PageDropdown() {
                         <button
                           type="button"
                           onClick={(e) => handleStartRenameGroup(group.id, group.name, e)}
-                          style={{
-                            border: 'none',
-                            background: 'none',
-                            cursor: 'pointer',
-                            padding: '2px',
-                            borderRadius: 3,
-                            color: '#94a3b8',
-                            display: 'flex',
-                            alignItems: 'center',
-                            transition: 'color 120ms ease',
-                          }}
-                          onMouseEnter={(e) => (e.currentTarget.style.color = '#20242d')}
-                          onMouseLeave={(e) => (e.currentTarget.style.color = '#9299a8')}
+                          style={iconButtonStyle}
+                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
+                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                           title="重命名分组"
                         >
-                          <Edit2 size={11} strokeWidth={1.8} />
+                          <Edit2 size={12} strokeWidth={1.8} color="#64748b" />
                         </button>
                       )}
 
@@ -563,34 +532,32 @@ export function PageDropdown() {
                           e.stopPropagation()
                           deleteGroup(group.id)
                         }}
-                        style={{
-                          border: 'none',
-                          background: 'none',
-                          cursor: 'pointer',
-                          padding: '2px',
-                          borderRadius: 3,
-                          color: '#94a3b8',
-                          display: 'flex',
-                          alignItems: 'center',
-                          transition: 'color 120ms ease',
+                        style={iconButtonStyle}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = '#fee2e2'
+                          const svg = e.currentTarget.querySelector('svg')
+                          if (svg) svg.style.stroke = '#ef4444'
                         }}
-                        onMouseEnter={(e) => (e.currentTarget.style.color = '#ef4444')}
-                        onMouseLeave={(e) => (e.currentTarget.style.color = '#94a3b8')}
-                        title="解散分组 (保留组内画布)"
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent'
+                          const svg = e.currentTarget.querySelector('svg')
+                          if (svg) svg.style.stroke = '#64748b'
+                        }}
+                        title="解散分组 (安全保留组内画布)"
                       >
-                        <Trash2 size={11} strokeWidth={1.8} />
+                        <Trash2 size={12} strokeWidth={1.8} color="#64748b" />
                       </button>
                     </div>
                   </div>
 
                   {/* 展开展示组内画板 */}
                   {!isCollapsed && (
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                       {groupPages.length === 0 ? (
                         <div
                           style={{
-                            padding: '3px 8px 3px 24px',
-                            fontSize: 10,
+                            padding: '4px 8px 4px 28px',
+                            fontSize: 11,
                             color: '#94a3b8',
                             fontStyle: 'italic',
                           }}
@@ -607,46 +574,46 @@ export function PageDropdown() {
             })}
           </div>
 
-          {/* 3. 已归档专区 (折叠面板) */}
-          <div style={{ borderTop: '1px solid #f0f2f5', marginTop: 3, paddingTop: 3 }}>
+          {/* 3. 已归档专区 (折叠抽屉) */}
+          <div style={{ borderTop: '1px solid #f1f5f9', marginTop: 4, paddingTop: 4 }}>
             <div
               onClick={() => setIsArchivedOpen((prev) => !prev)}
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 5,
-                padding: '4px 6px',
-                borderRadius: 6,
+                gap: 6,
+                height: 28,
+                padding: '0 8px',
+                borderRadius: 7,
                 color: '#64748b',
-                fontSize: 11,
+                fontSize: 11.5,
                 fontWeight: 600,
                 cursor: 'pointer',
-                transition: 'background-color 120ms ease',
+                transition: 'all 120ms ease',
               }}
               onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f8fafc')}
               onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
             >
-              <div style={{ width: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <div style={{ width: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                 <ChevronRight
                   size={11}
                   strokeWidth={2.2}
                   color="#94a3b8"
                   style={{
                     transform: isArchivedOpen ? 'rotate(90deg)' : 'rotate(0deg)',
-                    transition: 'transform 120ms ease',
+                    transition: 'transform 140ms ease',
                   }}
                 />
               </div>
-              <Archive size={12} strokeWidth={2} color="#64748b" style={{ flexShrink: 0 }} />
-              <span style={{ flex: 1, textAlign: 'left' }}>已归档</span>
+              <Archive size={12} strokeWidth={1.8} color="#64748b" style={{ flexShrink: 0 }} />
+              <span style={{ flex: 1, textAlign: 'left', letterSpacing: '-0.01em' }}>已归档</span>
               <span
                 style={{
                   fontSize: 10,
-                  fontWeight: 500,
+                  fontWeight: 600,
                   color: archivedPages.length > 0 ? '#475569' : '#94a3b8',
                   backgroundColor: archivedPages.length > 0 ? '#f1f5f9' : 'transparent',
-                  border: archivedPages.length > 0 ? '1px solid #e2e8f0' : 'none',
-                  padding: archivedPages.length > 0 ? '1px 5px' : '0',
+                  padding: archivedPages.length > 0 ? '1px 6px' : '0',
                   borderRadius: 9999,
                 }}
               >
@@ -670,8 +637,8 @@ export function PageDropdown() {
                 {archivedPages.length === 0 ? (
                   <div
                     style={{
-                      padding: '4px 8px 6px 24px',
-                      fontSize: 10,
+                      padding: '5px 8px 6px 28px',
+                      fontSize: 11,
                       color: '#94a3b8',
                       fontStyle: 'italic',
                     }}
@@ -685,16 +652,17 @@ export function PageDropdown() {
             )}
           </div>
 
-          {/* 底部新增操作组: [+ 新建画布] 与 [📁+ 新建组] */}
+          {/* 底部新增操作组: [+ 新建画布] 与 [📁 新建组] */}
           <div
             style={{
               display: 'flex',
-              gap: 4,
-              borderTop: '1px solid #f0f2f5',
+              gap: 6,
+              borderTop: '1px solid #f1f5f9',
               marginTop: 4,
-              paddingTop: 4,
+              paddingTop: 6,
             }}
           >
+            {/* 新建画布 (主要行动点) */}
             <button
               type="button"
               onClick={(e) => {
@@ -703,28 +671,30 @@ export function PageDropdown() {
               }}
               style={{
                 flex: 1,
+                height: 28,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: 4,
-                padding: '5px 4px',
-                borderRadius: 6,
+                gap: 5,
+                borderRadius: 7,
                 border: 'none',
-                backgroundColor: '#f8fafc',
-                color: '#181b24',
-                fontSize: 11,
+                backgroundColor: '#0f172a',
+                color: '#ffffff',
+                fontSize: 11.5,
                 fontWeight: 600,
                 cursor: 'pointer',
-                transition: 'background-color 120ms ease',
+                transition: 'all 120ms ease',
+                boxShadow: '0 1px 3px rgba(15, 23, 42, 0.12)',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#eef1f6')}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#f8fafc')}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#1e293b')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#0f172a')}
               title="在顶层新建画布"
             >
-              <Plus size={12} strokeWidth={2.4} color="#181b24" />
+              <Plus size={12} strokeWidth={2.4} color="#ffffff" />
               <span>新建画布</span>
             </button>
 
+            {/* 新建组 (次要行动点) */}
             <button
               type="button"
               onClick={(e) => {
@@ -735,25 +705,31 @@ export function PageDropdown() {
               }}
               style={{
                 flex: 1,
+                height: 28,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: 4,
-                padding: '5px 4px',
-                borderRadius: 6,
-                border: 'none',
-                backgroundColor: '#f8fafc',
-                color: '#181b24',
-                fontSize: 11,
+                gap: 5,
+                borderRadius: 7,
+                border: '1px solid #e2e8f0',
+                backgroundColor: '#ffffff',
+                color: '#334155',
+                fontSize: 11.5,
                 fontWeight: 600,
                 cursor: 'pointer',
-                transition: 'background-color 120ms ease',
+                transition: 'all 120ms ease',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#eef1f6')}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#f8fafc')}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#f8fafc'
+                e.currentTarget.style.borderColor = '#cbd5e1'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = '#ffffff'
+                e.currentTarget.style.borderColor = '#e2e8f0'
+              }}
               title="新建分组"
             >
-              <FolderPlus size={12} strokeWidth={2} color="#181b24" />
+              <FolderPlus size={12} strokeWidth={1.8} color="#475569" />
               <span>新建组</span>
             </button>
           </div>
@@ -761,4 +737,16 @@ export function PageDropdown() {
       )}
     </div>
   )
+}
+
+const iconButtonStyle: React.CSSProperties = {
+  border: 'none',
+  background: 'none',
+  cursor: 'pointer',
+  padding: '4px',
+  borderRadius: 4,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  transition: 'background-color 120ms ease',
 }

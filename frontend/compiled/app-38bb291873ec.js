@@ -9688,11 +9688,18 @@ const Chat = ({
                   prompt: finalPrompt,
                   originalPrompt: statusData && statusData.original_prompt || originalPrompt || finalPrompt,
                   resolvedPrompt: statusData && statusData.resolved_prompt || plannedPrompt || finalPrompt,
+                  promptTrace: statusData && statusData.prompt_trace || plannedPromptTrace || '',
                   model: model,
                   provider: statusData && statusData.provider || provider,
                   jobId: jobId,
+                  clientRequestId: clientRequestId,
                   size: aiOptions.size || '1024x1024',
                   resolution: aiOptions.resolution || '1K',
+                  variant: statusData && statusData.variant || aiOptions.variant || 'flare',
+                  quality: quality || 'auto',
+                  skill: activeSkill || '',
+                  hasReference: refImages.length > 0,
+                  refCount: refImages.length,
                   createdAt: Date.now()
                 });
                 tryFlushCollected();
@@ -9887,11 +9894,18 @@ const Chat = ({
                   prompt: finalPrompt,
                   originalPrompt: t && t.original_prompt || originalPrompt || finalPrompt,
                   resolvedPrompt: plannedPrompt || finalPrompt,
+                  promptTrace: plannedPromptTrace || '',
                   model: model,
                   provider: t.provider || provider,
                   jobId: jid,
+                  clientRequestId: clientRequestId,
                   size: aiOptions.size || '1024x1024',
                   resolution: aiOptions.resolution || '1K',
+                  variant: t && t.variant || aiOptions.variant || 'flare',
+                  quality: quality || 'auto',
+                  skill: activeSkill || '',
+                  hasReference: refImages.length > 0,
+                  refCount: refImages.length,
                   createdAt: Date.now()
                 });
               }

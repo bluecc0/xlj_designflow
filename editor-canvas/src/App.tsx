@@ -62,6 +62,7 @@ export function App() {
     addText,
     addImage,
     addImages,
+    updateImages,
     insertImagesAuto,
     revision,
     isDirty,
@@ -117,7 +118,18 @@ export function App() {
   const [propertiesModalImage, setPropertiesModalImage] = useState<any>(null)
   const [snapLines, setSnapLines] = useState<SnapLine[]>([])
 
-  const handleStartOutpainting = useCallback((id: string) => {
+  // 扩图初始状态记录（用于原图缩放与取消复原）
+  const [outpaintInitialImage, setOutpaintInitialImage] = useState<{
+    id: string
+    x: number
+    y: number
+    width: number
+    height: number
+    naturalWidth: number
+    naturalHeight: number
+  } | null>(null)
+
+  const handleStartOutpainting = useCallback(async (id: string) => {
     setOutpaintingImageId(id)
     setOutpaintMargins({
       top: 120,
@@ -125,11 +137,58 @@ export function App() {
       bottom: 120,
       left: 120,
     })
-  }, [])
+    const target = images.find((im) => im.id === id)
+    if (target) {
+      let natW = target.naturalWidth
+      let natH = target.naturalHeight
+      if (!natW || !natH) {
+        try {
+          const dims = await getImageDimensions(target.url)
+          natW = dims.width
+          natH = dims.height
+        } catch {
+          natW = target.width
+          natH = target.height
+        }
+      }
+      setOutpaintInitialImage({
+        id: target.id,
+        x: target.x,
+        y: target.y,
+        width: target.width,
+        height: target.height,
+        naturalWidth: natW,
+        naturalHeight: natH,
+      })
+    }
+  }, [images])
 
   const handleCancelOutpainting = useCallback(() => {
+    if (outpaintInitialImage) {
+      updateImages([
+        {
+          id: outpaintInitialImage.id,
+          patch: {
+            x: outpaintInitialImage.x,
+            y: outpaintInitialImage.y,
+            width: outpaintInitialImage.width,
+            height: outpaintInitialImage.height,
+          },
+        },
+      ])
+    }
     setOutpaintingImageId(null)
-  }, [])
+    setOutpaintInitialImage(null)
+  }, [outpaintInitialImage, updateImages])
+
+  // 原图 4 角拖拽缩放
+  const handleOutpaintImageResize = useCallback(
+    (patch: { x: number; y: number; width: number; height: number }) => {
+      if (!outpaintingImageId) return
+      updateImages([{ id: outpaintingImageId, patch }])
+    },
+    [outpaintingImageId, updateImages]
+  )
 
   const handleExecuteOutpainting = useCallback(async () => {
     if (!outpaintingImageId) return
@@ -148,25 +207,19 @@ export function App() {
     }
 
     try {
-      // 1. 获取原图真实物理尺寸 (naturalWidth / naturalHeight)
-      let naturalW = target.naturalWidth
-      let naturalH = target.naturalHeight
-      if (!naturalW || !naturalH) {
-        try {
-          const dims = await getImageDimensions(target.url)
-          naturalW = dims.width
-          naturalH = dims.height
-        } catch {
-          naturalW = target.width
-          naturalH = target.height
-        }
-      }
+      // 1. 获取原图基础物理尺寸与当前缩放倍率
+      const natW = outpaintInitialImage?.naturalWidth || target.naturalWidth || target.width
+      const natH = outpaintInitialImage?.naturalHeight || target.naturalHeight || target.height
+      const initW = outpaintInitialImage?.width || target.width
 
-      // 2. 计算画布显示尺寸到原图物理像素的比例
-      const scaleX = (naturalW || target.width) / target.width
-      const scaleY = (naturalH || target.height) / target.height
+      const scaleMultiplier = initW > 0 ? target.width / initW : 1
+      const baseW = Math.max(64, Math.min(4096, Math.round(natW * scaleMultiplier)))
+      const baseH = Math.max(64, Math.min(4096, Math.round(natH * scaleMultiplier)))
 
-      // 3. 将画布拉伸的视觉边距精确换算为原图物理像素边距
+      // 2. 将画布拉伸的视觉边距精确换算为基准物理像素边距
+      const scaleX = baseW / target.width
+      const scaleY = baseH / target.height
+
       const naturalMargins: OutpaintMargins = {
         top: Math.max(0, Math.round(outpaintMargins.top * scaleY)),
         right: Math.max(0, Math.round(outpaintMargins.right * scaleX)),
@@ -174,11 +227,18 @@ export function App() {
         left: Math.max(0, Math.round(outpaintMargins.left * scaleX)),
       }
 
-      // 4. 以原图原始清晰度向后端提交扩图
+      const totalOutW = baseW + naturalMargins.left + naturalMargins.right
+      const totalOutH = baseH + naturalMargins.top + naturalMargins.bottom
+      if (totalOutW > 4096 || totalOutH > 4096 || totalOutW * totalOutH > 4194304) {
+        alert(`扩图总尺寸 (${totalOutW}×${totalOutH}) 超过 FLUX 400 万像素或 4096px 限制，请缩小原图或调整边距`)
+        return
+      }
+
+      // 3. 提交扩图任务
       const result = await runOutpainting(
         target.url,
-        naturalW,
-        naturalH,
+        baseW,
+        baseH,
         naturalMargins,
         (msg, progress) => {
           updateOperation({ message: msg, progress })
@@ -207,13 +267,14 @@ export function App() {
       })
 
       setOutpaintingImageId(null)
+      setOutpaintInitialImage(null)
       setSelected([newImg.id], 'image')
     } catch (err: any) {
       alert(`扩图失败: ${err.message}`)
     } finally {
       releaseOperation()
     }
-  }, [outpaintingImageId, images, outpaintMargins, claimOperation, updateOperation, releaseOperation, addImage, setSelected])
+  }, [outpaintingImageId, images, outpaintMargins, outpaintInitialImage, claimOperation, updateOperation, releaseOperation, addImage, setSelected])
 
   // 1. 快捷键监听
   useEffect(() => {
@@ -1288,6 +1349,8 @@ export function App() {
               image={outpaintingTarget}
               margins={outpaintMargins}
               onMarginsChange={setOutpaintMargins}
+              initialImage={outpaintInitialImage}
+              onImageResize={handleOutpaintImageResize}
               isSubmitting={aiState.status === 'running' && aiState.type === 'outpainting'}
             />
           </div>
@@ -1302,6 +1365,7 @@ export function App() {
         <ContextualToolbar
           isOutpainting={Boolean(outpaintingImageId)}
           outpaintMargins={outpaintMargins}
+          outpaintInitialImage={outpaintInitialImage}
           onStartOutpainting={handleStartOutpainting}
           onExecuteOutpainting={handleExecuteOutpainting}
           onCancelOutpainting={handleCancelOutpainting}

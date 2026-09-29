@@ -330,8 +330,8 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
                 width: 34,
                 height: 34,
                 borderRadius: 10,
-                backgroundColor: '#eff6ff',
-                color: '#2563eb',
+                backgroundColor: '#f1f5f9',
+                color: '#0f172a',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -385,7 +385,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
               </label>
               <span style={{ fontSize: 11, color: '#64748b' }}>
                 {parsedSkus.length > 0 ? (
-                  <span style={{ color: '#2563eb', fontWeight: 600 }}>
+                  <span style={{ color: '#0f172a', fontWeight: 600 }}>
                     已识别 {parsedSkus.length} 个货号
                   </span>
                 ) : (
@@ -427,8 +427,8 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
                 transition: 'border-color 150ms ease, box-shadow 150ms ease',
               }}
               onFocus={(e) => {
-                e.target.style.borderColor = '#3b82f6'
-                e.target.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.15)'
+                e.target.style.borderColor = '#0f172a'
+                e.target.style.boxShadow = '0 0 0 3px rgba(15, 23, 42, 0.12)'
               }}
               onBlur={(e) => {
                 e.target.style.borderColor = '#cbd5e1'
@@ -500,9 +500,9 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
                       gap: 8,
                       padding: '8px 10px',
                       borderRadius: 9,
-                      border: checked ? '1.5px solid #2563eb' : '1px solid #e2e8f0',
-                      backgroundColor: checked ? '#eff6ff' : '#ffffff',
-                      color: checked ? '#1d4ed8' : '#475569',
+                      border: checked ? '1.5px solid #0f172a' : '1px solid #e2e8f0',
+                      backgroundColor: checked ? '#f1f5f9' : '#ffffff',
+                      color: checked ? '#0f172a' : '#475569',
                       cursor: 'pointer',
                       fontSize: 12,
                       fontWeight: checked ? 600 : 500,
@@ -522,7 +522,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
                         height: 16,
                         borderRadius: 4,
                         border: checked ? 'none' : '1.5px solid #94a3b8',
-                        backgroundColor: checked ? '#2563eb' : 'transparent',
+                        backgroundColor: checked ? '#0f172a' : 'transparent',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -555,7 +555,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
                 color: '#64748b',
               }}
             >
-              <Layers size={14} color="#3b82f6" />
+              <Layers size={14} color="#0f172a" />
               <span>
                 预计生成{' '}
                 <strong style={{ color: '#0f172a' }}>{totalToImport}</strong> 张素材（
@@ -617,16 +617,16 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
                   height: 34,
                   padding: '0 12px',
                   borderRadius: 8,
-                  backgroundColor: '#eff6ff',
-                  border: '1px solid #bfdbfe',
-                  color: '#2563eb',
+                  backgroundColor: '#f1f5f9',
+                  border: '1px solid #e2e8f0',
+                  color: '#0f172a',
                   fontSize: 12,
                   fontWeight: 600,
                   cursor: 'pointer',
                   transition: 'background-color 150ms ease',
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#dbeafe')}
-                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#eff6ff')}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#f1f5f9')}
               >
                 <Sparkles size={13} />
                 <span>载入开发模拟图测试排版 ({totalToImport} 张)</span>

@@ -333,7 +333,7 @@ export function TextToolbar() {
                       backgroundColor: p.color,
                       border: p.color === '#ffffff' ? '1.5px solid #cbd5e1' : '1px solid rgba(0,0,0,0.15)',
                       cursor: 'pointer',
-                      boxShadow: p.color === currentColor ? '0 0 0 2px #3b82f6' : 'none',
+                      boxShadow: p.color === currentColor ? '0 0 0 2px #0f172a' : 'none',
                       transition: 'transform 120ms ease',
                       padding: 0,
                     }}

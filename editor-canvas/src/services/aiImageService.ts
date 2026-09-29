@@ -260,6 +260,7 @@ export interface ImageMetadataResponse {
   isAiGenerated: boolean
   aiMetadata?: {
     jobId?: string
+    clientRequestId?: string
     prompt?: string
     originalPrompt?: string
     resolvedPrompt?: string
@@ -268,7 +269,17 @@ export interface ImageMetadataResponse {
     provider?: string
     size?: string
     resolution?: string
+    variant?: string
+    quality?: string
+    skill?: string
     hasReference?: boolean
+    referenceCount?: number
+    referenceImages?: Array<{
+      type?: string
+      name?: string
+      url: string
+      label?: string
+    }>
     createdAt?: number
     requestMeta?: Record<string, any>
   } | null
@@ -297,6 +308,7 @@ export async function fetchImageMetadata(imageUrl: string): Promise<ImageMetadat
         aiMetadata: data.ai_metadata
           ? {
               jobId: data.ai_metadata.job_id,
+              clientRequestId: data.ai_metadata.client_request_id,
               prompt: data.ai_metadata.prompt,
               originalPrompt: data.ai_metadata.original_prompt,
               resolvedPrompt: data.ai_metadata.resolved_prompt,
@@ -305,7 +317,14 @@ export async function fetchImageMetadata(imageUrl: string): Promise<ImageMetadat
               provider: data.ai_metadata.provider,
               size: data.ai_metadata.size,
               resolution: data.ai_metadata.resolution,
-              hasReference: data.ai_metadata.has_reference,
+              variant: data.ai_metadata.variant,
+              quality: data.ai_metadata.quality,
+              skill: data.ai_metadata.skill,
+              hasReference: Boolean(data.ai_metadata.has_reference),
+              referenceCount: data.ai_metadata.reference_count || 0,
+              referenceImages: Array.isArray(data.ai_metadata.reference_images)
+                ? data.ai_metadata.reference_images
+                : [],
               createdAt: data.ai_metadata.created_at,
               requestMeta: data.ai_metadata.request_meta,
             }
