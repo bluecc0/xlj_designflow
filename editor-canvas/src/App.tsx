@@ -763,8 +763,10 @@ export function App() {
       e.target === containerRef.current ||
       (e.target as HTMLElement).getAttribute('data-canvas-bg') === 'true'
     if (isCanvasBg) {
+      if (outpaintingImageIdRef.current) {
+        handleCancelOutpainting()
+      }
       clearSelection()
-      setOutpaintingImageId(null)
 
       if (activeTool === 'text') {
         const pt = screenToCanvas({ x: e.clientX, y: e.clientY })
@@ -1223,6 +1225,9 @@ export function App() {
           e.target === containerRef.current ||
           (e.target as HTMLElement).getAttribute('data-canvas-bg') === 'true'
         if (isCanvasBackground) {
+          if (outpaintingImageIdRef.current) {
+            handleCancelOutpainting()
+          }
           clearSelection()
         }
         setContextMenu({
@@ -1278,8 +1283,16 @@ export function App() {
             <FrameShape
               frame={frame}
               isSelected={selectedType === 'frame' && selectedIds.includes(frame.id)}
-              onSelect={() => setSelected([frame.id], 'frame')}
+              onSelect={() => {
+                if (outpaintingImageIdRef.current) {
+                  handleCancelOutpainting()
+                }
+                setSelected([frame.id], 'frame')
+              }}
               onContextMenu={(e) => {
+                if (outpaintingImageIdRef.current) {
+                  handleCancelOutpainting()
+                }
                 setSelected([frame.id], 'frame')
                 setContextMenu({
                   visible: true,
@@ -1301,6 +1314,9 @@ export function App() {
               isSelected={selectedType === 'image' && selectedIds.includes(im.id)}
               isSingleSelected={selectedType === 'image' && selectedIds.length === 1 && selectedIds[0] === im.id}
               onSelect={(isShift) => {
+                if (outpaintingImageIdRef.current && outpaintingImageIdRef.current !== im.id) {
+                  handleCancelOutpainting()
+                }
                 if (isShift) {
                   toggleSelected(im.id, 'image')
                 } else {
@@ -1308,6 +1324,9 @@ export function App() {
                 }
               }}
               onContextMenu={(e) => {
+                if (outpaintingImageIdRef.current && outpaintingImageIdRef.current !== im.id) {
+                  handleCancelOutpainting()
+                }
                 if (!selectedIds.includes(im.id)) {
                   setSelected([im.id], 'image')
                 }
@@ -1330,6 +1349,9 @@ export function App() {
               text={txt}
               isSelected={selectedType === 'text' && selectedIds.includes(txt.id)}
               onSelect={(isShift) => {
+                if (outpaintingImageIdRef.current) {
+                  handleCancelOutpainting()
+                }
                 if (isShift) {
                   toggleSelected(txt.id, 'text')
                 } else {
@@ -1337,6 +1359,9 @@ export function App() {
                 }
               }}
               onContextMenu={(e) => {
+                if (outpaintingImageIdRef.current) {
+                  handleCancelOutpainting()
+                }
                 if (!selectedIds.includes(txt.id)) {
                   setSelected([txt.id], 'text')
                 }
