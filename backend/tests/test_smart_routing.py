@@ -85,6 +85,10 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                 ["apimart"],
             )
 
+    def test_gpt_image_25_xhigh_routes_to_apimart(self) -> None:
+        with patch.object(ai_image.settings, "ai_image_api_key", "test"), patch.object(ai_image.settings, "smart_routing_rules_json", ""):
+            self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", quality="xhigh", filter_frozen=False), ["apimart"])
+
     def test_gpt_image_25_route_ignores_adobe(self) -> None:
         with patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api:8080"), \
              patch.object(ai_image.settings, "cliproxy_api_key", "sk-sub2api"), \
