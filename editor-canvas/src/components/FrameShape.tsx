@@ -64,6 +64,7 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
 
   // 1. 拖拽画板标题移动画板
   const handleHeaderMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return
     e.stopPropagation()
     onSelect()
     isDraggingRef.current = true
@@ -123,6 +124,7 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
 
   // 2. 拖拽手柄拉伸画板尺寸（放大/缩小）
   const handleResizeHandleMouseDown = (handle: ResizeHandle, e: React.MouseEvent) => {
+    if (e.button !== 0) return
     e.stopPropagation()
     onSelect()
     snapshotBeforeResizeRef.current = useCanvasStore.getState().getDocument()

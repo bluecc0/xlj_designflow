@@ -18,6 +18,16 @@ export interface CanvasPage {
   id: string
   name: string
   order: number
+  archived?: boolean
+  archivedAt?: number
+  groupId?: string | null
+}
+
+export interface CanvasPageGroup {
+  id: string
+  name: string
+  order: number
+  collapsed?: boolean
 }
 
 export interface CanvasFrame {
@@ -31,6 +41,15 @@ export interface CanvasFrame {
   background?: string
 }
 
+export interface ReferenceImageItem {
+  type?: 'manual' | 'context' | 'outpainting_source' | 'preview' | string
+  name?: string
+  url: string
+  label?: string
+  width?: number
+  height?: number
+}
+
 export interface CanvasImageMeta {
   prompt?: string
   originalPrompt?: string
@@ -39,11 +58,19 @@ export interface CanvasImageMeta {
   model?: string
   provider?: string
   jobId?: string
+  clientRequestId?: string
   createdAt?: number | string
   size?: string
   resolution?: string
+  variant?: string
+  quality?: string
+  skill?: string
+  hasReference?: boolean
+  referenceCount?: number
+  referenceImages?: ReferenceImageItem[]
   fileSize?: number
   mimeType?: string
+  requestMeta?: Record<string, any>
   [key: string]: any
 }
 
@@ -86,6 +113,7 @@ export interface CanvasText {
 export interface CanvasDocument {
   version: 2
   pages: CanvasPage[]
+  groups?: CanvasPageGroup[]
   activePageId: string
   frames: CanvasFrame[]
   images: CanvasImage[]

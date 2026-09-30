@@ -70,6 +70,7 @@ from .ai_image import (
     cleanup_expired_user_refs,
     normalize_provider,
     save_user_refs,
+    _ai_image_public_url,
     compress_image_to_data_url,
     SLASH_MODEL_MAP,
 )
@@ -190,6 +191,11 @@ from .job_store import (
     is_inspiration_favorited,
     list_inspiration_favorite_ids,
     set_inspiration_favorite,
+    list_quick_prompts,
+    create_quick_prompt,
+    update_quick_prompt,
+    delete_quick_prompt,
+    seed_default_quick_prompts,
 )
 from .models import (
     ComposeJob,
@@ -198,6 +204,8 @@ from .models import (
     ExportRequest,
     GridExportRequest,
     ParseResult,
+    QuickPromptCreateRequest,
+    QuickPromptUpdateRequest,
     SlotInfo,
     SpecialComposeJob,
     SpecialComposeRequest,
@@ -5621,19 +5629,84 @@ def ai_image_metadata(request: Request, url: str):
     is_ai = bool(job)
     ai_metadata = None
     if job:
+        req_meta = job.get("request_meta") or {}
+        if isinstance(req_meta, str):
+            try:
+                req_meta = json.loads(req_meta)
+            except Exception:
+                req_meta = {}
+
+        ref_images = list(req_meta.get("reference_images") or [])
+        job_user_id = job.get("user_id") or (user["id"] if user else None)
+        jid = job.get("id")
+
+        # 若 request_meta 中尚未直接记录 reference_images，尝试从磁盘或任务元数据中补充
+        if not ref_images and (job.get("has_reference") or req_meta.get("reference_names")):
+            if job_user_id and jid:
+                ref_dir = settings.output_path / "ai-images" / str(job_user_id) / "refs" / str(jid)
+                if ref_dir.exists() and ref_dir.is_dir():
+                    ref_files = sorted(ref_dir.iterdir())
+                    ref_names = req_meta.get("reference_names") or []
+                    for idx, rf in enumerate(ref_files):
+                        if rf.is_file():
+                            orig_name = ref_names[idx] if idx < len(ref_names) else rf.name
+                            ref_images.append({
+                                "type": "manual",
+                                "name": orig_name,
+                                "url": f"/ai-images/{job_user_id}/refs/{jid}/{rf.name}",
+                                "label": f"用户参考图 {idx + 1}",
+                            })
+
+        # 如果是 outpainting 扩图，source_image_url / source_snapshot_url 即为参考原图
+        if req_meta.get("operation") == "outpainting":
+            source_url = req_meta.get("source_snapshot_url") or req_meta.get("source_image_url")
+            if source_url and not any(r.get("url") == source_url for r in ref_images):
+                ref_images.append({
+                    "type": "outpainting_source",
+                    "name": Path(source_url).name,
+                    "url": source_url,
+                    "label": "扩图原图",
+                })
+
+        # 补充上下文参考图（如果 req_meta 中有记录且尚未加入列表）
+        ctx_url = req_meta.get("context_reference_url")
+        if ctx_url and not any(r.get("url") == ctx_url for r in ref_images):
+            ref_images.append({
+                "type": "context",
+                "name": Path(ctx_url).name,
+                "url": ctx_url,
+                "label": "上下文关联图",
+            })
+
+        # 如果通过 request_previews 有非 data: 的站内参考图预览
+        for pv in req_meta.get("reference_previews") or []:
+            if isinstance(pv, str) and pv.startswith("/") and not any(r.get("url") == pv for r in ref_images):
+                ref_images.append({
+                    "type": "preview",
+                    "name": Path(pv).name,
+                    "url": pv,
+                    "label": f"参考图 {len(ref_images) + 1}",
+                })
+
         ai_metadata = {
             "job_id": job.get("id"),
+            "client_request_id": job.get("client_request_id") or req_meta.get("client_request_id") or "",
             "prompt": job.get("prompt") or "",
             "original_prompt": job.get("original_prompt") or "",
             "resolved_prompt": job.get("resolved_prompt") or "",
             "prompt_trace": job.get("prompt_trace") or "",
             "model": job.get("model") or "",
-            "provider": job.get("provider") or "",
+            "provider": job.get("provider") or req_meta.get("provider") or "",
             "size": job.get("size") or "",
             "resolution": job.get("resolution") or "",
-            "has_reference": bool(job.get("has_reference")),
+            "variant": req_meta.get("variant") or "",
+            "quality": req_meta.get("quality") or "",
+            "skill": req_meta.get("skill") or "",
+            "has_reference": bool(job.get("has_reference")) or len(ref_images) > 0,
+            "reference_count": len(ref_images) or job.get("reference_count") or 0,
+            "reference_images": ref_images,
             "created_at": job.get("created_at"),
-            "request_meta": job.get("request_meta") or {},
+            "request_meta": req_meta,
         }
 
     return {
@@ -6703,6 +6776,7 @@ async def ai_image_endpoint(
             )
 
         # 2. 取上一张生成的图片作为参考图
+        context_ref_url = ""
         if session_id:
             prev_messages = load_ai_chat_messages(session_id, user_id=user["id"])
             for m in reversed(prev_messages):
@@ -6712,6 +6786,7 @@ async def ai_image_endpoint(
                     try:
                         if local_path.exists():
                             context_ref_bytes.append((local_path.read_bytes(), local_path.name))
+                            context_ref_url = prev_url
                             logger.info("Using previous image as reference: %s", local_path.name)
                             break
                     except Exception:
@@ -6727,6 +6802,7 @@ async def ai_image_endpoint(
         batch_id = uuid.uuid4().hex if batch_count > 1 else ""
         job_ids: list[str] = []
         saved_reference_storage_id = ""
+        stored_reference_urls: list[str] = []
         for _idx in range(batch_count):
             jid = uuid.uuid4().hex
             job_ids.append(jid)
@@ -6741,10 +6817,32 @@ async def ai_image_endpoint(
             reference_storage_id = batch_id or jid
             if all_refs_batch and reference_storage_id != saved_reference_storage_id:
                 try:
-                    save_user_refs(user["id"], reference_storage_id, all_refs_batch)
+                    ref_paths = save_user_refs(user["id"], reference_storage_id, all_refs_batch)
+                    stored_reference_urls = []
+                    for ref_path in ref_paths:
+                        try:
+                            stored_reference_urls.append(_ai_image_public_url(Path(ref_path)))
+                        except Exception:
+                            stored_reference_urls.append("")
                     saved_reference_storage_id = reference_storage_id
                 except Exception:
                     logger.warning("Failed to save user refs for %s", reference_storage_id)
+
+            reference_images = []
+            for i, (_content, name) in enumerate(all_refs_batch[:actual_manual_count]):
+                reference_images.append({
+                    "type": "manual",
+                    "name": name,
+                    "url": stored_reference_urls[i] if i < len(stored_reference_urls) else "",
+                    "label": f"用户参考图 {i + 1}",
+                })
+            if actual_context_count and context_ref_url:
+                reference_images.append({
+                    "type": "context",
+                    "name": Path(context_ref_url).name,
+                    "url": context_ref_url,
+                    "label": "上下文关联图",
+                })
             request_meta = {
                 "client_request_id": client_req,
                 "chat_session_id": session_id,
@@ -6757,8 +6855,10 @@ async def ai_image_endpoint(
                 "reference_storage_job_id": reference_storage_id,
                 "manual_reference_count": actual_manual_count,
                 "context_reference_count": actual_context_count,
-                "context_image_url": prev_url if (context_ref_bytes and prev_url) else "",
+                "context_reference_url": context_ref_url if context_ref_bytes else "",
+                "context_image_url": context_ref_url if context_ref_bytes else "",
                 "reference_names": [name for _content, name in all_refs_batch],
+                "reference_images": reference_images,
                 # data URL 缩略图体积很大，不写入任务库；站内 URL 可以安全保留用于排障。
                 "reference_previews": [
                     preview for preview in ref_previews_list
@@ -7406,3 +7506,73 @@ def admin_operations(
         "limit": limit,
         "offset": offset,
     }
+
+
+# ─── 常用语 (Quick Prompts) ───────────────────────────────────────────────────
+
+
+@app.get("/quick-prompts")
+def get_quick_prompts_endpoint(request: Request):
+    """获取当前用户的常用语列表。首次访问自动载入默认预设。"""
+    user = _current_user(request)
+    prompts = list_quick_prompts(user["id"])
+    return {"prompts": prompts}
+
+
+@app.post("/quick-prompts")
+def create_quick_prompt_endpoint(request: Request, body: QuickPromptCreateRequest):
+    """创建常用语"""
+    user = _current_user(request)
+    try:
+        prompt = create_quick_prompt(
+            user_id=user["id"],
+            title=body.title,
+            content=body.content,
+            category=body.category or "通用",
+        )
+        return {"prompt": prompt}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/quick-prompts/{prompt_id}")
+def update_quick_prompt_endpoint(
+    request: Request,
+    prompt_id: str,
+    body: QuickPromptUpdateRequest,
+):
+    """修改常用语"""
+    user = _current_user(request)
+    try:
+        updated = update_quick_prompt(
+            prompt_id=prompt_id,
+            user_id=user["id"],
+            title=body.title,
+            content=body.content,
+            category=body.category,
+            sort_order=body.sort_order,
+        )
+        if not updated:
+            raise HTTPException(404, "常用语不存在或无权限修改")
+        return {"prompt": updated}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/quick-prompts/{prompt_id}")
+def delete_quick_prompt_endpoint(request: Request, prompt_id: str):
+    """删除常用语"""
+    user = _current_user(request)
+    ok = delete_quick_prompt(prompt_id=prompt_id, user_id=user["id"])
+    if not ok:
+        raise HTTPException(404, "常用语不存在或无权限删除")
+    return {"deleted": prompt_id}
+
+
+@app.post("/quick-prompts/seed-defaults")
+def seed_default_quick_prompts_endpoint(request: Request):
+    """恢复/重置推荐电商常用语预设"""
+    user = _current_user(request)
+    prompts = seed_default_quick_prompts(user["id"], force=True)
+    return {"prompts": prompts}
+

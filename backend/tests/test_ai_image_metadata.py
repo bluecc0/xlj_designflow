@@ -145,6 +145,63 @@ class AiImageMetadataTest(unittest.TestCase):
                 conn.execute("DELETE FROM ai_image_jobs WHERE id = ?", (test_id,))
                 conn.commit()
 
+    def test_returns_reference_images_and_request_meta(self) -> None:
+        mock_job = {
+            "id": "job_ref_test",
+            "user_id": "test_user",
+            "status": "done",
+            "model": "gpt-image-2",
+            "provider": "apimart",
+            "prompt": "电商服饰白底人像摄影",
+            "original_prompt": "电商服饰白底人像摄影，原提示词",
+            "resolved_prompt": "电商服饰白底人像摄影，最终生成词",
+            "prompt_trace": '{"steps":["expand","refine"]}',
+            "size": "1024x1024",
+            "resolution": "1K",
+            "has_reference": True,
+            "created_at": 1718001122.0,
+            "client_request_id": "client_req_001",
+            "request_meta": {
+                "quality": "high",
+                "variant": "flare",
+                "skill": "电商白底图",
+                "reference_images": [
+                    {
+                        "type": "manual",
+                        "name": "ref_shoe.png",
+                        "url": "/ai-images/test_user/refs/job_ref_test/ref_0.png",
+                        "label": "用户参考图 1",
+                    },
+                    {
+                        "type": "context",
+                        "name": "prev.png",
+                        "url": "/ai-images/test_user/2026-03-29/prev.png",
+                        "label": "上下文关联图",
+                    },
+                ],
+            },
+        }
+        with (
+            patch.object(main, "load_ai_image_job_by_image_url", return_value=mock_job),
+            patch.object(main, "_current_user", return_value={"id": "test_user"}),
+        ):
+            res = main.ai_image_metadata(
+                _request("/ai-images/test_user/2026-09-15/demo.png"),
+                "/ai-images/test_user/2026-09-15/demo.png",
+            )
+
+        self.assertTrue(res["is_ai_generated"])
+        ai_meta = res["ai_metadata"]
+        self.assertIsNotNone(ai_meta)
+        self.assertEqual(ai_meta["model"], "gpt-image-2")
+        self.assertEqual(ai_meta["variant"], "flare")
+        self.assertEqual(ai_meta["quality"], "high")
+        self.assertEqual(ai_meta["skill"], "电商白底图")
+        self.assertEqual(ai_meta["client_request_id"], "client_req_001")
+        self.assertEqual(len(ai_meta["reference_images"]), 2)
+        self.assertEqual(ai_meta["reference_images"][0]["name"], "ref_shoe.png")
+        self.assertEqual(ai_meta["reference_images"][1]["type"], "context")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,6 +62,7 @@ export function App() {
     addText,
     addImage,
     addImages,
+    updateImages,
     insertImagesAuto,
     revision,
     isDirty,
@@ -119,7 +120,33 @@ export function App() {
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const dragDepthRef = useRef(0)
 
-  const handleStartOutpainting = useCallback((id: string) => {
+  // 扩图初始状态记录（用于原图缩放与取消复原）
+  const [outpaintInitialImage, setOutpaintInitialImage] = useState<{
+    id: string
+    x: number
+    y: number
+    width: number
+    height: number
+    naturalWidth: number
+    naturalHeight: number
+  } | null>(null)
+
+  const outpaintingImageIdRef = useRef<string | null>(null)
+  outpaintingImageIdRef.current = outpaintingImageId
+
+  const outpaintInitialImageRef = useRef<{
+    id: string
+    x: number
+    y: number
+    width: number
+    height: number
+    naturalWidth: number
+    naturalHeight: number
+  } | null>(null)
+  outpaintInitialImageRef.current = outpaintInitialImage
+
+  const handleStartOutpainting = useCallback(async (id: string) => {
+    outpaintingImageIdRef.current = id
     setOutpaintingImageId(id)
     setOutpaintMargins({
       top: 120,
@@ -127,11 +154,71 @@ export function App() {
       bottom: 120,
       left: 120,
     })
-  }, [])
+    const target = images.find((im) => im.id === id)
+    if (target) {
+      const initialSnapshot = {
+        id: target.id,
+        x: target.x,
+        y: target.y,
+        width: target.width,
+        height: target.height,
+        naturalWidth: target.naturalWidth || target.width,
+        naturalHeight: target.naturalHeight || target.height,
+      }
+      outpaintInitialImageRef.current = initialSnapshot
+      setOutpaintInitialImage(initialSnapshot)
+
+      if (!target.naturalWidth || !target.naturalHeight) {
+        try {
+          const dims = await getImageDimensions(target.url)
+          if (outpaintingImageIdRef.current === id) {
+            setOutpaintInitialImage((prev) => {
+              if (!prev || prev.id !== id) return prev
+              const updated = {
+                ...prev,
+                naturalWidth: dims.width,
+                naturalHeight: dims.height,
+              }
+              outpaintInitialImageRef.current = updated
+              return updated
+            })
+          }
+        } catch {
+          // 忽略探测失败，保持初始已记录尺寸
+        }
+      }
+    }
+  }, [images])
 
   const handleCancelOutpainting = useCallback(() => {
+    const initial = outpaintInitialImageRef.current || outpaintInitialImage
+    if (initial) {
+      updateImages([
+        {
+          id: initial.id,
+          patch: {
+            x: initial.x,
+            y: initial.y,
+            width: initial.width,
+            height: initial.height,
+          },
+        },
+      ])
+    }
+    outpaintingImageIdRef.current = null
+    outpaintInitialImageRef.current = null
     setOutpaintingImageId(null)
-  }, [])
+    setOutpaintInitialImage(null)
+  }, [outpaintInitialImage, updateImages])
+
+  // 原图 4 角拖拽缩放
+  const handleOutpaintImageResize = useCallback(
+    (patch: { x: number; y: number; width: number; height: number }) => {
+      if (!outpaintingImageId) return
+      updateImages([{ id: outpaintingImageId, patch }])
+    },
+    [outpaintingImageId, updateImages]
+  )
 
   const handleExecuteOutpainting = useCallback(async () => {
     if (!outpaintingImageId) return
@@ -150,25 +237,19 @@ export function App() {
     }
 
     try {
-      // 1. 获取原图真实物理尺寸 (naturalWidth / naturalHeight)
-      let naturalW = target.naturalWidth
-      let naturalH = target.naturalHeight
-      if (!naturalW || !naturalH) {
-        try {
-          const dims = await getImageDimensions(target.url)
-          naturalW = dims.width
-          naturalH = dims.height
-        } catch {
-          naturalW = target.width
-          naturalH = target.height
-        }
-      }
+      // 1. 获取原图基础物理尺寸与当前缩放倍率
+      const natW = outpaintInitialImage?.naturalWidth || target.naturalWidth || target.width
+      const natH = outpaintInitialImage?.naturalHeight || target.naturalHeight || target.height
+      const initW = outpaintInitialImage?.width || target.width
 
-      // 2. 计算画布显示尺寸到原图物理像素的比例
-      const scaleX = (naturalW || target.width) / target.width
-      const scaleY = (naturalH || target.height) / target.height
+      const scaleMultiplier = initW > 0 ? target.width / initW : 1
+      const baseW = Math.max(64, Math.min(4096, Math.round(natW * scaleMultiplier)))
+      const baseH = Math.max(64, Math.min(4096, Math.round(natH * scaleMultiplier)))
 
-      // 3. 将画布拉伸的视觉边距精确换算为原图物理像素边距
+      // 2. 将画布拉伸的视觉边距精确换算为基准物理像素边距
+      const scaleX = baseW / target.width
+      const scaleY = baseH / target.height
+
       const naturalMargins: OutpaintMargins = {
         top: Math.max(0, Math.round(outpaintMargins.top * scaleY)),
         right: Math.max(0, Math.round(outpaintMargins.right * scaleX)),
@@ -176,11 +257,18 @@ export function App() {
         left: Math.max(0, Math.round(outpaintMargins.left * scaleX)),
       }
 
-      // 4. 以原图原始清晰度向后端提交扩图
+      const totalOutW = baseW + naturalMargins.left + naturalMargins.right
+      const totalOutH = baseH + naturalMargins.top + naturalMargins.bottom
+      if (totalOutW > 4096 || totalOutH > 4096 || totalOutW * totalOutH > 4194304) {
+        alert(`扩图总尺寸 (${totalOutW}×${totalOutH}) 超过 FLUX 400 万像素或 4096px 限制，请缩小原图或调整边距`)
+        return
+      }
+
+      // 3. 提交扩图任务
       const result = await runOutpainting(
         target.url,
-        naturalW,
-        naturalH,
+        baseW,
+        baseH,
         naturalMargins,
         (msg, progress) => {
           updateOperation({ message: msg, progress })
@@ -209,35 +297,45 @@ export function App() {
       })
 
       setOutpaintingImageId(null)
+      setOutpaintInitialImage(null)
+      outpaintingImageIdRef.current = null
+      outpaintInitialImageRef.current = null
       setSelected([newImg.id], 'image')
     } catch (err: any) {
       alert(`扩图失败: ${err.message}`)
     } finally {
       releaseOperation()
     }
-  }, [outpaintingImageId, images, outpaintMargins, claimOperation, updateOperation, releaseOperation, addImage, setSelected])
+  }, [outpaintingImageId, images, outpaintMargins, outpaintInitialImage, claimOperation, updateOperation, releaseOperation, addImage, setSelected])
 
   // 1. 快捷键监听
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!snapshotHydratedRef.current) return
       // 忽略在输入框内的快捷键
-      const isInput = ['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)
+      const target = e.target as HTMLElement | null
+      const isInput =
+        target &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)
       if (isInput) return
 
       if (e.code === 'Space' && !e.repeat) {
+        e.preventDefault()
         setSpacePressed(true)
+        if (mousePosRef.current) {
+          lastMousePosRef.current = { x: mousePosRef.current.x, y: mousePosRef.current.y }
+        }
       }
 
       // 退出扩图 (Escape) / 确认扩图 (Enter)
       if (e.key === 'Escape') {
-        if (outpaintingImageId) {
+        if (outpaintingImageIdRef.current) {
           e.preventDefault()
-          setOutpaintingImageId(null)
+          handleCancelOutpainting()
           return
         }
       } else if (e.key === 'Enter') {
-        if (outpaintingImageId && aiState.status !== 'running') {
+        if (outpaintingImageIdRef.current && aiState.status !== 'running') {
           e.preventDefault()
           handleExecuteOutpainting()
           return
@@ -304,18 +402,53 @@ export function App() {
 
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
+        e.preventDefault()
         setSpacePressed(false)
-        setIsPanning(false)
+        if (!isMouseDownRef.current) {
+          setIsPanning(false)
+        }
       }
     }
 
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
 
-    // 实时记录鼠标屏幕坐标
+    // 实时记录鼠标屏幕坐标与平移追踪（保障零瞬移跳跃）
     const onMouseMoveWindow = (e: MouseEvent) => {
       mousePosRef.current = { x: e.clientX, y: e.clientY }
+
+      // 仅在鼠标真正按下且处于平移状态时执行平移
+      if (isMouseDownRef.current && useViewportStore.getState().isPanning) {
+        const dx = e.clientX - lastMousePosRef.current.x
+        const dy = e.clientY - lastMousePosRef.current.y
+        lastMousePosRef.current = { x: e.clientX, y: e.clientY }
+        if (dx !== 0 || dy !== 0) {
+          panBy(dx, dy)
+        }
+        return
+      }
+
+      // 鼠标未按下时，始终与指针实时同步坐标，彻底杜绝下一次按键或按下时的瞬移跳跃
+      lastMousePosRef.current = { x: e.clientX, y: e.clientY }
     }
+
+    const onMouseUpWindow = () => {
+      if (isMouseDownRef.current && useViewportStore.getState().isPanning) {
+        setIsPanning(false)
+        clearTimeout(wheelTimerRef.current)
+        wheelTimerRef.current = setTimeout(() => {
+          useCanvasStore.setState((s) => ({ isDirty: true, editSequence: (s.editSequence || 0) + 1 }))
+        }, 1000)
+      }
+      isMouseDownRef.current = false
+    }
+
+    const onBlurWindow = () => {
+      setSpacePressed(false)
+      setIsPanning(false)
+      isMouseDownRef.current = false
+    }
+
     const onMouseLeaveWindow = () => {
       mousePosRef.current = null
     }
@@ -422,6 +555,8 @@ export function App() {
     }
 
     window.addEventListener('mousemove', onMouseMoveWindow)
+    window.addEventListener('mouseup', onMouseUpWindow)
+    window.addEventListener('blur', onBlurWindow)
     window.addEventListener('mouseleave', onMouseLeaveWindow)
     window.addEventListener('paste', onPasteWindow)
 
@@ -429,6 +564,8 @@ export function App() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('mousemove', onMouseMoveWindow)
+      window.removeEventListener('mouseup', onMouseUpWindow)
+      window.removeEventListener('blur', onBlurWindow)
       window.removeEventListener('mouseleave', onMouseLeaveWindow)
       window.removeEventListener('paste', onPasteWindow)
     }
@@ -448,6 +585,8 @@ export function App() {
     restoreHistoryDocument,
     addImages,
     screenToCanvas,
+    handleCancelOutpainting,
+    handleExecuteOutpainting,
   ])
 
   // 1.1 外部多图片文件拖拽置入画布 (Drag & Drop)
@@ -585,8 +724,9 @@ export function App() {
       setContextMenu((m) => ({ ...m, visible: false }))
     }
 
-    // 中键、空格或当前是抓手工具：触发平移
-    if (e.button === 1 || isSpacePressed || activeTool === 'hand') {
+    // 中键平移、或者按住空格键点左键、或者抓手工具点左键：触发平移
+    if (e.button === 1 || (e.button === 0 && (isSpacePressed || activeTool === 'hand'))) {
+      e.preventDefault()
       isMouseDownRef.current = true
       setIsPanning(true)
       lastMousePosRef.current = { x: e.clientX, y: e.clientY }
@@ -598,8 +738,10 @@ export function App() {
       e.target === containerRef.current ||
       (e.target as HTMLElement).getAttribute('data-canvas-bg') === 'true'
     if (isCanvasBg) {
+      if (outpaintingImageIdRef.current) {
+        handleCancelOutpainting()
+      }
       clearSelection()
-      setOutpaintingImageId(null)
 
       if (activeTool === 'text') {
         const pt = screenToCanvas({ x: e.clientX, y: e.clientY })
@@ -611,7 +753,7 @@ export function App() {
         return
       }
 
-      if (activeTool === 'select') {
+      if (activeTool === 'select' && e.button === 0) {
         // 开启框选
         setMarqueeStart({ x: e.clientX, y: e.clientY })
         setMarqueeCurrent({ x: e.clientX, y: e.clientY })
@@ -620,14 +762,6 @@ export function App() {
   }
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (isPanning || isSpacePressed) {
-      const dx = e.clientX - lastMousePosRef.current.x
-      const dy = e.clientY - lastMousePosRef.current.y
-      lastMousePosRef.current = { x: e.clientX, y: e.clientY }
-      panBy(dx, dy)
-      return
-    }
-
     if (marqueeStart) {
       setMarqueeCurrent({ x: e.clientX, y: e.clientY })
     }
@@ -1078,6 +1212,9 @@ export function App() {
       ? currentImages.find((im) => im.id === selectedIds[0])
       : null
 
+  // 抓手或平移交互模式（在此模式下子图元不截断点击与移动事件，支持画布全局统一抓取）
+  const isHandOrPanMode = isSpacePressed || activeTool === 'hand' || isPanning
+
   return (
     <div
       ref={containerRef}
@@ -1090,6 +1227,9 @@ export function App() {
           e.target === containerRef.current ||
           (e.target as HTMLElement).getAttribute('data-canvas-bg') === 'true'
         if (isCanvasBackground) {
+          if (outpaintingImageIdRef.current) {
+            handleCancelOutpainting()
+          }
           clearSelection()
         }
         setContextMenu({
@@ -1106,12 +1246,22 @@ export function App() {
         overflow: 'hidden',
         touchAction: 'none',
         overscrollBehavior: 'none',
-        cursor: isPanning || isSpacePressed || activeTool === 'hand' ? 'grab' : activeTool === 'text' ? 'text' : 'default',
+        cursor: isPanning
+          ? 'grabbing'
+          : isSpacePressed || activeTool === 'hand'
+          ? 'grab'
+          : activeTool === 'text'
+          ? 'text'
+          : 'default',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
         backgroundColor: '#f8fafc',
       }}
     >
       {/* 顶部多画板标签栏与存盘指示 */}
-      <TopBar saveStatus={saveStatus} />
+      <div style={{ pointerEvents: isPanning ? 'none' : 'auto' }}>
+        <TopBar saveStatus={saveStatus} />
+      </div>
 
       {/* 点阵网格背景 */}
       <CanvasGrid zoom={zoom} panX={panX} panY={panY} />
@@ -1131,12 +1281,20 @@ export function App() {
       >
         {/* 画板列表 */}
         {currentFrames.map((frame) => (
-          <div key={frame.id} style={{ pointerEvents: 'auto' }}>
+          <div key={frame.id} style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
             <FrameShape
               frame={frame}
               isSelected={selectedType === 'frame' && selectedIds.includes(frame.id)}
-              onSelect={() => setSelected([frame.id], 'frame')}
+              onSelect={() => {
+                if (outpaintingImageIdRef.current) {
+                  handleCancelOutpainting()
+                }
+                setSelected([frame.id], 'frame')
+              }}
               onContextMenu={(e) => {
+                if (outpaintingImageIdRef.current) {
+                  handleCancelOutpainting()
+                }
                 setSelected([frame.id], 'frame')
                 setContextMenu({
                   visible: true,
@@ -1152,12 +1310,15 @@ export function App() {
 
         {/* 图片图元列表 */}
         {currentImages.map((im) => (
-          <div key={im.id} style={{ pointerEvents: 'auto' }}>
+          <div key={im.id} style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
             <ImageShape
               image={im}
               isSelected={selectedType === 'image' && selectedIds.includes(im.id)}
               isSingleSelected={selectedType === 'image' && selectedIds.length === 1 && selectedIds[0] === im.id}
               onSelect={(isShift) => {
+                if (outpaintingImageIdRef.current && outpaintingImageIdRef.current !== im.id) {
+                  handleCancelOutpainting()
+                }
                 if (isShift) {
                   toggleSelected(im.id, 'image')
                 } else {
@@ -1165,6 +1326,9 @@ export function App() {
                 }
               }}
               onContextMenu={(e) => {
+                if (outpaintingImageIdRef.current && outpaintingImageIdRef.current !== im.id) {
+                  handleCancelOutpainting()
+                }
                 if (!selectedIds.includes(im.id)) {
                   setSelected([im.id], 'image')
                 }
@@ -1182,11 +1346,14 @@ export function App() {
 
         {/* 文本图元列表 */}
         {currentTexts.map((txt) => (
-          <div key={txt.id} style={{ pointerEvents: 'auto' }}>
+          <div key={txt.id} style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
             <TextShape
               text={txt}
               isSelected={selectedType === 'text' && selectedIds.includes(txt.id)}
               onSelect={(isShift) => {
+                if (outpaintingImageIdRef.current) {
+                  handleCancelOutpainting()
+                }
                 if (isShift) {
                   toggleSelected(txt.id, 'text')
                 } else {
@@ -1194,6 +1361,9 @@ export function App() {
                 }
               }}
               onContextMenu={(e) => {
+                if (outpaintingImageIdRef.current) {
+                  handleCancelOutpainting()
+                }
                 if (!selectedIds.includes(txt.id)) {
                   setSelected([txt.id], 'text')
                 }
@@ -1214,28 +1384,34 @@ export function App() {
 
         {/* 单选中图片的变换拉伸手柄 Overlay */}
         {singleSelectedImage && !outpaintingImageId && (
-          <SelectionOverlay
-            image={singleSelectedImage}
-            onContextMenu={(e) => {
-              setContextMenu({
-                visible: true,
-                x: e.clientX,
-                y: e.clientY,
-                targetId: singleSelectedImage.id,
-                targetType: 'image',
-              })
-            }}
-          />
+          <div style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
+            <SelectionOverlay
+              image={singleSelectedImage}
+              onContextMenu={(e) => {
+                setContextMenu({
+                  visible: true,
+                  x: e.clientX,
+                  y: e.clientY,
+                  targetId: singleSelectedImage.id,
+                  targetType: 'image',
+                })
+              }}
+            />
+          </div>
         )}
 
         {/* 智能扩图交互外框 */}
         {outpaintingTarget && (
-          <OutpaintingOverlay
-            image={outpaintingTarget}
-            margins={outpaintMargins}
-            onMarginsChange={setOutpaintMargins}
-            isSubmitting={aiState.status === 'running' && aiState.type === 'outpainting'}
-          />
+          <div style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
+            <OutpaintingOverlay
+              image={outpaintingTarget}
+              margins={outpaintMargins}
+              onMarginsChange={setOutpaintMargins}
+              initialImage={outpaintInitialImage}
+              onImageResize={handleOutpaintImageResize}
+              isSubmitting={aiState.status === 'running' && aiState.type === 'outpainting'}
+            />
+          </div>
         )}
       </div>
 
@@ -1243,13 +1419,16 @@ export function App() {
       <MarqueeSelection startScreen={marqueeStart} currentScreen={marqueeCurrent} />
 
       {/* 选中图元的浮动工具条（位于屏幕坐标系） */}
-      <ContextualToolbar
-        isOutpainting={Boolean(outpaintingImageId)}
-        outpaintMargins={outpaintMargins}
-        onStartOutpainting={handleStartOutpainting}
-        onExecuteOutpainting={handleExecuteOutpainting}
-        onCancelOutpainting={handleCancelOutpainting}
-      />
+      <div style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
+        <ContextualToolbar
+          isOutpainting={Boolean(outpaintingImageId)}
+          outpaintMargins={outpaintMargins}
+          outpaintInitialImage={outpaintInitialImage}
+          onStartOutpainting={handleStartOutpainting}
+          onExecuteOutpainting={handleExecuteOutpainting}
+          onCancelOutpainting={handleCancelOutpainting}
+        />
+      </div>
 
       {/* 自定义右键上下文菜单 */}
       <ContextMenu
@@ -1278,13 +1457,19 @@ export function App() {
       )}
 
       {/* 竖向浮动右侧工具坞 */}
-      <BottomToolbar />
+      <div style={{ pointerEvents: isPanning ? 'none' : 'auto' }}>
+        <BottomToolbar />
+      </div>
 
       {/* 左下角鸟瞰图 / Minimap 导航器 */}
-      <Minimap />
+      <div style={{ pointerEvents: isPanning ? 'none' : 'auto' }}>
+        <Minimap />
+      </div>
 
       {/* 右下角缩放控制条 */}
-      <CanvasZoomBar />
+      <div style={{ pointerEvents: isPanning ? 'none' : 'auto' }}>
+        <CanvasZoomBar />
+      </div>
 
       {/* 外部多图拖拽放置指示浮层 */}
       {isDraggingFiles && (

@@ -42,8 +42,7 @@ function SnapGuidesInner({ lines: propLines }: Props) {
                 top,
                 width: lineWidth,
                 height,
-                backgroundColor: '#f43f5e',
-                boxShadow: '0 0 1px rgba(244, 63, 94, 0.4)',
+                backgroundColor: '#181b24',
                 transform: 'translateX(-50%)',
               }}
             />
@@ -61,8 +60,7 @@ function SnapGuidesInner({ lines: propLines }: Props) {
               top: line.pos,
               width,
               height: lineWidth,
-              backgroundColor: '#f43f5e',
-              boxShadow: '0 0 1px rgba(244, 63, 94, 0.4)',
+              backgroundColor: '#181b24',
               transform: 'translateY(-50%)',
             }}
           />

@@ -15,6 +15,12 @@ import { downloadImagesAsZip } from '../utils/zipDownload'
 interface Props {
   isOutpainting?: boolean
   outpaintMargins?: OutpaintMargins
+  outpaintInitialImage?: {
+    width: number
+    height: number
+    naturalWidth: number
+    naturalHeight: number
+  } | null
   onStartOutpainting: (imageId: string) => void
   onExecuteOutpainting?: () => void
   onCancelOutpainting?: () => void
@@ -108,6 +114,7 @@ function DesignflowToolbarIcon({ name }: { name: 'download' | 'outpaint' | 'upsc
 export function ContextualToolbar({
   isOutpainting = false,
   outpaintMargins,
+  outpaintInitialImage,
   onStartOutpainting,
   onExecuteOutpainting,
   onCancelOutpainting,
@@ -387,6 +394,27 @@ export function ContextualToolbar({
   const isAiBusy = aiState.status === 'running'
   const isOutpaintBusy = isAiBusy && aiState.type === 'outpainting'
 
+  // 扩图原图物理尺寸与最终出图分辨率估算
+  const natW = outpaintInitialImage?.naturalWidth || firstImage?.naturalWidth || firstImage?.width || 0
+  const natH = outpaintInitialImage?.naturalHeight || firstImage?.naturalHeight || firstImage?.height || 0
+  const initW = outpaintInitialImage?.width || firstImage?.width || 1
+  const currentMultiplier = initW > 0 && firstImage ? firstImage.width / initW : 1
+  const phyW = Math.round(natW * currentMultiplier)
+  const phyH = Math.round(natH * currentMultiplier)
+
+  const scaleX = firstImage?.width ? phyW / firstImage.width : 1
+  const scaleY = firstImage?.height ? phyH / firstImage.height : 1
+  const phyTop = Math.max(0, Math.round((outpaintMargins?.top || 0) * scaleY))
+  const phyRight = Math.max(0, Math.round((outpaintMargins?.right || 0) * scaleX))
+  const phyBottom = Math.max(0, Math.round((outpaintMargins?.bottom || 0) * scaleY))
+  const phyLeft = Math.max(0, Math.round((outpaintMargins?.left || 0) * scaleX))
+
+  const totalOutW = phyW + phyLeft + phyRight
+  const totalOutH = phyH + phyTop + phyBottom
+  const totalPixels = totalOutW * totalOutH
+  const isOverLimit = totalOutW > 4096 || totalOutH > 4096 || totalPixels > 4194304
+  const totalMegaPixels = (totalPixels / 1_000_000).toFixed(2)
+
   return (
     <div
       onMouseDown={(e) => e.stopPropagation()}
@@ -416,13 +444,38 @@ export function ContextualToolbar({
 
             {/* 2. 智能扩图 / 生成 */}
             {isOutpainting ? (
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                {/* 最终尺寸指示 */}
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: '3px 7px',
+                    borderRadius: 5,
+                    backgroundColor: isOverLimit ? '#fef2f2' : '#f8fafc',
+                    color: isOverLimit ? '#dc2626' : '#334155',
+                    border: `1px solid ${isOverLimit ? '#fecaca' : '#e2e8f0'}`,
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={
+                    isOverLimit
+                      ? `最终尺寸 ${totalOutW}×${totalOutH} (${totalMegaPixels}MP) 超过 FLUX 400万像素上限，请缩小原图或边距`
+                      : `预计最终出图: ${totalOutW} × ${totalOutH} px (${totalMegaPixels} MP)`
+                  }
+                >
+                  <span>{isOverLimit ? '⚠️ 超出上限' : `最终 ${totalOutW}×${totalOutH}`}</span>
+                </div>
+
                 <button
                   onClick={onExecuteOutpainting}
                   className="designflow-toolbar-button designflow-toolbar-button-ai"
                   data-composing="true"
-                  title="点击开始 FLUX 扩图 (Enter)"
-                  disabled={isAiBusy}
+                  title={isOverLimit ? '超出 FLUX 400万像素上限，无法生成' : '点击开始 FLUX 扩图 (Enter)'}
+                  disabled={isAiBusy || isOverLimit}
+                  style={isOverLimit ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
                 >
                   {isOutpaintBusy ? (
                     <span className="designflow-upscale-spinner" />

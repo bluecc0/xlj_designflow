@@ -2004,6 +2004,12 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
   const [typeTipVisible, setTypeTipVisible] = React.useState(false);
+  const [quickPrompts, setQuickPrompts] = React.useState([]);
+  const [quickPromptsLoaded, setQuickPromptsLoaded] = React.useState(false);
+  const [quickPromptsLoading, setQuickPromptsLoading] = React.useState(false);
+  const [quickPromptsSearch, setQuickPromptsSearch] = React.useState('');
+  const [quickPromptEditing, setQuickPromptEditing] = React.useState(null);
+  const [quickPromptSaving, setQuickPromptSaving] = React.useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = React.useState('chat');
   const [agentSkills, setAgentSkills] = React.useState([]);
   const [selectedSkill, setSelectedSkill] = React.useState('');
@@ -2594,6 +2600,101 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     });
   }, []);
 
+  const loadQuickPrompts = React.useCallback(function() {
+    if (!window.API || !window.API.listQuickPrompts) return;
+    setQuickPromptsLoading(true);
+    window.API.listQuickPrompts()
+      .then(function(prompts) {
+        setQuickPrompts(Array.isArray(prompts) ? prompts : []);
+        setQuickPromptsLoaded(true);
+      })
+      .catch(function(err) {
+        console.error('加载常用语失败', err);
+      })
+      .finally(function() {
+        setQuickPromptsLoading(false);
+      });
+  }, []);
+
+  React.useEffect(function() {
+    if (prototypePanel === 'quick_prompts') {
+      loadQuickPrompts();
+    }
+  }, [prototypePanel, loadQuickPrompts]);
+
+  const insertPromptToComposer = React.useCallback(function(snippet) {
+    if (!snippet) return;
+    setText(function(prev) {
+      const current = String(prev || '');
+      const input = taRef.current;
+      if (!input || !current.trim()) {
+        const next = snippet;
+        setTimeout(function() {
+          if (!taRef.current) return;
+          taRef.current.focus();
+          const pos = next.length;
+          taRef.current.setSelectionRange(pos, pos);
+        }, 0);
+        return next;
+      }
+      const start = input.selectionStart ?? current.length;
+      const end = input.selectionEnd ?? current.length;
+      const needsLeadingSpace = start > 0 && !/\s$/.test(current.slice(0, start));
+      const needsTrailingSpace = end < current.length && !/^\s/.test(current.slice(end));
+      const inserted = (needsLeadingSpace ? ' ' : '') + snippet + (needsTrailingSpace ? ' ' : '');
+      const next = current.slice(0, start) + inserted + current.slice(end);
+      setTimeout(function() {
+        if (!taRef.current) return;
+        taRef.current.focus();
+        const newPos = start + inserted.length;
+        taRef.current.setSelectionRange(newPos, newPos);
+      }, 0);
+      return next;
+    });
+    setPrototypePanel('');
+    setQuickPromptEditing(null);
+  }, []);
+
+  const handleDeleteQuickPrompt = React.useCallback(function(id) {
+    if (!id || !window.API || !window.API.deleteQuickPrompt) return;
+    window.API.deleteQuickPrompt(id)
+      .then(function() {
+        setQuickPrompts(function(prev) { return prev.filter(function(p) { return p.id !== id; }); });
+      })
+      .catch(function(err) {
+        console.error('删除常用语失败', err);
+      });
+  }, []);
+
+  const handleSaveQuickPrompt = React.useCallback(function() {
+    if (!quickPromptEditing || !window.API) return;
+    const content = String(quickPromptEditing.content || '').trim();
+    if (!content) return;
+    setQuickPromptSaving(true);
+    const promise = quickPromptEditing.id
+      ? window.API.updateQuickPrompt(quickPromptEditing.id, { content: content, title: content.slice(0, 30) })
+      : window.API.createQuickPrompt({ content: content, title: content.slice(0, 30) });
+
+    promise
+      .then(function(saved) {
+        if (!saved) return;
+        setQuickPrompts(function(prev) {
+          if (quickPromptEditing.id) {
+            return prev.map(function(p) { return p.id === saved.id ? saved : p; });
+          } else {
+            return [saved].concat(prev.filter(function(p) { return p.id !== saved.id; }));
+          }
+        });
+        setQuickPromptEditing(null);
+      })
+      .catch(function(err) {
+        console.error('保存常用语失败', err);
+      })
+      .finally(function() {
+        setQuickPromptSaving(false);
+      });
+  }, [quickPromptEditing]);
+
   const handleKeyDown = (e) => {
     const el = taRef.current;
     const start = el ? el.selectionStart : 0;
@@ -3117,18 +3218,22 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       minHeight: 30,
     };
   };
-  const protoPanelShell = function(children, width) {
+  const protoPanelShell = function(children, width, options) {
     // width:
     // - 'fluid'  → 贴父容器左右，略缩进
     // - 'fill'   → 贴满父容器内容区（用于生图参数，对齐输入框）
     // - number   → 固定宽度
     const fluid = width === 'fluid';
     const fill = width === 'fill';
+    const alignRight = Boolean(options && options.align === 'right');
     return React.createElement(React.Fragment, null,
       // 透明 backdrop：点击面板外任意位置自动关闭
       React.createElement('div', {
         key: 'backdrop',
-        onClick: function() { setPrototypePanel(''); },
+        onClick: function() {
+          setPrototypePanel('');
+          setQuickPromptEditing(null);
+        },
         style: {
           position: 'fixed', inset: 0, zIndex: 19,
         }
@@ -3137,11 +3242,14 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
         key: 'panel',
         style: {
           position: 'absolute',
-          left: fill ? 0 : (fluid ? 8 : 0),
-          right: fill ? 0 : (fluid ? 8 : 'auto'),
+          left: fill ? 0 : (fluid ? 8 : (alignRight ? 'auto' : 0)),
+          right: fill ? 0 : (fluid ? 8 : (alignRight ? 0 : 'auto')),
           bottom: 58,
           width: fill || fluid ? 'auto' : (width || 360),
           maxWidth: fill || fluid ? 'none' : 'calc(100vw - 36px)',
+          maxHeight: 'min(480px, calc(100vh - 100px))',
+          display: 'flex',
+          flexDirection: 'column',
           borderRadius: 14,
           border: '1px solid var(--line)',
           background: 'var(--panel)',
@@ -3723,6 +3831,303 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
         )
       ), isImageParams ? 'fill' : 'fluid');
     }
+    if (prototypePanel === 'quick_prompts') {
+      const filtered = quickPrompts.filter(function(p) {
+        if (!quickPromptsSearch.trim()) return true;
+        const kw = quickPromptsSearch.trim().toLowerCase();
+        return String(p.content || '').toLowerCase().indexOf(kw) !== -1 ||
+               String(p.title || '').toLowerCase().indexOf(kw) !== -1;
+      });
+
+      if (quickPromptEditing) {
+        return protoPanelShell(React.createElement(React.Fragment, null,
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 8, borderBottom: '1px solid var(--line)' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+              React.createElement('button', {
+                type: 'button',
+                onClick: function() { setQuickPromptEditing(null); },
+                style: { border: 'none', background: 'transparent', color: 'var(--ink-2)', cursor: 'pointer', padding: '2px 4px', fontSize: 12 }
+              }, '← 返回'),
+              React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: 'var(--ink)' } },
+                quickPromptEditing.id ? '编辑常用语' : '新建常用语'
+              )
+            )
+          ),
+          React.createElement('div', { style: { marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 } },
+            React.createElement('textarea', {
+              rows: 5,
+              autoFocus: true,
+              value: quickPromptEditing.content || '',
+              onChange: function(e) {
+                const val = e.target.value;
+                setQuickPromptEditing(function(prev) { return Object.assign({}, prev, { content: val }); });
+              },
+              placeholder: '输入常用提示词内容...',
+              style: {
+                width: '100%',
+                padding: '10px',
+                borderRadius: 8,
+                border: '1px solid var(--line)',
+                background: 'var(--panel-2)',
+                fontSize: 12.5,
+                color: 'var(--ink)',
+                outline: 'none',
+                boxSizing: 'border-box',
+                resize: 'vertical',
+                fontFamily: 'inherit',
+                lineHeight: 1.5,
+              }
+            }),
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } },
+              React.createElement('button', {
+                type: 'button',
+                onClick: function() { setQuickPromptEditing(null); },
+                style: {
+                  height: 28,
+                  padding: '0 12px',
+                  borderRadius: 6,
+                  border: '1px solid var(--line)',
+                  background: 'transparent',
+                  color: 'var(--ink-2)',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }
+              }, '取消'),
+              React.createElement('button', {
+                type: 'button',
+                disabled: quickPromptSaving || !String(quickPromptEditing.content || '').trim(),
+                onClick: handleSaveQuickPrompt,
+                style: {
+                  height: 28,
+                  padding: '0 14px',
+                  borderRadius: 6,
+                  border: 'none',
+                  background: 'var(--ink)',
+                  color: 'white',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: quickPromptSaving ? 'wait' : 'pointer',
+                  opacity: !String(quickPromptEditing.content || '').trim() ? 0.5 : 1,
+                }
+              }, quickPromptSaving ? '保存中...' : '保存')
+            )
+          )
+        ), 380, { align: 'right' });
+      }
+
+      return protoPanelShell(React.createElement(React.Fragment, null,
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingBottom: 8, borderBottom: '1px solid var(--line)' } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+            React.createElement(I.bookmark, { size: 14, style: { color: 'var(--ink)' } }),
+            React.createElement('span', { style: { fontSize: 13.5, fontWeight: 700, color: 'var(--ink)' } }, '常用语'),
+            React.createElement('span', {
+              style: {
+                fontSize: 10.5,
+                fontWeight: 600,
+                padding: '1px 6px',
+                borderRadius: 999,
+                background: 'var(--panel-2)',
+                color: 'var(--ink-3)',
+              }
+            }, String(filtered.length))
+          ),
+          React.createElement('button', {
+            type: 'button',
+            onClick: function() {
+              setQuickPromptEditing({ id: null, content: '' });
+            },
+            style: {
+              height: 26,
+              padding: '0 8px',
+              borderRadius: 6,
+              border: '1px solid var(--line)',
+              background: 'var(--panel)',
+              color: 'var(--ink)',
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+            }
+          },
+            React.createElement(I.plus, { size: 10 }),
+            '新建'
+          )
+        ),
+        React.createElement('div', { style: { position: 'relative', marginTop: 10 } },
+          React.createElement('input', {
+            type: 'text',
+            value: quickPromptsSearch,
+            onChange: function(e) { setQuickPromptsSearch(e.target.value); },
+            placeholder: '搜索常用语...',
+            style: {
+              width: '100%',
+              height: 30,
+              padding: '0 10px 0 28px',
+              borderRadius: 8,
+              border: '1px solid var(--line)',
+              background: 'var(--panel-2)',
+              fontSize: 11.5,
+              color: 'var(--ink)',
+              outline: 'none',
+              boxSizing: 'border-box',
+            }
+          }),
+          React.createElement('div', {
+            style: {
+              position: 'absolute',
+              left: 8,
+              top: 8,
+              color: 'var(--ink-3)',
+              pointerEvents: 'none',
+              display: 'grid',
+              placeItems: 'center',
+            }
+          }, React.createElement(I.search, { size: 13 }))
+        ),
+        React.createElement('div', {
+          style: {
+            marginTop: 10,
+            maxHeight: 280,
+            overflowY: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 7,
+          }
+        },
+          quickPromptsLoading && quickPrompts.length === 0 ? React.createElement('div', {
+            style: { padding: '24px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 12 }
+          }, '加载中...') : (
+            filtered.length === 0 ? React.createElement('div', {
+              style: { padding: '24px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 12 }
+            },
+              React.createElement('div', null, quickPrompts.length === 0 ? '暂无常用语' : '未找到相关常用语'),
+              quickPrompts.length === 0 ? React.createElement('button', {
+                type: 'button',
+                onClick: function() {
+                  if (window.API && window.API.seedDefaultQuickPrompts) {
+                    setQuickPromptsLoading(true);
+                    window.API.seedDefaultQuickPrompts()
+                      .then(function(res) { setQuickPrompts(res || []); })
+                      .finally(function() { setQuickPromptsLoading(false); });
+                  }
+                },
+                style: {
+                  marginTop: 10,
+                  padding: '5px 12px',
+                  borderRadius: 6,
+                  border: '1px solid var(--line)',
+                  background: 'var(--panel-2)',
+                  color: 'var(--ink)',
+                  fontSize: 11,
+                  cursor: 'pointer',
+                }
+              }, '导入推荐预设') : null
+            ) : filtered.map(function(p) {
+              return React.createElement('div', {
+                key: p.id,
+                onClick: function() { insertPromptToComposer(p.content); },
+                title: '点击直接填入输入框',
+                style: {
+                  padding: '9px 11px',
+                  borderRadius: 8,
+                  border: '1px solid var(--line)',
+                  background: 'var(--panel-2)',
+                  cursor: 'pointer',
+                  position: 'relative',
+                  transition: 'background 120ms, border-color 120ms',
+                },
+                onMouseEnter: function(e) {
+                  e.currentTarget.style.borderColor = 'var(--ink-3)';
+                  e.currentTarget.style.background = 'var(--panel)';
+                  const actions = e.currentTarget.querySelector('.qp-actions');
+                  if (actions) actions.style.opacity = '1';
+                },
+                onMouseLeave: function(e) {
+                  e.currentTarget.style.borderColor = 'var(--line)';
+                  e.currentTarget.style.background = 'var(--panel-2)';
+                  const actions = e.currentTarget.querySelector('.qp-actions');
+                  if (actions) actions.style.opacity = '0';
+                }
+              },
+                React.createElement('div', {
+                  className: 'qp-actions',
+                  style: {
+                    position: 'absolute',
+                    top: 6,
+                    right: 6,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 3,
+                    opacity: 0,
+                    transition: 'opacity 120ms',
+                    background: 'var(--panel)',
+                    padding: '2px',
+                    borderRadius: 6,
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
+                  }
+                },
+                  React.createElement('button', {
+                    type: 'button',
+                    title: '编辑',
+                    onClick: function(e) {
+                      e.stopPropagation();
+                      setQuickPromptEditing(p);
+                    },
+                    style: {
+                      width: 20,
+                      height: 20,
+                      borderRadius: 4,
+                      border: 'none',
+                      background: 'transparent',
+                      color: 'var(--ink-3)',
+                      cursor: 'pointer',
+                      display: 'grid',
+                      placeItems: 'center',
+                      padding: 0,
+                    }
+                  }, React.createElement(I.edit, { size: 11 })),
+                  React.createElement('button', {
+                    type: 'button',
+                    title: '删除',
+                    onClick: function(e) {
+                      e.stopPropagation();
+                      handleDeleteQuickPrompt(p.id);
+                    },
+                    style: {
+                      width: 20,
+                      height: 20,
+                      borderRadius: 4,
+                      border: 'none',
+                      background: 'transparent',
+                      color: 'var(--ink-3)',
+                      cursor: 'pointer',
+                      display: 'grid',
+                      placeItems: 'center',
+                      padding: 0,
+                    }
+                  }, React.createElement(I.trash, { size: 11 }))
+                ),
+                React.createElement('div', {
+                  style: {
+                    fontSize: 12,
+                    color: 'var(--ink)',
+                    lineHeight: 1.5,
+                    display: '-webkit-box',
+                    WebkitLineClamp: 3,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                    wordBreak: 'break-word',
+                    paddingRight: 16,
+                  }
+                }, p.content)
+              );
+            })
+          )
+        )
+      ), 380, { align: 'right' });
+    }
     return null;
   };
 
@@ -4068,6 +4473,11 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
             <I.paperclip size={14}/>
           </button>
           <div style={{ flex: 1 }}/>
+          {prototypeToolButton('quick_prompts', '常用语', React.createElement(I.bookmark, { size: 14 }), null, {
+            width: 34,
+            minWidth: 34,
+            height: 34,
+          })}
           <button
             onClick={handleSend}
             style={{
@@ -4953,11 +5363,18 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                       prompt: finalPrompt,
                       originalPrompt: (statusData && statusData.original_prompt) || originalPrompt || finalPrompt,
                       resolvedPrompt: (statusData && statusData.resolved_prompt) || plannedPrompt || finalPrompt,
+                      promptTrace: (statusData && statusData.prompt_trace) || plannedPromptTrace || '',
                       model: model,
                       provider: (statusData && statusData.provider) || provider,
                       jobId: jobId,
+                      clientRequestId: clientRequestId,
                       size: aiOptions.size || '1024x1024',
                       resolution: aiOptions.resolution || '1K',
+                      variant: (statusData && statusData.variant) || aiOptions.variant || 'flare',
+                      quality: quality || 'auto',
+                      skill: activeSkill || '',
+                      hasReference: refImages.length > 0,
+                      refCount: refImages.length,
                       createdAt: Date.now(),
                     });
                     tryFlushCollected();
@@ -5161,11 +5578,18 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
                     prompt: finalPrompt,
                     originalPrompt: (t && t.original_prompt) || originalPrompt || finalPrompt,
                     resolvedPrompt: plannedPrompt || finalPrompt,
+                    promptTrace: plannedPromptTrace || '',
                     model: model,
                     provider: t.provider || provider,
                     jobId: jid,
+                    clientRequestId: clientRequestId,
                     size: aiOptions.size || '1024x1024',
                     resolution: aiOptions.resolution || '1K',
+                    variant: (t && t.variant) || aiOptions.variant || 'flare',
+                    quality: quality || 'auto',
+                    skill: activeSkill || '',
+                    hasReference: refImages.length > 0,
+                    refCount: refImages.length,
                     createdAt: Date.now(),
                   });
                 }

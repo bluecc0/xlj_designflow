@@ -182,7 +182,7 @@ class ImagePreparationTest(unittest.TestCase):
         with self.assertRaisesRegex(bfl.OutpaintingValidationError, "每边至少 64px"):
             bfl._validate_fast_mode_geometry(prepared, geometry)
 
-    def test_rejects_non_proportional_or_upscaled_processing_size(self) -> None:
+    def test_processing_size_upscale_downscale_and_validation(self) -> None:
         common = {
             "max_source_bytes": 1024 * 1024,
             "max_source_pixels": 1024 * 1024,
@@ -195,11 +195,32 @@ class ImagePreparationTest(unittest.TestCase):
                 processing_height=30,
                 **common,
             )
-        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "不能放大"):
+        # 支持等比例缩小
+        downscaled = bfl.prepare_outpainting_image(
+            png_data_uri((100, 50)),
+            processing_width=50,
+            processing_height=25,
+            **common,
+        )
+        self.assertEqual(downscaled.processing_width, 50)
+        self.assertEqual(downscaled.processing_height, 25)
+
+        # 支持等比例放大
+        upscaled = bfl.prepare_outpainting_image(
+            png_data_uri((100, 50)),
+            processing_width=200,
+            processing_height=100,
+            **common,
+        )
+        self.assertEqual(upscaled.processing_width, 200)
+        self.assertEqual(upscaled.processing_height, 100)
+
+        # 超过最大限制时报错
+        with self.assertRaisesRegex(bfl.OutpaintingValidationError, "不能超过 4096"):
             bfl.prepare_outpainting_image(
                 png_data_uri((100, 50)),
-                processing_width=200,
-                processing_height=100,
+                processing_width=5000,
+                processing_height=2500,
                 **common,
             )
 

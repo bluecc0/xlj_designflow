@@ -417,13 +417,16 @@ def _processing_size(
         raise OutpaintingValidationError("processing_width 和 processing_height 必须同时提供")
     width = strict_int(processing_width, "processing_width", minimum=1)
     height = strict_int(processing_height, "processing_height", minimum=1)
-    if width > source_width or height > source_height:
-        raise OutpaintingValidationError("处理尺寸只能按比例缩小，不能放大源图片")
+    if width > MAX_OUTPUT_SIDE or height > MAX_OUTPUT_SIDE:
+        raise OutpaintingValidationError(f"处理尺寸不能超过 {MAX_OUTPUT_SIDE} × {MAX_OUTPUT_SIDE}px")
+    if width * height > MAX_OUTPUT_PIXELS:
+        raise OutpaintingValidationError(f"处理尺寸不能超过 {MAX_OUTPUT_PIXELS} 像素")
     # Integer resize dimensions may differ by one rounding pixel while preserving the
     # source aspect ratio. Larger distortion is rejected because the canvas preview
     # and provider input would no longer describe the same geometry.
     ratio_error = abs(width * source_height - height * source_width)
-    if ratio_error > max(source_width, source_height):
+    max_tolerance = max(source_width, source_height, width, height)
+    if ratio_error > max_tolerance:
         raise OutpaintingValidationError("处理尺寸必须与源图片保持相同比例")
     return width, height
 
@@ -437,7 +440,7 @@ def prepare_outpainting_image(
     max_source_pixels: int,
     max_encoded_input_bytes: int,
 ) -> PreparedOutpaintingImage:
-    """Validate, decode and optionally proportionally downscale a source image."""
+    """Validate, decode and optionally resize (proportionally upscale or downscale) a source image."""
     payload, declared_mime = _read_source_bytes(source, max_source_bytes)
     image, source_format, source_width, source_height = _validated_loaded_image(
         payload,

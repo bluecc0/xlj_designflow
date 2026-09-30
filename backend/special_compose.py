@@ -20,7 +20,7 @@ Slot 字段映射（特殊品版）：
   slot/product_1/time_hour     → 仅时间部分：如 "10:00发售"
   slot/product_1/time_hour_c   → 中文时间部分：如 "10点发售"
   slot/product_1/time_cn       → 纯中文文本时间（无后缀）：如 "8月15日 10:00"
-  slot/product_1/time_4        → 日期+火爆发售中：如 "9/19 火爆发售中"
+  slot/product_1/time_4        → 日期+火爆发售：如 "9/19 火爆发售"
 
 与主流程的隔离：
 - 入口为 POST /special-compose，独立端点
@@ -233,12 +233,12 @@ def expand_time_fields(raw_time: str) -> dict[str, str]:
     else:
         result["time_c"] = f"{date_part} {hour_formatted}".strip() if date_part or hour_formatted else raw
 
-    # time_4：取日期部分 + " 火爆发售中"
-    # 例："9月19日10点发售" → "9/19 火爆发售中"
+    # time_4：取日期部分 + " 火爆发售"
+    # 例："9月19日10点发售" → "9/19 火爆发售"
     if date_part:
-        result["time_4"] = f"{date_part} 火爆发售中"
+        result["time_4"] = f"{date_part} 火爆发售"
     elif raw:
-        result["time_4"] = f"{raw} 火爆发售中"
+        result["time_4"] = f"{raw} 火爆发售"
     else:
         result["time_4"] = ""
 
@@ -308,7 +308,7 @@ def _run_inner(job: SpecialComposeJob) -> None:
         merged_fields["time_hour_c"] = time_expanded["time_hour_c"]   # 始终覆盖（中文小时文案）
         merged_fields["time_c"] = time_expanded["time_c"]             # 完整中文原始时间
         merged_fields["time_cn"] = time_expanded["time_cn"]           # 纯中文文本时间（无后缀，如 8月15日 10:00）
-        merged_fields["time_4"] = time_expanded["time_4"]             # 日期 + 火爆发售中
+        merged_fields["time_4"] = time_expanded["time_4"]             # 日期 + 火爆发售
         # 如果 time slot 需要的是格式化版本（如"3/28 10:00发售"），此处覆盖
         if raw_time and time_expanded["time"] != raw_time:
             # 用户传入了原始时间文案，将格式化版本存到 time，原始文案存到 time_raw
