@@ -2882,6 +2882,15 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           : selectedWorkflow === 'distribute'
             ? (smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量')
             : '';
+  const isSub2ApiRoute = activeMode === 'ai-image' && (
+    aiProvider === 'sub2api' ||
+    (
+      aiProvider === 'auto' &&
+      (activeAiModel === 'gpt-image-2.5' || activeAiModel === 'gpt-image-2') &&
+      (aiQuality === '1K' || !aiQuality) &&
+      !(activeAiModel === 'gpt-image-2.5' && (aiQualityTier === 'max' || aiQualityTier === 'xhigh'))
+    )
+  );
   const selectedSettingBits = [
     activeSkillInfo ? ('$' + activeSkillInfo.name) : '',
     activeSkillInfo ? '' : (agentEnabled ? 'Agent' : activeTaskLabel),
@@ -3954,9 +3963,10 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           width: 6,
           height: 6,
           borderRadius: 999,
-          background: agentEnabled ? 'var(--ink)' : 'var(--accent)',
+          background: isSub2ApiRoute ? 'var(--ok)' : (agentEnabled ? 'var(--ink)' : 'var(--accent)'),
           flexShrink: 0,
-        }}/>
+          transition: 'background 160ms ease',
+        }} title={isSub2ApiRoute ? 'Sub2API 渠道' : undefined}/>
         <div style={{
           display: 'flex',
           gap: 8,

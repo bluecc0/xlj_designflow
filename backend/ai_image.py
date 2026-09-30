@@ -2124,6 +2124,7 @@ def get_smart_route_candidates(
     resolution: str = "",
     size: str = "1024x1024",
     variant: str = "flare",
+    quality: str = "",
     *,
     filter_frozen: bool = True,
     now: float | None = None,
@@ -2140,13 +2141,17 @@ def get_smart_route_candidates(
     if not res_upper:
         _ratio, res_clean = _normalize_size(size, resolution)
         res_upper = res_clean.upper() if res_clean else "1K"
+    quality_lower = (quality or "").strip().lower()
 
     # 1. 根据模型与画质分辨率选择匹配规则（环境 JSON 显式规则优先）
     if custom_rules and model_name in custom_rules:
         preferred_order = custom_rules[model_name]
     elif model_name == "gpt-image-2.5" or model_name in _APIMART_GPT_IMAGE_25_MODELS:
         effective_variant = "sunburst" if (variant_name == "sunburst" or model_name == "gpt-image-2.5-sunburst") else "flare"
-        if res_upper == "1K":
+        if quality_lower in ("max", "xhigh", "high"):
+            # 高质量/最高质量仅官方 APIMart 支持，Sub2API 不支持该画质档位，优先路由至 APIMart
+            preferred_order = [PROVIDER_APIMART]
+        elif res_upper == "1K":
             if effective_variant == "flare":
                 preferred_order = [PROVIDER_SUB2API, PROVIDER_TUZI, PROVIDER_APIMART]
             else:
@@ -2235,7 +2240,7 @@ async def smart_generate_image_async(
     前端只有两个失败出口：明确的上游安全审核拦截，或全部线路完成两轮后仍失败。
     是否已提交上游由各 provider 的 on_accepted 明确信号决定；已接受的同一线路不重复提交。
     """
-    candidates = get_smart_route_candidates(model, resolution=resolution, size=size, variant=variant)
+    candidates = get_smart_route_candidates(model, resolution=resolution, size=size, variant=variant, quality=quality)
     logger.info("[smart-routing] Candidate providers for model=%s variant=%s res=%s size=%s: %s",
                 model, variant, resolution, size, candidates)
     if not candidates:

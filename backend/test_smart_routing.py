@@ -71,6 +71,15 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                 ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", variant="sunburst"),
                 ["sub2api", "apimart"],
             )
+            # 最高质量 (max) 与高质量 (xhigh) 优先/仅路由到 APIMart（Sub2API 不支持高画质档位）
+            self.assertEqual(
+                ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", quality="max"),
+                ["apimart"],
+            )
+            self.assertEqual(
+                ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", quality="xhigh"),
+                ["apimart"],
+            )
 
     def test_gpt_image_25_route_ignores_adobe(self) -> None:
         with patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api:8080"), \
