@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 from starlette.requests import Request
 
@@ -21,9 +23,16 @@ def _mock_request(user_id: str) -> Request:
 
 class QuickPromptsTest(unittest.TestCase):
     def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_db_path = job_store._DB_PATH
+        job_store._DB_PATH = Path(self.temp_dir.name) / "test_quick_prompts.db"
         job_store.init_db()
         self.user_a = f"test_user_a_{uuid.uuid4().hex[:8]}"
         self.user_b = f"test_user_b_{uuid.uuid4().hex[:8]}"
+
+    def tearDown(self) -> None:
+        job_store._DB_PATH = self.original_db_path
+        self.temp_dir.cleanup()
 
     def test_default_seeding_on_first_list(self) -> None:
         prompts = job_store.list_quick_prompts(self.user_a)

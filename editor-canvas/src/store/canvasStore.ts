@@ -292,11 +292,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   switchPage: (pageId) => {
-    set({
+    set((s) => withMutation(s, {
       activePageId: pageId,
       selectedIds: [],
       selectedType: null,
-    })
+    }))
   },
 
   renamePage: (pageId, name) => {
@@ -418,7 +418,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   toggleGroupCollapse: (groupId) => {
-    set((s) => ({
+    set((s) => withMutation(s, {
       groups: (s.groups || []).map((g) =>
         g.id === groupId ? { ...g, collapsed: !g.collapsed } : g
       ),
@@ -1251,45 +1251,59 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const groups: CanvasPageGroup[] = Array.isArray(doc.groups) ? doc.groups : []
     let activePageId = doc.activePageId || pages[0].id
 
-    // 画板水合（支持为空 []）
-    const frames: CanvasFrame[] = (Array.isArray(doc.frames) ? doc.frames : []).map((f: any) => ({
-      ...f,
-      pageId: f.pageId || pages[0].id,
-    }))
+    // 仅在旧版本未迁移快照（!doc.version || doc.version < 2）加载时执行一次性冗余空页面迁移
+    const isLegacySnapshot = !doc.version || doc.version < 2
+    if (isLegacySnapshot) {
+      const pageHasContent = (pageId: string) =>
+        (Array.isArray(doc.frames) && doc.frames.some((f: any) => f.pageId === pageId)) ||
+        (Array.isArray(doc.images) && doc.images.some((im: any) => im.pageId === pageId)) ||
+        (Array.isArray(doc.texts) && doc.texts.some((t: any) => t.pageId === pageId))
 
-    // 图片水合
-    const images: CanvasImage[] = (Array.isArray(doc.images) ? doc.images : []).map((im: any) => ({
-      ...im,
-      pageId: im.pageId || pages[0].id,
-    }))
+      // 旧快照智能画板纠正：若 activePageId 无内容但历史页面有内容，优先激活最近有内容的画板
+      if (!pageHasContent(activePageId)) {
+        const lastContentPage = [...pages].reverse().find((p) => pageHasContent(p.id))
+        if (lastContentPage) {
+          activePageId = lastContentPage.id
+        }
+      }
 
-    // 文本水合
-    const texts: CanvasText[] = (Array.isArray(doc.texts) ? doc.texts : []).map((t: any) => ({
-      ...t,
-      pageId: t.pageId || pages[0].id,
-    }))
-
-    // 智能画板纠正：如果当前 activePageId 没有图元但历史页面有图元，优先激活最近有内容的画板
-    const activeHasContent = images.some((im) => im.pageId === activePageId) ||
-      texts.some((t) => t.pageId === activePageId)
-    if (!activeHasContent) {
-      const lastContentPage = [...pages].reverse().find((p) =>
-        images.some((im) => im.pageId === p.id) || texts.some((t) => t.pageId === p.id)
-      )
-      if (lastContentPage) {
-        activePageId = lastContentPage.id
+      // 清理历史累积的无内容且未分组的空页面，保留当前页、归档页、分组内页面以及有内容(frames/images/texts)的页面
+      const migratedPages = pages.filter((p) => {
+        if (p.id === activePageId) return true
+        if (p.archived) return true
+        if (p.groupId) return true
+        return pageHasContent(p.id)
+      })
+      if (migratedPages.length > 0) {
+        pages = migratedPages
       }
     }
 
-    // 清理因历史 new-canvas 累积的大量同名空页面，保留当前页面、已归档页面和有内容的页面
-    const meaningfulPages = pages.filter((p) => {
-      if (p.id === activePageId) return true
-      if (p.archived) return true
-      return images.some((im) => im.pageId === p.id) || texts.some((t) => t.pageId === p.id)
-    })
-    if (meaningfulPages.length > 0) {
-      pages = meaningfulPages
+    // 确保 activePageId 处于有效页面中
+    if (!pages.some((p) => p.id === activePageId)) {
+      activePageId = pages[0].id
     }
+
+    const pageIdSet = new Set(pages.map((p) => p.id))
+    const fallbackPageId = pages[0].id
+
+    // 画板水合（支持为空 []，孤立 pageId 自动对齐到有效页面）
+    const frames: CanvasFrame[] = (Array.isArray(doc.frames) ? doc.frames : []).map((f: any) => ({
+      ...f,
+      pageId: f.pageId && pageIdSet.has(f.pageId) ? f.pageId : fallbackPageId,
+    }))
+
+    // 图片水合（孤立 pageId 自动对齐到有效页面）
+    const images: CanvasImage[] = (Array.isArray(doc.images) ? doc.images : []).map((im: any) => ({
+      ...im,
+      pageId: im.pageId && pageIdSet.has(im.pageId) ? im.pageId : fallbackPageId,
+    }))
+
+    // 文本水合（孤立 pageId 自动对齐到有效页面）
+    const texts: CanvasText[] = (Array.isArray(doc.texts) ? doc.texts : []).map((t: any) => ({
+      ...t,
+      pageId: t.pageId && pageIdSet.has(t.pageId) ? t.pageId : fallbackPageId,
+    }))
 
     // 视口水合恢复
     if (doc.viewport && typeof doc.viewport.zoom === 'number') {
