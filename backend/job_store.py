@@ -2623,7 +2623,7 @@ def load_admin_overview(hours: int = 24) -> dict:
     user_ranking = sorted(
         (item for item in ranking_by_user.values() if item["image_count"] > 0),
         key=lambda item: (-item["image_count"], -item["total_count"], item["user_id"]),
-    )[:5]
+    )
 
     return {
         "generated_at": now,
@@ -2683,8 +2683,12 @@ def load_admin_tasks(
             clauses.append(f"(user_id IS NULL OR user_id NOT IN ({placeholders}))")
             params.extend(list(test_uids))
     if provider:
-        clauses.append("provider = ?")
-        params.append(provider)
+        p_clean = provider.strip().lower()
+        if p_clean in ("bfl", "blf"):
+            clauses.append("provider IN ('bfl', 'blf')")
+        else:
+            clauses.append("provider = ?")
+            params.append(provider)
     if reference == "yes":
         clauses.append("has_reference = 1")
     elif reference == "no":

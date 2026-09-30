@@ -28,6 +28,9 @@ const ADMIN_PROVIDERS = {
   apimart: '默认线路 (APIMart)',
   sub2api: '订阅线路 (Sub2API)',
   adobe2api: 'Adobe 线路 (Firefly)',
+  bfl: 'BFL 线路',
+  blf: 'BFL 线路',
+  tuzi: '兔子线路',
   penpot: 'Penpot',
   local: '本地处理',
 };
@@ -187,14 +190,16 @@ const ADMIN_CSS = `
   .df-admin-chart { height: 218px; display: flex; align-items: stretch; gap: 8px; padding: 22px 18px 12px; }
   .df-admin-baritem { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; gap: 6px; }
   .df-admin-bartrack { height: 158px; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; border-radius: 4px 4px 2px 2px; background: #f0f1ed; }
-  .df-admin-bar { background: #20231f; transition: height 180ms; }
+  .df-admin-bar { background: #2563eb; transition: height 180ms; }
+  .df-admin-bar.is-ai { background: #2563eb; }
   .df-admin-bar.is-agent { background: #5f6fe8; }
   .df-admin-bar.is-compose { background: #55bc91; }
   .df-admin-bar.is-special { background: #e7ad42; }
   .df-admin-barlabel { color: var(--admin-faint); text-align: center; font-size: 8.5px; white-space: nowrap; }
   .df-admin-legend { display: inline-flex; align-items: center; gap: 9px; }
   .df-admin-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-  .df-admin-legend i { width: 5px; height: 5px; border-radius: 50%; background: #20231f; }
+  .df-admin-legend i { width: 5px; height: 5px; border-radius: 50%; background: #2563eb; }
+  .df-admin-legend .is-ai i { background: #2563eb; }
   .df-admin-legend .is-agent i { background: #5f6fe8; }
   .df-admin-legend .is-compose i { background: #55bc91; }
   .df-admin-legend .is-special i { background: #e7ad42; }
@@ -209,6 +214,11 @@ const ADMIN_CSS = `
   .df-admin-split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
   .df-admin-overviewtriple { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 10px; }
   .df-admin-ranking { padding: 7px 16px 12px; }
+  .df-admin-ranking.df-admin-scroll-y { max-height: 244px; overflow-y: auto; overflow-x: hidden; }
+  .df-admin-scroll-y::-webkit-scrollbar { width: 4px; }
+  .df-admin-scroll-y::-webkit-scrollbar-track { background: transparent; }
+  .df-admin-scroll-y::-webkit-scrollbar-thumb { background: #dcdfd8; border-radius: 99px; }
+  .df-admin-scroll-y::-webkit-scrollbar-thumb:hover { background: #b8bcb2; }
   .df-admin-rankrow { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 45px; border-bottom: 1px solid #eff0ec; }
   .df-admin-rankrow:last-child { border-bottom: 0; }
   .df-admin-rankno { color: var(--admin-faint); font: 9.5px "JetBrains Mono", monospace; }
@@ -479,7 +489,7 @@ function AdminTrendChart({ series, hours }) {
               <span className="df-admin-bar is-special" style={{ height: specialHeight }} />
               <span className="df-admin-bar is-compose" style={{ height: composeHeight }} />
               <span className="df-admin-bar is-agent" style={{ height: agentHeight }} />
-              <span className="df-admin-bar" style={{ height: imageHeight }} />
+              <span className="df-admin-bar is-ai" style={{ height: imageHeight }} />
             </div>
             <div className="df-admin-barlabel">{label}</div>
           </div>
@@ -541,10 +551,10 @@ function AdminUserRanking({ items, hours }) {
     <section className="df-admin-card">
       <div className="df-admin-cardhead">
         <span className="df-admin-cardtitle">用户生图排行</span>
-        <span className="df-admin-cardmeta">{adminRangeLabel(hours)} · Top 5</span>
+        <span className="df-admin-cardmeta">{adminRangeLabel(hours)}{ranking.length ? (' · 共 ' + ranking.length + ' 人') : ''}</span>
       </div>
       {ranking.length ? (
-        <div className="df-admin-ranking">
+        <div className="df-admin-ranking df-admin-scroll-y">
           {ranking.map(function(item, index) {
             return (
               <div className="df-admin-rankrow" key={item.user_id}>
@@ -1021,7 +1031,7 @@ function AdminPage({ user, onBack }) {
   var aiProvider = health && health.ai_provider || {};
   var apimartProvider = aiProvider.apimart || aiProvider;
   var services = [
-    { name: 'DesignFlow 后端', desc: 'FastAPI 应用', connected: !!(health && health.status === 'ok'), detail: health && health.version, icon: <I.logo size={13} style={{ width: 20, height: 20 }} /> },
+    { name: 'XLJ Studio 后端', desc: 'FastAPI 应用', connected: !!(health && health.status === 'ok'), detail: health && health.version, icon: <I.logo size={13} style={{ width: 20, height: 20 }} /> },
     { name: 'Penpot', desc: '模板与合成引擎', connected: !!(health && health.penpot && health.penpot.connected), detail: health && health.penpot && health.penpot.url, icon: <I.layers size={15} /> },
     { name: '产品素材库', desc: '本地产品图资源', connected: !!(health && health.library && health.library.connected), detail: health && health.library && ((health.library.folders || []).length + ' 个目录 · ' + health.library.path), icon: <I.folder size={15} /> },
     { name: '默认生图线路', desc: 'APIMart', connected: !!apimartProvider.connected, configured: !!apimartProvider.configured, detail: apimartProvider.message || apimartProvider.url, icon: <I.image size={15} /> },
@@ -1071,7 +1081,7 @@ function AdminPage({ user, onBack }) {
             <div className="df-admin-cardhead">
               <span className="df-admin-cardtitle">使用趋势</span>
               <span className="df-admin-cardmeta df-admin-legend">
-                <span><i />AI 生图</span><span className="is-agent"><i />Agent</span><span className="is-compose"><i />模板合成</span><span className="is-special"><i />特殊品</span>
+                <span className="is-ai"><i />AI 生图</span><span className="is-agent"><i />Agent</span><span className="is-compose"><i />模板合成</span><span className="is-special"><i />特殊品</span>
               </span>
             </div>
             <AdminTrendChart series={overview.series} hours={overview.range_hours} />
@@ -1083,13 +1093,14 @@ function AdminPage({ user, onBack }) {
             </div>
             <div className="df-admin-breakdown">
               {(overview.breakdown || []).map(function(item) {
+                var barColor = item.type === 'agent_image' ? '#5f6fe8' : (item.type === 'compose' ? '#55bc91' : (item.type === 'special' ? '#e7ad42' : '#2563eb'));
                 return (
                   <div className="df-admin-breakrow" key={item.type}>
                     <div className="df-admin-breaktop">
                       <span>{ADMIN_TASK_TYPES[item.type] || item.type}</span>
                       <span className="df-admin-breakvalue">{item.total}</span>
                     </div>
-                    <div className="df-admin-progress"><span style={{ width: Math.round(item.total * 100 / maxBreakdown) + '%' }} /></div>
+                    <div className="df-admin-progress"><span style={{ width: Math.round(item.total * 100 / maxBreakdown) + '%', background: barColor }} /></div>
                   </div>
                 );
               })}
@@ -1147,7 +1158,7 @@ function AdminPage({ user, onBack }) {
             <option value="">全部用户</option>{users.map(function(item) { return <option value={item.id} key={item.id}>{adminUserLabel(item)}</option>; })}
           </select>
           <select className="df-admin-control" value={taskFilters.provider} onChange={function(e) { setTaskFilter('provider', e.target.value); }}>
-            <option value="">全部渠道</option><option value="apimart">默认线路</option><option value="sub2api">订阅线路</option><option value="adobe2api">Adobe 线路</option><option value="penpot">Penpot</option><option value="local">本地处理</option>
+            <option value="">全部渠道</option><option value="apimart">默认线路</option><option value="sub2api">订阅线路</option><option value="adobe2api">Adobe 线路</option><option value="bfl">BFL 线路</option><option value="penpot">Penpot</option><option value="local">本地处理</option>
           </select>
           <select className="df-admin-control" value={taskFilters.reference} onChange={function(e) { setTaskFilter('reference', e.target.value); }}>
             <option value="">参考图不限</option><option value="yes">使用参考图</option><option value="no">未用参考图</option>
@@ -1280,7 +1291,7 @@ function AdminPage({ user, onBack }) {
       <aside className="df-admin-sidebar">
         <div className="df-admin-brand">
           <div className="df-admin-brandmark"><I.logo size={15} style={{ width: 30, height: 30, borderRadius: 8 }} /></div>
-          <div className="df-admin-brandname">DesignFlow</div>
+          <div className="df-admin-brandname">XLJ Studio</div>
           <div className="df-admin-brandmeta">Operations</div>
         </div>
         <div className="df-admin-navlabel">Workspace</div>

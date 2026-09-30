@@ -323,6 +323,48 @@ class AdminConsoleStoreTest(unittest.TestCase):
         self.assertEqual(expired_urls, ["/ai-images/_service-monitor/probe.png"])
         self.assertEqual(job_store.load_service_probes("sub2api"), [])
 
+    def test_load_admin_tasks_bfl_provider(self) -> None:
+        created_at = self.now - 60
+        job_store.save_ai_image_job(
+            job_id="ai-bfl-outpaint",
+            user_id="designer",
+            status="done",
+            model="flux-outpaint",
+            provider="bfl",
+            prompt="扩图",
+            size="1024x1024",
+            created_at=created_at,
+        )
+        tasks_bfl, total_bfl = job_store.load_admin_tasks(provider="bfl")
+        self.assertEqual(total_bfl, 1)
+        self.assertEqual(tasks_bfl[0]["id"], "ai-bfl-outpaint")
+
+        tasks_blf, total_blf = job_store.load_admin_tasks(provider="blf")
+        self.assertEqual(total_blf, 1)
+        self.assertEqual(tasks_blf[0]["id"], "ai-bfl-outpaint")
+
+    def test_user_ranking_includes_all_users_beyond_five(self) -> None:
+        with job_store._connect() as conn:
+            for i in range(1, 8):
+                uid = f"user_rank_{i}"
+                conn.execute(
+                    "INSERT INTO users (id, username, username_key, created_at) VALUES (?, ?, ?, ?)",
+                    (uid, f"user{i}", f"user{i}", self.now - 1000),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO ai_image_jobs (id, user_id, status, model, prompt, size, created_at)
+                    VALUES (?, ?, 'done', 'gpt-image-2', 'test', '1024x1024', ?)
+                    """,
+                    (f"rank-job-{i}", uid, self.now - 100),
+                )
+            conn.commit()
+
+        with patch("backend.job_store.time.time", return_value=self.now):
+            overview = job_store.load_admin_overview(24)
+
+        self.assertGreaterEqual(len(overview["user_ranking"]), 7)
+
     def test_inspiration_writes_commit_before_connection_closes(self) -> None:
         post_id = "inspiration-commit"
         self.assertTrue(
