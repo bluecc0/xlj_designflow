@@ -5567,9 +5567,13 @@ def ai_image_metadata(request: Request, url: str):
     path = split.path or clean_url
 
     # 1. 尝试反查 AI 生图任务 (ai_image_jobs 或 agent_images)
-    job = load_ai_image_job_by_image_url(path, None if (not user or _is_admin(user)) else user["id"])
-    if not job and user:
-        job = load_ai_image_job_by_image_url(path)
+    # 仅允许管理员进行全局反查，普通用户始终限定当前 user_id，未登录用户不允许反查生图任务信息
+    job = None
+    if user:
+        if _is_admin(user):
+            job = load_ai_image_job_by_image_url(path, None)
+        else:
+            job = load_ai_image_job_by_image_url(path, user.get("id"))
 
     # 2. 尝试解析本地磁盘文件以获取物理大小与 MIME
     file_size = None

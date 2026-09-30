@@ -25,6 +25,16 @@ def _request(url: str = "") -> Request:
 
 
 class AiImageMetadataTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_db_path = job_store._DB_PATH
+        job_store._DB_PATH = Path(self.temp_dir.name) / "test_ai_metadata.db"
+        job_store.init_db()
+
+    def tearDown(self) -> None:
+        job_store._DB_PATH = self.original_db_path
+        self.temp_dir.cleanup()
+
     def test_rejects_empty_url(self) -> None:
         with self.assertRaises(HTTPException) as raised:
             main.ai_image_metadata(_request(""), "")
@@ -70,7 +80,7 @@ class AiImageMetadataTest(unittest.TestCase):
 
         try:
             with (
-                patch.object(job_store, "load_ai_image_job_by_image_url", return_value=None),
+                patch.object(main, "load_ai_image_job_by_image_url", return_value=None),
                 patch.object(main, "_resolve_public_asset_path", return_value=temp_path),
             ):
                 res = main.ai_image_metadata(
@@ -84,6 +94,48 @@ class AiImageMetadataTest(unittest.TestCase):
             self.assertIn("B", res["file_size_formatted"])
         finally:
             temp_path.unlink(missing_ok=True)
+
+    def test_user_isolation_non_admin_cannot_access_other_users_metadata(self) -> None:
+        target_url = "/ai-images/victim_user/2026/secret.png"
+        job_store.save_ai_image_job(
+            job_id="job_victim_123",
+            user_id="victim_user",
+            status="done",
+            model="gpt-image-2",
+            prompt="保密商品图设计Prompt",
+            size="1024x1024",
+            image_url=target_url,
+            created_at=1718000000.0,
+        )
+
+        # 普通用户 attacker_user 查询 victim_user 的图片：查不到 AI 元数据
+        with patch.object(main, "_current_user", return_value={"id": "attacker_user", "roles": ["user"]}):
+            res = main.ai_image_metadata(_request(target_url), target_url)
+            self.assertFalse(res["is_ai_generated"])
+            self.assertIsNone(res["ai_metadata"])
+
+        # 未登录用户查询 victim_user 的图片：查不到 AI 元数据
+        with patch.object(main, "_current_user", side_effect=Exception("No session")):
+            res = main.ai_image_metadata(_request(target_url), target_url)
+            self.assertFalse(res["is_ai_generated"])
+            self.assertIsNone(res["ai_metadata"])
+
+        # 管理员查询：可以查到 AI 元数据
+        with (
+            patch.object(main, "_current_user", return_value={"id": "admin_user", "roles": ["admin"]}),
+            patch.object(main, "_is_admin", return_value=True),
+        ):
+            res = main.ai_image_metadata(_request(target_url), target_url)
+            self.assertTrue(res["is_ai_generated"])
+            self.assertIsNotNone(res["ai_metadata"])
+            self.assertEqual(res["ai_metadata"]["prompt"], "保密商品图设计Prompt")
+
+        # 原作者本人查询：可以查到 AI 元数据
+        with patch.object(main, "_current_user", return_value={"id": "victim_user", "roles": ["user"]}):
+            res = main.ai_image_metadata(_request(target_url), target_url)
+            self.assertTrue(res["is_ai_generated"])
+            self.assertIsNotNone(res["ai_metadata"])
+            self.assertEqual(res["ai_metadata"]["prompt"], "保密商品图设计Prompt")
 
     def test_load_ai_image_job_by_image_url_handles_encoded_and_full_urls(self) -> None:
         test_id = "test_url_norm_job"

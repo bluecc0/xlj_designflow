@@ -129,7 +129,22 @@ export function App() {
     naturalHeight: number
   } | null>(null)
 
+  const outpaintingImageIdRef = useRef<string | null>(null)
+  outpaintingImageIdRef.current = outpaintingImageId
+
+  const outpaintInitialImageRef = useRef<{
+    id: string
+    x: number
+    y: number
+    width: number
+    height: number
+    naturalWidth: number
+    naturalHeight: number
+  } | null>(null)
+  outpaintInitialImageRef.current = outpaintInitialImage
+
   const handleStartOutpainting = useCallback(async (id: string) => {
+    outpaintingImageIdRef.current = id
     setOutpaintingImageId(id)
     setOutpaintMargins({
       top: 120,
@@ -139,44 +154,57 @@ export function App() {
     })
     const target = images.find((im) => im.id === id)
     if (target) {
-      let natW = target.naturalWidth
-      let natH = target.naturalHeight
-      if (!natW || !natH) {
-        try {
-          const dims = await getImageDimensions(target.url)
-          natW = dims.width
-          natH = dims.height
-        } catch {
-          natW = target.width
-          natH = target.height
-        }
-      }
-      setOutpaintInitialImage({
+      const initialSnapshot = {
         id: target.id,
         x: target.x,
         y: target.y,
         width: target.width,
         height: target.height,
-        naturalWidth: natW,
-        naturalHeight: natH,
-      })
+        naturalWidth: target.naturalWidth || target.width,
+        naturalHeight: target.naturalHeight || target.height,
+      }
+      outpaintInitialImageRef.current = initialSnapshot
+      setOutpaintInitialImage(initialSnapshot)
+
+      if (!target.naturalWidth || !target.naturalHeight) {
+        try {
+          const dims = await getImageDimensions(target.url)
+          if (outpaintingImageIdRef.current === id) {
+            setOutpaintInitialImage((prev) => {
+              if (!prev || prev.id !== id) return prev
+              const updated = {
+                ...prev,
+                naturalWidth: dims.width,
+                naturalHeight: dims.height,
+              }
+              outpaintInitialImageRef.current = updated
+              return updated
+            })
+          }
+        } catch {
+          // 忽略探测失败，保持初始已记录尺寸
+        }
+      }
     }
   }, [images])
 
   const handleCancelOutpainting = useCallback(() => {
-    if (outpaintInitialImage) {
+    const initial = outpaintInitialImageRef.current || outpaintInitialImage
+    if (initial) {
       updateImages([
         {
-          id: outpaintInitialImage.id,
+          id: initial.id,
           patch: {
-            x: outpaintInitialImage.x,
-            y: outpaintInitialImage.y,
-            width: outpaintInitialImage.width,
-            height: outpaintInitialImage.height,
+            x: initial.x,
+            y: initial.y,
+            width: initial.width,
+            height: initial.height,
           },
         },
       ])
     }
+    outpaintingImageIdRef.current = null
+    outpaintInitialImageRef.current = null
     setOutpaintingImageId(null)
     setOutpaintInitialImage(null)
   }, [outpaintInitialImage, updateImages])
@@ -268,6 +296,8 @@ export function App() {
 
       setOutpaintingImageId(null)
       setOutpaintInitialImage(null)
+      outpaintingImageIdRef.current = null
+      outpaintInitialImageRef.current = null
       setSelected([newImg.id], 'image')
     } catch (err: any) {
       alert(`扩图失败: ${err.message}`)
@@ -296,13 +326,13 @@ export function App() {
 
       // 退出扩图 (Escape) / 确认扩图 (Enter)
       if (e.key === 'Escape') {
-        if (outpaintingImageId) {
+        if (outpaintingImageIdRef.current) {
           e.preventDefault()
-          setOutpaintingImageId(null)
+          handleCancelOutpainting()
           return
         }
       } else if (e.key === 'Enter') {
-        if (outpaintingImageId && aiState.status !== 'running') {
+        if (outpaintingImageIdRef.current && aiState.status !== 'running') {
           e.preventDefault()
           handleExecuteOutpainting()
           return
@@ -641,6 +671,8 @@ export function App() {
     restoreHistoryDocument,
     addImages,
     screenToCanvas,
+    handleCancelOutpainting,
+    handleExecuteOutpainting,
   ])
 
   // 2. 原生非 passive 滚轮与手势监听（彻底杜绝放大整个浏览器界面）
