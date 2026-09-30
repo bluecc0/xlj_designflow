@@ -12269,6 +12269,9 @@ const ADMIN_PROVIDERS = {
   apimart: '默认线路 (APIMart)',
   sub2api: '订阅线路 (Sub2API)',
   adobe2api: 'Adobe 线路 (Firefly)',
+  bfl: 'BFL 线路',
+  blf: 'BFL 线路',
+  tuzi: '兔子线路',
   penpot: 'Penpot',
   local: '本地处理'
 };
@@ -12426,14 +12429,16 @@ const ADMIN_CSS = `
   .df-admin-chart { height: 218px; display: flex; align-items: stretch; gap: 8px; padding: 22px 18px 12px; }
   .df-admin-baritem { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; gap: 6px; }
   .df-admin-bartrack { height: 158px; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; border-radius: 4px 4px 2px 2px; background: #f0f1ed; }
-  .df-admin-bar { background: #20231f; transition: height 180ms; }
+  .df-admin-bar { background: #2563eb; transition: height 180ms; }
+  .df-admin-bar.is-ai { background: #2563eb; }
   .df-admin-bar.is-agent { background: #5f6fe8; }
   .df-admin-bar.is-compose { background: #55bc91; }
   .df-admin-bar.is-special { background: #e7ad42; }
   .df-admin-barlabel { color: var(--admin-faint); text-align: center; font-size: 8.5px; white-space: nowrap; }
   .df-admin-legend { display: inline-flex; align-items: center; gap: 9px; }
   .df-admin-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-  .df-admin-legend i { width: 5px; height: 5px; border-radius: 50%; background: #20231f; }
+  .df-admin-legend i { width: 5px; height: 5px; border-radius: 50%; background: #2563eb; }
+  .df-admin-legend .is-ai i { background: #2563eb; }
   .df-admin-legend .is-agent i { background: #5f6fe8; }
   .df-admin-legend .is-compose i { background: #55bc91; }
   .df-admin-legend .is-special i { background: #e7ad42; }
@@ -12448,6 +12453,11 @@ const ADMIN_CSS = `
   .df-admin-split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
   .df-admin-overviewtriple { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 10px; }
   .df-admin-ranking { padding: 7px 16px 12px; }
+  .df-admin-ranking.df-admin-scroll-y { max-height: 244px; overflow-y: auto; overflow-x: hidden; }
+  .df-admin-scroll-y::-webkit-scrollbar { width: 4px; }
+  .df-admin-scroll-y::-webkit-scrollbar-track { background: transparent; }
+  .df-admin-scroll-y::-webkit-scrollbar-thumb { background: #dcdfd8; border-radius: 99px; }
+  .df-admin-scroll-y::-webkit-scrollbar-thumb:hover { background: #b8bcb2; }
   .df-admin-rankrow { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 45px; border-bottom: 1px solid #eff0ec; }
   .df-admin-rankrow:last-child { border-bottom: 0; }
   .df-admin-rankno { color: var(--admin-faint); font: 9.5px "JetBrains Mono", monospace; }
@@ -12748,7 +12758,7 @@ function AdminTrendChart({
         height: agentHeight
       }
     }), /*#__PURE__*/React.createElement("span", {
-      className: "df-admin-bar",
+      className: "df-admin-bar is-ai",
       style: {
         height: imageHeight
       }
@@ -12826,8 +12836,8 @@ function AdminUserRanking({
     className: "df-admin-cardtitle"
   }, "\u7528\u6237\u751F\u56FE\u6392\u884C"), /*#__PURE__*/React.createElement("span", {
     className: "df-admin-cardmeta"
-  }, adminRangeLabel(hours), " \xB7 Top 5")), ranking.length ? /*#__PURE__*/React.createElement("div", {
-    className: "df-admin-ranking"
+  }, adminRangeLabel(hours), ranking.length ? ' · 共 ' + ranking.length + ' 人' : '')), ranking.length ? /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-ranking df-admin-scroll-y"
   }, ranking.map(function (item, index) {
     return /*#__PURE__*/React.createElement("div", {
       className: "df-admin-rankrow",
@@ -13470,7 +13480,7 @@ function AdminPage({
   var aiProvider = health && health.ai_provider || {};
   var apimartProvider = aiProvider.apimart || aiProvider;
   var services = [{
-    name: 'DesignFlow 后端',
+    name: 'XLJ Studio 后端',
     desc: 'FastAPI 应用',
     connected: !!(health && health.status === 'ok'),
     detail: health && health.version,
@@ -13601,7 +13611,9 @@ function AdminPage({
       className: "df-admin-cardtitle"
     }, "\u4F7F\u7528\u8D8B\u52BF"), /*#__PURE__*/React.createElement("span", {
       className: "df-admin-cardmeta df-admin-legend"
-    }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("i", null), "AI \u751F\u56FE"), /*#__PURE__*/React.createElement("span", {
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "is-ai"
+    }, /*#__PURE__*/React.createElement("i", null), "AI \u751F\u56FE"), /*#__PURE__*/React.createElement("span", {
       className: "is-agent"
     }, /*#__PURE__*/React.createElement("i", null), "Agent"), /*#__PURE__*/React.createElement("span", {
       className: "is-compose"
@@ -13621,6 +13633,7 @@ function AdminPage({
     }, overview.active_users || 0, " \u4F4D\u6D3B\u8DC3\u7528\u6237")), /*#__PURE__*/React.createElement("div", {
       className: "df-admin-breakdown"
     }, (overview.breakdown || []).map(function (item) {
+      var barColor = item.type === 'agent_image' ? '#5f6fe8' : item.type === 'compose' ? '#55bc91' : item.type === 'special' ? '#e7ad42' : '#2563eb';
       return /*#__PURE__*/React.createElement("div", {
         className: "df-admin-breakrow",
         key: item.type
@@ -13632,7 +13645,8 @@ function AdminPage({
         className: "df-admin-progress"
       }, /*#__PURE__*/React.createElement("span", {
         style: {
-          width: Math.round(item.total * 100 / maxBreakdown) + '%'
+          width: Math.round(item.total * 100 / maxBreakdown) + '%',
+          background: barColor
         }
       })));
     })))), /*#__PURE__*/React.createElement("div", {
@@ -13766,6 +13780,8 @@ function AdminPage({
     }, "\u8BA2\u9605\u7EBF\u8DEF"), /*#__PURE__*/React.createElement("option", {
       value: "adobe2api"
     }, "Adobe \u7EBF\u8DEF"), /*#__PURE__*/React.createElement("option", {
+      value: "bfl"
+    }, "BFL \u7EBF\u8DEF"), /*#__PURE__*/React.createElement("option", {
       value: "penpot"
     }, "Penpot"), /*#__PURE__*/React.createElement("option", {
       value: "local"
@@ -14000,7 +14016,7 @@ function AdminPage({
     }
   })), /*#__PURE__*/React.createElement("div", {
     className: "df-admin-brandname"
-  }, "DesignFlow"), /*#__PURE__*/React.createElement("div", {
+  }, "XLJ Studio"), /*#__PURE__*/React.createElement("div", {
     className: "df-admin-brandmeta"
   }, "Operations")), /*#__PURE__*/React.createElement("div", {
     className: "df-admin-navlabel"
