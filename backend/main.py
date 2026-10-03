@@ -70,7 +70,7 @@ from .ai_image import (
     save_user_refs,
     _ai_image_public_url,
     compress_image_to_data_url,
-    SLASH_MODEL_MAP,
+    normalize_model_name,
 )
 from .agent_mode import (
     VisualIntentPatch,
@@ -6588,14 +6588,9 @@ async def ai_image_endpoint(
     if not original_prompt:
         raise HTTPException(400, "prompt 不能为空")
 
-    resolved = SLASH_MODEL_MAP.get(model.lower(), model)
+    resolved = normalize_model_name(model.lower())
     if not resolved:
         raise HTTPException(400, f"未知模型: {model}")
-    # 去掉用户 prompt 中的 /指令 前缀，只保留实际描述内容
-    for cmd in SLASH_MODEL_MAP:
-        if original_prompt.lower().startswith(cmd):
-            original_prompt = original_prompt[len(cmd):].strip()
-            break
     try:
         resolved_provider = normalize_provider(provider)
     except ValueError as exc:

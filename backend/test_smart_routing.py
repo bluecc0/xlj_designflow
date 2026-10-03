@@ -692,7 +692,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             Path(__file__).resolve().parents[1] / "frontend" / "src" / "Chat.jsx"
         ).read_text(encoding="utf-8")
         branch_start = chat_source.index(
-            "if (activeSkill && !aiCmd && aiOptions.workflow !== 'download')"
+            "if (activeSkill && !isAiImageMode && aiOptions.workflow !== 'download')"
         )
         branch_end = chat_source.index("// 检测\"重新生成\"关键词", branch_start)
         skill_branch = chat_source[branch_start:branch_end]

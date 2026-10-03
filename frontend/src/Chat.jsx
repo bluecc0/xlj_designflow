@@ -1835,11 +1835,11 @@ const CHAT_INSPIRATION_CATEGORIES = [
 
 // ---------- Composer ----------
 
-const DEFAULT_COMPOSER_COMMAND = '/Gpt image 2.5';
+const DEFAULT_COMPOSER_MODE = 'gpt-image-2.5';
 
-const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
+const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
   const [text, setText] = React.useState('');
-  const [lockedCommand, setLockedCommand] = React.useState(DEFAULT_COMPOSER_COMMAND);
+  const [selectedMode, setSelectedMode] = React.useState(DEFAULT_COMPOSER_MODE);
   const [files, setFiles] = React.useState([]);
   const [imageType, setImageType] = React.useState('png');
   const [aiRatio, setAiRatio] = React.useState('auto');
@@ -1876,14 +1876,13 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const STATUS_COMPOSER_HEIGHT = 208;
   const MAX_COMPOSER_HEIGHT = 500;
   const minComposerHeightRef = React.useRef(COLLAPSED_COMPOSER_HEIGHT);
-  const COMMANDS = React.useMemo(() => ['/花瓣下载', '/特殊品（完整）', '/特殊品', '/Nano Banana pro', '/Gpt image 2.5'], []);
-  const cmdToWorkflow = React.useCallback(function(cmd) {
-    const clean = String(cmd || '').trim();
-    if (clean === '/Gpt image 2.5' || clean === '/Gpt image 2' || clean === '/Nano Banana pro') return 'ai-image';
-    if (clean === '/特殊品' || clean === '/特殊品（完整）') return 'special';
-    if (clean === '/花瓣下载') return 'download';
-    return 'chat';
-  }, []);
+  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'nano-banana-pro'
+    ? 'ai-image'
+    : selectedMode === 'special' || selectedMode === 'special_full'
+      ? selectedMode
+      : selectedMode === 'download'
+        ? 'download'
+        : selectedWorkflow;
   const normalizeBatchCount = React.useCallback(function(value) {
     const digits = String(value || '').replace(/\D+/g, '');
     if (!digits) return 1;
@@ -1980,20 +1979,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     return function() { alive = false; };
   }, []);
 
-  // 检测花瓣登录状态，未登录则禁用 /花瓣下载 指令
-  React.useEffect(() => {
-    const apiBase = window.API_BASE || window.location.origin;
-    fetch(apiBase + '/proxy-download/login-status', { credentials: 'include' })
-      .then(r => r.json())
-      .then(data => {
-        const cmd = SLASH_COMMANDS.find(c => c.cmd === '/花瓣下载');
-        if (cmd) cmd.available = !!data.logged_in;
-        setTaskDefsKey(function(k) { return k + 1; });
-      })
-      .catch(() => {});
-  }, []);
   const displayValue = text;
-  const lockedPrefixLength = 0;
 
   React.useEffect(() => {
     if (!resetKey) return;
@@ -2123,40 +2109,12 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     };
   }, [prototypePanel, skillMenuOpen]);
 
-  // 外部触发 slash 命令（选中特殊品模板时）
-  React.useEffect(() => {
-    if (agentEnabled) return;
-    if (!slashTrigger) return;
-    if (slashTrigger.clear) {
-      setLockedCommand(function(prev) {
-        if (cmdToWorkflow(prev) === 'special') {
-          setSelectedWorkflow('chat');
-          return '';
-        }
-        return prev;
-      });
-      return;
-    }
-    const nextCmd = '/' + slashTrigger.cmd;
-    setLockedCommand(nextCmd);
-    setSelectedSkill('');
-    setSelectedWorkflow(cmdToWorkflow(nextCmd));
-    setPrototypePanel('');
-    setText('');
-    setTimeout(() => {
-      const el = taRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(0, 0);
-    }, 0);
-  }, [agentEnabled, slashTrigger?.key, cmdToWorkflow]);
-
-  // 外部触发：从灵感页"生成同款"传过来，自动锁定 /Gpt image 2 并填入 prompt
+  // 外部触发：从灵感页“生成同款”传过来，自动选择生图模式并填入 prompt
   React.useEffect(() => {
     if (!seedPrompt) return;
-    setLockedCommand('/Gpt image 2.5');
+    setSelectedMode('gpt-image-2.5');
     setSelectedSkill('');
-    setSelectedWorkflow('ai-image');
+    setSelectedWorkflow('chat');
     setPrototypePanel('');
     setText(String(seedPrompt));
     setTimeout(() => {
@@ -2170,22 +2128,22 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
 
   React.useEffect(() => {
     if (agentEnabled) {
-      setLockedCommand('');
+      setSelectedMode('');
       setSelectedSkill('');
       setSelectedWorkflow('chat');
-      }
+    }
   }, [agentEnabled]);
 
   React.useEffect(() => {
     if (template && (template.is_special || template.is_special_full)) return;
-    setLockedCommand(function(prev) {
-      if (cmdToWorkflow(prev) === 'special') {
+    setSelectedMode(function(prev) {
+      if (prev === 'special' || prev === 'special_full') {
         setSelectedWorkflow('chat');
         return '';
       }
       return prev;
     });
-  }, [template?.file_id, template?.group_name, template?.id, template?.is_special, template?.is_special_full, cmdToWorkflow]);
+  }, [template?.file_id, template?.group_name, template?.id, template?.is_special, template?.is_special_full]);
 
   React.useEffect(() => {
     const el = taRef.current;
@@ -2217,25 +2175,16 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     '9:16':{ label: '9:16', qualities: ['1K', '2K', '4K'], preview: '864×1536', px: { '1K': '864×1536', '2K': '1152×2048', '4K': '2160×3840' } },
   };
 
-  // 从文本内容检测当前模式
-  // trimmed = 用户实际打的内容（剥去 lockedCommand 锁定的前缀）
-  const _t = (() => {
-    const raw = String(text || '').trimStart();
-    if (lockedCommand && raw.toLowerCase().startsWith(lockedCommand.toLowerCase())) {
-      return raw.slice(lockedCommand.length).trimStart();
-    }
-    return raw;
-  })();
-  // activeAiModel: 只看 lockedCommand (UI 选的任务, 用户不再手动打前缀)
-  const activeAiModel =
-    (lockedCommand === '/Gpt image 2.5' || lockedCommand === '/Gpt image 2') ? 'gpt-image-2.5' :
-    lockedCommand === '/Nano Banana pro' ? 'nano-banana-pro' :
-    '';
-  const activeMode =
-    (lockedCommand === '/Gpt image 2.5' || lockedCommand === '/Gpt image 2' || lockedCommand === '/Nano Banana pro') ? 'ai-image' :
-    lockedCommand === '/特殊品（完整）' ? 'special_full' :
-    lockedCommand === '/特殊品' ? 'special' :
-    selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
+  const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2'
+    ? 'gpt-image-2.5'
+    : selectedMode === 'nano-banana-pro'
+      ? 'nano-banana-pro'
+      : '';
+  const activeMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro'
+    ? 'ai-image'
+    : selectedMode === 'special_full' || selectedMode === 'special'
+      ? selectedMode
+      : selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
   const aiOptionMap = AI_OPTIONS;
@@ -2264,21 +2213,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
 
   const selectWorkflow = React.useCallback(function(next) {
     if (agentEnabled) return;
-    const cmd = next && next.cmd ? next.cmd : '';
-    if (cmd) {
-      setLockedCommand(cmd);
-      setSelectedSkill('');
-      setSelectedWorkflow(cmdToWorkflow(cmd));
-        setPrototypePanel('');
-      setTimeout(() => {
-        const el = taRef.current;
-        if (!el) return;
-        el.focus();
-        el.setSelectionRange(0, 0);
-      }, 0);
-      return;
-    }
-    setLockedCommand('');
+    const mode = next && next.mode ? next.mode : '';
+    setSelectedMode(mode);
     setSelectedSkill('');
     setSelectedWorkflow(next && next.workflow ? next.workflow : 'chat');
     setPrototypePanel('');
@@ -2286,26 +2222,18 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       const el = taRef.current;
       if (el) el.focus();
     }, 0);
-  }, [agentEnabled, cmdToWorkflow]);
+  }, [agentEnabled]);
 
   const restoreMessage = React.useCallback((message) => {
     const raw = String(message || '');
-    const matched = COMMANDS.find(function(cmd) {
-      return raw === cmd || raw.startsWith(cmd + ' ');
-    });
-    if (matched) {
-      setLockedCommand(matched);
-      setSelectedSkill('');
-      setSelectedWorkflow(cmdToWorkflow(matched));
-      setText(raw.slice(matched.length).trimStart());
-    } else if (raw.trimStart().startsWith('$')) {
+    if (raw.trimStart().startsWith('$')) {
       const parsed = parseSkillInvocation(raw);
-      setLockedCommand('');
+      setSelectedMode('');
       setSelectedWorkflow('chat');
       setSelectedSkill(parsed.skill || '');
       setText(parsed.prompt || '');
     } else {
-      setLockedCommand('');
+      setSelectedMode('');
       setSelectedSkill('');
       setSelectedWorkflow('chat');
       setText(raw);
@@ -2317,7 +2245,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       const len = el.value.length;
       el.setSelectionRange(len, len);
     }, 0);
-  }, [COMMANDS, cmdToWorkflow, parseSkillInvocation]);
+  }, [parseSkillInvocation]);
 
   const handleSend = () => {
     const body = text.trim();
@@ -2333,7 +2261,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     }
     const message = selectedSkill
       ? ('$' + selectedSkill + (body ? ' ' + body : ''))
-      : (lockedCommand ? (lockedCommand + (body ? ' ' + body : '')) : body);
+      : body;
     const skillInvocation = parseSkillInvocation(message);
     const sendMessage = message;
     const executionMessage = skillInvocation.skill ? skillInvocation.prompt : message;
@@ -2356,8 +2284,9 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       variant: aiVariant,
       quality: aiQualityTier,
       provider: aiProvider,
-      workflow: selectedWorkflow,
-      lockedCommand: lockedCommand,
+      workflow: selectedWorkflowMode,
+      model: activeAiModel,
+      mode: selectedMode,
       batchCount: activeMode === 'ai-image' ? normalizedBatchCount : 1,
       skill: skillInvocation.skill || '',
       skillPrompt: executionMessage,
@@ -2523,7 +2452,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     const el = taRef.current;
     const start = el ? el.selectionStart : 0;
     const end = el ? el.selectionEnd : 0;
-    const currentMessage = lockedCommand ? (text.trim() || lockedCommand) : text.trim();
+    const currentMessage = text.trim();
     if (e.key === 'Escape' && skillMenuOpen) {
       e.preventDefault();
       setPrototypePanel('');
@@ -2591,7 +2520,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     }
     if (
       e.key === 'ArrowUp' &&
-      !lockedCommand &&
       !text.trim() &&
       files.length === 0 &&
       refImages.length === 0 &&
@@ -2600,13 +2528,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       e.preventDefault();
       restoreMessage(lastSubmittedMessage);
       return;
-    }
-    if (lockedCommand) {
-      if (e.key === 'ArrowUp' && !text.trim() && files.length === 0 && refImages.length === 0 && lastSubmittedMessage) {
-        e.preventDefault();
-        restoreMessage(lastSubmittedMessage);
-        return;
-      }
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -2633,29 +2554,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     if (agentEnabled) {
       setText(next);
       return;
-    }
-    if (lockedCommand) {
-      if (next.startsWith(lockedCommand + ' ')) {
-        setText(next.slice(lockedCommand.length).trimStart());
-        return;
-      }
-      if (next === lockedCommand) {
-        setText('');
-        return;
-      }
-      setText(next);
-      return;
-    }
-    if (!lockedCommand) {
-      const matched = COMMANDS.find(function(cmd) {
-        return next.startsWith(cmd + ' ');
-      });
-      if (matched) {
-        setLockedCommand(matched);
-        setSelectedWorkflow(cmdToWorkflow(matched));
-        setText(next.slice(matched.length).trimStart());
-        return;
-      }
     }
     setText(next);
   };
@@ -2820,26 +2718,17 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     });
     return true;
   };
-  const canSend = Boolean((lockedCommand ? (lockedCommand + ' ' + text.trim()).trim() : text.trim()) || files.length) && !isLoading;
+  const canSend = Boolean(text.trim() || files.length) && !isLoading;
   const getTaskDefinitions = React.useCallback(function() {
-    var slashMap = {};
-    try {
-      var cmds = window.SLASH_COMMANDS || [];
-      cmds.forEach(function(c) { slashMap[c.cmd] = c.available !== false; });
-    } catch (e) {}
-    function available(cmd) {
-      if (!cmd) return true; // 无 cmd 的卡片始终可用
-      return slashMap[cmd] !== false;
-    }
     return [
-      { id: 'chat', label: '默认', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat' },
-      { id: 'gpt-image', label: 'GPT Image 2.5', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', cmd: '/Gpt image 2.5', available: available('/Gpt image 2.5') },
-      { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro', available: available('/Nano Banana pro') },
-      { id: 'distribute', label: '智能铺货', desc: '上传表格，自动解析为铺货 JSON', iconKey: 'grid', workflow: 'distribute' },
-      { id: 'special', label: '特殊品', desc: '使用特殊品模板合成结果', iconKey: 'layers', cmd: template && template.is_special_full ? '/特殊品（完整）' : '/特殊品', available: available(template && template.is_special_full ? '/特殊品（完整）' : '/特殊品') },
-      { id: 'download', label: '花瓣下载', desc: '输入花瓣 ID，自动识别可下载格式', iconKey: 'download', cmd: '/花瓣下载', available: available('/花瓣下载') },
+      { id: 'chat', label: '默认', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat', mode: '' },
+      { id: 'gpt-image', label: 'GPT Image 2.5', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', workflow: 'chat', mode: 'gpt-image-2.5' },
+      { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', workflow: 'chat', mode: 'nano-banana-pro' },
+      { id: 'distribute', label: '智能铺货', desc: '上传表格，自动解析为铺货 JSON', iconKey: 'grid', workflow: 'distribute', mode: '' },
+      { id: 'special', label: '特殊品', desc: '使用特殊品模板合成结果', iconKey: 'layers', workflow: 'chat', mode: template && template.is_special_full ? 'special_full' : 'special' },
+      { id: 'download', label: '花瓣下载', desc: '输入花瓣 ID，自动识别可下载格式', iconKey: 'download', workflow: 'chat', mode: 'download' },
     ];
-  }, [template && template.is_special_full, taskDefsKey]);
+  }, [template && template.is_special_full]);
   const getTaskIcon = React.useCallback(function(iconKey) {
     return I[iconKey] || I.sparkles;
   }, []);
@@ -2919,7 +2808,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
               : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(
     text.trim() ||
-    lockedCommand ||
+    selectedMode ||
     modeParamLabel ||
     refImages.length > 0 ||
     files.length > 0 ||
@@ -3118,9 +3007,9 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
         React.createElement('div', { style: { marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 } },
           tasks.map(function(item) {
             const isAvailable = item.available !== false;
-            const active = item.cmd
-              ? lockedCommand === item.cmd
-              : (!lockedCommand && selectedWorkflow === item.workflow);
+            const active = item.mode
+              ? selectedMode === item.mode
+              : (!selectedMode && selectedWorkflow === item.workflow);
             const IconComp = getTaskIcon(item.iconKey);
             return React.createElement('button', {
               key: item.label,
@@ -3530,19 +3419,19 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           protoSectionLabel('模板线路'),
           React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 } },
             [
-              { cmd: '/特殊品', label: '普通' },
-              { cmd: '/特殊品（完整）', label: '完整' },
+              { mode: 'special', label: '普通' },
+              { mode: 'special_full', label: '完整' },
             ].map(function(item) {
-              const active = lockedCommand === item.cmd;
+              const active = selectedMode === item.mode;
               return React.createElement('button', {
-                key: item.cmd,
+                key: item.mode,
                 type: 'button',
                 onClick: function() {
-                  setLockedCommand(item.cmd);
+                  setSelectedMode(item.mode);
                   setSelectedSkill('');
-                  setSelectedWorkflow(cmdToWorkflow(item.cmd));
+                  setSelectedWorkflow('chat');
                   if (onRequestSpecialTemplate) {
-                    onRequestSpecialTemplate(item.cmd === '/特殊品（完整）' ? 'full' : 'normal');
+                    onRequestSpecialTemplate(item.mode === 'special_full' ? 'full' : 'normal');
                   }
                   setPrototypePanel('');
                   setTimeout(function() {
@@ -4308,7 +4197,7 @@ const mapAgentProjectMessages = function(project, images) {
   }));
 };
 
-const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
+const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
   const [messages, setMessages] = React.useState([]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
   const [agentMessages, setAgentMessages] = React.useState([]);
@@ -5773,13 +5662,10 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     // ── 花瓣下载 ─────────────────────────────────────────────────────────────
-    // 新交互: 用户通过功能按钮选择“花瓣下载”，输入框只填写 URL/ID。
-    // 旧的 /花瓣下载 文本仍兼容，但不再要求用户输入斜杠指令。
-    const isHuabanDownloadMode = aiOptions.workflow === 'download' || aiOptions.lockedCommand === '/花瓣下载' || trimmed.startsWith('/花瓣下载');
+    // 用户通过功能按钮选择“花瓣下载”，输入框只填写 URL/ID。
+    const isHuabanDownloadMode = aiOptions.workflow === 'download' || aiOptions.mode === 'download';
     if (isHuabanDownloadMode) {
-      const args = trimmed.startsWith('/花瓣下载')
-        ? trimmed.replace(/^\/花瓣下载\s*/, '').trim()
-        : trimmed.trim();
+      const args = trimmed.trim();
       const match = args.match(/^(\S+)(?:\s+([A-Za-z0-9._-]+))?$/);
       setMessages(msgs => [...msgs, { who: 'user', text: args || text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       if (!match) {
@@ -5883,25 +5769,12 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     // ── AI 生图指令匹配 ────────────────────────────────────────────────────────
-    // 用户心智: 只通过 UI 选模型 (lockedCommand), 不再手动打 / 指令.
-    // aiCmd 直接从 lockedCommand 解析, 永远 implicit.
-    const AI_IMAGE_CMDS = [
-      { prefix: '/Nano Banana pro', model: 'nano-banana-pro' },
-      { prefix: '/Gpt image 2.5',   model: 'gpt-image-2.5' },
-      { prefix: '/Gpt image 2',     model: 'gpt-image-2.5' },
-    ];
+    // 用户通过 UI 功能面板选择模型，输入框仅作为图片描述。
+    const targetAiModel = aiOptions.model || (aiOptions.mode === 'nano-banana-pro' ? 'nano-banana-pro' : (aiOptions.workflow === 'ai-image' ? 'gpt-image-2.5' : ''));
+    const isAiImageMode = Boolean(targetAiModel) || aiOptions.workflow === 'ai-image';
     const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
-    const lockedAiCmd = AI_IMAGE_CMDS.find(function(c) {
-      return String(aiOptions.lockedCommand || '').trim().toLowerCase() === c.prefix.toLowerCase();
-    });
-    const textAiCmd = AI_IMAGE_CMDS.find(function(c) {
-      return text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase());
-    });
-    const aiCmd = lockedAiCmd
-      ? Object.assign({}, lockedAiCmd, { implicit: true, fromLockedCommand: true })
-      : (textAiCmd ? Object.assign({}, textAiCmd, { implicit: true, fromLockedCommand: false }) : null);
 
-    if (activeSkill && !aiCmd && aiOptions.workflow !== 'download') {
+    if (activeSkill && !isAiImageMode && aiOptions.workflow !== 'download') {
       const skillImageOptions = Object.assign({}, aiOptions, {
         provider: 'auto',
         size: 'auto',
@@ -5922,28 +5795,24 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const rest = rawPrompt.slice(freshMatch.length).trim();
       const freshPrompt = rest || '重新生成';
       const lastOpts = getLastAiImageOptions();
-      const model = aiCmd ? aiCmd.model : (lastOpts?.model || 'gpt-image-2.5');
-      const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, variant: lastOpts?.variant || aiOptions.variant || 'flare', quality: lastOpts?.quality || aiOptions.quality || 'auto', provider: aiOptions.provider };
-      setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? rawPrompt : text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
+      const model = isAiImageMode ? targetAiModel : (lastOpts?.model || 'gpt-image-2.5');
+      const opts = isAiImageMode ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, variant: lastOpts?.variant || aiOptions.variant || 'flare', quality: lastOpts?.quality || aiOptions.quality || 'auto', provider: aiOptions.provider };
+      setMessages(msgs => [...msgs, { who: 'user', text: rawPrompt, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       await runAiImageGeneration(model, freshPrompt, freshPrompt, refImages, opts);
       return;
     }
 
-    if (aiCmd) {
-      const rawAiText = text.trim();
-      const plainText = rawAiText.toLowerCase().startsWith(aiCmd.prefix.toLowerCase())
-        ? rawAiText.slice(aiCmd.prefix.length).trimStart()
-        : rawAiText;
+    if (isAiImageMode) {
+      const plainText = text.trim();
       if (!plainText) {
-        const prefixLabel = aiCmd.implicit ? '（复用上次模型）' : aiCmd.prefix;
         setMessages(msgs => [...msgs,
           { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta },
-          { who: 'ai', text: `请在 ${prefixLabel} 后输入图片描述` },
+          { who: 'ai', text: '请输入图片描述' },
         ]);
         return;
       }
       setMessages(msgs => [...msgs, { who: 'user', text: plainText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
-      await runAiImageGeneration(aiCmd.model, plainText, plainText, refImages, aiOptions);
+      await runAiImageGeneration(targetAiModel || 'gpt-image-2.5', plainText, plainText, refImages, aiOptions);
       return;
     }
 
@@ -5966,20 +5835,17 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       return;
     }
 
-    // ── 特殊品（完整）流程 ────────────────────────────────────────────────────
-    const _isSpecialFull = text.trimStart().startsWith('/特殊品（完整）');
-    const _isSpecial     = !_isSpecialFull && text.trimStart().startsWith('/特殊品');
-    if (_isSpecial || _isSpecialFull) {
-      const _cmdLabel  = _isSpecialFull ? '特殊品（完整）' : '特殊品';
-      const _endpoint  = _isSpecialFull ? '/special-compose-full' : '/special-compose';
-      const _pollBase  = _isSpecialFull ? '/special-compose-full' : '/special-compose';
-      const _argRegex  = _isSpecialFull ? /^\/特殊品（完整）\s*/ : /^\/特殊品\s*/;
-      const _errHint   = _isSpecialFull
-        ? '请提供 SKU，格式：/特殊品（完整） SKU，文案，时间文案'
-        : '请提供 SKU，格式：/特殊品 SKU，文案，时间文案';
-      const _tplHint   = _isSpecialFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板';
+    // ── 特殊品流程 ────────────────────────────────────────────────────
+    const isSpecialWorkflow = aiOptions.workflow === 'special' || aiOptions.workflow === 'special_full' || aiOptions.mode === 'special' || aiOptions.mode === 'special_full';
+    if (isSpecialWorkflow) {
+      const isFull = aiOptions.workflow === 'special_full' || aiOptions.mode === 'special_full';
+      const _cmdLabel  = isFull ? '特殊品（完整）' : '特殊品';
+      const _endpoint  = isFull ? '/special-compose-full' : '/special-compose';
+      const _pollBase  = isFull ? '/special-compose-full' : '/special-compose';
+      const _errHint   = '请提供 SKU，格式：SKU，文案，时间文案';
+      const _tplHint   = isFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板';
 
-      const displayText = text.replace(_argRegex, '').trim() || text;
+      const displayText = text.trim();
       setMessages(msgs => [...msgs, { who: 'user', text: displayText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       setIsLoading(true);
       // 先插入 generating 消息占位
@@ -5994,7 +5860,7 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         }];
       });
       try {
-        const args = text.replace(_argRegex, '').trim();
+        const args = displayText;
         const parts = args.split('，').map(s => s.trim());
         const sku = parts[0] || '';
         const fields = { name: parts[1] || '', time: parts[2] || '' };
@@ -6608,7 +6474,6 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
         onParseTable={handleParseTable}
         onSmartDistribute={handleSmartDistribute}
         isLoading={isLoading}
-        slashTrigger={slashTrigger}
         template={template}
         lastSubmittedMessage={lastSubmittedMessage}
         agentEnabled={agentEnabled}

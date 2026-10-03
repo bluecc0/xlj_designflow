@@ -84,10 +84,10 @@ output/               Exported results & AI-generated images
 
 ## AI Image Generation
 
-- `/Gpt image 2 <prompt>` → model `gpt-image-2` (text-to-image, strong Chinese understanding)
-- `/Nano Banana pro <prompt>` → model `gemini-3-pro-image-preview` (image editing, high consistency)
+- `gpt-image-2.5` / `gpt-image-2` → text-to-image, strong Chinese understanding
+- `nano-banana-pro` → model `gemini-3-pro-image-preview` (image editing, high consistency)
 - Session context: subsequent prompts in the same session get auto-enriched via LLM (SiliconFlow Qwen) and the previous result image is injected as reference
-- Slash command routing in `SLASH_MODEL_MAP` (ai_image.py:36-42)
+- Model routing and normalization in `SUPPORTED_MODELS` (ai_image.py)
 
 ## Key Files for Context
 
