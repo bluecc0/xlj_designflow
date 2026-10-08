@@ -360,3 +360,62 @@ export async function fetchImageMetadata(imageUrl: string): Promise<ImageMetadat
   }
 }
 
+/**
+ * 快捷编辑生图（模型 gpt-image-2.5，默认智能路由 auto，单参考图）
+ */
+export async function runQuickEdit(
+  imageUrl: string,
+  prompt: string,
+  onProgress?: (msg: string, progress?: number) => void
+): Promise<{ imageUrl: string; width: number; height: number }> {
+  const cleanPrompt = (prompt || '').trim()
+  if (!cleanPrompt) throw new Error('提示词不能为空')
+
+  const normalized = normalizeAssetUrl(imageUrl)
+  onProgress?.('正在准备参考图...')
+  const imgResp = await fetch(normalized, { credentials: 'include' })
+  if (!imgResp.ok) throw new Error(`无法获取参考图 (HTTP ${imgResp.status})`)
+  const blob = await imgResp.blob()
+  const ext = blob.type && blob.type.includes('/') ? blob.type.split('/')[1] : 'png'
+  const file = new File([blob], `reference.${ext}`, { type: blob.type || 'image/png' })
+
+  const clientRequestId = generateUUID()
+  const fd = new FormData()
+  fd.append('model', 'gpt-image-2.5')
+  fd.append('provider', 'auto')
+  fd.append('prompt', cleanPrompt)
+  fd.append('size', 'auto')
+  fd.append('resolution', '1K')
+  fd.append('variant', 'flare')
+  fd.append('quality', 'auto')
+  fd.append('batch_count', '1')
+  fd.append('client_request_id', clientRequestId)
+  fd.append('image', file)
+
+  onProgress?.('正在提交 gpt-image-2.5 任务...')
+  const resp = await fetch('/ai-image', {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'X-Client-Request-Id': clientRequestId,
+    },
+    body: fd,
+  })
+
+  if (!resp.ok) {
+    const txt = await resp.text()
+    throw new Error(txt || `HTTP ${resp.status}`)
+  }
+
+  const data = await resp.json()
+  const jobId = data.job_id || (Array.isArray(data.job_ids) ? data.job_ids[0] : null)
+  if (!jobId) throw new Error('没有返回任务编号')
+
+  onProgress?.('gpt-image-2.5 正在生图...')
+  const result = await pollJob(jobId, 300, onProgress)
+  const finalUrl = normalizeAssetUrl(result.image_url)
+  const dims = await getImageDimensions(finalUrl)
+  return { imageUrl: finalUrl, ...dims }
+}
+
+

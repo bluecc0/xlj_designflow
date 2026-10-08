@@ -12,6 +12,7 @@ interface Props {
   isSingleSelected?: boolean
   onSelect: (isShift: boolean) => void
   onContextMenu?: (e: React.MouseEvent) => void
+  onDoubleClick?: () => void
 }
 
 function ImageShapeInner({
@@ -20,6 +21,7 @@ function ImageShapeInner({
   isSingleSelected = false,
   onSelect,
   onContextMenu,
+  onDoubleClick,
 }: Props) {
   const zoom = useViewportStore((s) => s.zoom)
   const updateImages = useCanvasStore((s) => s.updateImages)
@@ -135,6 +137,10 @@ function ImageShapeInner({
   return (
     <div
       onMouseDown={handleMouseDown}
+      onDoubleClick={(e) => {
+        e.stopPropagation()
+        onDoubleClick?.()
+      }}
       onContextMenu={(e) => {
         e.preventDefault()
         e.stopPropagation()

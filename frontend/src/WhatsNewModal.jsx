@@ -147,7 +147,7 @@ const WhatsNewModal = ({ release, onClose }) => {
             lineHeight: 1.25,
             marginBottom: 6,
           },
-        }, release.title || 'Designflow 更新了'),
+        }, release.title || 'XLJ Studio 更新了'),
         versionLabel ? React.createElement('div', {
           style: {
             fontSize: 12.5,

@@ -1797,6 +1797,7 @@ const Canvas = ({
   resultTemplate,
   editorCommand,
   onUseReferenceImages,
+  onQuickEditGenerate,
   userId
 }) => {
   const t = template;
@@ -1868,6 +1869,10 @@ const Canvas = ({
         if (onUseReferenceImages) {
           onUseReferenceImages(images);
         }
+      } else if (data.type === 'designflow:quick-edit-generate') {
+        if (onQuickEditGenerate) {
+          onQuickEditGenerate(data);
+        }
       }
     };
     window.addEventListener('message', handleMessage);
@@ -1885,7 +1890,7 @@ const Canvas = ({
     };
     setTimeout(ping, 200);
     return () => window.removeEventListener('message', handleMessage);
-  }, [markEditorReady, onUseReferenceImages, postToEditor]);
+  }, [markEditorReady, onUseReferenceImages, onQuickEditGenerate, postToEditor]);
 
   // 宿主全局快捷键穿透中继（当焦点不在输入框时，透传 Cmd/Ctrl+Z 撤销与重做到画布）
   React.useEffect(() => {
@@ -8403,7 +8408,8 @@ const Chat = ({
   onRequestSpecialTemplate,
   seedPrompt,
   onSeedConsumed,
-  canvasReferenceSelection
+  canvasReferenceSelection,
+  quickEditRequest
 }) => {
   const [messages, setMessages] = React.useState([]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
@@ -8737,7 +8743,7 @@ const Chat = ({
     var refs = Array.isArray(refImages) ? refImages : [];
     return Promise.all(refs.map(async function (item, idx) {
       if (item && item.file) return item;
-      var src = normalizeReferenceUrl(item && item.sourceUrl ? item.sourceUrl : item && item.previewUrl ? item.previewUrl : '');
+      var src = normalizeReferenceUrl(item && item.sourceUrl ? item.sourceUrl : item && item.previewUrl ? item.previewUrl : item && item.src ? item.src : item && item.url ? item.url : '');
       if (!src) throw new Error('参考图缺少可读取地址');
       var response = await fetch(src, {
         credentials: 'include'
@@ -9700,7 +9706,7 @@ const Chat = ({
         };
       });
     }
-    if (agentEnabled) {
+    if (agentEnabled && aiOptions.workflow !== 'ai-image') {
       setIsLoading(true);
       var projectId = '';
       var assistantIdx = null;
@@ -10451,6 +10457,32 @@ const Chat = ({
   const handleQuickReply = React.useCallback(function (value) {
     handleSend(value, [], {});
   }, [handleSend]);
+
+  // ── 画布快捷编辑生图请求监听 ──────────────────────────────────────────────
+  const lastQuickEditKeyRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!quickEditRequest || !quickEditRequest.prompt) return;
+    if (quickEditRequest.key && quickEditRequest.key === lastQuickEditKeyRef.current) return;
+    lastQuickEditKeyRef.current = quickEditRequest.key;
+    const promptText = String(quickEditRequest.prompt).trim();
+    if (!promptText) return;
+    const rawImg = quickEditRequest.image;
+    const src = rawImg && (rawImg.src || rawImg.url || '');
+    const refs = src ? [{
+      sourceUrl: src,
+      previewUrl: src,
+      src: src,
+      name: rawImg && rawImg.name || 'reference.png'
+    }] : [];
+    handleSend(promptText, refs, {
+      workflow: 'ai-image',
+      model: 'gpt-image-2.5',
+      provider: 'auto',
+      quality: 'auto',
+      size: 'auto',
+      resolution: '1K'
+    });
+  }, [quickEditRequest, handleSend]);
   const handleParseTable = React.useCallback(async (file, filename, imageType) => {
     // Add user message showing file was uploaded
     setMessages(msgs => [...msgs, {
@@ -14164,7 +14196,7 @@ const WhatsNewModal = ({
       lineHeight: 1.25,
       marginBottom: 6
     }
-  }, release.title || 'Designflow 更新了'), versionLabel ? React.createElement('div', {
+  }, release.title || 'XLJ Studio 更新了'), versionLabel ? React.createElement('div', {
     style: {
       fontSize: 12.5,
       color: 'var(--ink-3)',
@@ -14342,7 +14374,7 @@ const LiteLoginGate = ({
       fontSize: 21,
       color: 'var(--ink)'
     }
-  }, "\u8FDB\u5165 Designflow"), /*#__PURE__*/React.createElement("div", {
+  }, "\u8FDB\u5165 XLJ Studio"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--ink-3)',
@@ -14487,6 +14519,15 @@ const App = () => {
     setCanvasReferenceSelection({
       key: Date.now() + Math.random(),
       images: images.slice(0, 9)
+    });
+  }, []);
+  const [quickEditRequest, setQuickEditRequest] = React.useState(null);
+  const handleQuickEditGenerate = React.useCallback(function (payload) {
+    if (!payload || !payload.prompt) return;
+    setQuickEditRequest({
+      key: Date.now() + Math.random(),
+      prompt: payload.prompt,
+      image: payload.image
     });
   }, []);
   const normalizeDesignflowAssetUrl = React.useCallback(function (rawUrl) {
@@ -14848,6 +14889,7 @@ const App = () => {
       resultTemplate: resultTemplate,
       editorCommand: editorCommand,
       onUseReferenceImages: handleUseCanvasReferences,
+      onQuickEditGenerate: handleQuickEditGenerate,
       userId: currentUser.id
     }),
     childrenB: /*#__PURE__*/React.createElement(InspirationPanel, {
@@ -14868,7 +14910,8 @@ const App = () => {
     onRequestSpecialTemplate: handleRequestSpecialTemplate,
     seedPrompt: seedPrompt,
     onSeedConsumed: handleSeedConsumed,
-    canvasReferenceSelection: canvasReferenceSelection
+    canvasReferenceSelection: canvasReferenceSelection,
+    quickEditRequest: quickEditRequest
   })), /*#__PURE__*/React.createElement(Tweaks, {
     visible: tweaksVisible,
     tweaks: tweaks,

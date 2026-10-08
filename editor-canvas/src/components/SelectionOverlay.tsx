@@ -9,6 +9,7 @@ import { useSnapStore } from '../store/snapStore'
 interface Props {
   image: CanvasImage
   onContextMenu?: (e: React.MouseEvent) => void
+  onDoubleClick?: () => void
 }
 
 const HANDLES: { pos: ResizeHandle; cursor: string; x: string; y: string }[] = [
@@ -22,7 +23,7 @@ const HANDLES: { pos: ResizeHandle; cursor: string; x: string; y: string }[] = [
   { pos: 'w', cursor: 'ew-resize', x: '0%', y: '50%' },
 ]
 
-export function SelectionOverlay({ image, onContextMenu }: Props) {
+export function SelectionOverlay({ image, onContextMenu, onDoubleClick }: Props) {
   const zoom = useViewportStore((s) => s.zoom)
   const screenToCanvas = useViewportStore((s) => s.screenToCanvas)
   const updateImage = useCanvasStore((s) => s.updateImage)
@@ -211,6 +212,10 @@ export function SelectionOverlay({ image, onContextMenu }: Props) {
       {/* 选中外框（极简暗色，无蓝色，边框保持 1.5px 屏幕像素） */}
       <div
         onMouseDown={handleMoveMouseDown}
+        onDoubleClick={(e) => {
+          e.stopPropagation()
+          onDoubleClick?.()
+        }}
         onContextMenu={(e) => {
           e.preventDefault()
           e.stopPropagation()

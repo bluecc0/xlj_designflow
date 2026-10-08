@@ -1,6 +1,6 @@
 ﻿// Main canvas — now simplified to just show the selected template preview.
 
-const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages, userId }) => {
+const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages, onQuickEditGenerate, userId }) => {
   const t = template;
   const hasResult = resultTemplate != null;
   const iframeRef = React.useRef(null);
@@ -65,6 +65,10 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
         if (onUseReferenceImages) {
           onUseReferenceImages(images);
         }
+      } else if (data.type === 'designflow:quick-edit-generate') {
+        if (onQuickEditGenerate) {
+          onQuickEditGenerate(data);
+        }
       }
     };
     window.addEventListener('message', handleMessage);
@@ -81,7 +85,7 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
     setTimeout(ping, 200);
 
     return () => window.removeEventListener('message', handleMessage);
-  }, [markEditorReady, onUseReferenceImages, postToEditor]);
+  }, [markEditorReady, onUseReferenceImages, onQuickEditGenerate, postToEditor]);
 
   // 宿主全局快捷键穿透中继（当焦点不在输入框时，透传 Cmd/Ctrl+Z 撤销与重做到画布）
   React.useEffect(() => {

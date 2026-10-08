@@ -38,7 +38,7 @@ const LiteLoginGate = ({ onLogin, loading, error, initialName }) => {
         display: 'flex', flexDirection: 'column', gap: 12,
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <div className="serif" style={{ fontSize: 21, color: 'var(--ink)' }}>进入 Designflow</div>
+          <div className="serif" style={{ fontSize: 21, color: 'var(--ink)' }}>进入 XLJ Studio</div>
           <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.5 }}>
             请输入用户名和密码登录。
           </div>
@@ -179,6 +179,15 @@ const App = () => {
     setCanvasReferenceSelection({
       key: Date.now() + Math.random(),
       images: images.slice(0, 9),
+    });
+  }, []);
+  const [quickEditRequest, setQuickEditRequest] = React.useState(null);
+  const handleQuickEditGenerate = React.useCallback(function(payload) {
+    if (!payload || !payload.prompt) return;
+    setQuickEditRequest({
+      key: Date.now() + Math.random(),
+      prompt: payload.prompt,
+      image: payload.image,
     });
   }, []);
 
@@ -527,6 +536,7 @@ const App = () => {
                   resultTemplate={resultTemplate}
                   editorCommand={editorCommand}
                   onUseReferenceImages={handleUseCanvasReferences}
+                  onQuickEditGenerate={handleQuickEditGenerate}
                   userId={currentUser.id}
                 />
               }
@@ -550,6 +560,7 @@ const App = () => {
               seedPrompt={seedPrompt}
               onSeedConsumed={handleSeedConsumed}
               canvasReferenceSelection={canvasReferenceSelection}
+              quickEditRequest={quickEditRequest}
             />
           </div>
           <Tweaks

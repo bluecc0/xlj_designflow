@@ -23,6 +23,7 @@ import {
   Maximize,
   Package,
   Info,
+  Sparkles,
 } from 'lucide-react'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
@@ -41,6 +42,7 @@ interface Props {
   onClose: () => void
   onOpenImportModal?: (pos: { x: number; y: number }) => void
   onOpenPropertiesModal?: (image: CanvasImage) => void
+  onOpenQuickEdit?: (image: CanvasImage) => void
 }
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
@@ -51,6 +53,7 @@ export const ContextMenu = memo(function ContextMenu({
   onClose,
   onOpenImportModal,
   onOpenPropertiesModal,
+  onOpenQuickEdit,
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null)
@@ -539,10 +542,24 @@ export const ContextMenu = memo(function ContextMenu({
             )}
           </div>
 
-          {/* 单张图片：属性卡片（置于菜单最底部） */}
+          {/* 单张图片：快捷编辑 & 属性卡片 */}
           {isSingleImage && singleImage && (
             <>
               <div style={dividerStyle} />
+              <div
+                data-action="quick-edit"
+                onClick={() => {
+                  onOpenQuickEdit?.(singleImage)
+                  onClose()
+                }}
+                style={menuItemStyle}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f4f8')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              >
+                <Sparkles size={14} color="#687083" strokeWidth={1.8} style={{ pointerEvents: 'none' }} />
+                <span style={{ flex: 1, color: '#1e232d' }}>快捷编辑</span>
+                <span style={shortcutStyle}>双击</span>
+              </div>
               <div
                 data-action="image-properties"
                 onClick={() => {

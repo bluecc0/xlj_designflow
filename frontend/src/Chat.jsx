@@ -4204,7 +4204,7 @@ const mapAgentProjectMessages = function(project, images) {
   }));
 };
 
-const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
+const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection, quickEditRequest }) => {
   const [messages, setMessages] = React.useState([]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
   const [agentMessages, setAgentMessages] = React.useState([]);
@@ -4516,7 +4516,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
     var refs = Array.isArray(refImages) ? refImages : [];
     return Promise.all(refs.map(async function(item, idx) {
       if (item && item.file) return item;
-      var src = normalizeReferenceUrl(item && item.sourceUrl ? item.sourceUrl : item && item.previewUrl ? item.previewUrl : '');
+      var src = normalizeReferenceUrl(item && item.sourceUrl ? item.sourceUrl : item && item.previewUrl ? item.previewUrl : item && item.src ? item.src : item && item.url ? item.url : '');
       if (!src) throw new Error('参考图缺少可读取地址');
       var response = await fetch(src, { credentials: 'include' });
       if (!response.ok) throw new Error('参考图读取失败: HTTP ' + response.status);
@@ -5410,7 +5410,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
       });
     }
 
-    if (agentEnabled) {
+    if (agentEnabled && aiOptions.workflow !== 'ai-image') {
       setIsLoading(true);
       var projectId = '';
       var assistantIdx = null;
@@ -5994,6 +5994,35 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
   const handleQuickReply = React.useCallback(function(value) {
     handleSend(value, [], {});
   }, [handleSend]);
+
+  // ── 画布快捷编辑生图请求监听 ──────────────────────────────────────────────
+  const lastQuickEditKeyRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!quickEditRequest || !quickEditRequest.prompt) return;
+    if (quickEditRequest.key && quickEditRequest.key === lastQuickEditKeyRef.current) return;
+    lastQuickEditKeyRef.current = quickEditRequest.key;
+
+    const promptText = String(quickEditRequest.prompt).trim();
+    if (!promptText) return;
+
+    const rawImg = quickEditRequest.image;
+    const src = rawImg && (rawImg.src || rawImg.url || '');
+    const refs = src ? [{
+      sourceUrl: src,
+      previewUrl: src,
+      src: src,
+      name: (rawImg && rawImg.name) || 'reference.png',
+    }] : [];
+
+    handleSend(promptText, refs, {
+      workflow: 'ai-image',
+      model: 'gpt-image-2.5',
+      provider: 'auto',
+      quality: 'auto',
+      size: 'auto',
+      resolution: '1K',
+    });
+  }, [quickEditRequest, handleSend]);
 
   const handleParseTable = React.useCallback(async (file, filename, imageType) => {
     // Add user message showing file was uploaded

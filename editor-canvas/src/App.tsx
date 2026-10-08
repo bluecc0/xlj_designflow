@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
+import { Sparkles } from 'lucide-react'
 import { CanvasGrid } from './components/CanvasGrid'
 import { FrameShape } from './components/FrameShape'
 import { ImageShape } from './components/ImageShape'
@@ -14,13 +15,14 @@ import { MarqueeSelection } from './components/MarqueeSelection'
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu'
 import { ImportProductModal } from './components/ImportProductModal'
 import { ImagePropertiesModal } from './components/ImagePropertiesModal'
+import { QuickEditPopover } from './components/QuickEditPopover'
 import { SnapGuides } from './components/SnapGuides'
-import type { OutpaintMargins } from './types'
+import type { OutpaintMargins, CanvasImage } from './types'
 import { useViewportStore } from './store/viewportStore'
 import { useCanvasStore } from './store/canvasStore'
 import { useHistoryStore } from './store/historyStore'
 import { useAIOperationStore } from './store/aiOperationStore'
-import { runOutpainting, getImageDimensions } from './services/aiImageService'
+import { runOutpainting, runQuickEdit, getImageDimensions } from './services/aiImageService'
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 import { loadImagesFromFiles } from './utils/imageLoader'
 
@@ -117,6 +119,9 @@ export function App() {
     targetPos: { x: number; y: number } | null
   }>({ visible: false, targetPos: null })
   const [propertiesModalImage, setPropertiesModalImage] = useState<any>(null)
+  const [quickEditImage, setQuickEditImage] = useState<CanvasImage | null>(null)
+  const [quickEditToast, setQuickEditToast] = useState<string | null>(null)
+  const [isQuickEditSubmitting, setIsQuickEditSubmitting] = useState(false)
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const dragDepthRef = useRef(0)
 
@@ -307,6 +312,75 @@ export function App() {
       releaseOperation()
     }
   }, [outpaintingImageId, images, outpaintMargins, outpaintInitialImage, claimOperation, updateOperation, releaseOperation, addImage, setSelected])
+
+  const handleQuickEditSubmit = useCallback(
+    async (prompt: string, targetImage: CanvasImage) => {
+      setIsQuickEditSubmitting(true)
+      try {
+        const isEmbedded = typeof window !== 'undefined' && window.parent && window.parent !== window
+        if (isEmbedded) {
+          window.parent.postMessage(
+            {
+              type: 'designflow:quick-edit-generate',
+              prompt,
+              image: {
+                id: targetImage.id,
+                src: targetImage.url,
+                url: targetImage.url,
+                name: targetImage.name || 'reference.png',
+                width: targetImage.width,
+                height: targetImage.height,
+              },
+            },
+            '*'
+          )
+          setQuickEditToast('已提交生图任务，正在使用 gpt-image-2.5 智能路由生成...')
+          setTimeout(() => {
+            setQuickEditToast(null)
+          }, 3500)
+          setQuickEditImage(null)
+        } else {
+          // 独立运行时的直接调用
+          claimOperation('quick-edit', '正在提交快捷编辑任务...')
+          setQuickEditToast('正在使用 gpt-image-2.5 生成图片...')
+          const result = await runQuickEdit(
+            targetImage.url,
+            prompt,
+            (msg, progress) => {
+              updateOperation({ message: msg, progress })
+            }
+          )
+          const newX = targetImage.x + targetImage.width + 24
+          const newY = targetImage.y
+          const newImg = addImage({
+            id: 'img-' + Math.random().toString(36).slice(2, 10),
+            frameId: targetImage.frameId,
+            x: newX,
+            y: newY,
+            width: targetImage.width,
+            height: targetImage.height,
+            rotation: 0,
+            url: result.imageUrl,
+            name: `${targetImage.name || 'image'}-编辑`,
+            naturalWidth: result.width,
+            naturalHeight: result.height,
+            locked: false,
+            opacity: 1,
+          })
+          setSelected([newImg.id], 'image')
+          setQuickEditToast('快捷编辑生图完成')
+          setTimeout(() => setQuickEditToast(null), 3000)
+          setQuickEditImage(null)
+        }
+      } catch (err: any) {
+        alert(`快捷编辑失败: ${err.message}`)
+      } finally {
+        setIsQuickEditSubmitting(false)
+        releaseOperation()
+      }
+    },
+    [claimOperation, updateOperation, releaseOperation, addImage, setSelected]
+  )
 
   // 1. 快捷键监听
   useEffect(() => {
@@ -1325,6 +1399,13 @@ export function App() {
                   setSelected([im.id], 'image')
                 }
               }}
+              onDoubleClick={() => {
+                if (outpaintingImageIdRef.current && outpaintingImageIdRef.current !== im.id) {
+                  handleCancelOutpainting()
+                }
+                setSelected([im.id], 'image')
+                setQuickEditImage(im)
+              }}
               onContextMenu={(e) => {
                 if (outpaintingImageIdRef.current && outpaintingImageIdRef.current !== im.id) {
                   handleCancelOutpainting()
@@ -1387,6 +1468,9 @@ export function App() {
           <div style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
             <SelectionOverlay
               image={singleSelectedImage}
+              onDoubleClick={() => {
+                setQuickEditImage(singleSelectedImage)
+              }}
               onContextMenu={(e) => {
                 setContextMenu({
                   visible: true,
@@ -1439,6 +1523,10 @@ export function App() {
           setImportModalState({ visible: true, targetPos: pt })
         }}
         onOpenPropertiesModal={(img) => setPropertiesModalImage(img)}
+        onOpenQuickEdit={(img) => {
+          setSelected([img.id], 'image')
+          setQuickEditImage(img)
+        }}
       />
 
       {/* 导入产品图输入弹窗 */}
@@ -1454,6 +1542,43 @@ export function App() {
           image={propertiesModalImage}
           onClose={() => setPropertiesModalImage(null)}
         />
+      )}
+
+      {/* 图片快捷编辑弹出输入框 */}
+      {quickEditImage && (
+        <QuickEditPopover
+          image={quickEditImage}
+          onClose={() => setQuickEditImage(null)}
+          onSubmit={handleQuickEditSubmit}
+          isSubmitting={isQuickEditSubmitting}
+        />
+      )}
+
+      {/* 快捷操作反馈轻提示 */}
+      {quickEditToast && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 54,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 1100,
+            backgroundColor: '#0f172a',
+            color: '#ffffff',
+            padding: '7px 16px',
+            borderRadius: 99,
+            fontSize: 12,
+            fontWeight: 500,
+            boxShadow: '0 8px 24px rgba(15, 23, 42, 0.22)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 7,
+            pointerEvents: 'none',
+          }}
+        >
+          <Sparkles size={13} />
+          <span>{quickEditToast}</span>
+        </div>
       )}
 
       {/* 竖向浮动右侧工具坞 */}

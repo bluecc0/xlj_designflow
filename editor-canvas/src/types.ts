@@ -133,7 +133,7 @@ export interface OutpaintMargins {
 }
 
 export interface AIOperationState {
-  type: 'outpainting' | 'upscale' | 'matting' | 'vectorize' | 'layer-extract' | null
+  type: 'outpainting' | 'upscale' | 'matting' | 'vectorize' | 'layer-extract' | 'quick-edit' | null
   status: 'idle' | 'running' | 'done' | 'error'
   jobId?: string
   progress?: number
