@@ -2267,12 +2267,19 @@ async def health():
 @app.get("/health/deep")
 async def health_deep():
     local_health = _local_health_payload()
+    # Penpot is a local/LAN dependency and must never be sent through the
+    # optional AI API proxy. Keep a separate client so a proxy failure cannot
+    # make a working Penpot instance appear offline in the service dashboard.
+    penpot_client_kwargs: dict[str, Any] = {"timeout": 3, "trust_env": False}
     client_kwargs: dict[str, Any] = {"timeout": 3, "trust_env": False}
     if settings.ai_image_api_proxy_url:
         client_kwargs["proxy"] = settings.ai_image_api_proxy_url
-    async with httpx.AsyncClient(**client_kwargs) as client:
+    async with (
+        httpx.AsyncClient(**penpot_client_kwargs) as penpot_client,
+        httpx.AsyncClient(**client_kwargs) as client,
+    ):
         penpot_ok, ai_provider, adobe_provider = await asyncio.gather(
-            _probe_penpot(client),
+            _probe_penpot(penpot_client),
             _probe_apimart(client),
             _probe_adobe2api(client),
         )
