@@ -1,5 +1,5 @@
 import React, { memo, useEffect, useRef, useState } from 'react'
-import { Sparkles, Loader2 } from 'lucide-react'
+import { ArrowUp, Loader2 } from 'lucide-react'
 import type { CanvasImage } from '../types'
 import { useViewportStore } from '../store/viewportStore'
 
@@ -16,6 +16,7 @@ export const QuickEditPopover = memo(function QuickEditPopover({
   onSubmit,
   isSubmitting = false,
 }: Props) {
+  // 输入框初始为空，展示预输入灰色提示文案
   const [prompt, setPrompt] = useState('')
   const popoverRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -58,9 +59,9 @@ export const QuickEditPopover = memo(function QuickEditPopover({
     onSubmit(cleanPrompt, image)
   }
 
-  // 视口坐标计算（极简单行胶囊悬浮坞）
-  const popoverWidth = 360
-  const popoverHeight = 38
+  // 视口坐标计算（极简暗色圆形胶囊坞）
+  const popoverWidth = 420
+  const popoverHeight = 44
   const winW = typeof window !== 'undefined' ? window.innerWidth : 1200
   const winH = typeof window !== 'undefined' ? window.innerHeight : 800
 
@@ -83,6 +84,8 @@ export const QuickEditPopover = memo(function QuickEditPopover({
     }
   }
 
+  const canSubmit = Boolean(prompt.trim()) && !isSubmitting
+
   return (
     <div
       ref={popoverRef}
@@ -100,25 +103,31 @@ export const QuickEditPopover = memo(function QuickEditPopover({
         maxWidth: 'calc(100vw - 28px)',
         height: popoverHeight,
         zIndex: 900,
-        backgroundColor: 'rgba(255, 255, 255, 0.94)',
+        backgroundColor: 'rgba(32, 34, 40, 0.96)',
         backdropFilter: 'blur(24px)',
         WebkitBackdropFilter: 'blur(24px)',
         borderRadius: 9999,
-        border: '1px solid #e7e9ee',
-        boxShadow: '0 12px 34px rgba(20, 47, 95, 0.10), 0 2px 6px rgba(20, 47, 95, 0.04)',
+        border: '1px solid rgba(255, 255, 255, 0.10)',
+        boxShadow: '0 16px 40px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.22)',
         display: 'flex',
         alignItems: 'center',
-        padding: '0 5px 0 13px',
+        padding: '0 6px 0 18px',
         boxSizing: 'border-box',
-        gap: 8,
+        gap: 10,
         userSelect: 'none',
       }}
     >
-      <Sparkles size={14} color="#687083" strokeWidth={1.8} style={{ flexShrink: 0, pointerEvents: 'none' }} />
+      <style>{`
+        .quick-edit-pill-input::placeholder {
+          color: #848999;
+          opacity: 1;
+        }
+      `}</style>
 
       <input
         ref={inputRef}
         type="text"
+        className="quick-edit-pill-input"
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={(e) => {
@@ -135,7 +144,7 @@ export const QuickEditPopover = memo(function QuickEditPopover({
           }
         }}
         onKeyUp={(e) => e.stopPropagation()}
-        placeholder="输入改图提示词，Enter 发送..."
+        placeholder="输入改图提示词，描述你想生成的图片..."
         disabled={isSubmitting}
         style={{
           flex: 1,
@@ -143,52 +152,48 @@ export const QuickEditPopover = memo(function QuickEditPopover({
           border: 'none',
           outline: 'none',
           backgroundColor: 'transparent',
-          fontSize: 13,
-          color: '#181b24',
+          fontSize: 13.5,
+          color: '#ffffff',
           padding: 0,
           fontFamily: 'inherit',
+          caretColor: '#ffffff',
         }}
       />
 
       <button
         type="button"
         onClick={handleSubmit}
-        disabled={!prompt.trim() || isSubmitting}
+        disabled={!canSubmit}
+        aria-label="生成"
         style={{
-          height: 28,
-          padding: '0 12px',
-          borderRadius: 9999,
+          width: 32,
+          height: 32,
+          borderRadius: '50%',
           border: 'none',
-          backgroundColor: !prompt.trim() || isSubmitting ? '#eef1f6' : '#181b24',
-          color: !prompt.trim() || isSubmitting ? '#94a3b8' : '#ffffff',
-          fontSize: 12,
-          fontWeight: 500,
-          cursor: !prompt.trim() || isSubmitting ? 'not-allowed' : 'pointer',
+          backgroundColor: '#ffffff',
+          color: '#181b24',
+          cursor: canSubmit ? 'pointer' : 'not-allowed',
+          opacity: canSubmit ? 1 : 0.4,
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: 4,
           flexShrink: 0,
-          transition: 'background-color 140ms ease, color 140ms ease',
+          transition: 'opacity 150ms ease, transform 120ms ease, background-color 150ms ease',
+          boxShadow: canSubmit ? '0 2px 8px rgba(0, 0, 0, 0.2)' : 'none',
         }}
         onMouseEnter={(e) => {
-          if (prompt.trim() && !isSubmitting) {
-            e.currentTarget.style.backgroundColor = '#2d3340'
+          if (canSubmit) {
+            e.currentTarget.style.transform = 'scale(1.05)'
           }
         }}
         onMouseLeave={(e) => {
-          if (prompt.trim() && !isSubmitting) {
-            e.currentTarget.style.backgroundColor = '#181b24'
-          }
+          e.currentTarget.style.transform = 'scale(1)'
         }}
       >
         {isSubmitting ? (
-          <>
-            <Loader2 size={12} className="animate-spin" />
-            <span>生成中</span>
-          </>
+          <Loader2 size={15} className="animate-spin" />
         ) : (
-          <span>生成</span>
+          <ArrowUp size={16} strokeWidth={2.4} />
         )}
       </button>
     </div>
