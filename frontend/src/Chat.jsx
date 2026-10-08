@@ -1849,6 +1849,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
   const [aiProvider, setAiProvider] = React.useState('auto');
   const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [smartDistributeMode, setSmartDistributeMode] = React.useState('full');
+  const [specialRouteMode, setSpecialRouteMode] = React.useState('auto');
   const [manualRefImages, setManualRefImages] = React.useState([]);
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
@@ -2215,6 +2216,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
     if (agentEnabled) return;
     const mode = next && next.mode ? next.mode : '';
     setSelectedMode(mode);
+    if (mode === 'special_full') setSpecialRouteMode('full');
+    else if (mode === 'special') setSpecialRouteMode('auto');
     setSelectedSkill('');
     setSelectedWorkflow(next && next.workflow ? next.workflow : 'chat');
     setPrototypePanel('');
@@ -2287,6 +2290,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       workflow: selectedWorkflowMode,
       model: activeAiModel,
       mode: selectedMode,
+      specialRouteMode: specialRouteMode,
       batchCount: activeMode === 'ai-image' ? normalizedBatchCount : 1,
       skill: skillInvocation.skill || '',
       skillPrompt: executionMessage,
@@ -2294,6 +2298,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
     setAiBatchCount(String(normalizedBatchCount));
     setText('');
     setSelectedSkill('');
+    setSpecialRouteMode('auto');
     clearRefImages();
   };
 
@@ -2761,11 +2766,11 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
   const qualityMap = { auto: '自动', medium: '中等', xhigh: '高', max: '最高' };
   const qualityTag = (activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto') ? (' · ' + (qualityMap[aiQualityTier] || aiQualityTier)) : '';
   const modeParamLabel = activeMode === 'ai-image'
-    ? (aiRatio + ' · ' + aiQuality + (activeAiModel === 'gpt-image-2.5' ? (' · ' + aiVariant + qualityTag) : ''))
+    ? (aiRatio + ' · ' + aiQuality + (activeAiModel === 'gpt-image-2.5' ? (' · ' + ({ flare: '快速', sunburst: '优质' }[aiVariant] || aiVariant) + qualityTag) : ''))
     : activeMode === 'special_full'
       ? '线路 完整'
       : activeMode === 'special'
-        ? '线路 普通'
+        ? ('线路 ' + (specialRouteMode === 'auto' ? '自动' : specialRouteMode === 'full' ? '完整' : '普通'))
         : selectedWorkflow === 'compose'
           ? (imageType ? ('素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType)) : '')
           : selectedWorkflow === 'distribute'
@@ -3185,7 +3190,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
                   background: 'var(--panel)',
                 }
               },
-                [['flare', 'Flare'], ['sunburst', 'Sunburst']].map(function(item, idx) {
+                [['flare', '快速'], ['sunburst', '优质']].map(function(item, idx) {
                   const active = aiVariant === item[0];
                   return React.createElement('button', {
                     key: item[0],
@@ -3417,21 +3422,23 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
         ),
         isSpecialParams && React.createElement(React.Fragment, null,
           protoSectionLabel('模板线路'),
-          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 } },
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7 } },
             [
+              { mode: 'auto', label: '自动' },
               { mode: 'special', label: '普通' },
               { mode: 'special_full', label: '完整' },
             ].map(function(item) {
-              const active = selectedMode === item.mode;
+              const active = item.mode === 'auto' ? (selectedMode === 'special' && specialRouteMode === 'auto') : selectedMode === item.mode;
               return React.createElement('button', {
                 key: item.mode,
                 type: 'button',
                 onClick: function() {
-                  setSelectedMode(item.mode);
+                  setSpecialRouteMode(item.mode === 'special_full' ? 'full' : item.mode === 'special' ? 'normal' : 'auto');
+                  setSelectedMode(item.mode === 'auto' ? 'special' : item.mode);
                   setSelectedSkill('');
                   setSelectedWorkflow('chat');
                   if (onRequestSpecialTemplate) {
-                    onRequestSpecialTemplate(item.mode === 'special_full' ? 'full' : 'normal');
+                    onRequestSpecialTemplate(item.mode === 'special_full' ? 'full' : item.mode === 'special' ? 'normal' : 'auto');
                   }
                   setPrototypePanel('');
                   setTimeout(function() {
@@ -5838,12 +5845,30 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
     // ── 特殊品流程 ────────────────────────────────────────────────────
     const isSpecialWorkflow = aiOptions.workflow === 'special' || aiOptions.workflow === 'special_full' || aiOptions.mode === 'special' || aiOptions.mode === 'special_full';
     if (isSpecialWorkflow) {
-      const isFull = aiOptions.workflow === 'special_full' || aiOptions.mode === 'special_full';
+      let isFull = aiOptions.workflow === 'special_full' || aiOptions.mode === 'special_full';
+      const routeMode = aiOptions.specialRouteMode || (aiOptions.mode === 'special_full' ? 'full' : 'auto');
+      if (routeMode === 'full') isFull = true;
+      if (routeMode === 'normal') isFull = false;
+      if (routeMode === 'auto') {
+        try {
+          const detectResp = await fetch(`${window.API_BASE || window.location.origin}/special-compose/detect?sku=${encodeURIComponent((text.trim().split('，')[0] || ''))}`, { credentials: 'include' });
+          if (detectResp.ok) {
+            const detectData = await detectResp.json();
+            isFull = Boolean(detectData && detectData.has_scene);
+          }
+        } catch (detectError) {
+          console.warn('Detect special materials failed:', detectError);
+        }
+      }
       const _cmdLabel  = isFull ? '特殊品（完整）' : '特殊品';
       const _endpoint  = isFull ? '/special-compose-full' : '/special-compose';
       const _pollBase  = isFull ? '/special-compose-full' : '/special-compose';
       const _errHint   = '请提供 SKU，格式：SKU，文案，时间文案';
       const _tplHint   = isFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板';
+      const templates = Array.isArray(window.TEMPLATES) ? window.TEMPLATES : [];
+      const effectiveTemplate = templates.find(function(t) {
+        return isFull ? t.is_special_full : (t.is_special && !t.is_special_full);
+      }) || template;
 
       const displayText = text.trim();
       setMessages(msgs => [...msgs, { who: 'user', text: displayText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
@@ -5865,11 +5890,11 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
         const sku = parts[0] || '';
         const fields = { name: parts[1] || '', time: parts[2] || '' };
         if (!sku) throw new Error(_errHint);
-        if (!template) throw new Error(_tplHint);
+        if (!effectiveTemplate) throw new Error(_tplHint);
 
-        const frameIds = template.frames ? template.frames.map(f => f.id) : [template.id];
-        const fileId = template.file_id || (template.frames && template.frames[0]?.file_id);
-        const pageId = template.page_id || (template.frames && template.frames[0]?.page_id);
+        const frameIds = effectiveTemplate.frames ? effectiveTemplate.frames.map(f => f.id) : [effectiveTemplate.id];
+        const fileId = effectiveTemplate.file_id || (effectiveTemplate.frames && effectiveTemplate.frames[0]?.file_id);
+        const pageId = effectiveTemplate.page_id || (effectiveTemplate.frames && effectiveTemplate.frames[0]?.page_id);
 
         const resp = await fetch(_endpoint, {
           method: 'POST',
@@ -5906,15 +5931,15 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
               return frameIds.map((_, i) => `/results/${job['id']}/frame_${i}.png`);
             };
             const urls = buildUrls();
-            const frameNames = (template.frames && template.frames.length > 0 ? template.frames : [template]).map(f => f.name || f.variant || '画板');
+            const frameNames = (effectiveTemplate.frames && effectiveTemplate.frames.length > 0 ? effectiveTemplate.frames : [effectiveTemplate]).map(f => f.name || f.variant || '画板');
             const zipUrl = `${_pollBase}/${job['id']}/download-zip?names=${encodeURIComponent(frameNames.join(','))}`;
             setMessages(msgs => msgs.map((m, idx) => {
               if (idx !== specialMsgIdx) return m;
               return { ...m, status: 'done', specialUrls: urls, penpotUrl: s.penpot_edit_url, zipUrl };
             }));
             // 构建 resultTpl 供画布预览
-            if (onComposeComplete && urls.length > 0 && template) {
-              const base = structuredClone(template);
+            if (onComposeComplete && urls.length > 0 && effectiveTemplate) {
+              const base = structuredClone(effectiveTemplate);
               const baseFrames = base.frames && base.frames.length > 0 ? base.frames : [base];
               base.frames = urls.map((url, i) => ({ ...(baseFrames[i % baseFrames.length] || baseFrames[0]), resultUrl: url }));
               base._frameNames = frameNames;

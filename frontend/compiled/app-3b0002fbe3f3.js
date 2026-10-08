@@ -5794,6 +5794,7 @@ const Composer = ({
   const [aiProvider, setAiProvider] = React.useState('auto');
   const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [smartDistributeMode, setSmartDistributeMode] = React.useState('full');
+  const [specialRouteMode, setSpecialRouteMode] = React.useState('auto');
   const [manualRefImages, setManualRefImages] = React.useState([]);
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
@@ -6239,6 +6240,7 @@ const Composer = ({
     if (agentEnabled) return;
     const mode = next && next.mode ? next.mode : '';
     setSelectedMode(mode);
+    if (mode === 'special_full') setSpecialRouteMode('full');else if (mode === 'special') setSpecialRouteMode('auto');
     setSelectedSkill('');
     setSelectedWorkflow(next && next.workflow ? next.workflow : 'chat');
     setPrototypePanel('');
@@ -6317,6 +6319,7 @@ const Composer = ({
       workflow: selectedWorkflowMode,
       model: activeAiModel,
       mode: selectedMode,
+      specialRouteMode: specialRouteMode,
       batchCount: activeMode === 'ai-image' ? normalizedBatchCount : 1,
       skill: skillInvocation.skill || '',
       skillPrompt: executionMessage
@@ -6324,6 +6327,7 @@ const Composer = ({
     setAiBatchCount(String(normalizedBatchCount));
     setText('');
     setSelectedSkill('');
+    setSpecialRouteMode('auto');
     clearRefImages();
   };
   const overlayRef = React.useRef(null);
@@ -6794,7 +6798,10 @@ const Composer = ({
     max: '最高'
   };
   const qualityTag = activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto' ? ' · ' + (qualityMap[aiQualityTier] || aiQualityTier) : '';
-  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + (activeAiModel === 'gpt-image-2.5' ? ' · ' + aiVariant + qualityTag : '') : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 普通' : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
+  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + (activeAiModel === 'gpt-image-2.5' ? ' · ' + ({
+    flare: '快速',
+    sunburst: '优质'
+  }[aiVariant] || aiVariant) + qualityTag : '') : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 ' + (specialRouteMode === 'auto' ? '自动' : specialRouteMode === 'full' ? '完整' : '普通') : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
   const isSub2ApiRoute = activeMode === 'ai-image' && (aiProvider === 'sub2api' || aiProvider === 'auto' && (activeAiModel === 'gpt-image-2.5' || activeAiModel === 'gpt-image-2') && (aiQuality === '1K' || !aiQuality) && !(activeAiModel === 'gpt-image-2.5' && (aiQualityTier === 'max' || aiQualityTier === 'xhigh')));
   const selectedSettingBits = [activeSkillInfo ? '$' + activeSkillInfo.name : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? '⚡ 智能' : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
   const composerPlaceholder = agentEnabled ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）' : activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
@@ -7222,7 +7229,7 @@ const Composer = ({
           overflow: 'hidden',
           background: 'var(--panel)'
         }
-      }, [['flare', 'Flare'], ['sunburst', 'Sunburst']].map(function (item, idx) {
+      }, [['flare', '快速'], ['sunburst', '优质']].map(function (item, idx) {
         const active = aiVariant === item[0];
         return React.createElement('button', {
           key: item[0],
@@ -7449,26 +7456,30 @@ const Composer = ({
       }))), isSpecialParams && React.createElement(React.Fragment, null, protoSectionLabel('模板线路'), React.createElement('div', {
         style: {
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          gridTemplateColumns: 'repeat(3, 1fr)',
           gap: 7
         }
       }, [{
+        mode: 'auto',
+        label: '自动'
+      }, {
         mode: 'special',
         label: '普通'
       }, {
         mode: 'special_full',
         label: '完整'
       }].map(function (item) {
-        const active = selectedMode === item.mode;
+        const active = item.mode === 'auto' ? selectedMode === 'special' && specialRouteMode === 'auto' : selectedMode === item.mode;
         return React.createElement('button', {
           key: item.mode,
           type: 'button',
           onClick: function () {
-            setSelectedMode(item.mode);
+            setSpecialRouteMode(item.mode === 'special_full' ? 'full' : item.mode === 'special' ? 'normal' : 'auto');
+            setSelectedMode(item.mode === 'auto' ? 'special' : item.mode);
             setSelectedSkill('');
             setSelectedWorkflow('chat');
             if (onRequestSpecialTemplate) {
-              onRequestSpecialTemplate(item.mode === 'special_full' ? 'full' : 'normal');
+              onRequestSpecialTemplate(item.mode === 'special_full' ? 'full' : item.mode === 'special' ? 'normal' : 'auto');
             }
             setPrototypePanel('');
             setTimeout(function () {
@@ -10239,12 +10250,32 @@ const Chat = ({
     // ── 特殊品流程 ────────────────────────────────────────────────────
     const isSpecialWorkflow = aiOptions.workflow === 'special' || aiOptions.workflow === 'special_full' || aiOptions.mode === 'special' || aiOptions.mode === 'special_full';
     if (isSpecialWorkflow) {
-      const isFull = aiOptions.workflow === 'special_full' || aiOptions.mode === 'special_full';
+      let isFull = aiOptions.workflow === 'special_full' || aiOptions.mode === 'special_full';
+      const routeMode = aiOptions.specialRouteMode || (aiOptions.mode === 'special_full' ? 'full' : 'auto');
+      if (routeMode === 'full') isFull = true;
+      if (routeMode === 'normal') isFull = false;
+      if (routeMode === 'auto') {
+        try {
+          const detectResp = await fetch(`${window.API_BASE || window.location.origin}/special-compose/detect?sku=${encodeURIComponent(text.trim().split('，')[0] || '')}`, {
+            credentials: 'include'
+          });
+          if (detectResp.ok) {
+            const detectData = await detectResp.json();
+            isFull = Boolean(detectData && detectData.has_scene);
+          }
+        } catch (detectError) {
+          console.warn('Detect special materials failed:', detectError);
+        }
+      }
       const _cmdLabel = isFull ? '特殊品（完整）' : '特殊品';
       const _endpoint = isFull ? '/special-compose-full' : '/special-compose';
       const _pollBase = isFull ? '/special-compose-full' : '/special-compose';
       const _errHint = '请提供 SKU，格式：SKU，文案，时间文案';
       const _tplHint = isFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板';
+      const templates = Array.isArray(window.TEMPLATES) ? window.TEMPLATES : [];
+      const effectiveTemplate = templates.find(function (t) {
+        return isFull ? t.is_special_full : t.is_special && !t.is_special_full;
+      }) || template;
       const displayText = text.trim();
       setMessages(msgs => [...msgs, {
         who: 'user',
@@ -10275,10 +10306,10 @@ const Chat = ({
           time: parts[2] || ''
         };
         if (!sku) throw new Error(_errHint);
-        if (!template) throw new Error(_tplHint);
-        const frameIds = template.frames ? template.frames.map(f => f.id) : [template.id];
-        const fileId = template.file_id || template.frames && template.frames[0]?.file_id;
-        const pageId = template.page_id || template.frames && template.frames[0]?.page_id;
+        if (!effectiveTemplate) throw new Error(_tplHint);
+        const frameIds = effectiveTemplate.frames ? effectiveTemplate.frames.map(f => f.id) : [effectiveTemplate.id];
+        const fileId = effectiveTemplate.file_id || effectiveTemplate.frames && effectiveTemplate.frames[0]?.file_id;
+        const pageId = effectiveTemplate.page_id || effectiveTemplate.frames && effectiveTemplate.frames[0]?.page_id;
         const resp = await fetch(_endpoint, {
           method: 'POST',
           headers: {
@@ -10331,7 +10362,7 @@ const Chat = ({
               return frameIds.map((_, i) => `/results/${job['id']}/frame_${i}.png`);
             };
             const urls = buildUrls();
-            const frameNames = (template.frames && template.frames.length > 0 ? template.frames : [template]).map(f => f.name || f.variant || '画板');
+            const frameNames = (effectiveTemplate.frames && effectiveTemplate.frames.length > 0 ? effectiveTemplate.frames : [effectiveTemplate]).map(f => f.name || f.variant || '画板');
             const zipUrl = `${_pollBase}/${job['id']}/download-zip?names=${encodeURIComponent(frameNames.join(','))}`;
             setMessages(msgs => msgs.map((m, idx) => {
               if (idx !== specialMsgIdx) return m;
@@ -10344,8 +10375,8 @@ const Chat = ({
               };
             }));
             // 构建 resultTpl 供画布预览
-            if (onComposeComplete && urls.length > 0 && template) {
-              const base = structuredClone(template);
+            if (onComposeComplete && urls.length > 0 && effectiveTemplate) {
+              const base = structuredClone(effectiveTemplate);
               const baseFrames = base.frames && base.frames.length > 0 ? base.frames : [base];
               base.frames = urls.map((url, i) => ({
                 ...(baseFrames[i % baseFrames.length] || baseFrames[0]),

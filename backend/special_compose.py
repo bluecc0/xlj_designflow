@@ -110,6 +110,7 @@ def detect_special_materials(sku: str) -> dict:
             "has_scene": False,
             "banner_found": False,
             "poster_found": False,
+            "poster1_found": False,
             "recommended_flow": "special",
         }
     library = ProductLibrary(settings.product_library_path)
@@ -118,12 +119,14 @@ def detect_special_materials(sku: str) -> dict:
 
     banner_path = library.find_in_folder(clean_sku, banner_folder)
     poster_path = library.find_in_folder(clean_sku, poster_folder)
-    has_scene = bool(banner_path or poster_path)
+    poster1_path = library.find_in_folder(f"{clean_sku}_1", poster_folder)
+    has_scene = bool(banner_path or poster_path or poster1_path)
     return {
         "sku": clean_sku,
         "has_scene": has_scene,
         "banner_found": bool(banner_path),
         "poster_found": bool(poster_path),
+        "poster1_found": bool(poster1_path),
         "recommended_flow": "special_full" if has_scene else "special",
     }
 
@@ -525,6 +528,7 @@ def _run_inner(job: SpecialComposeJob) -> None:
         job.penpot_file_id = work_file_id
         job.penpot_page_id = req.page_id
         job.result_frame_ids = valid_frame_ids
+        job.result_frame_names = [str(frame_index[fid].get("name") or "画板") for fid in valid_frame_ids]
 
         results_dir = settings.output_path / "results" / job.id
         results_dir.mkdir(parents=True, exist_ok=True)

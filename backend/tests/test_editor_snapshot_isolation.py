@@ -159,6 +159,7 @@ class EditorSnapshotIsolationTest(unittest.TestCase):
                     empty_doc,
                     base_revision=1,
                     intent="user_delete",
+                    deleted_record_ids=["img-1", "img-2", "img-3"],
                 )
                 self.assertTrue(ok)
                 self.assertEqual(rev2, 2)

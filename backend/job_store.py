@@ -165,6 +165,7 @@ def init_db() -> None:
                 request_json     TEXT NOT NULL,
                 result_paths_json TEXT,
                 result_frame_ids_json TEXT,
+                result_frame_names_json TEXT,
                 penpot_file_id   TEXT,
                 penpot_page_id   TEXT,
                 penpot_edit_url  TEXT,
@@ -174,7 +175,7 @@ def init_db() -> None:
                 updated_at       REAL NOT NULL
             )
         """)
-        for col, typ in [("user_id", "TEXT")]:
+        for col, typ in [("user_id", "TEXT"), ("result_frame_names_json", "TEXT")]:
             try:
                 conn.execute(f"ALTER TABLE special_jobs ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
@@ -614,6 +615,7 @@ def save_special_job(job) -> None:
                 request_json     TEXT NOT NULL,
                 result_paths_json TEXT,
                 result_frame_ids_json TEXT,
+                result_frame_names_json TEXT,
                 penpot_file_id   TEXT,
                 penpot_page_id   TEXT,
                 penpot_edit_url  TEXT,
@@ -623,16 +625,21 @@ def save_special_job(job) -> None:
                 updated_at       REAL NOT NULL
             )
         """)
+        try:
+            conn.execute("ALTER TABLE special_jobs ADD COLUMN result_frame_names_json TEXT")
+        except sqlite3.OperationalError:
+            pass
         conn.execute("""
             INSERT INTO special_jobs
-              (id, user_id, status, sku, request_json, result_paths_json, result_frame_ids_json,
+              (id, user_id, status, sku, request_json, result_paths_json, result_frame_ids_json, result_frame_names_json,
                penpot_file_id, penpot_page_id, penpot_edit_url, error, progress_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 user_id              = excluded.user_id,
                 status               = excluded.status,
                 result_paths_json    = excluded.result_paths_json,
                 result_frame_ids_json = excluded.result_frame_ids_json,
+                result_frame_names_json = excluded.result_frame_names_json,
                 penpot_file_id      = excluded.penpot_file_id,
                 penpot_page_id      = excluded.penpot_page_id,
                 penpot_edit_url     = excluded.penpot_edit_url,
@@ -647,6 +654,7 @@ def save_special_job(job) -> None:
             job.request.model_dump_json() if job.request else '{}',
             json.dumps(job.result_paths, ensure_ascii=False),
             json.dumps(job.result_frame_ids, ensure_ascii=False),
+            json.dumps(getattr(job, "result_frame_names", []), ensure_ascii=False),
             job.penpot_file_id,
             job.penpot_page_id,
             job.penpot_edit_url,
@@ -1752,11 +1760,61 @@ def _should_reject_editor_snapshot_overwrite(old_json: str | None, new_json: str
     return False
 
 
+def _editor_snapshot_canvas_record_ids(snapshot_json: str) -> set[str]:
+    try:
+        snapshot = json.loads(snapshot_json)
+    except Exception:
+        return set()
+    if isinstance(snapshot, dict) and (
+        snapshot.get("version") == 2
+        or "pages" in snapshot
+        or "frames" in snapshot
+        or "images" in snapshot
+        or "texts" in snapshot
+    ):
+        ids: set[str] = set()
+        for key in ("pages", "frames", "images", "texts"):
+            items = snapshot.get(key)
+            if isinstance(items, list):
+                ids.update(
+                    str(item.get("id"))
+                    for item in items
+                    if isinstance(item, dict) and item.get("id")
+                )
+        return ids
+
+    store = {}
+    if isinstance(snapshot, dict):
+        document = snapshot.get("document")
+        if isinstance(document, dict) and isinstance(document.get("store"), dict):
+            store = document["store"]
+        elif isinstance(snapshot.get("store"), dict):
+            store = snapshot["store"]
+    return {
+        str(record_id)
+        for record_id, record in store.items()
+        if isinstance(record, dict) and record.get("typeName") in {"page", "shape"}
+    }
+
+
+def _matches_declared_editor_delete(
+    old_json: str,
+    new_json: str,
+    deleted_record_ids: list[str] | None,
+) -> bool:
+    declared = {str(record_id) for record_id in (deleted_record_ids or []) if record_id}
+    if not declared:
+        return False
+    removed = _editor_snapshot_canvas_record_ids(old_json) - _editor_snapshot_canvas_record_ids(new_json)
+    return bool(removed) and removed == declared
+
+
 def save_editor_snapshot(
     user_id: str,
     snapshot_json: str,
     base_revision: int | None = None,
     intent: str | None = None,
+    deleted_record_ids: list[str] | None = None,
 ) -> tuple[bool, int, str | None]:
     now = time.time()
     with _lock, _connect() as conn:
@@ -1799,9 +1857,15 @@ def save_editor_snapshot(
         if new_stats["pages"] == 0:
             return False, old_revision, "invalid_snapshot_structure"
 
-        # 2. 覆盖防护拦截：若非用户明确发起的删除操作 (intent != 'user_delete')，
-        # 且符合异常清空/缩减特征（如默认单页空画板覆盖原有数据），一律拒绝覆盖！
-        if intent != "user_delete" and _should_reject_editor_snapshot_overwrite(old_json, snapshot_json):
+        # 2. 大幅缩减只允许删除集合与客户端声明完全一致。单独的 user_delete
+        # 标记不足以证明整份快照清空来自用户操作，避免后续异常空白借此绕过保护。
+        destructive_overwrite = _should_reject_editor_snapshot_overwrite(old_json, snapshot_json)
+        declared_delete_matches = intent == "user_delete" and _matches_declared_editor_delete(
+            old_json,
+            snapshot_json,
+            deleted_record_ids,
+        )
+        if destructive_overwrite and not declared_delete_matches:
             reject_dir = settings.root_dir / "output" / "editor-snapshot-rejected"
             reject_dir.mkdir(parents=True, exist_ok=True)
             reject_path = reject_dir / f"{user_id}-{int(now)}.json"

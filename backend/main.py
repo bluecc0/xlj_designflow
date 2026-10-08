@@ -2267,7 +2267,10 @@ async def health():
 @app.get("/health/deep")
 async def health_deep():
     local_health = _local_health_payload()
-    async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
+    client_kwargs: dict[str, Any] = {"timeout": 3, "trust_env": False}
+    if settings.ai_image_api_proxy_url:
+        client_kwargs["proxy"] = settings.ai_image_api_proxy_url
+    async with httpx.AsyncClient(**client_kwargs) as client:
         penpot_ok, ai_provider, adobe_provider = await asyncio.gather(
             _probe_penpot(client),
             _probe_apimart(client),
@@ -3218,13 +3221,35 @@ def download_special_images(job_id: str, request: Request):
     return {"job_id": job_id, "images": urls}
 
 
+_SPECIAL_PNG_FRAME_NAMES = {
+    "分类页",
+    "尖货轮播-pc-1",
+    "尖货轮播-pc-2",
+    "尖货轮播-横版-1",
+    "尖货轮播-横版-2",
+    "sku",
+    "sku-1",
+    "首页sku",
+    "首页sku-1",
+    "首页 sku",
+    "首页 sku-1",
+    "首页[sku]",
+    "首页[sku]-1",
+}
+
+
+def _special_export_filename(frame_name: str, sku: str, variant_label: str, export_format: str) -> str:
+    real_name = re.sub(r"sku", lambda _match: sku, (frame_name or "画板").strip(), flags=re.IGNORECASE)
+    safe_name = _safe_download_filename(real_name)
+    return f"{safe_name}{variant_label}.{export_format}"
+
+
 @app.get("/special-compose/{job_id}/download-zip")
 def download_special_zip(job_id: str, names: str = ""):
     """
     将特殊品合成所有图片打包成 zip 下载。
-    names: 逗号分隔的画板显示名列表，与 result_frame_ids 顺序对应，
-           用于命名文件为 {sku}_{names[i]}.png。
-           若不提供则使用序号。
+    新任务使用合成时从模板读取并保存的真实画板名；其中 sku 占位符替换为真实 SKU。
+    names 仅用于兼容尚未保存画板名的旧任务。
     """
     import zipfile, io
     from PIL import Image
@@ -3237,7 +3262,9 @@ def download_special_zip(job_id: str, names: str = ""):
         raise HTTPException(400, f"任务尚未完成: {job.status}")
 
     sku = job.request.sku or job_id[:8]
-    name_list = [n.strip() for n in names.split(",")] if names else []
+    name_list = list(getattr(job, "result_frame_names", []) or [])
+    if not name_list and names:
+        name_list = [n.strip() for n in names.split(",")]
     # 从独立目录 output/results/{job_id}/ 读取
     results_dir = settings.output_path / "results" / job_id
     job_prefix = job.id + "_"
@@ -3260,32 +3287,6 @@ def download_special_zip(job_id: str, names: str = ""):
     })
     variant_labels = {k: f"_版本{k[2:]}" for k in variant_keys}  # _v1→_版本1, _v2→_版本2
 
-    # 特定画板名 → 自定义文件名前缀规则
-    # key: 画板名, value: 替换 "{sku}_{画板名}" 部分的新前缀（None 表示直接用 sku）
-    FRAME_NAME_OVERRIDES: dict[str, str | None] = {
-        "尖货轮播-PC-1": None,       # → {sku}{变体}.png
-        "尖货轮播-PC-2": "{sku}-1",  # → {sku}-1{变体}.png
-        "sku": None,                # → {sku}{变体}.png
-        "sku-1": "{sku}-1",         # → {sku}-1{变体}.png
-        "首页SKU": "首页{sku}",       # → 首页{sku}{变体}.png
-        "首页SKU-1": "首页{sku}-1",   # → 首页{sku}-1{变体}.png
-        "首页 SKU": "首页{sku}",
-        "首页 SKU-1": "首页{sku}-1",
-    }
-    FRAME_EXPORT_FORMATS: dict[str, str] = {
-        "分类页": "png",
-        "尖货轮播-PC-1": "png",
-        "尖货轮播-PC-2": "png",
-        "尖货轮播-横版-1": "png",
-        "尖货轮播-横版-2": "png",
-        "sku": "png",
-        "sku-1": "png",
-        "首页SKU": "png",
-        "首页SKU-1": "png",
-        "首页 SKU": "png",
-        "首页 SKU-1": "png",
-    }
-
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in all_frames:
@@ -3296,13 +3297,8 @@ def download_special_zip(job_id: str, names: str = ""):
             variant_suffix = m.group(2) or ""
             frame_label = name_list[idx] if idx < len(name_list) else f"画板{idx + 1}"
             label_suffix = variant_labels.get(variant_suffix, "")
-            export_format = FRAME_EXPORT_FORMATS.get(frame_label, "jpg")
-            if frame_label in FRAME_NAME_OVERRIDES:
-                override = FRAME_NAME_OVERRIDES[frame_label]
-                prefix = override.replace("{sku}", sku) if override else sku
-                zip_name = f"{prefix}{label_suffix}.{export_format}"
-            else:
-                zip_name = f"{sku}_{frame_label}{label_suffix}.{export_format}"
+            export_format = "png" if frame_label.casefold() in _SPECIAL_PNG_FRAME_NAMES else "jpg"
+            zip_name = _special_export_filename(frame_label, sku, label_suffix, export_format)
             if export_format == "png":
                 zf.write(str(p), zip_name)
             else:
@@ -3384,7 +3380,9 @@ def download_special_full_zip(job_id: str, names: str = "", request: Request = N
         raise HTTPException(400, f"任务尚未完成: {job.status}")
 
     sku = job.request.sku or job_id[:8]
-    name_list = [n.strip() for n in names.split(",")] if names else []
+    name_list = list(getattr(job, "result_frame_names", []) or [])
+    if not name_list and names:
+        name_list = [n.strip() for n in names.split(",")]
     results_dir = settings.output_path / "results" / job_id
     all_frames = sorted(
         results_dir.glob("frame_*.png"),
@@ -3395,30 +3393,6 @@ def download_special_full_zip(job_id: str, names: str = "", request: Request = N
         for p in all_frames if _re.search(r'(_v\d+)$', p.stem)
     })
     variant_labels = {k: f"_版本{k[2:]}" for k in variant_keys}
-    FRAME_NAME_OVERRIDES: dict[str, str | None] = {
-        "尖货轮播-PC-1": None,
-        "尖货轮播-PC-2": "{sku}-1",
-        "sku": None,
-        "sku-1": "{sku}-1",
-        "首页SKU": "首页{sku}",
-        "首页SKU-1": "首页{sku}-1",
-        "首页 SKU": "首页{sku}",
-        "首页 SKU-1": "首页{sku}-1",
-    }
-    FRAME_EXPORT_FORMATS: dict[str, str] = {
-        "分类页": "png",
-        "尖货轮播-PC-1": "png",
-        "尖货轮播-PC-2": "png",
-        "尖货轮播-横版-1": "png",
-        "尖货轮播-横版-2": "png",
-        "sku": "png",
-        "sku-1": "png",
-        "首页SKU": "png",
-        "首页SKU-1": "png",
-        "首页 SKU": "png",
-        "首页 SKU-1": "png",
-    }
-
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in all_frames:
@@ -3429,13 +3403,8 @@ def download_special_full_zip(job_id: str, names: str = "", request: Request = N
             variant_suffix = m.group(2) or ""
             frame_label = name_list[idx] if idx < len(name_list) else f"画板{idx + 1}"
             label_suffix = variant_labels.get(variant_suffix, "")
-            export_format = FRAME_EXPORT_FORMATS.get(frame_label, "jpg")
-            if frame_label in FRAME_NAME_OVERRIDES:
-                override = FRAME_NAME_OVERRIDES[frame_label]
-                prefix = override.replace("{sku}", sku) if override else sku
-                zip_name = f"{prefix}{label_suffix}.{export_format}"
-            else:
-                zip_name = f"{sku}_{frame_label}{label_suffix}.{export_format}"
+            export_format = "png" if frame_label.casefold() in _SPECIAL_PNG_FRAME_NAMES else "jpg"
+            zip_name = _special_export_filename(frame_label, sku, label_suffix, export_format)
             if export_format == "png":
                 zf.write(str(p), zip_name)
             else:
@@ -4827,12 +4796,15 @@ async def _run_ai_image_background(
     try:
         stage = "generate"
         if provider == PROVIDER_AUTO or not provider:
-            result = await smart_generate_image_async(
-                model=model, prompt=prompt,
-                images=refs if refs else None,
-                size=size, resolution=resolution, user_id=user_id,
-                variant=variant, quality=quality,
-                on_progress=on_progress, on_attempt=on_attempt, on_accepted=on_accepted,
+            result = await asyncio.wait_for(
+                smart_generate_image_async(
+                    model=model, prompt=prompt,
+                    images=refs if refs else None,
+                    size=size, resolution=resolution, user_id=user_id,
+                    variant=variant, quality=quality,
+                    on_progress=on_progress, on_attempt=on_attempt, on_accepted=on_accepted,
+                ),
+                timeout=max(60, int(settings.ai_image_smart_route_timeout_seconds or 360)),
             )
         elif provider == PROVIDER_SUB2API:
             result = await generate_sub2api_async(
@@ -6421,9 +6393,18 @@ async def editor_save_snapshot(request: Request):
         raise HTTPException(409, "画板包含其他用户的图片，已拒绝保存，请刷新页面")
     base_revision = body.get("base_revision") if isinstance(body, dict) else None
     intent = body.get("intent") if isinstance(body, dict) else None
+    deleted_record_ids = body.get("deleted_record_ids") if isinstance(body, dict) else None
+    if not isinstance(deleted_record_ids, list):
+        deleted_record_ids = None
 
     raw = json.dumps(snapshot, ensure_ascii=False) if not isinstance(snapshot, str) else snapshot
-    ok, rev, reason = save_editor_snapshot(user["id"], raw, base_revision=base_revision, intent=intent)
+    ok, rev, reason = save_editor_snapshot(
+        user["id"],
+        raw,
+        base_revision=base_revision,
+        intent=intent,
+        deleted_record_ids=deleted_record_ids,
+    )
     if not ok:
         raise HTTPException(
             status_code=409,

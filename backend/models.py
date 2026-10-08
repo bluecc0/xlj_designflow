@@ -182,6 +182,7 @@ class SpecialComposeJob(BaseModel):
     request: SpecialComposeRequest
     result_paths: list[str] = Field(default_factory=list)  # 每个画板对应一个输出（export_frame 兜底）
     result_frame_ids: list[str] = Field(default_factory=list)  # 副本中的 frame id（同原模板）
+    result_frame_names: list[str] = Field(default_factory=list)  # 模板中的真实画板名
     penpot_file_id: Optional[str] = None   # 副本 file id，用于前端取缩略图
     penpot_page_id: Optional[str] = None   # 副本 page id
     penpot_edit_url: Optional[str] = None
@@ -215,6 +216,7 @@ class SpecialFullComposeJob(BaseModel):
     request: SpecialFullComposeRequest
     result_paths: list[str] = Field(default_factory=list)
     result_frame_ids: list[str] = Field(default_factory=list)
+    result_frame_names: list[str] = Field(default_factory=list)
     penpot_file_id: Optional[str] = None
     penpot_page_id: Optional[str] = None
     penpot_edit_url: Optional[str] = None

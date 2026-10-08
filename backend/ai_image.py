@@ -9,6 +9,7 @@ Flow:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -23,11 +24,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 import httpx
-from PIL import Image
+from PIL import Image, ImageOps
 
 from .config import settings
 
 logger = logging.getLogger(__name__)
+
+_sub2api_slots = asyncio.Semaphore(max(1, int(settings.cliproxy_max_concurrency)))
+_tuzi_slots = asyncio.Semaphore(max(1, int(settings.tuzi_max_concurrency)))
 
 
 class TransientTaskStatusError(RuntimeError):
@@ -380,6 +384,14 @@ def _model_credentials(model: str) -> tuple[str, str]:
     if base_url.endswith("/v1"):
         base_url = base_url[:-3]
     return base_url, api_key
+
+
+def _ai_image_client_kwargs(timeout: float | httpx.Timeout) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False}
+    proxy_url = (getattr(settings, "ai_image_api_proxy_url", "") or "").strip()
+    if proxy_url:
+        kwargs["proxy"] = proxy_url
+    return kwargs
 
 
 PROVIDER_AUTO = "auto"
@@ -801,6 +813,44 @@ def _extract_task_error(payload: Any) -> str | None:
     return None
 
 
+_APIMART_REFERENCE_MAX_EDGE = 4096
+
+
+def _reference_image_type(image_bytes: bytes, filename: str) -> str:
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            return Image.MIME.get(image.format or "", "application/octet-stream")
+    except Exception:
+        suffix = Path(filename).suffix.lower()
+        return {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+        }.get(suffix, "application/octet-stream")
+
+
+def _normalize_apimart_reference(
+    image_bytes: bytes,
+    *,
+    max_edge: int = _APIMART_REFERENCE_MAX_EDGE,
+) -> tuple[bytes, str, str]:
+    """Convert provider-incompatible reference images to a bounded RGB JPEG."""
+    with Image.open(io.BytesIO(image_bytes)) as source:
+        image = ImageOps.exif_transpose(source)
+        if image.mode in {"RGBA", "LA"} or "transparency" in image.info:
+            rgba = image.convert("RGBA")
+            background = Image.new("RGB", rgba.size, "white")
+            background.paste(rgba, mask=rgba.getchannel("A"))
+            image = background
+        else:
+            image = image.convert("RGB")
+        image.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=92, optimize=True)
+    return output.getvalue(), "reference.jpg", "image/jpeg"
+
+
 async def _upload_reference_image(
     client: httpx.AsyncClient,
     base_url: str,
@@ -809,8 +859,34 @@ async def _upload_reference_image(
     filename: str,
 ) -> str:
     endpoint = f"{base_url}/v1/uploads/images"
-    files = {"file": (filename, image_bytes, "image/png")}
+    content_type = _reference_image_type(image_bytes, filename)
+    normalized = False
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            if max(image.size) > _APIMART_REFERENCE_MAX_EDGE:
+                image_bytes, filename, content_type = _normalize_apimart_reference(image_bytes)
+                normalized = True
+    except Exception:
+        pass
+
+    files = {"file": (filename, image_bytes, content_type)}
     resp = await client.post(endpoint, headers={"Authorization": headers["Authorization"]}, files=files)
+    if (
+        not normalized
+        and resp.status_code == 400
+        and "invalid image content" in _extract_error_text(resp).lower()
+    ):
+        try:
+            image_bytes, filename, content_type = _normalize_apimart_reference(image_bytes)
+        except Exception:
+            pass
+        else:
+            files = {"file": (filename, image_bytes, content_type)}
+            resp = await client.post(
+                endpoint,
+                headers={"Authorization": headers["Authorization"]},
+                files=files,
+            )
     if not resp.is_success:
         raise RuntimeError(f"上传参考图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
     url = _extract_upload_url(resp.json())
@@ -1057,7 +1133,7 @@ async def generate_image(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
+    async with httpx.AsyncClient(**_ai_image_client_kwargs(180)) as client:
         task_id = await _submit_generation_task(
             client,
             base_url=base_url,
@@ -1107,7 +1183,7 @@ async def generate_image_with_reference(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
+    async with httpx.AsyncClient(**_ai_image_client_kwargs(240)) as client:
         reference_urls: list[str] = []
         for index, (image_bytes, filename) in enumerate(images[:9]):
             safe_name = filename or f"reference_{index}.png"
@@ -1171,7 +1247,7 @@ async def generate_image_async(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
+    async with httpx.AsyncClient(**_ai_image_client_kwargs(180)) as client:
         task_id = await _submit_generation_task(
             client,
             base_url=base_url,
@@ -1229,7 +1305,7 @@ async def generate_image_with_reference_async(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    async with httpx.AsyncClient(timeout=240, trust_env=False) as client:
+    async with httpx.AsyncClient(**_ai_image_client_kwargs(240)) as client:
         reference_urls: list[str] = []
         for index, (image_bytes, filename) in enumerate(images[:9]):
             safe_name = filename or f"reference_{index}.png"
@@ -1488,52 +1564,58 @@ async def generate_sub2api_async(
 
     refs = (images or [])[:9]
     mapped_size = _cliproxy_size(size, resolution)
-    timeout = httpx.Timeout(1800.0, connect=30.0)
+    request_timeout = max(30, int(settings.cliproxy_image_timeout_seconds or 120))
+    timeout = httpx.Timeout(float(request_timeout), connect=min(10.0, float(request_timeout)))
 
     final_prompt = normalize_reference_prompt(prompt) if refs else prompt
 
-    if on_progress:
-        on_progress(5, "starting")
-
+    if on_progress and _sub2api_slots.locked():
+        on_progress(0, "queued")
+    await _sub2api_slots.acquire()
     try:
-        client_kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False}
-        if settings.cliproxy_proxy_url:
-            client_kwargs["proxy"] = settings.cliproxy_proxy_url
-        async with httpx.AsyncClient(**client_kwargs) as client:
-            if refs:
-                data = {
-                    "model": model_name,
-                    "prompt": final_prompt,
-                    "size": mapped_size,
-                    "n": "1",
-                    "output_format": "png",
-                }
-                files = [
-                    ("image", (filename or f"reference-{idx + 1}.png", image_bytes, _mime_from_filename(filename)))
-                    for idx, (image_bytes, filename) in enumerate(refs)
-                ]
-                endpoint = f"{api_base}/images/edits"
-                resp = await client.post(endpoint, data=data, files=files, headers=_cliproxy_headers(api_key))
-            else:
-                payload = {
-                    "model": model_name,
-                    "prompt": prompt,
-                    "size": mapped_size,
-                    "n": 1,
-                    "output_format": "png",
-                }
-                endpoint = f"{api_base}/images/generations"
-                resp = await client.post(endpoint, json=payload, headers=_cliproxy_headers(api_key, json_request=True))
-    except httpx.RequestError as exc:
-        kind = classify_httpx_transport_error(exc)
-        if kind == "connect":
-            raise RuntimeError(f"CLIProxyAPI 连接失败：{exc}") from exc
-        if kind == "ambiguous":
-            raise AmbiguousUpstreamError(
-                f"CLIProxyAPI 请求响应超时/中断（未收到受理确认）：{exc}",
-                provider=PROVIDER_SUB2API,
-            ) from exc
-        raise RuntimeError(f"CLIProxyAPI 请求失败：{exc}") from exc
+        if on_progress:
+            on_progress(5, "starting")
+        try:
+            client_kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False}
+            if settings.cliproxy_proxy_url:
+                client_kwargs["proxy"] = settings.cliproxy_proxy_url
+            async with httpx.AsyncClient(**client_kwargs) as client:
+                if refs:
+                    data = {
+                        "model": model_name,
+                        "prompt": final_prompt,
+                        "size": mapped_size,
+                        "n": "1",
+                        "output_format": "png",
+                    }
+                    files = [
+                        ("image", (filename or f"reference-{idx + 1}.png", image_bytes, _mime_from_filename(filename)))
+                        for idx, (image_bytes, filename) in enumerate(refs)
+                    ]
+                    endpoint = f"{api_base}/images/edits"
+                    resp = await client.post(endpoint, data=data, files=files, headers=_cliproxy_headers(api_key))
+                else:
+                    payload = {
+                        "model": model_name,
+                        "prompt": prompt,
+                        "size": mapped_size,
+                        "n": 1,
+                        "output_format": "png",
+                    }
+                    endpoint = f"{api_base}/images/generations"
+                    resp = await client.post(endpoint, json=payload, headers=_cliproxy_headers(api_key, json_request=True))
+        except httpx.RequestError as exc:
+            kind = classify_httpx_transport_error(exc)
+            if kind == "connect":
+                raise RuntimeError(f"CLIProxyAPI 连接失败：{exc}") from exc
+            if kind == "ambiguous":
+                raise AmbiguousUpstreamError(
+                    f"CLIProxyAPI 请求响应超时/中断（未收到受理确认）：{exc}",
+                    provider=PROVIDER_SUB2API,
+                ) from exc
+            raise RuntimeError(f"CLIProxyAPI 请求失败：{exc}") from exc
+    finally:
+        _sub2api_slots.release()
 
     raw_text = resp.text
     if not resp.is_success:
@@ -1647,16 +1729,20 @@ async def generate_tuzi_async(
         "Accept": "application/json",
         "User-Agent": "DesignFlow/tuzi-image",
     }
-    timeout = httpx.Timeout(900.0, connect=30.0)
+    request_timeout = max(30, int(settings.tuzi_image_timeout_seconds or 120))
+    timeout = httpx.Timeout(float(request_timeout), connect=min(10.0, float(request_timeout)))
     refs = (images or [])[:9]
     final_prompt = normalize_reference_prompt(prompt) if refs else prompt
 
-    if on_progress:
-        on_progress(5, "starting")
+    if on_progress and _tuzi_slots.locked():
+        on_progress(0, "queued")
+    await _tuzi_slots.acquire()
     client_kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False}
     if settings.tuzi_proxy_url:
         client_kwargs["proxy"] = settings.tuzi_proxy_url
     try:
+        if on_progress:
+            on_progress(5, "starting")
         async with httpx.AsyncClient(**client_kwargs) as client:
             if refs:
                 endpoint = f"{base_url}/images/edits"
@@ -1692,6 +1778,8 @@ async def generate_tuzi_async(
                 provider=PROVIDER_TUZI,
             ) from exc
         raise RuntimeError(f"Tuzi 请求失败：{exc}") from exc
+    finally:
+        _tuzi_slots.release()
 
     if not resp.is_success:
         raise RuntimeError(f"Tuzi 生图失败：{_api_error_msg(resp.status_code, resp.text[:500])}")

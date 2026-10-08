@@ -57,6 +57,8 @@ class Settings:
     cliproxy_base_url: str = os.getenv("CLIPROXY_BASE_URL", "") or sub2api_base_url
     cliproxy_api_key: str = os.getenv("CLIPROXY_API_KEY", "") or sub2api_api_key
     cliproxy_proxy_url: str = os.getenv("CLIPROXY_PROXY_URL", "").strip()
+    cliproxy_image_timeout_seconds: int = int(os.getenv("CLIPROXY_IMAGE_TIMEOUT_SECONDS", "120"))
+    cliproxy_max_concurrency: int = int(os.getenv("CLIPROXY_MAX_CONCURRENCY", "4"))
     ai_image_download_proxy_url: str = os.getenv("AI_IMAGE_DOWNLOAD_PROXY_URL", "").strip()
     sub2api_monitor_enabled: bool = os.getenv("SUB2API_MONITOR_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
     sub2api_monitor_timezone: str = os.getenv("SUB2API_MONITOR_TIMEZONE", "Asia/Shanghai").strip() or "Asia/Shanghai"
@@ -78,9 +80,11 @@ class Settings:
     ai_image_provider: str = os.getenv("AI_IMAGE_PROVIDER", "auto")
     ai_image_base_url: str = os.getenv("AI_IMAGE_BASE_URL", "https://api.apimart.ai")
     ai_image_api_key: str = os.getenv("AI_IMAGE_API_KEY", "")
+    ai_image_api_proxy_url: str = os.getenv("AI_IMAGE_API_PROXY_URL", "").strip()
     ai_image_gpt_25_model: str = os.getenv("AI_IMAGE_GPT_25_MODEL", "gpt-image-2.5-flare")
     ai_image_gpt_25_quality: str = os.getenv("AI_IMAGE_GPT_25_QUALITY", "medium")
     ai_image_job_timeout_seconds: int = int(os.getenv("AI_IMAGE_JOB_TIMEOUT_SECONDS", "600"))
+    ai_image_smart_route_timeout_seconds: int = int(os.getenv("AI_IMAGE_SMART_ROUTE_TIMEOUT_SECONDS", "360"))
 
     # AI 生图 API（adobe2api）
     adobe2api_base_url: str = os.getenv("ADOBE2API_BASE_URL", "http://77.73.8.142:6001/v1")
@@ -91,6 +95,8 @@ class Settings:
     tuzi_api_key: str = os.getenv("TUZI_API_KEY", "")
     tuzi_model: str = os.getenv("TUZI_MODEL", "gpt-image-2.5")
     tuzi_proxy_url: str = os.getenv("TUZI_PROXY_URL", "").strip()
+    tuzi_image_timeout_seconds: int = int(os.getenv("TUZI_IMAGE_TIMEOUT_SECONDS", "120"))
+    tuzi_max_concurrency: int = int(os.getenv("TUZI_MAX_CONCURRENCY", "4"))
 
     # 智能路由模型自定义优先级规则 JSON（可选，用于动态覆写）
     smart_routing_rules_json: str = os.getenv("SMART_ROUTING_RULES_JSON", "")

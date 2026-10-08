@@ -101,15 +101,18 @@ async def _download_result_layers(
     result_layers: list[dict[str, Any]],
     timeout_seconds: int,
     retries: int = 0,
+    proxy_url: str = "",
 ) -> list[dict[str, Any]]:
     timeout = httpx.Timeout(max(60, int(timeout_seconds or 900)), connect=30.0)
-    async with httpx.AsyncClient(
-        timeout=timeout,
-        follow_redirects=True,
-        # Kie 的结果 URL 由服务端直接下载；不要继承本机代理，避免代理
-        # 返回 503 或拦截对象存储 URL，导致 PSD 任务误报失败。
-        trust_env=False,
-    ) as client:
+    client_kwargs: dict[str, Any] = {
+        "timeout": timeout,
+        "follow_redirects": True,
+        # 不继承系统代理；需要代理的供应商由调用方显式传入。
+        "trust_env": False,
+    }
+    if proxy_url:
+        client_kwargs["proxy"] = proxy_url
+    async with httpx.AsyncClient(**client_kwargs) as client:
         downloaded: list[dict[str, Any]] = []
         for index, layer in enumerate(result_layers, start=1):
             url = str(layer.get("url") or "").strip()
@@ -333,6 +336,7 @@ async def _run_remote_decomposition(source_copy: Path) -> dict[str, Any]:
             timeout_seconds=settings.layer_extract_timeout_seconds,
             poll_interval_seconds=settings.layer_extract_poll_interval_seconds,
             download_retries=settings.layer_extract_download_retries,
+            proxy_url=settings.ai_image_api_proxy_url,
         )
         result = await client.run(
             source_copy,
@@ -342,6 +346,7 @@ async def _run_remote_decomposition(source_copy: Path) -> dict[str, Any]:
             result["result_layers"],
             settings.layer_extract_timeout_seconds,
             settings.layer_extract_download_retries,
+            proxy_url=settings.ai_image_api_proxy_url,
         )
         return {
             "provider": "apimart",

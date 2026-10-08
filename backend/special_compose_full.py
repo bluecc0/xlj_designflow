@@ -5,6 +5,7 @@
 1. 支持 banner / poster 场景图 slot（横/竖版，通过 IMAGE_TYPE_FOLDERS 配置）
    slot/product_1/banner  → Banner/ 文件夹
    slot/product_1/poster  → Poster/ 文件夹
+   slot/product_1/poster1 → Poster/ 文件夹中 SKU 后缀为 _1 的图片
 2. 导出前自动隐藏模板中名称为 "hide"（大小写不敏感）的所有图层
    设计师可在 Penpot 中保持辅助层可见，导出时自动屏蔽
 
@@ -205,10 +206,11 @@ def _run_inner(job: SpecialFullComposeJob) -> None:
                 elif not field_part:
                     continue
 
-                # ── 图片 slot（含 banner / poster）───────────────────────────
+                # ── 图片 slot（含 banner / poster / poster1）────────────────
                 if field_part == "image" or field_part.startswith("image_") \
-                        or field_part in ("banner", "poster"):
+                        or field_part in ("banner", "poster", "poster1"):
                     image_type_key: Optional[str] = slot.get("image_type")
+                    image_sku = f"{req.sku}{slot.get('image_name_suffix', '')}"
                     folder: Optional[str] = None
                     if image_type_key:
                         folder = settings.IMAGE_TYPE_FOLDERS.get(image_type_key)
@@ -220,9 +222,9 @@ def _run_inner(job: SpecialFullComposeJob) -> None:
 
                     img_path: Optional[str] = None
                     if folder:
-                        img_path = library.find_in_folder(req.sku, folder)
+                        img_path = library.find_in_folder(image_sku, folder)
                     if img_path is None:
-                        img_path = library.find(req.sku)
+                        img_path = library.find(image_sku)
 
                     if img_path:
                         _log(job, f"上传图片({image_type_key or '默认'}): {img_path} → {slot_name}")
@@ -236,7 +238,7 @@ def _run_inner(job: SpecialFullComposeJob) -> None:
                             )
                         )
                     else:
-                        _log(job, f"未找到图片 SKU={req.sku} type={image_type_key}，隐藏图层")
+                        _log(job, f"未找到图片 SKU={image_sku} type={image_type_key}，隐藏图层")
                         all_changes.append(client.hide_layer(slot["id"], slot["page_id"]))
 
                 # ── 分段文字 slot（name_1 / name_2）──────────────────────────
@@ -331,6 +333,7 @@ def _run_inner(job: SpecialFullComposeJob) -> None:
         valid_frame_ids = [fid for fid in req.frame_ids if fid in frame_index]
         job.penpot_page_id = req.page_id
         job.result_frame_ids = valid_frame_ids
+        job.result_frame_names = [str(frame_index[fid].get("name") or "画板") for fid in valid_frame_ids]
 
         results_dir = settings.output_path / "results" / job.id
         results_dir.mkdir(parents=True, exist_ok=True)

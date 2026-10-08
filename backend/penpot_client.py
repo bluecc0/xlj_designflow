@@ -370,6 +370,10 @@ class PenpotClient:
                         elif field_part.startswith("image_"):
                             # 去掉 image_ 前缀，剩余部分作为 image_type key
                             slot["image_type"] = field_part[len("image_"):]
+                        elif field_part == "poster1":
+                            # slot/product_1/poster1 -> Poster/{SKU}_1.ext
+                            slot["image_type"] = "poster"
+                            slot["image_name_suffix"] = "_1"
                         elif field_part in _SCENE_IMAGE_TYPES:
                             # slot/product_1/banner → image_type = "banner"
                             slot["image_type"] = field_part
