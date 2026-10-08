@@ -1530,13 +1530,19 @@ def _editor_snapshot_stats(snapshot_json: str) -> dict[str, int]:
         elif isinstance(snapshot.get("store"), dict):
             store = snapshot["store"]
     pages = shapes = assets = 0
+    # One-way migration intentionally drops legacy freehand strokes and group
+    # containers because the new canvas does not support them. Do not count
+    # those unsupported records as surviving content when guarding against an
+    # accidental blank overwrite; images, text, frames, and unknown shapes
+    # remain protected.
+    unsupported_legacy_types = {"draw", "group"}
     for record in store.values():
         if not isinstance(record, dict):
             continue
         type_name = record.get("typeName")
         if type_name == "page":
             pages += 1
-        elif type_name == "shape":
+        elif type_name == "shape" and record.get("type") not in unsupported_legacy_types:
             shapes += 1
         elif type_name == "asset":
             assets += 1

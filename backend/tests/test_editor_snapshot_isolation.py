@@ -255,6 +255,51 @@ class EditorSnapshotIsolationTest(unittest.TestCase):
         self.assertTrue(any(record.get("type") == "text" and record.get("typeName") == "shape" for record in records))
         self.assertEqual(json.loads(new_user_raw or "{}")["designflowCanvasDocument"], canvas)
 
+    def test_one_way_migration_allows_legacy_drawings_to_be_dropped(self) -> None:
+        import json
+        import tempfile
+        from pathlib import Path
+        from backend import job_store
+
+        legacy = {
+            "document": {
+                "schema": {"schemaVersion": 2},
+                "store": {
+                    "document:document": {"id": "document:document", "typeName": "document"},
+                    "page:old": {"id": "page:old", "typeName": "page", "name": "旧画板", "index": "a1"},
+                    **{
+                        f"shape:draw-{index}": {
+                            "id": f"shape:draw-{index}",
+                            "typeName": "shape",
+                            "type": "draw",
+                            "parentId": "page:old",
+                            "props": {"segments": []},
+                        }
+                        for index in range(1, 4)
+                    },
+                },
+            }
+        }
+        migrated = {
+            "version": 2,
+            "pages": [{"id": "page:old", "name": "画板 1", "order": 0}],
+            "activePageId": "page:old",
+            "frames": [],
+            "images": [],
+            "texts": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(job_store, "_DB_PATH", Path(temp_dir) / "jobs.db"):
+                job_store.init_db()
+                self.assertTrue(job_store.save_editor_snapshot("draw_user", json.dumps(legacy))[0])
+                ok, revision, reason = job_store.save_editor_snapshot(
+                    "draw_user", json.dumps(migrated), base_revision=1
+                )
+
+        self.assertTrue(ok, reason)
+        self.assertEqual(revision, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
