@@ -1,7 +1,36 @@
 import { create } from 'zustand'
 import type { CanvasDocument, CanvasFrame, CanvasImage, CanvasPage, CanvasPageGroup, CanvasText, CanvasTool } from '../types'
 import { useHistoryStore } from './historyStore'
-import { useViewportStore } from './viewportStore'
+import {
+  useViewportStore,
+  hasLocalStoredViewport,
+  getStoredPageViewport,
+  setActivePageForViewport,
+} from './viewportStore'
+
+function getActivePageStorageKey(): string {
+  const uid =
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('user_id') || 'default'
+      : 'default'
+  return `designflow_canvas_active_page_${uid}`
+}
+
+function getStoredActivePageId(): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return localStorage.getItem(getActivePageStorageKey())
+  } catch {
+    return null
+  }
+}
+
+function persistActivePageId(pageId: string) {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(getActivePageStorageKey(), pageId)
+  } catch {}
+}
 
 interface CanvasState {
   // 多页面与分组
@@ -387,6 +416,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       archived: false,
       groupId: groupId || null,
     }
+    useViewportStore.getState().switchPageViewport(newPageId)
+    persistActivePageId(newPageId)
     set((s) => withMutation(s, {
       pages: [...s.pages, newPage],
       activePageId: newPageId,
@@ -403,6 +434,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   switchPage: (pageId) => {
+    if (pageId === get().activePageId || !get().pages.some((p) => p.id === pageId && !p.archived)) return
+    useViewportStore.getState().switchPageViewport(pageId)
+    persistActivePageId(pageId)
     set((s) => withMutation(s, {
       activePageId: pageId,
       selectedIds: [],
@@ -435,6 +469,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       nextActiveId = remainingUnarchived[0]?.id || activePageId
     }
 
+    if (nextActiveId !== activePageId) {
+      useViewportStore.getState().switchPageViewport(nextActiveId)
+      persistActivePageId(nextActiveId)
+    }
     set((s) => withMutation(s, {
       pages: nextPages,
       activePageId: nextActiveId,
@@ -460,6 +498,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
     })
 
+    useViewportStore.getState().switchPageViewport(pageId)
+    persistActivePageId(pageId)
     set((s) => withMutation(s, {
       pages: nextPages,
       activePageId: pageId,
@@ -482,6 +522,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       ? (remainingPages.find((p) => !p.archived)?.id || remainingPages[0]?.id || 'page-1')
       : activePageId
 
+    if (nextActive !== activePageId) {
+      useViewportStore.getState().switchPageViewport(nextActive)
+      persistActivePageId(nextActive)
+    }
     set((s) => withMutation(s, {
       pages: remainingPages,
       activePageId: nextActive,
@@ -1447,7 +1491,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       pages = [DEFAULT_PAGE]
     }
     const groups: CanvasPageGroup[] = Array.isArray(doc.groups) ? doc.groups : []
-    let activePageId = doc.activePageId || pages[0].id
+    const storedPageId = getStoredActivePageId()
+    let activePageId =
+      storedPageId && pages.some((p) => p.id === storedPageId && !p.archived)
+        ? storedPageId
+        : (doc.activePageId && pages.some((p) => p.id === doc.activePageId && !p.archived)
+          ? doc.activePageId
+          : (pages.find((p) => !p.archived)?.id || pages[0].id))
 
     // 仅在旧版本未迁移快照（!doc.version || doc.version < 2）加载时执行一次性冗余空页面迁移
     const isLegacySnapshot = !doc.version || doc.version < 2
@@ -1458,7 +1508,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         (Array.isArray(doc.texts) && doc.texts.some((t: any) => t.pageId === pageId))
 
       // 旧快照智能画板纠正：若 activePageId 无内容但历史页面有内容，优先激活最近有内容的画板
-      if (!pageHasContent(activePageId)) {
+      if (!pageHasContent(activePageId) && storedPageId !== activePageId) {
         const lastContentPage = [...pages].reverse().find((p) => pageHasContent(p.id))
         if (lastContentPage) {
           activePageId = lastContentPage.id
@@ -1503,10 +1553,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       pageId: t.pageId && pageIdSet.has(t.pageId) ? t.pageId : fallbackPageId,
     }))
 
-    // 视口水合恢复
-    if (doc.viewport && typeof doc.viewport.zoom === 'number') {
-      useViewportStore.getState().setZoom(doc.viewport.zoom)
-      useViewportStore.getState().setPan(doc.viewport.panX, doc.viewport.panY)
+    setActivePageForViewport(activePageId)
+    // 视口水合恢复：只有当前画板的本地视口有效时才优先使用它。
+    const savedViewport = getStoredPageViewport(activePageId)
+    const viewport = useViewportStore.getState()
+    if (savedViewport) {
+      viewport.setViewport(savedViewport.zoom, savedViewport.panX, savedViewport.panY)
+    } else if ((!storedPageId || storedPageId === activePageId) && hasLocalStoredViewport()) {
+      // 兼容旧版只存全局视口的记录。
+      viewport.setViewport(viewport.zoom, viewport.panX, viewport.panY)
+    } else if (doc.viewport && Number.isFinite(doc.viewport.zoom) && Number.isFinite(doc.viewport.panX) && Number.isFinite(doc.viewport.panY)) {
+      viewport.setViewport(doc.viewport.zoom, doc.viewport.panX, doc.viewport.panY)
     }
 
     set({

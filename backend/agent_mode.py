@@ -16,9 +16,9 @@ import httpx
 import pydantic
 
 from .ai_image import (
-    SLASH_MODEL_MAP,
     generate_image_async,
     generate_image_with_reference_async,
+    normalize_model_name,
     smart_generate_image_async,
 )
 from .config import settings
@@ -2396,7 +2396,7 @@ async def stream_generation_events(
     current_image: Optional[dict[str, Any]] = None,
     reference_images: Optional[list[tuple[bytes, str]]] = None,
 ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-    resolved_model = SLASH_MODEL_MAP.get(str(prompt_payload.get("model") or settings.agent_image_model).lower(), prompt_payload.get("model") or settings.agent_image_model)
+    resolved_model = normalize_model_name(str(prompt_payload.get("model") or settings.agent_image_model))
     parameters = prompt_payload.get("parameters") or {}
     size = parameters.get("size") or settings.agent_image_size
     resolution = parameters.get("resolution") or settings.agent_image_resolution

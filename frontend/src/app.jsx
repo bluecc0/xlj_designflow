@@ -146,7 +146,6 @@ const App = () => {
   const [activeTemplate, setActiveTemplate] = React.useState(TEMPLATES[0]);
   const [resultTemplate, setResultTemplate] = React.useState(null);
   const [editorCommand, setEditorCommand] = React.useState(null);
-  const [slashTrigger, setSlashTrigger] = React.useState(null);
   const [currentUser, setCurrentUser] = React.useState(null);
   const currentUserIdRef = React.useRef('');
   currentUserIdRef.current = currentUser && currentUser.id ? String(currentUser.id) : '';
@@ -427,9 +426,6 @@ const App = () => {
   const selectTemplate = React.useCallback((t) => {
     if (!t) return;
     setActiveTemplate(t);
-    if (t.is_special_full) setSlashTrigger({ cmd: '特殊品（完整）', key: Date.now() });
-    else if (t.is_special) setSlashTrigger({ cmd: '特殊品', key: Date.now() });
-    else setSlashTrigger({ clear: true, key: Date.now() });
   }, []);
 
   const handleRequestSpecialTemplate = React.useCallback((kind) => {
@@ -549,7 +545,6 @@ const App = () => {
               onComposeComplete={function(jobId, penpotEditUrl, directImageUrls, resultTpl) {
                 handleComposeComplete(jobId, penpotEditUrl, directImageUrls, resultTpl, currentUser.id);
               }}
-              slashTrigger={slashTrigger}
               user={currentUser}
               onRequestSpecialTemplate={handleRequestSpecialTemplate}
               seedPrompt={seedPrompt}

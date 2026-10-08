@@ -74,21 +74,14 @@ _HTTP_ERRORS: dict[int, str] = {
     503: "服务暂时不可用，请稍后重试",
 }
 
-SLASH_MODEL_MAP: dict[str, str] = {
-    "nano banano pro": "gemini-3-pro-image-preview",
-    "nano banana pro": "gemini-3-pro-image-preview",
+SUPPORTED_MODELS: dict[str, str] = {
     "nano-banana-pro": "gemini-3-pro-image-preview",
-    "gpt image 2": "gpt-image-2",
     "gpt-image-2": "gpt-image-2",
-    "gpt image 2.5": "gpt-image-2.5",
     "gpt-image-2.5": "gpt-image-2.5",
     "gpt-image-2.5-flare": "gpt-image-2.5-flare",
     "gpt-image-2.5-sunburst": "gpt-image-2.5-sunburst",
-    "gpt image 2.5 flare": "gpt-image-2.5-flare",
-    "gpt image 2.5 sunburst": "gpt-image-2.5-sunburst",
-    "gpt image 2.5-flare": "gpt-image-2.5-flare",
-    "gpt image 2.5-sunburst": "gpt-image-2.5-sunburst",
 }
+SLASH_MODEL_MAP = SUPPORTED_MODELS
 
 PROVIDER_APIMART = "apimart"
 PROVIDER_ADOBE2API = "adobe2api"
@@ -407,11 +400,14 @@ def normalize_provider(provider: str | None = None) -> str:
     raise ValueError(f"未知生图线路: {provider}")
 
 
-def _normalize_model_name(model: str) -> str:
+def normalize_model_name(model: str) -> str:
     clean = (model or "").strip()
     if not clean:
         raise ValueError("model 不能为空")
-    return SLASH_MODEL_MAP.get(clean.casefold(), clean)
+    return SUPPORTED_MODELS.get(clean.casefold(), clean)
+
+
+_normalize_model_name = normalize_model_name
 
 
 _APIMART_GPT_IMAGE_25_MODELS = {"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}

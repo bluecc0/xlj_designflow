@@ -446,7 +446,7 @@ const copyTextToClipboard = async (text) => {
   return ok;
 };
 
-const CopyableTextBubble = ({ who, text, markdown, onRetry, canRetry, retryTitle, isRetrying }) => {
+const CopyableTextBubble = ({ who, text, markdown }) => {
   const [hovered, setHovered] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const copyValue = String(text || '');
@@ -472,68 +472,33 @@ const CopyableTextBubble = ({ who, text, markdown, onRetry, canRetry, retryTitle
     >
       <TextBubble who={who} markdown={markdown}>{copyValue}</TextBubble>
       {copyValue && (
-        <div style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 3,
-          opacity: hovered || copied ? 1 : 0,
-          transform: hovered || copied ? 'translateY(0)' : 'translateY(-2px)',
-          pointerEvents: hovered || copied ? 'auto' : 'none',
-          boxShadow: 'none',
-          transition: 'opacity 120ms ease, transform 120ms ease, color 120ms ease',
-        }}>
-          <button
-            type="button"
-            title={copied ? '已复制' : '复制消息'}
-            aria-label={copied ? '已复制' : '复制消息'}
-            onClick={onCopy}
-            style={{
-              height: 22,
-              width: 22,
-              padding: 0,
-              borderRadius: 7,
-              border: '1px solid var(--line-2)',
-              background: who === 'user' ? 'var(--panel)' : 'transparent',
-              color: copied ? 'var(--ok)' : 'var(--ink-2)',
-              display: 'grid',
-              placeItems: 'center',
-              cursor: 'pointer',
-              fontSize: 10.5,
-              lineHeight: 1,
-            }}
-          >
-            {copied ? <I.check size={11}/> : <I.copy size={11}/>}
-          </button>
-          {canRetry && (
-            <button
-              type="button"
-              disabled={isRetrying}
-              title={retryTitle || '重试此任务'}
-              aria-label={retryTitle || '重试此任务'}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (onRetry) onRetry();
-              }}
-              style={{
-                height: 22,
-                width: 22,
-                padding: 0,
-                borderRadius: 7,
-                border: '1px solid var(--line-2)',
-                background: who === 'user' ? 'var(--panel)' : 'transparent',
-                color: isRetrying ? 'var(--ink-3)' : 'var(--ink-2)',
-                display: 'grid',
-                placeItems: 'center',
-                cursor: isRetrying ? 'default' : 'pointer',
-                fontSize: 10.5,
-                lineHeight: 1,
-              }}
-            >
-              <I.refresh size={11}/>
-            </button>
-          )}
-        </div>
+        <button
+          type="button"
+          title={copied ? '已复制' : '复制消息'}
+          aria-label={copied ? '已复制' : '复制消息'}
+          onClick={onCopy}
+          style={{
+            height: 22,
+            width: 22,
+            padding: 0,
+            borderRadius: 7,
+            border: '1px solid var(--line-2)',
+            background: who === 'user' ? 'var(--panel)' : 'transparent',
+            color: copied ? 'var(--ok)' : 'var(--ink-2)',
+            display: 'grid',
+            placeItems: 'center',
+            cursor: 'pointer',
+            opacity: hovered || copied ? 1 : 0,
+            transform: hovered || copied ? 'translateY(0)' : 'translateY(-2px)',
+            pointerEvents: hovered || copied ? 'auto' : 'none',
+            boxShadow: 'none',
+            transition: 'opacity 120ms ease, transform 120ms ease, color 120ms ease',
+            fontSize: 10.5,
+            lineHeight: 1,
+          }}
+        >
+          {copied ? <I.check size={11}/> : <I.copy size={11}/>}
+        </button>
       )}
     </div>
   );
@@ -927,10 +892,9 @@ const ThinkingBlock = ({ text }) => {
   );
 };
 
-const PromptTraceBlock = ({ title, text, onRetry, isRetrying }) => {
+const PromptTraceBlock = ({ title, text }) => {
   var _s = React.useState(true);
   var open = _s[0]; var setOpen = _s[1];
-  const [copied, setCopied] = React.useState(false);
   const userToggledRef = React.useRef(false);
   const bodyRef = React.useRef(null);
   React.useEffect(function() {
@@ -943,92 +907,20 @@ const PromptTraceBlock = ({ title, text, onRetry, isRetrying }) => {
   const rules = parsed && Array.isArray(parsed.applied_rules) ? parsed.applied_rules : [];
   const finalPrompt = parsed && parsed.final_prompt ? String(parsed.final_prompt) : String(text);
   const negativePrompt = parsed && parsed.negative_prompt ? String(parsed.negative_prompt) : '';
-
-  const onCopy = React.useCallback(async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    try {
-      const ok = await copyTextToClipboard(finalPrompt);
-      if (ok) {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
-      }
-    } catch (err) {
-      console.warn('copy prompt failed', err);
-    }
-  }, [finalPrompt]);
-
   return (
     <div style={{ borderRadius: 8, border: '1px solid var(--line-2)', background: 'var(--panel-2)', overflow: 'hidden', marginBottom: 6 }}>
       <div
+        onClick={function() { userToggledRef.current = true; setOpen(!open); }}
         style={{
-          padding: '6px 10px 6px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6,
-          userSelect: 'none',
+          padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 6,
+          cursor: 'pointer', userSelect: 'none',
           borderBottom: open ? '1px solid var(--line-2)' : 'none',
         }}
       >
-        <div
-          onClick={function() { userToggledRef.current = true; setOpen(!open); }}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flex: 1, minWidth: 0 }}
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--ink-3)" strokeWidth="2" strokeLinecap="round" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 200ms' }}>
-            <path d="m9 18 6-6-6-6"/>
-          </svg>
-          <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 500 }}>{title || '生图 Prompt'}</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <button
-            type="button"
-            title={copied ? '已复制 Prompt' : '复制 Prompt'}
-            onClick={onCopy}
-            style={{
-              height: 20,
-              padding: '0 6px',
-              borderRadius: 5,
-              border: '1px solid var(--line-2)',
-              background: 'var(--panel)',
-              color: copied ? 'var(--ok)' : 'var(--ink-2)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 3,
-              cursor: 'pointer',
-              fontSize: 10,
-              lineHeight: 1,
-            }}
-          >
-            {copied ? <I.check size={10}/> : <I.copy size={10}/>}
-            <span>{copied ? '已复制' : '复制'}</span>
-          </button>
-          {onRetry && (
-            <button
-              type="button"
-              disabled={isRetrying}
-              title="重试生图（复用集成后的完整 Prompt）"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onRetry();
-              }}
-              style={{
-                height: 20,
-                padding: '0 6px',
-                borderRadius: 5,
-                border: '1px solid var(--line-2)',
-                background: 'var(--panel)',
-                color: isRetrying ? 'var(--ink-3)' : 'var(--ink-2)',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 3,
-                cursor: isRetrying ? 'default' : 'pointer',
-                fontSize: 10,
-                lineHeight: 1,
-              }}
-            >
-              <I.refresh size={10}/>
-              <span>重试</span>
-            </button>
-          )}
-        </div>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--ink-3)" strokeWidth="2" strokeLinecap="round" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 200ms' }}>
+          <path d="m9 18 6-6-6-6"/>
+        </svg>
+        <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{title || '生图 Prompt'}</span>
       </div>
       {open && (
         <div ref={bodyRef} style={{
@@ -1250,7 +1142,7 @@ const ChatSessionBar = ({ messages, historyControl }) => {
   );
 };
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greetingKey, onQuickReply, agentEnabled, onPublishInspiration, onUnpublishInspiration, onRetryAiImage }) => {
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greetingKey, onQuickReply, agentEnabled, onPublishInspiration, onUnpublishInspiration }) => {
   const bottomRef = React.useRef(null);
   const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
 
@@ -1336,8 +1228,6 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
               showPromptTrace && React.createElement(PromptTraceBlock, {
                 title: m.activeSkill ? ('Skill 解析 · $' + m.activeSkill) : '生图 Prompt',
                 text: promptTraceText || resolvedPromptText,
-                onRetry: onRetryAiImage ? function() { onRetryAiImage(m); } : null,
-                isRetrying: isGenerating,
               }),
               agentEnabled && promptInstruction && React.createElement('div', {
                 style: {
@@ -1476,22 +1366,9 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   padding: '8px 10px', borderRadius: 6, background: 'var(--panel)',
                   border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)',
                   lineHeight: 1.45, wordBreak: 'break-word',
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
                 }
               },
-                React.createElement('span', { style: { flex: 1 } }, formatAiImageError(m.error, m.jobId || m.job_id)),
-                onRetryAiImage ? React.createElement('button', {
-                  type: 'button',
-                  disabled: isGenerating,
-                  title: '重试生图（复用集成 Prompt）',
-                  onClick: function() { onRetryAiImage(m); },
-                  style: {
-                    padding: '3px 8px', borderRadius: 5, background: 'var(--warn)',
-                    color: 'white', border: 'none', cursor: isGenerating ? 'default' : 'pointer', fontSize: 11,
-                    display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
-                    opacity: isGenerating ? 0.6 : 1,
-                  }
-                }, React.createElement(I.refresh, { size: 10 }), '重试') : null
+                formatAiImageError(m.error, m.jobId || m.job_id)
               ),
             );
           })() : m.type === 'parse-result' ? (() => {
@@ -1817,34 +1694,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 {m.thinking ? (
                   <ThinkingBlock text={m.thinking}/>
                 ) : null}
-                {(() => {
-                  let targetAiGen = null;
-                  if (m.who === 'user') {
-                    for (let j = i + 1; j < messages.length; j++) {
-                      if (messages[j].type === 'ai-image-generating') {
-                        targetAiGen = messages[j];
-                        break;
-                      }
-                      if (messages[j].who === 'user') break;
-                    }
-                  }
-                  const canRetryImage = Boolean(onRetryAiImage && targetAiGen);
-                  return (
-                    <CopyableTextBubble
-                      who={m.who}
-                      text={m.text}
-                      markdown
-                      canRetry={canRetryImage}
-                      isRetrying={isGenerating}
-                      retryTitle="重试本次生图任务（复用集成 Prompt）"
-                      onRetry={() => {
-                        if (onRetryAiImage && targetAiGen) {
-                          onRetryAiImage(targetAiGen);
-                        }
-                      }}
-                    />
-                  );
-                })()}
+                <CopyableTextBubble who={m.who} text={m.text} markdown/>
                 {/* Agent CONFIRM 阶段的创意方案卡片 */}
                 {m.brief || m.contract ? (
                   <BriefCard brief={m.brief} contract={m.contract} completeness={m.completeness}/>
@@ -1985,11 +1835,11 @@ const CHAT_INSPIRATION_CATEGORIES = [
 
 // ---------- Composer ----------
 
-const DEFAULT_COMPOSER_COMMAND = '/Gpt image 2.5';
+const DEFAULT_COMPOSER_MODE = 'gpt-image-2.5';
 
-const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTrigger, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
+const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
   const [text, setText] = React.useState('');
-  const [lockedCommand, setLockedCommand] = React.useState(DEFAULT_COMPOSER_COMMAND);
+  const [selectedMode, setSelectedMode] = React.useState(DEFAULT_COMPOSER_MODE);
   const [files, setFiles] = React.useState([]);
   const [imageType, setImageType] = React.useState('png');
   const [aiRatio, setAiRatio] = React.useState('auto');
@@ -1999,11 +1849,9 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const [aiProvider, setAiProvider] = React.useState('auto');
   const [aiBatchCount, setAiBatchCount] = React.useState('1');
   const [smartDistributeMode, setSmartDistributeMode] = React.useState('full');
-  const [specialRouteMode, setSpecialRouteMode] = React.useState('auto'); // 'auto' | 'normal' | 'full'
   const [manualRefImages, setManualRefImages] = React.useState([]);
   const [canvasRefImages, setCanvasRefImages] = React.useState([]);
   const [prototypePanel, setPrototypePanel] = React.useState('');
-  const [typeTipVisible, setTypeTipVisible] = React.useState(false);
   const [quickPrompts, setQuickPrompts] = React.useState([]);
   const [quickPromptsLoaded, setQuickPromptsLoaded] = React.useState(false);
   const [quickPromptsLoading, setQuickPromptsLoading] = React.useState(false);
@@ -2028,14 +1876,13 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
   const STATUS_COMPOSER_HEIGHT = 208;
   const MAX_COMPOSER_HEIGHT = 500;
   const minComposerHeightRef = React.useRef(COLLAPSED_COMPOSER_HEIGHT);
-  const COMMANDS = React.useMemo(() => ['/花瓣下载', '/特殊品（完整）', '/特殊品', '/Nano Banana pro', '/Gpt image 2.5'], []);
-  const cmdToWorkflow = React.useCallback(function(cmd) {
-    const clean = String(cmd || '').trim();
-    if (clean === '/Gpt image 2.5' || clean === '/Gpt image 2' || clean === '/Nano Banana pro') return 'ai-image';
-    if (clean === '/特殊品' || clean === '/特殊品（完整）') return 'special';
-    if (clean === '/花瓣下载') return 'download';
-    return 'chat';
-  }, []);
+  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'nano-banana-pro'
+    ? 'ai-image'
+    : selectedMode === 'special' || selectedMode === 'special_full'
+      ? selectedMode
+      : selectedMode === 'download'
+        ? 'download'
+        : selectedWorkflow;
   const normalizeBatchCount = React.useCallback(function(value) {
     const digits = String(value || '').replace(/\D+/g, '');
     if (!digits) return 1;
@@ -2132,20 +1979,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     return function() { alive = false; };
   }, []);
 
-  // 检测花瓣登录状态，未登录则禁用 /花瓣下载 指令
-  React.useEffect(() => {
-    const apiBase = window.API_BASE || window.location.origin;
-    fetch(apiBase + '/proxy-download/login-status', { credentials: 'include' })
-      .then(r => r.json())
-      .then(data => {
-        const cmd = SLASH_COMMANDS.find(c => c.cmd === '/花瓣下载');
-        if (cmd) cmd.available = !!data.logged_in;
-        setTaskDefsKey(function(k) { return k + 1; });
-      })
-      .catch(() => {});
-  }, []);
   const displayValue = text;
-  const lockedPrefixLength = 0;
 
   React.useEffect(() => {
     if (!resetKey) return;
@@ -2153,7 +1987,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     setSelectedSkill('');
     setLockedCommand(DEFAULT_COMPOSER_COMMAND);
     setSelectedWorkflow('chat');
-    setSpecialRouteMode('auto');
     setFiles([]);
     clearRefImages();
     setPrototypePanel('');
@@ -2276,53 +2109,12 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     };
   }, [prototypePanel, skillMenuOpen]);
 
-  // 外部触发 slash 命令（选中特殊品模板时）
-  React.useEffect(() => {
-    if (agentEnabled) return;
-    if (!slashTrigger) return;
-    if (slashTrigger.clear) {
-      setLockedCommand(function(prev) {
-        if (cmdToWorkflow(prev) === 'special') {
-          setSelectedWorkflow('chat');
-          return '';
-        }
-        return prev;
-      });
-      return;
-    }
-    const isSpecialCmd = slashTrigger.cmd === '特殊品（完整）' || slashTrigger.cmd === '特殊品';
-    if (isSpecialCmd) {
-      if (slashTrigger.mode) {
-        setSpecialRouteMode(slashTrigger.mode);
-        setLockedCommand(slashTrigger.mode === 'full' ? '/特殊品（完整）' : '/特殊品');
-      } else {
-        setSpecialRouteMode('auto');
-        setLockedCommand('/特殊品');
-      }
-      setSelectedSkill('');
-      setSelectedWorkflow('special');
-    } else {
-      const nextCmd = '/' + slashTrigger.cmd;
-      setLockedCommand(nextCmd);
-      setSelectedSkill('');
-      setSelectedWorkflow(cmdToWorkflow(nextCmd));
-    }
-    setPrototypePanel('');
-    setText('');
-    setTimeout(() => {
-      const el = taRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(0, 0);
-    }, 0);
-  }, [agentEnabled, slashTrigger?.key, cmdToWorkflow]);
-
-  // 外部触发：从灵感页"生成同款"传过来，自动锁定 /Gpt image 2 并填入 prompt
+  // 外部触发：从灵感页“生成同款”传过来，自动选择生图模式并填入 prompt
   React.useEffect(() => {
     if (!seedPrompt) return;
-    setLockedCommand('/Gpt image 2.5');
+    setSelectedMode('gpt-image-2.5');
     setSelectedSkill('');
-    setSelectedWorkflow('ai-image');
+    setSelectedWorkflow('chat');
     setPrototypePanel('');
     setText(String(seedPrompt));
     setTimeout(() => {
@@ -2336,23 +2128,22 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
 
   React.useEffect(() => {
     if (agentEnabled) {
-      setLockedCommand('');
+      setSelectedMode('');
       setSelectedSkill('');
       setSelectedWorkflow('chat');
-      }
+    }
   }, [agentEnabled]);
 
   React.useEffect(() => {
-    // 只有当用户显式选择了一个非特殊品模板时，才重置特殊品锁定；未选模板（null）时保留特殊品模式
-    if (!template || template.is_special || template.is_special_full) return;
-    setLockedCommand(function(prev) {
-      if (cmdToWorkflow(prev) === 'special') {
+    if (template && (template.is_special || template.is_special_full)) return;
+    setSelectedMode(function(prev) {
+      if (prev === 'special' || prev === 'special_full') {
         setSelectedWorkflow('chat');
         return '';
       }
       return prev;
     });
-  }, [template?.file_id, template?.group_name, template?.id, template?.is_special, template?.is_special_full, cmdToWorkflow]);
+  }, [template?.file_id, template?.group_name, template?.id, template?.is_special, template?.is_special_full]);
 
   React.useEffect(() => {
     const el = taRef.current;
@@ -2384,25 +2175,16 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     '9:16':{ label: '9:16', qualities: ['1K', '2K', '4K'], preview: '864×1536', px: { '1K': '864×1536', '2K': '1152×2048', '4K': '2160×3840' } },
   };
 
-  // 从文本内容检测当前模式
-  // trimmed = 用户实际打的内容（剥去 lockedCommand 锁定的前缀）
-  const _t = (() => {
-    const raw = String(text || '').trimStart();
-    if (lockedCommand && raw.toLowerCase().startsWith(lockedCommand.toLowerCase())) {
-      return raw.slice(lockedCommand.length).trimStart();
-    }
-    return raw;
-  })();
-  // activeAiModel: 只看 lockedCommand (UI 选的任务, 用户不再手动打前缀)
-  const activeAiModel =
-    (lockedCommand === '/Gpt image 2.5' || lockedCommand === '/Gpt image 2') ? 'gpt-image-2.5' :
-    lockedCommand === '/Nano Banana pro' ? 'nano-banana-pro' :
-    '';
-  const activeMode =
-    (lockedCommand === '/Gpt image 2.5' || lockedCommand === '/Gpt image 2' || lockedCommand === '/Nano Banana pro') ? 'ai-image' :
-    lockedCommand === '/特殊品（完整）' ? 'special_full' :
-    lockedCommand === '/特殊品' ? 'special' :
-    selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
+  const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2'
+    ? 'gpt-image-2.5'
+    : selectedMode === 'nano-banana-pro'
+      ? 'nano-banana-pro'
+      : '';
+  const activeMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro'
+    ? 'ai-image'
+    : selectedMode === 'special_full' || selectedMode === 'special'
+      ? selectedMode
+      : selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
   const aiOptionMap = AI_OPTIONS;
@@ -2431,25 +2213,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
 
   const selectWorkflow = React.useCallback(function(next) {
     if (agentEnabled) return;
-    const cmd = next && next.cmd ? next.cmd : '';
-    if (cmd) {
-      setLockedCommand(cmd);
-      setSelectedSkill('');
-      setSelectedWorkflow(cmdToWorkflow(cmd));
-      if (next && (next.id === 'special' || cmd.startsWith('/特殊品'))) {
-        setSpecialRouteMode('auto');
-        setLockedCommand('/特殊品');
-      }
-      setPrototypePanel('');
-      setTimeout(() => {
-        const el = taRef.current;
-        if (!el) return;
-        el.focus();
-        el.setSelectionRange(0, 0);
-      }, 0);
-      return;
-    }
-    setLockedCommand('');
+    const mode = next && next.mode ? next.mode : '';
+    setSelectedMode(mode);
     setSelectedSkill('');
     setSelectedWorkflow(next && next.workflow ? next.workflow : 'chat');
     setPrototypePanel('');
@@ -2457,26 +2222,18 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       const el = taRef.current;
       if (el) el.focus();
     }, 0);
-  }, [agentEnabled, cmdToWorkflow]);
+  }, [agentEnabled]);
 
   const restoreMessage = React.useCallback((message) => {
     const raw = String(message || '');
-    const matched = COMMANDS.find(function(cmd) {
-      return raw === cmd || raw.startsWith(cmd + ' ');
-    });
-    if (matched) {
-      setLockedCommand(matched);
-      setSelectedSkill('');
-      setSelectedWorkflow(cmdToWorkflow(matched));
-      setText(raw.slice(matched.length).trimStart());
-    } else if (raw.trimStart().startsWith('$')) {
+    if (raw.trimStart().startsWith('$')) {
       const parsed = parseSkillInvocation(raw);
-      setLockedCommand('');
+      setSelectedMode('');
       setSelectedWorkflow('chat');
       setSelectedSkill(parsed.skill || '');
       setText(parsed.prompt || '');
     } else {
-      setLockedCommand('');
+      setSelectedMode('');
       setSelectedSkill('');
       setSelectedWorkflow('chat');
       setText(raw);
@@ -2488,7 +2245,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       const len = el.value.length;
       el.setSelectionRange(len, len);
     }, 0);
-  }, [COMMANDS, cmdToWorkflow, parseSkillInvocation]);
+  }, [parseSkillInvocation]);
 
   const handleSend = () => {
     const body = text.trim();
@@ -2504,7 +2261,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     }
     const message = selectedSkill
       ? ('$' + selectedSkill + (body ? ' ' + body : ''))
-      : (lockedCommand ? (lockedCommand + (body ? ' ' + body : '')) : body);
+      : body;
     const skillInvocation = parseSkillInvocation(message);
     const sendMessage = message;
     const executionMessage = skillInvocation.skill ? skillInvocation.prompt : message;
@@ -2527,9 +2284,9 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       variant: aiVariant,
       quality: aiQualityTier,
       provider: aiProvider,
-      workflow: selectedWorkflow,
-      lockedCommand: lockedCommand,
-      specialRouteMode: specialRouteMode,
+      workflow: selectedWorkflowMode,
+      model: activeAiModel,
+      mode: selectedMode,
       batchCount: activeMode === 'ai-image' ? normalizedBatchCount : 1,
       skill: skillInvocation.skill || '',
       skillPrompt: executionMessage,
@@ -2538,10 +2295,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     setText('');
     setSelectedSkill('');
     clearRefImages();
-    if (activeMode === 'special' || activeMode === 'special_full') {
-      setSpecialRouteMode('auto');
-      setLockedCommand('/特殊品');
-    }
   };
 
   const overlayRef = React.useRef(null);
@@ -2699,7 +2452,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     const el = taRef.current;
     const start = el ? el.selectionStart : 0;
     const end = el ? el.selectionEnd : 0;
-    const currentMessage = lockedCommand ? (text.trim() || lockedCommand) : text.trim();
+    const currentMessage = text.trim();
     if (e.key === 'Escape' && skillMenuOpen) {
       e.preventDefault();
       setPrototypePanel('');
@@ -2767,7 +2520,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     }
     if (
       e.key === 'ArrowUp' &&
-      !lockedCommand &&
       !text.trim() &&
       files.length === 0 &&
       refImages.length === 0 &&
@@ -2776,13 +2528,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       e.preventDefault();
       restoreMessage(lastSubmittedMessage);
       return;
-    }
-    if (lockedCommand) {
-      if (e.key === 'ArrowUp' && !text.trim() && files.length === 0 && refImages.length === 0 && lastSubmittedMessage) {
-        e.preventDefault();
-        restoreMessage(lastSubmittedMessage);
-        return;
-      }
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -2809,29 +2554,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     if (agentEnabled) {
       setText(next);
       return;
-    }
-    if (lockedCommand) {
-      if (next.startsWith(lockedCommand + ' ')) {
-        setText(next.slice(lockedCommand.length).trimStart());
-        return;
-      }
-      if (next === lockedCommand) {
-        setText('');
-        return;
-      }
-      setText(next);
-      return;
-    }
-    if (!lockedCommand) {
-      const matched = COMMANDS.find(function(cmd) {
-        return next.startsWith(cmd + ' ');
-      });
-      if (matched) {
-        setLockedCommand(matched);
-        setSelectedWorkflow(cmdToWorkflow(matched));
-        setText(next.slice(matched.length).trimStart());
-        return;
-      }
     }
     setText(next);
   };
@@ -2972,7 +2694,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     setSelectedSkill('');
     setLockedCommand(DEFAULT_COMPOSER_COMMAND);
     setSelectedWorkflow('chat');
-    setSpecialRouteMode('auto');
     setFiles([]);
     clearRefImages();
     setTimeout(() => {
@@ -2997,26 +2718,17 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     });
     return true;
   };
-  const canSend = Boolean((lockedCommand ? (lockedCommand + ' ' + text.trim()).trim() : text.trim()) || files.length) && !isLoading;
+  const canSend = Boolean(text.trim() || files.length) && !isLoading;
   const getTaskDefinitions = React.useCallback(function() {
-    var slashMap = {};
-    try {
-      var cmds = window.SLASH_COMMANDS || [];
-      cmds.forEach(function(c) { slashMap[c.cmd] = c.available !== false; });
-    } catch (e) {}
-    function available(cmd) {
-      if (!cmd) return true; // 无 cmd 的卡片始终可用
-      return slashMap[cmd] !== false;
-    }
     return [
-      { id: 'chat', label: '默认', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat' },
-      { id: 'gpt-image', label: 'GPT Image 2.5', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', cmd: '/Gpt image 2.5', available: available('/Gpt image 2.5') },
-      { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', cmd: '/Nano Banana pro', available: available('/Nano Banana pro') },
-      { id: 'distribute', label: '智能铺货', desc: '上传表格，自动解析为铺货 JSON', iconKey: 'grid', workflow: 'distribute' },
-      { id: 'special', label: '特殊品', desc: '自动识别素材并合成多画板', iconKey: 'layers', cmd: '/特殊品', available: available('/特殊品') || available('/特殊品（完整）') },
-      { id: 'download', label: '花瓣下载', desc: '输入花瓣 ID，自动识别可下载格式', iconKey: 'download', cmd: '/花瓣下载', available: available('/花瓣下载') },
+      { id: 'chat', label: '默认', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat', mode: '' },
+      { id: 'gpt-image', label: 'GPT Image 2.5', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', workflow: 'chat', mode: 'gpt-image-2.5' },
+      { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', workflow: 'chat', mode: 'nano-banana-pro' },
+      { id: 'distribute', label: '智能铺货', desc: '上传表格，自动解析为铺货 JSON', iconKey: 'grid', workflow: 'distribute', mode: '' },
+      { id: 'special', label: '特殊品', desc: '使用特殊品模板合成结果', iconKey: 'layers', workflow: 'chat', mode: template && template.is_special_full ? 'special_full' : 'special' },
+      { id: 'download', label: '花瓣下载', desc: '输入花瓣 ID，自动识别可下载格式', iconKey: 'download', workflow: 'chat', mode: 'download' },
     ];
-  }, [template && template.is_special_full, taskDefsKey]);
+  }, [template && template.is_special_full]);
   const getTaskIcon = React.useCallback(function(iconKey) {
     return I[iconKey] || I.sparkles;
   }, []);
@@ -3047,24 +2759,25 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
     ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
     : null;
   const qualityMap = { auto: '自动', medium: '中等', xhigh: '高', max: '最高' };
-  const variantMap = { flare: '快速', sunburst: '优质' };
   const qualityTag = (activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto') ? (' · ' + (qualityMap[aiQualityTier] || aiQualityTier)) : '';
-  const variantTag = (activeAiModel === 'gpt-image-2.5') ? (' · ' + (variantMap[aiVariant] || aiVariant)) : '';
   const modeParamLabel = activeMode === 'ai-image'
-    ? (aiRatio + ' · ' + aiQuality + variantTag + qualityTag)
-    : (activeMode === 'special' || activeMode === 'special_full')
-      ? ('线路 ' + (specialRouteMode === 'auto' ? '自动' : specialRouteMode === 'full' ? '完整' : '普通'))
-      : selectedWorkflow === 'compose'
-        ? (imageType ? ('素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType)) : '')
-        : selectedWorkflow === 'distribute'
-          ? (smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量')
-          : '';
+    ? (aiRatio + ' · ' + aiQuality + (activeAiModel === 'gpt-image-2.5' ? (' · ' + aiVariant + qualityTag) : ''))
+    : activeMode === 'special_full'
+      ? '线路 完整'
+      : activeMode === 'special'
+        ? '线路 普通'
+        : selectedWorkflow === 'compose'
+          ? (imageType ? ('素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType)) : '')
+          : selectedWorkflow === 'distribute'
+            ? (smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量')
+            : '';
   const isSub2ApiRoute = activeMode === 'ai-image' && (
-    aiProvider === 'sub2api' || (
+    aiProvider === 'sub2api' ||
+    (
       aiProvider === 'auto' &&
       (activeAiModel === 'gpt-image-2.5' || activeAiModel === 'gpt-image-2') &&
       (aiQuality === '1K' || !aiQuality) &&
-      !(activeAiModel === 'gpt-image-2.5' && ['high', 'xhigh', 'max'].includes(aiQualityTier))
+      !(activeAiModel === 'gpt-image-2.5' && (aiQualityTier === 'max' || aiQualityTier === 'xhigh'))
     )
   );
   const selectedSettingBits = [
@@ -3095,7 +2808,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
               : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(
     text.trim() ||
-    lockedCommand ||
+    selectedMode ||
     modeParamLabel ||
     refImages.length > 0 ||
     files.length > 0 ||
@@ -3294,9 +3007,9 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
         React.createElement('div', { style: { marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 } },
           tasks.map(function(item) {
             const isAvailable = item.available !== false;
-            const active = item.cmd
-              ? lockedCommand === item.cmd
-              : (!lockedCommand && selectedWorkflow === item.workflow);
+            const active = item.mode
+              ? selectedMode === item.mode
+              : (!selectedMode && selectedWorkflow === item.workflow);
             const IconComp = getTaskIcon(item.iconKey);
             return React.createElement('button', {
               key: item.label,
@@ -3368,26 +3081,15 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
       const isDistributeParams = activeMode === 'distribute';
       const paramsTitle = isImageParams ? '生图参数' : isSpecialParams ? '特殊品参数' : isComposeParams ? '合成参数' : isDistributeParams ? '铺货参数' : '问答参数';
       const batchCountValue = normalizeBatchCount(aiBatchCount);
-      const imageFieldLabel = function(text, extraPropsOrStyle) {
-        let titleAttr = undefined;
-        let styleObj = {};
-        if (extraPropsOrStyle) {
-          if (extraPropsOrStyle.title) {
-            titleAttr = extraPropsOrStyle.title;
-          }
-          const rest = Object.assign({}, extraPropsOrStyle);
-          delete rest.title;
-          styleObj = rest;
-        }
+      const imageFieldLabel = function(text, extraStyle) {
         return React.createElement('div', {
-          title: titleAttr,
           style: Object.assign({
             fontSize: 12,
             fontWeight: 500,
             color: 'var(--ink-2)',
             letterSpacing: '-0.01em',
             marginBottom: 8,
-          }, styleObj)
+          }, extraStyle || {})
         }, text);
       };
       return protoPanelShell(React.createElement(React.Fragment, null,
@@ -3470,73 +3172,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
               marginTop: 12,
             }
           },
-            React.createElement('div', { style: { position: 'relative' } },
-              React.createElement('div', {
-                onMouseEnter: function() { setTypeTipVisible(true); },
-                onMouseLeave: function() { setTypeTipVisible(false); },
-                style: {
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  cursor: 'help',
-                  marginBottom: 8,
-                  userSelect: 'none',
-                }
-              },
-                React.createElement('span', {
-                  style: {
-                    fontSize: 12,
-                    fontWeight: 500,
-                    color: 'var(--ink-2)',
-                    letterSpacing: '-0.01em',
-                    borderBottom: '1px dashed var(--ink-4)',
-                    paddingBottom: 1,
-                  }
-                }, '类型'),
-                React.createElement('svg', {
-                  width: 12,
-                  height: 12,
-                  viewBox: '0 0 16 16',
-                  fill: 'none',
-                  style: { color: 'var(--ink-3)', opacity: 0.85, flexShrink: 0, transform: 'translateY(-1px)' }
-                },
-                  React.createElement('circle', { cx: 8, cy: 8, r: 7, stroke: 'currentColor', strokeWidth: 1.5 }),
-                  React.createElement('path', { d: 'M8 7v4.5M8 4.5v.5', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' })
-                )
-              ),
-              typeTipVisible && React.createElement('div', {
-                style: {
-                  position: 'absolute',
-                  bottom: 'calc(100% - 2px)',
-                  left: 0,
-                  zIndex: 60,
-                  padding: '5px 9px',
-                  borderRadius: 6,
-                  background: 'var(--ink)',
-                  color: 'var(--panel)',
-                  fontSize: 11,
-                  fontWeight: 500,
-                  lineHeight: 1.4,
-                  whiteSpace: 'nowrap',
-                  boxShadow: '0 6px 18px rgba(0, 0, 0, 0.18)',
-                  pointerEvents: 'none',
-                  transition: 'opacity 0.15s ease',
-                }
-              },
-                '快速对应更快（Flare），优质对应更好（Sunburst）',
-                React.createElement('div', {
-                  style: {
-                    position: 'absolute',
-                    top: '100%',
-                    left: 14,
-                    width: 0,
-                    height: 0,
-                    borderLeft: '4px solid transparent',
-                    borderRight: '4px solid transparent',
-                    borderTop: '4px solid var(--ink)',
-                  }
-                })
-              ),
+            React.createElement('div', null,
+              imageFieldLabel('类型'),
               React.createElement('div', {
                 style: {
                   display: 'flex',
@@ -3548,12 +3185,11 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
                   background: 'var(--panel)',
                 }
               },
-                [['flare', '快速', '快速对应更快（Flare 模型）'], ['sunburst', '优质', '优质对应更好（Sunburst 模型）']].map(function(item, idx) {
+                [['flare', 'Flare'], ['sunburst', 'Sunburst']].map(function(item, idx) {
                   const active = aiVariant === item[0];
                   return React.createElement('button', {
                     key: item[0],
                     type: 'button',
-                    title: item[2],
                     onClick: function() { setAiVariant(item[0]); },
                     style: {
                       flex: 1,
@@ -3781,29 +3417,22 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
         ),
         isSpecialParams && React.createElement(React.Fragment, null,
           protoSectionLabel('模板线路'),
-          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7 } },
+          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 } },
             [
-              { mode: 'auto', label: '自动', desc: '智能匹配素材' },
-              { mode: 'normal', label: '普通', desc: '无场景图主图' },
-              { mode: 'full', label: '完整', desc: '含场景海报' },
+              { mode: 'special', label: '普通' },
+              { mode: 'special_full', label: '完整' },
             ].map(function(item) {
-              const active = specialRouteMode === item.mode;
+              const active = selectedMode === item.mode;
               return React.createElement('button', {
                 key: item.mode,
                 type: 'button',
                 onClick: function() {
-                  setSpecialRouteMode(item.mode);
-                  if (item.mode === 'full') {
-                    setLockedCommand('/特殊品（完整）');
-                    if (onRequestSpecialTemplate) onRequestSpecialTemplate('full');
-                  } else if (item.mode === 'normal') {
-                    setLockedCommand('/特殊品');
-                    if (onRequestSpecialTemplate) onRequestSpecialTemplate('normal');
-                  } else {
-                    setLockedCommand('/特殊品');
-                  }
+                  setSelectedMode(item.mode);
                   setSelectedSkill('');
-                  setSelectedWorkflow('special');
+                  setSelectedWorkflow('chat');
+                  if (onRequestSpecialTemplate) {
+                    onRequestSpecialTemplate(item.mode === 'special_full' ? 'full' : 'normal');
+                  }
                   setPrototypePanel('');
                   setTimeout(function() {
                     const el = taRef.current;
@@ -4226,7 +3855,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, slashTri
           background: isSub2ApiRoute ? 'var(--ok)' : (agentEnabled ? 'var(--ink)' : 'var(--accent)'),
           flexShrink: 0,
           transition: 'background 160ms ease',
-        }} title={isSub2ApiRoute ? 'Sub2API preferred' : undefined}/>
+        }} title={isSub2ApiRoute ? 'Sub2API 渠道' : undefined}/>
         <div style={{
           display: 'flex',
           gap: 8,
@@ -4568,7 +4197,7 @@ const mapAgentProjectMessages = function(project, images) {
   }));
 };
 
-const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
+const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection }) => {
   const [messages, setMessages] = React.useState([]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
   const [agentMessages, setAgentMessages] = React.useState([]);
@@ -5746,206 +5375,6 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
   }, [currentAiChatId, enhancePromptWithProductRefs, loadAiChatHistory, loadResolvedRefFiles, onComposeComplete, parseProductRefs]);
 
-  const handleRetryAiImage = React.useCallback(async (target) => {
-    if (!target || isLoading) return;
-    const jobId = target.jobId || target.job_id || '';
-    const rawPrompt = target.prompt || target.text || '';
-    const resolvedPrompt = target.resolvedPrompt || rawPrompt;
-    const effectivePrompt = (resolvedPrompt || rawPrompt).trim();
-    if (!effectivePrompt) return;
-
-    const model = target.model || 'gpt-image-2.5';
-    const size = target.size || '1024x1024';
-    const resolution = target.resolution || '1K';
-    const variant = target.variant || 'flare';
-    const quality = target.quality || 'auto';
-    const provider = target.provider || 'auto';
-    const promptTrace = target.promptTrace || '';
-    const refPreviews = target.refPreviews || [];
-
-    setIsLoading(true);
-
-    // 1. 如果有历史 jobId，优先调用后端智能重试（可自动继承磁盘参考图及上下文隐藏参考图，并使用 resolvedPrompt）
-    if (jobId) {
-      const slotAt = Date.now();
-      const clientRequestId = 'retry-' + slotAt + '-' + Math.random().toString(36).slice(2, 8);
-      const apiBase = window.API_BASE || '';
-
-      setMessages(msgs => [...msgs, {
-        who: 'ai',
-        type: 'ai-image-generating',
-        status: 'processing',
-        model: model,
-        prompt: target.originalPrompt || target.prompt || effectivePrompt,
-        resolvedPrompt: effectivePrompt,
-        promptTrace: promptTrace,
-        startedAt: slotAt,
-        progress: 12,
-        provider: provider,
-        variant: variant,
-        quality: quality,
-        size: size,
-        resolution: resolution,
-        refPreviews: refPreviews,
-        clientRequestId: clientRequestId,
-      }]);
-
-      try {
-        if (!window.API || !window.API.retryAiImage) {
-          throw new Error('重试接口不可用，请稍后再试');
-        }
-        const retryRes = await window.API.retryAiImage(jobId, currentAiChatId);
-        const newJobId = retryRes.job_id;
-        if (!newJobId) throw new Error(retryRes.detail || '重试任务创建失败');
-
-        setMessages(msgs => msgs.map(m =>
-          m.type === 'ai-image-generating' && m.startedAt === slotAt
-            ? Object.assign({}, m, {
-                jobId: newJobId,
-                resolvedPrompt: retryRes.resolved_prompt || m.resolvedPrompt,
-                originalPrompt: retryRes.original_prompt || m.originalPrompt,
-                promptTrace: retryRes.prompt_trace || m.promptTrace,
-                model: retryRes.model || m.model,
-                size: retryRes.size || m.size,
-                status: 'processing',
-                progress: 15,
-              })
-            : m
-        ));
-
-        let pollFails = 0;
-        const stopPoll = (errorMsg) => {
-          clearInterval(pollInterval);
-          setIsLoading(false);
-          setMessages(msgs => msgs.map(m =>
-            m.type === 'ai-image-generating' && m.startedAt === slotAt
-              ? Object.assign({}, m, { status: 'failed', error: errorMsg || '生图失败' })
-              : m
-          ));
-        };
-
-        const pollInterval = setInterval(() => {
-          fetch(apiBase + '/ai-image/' + newJobId, {
-            credentials: 'include',
-            headers: { 'X-Client-Request-Id': clientRequestId },
-          })
-            .then(r => {
-              if (!r.ok) {
-                pollFails += 1;
-                return r.json().catch(() => ({})).then(errBody => {
-                  let detail = (errBody && (errBody.detail || errBody.message || errBody.error)) || '';
-                  if (typeof detail === 'object' && detail) detail = detail.message || JSON.stringify(detail);
-                  if (isTerminalAiImagePollStatus(r.status)) {
-                    stopPoll(detail || ('查询任务状态失败 HTTP ' + r.status));
-                    return null;
-                  }
-                  if (pollFails > 15) {
-                    stopPoll(detail || ('状态轮询超时或服务异常（HTTP ' + r.status + '）'));
-                    return null;
-                  }
-                  return null;
-                });
-              }
-              pollFails = 0;
-              return r.json();
-            })
-            .then(statusData => {
-              if (!statusData) return;
-              setMessages(msgs => msgs.map(m =>
-                m.type === 'ai-image-generating' && m.startedAt === slotAt
-                  ? Object.assign({}, m, {
-                      status: statusData.status === 'failed' || statusData.status === 'done' ? statusData.status : (statusData.status || m.status),
-                      progress: statusData.progress || m.progress,
-                      originalPrompt: statusData.original_prompt || m.originalPrompt,
-                      resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt,
-                      promptTrace: statusData.prompt_trace || m.promptTrace,
-                      provider: statusData.provider || m.provider,
-                      providerSwitched: statusData.providerSwitched || m.providerSwitched,
-                      taskId: statusData.task_id || m.taskId,
-                      jobId: newJobId,
-                    })
-                  : m
-              ));
-
-              if (statusData.status === 'done' && statusData.image_url) {
-                clearInterval(pollInterval);
-                setIsLoading(false);
-                const finalElapsed = Math.floor((Date.now() - slotAt) / 1000);
-                setMessages(msgs => msgs.map(m =>
-                  m.type === 'ai-image-generating' && m.startedAt === slotAt
-                    ? Object.assign({}, m, {
-                        status: 'done',
-                        imageUrl: statusData.image_url,
-                        previewUrl: statusData.preview_url || statusData.image_url,
-                        finalElapsed: finalElapsed,
-                        progress: 100,
-                        refPreviews: refPreviews.length ? refPreviews : m.refPreviews,
-                        originalPrompt: statusData.original_prompt || m.originalPrompt,
-                        resolvedPrompt: statusData.resolved_prompt || m.resolvedPrompt,
-                        promptTrace: statusData.prompt_trace || m.promptTrace,
-                        variant: statusData.variant || m.variant || 'flare',
-                        jobId: newJobId,
-                        taskId: statusData.task_id || m.taskId,
-                      })
-                    : m
-                ));
-                loadAiChatHistory();
-              } else if (statusData.status === 'done' && !statusData.image_url) {
-                stopPoll('任务完成但未返回图片地址');
-              } else if (statusData.status === 'failed') {
-                stopPoll(statusData.error || '生图失败');
-              }
-            })
-            .catch(pollErr => {
-              pollFails += 1;
-              if (pollFails > 15) {
-                stopPoll('状态轮询超时或网络中断');
-              }
-            });
-        }, 2000);
-        return;
-      } catch (retryErr) {
-        const retryMessage = retryErr && retryErr.message
-          ? retryErr.message
-          : '重试任务创建失败，请稍后再试';
-        console.error('retryAiImage failed', retryErr);
-        setIsLoading(false);
-        setMessages(msgs => msgs.map(m =>
-          m.type === 'ai-image-generating' && m.startedAt === slotAt
-            ? Object.assign({}, m, { status: 'failed', error: retryMessage })
-            : m
-        ));
-        // 已有历史 jobId 的重试请求失败时不得降级为无参考图的新任务，
-        // 避免生成错误内容或在请求状态不明确时重复计费。
-        return;
-      }
-    }
-
-    // 2. 无历史 jobId 时才直接调用 runAiImageGeneration，明确将集成后的 Prompt
-    // 作为 plannedPrompt 传入，跳过二次推演改写。
-    try {
-      await runAiImageGeneration(
-        model,
-        effectivePrompt,
-        rawPrompt,
-        [],
-        {
-          size: size,
-          resolution: resolution,
-          variant: variant,
-          quality: quality,
-          provider: provider,
-          plannedPrompt: effectivePrompt,
-          promptTrace: promptTrace,
-        }
-      );
-    } catch (e) {
-      console.error('fallback runAiImageGeneration retry failed', e);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [currentAiChatId, isLoading, loadAiChatHistory, runAiImageGeneration]);
-
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
     if (!text.trim() || isLoading) return;
     const activeSkill = String(aiOptions.skill || '').trim();
@@ -6233,13 +5662,10 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     // ── 花瓣下载 ─────────────────────────────────────────────────────────────
-    // 新交互: 用户通过功能按钮选择“花瓣下载”，输入框只填写 URL/ID。
-    // 旧的 /花瓣下载 文本仍兼容，但不再要求用户输入斜杠指令。
-    const isHuabanDownloadMode = aiOptions.workflow === 'download' || aiOptions.lockedCommand === '/花瓣下载' || trimmed.startsWith('/花瓣下载');
+    // 用户通过功能按钮选择“花瓣下载”，输入框只填写 URL/ID。
+    const isHuabanDownloadMode = aiOptions.workflow === 'download' || aiOptions.mode === 'download';
     if (isHuabanDownloadMode) {
-      const args = trimmed.startsWith('/花瓣下载')
-        ? trimmed.replace(/^\/花瓣下载\s*/, '').trim()
-        : trimmed.trim();
+      const args = trimmed.trim();
       const match = args.match(/^(\S+)(?:\s+([A-Za-z0-9._-]+))?$/);
       setMessages(msgs => [...msgs, { who: 'user', text: args || text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       if (!match) {
@@ -6343,25 +5769,12 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
     }
 
     // ── AI 生图指令匹配 ────────────────────────────────────────────────────────
-    // 用户心智: 只通过 UI 选模型 (lockedCommand), 不再手动打 / 指令.
-    // aiCmd 直接从 lockedCommand 解析, 永远 implicit.
-    const AI_IMAGE_CMDS = [
-      { prefix: '/Nano Banana pro', model: 'nano-banana-pro' },
-      { prefix: '/Gpt image 2.5',   model: 'gpt-image-2.5' },
-      { prefix: '/Gpt image 2',     model: 'gpt-image-2.5' },
-    ];
+    // 用户通过 UI 功能面板选择模型，输入框仅作为图片描述。
+    const targetAiModel = aiOptions.model || (aiOptions.mode === 'nano-banana-pro' ? 'nano-banana-pro' : (aiOptions.workflow === 'ai-image' ? 'gpt-image-2.5' : ''));
+    const isAiImageMode = Boolean(targetAiModel) || aiOptions.workflow === 'ai-image';
     const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
-    const lockedAiCmd = AI_IMAGE_CMDS.find(function(c) {
-      return String(aiOptions.lockedCommand || '').trim().toLowerCase() === c.prefix.toLowerCase();
-    });
-    const textAiCmd = AI_IMAGE_CMDS.find(function(c) {
-      return text.trimStart().toLowerCase().startsWith(c.prefix.toLowerCase());
-    });
-    const aiCmd = lockedAiCmd
-      ? Object.assign({}, lockedAiCmd, { implicit: true, fromLockedCommand: true })
-      : (textAiCmd ? Object.assign({}, textAiCmd, { implicit: true, fromLockedCommand: false }) : null);
 
-    if (activeSkill && !aiCmd && aiOptions.workflow !== 'download') {
+    if (activeSkill && !isAiImageMode && aiOptions.workflow !== 'download') {
       const skillImageOptions = Object.assign({}, aiOptions, {
         provider: 'auto',
         size: 'auto',
@@ -6382,28 +5795,24 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       const rest = rawPrompt.slice(freshMatch.length).trim();
       const freshPrompt = rest || '重新生成';
       const lastOpts = getLastAiImageOptions();
-      const model = aiCmd ? aiCmd.model : (lastOpts?.model || 'gpt-image-2.5');
-      const opts = aiCmd ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, variant: lastOpts?.variant || aiOptions.variant || 'flare', quality: lastOpts?.quality || aiOptions.quality || 'auto', provider: aiOptions.provider };
-      setMessages(msgs => [...msgs, { who: 'user', text: aiCmd && !aiCmd.implicit ? rawPrompt : text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
+      const model = isAiImageMode ? targetAiModel : (lastOpts?.model || 'gpt-image-2.5');
+      const opts = isAiImageMode ? aiOptions : { ...aiOptions, size: lastOpts?.size || aiOptions.size, resolution: lastOpts?.resolution || aiOptions.resolution, variant: lastOpts?.variant || aiOptions.variant || 'flare', quality: lastOpts?.quality || aiOptions.quality || 'auto', provider: aiOptions.provider };
+      setMessages(msgs => [...msgs, { who: 'user', text: rawPrompt, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       await runAiImageGeneration(model, freshPrompt, freshPrompt, refImages, opts);
       return;
     }
 
-    if (aiCmd) {
-      const rawAiText = text.trim();
-      const plainText = rawAiText.toLowerCase().startsWith(aiCmd.prefix.toLowerCase())
-        ? rawAiText.slice(aiCmd.prefix.length).trimStart()
-        : rawAiText;
+    if (isAiImageMode) {
+      const plainText = text.trim();
       if (!plainText) {
-        const prefixLabel = aiCmd.implicit ? '（复用上次模型）' : aiCmd.prefix;
         setMessages(msgs => [...msgs,
           { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta },
-          { who: 'ai', text: `请在 ${prefixLabel} 后输入图片描述` },
+          { who: 'ai', text: '请输入图片描述' },
         ]);
         return;
       }
       setMessages(msgs => [...msgs, { who: 'user', text: plainText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
-      await runAiImageGeneration(aiCmd.model, plainText, plainText, refImages, aiOptions);
+      await runAiImageGeneration(targetAiModel || 'gpt-image-2.5', plainText, plainText, refImages, aiOptions);
       return;
     }
 
@@ -6426,122 +5835,41 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       return;
     }
 
-    // ── 特殊品（完整/普通/自动）流程 ──────────────────────────────────────────
-    const _isExplicitSpecialFull = text.trimStart().startsWith('/特殊品（完整）');
-    const _isSpecial = _isExplicitSpecialFull || text.trimStart().startsWith('/特殊品');
-    if (_isSpecial) {
-      const _routeMode = aiOptions.specialRouteMode || 'auto';
-      const _argRegex = /^\/(特殊品（完整）|特殊品)\s*/;
-      const displayText = text.replace(_argRegex, '').trim() || text;
+    // ── 特殊品流程 ────────────────────────────────────────────────────
+    const isSpecialWorkflow = aiOptions.workflow === 'special' || aiOptions.workflow === 'special_full' || aiOptions.mode === 'special' || aiOptions.mode === 'special_full';
+    if (isSpecialWorkflow) {
+      const isFull = aiOptions.workflow === 'special_full' || aiOptions.mode === 'special_full';
+      const _cmdLabel  = isFull ? '特殊品（完整）' : '特殊品';
+      const _endpoint  = isFull ? '/special-compose-full' : '/special-compose';
+      const _pollBase  = isFull ? '/special-compose-full' : '/special-compose';
+      const _errHint   = '请提供 SKU，格式：SKU，文案，时间文案';
+      const _tplHint   = isFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板';
+
+      const displayText = text.trim();
       setMessages(msgs => [...msgs, { who: 'user', text: displayText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
       setIsLoading(true);
-
-      const args = text.replace(_argRegex, '').trim();
-      const parts = args.split('，').map(s => s.trim());
-      const sku = parts[0] || '';
-      const fields = { name: parts[1] || '', time: parts[2] || '' };
-      if (!sku) {
-        setIsLoading(false);
-        setMessages(msgs => [...msgs, {
-          who: 'ai',
-          text: '请提供 SKU，格式：/特殊品 SKU，文案，时间文案',
-        }]);
-        return;
-      }
-
       // 先插入 generating 消息占位
       let specialMsgIdx = null;
       setMessages(msgs => {
         specialMsgIdx = msgs.length;
         return [...msgs, {
           who: 'ai', type: 'generating',
-          logs: ['正在启动特殊品合成…'],
-          status: 'running', meta: 'Loom · 特殊品',
+          logs: [`正在启动${_cmdLabel}合成…`],
+          status: 'running', meta: `Loom · ${_cmdLabel}`,
           startedAt: Date.now(),
         }];
       });
       try {
-        // 判断目标线路：'full' 还是 'normal'
-        let targetFlow = 'normal';
-        let autoDetectNote = '';
-        if (_isExplicitSpecialFull || _routeMode === 'full') {
-          targetFlow = 'full';
-        } else if (_routeMode === 'normal') {
-          targetFlow = 'normal';
-        } else {
-          // 'auto' 智能模式：毫秒级探测素材库中的场景图（Banner/Poster）
-          try {
-            const apiBase = window.API_BASE || window.location.origin;
-            const detectResp = await fetch(`${apiBase}/special-compose/detect?sku=${encodeURIComponent(sku)}`, { credentials: 'include' });
-            if (detectResp.ok) {
-              const detectData = await detectResp.json();
-              if (detectData.has_scene) {
-                targetFlow = 'full';
-                autoDetectNote = '🔍 检测到场景图素材（Banner/Poster），已自动启用完整版画板（含场景海报）';
-              } else {
-                targetFlow = 'normal';
-                autoDetectNote = '🔍 未检测到场景图素材，自动使用标准版特殊品画板';
-              }
-            }
-          } catch (e) {
-            console.warn('Detect special materials failed, falling back to normal:', e);
-          }
-        }
+        const args = displayText;
+        const parts = args.split('，').map(s => s.trim());
+        const sku = parts[0] || '';
+        const fields = { name: parts[1] || '', time: parts[2] || '' };
+        if (!sku) throw new Error(_errHint);
+        if (!template) throw new Error(_tplHint);
 
-        const isFull = targetFlow === 'full';
-        const _cmdLabel = isFull ? '特殊品（完整）' : '特殊品';
-        const _endpoint = isFull ? '/special-compose-full' : '/special-compose';
-        const _pollBase = isFull ? '/special-compose-full' : '/special-compose';
-
-        // 匹配对应模板：支持自动从全局模板列表匹配与兜底
-        let templates = Array.isArray(window.TEMPLATES) ? window.TEMPLATES : [];
-        if (templates.length === 0 && window.API && window.API.fetchTemplates) {
-          try {
-            const fetched = await window.API.fetchTemplates();
-            if (Array.isArray(fetched)) {
-              const aggregated = typeof aggregateTemplates === 'function'
-                ? aggregateTemplates(fetched)
-                : (window.aggregateTemplates ? window.aggregateTemplates(fetched) : fetched);
-              templates = aggregated;
-              window.TEMPLATES = aggregated;
-            }
-          } catch (e) {
-            console.warn('Failed to fetch templates as fallback:', e);
-          }
-        }
-        let effectiveTemplate = template;
-        if (!effectiveTemplate || (!effectiveTemplate.is_special && !effectiveTemplate.is_special_full)) {
-          effectiveTemplate = templates.find(function(t) {
-            return isFull ? t.is_special_full : (t.is_special && !t.is_special_full);
-          }) || (isFull ? templates.find(t => t.is_special) : null);
-        } else {
-          // 若已有 template 但与目标线路版本不一致，自动切换至对应版本
-          if (isFull && !effectiveTemplate.is_special_full) {
-            const fullTpl = templates.find(t => t.is_special_full);
-            if (fullTpl) effectiveTemplate = fullTpl;
-          } else if (!isFull && effectiveTemplate.is_special_full) {
-            const normalTpl = templates.find(t => t.is_special && !t.is_special_full);
-            if (normalTpl) effectiveTemplate = normalTpl;
-          }
-        }
-
-        if (!effectiveTemplate) {
-          throw new Error(isFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板');
-        }
-
-        // 更新日志通知用户匹配结果
-        const initialLogs = [`正在启动${_cmdLabel}合成…`];
-        if (autoDetectNote) {
-          initialLogs.push(autoDetectNote);
-        }
-        setMessages(msgs => msgs.map((m, idx) => {
-          if (idx !== specialMsgIdx) return m;
-          return { ...m, logs: initialLogs, meta: `Loom · ${_cmdLabel}` };
-        }));
-
-        const frameIds = effectiveTemplate.frames ? effectiveTemplate.frames.map(f => f.id) : [effectiveTemplate.id];
-        const fileId = effectiveTemplate.file_id || (effectiveTemplate.frames && effectiveTemplate.frames[0]?.file_id);
-        const pageId = effectiveTemplate.page_id || (effectiveTemplate.frames && effectiveTemplate.frames[0]?.page_id);
+        const frameIds = template.frames ? template.frames.map(f => f.id) : [template.id];
+        const fileId = template.file_id || (template.frames && template.frames[0]?.file_id);
+        const pageId = template.page_id || (template.frames && template.frames[0]?.page_id);
 
         const resp = await fetch(_endpoint, {
           method: 'POST',
@@ -6578,15 +5906,15 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
               return frameIds.map((_, i) => `/results/${job['id']}/frame_${i}.png`);
             };
             const urls = buildUrls();
-            const frameNames = (effectiveTemplate.frames && effectiveTemplate.frames.length > 0 ? effectiveTemplate.frames : [effectiveTemplate]).map(f => f.name || f.variant || '画板');
+            const frameNames = (template.frames && template.frames.length > 0 ? template.frames : [template]).map(f => f.name || f.variant || '画板');
             const zipUrl = `${_pollBase}/${job['id']}/download-zip?names=${encodeURIComponent(frameNames.join(','))}`;
             setMessages(msgs => msgs.map((m, idx) => {
               if (idx !== specialMsgIdx) return m;
               return { ...m, status: 'done', specialUrls: urls, penpotUrl: s.penpot_edit_url, zipUrl };
             }));
             // 构建 resultTpl 供画布预览
-            if (onComposeComplete && urls.length > 0 && effectiveTemplate) {
-              const base = structuredClone(effectiveTemplate);
+            if (onComposeComplete && urls.length > 0 && template) {
+              const base = structuredClone(template);
               const baseFrames = base.frames && base.frames.length > 0 ? base.frames : [base];
               base.frames = urls.map((url, i) => ({ ...(baseFrames[i % baseFrames.length] || baseFrames[0]), resultUrl: url }));
               base._frameNames = frameNames;
@@ -7137,16 +6465,15 @@ const Chat = ({ state, template, onComposeComplete, slashTrigger, user, onReques
       )}
 
       {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration} onRetryAiImage={handleRetryAiImage}/>}
+      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
       {state === 'generating' && <ChatGenerating/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration} onRetryAiImage={handleRetryAiImage}/>}
+      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
 
       <Composer
         onSend={handleSend}
         onParseTable={handleParseTable}
         onSmartDistribute={handleSmartDistribute}
         isLoading={isLoading}
-        slashTrigger={slashTrigger}
         template={template}
         lastSubmittedMessage={lastSubmittedMessage}
         agentEnabled={agentEnabled}

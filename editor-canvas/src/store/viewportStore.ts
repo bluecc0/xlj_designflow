@@ -13,26 +13,38 @@ interface ViewportState {
   panBy: (dx: number, dy: number) => void
   setPan: (x: number, y: number) => void
   setZoom: (zoom: number) => void
+  setViewport: (zoom: number, panX: number, panY: number) => void
   zoomAt: (screenPoint: Point, factor: number) => void
   resetViewport: () => void
   screenToCanvas: (screen: Point) => Point
   canvasToScreen: (canvas: Point) => Point
+  switchPageViewport: (newPageId: string) => void
 }
 
 const MIN_ZOOM = 0.05
 const MAX_ZOOM = 6.0
 
-function getStorageKey() {
-  const uid =
-    typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('user_id') || 'default'
-      : 'default'
-  return `designflow_canvas_viewport_${uid}`
+function getUserId(): string {
+  if (typeof window === 'undefined') return 'default'
+  try {
+    return new URLSearchParams(window.location.search).get('user_id') || 'default'
+  } catch {
+    return 'default'
+  }
+}
+
+function getGlobalStorageKey(): string {
+  return `designflow_canvas_viewport_${getUserId()}`
+}
+
+function getPageStorageKey(pageId?: string): string {
+  const pid = pageId || 'default'
+  return `designflow_canvas_page_viewport_${getUserId()}_${pid}`
 }
 
 function getInitialViewport() {
   try {
-    const key = getStorageKey()
+    const key = getGlobalStorageKey()
     const saved = localStorage.getItem(key)
     if (saved) {
       const parsed = JSON.parse(saved)
@@ -56,21 +68,69 @@ function getInitialViewport() {
   }
 }
 
+let activePageIdRef = 'page-1'
 let saveTimer: any = null
+
+function saveViewportToStorage(zoom: number, panX: number, panY: number) {
+  try {
+    const payload = JSON.stringify({ zoom, panX, panY, updatedAt: Date.now() })
+    localStorage.setItem(getGlobalStorageKey(), payload)
+    if (activePageIdRef) {
+      localStorage.setItem(getPageStorageKey(activePageIdRef), payload)
+    }
+  } catch {}
+}
+
 function persistViewport(zoom: number, panX: number, panY: number) {
   clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(getStorageKey(), JSON.stringify({ zoom, panX, panY }))
-    } catch {}
-  }, 100)
+    saveViewportToStorage(zoom, panX, panY)
+  }, 80)
+}
+
+export function hasLocalStoredViewport(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    const key = getGlobalStorageKey()
+    const saved = localStorage.getItem(key)
+    if (!saved) return false
+    const parsed = JSON.parse(saved)
+    return (
+      typeof parsed.zoom === 'number' &&
+      typeof parsed.panX === 'number' &&
+      typeof parsed.panY === 'number'
+    )
+  } catch {
+    return false
+  }
+}
+
+export function setActivePageForViewport(pageId: string) {
+  activePageIdRef = pageId
+}
+
+export function getStoredPageViewport(pageId: string) {
+  try {
+    const pageSaved = localStorage.getItem(getPageStorageKey(pageId))
+    if (pageSaved) {
+      const parsed = JSON.parse(pageSaved)
+      if (typeof parsed.zoom === 'number' && typeof parsed.panX === 'number' && typeof parsed.panY === 'number') {
+        return {
+          zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, parsed.zoom)),
+          panX: parsed.panX,
+          panY: parsed.panY,
+        }
+      }
+    }
+  } catch {}
+  return null
 }
 
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', () => {
     try {
       const { zoom, panX, panY } = useViewportStore.getState()
-      localStorage.setItem(getStorageKey(), JSON.stringify({ zoom, panX, panY }))
+      saveViewportToStorage(zoom, panX, panY)
     } catch {}
   })
 }
@@ -111,6 +171,13 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
     })
   },
 
+  setViewport: (zoom, panX, panY) => {
+    clearTimeout(saveTimer)
+    const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom))
+    set({ zoom: nextZoom, panX, panY })
+    saveViewportToStorage(nextZoom, panX, panY)
+  },
+
   zoomAt: (screenPoint, factor) => {
     const { zoom, panX, panY } = get()
     const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor))
@@ -130,6 +197,18 @@ export const useViewportStore = create<ViewportState>((set, get) => ({
   resetViewport: () => {
     persistViewport(1.0, 120, 80)
     set({ zoom: 1.0, panX: 120, panY: 80 })
+  },
+
+  switchPageViewport: (newPageId: string) => {
+    // 切换前清除待写入的旧视口，确保它不会被记到新画板。
+    clearTimeout(saveTimer)
+    const current = get()
+    saveViewportToStorage(current.zoom, current.panX, current.panY)
+    activePageIdRef = newPageId
+    const saved = getStoredPageViewport(newPageId)
+    const next = saved || { zoom: current.zoom, panX: current.panX, panY: current.panY }
+    set(next)
+    saveViewportToStorage(next.zoom, next.panX, next.panY)
   },
 
   screenToCanvas: (screen) => {

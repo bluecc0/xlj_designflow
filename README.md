@@ -48,7 +48,7 @@ Penpot 模板（图层名 slot/...） + 本地产品图库
 | 产线 | 入口 | 说明 |
 |---|---|---|
 | 普通合成 | 选模板 + 上传表格 / `POST /compose` | 单模板填 slot |
-| 特殊品 | `/特殊品`、`/特殊品（完整）` | 多画板、变体导出、zip 按画板名改文件名 |
+| 特殊品 | 功能面板选择 / 特殊品模板 | 多画板、变体导出、zip 按画板名改文件名 |
 | AI 生图 | GPT Image 2 / Nano Banana Pro | 智能路由多线路，结果进画布 |
 
 另外还有：智能铺货（Excel → PS 插件 JSON）、花瓣下载、画布高清放大 / 转 SVG / 转 PSD、灵感瀑布流、Agent / Skill。
@@ -306,8 +306,8 @@ slot/{组}/{字段}
 
 两条独立接口，前端按中文逗号拆 `SKU，文案，时间`：
 
-- `/特殊品` → `POST /special-compose`
-- `/特殊品（完整）` → `POST /special-compose-full`
+- 普通特殊品模式 → `POST /special-compose`
+- 完整特殊品模式 → `POST /special-compose-full`
 
 `special_flows.json` 只描述普通特殊品字段；完整版前端写死同一套三字段。
 
