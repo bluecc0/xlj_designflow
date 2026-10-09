@@ -1,506 +1,169 @@
 # DesignFlow
 
-AI 驱动的电商设计资产平台。运营/设计通过对话选模板、匹配本地图库、AI 生图、特殊品多画板合成，批量产出商品主图。
+DesignFlow 是面向电商设计生产的本地 Web 工具：通过对话、Penpot 模板、本地产品图库和 AI 生图，生成商品海报、特殊品多画板结果和可继续编辑的无限画布素材。
 
-主界面：http://localhost:8000/ui  
-API 文档：http://localhost:8000/docs  
-仓库：https://github.com/bluecc0/xlj_designflow
+正式入口：`http://localhost:8000/ui`。仓库：[bluecc0/xlj_designflow](https://github.com/bluecc0/xlj_designflow)
 
----
+## 维护原则
 
-## 目录
+1. 区分源码、构建产物和运行数据。源码需要提交，运行数据、密钥和本机日志不能提交。
+2. 主 UI、当前画布和旧 tldraw 画布是独立构建目标，改哪一边就重建哪一边。
+3. `8000` 是正式入口；`8003` 只用于隔离测试，不应作为正式用户入口。
+4. 8000 和 8003 不得同时写同一个 SQLite 文件。`jobs.db` 不通过 Git 同步。
+5. 构建成功不等于运行时安全。前端改动还要做 bundle 语法、`no-undef` 和浏览器关键路径检查。
+6. 本文件记录维护约定，`KNOWLEDGE.md` 记录当前产品行为和用户操作。
 
-- [它做什么](#它做什么)
-- [技术栈](#技术栈)
-- [仓库结构](#仓库结构)
-- [本地启动](#本地启动)
-- [改代码后必须 rebuild](#改代码后必须-rebuild)
-- [配置](#配置)
-- [登录与权限](#登录与权限)
-- [核心业务](#核心业务)
-- [特殊品合成](#特殊品合成)
-- [AI 生图](#ai-生图)
-- [画布](#画布)
-- [后台管理](#后台管理)
-- [主要 HTTP 端点](#主要-http-端点)
-- [数据库](#数据库)
-- [测试](#测试)
-- [Git 与发布](#git-与发布)
-- [排错](#排错)
-- [相关文档](#相关文档)
+## 架构和目录
 
----
-
-## 它做什么
-
-```
-运营表格 / 对话指令 / SKU
-        ↓
-FastAPI（解析、匹配图库、调生图、写 Penpot slot）
-        ↓
-Penpot 模板（图层名 slot/...） + 本地产品图库
-        ↓
-导出 PNG/JPG，或落到中间 Tldraw 画布继续处理
-```
-
-三条主产线：
-
-| 产线 | 入口 | 说明 |
-|---|---|---|
-| 普通合成 | 选模板 + 上传表格 / `POST /compose` | 单模板填 slot |
-| 特殊品 | 功能面板选择 / 特殊品模板 | 多画板、变体导出、zip 按画板名改文件名 |
-| AI 生图 | GPT Image 2 / Nano Banana Pro | 智能路由多线路，结果进画布 |
-
-另外还有：智能铺货（Excel → PS 插件 JSON）、花瓣下载、画布高清放大 / 转 SVG / 转 PSD、灵感瀑布流、Agent / Skill。
-
----
-
-## 技术栈
-
-| 层 | 技术 |
+| 目录/文件 | 维护职责 |
 |---|---|
-| 后端 | Python FastAPI，`uvicorn`，端口 8000 |
-| 前端主 UI | `frontend/`，JSX 由 `build.py` 编成 hashed bundle，后端静态托管 `/ui` |
-| 画布 | `editor-lab-tldraw/`（Vite + React + tldraw），iframe 挂在 `/editor-beta/` |
-| 模板 | 本地 Penpot（默认 9001），Transit+JSON RPC |
-| 持久化 | SQLite `jobs.db`（git 忽略） |
-| 图库 | UNC / 本地目录，按 SKU 文件名精确匹配 |
+| `backend/` | FastAPI、业务流程、任务轮询和 SQLite |
+| `backend/main.py` | 路由、认证、静态挂载、后台任务 |
+| `backend/job_store.py` | 任务、会话、快照、账号、审计和备份 |
+| `backend/compose.py` | 普通 Penpot 合成 |
+| `backend/special_compose.py` | 普通特殊品合成 |
+| `backend/special_compose_full.py` | 完整特殊品合成，支持场景图 |
+| `backend/ai_image.py` | 生图适配器和智能路由 |
+| `frontend/src/` | 主 UI JSX 源码 |
+| `frontend/build.py` | JSX 编译和内容哈希 bundle 生成器 |
+| `frontend/compiled/` | 当前生效的主 UI bundle |
+| `editor-canvas/` | 当前主画布，挂载 `/editor-canvas/` |
+| `editor-lab-tldraw/` | 旧 tldraw 画布，挂载 `/editor-beta/` |
+| `ensure_ui_build.py` | 启动前检查并重建前端和画布 |
+| `special_flows.json` | 特殊品字段流程配置 |
+| `slot_schema.json` | 普通合成字段别名和列映射 |
 
-前端**不是** Vite 应用。改 `frontend/src/*.jsx` 后必须跑 `python build.py`。`api.js` 是普通脚本，不进 bundle。
+正式主线使用 `editor-canvas`。`editor-lab-tldraw` 只用于兼容、回归或旧实现验证，修改其中一边不会自动更新另一边。
 
----
+## 启动与端口
 
-## 仓库结构
+正式服务：
 
-```
-backend/                     FastAPI
-  main.py                   路由、鉴权中间件、静态挂载、zip 导出规则
-  config.py                 .env + login_users.json + IMAGE_TYPE_FOLDERS
-  models.py                 Pydantic 模型
-  job_store.py              SQLite：任务、会话、灵感、画布快照、后台统计
-  penpot_client.py          Penpot RPC + slot 解析
-  compose.py                普通合成（全局 Semaphore 串行）
-  special_compose.py        特殊品
-  special_compose_full.py   特殊品完整（banner/poster、hide 层）
-  product_library.py        图库查找（只拼路径 + exists，禁止热路径 iterdir）
-  table_parser.py           普通合成表格列映射
-  smart_distribute.py       智能铺货（规则解析，不调 AI）
-  ai_image.py               生图适配 + 智能路由
-  kie_layer_decomposition.py / layer_*.py   转 PSD
-  upscale_worker.py         Gigapixel 高清放大
-  vectorize_worker.py       vtracer 转 SVG
-  agent_mode.py             Agent 对话状态机
-  agent_skill_loader.py     skills/ 目录加载
-  test_*.py                 unittest
-
-frontend/                   主 UI（后端从这里 serve，不是 frontend-dist/）
-  src/app.jsx               根组件、登录门、三栏布局
-  src/Chat.jsx              对话、生图、特殊品、铺货
-  src/TemplatePanel.jsx     左侧模板库
-  src/Canvas.jsx            中间画布 iframe
-  src/TopBar.jsx            顶栏
-  src/AdminPage.jsx         /admin 后台
-  src/InspirationPanel.jsx  灵感浮层
-  src/WhatsNewModal.jsx     更新弹窗
-  src/api.js                fetch 封装（credentials: include）
-  build.py                  JSX → frontend/compiled/app-<hash>.js
-  compiled/                 当前生效 bundle（提交进 git）
-  index.html                入口，引用 compiled bundle
-  whats-new.json            更新弹窗文案
-
-editor-lab-tldraw/          画布子项目
-  src/App.tsx               工具条、批量下载、放大/矢量化/分层
-  dist/                     构建产物，挂到 /editor-beta/
-
-skills/                     Agent Skill（SKILL.md + references）
-special_flows.json          特殊品字段定义
-slot_schema.json            普通合成列别名
-template_rules.json         历史规则（智能铺货不再依赖）
-login_users.example.json    账号模板
-start.example.bat           Windows 一键启动模板（复制为 start.bat，该文件 git 忽略）
-ensure_ui_build.py          启动/更新时按过期检查重建 frontend 与 tldraw
-KNOWLEDGE.md                注入对话 system prompt 的产品说明
+```powershell
+.venv\Scripts\python.exe -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-`penpot/`、`jobs.db`、`.env`、`login_users.json`、`output/`、`start.bat` 都在 `.gitignore`。
+Windows 推荐复制 `start.example.bat` 为本机的 `start.bat` 后启动。常用地址：`/ui`、`/docs`、`/health`、`/health/deep`，完整地址均以 `http://localhost:8000` 为前缀。
 
----
+8003 仅用于新画布或分支预览，使用 `start-preview-8003.ps1`。必须使用独立测试数据或只读数据，不能与 8000 共同写 `jobs.db`。正式迁移应合并源码到 `master`，在正式目录重建，停止旧服务后启动 8000，而不是长期维护两个正式项目。
 
-## 本地启动
+## 构建规则
 
-依赖：Python 3.11+、Node.js（编前端 JSX）、本机或局域网 Penpot。
+修改 `frontend/src/*.jsx` 后：
 
-```bash
-# 1. 环境
-cp .env.example .env          # 填真实值；不要提交
-cp login_users.example.json login_users.json
-# 按需给账号加 password_hash（bcrypt）
-
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-pip install -r backend/requirements.txt
-
-# 2. 前端（改过 JSX 才需要）
-cd frontend && python build.py && cd ..
-
-# 3. 画布（改过 editor-lab-tldraw/src 才需要）
-cd editor-lab-tldraw && npm install && npm run build && cd ..
-
-# 4. 后端
-uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+```powershell
+.venv\Scripts\python.exe frontend\build.py
 ```
 
-Windows 也可：`copy start.example.bat start.bat` 后双击。默认只起后端 `:8000`，同一个窗口，关掉窗口即停。`PENPOT_BASE_URL` 以 `.env` 为准。启动前会跑 `ensure_ui_build.py`：JSX 或 tldraw 源比产物新才重建，已是最新就跳过。
+该命令按 `frontend/build.py` 的 `BABEL_FILES` 编译 `frontend/compiled/app-<hash>.js`，更新 `frontend/index.html` 并删除旧 bundle。新增 JSX 文件时必须加入 `BABEL_FILES`。`frontend/src/api.js` 是普通脚本，修改后刷新浏览器即可。
 
-```bat
-start.bat              只开 8000（过期则先 rebuild 前端 / 画布）
-start.bat extras       额外再开 Penpot MCP :4401 和插件 :4400（日常不需要）
-start.bat install      重装 backend/requirements.txt
+修改当前画布后：
+
+```powershell
+cd editor-canvas
+npm install
+npm run build
+cd ..
 ```
 
-Penpot 没起来时模板列表为空，其它功能仍可测。
+修改旧 tldraw 画布后，在 `editor-lab-tldraw` 目录执行同样的 `npm install` 和 `npm run build`。产物分别是两个目录下的 `dist/`。
 
-健康检查：`curl http://localhost:8000/health`  
-深探测（Penpot / APIMart / adobe2api）：`curl http://localhost:8000/health/deep`
+启动前检查或强制重建：
 
----
+```powershell
+.venv\Scripts\python.exe ensure_ui_build.py
+.venv\Scripts\python.exe ensure_ui_build.py --force
+```
 
-## 改代码后必须 rebuild
+前端改动后还要运行 `node --check` 检查当前 bundle，使用 `no-undef` 扫描，并实际打开 `/ui` 覆盖登录、空状态、生成中、已完成、特殊品参数面板和右侧画布。Babel 构建不会发现组件状态分支中的自由变量错误。
 
-浏览器不编译 JSX。正式机不要手跑两套命令：`start.bat` 和 `update_formal_local.bat` 都会先跑根目录 `ensure_ui_build.py`，源比产物新才重建。
+## 环境配置
 
-| 改了什么 | 自动 / 手动 | 否则 |
-|---|---|---|
-| `frontend/src/*.jsx`（`api.js` 除外） | 启动或 pull 后自动；也可 `cd frontend && python build.py` | `/ui` 仍是旧 bundle |
-| `frontend/src/api.js` | 不用 build，刷新即可 | — |
-| `frontend/whats-new.json` | 不用 build | — |
-| `editor-lab-tldraw/src/*` | 启动或 pull 后自动；也可 `cd editor-lab-tldraw && npm run build` | iframe 仍是旧 dist |
-| `backend/*.py` | `--reload` 自动重启 | — |
+复制 `.env.example` 为 `.env`。`.env`、`login_users.json`、数据库、图库路径和 API key 均为本机配置，不提交。
 
-强制两边都编：`python ensure_ui_build.py --force`。
-
-`build.py` 用本机 Node + `frontend/vendor/babel.min.js` 按 `BABEL_FILES` 顺序编译，写出 `frontend/compiled/app-<12位sha>.js`，并改 `index.html` 里的 `data-designflow-bundle` 标签。旧 hash 文件会被删掉。`index.html` 是产物，不要拿它当过期判断源。
-
-新增 JSX 文件时：加入 `BABEL_FILES`，并保证 `index.html` 里对应引用关系还对得上。
-
-两边都改时两个 build 都跑，避免「一半新一半旧」误判。
-
----
-
-## 配置
-
-根目录 `.env`，对照 `.env.example`。`backend/config.py` 读取。
-
-### 必填（合成 / 对话）
-
-| 变量 | 作用 |
+| 变量 | 用途 |
 |---|---|
-| `PENPOT_BASE_URL` | Penpot 地址 |
-| `PENPOT_ACCESS_TOKEN` / `PENPOT_EMAIL` / `PENPOT_PASSWORD` | RPC 认证 |
-| `SILICONFLOW_API_KEY` | 对话 / 表格解析兜底 |
-| `PRODUCT_LIBRARY_PATH` | 图库根目录，支持 UNC |
-| `OUTPUT_PATH` | 导出与生图落盘，默认 `./output` |
-| `LOGIN_USERS_PATH` | 默认 `./login_users.json` |
+| `PENPOT_BASE_URL` | Penpot 服务地址 |
+| `PENPOT_EMAIL` / `PENPOT_PASSWORD` | Penpot RPC 登录 |
+| `PRODUCT_LIBRARY_PATH` | 产品图库根目录，可为 UNC |
+| `OUTPUT_PATH` | 结果图和任务文件目录 |
+| `LOGIN_USERS_PATH` | 登录账号 JSON |
+| `AI_IMAGE_PROVIDER` | 生图线路，通常为 `auto` |
+| `AI_IMAGE_BASE_URL` / `AI_IMAGE_API_KEY` | APIMart 默认线路 |
+| `CLIPROXY_BASE_URL` / `CLIPROXY_API_KEY` | 订阅线路 |
+| `ADOBE2API_BASE_URL` / `ADOBE2API_API_KEY` | Adobe 兼容线路 |
+| `KIE_API_KEY` | PSD 分层能力 |
+| `UPSCALE_CLI_PATH` | 本地高清放大 CLI |
+| `AGENT_SKILL_PATHS` | Skill 搜索路径，Windows 用 `;` |
+| `PROXY_DOWNLOAD_*` | 花瓣下载中继配置 |
 
-### 生图
+不要把真实 key 写进源码、示例 env、README 或日志。
 
-| 变量 | 作用 |
-|---|---|
-| `AI_IMAGE_PROVIDER` | `auto` 走智能路由；也可钉死某一线路 |
-| `AI_IMAGE_BASE_URL` / `AI_IMAGE_API_KEY` | APIMart |
-| `CLIPROXY_BASE_URL` / `CLIPROXY_API_KEY` | 订阅线路（CLIProxyAPI） |
-| `ADOBE2API_BASE_URL` / `ADOBE2API_API_KEY` | adobe2api 兜底 |
-| `AI_IMAGE_DOWNLOAD_PROXY_URL` | 只用于下完成图 |
-| `NANO_BANANA_*` / `VLM_*` | 空则复用 `AI_IMAGE_*` |
+## 数据与备份
 
-### 可选能力（key 空 = 功能关闭）
+正式数据默认是根目录 `jobs.db`。后端会幂等建表并做缺列迁移，保存任务、会话、画布快照、灵感、Agent 和审计日志。
 
-| 变量 | 作用 |
-|---|---|
-| `KIE_*` | 画布「转 PSD」图层分离 |
-| `UPSCALE_CLI_PATH` | 本地 Gigapixel，空则高清放大不可用 |
-| `AGENT_SKILL_PATHS` | 默认 `./skills`，Windows 多路径用 `;` |
-| `SKILL_LLM_*` | Skill 规划模型；空则复用 CLIPROXY |
-| `SUB2API_MONITOR_*` | 订阅线路定时探测；本地可关 |
-| `PROXY_DOWNLOAD_*` | 花瓣下载 |
+不要用 Git 提交或回滚 `jobs.db`，不要让 8000 和 8003 同时打开同一个数据库，不要在服务运行时直接复制数据库，也不要用测试数据库覆盖正式数据库。
 
-不要把真实 key 写进 `.env.example` 或任何会提交的文件。
+后端启动后每天创建一次 SQLite 一致性备份到 `backups/`，最多保留 3 份。恢复前先停服务并保留当前数据库副本。画布快照按用户和页面隔离并带 `revision`；发生 409 时应读取服务端最新快照，不得抬高 revision 后把空画布写回。新画布对旧数据是单向迁移，旧版不支持的涂鸦等内容可能丢失，迁移前必须备份。
 
-### 图库目录约定
+## 主要业务边界
 
-`config.py` 里 `IMAGE_TYPE_FOLDERS`：
+- 登录使用用户名 + 密码，账号来自 `login_users.json`；`admin` 可进入后台，测试账号应设置 `is_test=true`。
+- `backend/compose.py` 负责普通 Penpot 合成；Penpot 写入和导出共用 `_compose_sem`，不要绕过串行锁。
+- `backend/ai_image.py` 处理 GPT Image 2.5、Nano Banana Pro、参考图、轮询、失败分类和线路切换。上游已接受但状态不明时不要立即重复提交。
+- `backend/smart_distribute.py` 是规则解析器，不调用 LLM，也不依赖历史 `template_rules.json`。
 
-| slot 后缀 / 类型 key | 子目录 |
-|---|---|
-| `png` | `PNG/` |
-| `model` | `Model_Images/` |
-| `shadow` | `PNG_Shadow/` |
-| `white` | `White_Base/` |
-| `whitex2` / `white2x` | `White_Basex2/` |
-| `banner` | `场景图/Banner/` |
-| `poster` | `场景图/Poster/` |
+## 模板与特殊品
 
-查找只拼 `{SKU}.png/.jpg/.jpeg/.webp` 再 `exists()`。UNC 大目录禁止 `iterdir()`。
+`GET /templates` 从 Penpot 查找项目名和文件名包含“模板”的资源。文件中的 frame 会成为模板画板；特殊品文件识别为 `is_special` / `is_special_full`。
 
----
+常见 slot：`slot/product_1/image_white`、`slot/product_1/name`、`slot/product_1/name_1`、`slot/product_1/time_4`、`slot/product_1/banner`、`slot/product_1/poster`、`slot/product_1/poster1`、`slot/variant_a/1`、`slot/variant_a/2`。
 
-## 登录与权限
+`poster1` 表示在 `场景图/Poster/` 查找 `{SKU}_1`，不是普通 `poster` 的别名。图片目录映射以 `backend/config.py` 的 `IMAGE_TYPE_FOLDERS` 为准。
 
-- Cookie：`designflow_session`，HttpOnly，30 天
-- 登录：`POST /auth/login-lite`（用户名 + 密码）
-- 账号文件：`login_users.json`（git 忽略）
-- `role=admin` 可进后台、看全站任务
-- `is_test=true` 的账号会从运营统计里隔离
-- 改密码后旧 session 的 `password_marker` 对不上，立即失效
+特殊品输入格式：`SKU，产品名称，发售时间`。自动线路会调用 `/special-compose/detect?sku=...`，检查 `Banner`、`Poster`、`Poster1`：找到任意场景素材就提交 `/special-compose-full`，全部找不到就提交 `/special-compose`，检测失败则记录日志并按普通流程继续。日志必须保留检查步骤、找到的素材和最终线路，自动、普通、完整三个按钮必须互斥高亮。
 
-白名单接口见 `backend/main.py` 的 `_AUTH_EXEMPT_PREFIXES`（`/health`、`/ui`、`/editor-beta`、`/auth/login-lite` 等）。其它 API 未登录返回 401，前端会弹登录。
+## 画布维护
 
----
+主 UI 通过 `frontend/src/Canvas.jsx` 加载 `/editor-canvas/index.html`。结果图、特殊品结果和上传素材可以放入画布继续排版。当前画布支持高清放大、转 SVG、转 PSD / 图层分离、图片上编辑和快速生图；每项能力依赖不同 CLI、provider 或 key。
 
-## 核心业务
+出现“画板已在其他页面更新，当前内容未被覆盖”时，关闭重复页面后刷新，不要强行提高 revision 覆盖服务端内容。
 
-### 模板发现
+## 测试与发布
 
-`GET /templates`：
+后端测试：
 
-1. 拉 Penpot 全部 team
-2. 项目名含「模板」
-3. 文件名也含「模板」
-4. 文件内每个顶层 frame 变成一块画板
-5. 文件名含「特殊品」→ `is_special`；同时含「完整」→ `is_special_full`
-
-一个 Penpot 文件 = 左侧一张模板卡，文件内多个 frame = 该模板的多画板。
-
-### Slot 命名
-
-图层名以 `slot/` 开头（中间空格会被去掉）：
-
-```
-slot/{组}/{字段}
+```powershell
+.venv\Scripts\python.exe -m unittest discover -s backend -p "test_*.py"
 ```
 
-| 图层 | 含义 |
-|---|---|
-| `slot/product_1/image` | 图库根目录按 SKU 找图 |
-| `slot/product_1/image_white` | `White_Base/{SKU}` |
-| `slot/product_1/image_png` | `PNG/` |
-| `slot/product_1/banner` / `poster` | 仅完整特殊品 |
-| `slot/product_1/name` | 全文案 |
-| `slot/product_1/name_1` / `name_2` | 按最后一个空格切开 |
-| `slot/product_1/time` / `time_month` / `time_hour` / `time_c` | 时间展开字段 |
-| `slot/variant_a/1`、`/2` | 变体显隐开关 |
-
-解析在 `penpot_client.parse_slots()`。合成时找不到图或文字为空会隐藏该层。
-
-### 普通合成
-
-`compose.py`。所有合成（含特殊品）共用 `_compose_sem`，因为 Penpot 导出不能并行写。提交变更后会走 `penpot_browser_refresh` 刷一次布局再导出。
-
-### 智能铺货
-
-`smart_distribute.py`，规则解析，不调 LLM，也不读 `template_rules.json`。Excel 黄底 = patch，否则 full。详见 `KNOWLEDGE.md`。
-
----
-
-## 特殊品合成
-
-两条独立接口，前端按中文逗号拆 `SKU，文案，时间`：
-
-- 普通特殊品模式 → `POST /special-compose`
-- 完整特殊品模式 → `POST /special-compose-full`
-
-`special_flows.json` 只描述普通特殊品字段；完整版前端写死同一套三字段。
-
-### 变体
-
-至少两个版本标记才会进入多版本导出。只放一个 `slot/variant_a/1` **不会**出两版。
-
-「版本 1 隐藏某组、版本 2 显示」需要一对：
-
-```
-slot/variant_抢购/1    ← 空白占位（1×1 即可）
-slot/variant_抢购/2    ← 真正要开关的组
-```
-
-名字必须挂在组本身上。普通特殊品里 `variant_*` 只做显隐；完整版里 `slot/variant_a/name` 会填字且不参与版本切换。同一画板不要混多组 `variant_*`（完整版会拆成多次导出）。
-
-### 导出文件名与格式
-
-磁盘始终是 `output/results/{job_id}/frame_0.png`（有变体则 `frame_0_v1.png`）。业务名只在下载 zip 时套上，规则在 `backend/main.py` 的 `FRAME_NAME_OVERRIDES` / `FRAME_EXPORT_FORMATS`，普通版和完整版各有一份，改要两处一起改。
-
-公式：`{前缀}{版本后缀}.{格式}`
-
-- 无变体：无后缀
-- `_v1` → `_版本1`
-
-| 画板名（须完全一致） | zip 内文件名 | 格式 |
-|---|---|---|
-| `尖货轮播-PC-1` | `{SKU}{_版本N}.png` | png |
-| `尖货轮播-PC-2` | `{SKU}-1{_版本N}.png` | png |
-| `sku` | `{SKU}{_版本N}.png` | png |
-| `sku-1` | `{SKU}-1{_版本N}.png` | png |
-| `首页SKU` / `首页 SKU` | `首页{SKU}{_版本N}.png` | png |
-| `首页SKU-1` / `首页 SKU-1` | `首页{SKU}-1{_版本N}.png` | png |
-| `分类页` | `{SKU}_分类页{_版本N}.png` | png |
-| `尖货轮播-横版-1/2` | `{SKU}_{画板名}{_版本N}.png` | png |
-| 其它画板 | `{SKU}_{画板名}{_版本N}.jpg` | jpg（白底压透明，quality 92） |
-
-画板名对不上表就走默认 JPG。zip 包名：普通 `{SKU}.zip`，完整 `{SKU}_完整.zip`。
-
----
-
-## AI 生图
-
-`backend/ai_image.py`。`AI_IMAGE_PROVIDER=auto` 时智能路由在 APIMart → CLIProxy → adobe2api 间切线，用户无感。单线路失败会记失败并换线；任务已被上游接受后的失败按 Ambiguous 处理，避免重复出图。
-
-模型入口：
-
-- GPT Image 2 → `gpt-image-2`
-- Nano Banana Pro → `gemini-3-pro-image-preview`
-
-参考图：附件最多 4 张；prompt 里 `[SKU]` 会抽本地白底图。也支持 `@参考图` 标签，后端再转成模型能懂的编号。
-
-结果目录：`output/ai-images/{user_id}/{YYYY-MM-DD}/`。前端轮询 `GET /ai-image/{job_id}`。幂等键是 `client_request_id`，防止自动重试打出两张。
-
----
-
-## 画布
-
-`frontend/src/Canvas.jsx` 用 iframe 加载 `/editor-beta/index.html`，避免主站 React 污染 tldraw store。
-
-**高度**：Canvas 必须是外层 grid 的直接子项，中间不能包 wrapper，否则 track 高度传不下来（历史上会表现为出图很久画布仍是白的）。
-
-**灵感面板**：不能用 grid wrapper 盖住画布。用 `position: fixed`，JS 跟 `getBoundingClientRect`。瀑布流用手写「插最短列」，不要用 CSS `column-count`。
-
-**快照**：`POST/GET /editor/snapshot`，按用户隔离，带 `revision`。409 时必须拉服务端最新快照，禁止抬 revision 后原样重试（会把空画板写进库）。快照里出现其它用户的图也会 409。
-
-画布工具条（`editor-lab-tldraw/src/App.tsx`）：
-
-- 批量下载选中图
-- 高清放大（`UPSCALE_CLI_PATH`）
-- 转 SVG（vtracer）
-- 转 PSD（Kie 分层；`KIE_API_KEY` 为空则不可用）
-
-改画布源码后必须 `npm run build`，提交时带上 `dist/`。
-
----
-
-## 后台管理
-
-管理员从顶栏进。主要看：
-
-- 运营概览、任务列表、用户 CRUD / 重置密码
-- 测试账号隔离
-- 订阅线路探测记录
-- 操作审计 `operation_logs`
-
-接口都在 `/admin/*`。
-
----
-
-## 主要 HTTP 端点
-
-完整列表以 `/docs` 为准。维护时常用：
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/health` `/health/deep` | 本地 / 上游探测 |
-| POST | `/auth/login-lite` | 登录 |
-| GET | `/templates` `/template-groups` | 模板 |
-| POST | `/compose` | 普通合成 |
-| POST | `/special-compose` `/special-compose-full` | 特殊品 |
-| GET | `/special-compose/{id}/download-zip` | zip（文件名/格式规则在这里） |
-| POST | `/parse-table` | 表格解析 |
-| POST | `/smart-distribute` | 智能铺货 |
-| POST | `/ai-image` | 生图 |
-| GET | `/ai-image/{id}` | 生图轮询 |
-| POST | `/ai-image/retry` | 智能重试 |
-| POST | `/ai-image/upscale` `/vectorize` `/layer-extract` | 画布后处理 |
-| GET/POST | `/editor/snapshot` | 画布持久化 |
-| GET/POST | `/inspiration` | 灵感 |
-| GET | `/admin/overview` `/admin/users` | 后台 |
-| POST | `/chat` | 对话（注入 `KNOWLEDGE.md`） |
-
-静态挂载：`/ui`、`/editor-beta`、`/results`、`/ai-images`、`/output`、`/product-library`、`/avatars`。`compiled/` 与画布 `assets/` 是长期缓存；`index.html` 是 `no-cache`。
-
----
-
-## 数据库
-
-`jobs.db`，启动时 `init_db()` 建表，缺列用 `ALTER TABLE ... ADD COLUMN` 容错，可重复执行。
-
-| 表 | 用途 |
-|---|---|
-| `jobs` / `special_jobs` | 合成任务 |
-| `ai_image_jobs` | 生图任务 |
-| `ai_chat_sessions` / `ai_chat_messages` | 生图会话历史 |
-| `editor_snapshots` | 画布 JSON + revision |
-| `users` / `sessions` | 账号与登录态 |
-| `inspiration_posts` / `inspiration_favorites` | 灵感；`job_id` 有 UNIQUE |
-| `agent_projects` / `agent_messages` / `agent_images` | Agent |
-| `operation_logs` | 审计 |
-| `service_probes` / `admin_alert_acknowledgements` | 后台探测与告警 |
-
-内存里还有 `_jobs` 字典给进行中的合成用，重启后进行中任务会丢，历史靠 SQLite。
-
-灵感缩略图：`output/ai-images/{user_id}/thumbs/{job_id}.webp`（约 480px）。前端瀑布流不要暴露原图 URL。
-
----
-
-## 测试
-
-`backend/test_*.py` 是 `unittest`，不依赖真实 Penpot / 外网（用临时 sqlite + mock）。
-
-```bash
-# 仓库根目录
-python -m unittest backend.test_smart_routing backend.test_admin_console
-python -m unittest discover -s backend -p "test_*.py"
-```
-
-改智能路由、分层 PSD、画布 snapshot、后台账号时，至少跑对应那几个文件。
-
----
-
-## Git 与发布
-
-- 默认分支 `master`。远程 hook 拦截直接 push master，走 PR。
-- 不要提交 `.env`、`login_users.json`、`jobs.db`、真实 license / API key。
-- 改 JSX 后把新的 `frontend/compiled/app-*.js` 和更新过的 `frontend/index.html` 一起提交，否则别人拉下来还是旧 UI。
-- 改画布后把 `editor-lab-tldraw/dist/` 一起提交。
-- 更新弹窗：改 `frontend/whats-new.json`（及可选 `frontend/changelog.html`）。
-- 对话里的产品说明改完要同步 `KNOWLEDGE.md`，否则线上助手还在说旧流程。
-
-正式机：后端直接 serve `frontend/` + `editor-lab-tldraw/dist/`。环境变量、图库 UNC、Gigapixel 路径按机器改 `.env`。
-
----
-
-## 排错
-
-| 现象 | 先查 |
-|---|---|
-| `/ui` 还是旧界面 | 没跑 `frontend/build.py`，或跑了没提交 `compiled/` |
-| 画布白屏 / 高度为 0 | Canvas 被包进 wrapper；或没 build `editor-lab-tldraw` |
-| 模板列表空 | Penpot 没起、token 失效、项目/文件名不含「模板」；可看 `/debug/team-scan` |
-| 特殊品 zip 变成 JPG / 文件名不对 | 画板名和 `FRAME_*` 字典差一个空格或用了别的中文 |
-| 变体只出一张 | 只有一个 `slot/variant_x/N`，需要成对 `/1` `/2` |
-| 图库找不到图 | SKU 与文件名不完全一致；或类型目录不在 `IMAGE_TYPE_FOLDERS` |
-| UNC 极慢 | 有人在热路径 `iterdir()` 了，应改回 `exists()` |
-| 生图 500 | `load_ai_image_job` 字段和表结构不一致；看后端日志 |
-| 画布保存后丢图 | 409 后不要抬 revision 重试空快照；应对齐服务端 revision |
-| 转 PSD / 放大灰掉 | `KIE_API_KEY` 或 `UPSCALE_CLI_PATH` 为空 |
-| 登录后立刻被踢 | `password_hash` 变了，旧 cookie 失效，重新登录即可 |
-
----
+按改动范围优先运行 `backend.tests.test_special_compose_detect`、`backend.tests.test_smart_routing` 和 `backend.tests.test_editor_snapshot_isolation`。提交前执行 `git status --short` 和 `git diff --check`。
+
+允许提交源码、测试、文档和经验证的 `frontend/compiled/`、`editor-canvas/dist/`、`editor-lab-tldraw/dist/`。禁止提交 `.env`、真实 key、`login_users.json`、`jobs.db`、`backups/`、`output/`、图库、模型、本机日志和 `frontend/whats-new.json`。
+
+推荐同步流程：`git fetch origin master`，检查工作区和差异，修改并测试后 `git add`、`git commit`、`git push origin master`，最后比较 `git rev-parse HEAD` 与 `git rev-parse origin/master`。远程有提交时先 review 再 pull；有未提交改动时不要直接 pull 覆盖。
+
+## 排障顺序
+
+1. 确认访问的端口和服务实际加载的目录。
+2. `/ui` 旧：检查 `frontend/index.html` 的 bundle 是否存在，重新执行 `frontend/build.py`。
+3. 画布旧或白屏：确认加载的是 `/editor-canvas/`，再检查对应 `dist/`。
+4. 页面空白：先看 Console 第一个异常，再做 `node --check` 和 `no-undef`。
+5. 模板为空：检查 Penpot、账号、模板命名和 `/health/deep`。
+6. 特殊品异常：看 Banner / Poster / Poster1 检测日志和对应 endpoint 的 `progress`。
+7. 画布丢图或串图：检查用户隔离、snapshot revision、图片 URL 和 409 处理。
+8. 放大或 PSD 失败：检查对应 CLI / provider key、任务轮询和后端日志。
+9. 本地远程不一致：`git fetch` 后比较 `HEAD` 与 `origin/master`。
 
 ## 相关文档
 
-| 文件 | 给谁看 |
+| 文件 | 用途 |
 |---|---|
-| `KNOWLEDGE.md` | 注入 LLM 的产品说明，改功能后要同步 |
-| `CLAUDE.md` / `AGENTS.md` | 给 AI 助手的仓库指南（部分段落可能落后于本 README） |
-| `special_flows.json` | 特殊品字段 |
-| `slot_schema.json` | 普通合成列别名 |
-| `.env.example` | 环境变量全集 |
-| `design-tool-prd.md` / `IDEAS.md` | 早期需求与债，以代码为准 |
-
-用户操作说明优先改 `KNOWLEDGE.md`。维护约定优先改本 README。
+| `KNOWLEDGE.md` | 对话模型使用的产品行为和用户操作说明 |
+| `AGENTS.md` | 开发代理约束 |
+| `.env.example` | 环境变量模板 |
+| `special_flows.json` | 特殊品字段定义 |
+| `slot_schema.json` | 普通合成列别名和字段规则 |
+| `backend/tests/` | 后端回归测试 |
+| `IDEAS.md` | 历史技术债，不作为当前行为依据 |
