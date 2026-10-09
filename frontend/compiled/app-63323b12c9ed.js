@@ -14329,93 +14329,130 @@ const LiteLoginGate = ({
     if (!clean || !password.trim() || loading) return;
     await onLogin(clean, password.trim());
   };
-  const inputStyle = {
-    width: '100%',
-    boxSizing: 'border-box',
-    borderRadius: 8,
-    border: '1px solid var(--line)',
-    background: 'var(--panel-2)',
-    color: 'var(--ink)',
-    padding: '10px 12px',
-    fontSize: 13,
-    outline: 'none'
-  };
+  const [showPwd, setShowPwd] = React.useState(false);
+  const canSubmit = !!name.trim() && !!password.trim() && !loading;
   return /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: 'fixed',
-      inset: 0,
-      zIndex: 200,
-      display: 'grid',
-      placeItems: 'center',
-      background: 'rgba(245, 245, 248, 0.78)',
-      backdropFilter: 'blur(6px)'
+    className: "lg-root"
+  }, /*#__PURE__*/React.createElement("style", null, `
+        .lg-root { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; overflow: hidden;
+          font-family: 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
+          -webkit-font-smoothing: antialiased; background: var(--bg); }
+        .lg-root::before { content: ''; position: absolute; inset: 0; pointer-events: none;
+          background-image: radial-gradient(oklch(0.18 0.01 260 / .09) 1px, transparent 1px); background-size: 22px 22px;
+          -webkit-mask-image: radial-gradient(ellipse 60% 55% at 50% 50%, #000 0%, transparent 100%);
+                  mask-image: radial-gradient(ellipse 60% 55% at 50% 50%, #000 0%, transparent 100%); }
+        @keyframes lg-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+        .lg-card { position: relative; width: min(400px, calc(100vw - 32px)); box-sizing: border-box; padding: 36px 32px 26px;
+          border-radius: 18px; background: var(--panel); border: 1px solid var(--line);
+          box-shadow: 0 1px 2px rgba(20,22,40,.04), 0 20px 48px rgba(20,22,40,.08);
+          display: flex; flex-direction: column; gap: 16px; animation: lg-in .45s cubic-bezier(.2,.8,.2,1); }
+        .lg-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+        .lg-logo { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; color: #fff; flex: none;
+          background: linear-gradient(135deg, var(--ink) 0%, oklch(0.28 0.04 275) 100%);
+          box-shadow: 0 6px 16px rgba(20,22,40,.22); }
+        .lg-brandname { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); line-height: 1.2; }
+        .lg-brandmeta { font-size: 11px; color: var(--ink-3); letter-spacing: .04em; margin-top: 2px; }
+        .lg-title { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.25; color: var(--ink); margin: 0; }
+        .lg-sub { font-size: 13px; color: var(--ink-3); line-height: 1.6; margin-top: 6px; }
+        .lg-field { position: relative; }
+        .lg-input { width: 100%; box-sizing: border-box; height: 44px; border-radius: 10px; border: 1px solid var(--line);
+          background: var(--panel-2); color: var(--ink); padding: 0 14px; font-size: 14px; font-family: inherit; outline: none;
+          transition: border-color .15s, box-shadow .15s, background .15s; }
+        .lg-input.has-eye { padding-right: 44px; }
+        .lg-input::placeholder { color: var(--ink-3); }
+        .lg-input:hover { border-color: oklch(0.85 0.006 260); }
+        .lg-input:focus { border-color: var(--ink); background: var(--panel); box-shadow: 0 0 0 3px oklch(0.18 0.01 260 / .08); }
+        .lg-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border-radius: 8px;
+          display: grid; place-items: center; color: var(--ink-3); background: transparent; border: 0; cursor: pointer; }
+        .lg-eye:hover { color: var(--ink); background: var(--line-2); }
+        .lg-btn { height: 44px; border-radius: 10px; border: 0; color: #fff; font-size: 14px; font-weight: 600; font-family: inherit; letter-spacing: .02em;
+          background: var(--ink); cursor: pointer; margin-top: 2px; transition: transform .12s, box-shadow .15s, background .15s; }
+        .lg-btn:hover:not(:disabled) { background: oklch(0.26 0.02 260); transform: translateY(-1px); box-shadow: 0 8px 18px rgba(20,22,40,.2); }
+        .lg-btn:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
+        .lg-btn:disabled { background: var(--line); color: rgba(255,255,255,.95); cursor: default; }
+        .lg-err { font-size: 12.5px; color: oklch(0.5 0.17 45); background: oklch(0.97 0.03 70); border: 1px solid oklch(0.9 0.06 70);
+          padding: 8px 12px; border-radius: 8px; }
+        .lg-foot { text-align: center; font-size: 11.5px; color: var(--ink-3); letter-spacing: .02em; padding-top: 4px; }
+      `), /*#__PURE__*/React.createElement("form", {
+    className: "lg-card",
+    onSubmit: e => {
+      e.preventDefault();
+      submit();
     }
   }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 'min(360px, calc(100vw - 32px))',
-      padding: 20,
-      borderRadius: 10,
-      background: 'var(--panel)',
-      border: '1px solid var(--line)',
-      boxShadow: '0 10px 30px rgba(0,0,0,0.08)',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 12
-    }
+    className: "lg-brand"
   }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 4
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "serif",
-    style: {
-      fontSize: 21,
-      color: 'var(--ink)'
-    }
-  }, "\u8FDB\u5165 XLJ Studio"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: 'var(--ink-3)',
-      lineHeight: 1.5
-    }
-  }, "\u8BF7\u8F93\u5165\u7528\u6237\u540D\u548C\u5BC6\u7801\u767B\u5F55\u3002")), /*#__PURE__*/React.createElement("input", {
+    className: "lg-logo"
+  }, /*#__PURE__*/React.createElement("svg", {
+    width: "20",
+    height: "20",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2.2",
+    strokeLinecap: "round"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M4 20 V6 M4 6 C10 6, 10 14, 16 14 C22 14, 22 6, 20 6"
+  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "lg-brandname"
+  }, "XLJ Studio"), /*#__PURE__*/React.createElement("div", {
+    className: "lg-brandmeta"
+  }, "\u946B\u4E50\u7EAAAI\u89C6\u89C9\u521B\u4F5C\u5E73\u53F0"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
+    className: "lg-title"
+  }, "\u6B22\u8FCE\u56DE\u6765"), /*#__PURE__*/React.createElement("div", {
+    className: "lg-sub"
+  }, "\u767B\u5F55\u540E\u8FDB\u5165 AI \u7535\u5546\u8BBE\u8BA1\u5DE5\u4F5C\u53F0\u3002")), /*#__PURE__*/React.createElement("div", {
+    className: "lg-field"
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "lg-input",
     value: name,
     onChange: e => setName(e.target.value),
-    onKeyDown: e => {
-      if (e.key === 'Enter') submit();
-    },
     placeholder: "\u7528\u6237\u540D",
-    autoFocus: true,
-    style: inputStyle
-  }), /*#__PURE__*/React.createElement("input", {
-    type: "password",
+    autoComplete: "username",
+    autoFocus: true
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "lg-field"
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "lg-input has-eye",
+    type: showPwd ? 'text' : 'password',
     value: password,
     onChange: e => setPassword(e.target.value),
-    onKeyDown: e => {
-      if (e.key === 'Enter') submit();
-    },
     placeholder: "\u5BC6\u7801",
-    style: inputStyle
-  }), error && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11.5,
-      color: 'var(--warn)'
-    }
+    autoComplete: "current-password"
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "lg-eye",
+    tabIndex: -1,
+    onClick: () => setShowPwd(v => !v),
+    "aria-label": showPwd ? '隐藏密码' : '显示密码'
+  }, /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.8",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, showPwd ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+    d: "M17.94 17.94A10.9 10.9 0 0 1 12 20c-7 0-11-8-11-8a19.8 19.8 0 0 1 5.06-5.94M9.9 4.24A10.9 10.9 0 0 1 12 4c7 0 11 8 11 8a19.7 19.7 0 0 1-3.17 4.19M1 1l22 22"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M14.12 14.12a3 3 0 1 1-4.24-4.24"
+  })) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {
+    d: "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
+  }), /*#__PURE__*/React.createElement("circle", {
+    cx: "12",
+    cy: "12",
+    r: "3"
+  }))))), error && /*#__PURE__*/React.createElement("div", {
+    className: "lg-err"
   }, error), /*#__PURE__*/React.createElement("button", {
-    onClick: submit,
-    disabled: !name.trim() || !password.trim() || loading,
-    style: {
-      height: 36,
-      borderRadius: 8,
-      background: !name.trim() || !password.trim() || loading ? 'var(--line)' : 'var(--ink)',
-      color: 'white',
-      fontSize: 12.5,
-      fontWeight: 500,
-      cursor: !name.trim() || !password.trim() || loading ? 'default' : 'pointer'
-    }
-  }, loading ? '进入中...' : '进入工作台')));
+    type: "submit",
+    className: "lg-btn",
+    disabled: !canSubmit
+  }, loading ? '进入中...' : '进入工作台'), /*#__PURE__*/React.createElement("div", {
+    className: "lg-foot"
+  }, "AI \u9A71\u52A8 \xB7 \u6279\u91CF\u751F\u6210\u7535\u5546\u6D77\u62A5")));
 };
 const FlipStage = ({
   inspirationOpen,
