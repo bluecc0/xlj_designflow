@@ -110,6 +110,15 @@ class Settings:
     vlm_base_url: str = os.getenv("VLM_BASE_URL", "") or ai_image_base_url
     vlm_api_key: str = os.getenv("VLM_API_KEY", "") or ai_image_api_key
 
+    # AI 换装（画布右键）
+    # 角度变体文件名后缀，"|" 分隔，{n} 为序号：SKU_2.png / SKU-2.png / SKU (2).png
+    product_angle_patterns: str = os.getenv("PRODUCT_ANGLE_PATTERNS", "_{n}|-{n}| ({n})|({n})")
+    product_angle_max: int = int(os.getenv("PRODUCT_ANGLE_MAX", "12"))
+    # 换装弹窗检索的素材类型（IMAGE_TYPE_FOLDERS 的 key，逗号分隔）
+    outfit_asset_types: str = os.getenv("OUTFIT_ASSET_TYPES", "white,png,white2x,shadow,model")
+    outfit_vlm_timeout_seconds: int = int(os.getenv("OUTFIT_VLM_TIMEOUT_SECONDS", "45"))
+    outfit_default_model: str = os.getenv("OUTFIT_DEFAULT_MODEL", "gpt-image-2.5")
+
     # BFL FLUX 扩图。运行参数统一由根目录 .env 管理，真实 API key 不进入仓库。
     bfl_outpainting_enabled: bool = os.getenv("BFL_OUTPAINTING_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
     bfl_api_key: str = os.getenv("BFL_API_KEY", "").strip()

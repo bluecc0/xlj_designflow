@@ -419,3 +419,193 @@ export async function runQuickEdit(
 }
 
 
+// ─── AI 换装 ────────────────────────────────────────────────────────────────
+
+const UPLOADABLE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+const MAX_UPLOAD_BYTES = 18 * 1024 * 1024
+
+async function readErrorMessage(resp: Response): Promise<string> {
+  const txt = await resp.text()
+  try {
+    const data = JSON.parse(txt)
+    const detail = data?.detail
+    if (typeof detail === 'string') return detail
+    if (detail && typeof detail === 'object') return detail.message || detail.error || txt
+    return data?.message || txt
+  } catch {
+    return txt || `HTTP ${resp.status}`
+  }
+}
+
+/**
+ * 把画布图片转为可上传的 File：SVG/GIF 等格式或体积过大时经 canvas 栅格化为 PNG。
+ */
+export async function loadImageAsUploadFile(rawUrl: string, baseName = 'image'): Promise<File> {
+  const url = normalizeAssetUrl(rawUrl)
+  const resp = await fetch(url, { credentials: 'include' })
+  if (!resp.ok) throw new Error(`无法读取图片 (HTTP ${resp.status})`)
+  const blob = await resp.blob()
+  const type = (blob.type || '').split(';')[0].trim()
+  if (UPLOADABLE_IMAGE_TYPES.has(type) && blob.size <= MAX_UPLOAD_BYTES) {
+    const ext = type.split('/')[1] === 'jpeg' ? 'jpg' : type.split('/')[1]
+    return new File([blob], `${baseName}.${ext}`, { type })
+  }
+
+  const objectUrl = URL.createObjectURL(blob)
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image()
+      el.onload = () => resolve(el)
+      el.onerror = () => reject(new Error('图片格式无法识别'))
+      el.src = objectUrl
+    })
+    const natW = img.naturalWidth || img.width || 1024
+    const natH = img.naturalHeight || img.height || 1024
+    const scale = Math.min(1, 3072 / Math.max(natW, natH))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(natW * scale))
+    canvas.height = Math.max(1, Math.round(natH * scale))
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('浏览器不支持图片转换')
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+    if (!png) throw new Error('图片转换失败')
+    return new File([png], `${baseName}.png`, { type: 'image/png' })
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+export interface OutfitGarment {
+  id: string
+  slot: string
+  slot_label: string
+  name: string
+  color?: string
+  material?: string
+  details?: string
+  position?: string
+}
+
+export interface OutfitAnalysis {
+  image_type: 'model' | 'mannequin' | 'product' | 'flatlay' | 'other'
+  image_type_label: string
+  summary: string
+  subject: { gender?: string; pose?: string; framing?: string; view?: string }
+  garments: OutfitGarment[]
+  background?: string
+  lighting?: string
+  cached?: boolean
+  elapsed_ms?: number
+}
+
+export interface OutfitAsset {
+  id: string
+  sku: string
+  asset_type: string
+  type_label: string
+  folder: string
+  path: string
+  filename: string
+  angle: string
+  url: string
+  thumb_url: string
+}
+
+export interface OutfitAssetSearchResult {
+  library_exists: boolean
+  max_references: number
+  truncated?: boolean
+  items: { sku: string; found: boolean; assets: OutfitAsset[] }[]
+}
+
+// 同一张图在一次会话内只分析一次（按图片 URL 缓存）
+const outfitAnalysisCache = new Map<string, Promise<OutfitAnalysis>>()
+
+/**
+ * VLM 快速分析图片中的人物/商品与服饰
+ */
+export function analyzeOutfit(imageUrl: string): Promise<OutfitAnalysis> {
+  const key = normalizeAssetUrl(imageUrl)
+  const cached = outfitAnalysisCache.get(key)
+  if (cached) return cached
+  const task = (async () => {
+    const file = await loadImageAsUploadFile(key, 'analyze')
+    const fd = new FormData()
+    fd.append('image', file)
+    const resp = await fetch('/ai-image/outfit-analyze', {
+      method: 'POST',
+      credentials: 'include',
+      body: fd,
+    })
+    if (!resp.ok) throw new Error(await readErrorMessage(resp))
+    return (await resp.json()) as OutfitAnalysis
+  })()
+  outfitAnalysisCache.set(key, task)
+  // 失败不缓存，允许重试
+  task.catch(() => outfitAnalysisCache.delete(key))
+  return task
+}
+
+/**
+ * 按 SKU 检索素材库多角度素材
+ */
+export async function searchOutfitAssets(skus: string[]): Promise<OutfitAssetSearchResult> {
+  const resp = await fetch(`/products/outfit-assets?sku=${encodeURIComponent(skus.join(','))}`, {
+    credentials: 'include',
+  })
+  if (!resp.ok) throw new Error(await readErrorMessage(resp))
+  return resp.json()
+}
+
+export interface OutfitChangeRequest {
+  sourceUrl: string
+  sourceName?: string
+  assets: OutfitAsset[]
+  uploads: File[]
+  analysis: OutfitAnalysis | null
+  targetGarmentIds: string[]
+  extraPrompt: string
+  model: 'gpt-image-2.5' | 'nano-banana-pro'
+  resolution: '1K' | '2K'
+  batchCount: number
+}
+
+/**
+ * 提交 AI 换装任务（原图 + 勾选素材，参考图生图模式，后端内置 prompt）
+ */
+export async function submitOutfitChange(
+  req: OutfitChangeRequest
+): Promise<{ jobIds: string[]; resolvedPrompt: string; model: string; size: string }> {
+  const sourceFile = await loadImageAsUploadFile(req.sourceUrl, 'source')
+  const clientRequestId = generateUUID()
+  const fd = new FormData()
+  fd.append('image', sourceFile)
+  fd.append(
+    'assets',
+    JSON.stringify(
+      req.assets.map((a) => ({ sku: a.sku, asset_type: a.asset_type, path: a.path, angle: a.angle }))
+    )
+  )
+  req.uploads.forEach((file) => fd.append('uploads', file))
+  if (req.analysis) fd.append('analysis', JSON.stringify(req.analysis))
+  fd.append('target_garments', JSON.stringify(req.targetGarmentIds))
+  fd.append('extra_prompt', req.extraPrompt || '')
+  fd.append('model', req.model)
+  fd.append('resolution', req.resolution)
+  fd.append('batch_count', String(req.batchCount))
+  fd.append('source_name', req.sourceName || '')
+  fd.append('client_request_id', clientRequestId)
+
+  const resp = await fetch('/ai-image/outfit-change', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'X-Client-Request-Id': clientRequestId },
+    body: fd,
+  })
+  if (!resp.ok) throw new Error(await readErrorMessage(resp))
+  const data = await resp.json()
+  const jobIds: string[] = Array.isArray(data.job_ids) ? data.job_ids : data.job_id ? [data.job_id] : []
+  if (jobIds.length === 0) throw new Error('没有返回任务编号')
+  return { jobIds, resolvedPrompt: data.resolved_prompt || '', model: data.model || req.model, size: data.size || '' }
+}

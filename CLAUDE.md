@@ -47,6 +47,7 @@ backend/              Python FastAPI server
   job_store.py        SQLite persistence for jobs, sessions, AI chat history
   penpot_browser_refresh.py  Windows browser automation for Penpot layout refresh
   slot_schema.py      Loader for slot_schema.json
+  outfit_change.py    AI 换装: SKU angle-image lookup, VLM garment analysis, built-in try-on prompt
 
 jobs.db               SQLite database (auto-created on startup)
 product-library/      Local product images organized by type folders
