@@ -1086,7 +1086,7 @@ const AgentWelcome = () => {
   );
 };
 
-const ChatGenerating = () => (
+const ChatGenerating = ({ user }) => (
   <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
     <Bubble who="user" user={user}>
       <TextBubble who="user">Make 4 studio shots of this vase for a homepage hero, warm and editorial. Add "New in" copy.</TextBubble>
@@ -1986,7 +1986,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
     if (!resetKey) return;
     setText('');
     setSelectedSkill('');
-    setLockedCommand(DEFAULT_COMPOSER_COMMAND);
     setSelectedWorkflow('chat');
     setFiles([]);
     clearRefImages();
@@ -2697,7 +2696,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
   const clearComposer = React.useCallback(() => {
     setText('');
     setSelectedSkill('');
-    setLockedCommand(DEFAULT_COMPOSER_COMMAND);
     setSelectedWorkflow('chat');
     setFiles([]);
     clearRefImages();
@@ -3428,7 +3426,11 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
               { mode: 'special', label: '普通' },
               { mode: 'special_full', label: '完整' },
             ].map(function(item) {
-              const active = item.mode === 'auto' ? (selectedMode === 'special' && specialRouteMode === 'auto') : selectedMode === item.mode;
+              const active = item.mode === 'auto'
+                ? (selectedMode === 'special' && specialRouteMode === 'auto')
+                : item.mode === 'special'
+                  ? (selectedMode === 'special' && specialRouteMode === 'normal')
+                  : (selectedMode === 'special_full' && specialRouteMode === 'full');
               return React.createElement('button', {
                 key: item.mode,
                 type: 'button',
@@ -5847,17 +5849,30 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
     if (isSpecialWorkflow) {
       let isFull = aiOptions.workflow === 'special_full' || aiOptions.mode === 'special_full';
       const routeMode = aiOptions.specialRouteMode || (aiOptions.mode === 'special_full' ? 'full' : 'auto');
+      const specialRouteLogs = [];
       if (routeMode === 'full') isFull = true;
       if (routeMode === 'normal') isFull = false;
       if (routeMode === 'auto') {
+        const detectSku = text.trim().split('，')[0] || '';
+        specialRouteLogs.push(`自动线路：检查 SKU「${detectSku}」是否有 Banner / Poster / Poster1 素材…`);
         try {
-          const detectResp = await fetch(`${window.API_BASE || window.location.origin}/special-compose/detect?sku=${encodeURIComponent((text.trim().split('，')[0] || ''))}`, { credentials: 'include' });
+          const detectResp = await fetch(`${window.API_BASE || window.location.origin}/special-compose/detect?sku=${encodeURIComponent(detectSku)}`, { credentials: 'include' });
           if (detectResp.ok) {
             const detectData = await detectResp.json();
             isFull = Boolean(detectData && detectData.has_scene);
+            const found = [];
+            if (detectData && detectData.banner_found) found.push('Banner');
+            if (detectData && detectData.poster_found) found.push('Poster');
+            if (detectData && detectData.poster1_found) found.push('Poster1');
+            specialRouteLogs.push(found.length > 0
+              ? `素材检测完成：发现 ${found.join('、')}，选择特殊品（完整）流程`
+              : '素材检测完成：未发现 Banner / Poster / Poster1，选择普通特殊品流程');
+          } else {
+            specialRouteLogs.push(`素材检测请求失败（HTTP ${detectResp.status}），按普通特殊品流程继续`);
           }
         } catch (detectError) {
           console.warn('Detect special materials failed:', detectError);
+          specialRouteLogs.push(`素材检测异常，按普通特殊品流程继续：${detectError && detectError.message ? detectError.message : '未知错误'}`);
         }
       }
       const _cmdLabel  = isFull ? '特殊品（完整）' : '特殊品';
@@ -5879,7 +5894,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
         specialMsgIdx = msgs.length;
         return [...msgs, {
           who: 'ai', type: 'generating',
-          logs: [`正在启动${_cmdLabel}合成…`],
+          logs: specialRouteLogs.concat([`已选择${_cmdLabel}流程，正在启动合成…`]),
           status: 'running', meta: `Loom · ${_cmdLabel}`,
           startedAt: Date.now(),
         }];
@@ -5912,7 +5927,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
           setMessages(msgs => msgs.map((m, idx) => {
             if (idx !== specialMsgIdx) return m;
             const finishing = s.status === 'done' || s.status === 'failed';
-            return { ...m, logs: s.progress || [], status: s.status,
+            return { ...m, logs: specialRouteLogs.concat(s.progress || []), status: s.status,
               ...(finishing && m.startedAt ? { finalElapsed: Math.floor((Date.now() - m.startedAt) / 1000) } : {}),
             };
           }));
@@ -6520,7 +6535,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
 
       {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
       {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
-      {state === 'generating' && <ChatGenerating/>}
+      {state === 'generating' && <ChatGenerating user={user}/>}
       {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
 
       <Composer

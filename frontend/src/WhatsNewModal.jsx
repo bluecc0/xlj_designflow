@@ -28,6 +28,7 @@ const WhatsNewFeatureIcon = ({ type }) => {
     display: 'grid',
     placeItems: 'center',
     flexShrink: 0,
+    alignSelf: 'center',
   };
   let glyph = null;
   if (type === 'image') {
@@ -38,6 +39,10 @@ const WhatsNewFeatureIcon = ({ type }) => {
     glyph = React.createElement(I.grid, { size: 16, stroke: 1.7 });
   } else if (type === 'sparkles') {
     glyph = React.createElement(I.sparkles, { size: 16, stroke: 1.7 });
+  } else if (type === 'canvas') {
+    glyph = React.createElement(I.layers, { size: 16, stroke: 1.7 });
+  } else if (type === 'move') {
+    glyph = React.createElement(I.dims, { size: 16, stroke: 1.7 });
   } else {
     glyph = React.createElement(I.zap, { size: 16, stroke: 1.7 });
   }
@@ -169,7 +174,7 @@ const WhatsNewModal = ({ release, onClose }) => {
               key: item.title || idx,
               style: {
                 display: 'flex',
-                alignItems: 'flex-start',
+                alignItems: 'center',
                 gap: 12,
               },
             },
@@ -185,14 +190,14 @@ const WhatsNewModal = ({ release, onClose }) => {
                     marginBottom: 3,
                   },
                 }, item.title || ''),
-                React.createElement('div', {
+                item.desc ? React.createElement('div', {
                   style: {
                     fontSize: 12.5,
                     color: 'var(--ink-2)',
                     lineHeight: 1.55,
                     letterSpacing: '-0.005em',
                   },
-                }, item.desc || '')
+                }, item.desc) : null
               )
             );
           })
