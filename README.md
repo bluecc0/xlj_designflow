@@ -128,6 +128,17 @@ cd ..
 
 主 UI 通过 `frontend/src/Canvas.jsx` 加载 `/editor-canvas/index.html`。结果图、特殊品结果和上传素材可以放入画布继续排版。当前画布支持高清放大、转 SVG、转 PSD / 图层分离、图片上编辑和快速生图；每项能力依赖不同 CLI、provider 或 key。
 
+### AI 换装
+
+画布中选中单张产品图或模特图，右键「AI 换装」：
+
+1. 打开即调用 `POST /ai-image/outfit-analyze`，用 `VLM_*` 配置的视觉模型识别图片类型（模特/人台/商品/平铺）和服饰清单；可点选要替换的部位，不选则按素材品类自动匹配。分析失败或跳过不影响换装。
+2. 输入一个或多个 SKU，`GET /products/outfit-assets` 列出素材库各类型文件夹中的全部角度图，勾选或本地上传（含原图最多 9 张参考图）。
+3. `POST /ai-image/outfit-change` 在服务端读库、压缩参考图、拼装内置换装 prompt（`backend/outfit_change.py`），按原图比例以参考图生图模式提交，复用 `/ai-image/{job_id}` 轮询。
+4. 弹窗提交后即关闭，右上角任务托盘显示进度，结果自动放到原图右侧空位；任务同时记入 AI 生图历史。
+
+角度图约定（只做路径拼接 + `exists()`，不遍历大目录）：`<类型文件夹>/<SKU>.png` 为主图，`<SKU>_2.png`、`<SKU>-2.png`、`<SKU> (2).png` 等为角度变体（`PRODUCT_ANGLE_PATTERNS`，连续 2 个缺号即停止），`<类型文件夹>/<SKU>/` 子文件夹内的图片全部列出。检索的类型由 `OUTFIT_ASSET_TYPES` 控制。
+
 出现“画板已在其他页面更新，当前内容未被覆盖”时，关闭重复页面后刷新，不要强行提高 revision 覆盖服务端内容。
 
 ## 测试与发布
