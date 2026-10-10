@@ -1,538 +1,385 @@
 import React, { useState } from 'react'
 
-export interface MannequinSlot {
+export interface OutfitItem {
   key: string
+  /** 提交给后端的部位 slot */
+  slot: string
   label: string
-  shortLabel: string
-  hint: string
+  placeholder: string
 }
 
+export interface OutfitZone {
+  key: string
+  label: string
+  items: OutfitItem[]
+}
+
+// 人偶 4 个可点区域，每个区域下细分具体单品
+export const OUTFIT_ZONES: OutfitZone[] = [
+  {
+    key: 'head',
+    label: '头部',
+    items: [{ key: 'hat', slot: 'hat', label: '帽子', placeholder: '帽子货号' }],
+  },
+  {
+    key: 'upper',
+    label: '上衣',
+    items: [
+      { key: 'outerwear', slot: 'outerwear', label: '外套', placeholder: '外套货号' },
+      { key: 'hoodie', slot: 'top', label: '卫衣', placeholder: '卫衣货号' },
+      { key: 'tshirt', slot: 'top', label: 'T恤', placeholder: 'T恤货号' },
+    ],
+  },
+  {
+    key: 'lower',
+    label: '下装',
+    items: [{ key: 'pants', slot: 'bottom', label: '裤子', placeholder: '裤子货号' }],
+  },
+  {
+    key: 'feet',
+    label: '鞋袜',
+    items: [
+      { key: 'shoes', slot: 'shoes', label: '鞋子', placeholder: '鞋子货号' },
+      { key: 'socks', slot: 'socks', label: '袜子', placeholder: '袜子货号' },
+    ],
+  },
+]
+
 interface Props {
-  activeSlot: string
-  configuredCounts: Record<string, number>
-  onSelectSlot: (slotKey: string) => void
+  activeZone: string
+  zoneCounts: Record<string, number>
+  onSelectZone: (zoneKey: string) => void
   disabled?: boolean
 }
 
-export const MANNEQUIN_SLOTS: MannequinSlot[] = [
-  { key: 'hat', label: '帽子 / 头饰', shortLabel: '帽子', hint: '头部及发顶' },
-  { key: 'accessory', label: '配饰 / 首饰', shortLabel: '配饰', hint: '领口、围巾、饰物' },
-  { key: 'outerwear', label: '外套 / 罩衫', shortLabel: '外套', hint: '大衣、西装、夹克' },
-  { key: 'top', label: '上衣 / 内搭', shortLabel: '上衣', hint: '胸腔躯干部位' },
-  { key: 'bag', label: '包袋 / 提包', shortLabel: '包袋', hint: '单肩包、手提包' },
-  { key: 'bottom', label: '下装 / 裤裙', shortLabel: '下装', hint: '腰腹至脚踝双腿' },
-  { key: 'shoes', label: '鞋履 / 鞋子', shortLabel: '鞋子', hint: '脚部及站立鞋履' },
-]
+// 标签引线锚点：[部位上的圆点 x, y, 标签中心 y]
+const CALLOUTS: Record<string, [number, number, number]> = {
+  head: [105, 40, 38],
+  upper: [126, 122, 122],
+  lower: [112, 252, 256],
+  feet: [122, 356, 350],
+}
+
+const W = 260
+const H = 390
+const LABEL_X = 146
+const LABEL_W = 106
+
+// ── 几何轮廓：人物真正“穿”着服饰，无多余重复裸体衬底 ──
+
+// 头部与面廓
+const HEAD_SKULL =
+  'M 90 26 C 99 26, 104 34, 104 46 C 104 56, 98 64, 90 65 C 82 64, 76 56, 76 46 C 76 34, 81 26, 90 26 Z'
+
+// 颈部（从下巴内侧 y=56 自然落入衣领开口 y=82）
+const NECK_PATH = 'M 83.5 56 L 83.5 80 Q 90 85 96.5 80 L 96.5 56 Z'
+
+// 帽子（紧密包裹颅顶并自然伸出前檐）
+const CAP_CROWN = 'M 75 42 C 74 23, 106 23, 105 42 Q 90 38 75 42 Z'
+const CAP_VISOR = 'M 98 40 Q 112 38 120 42 Q 110 46 98 44 Z'
+
+// 上衣主体（含肩膀、左右袖筒及衣身，完全包裹躯干与上臂，双手从袖口自然伸出）
+const UPPER_GARMENT =
+  'M 82 76 L 58 86 C 52 92, 48 112, 45 138 L 44 168 L 54 168 L 56 138 C 58 118, 62 108, 68 108 L 70 148 L 68 194 Q 90 198 112 194 L 110 148 L 112 108 C 118 108, 122 118, 124 138 L 126 168 L 136 168 L 135 138 C 132 112, 128 92, 122 86 L 98 76 Q 90 86 82 76 Z'
+
+// 袖口伸出的手腕与手部（只露双手，不露多余手臂）
+const HAND_L = 'M 46 168 L 45 190 C 45 198, 48 202, 51 202 C 54 202, 56 198, 55 190 L 53 168 Z'
+const HAND_R = 'M 127 168 L 125 190 C 124 198, 126 202, 129 202 C 132 202, 135 198, 134 190 L 133 168 Z'
+
+// 下装（裤子：从腰部 y=194 紧密承接上衣下摆，向下包裹整条腿部直至裤脚 y=330）
+const PANTS_GARMENT =
+  'M 68 194 Q 90 198 112 194 L 113 230 C 113 250, 110 280, 107 330 L 95 330 C 94 285, 93 255, 90 240 C 87 255, 86 285, 85 330 L 73 330 C 70 280, 67 250, 67 230 Z'
+
+// 裤脚露出的脚踝与袜子
+const SOCK_L = 'M 75 330 L 76 348 L 84 348 L 83 330 Z'
+const SOCK_R = 'M 97 330 L 96 348 L 104 348 L 105 330 Z'
+
+// 鞋子（脚踏地面，平稳扎实）
+const SHOE_L = 'M 75 348 Q 72 354 67 358 C 61 360, 56 361, 56 364 L 86 364 C 88 364, 88 358, 87 352 L 85 348 Z'
+const SHOE_R = 'M 95 348 Q 93 352 94 364 L 124 364 C 124 361, 119 360, 113 358 Q 108 354 105 348 Z'
 
 export const InteractiveMannequin: React.FC<Props> = ({
-  activeSlot,
-  configuredCounts,
-  onSelectSlot,
+  activeZone,
+  zoneCounts,
+  onSelectZone,
   disabled = false,
 }) => {
-  const [hoveredSlot, setHoveredSlot] = useState<string | null>(null)
+  const [hovered, setHovered] = useState<string | null>(null)
 
-  const isSlotActive = (key: string) => activeSlot === key
-  const isSlotHovered = (key: string) => hoveredSlot === key
-  const getSlotCount = (key: string) => configuredCounts[key] || 0
+  // 浅色系服饰材质：纯净、轻柔、不显眼、克制
+  const garment = (zone: string): React.SVGProps<SVGPathElement> => {
+    const isActive = activeZone === zone
+    const isHov = hovered === zone
+    const count = zoneCounts[zone] || 0
 
-  // 风格参数：极简黑白灰，高对比科技感
-  const getSlotStyle = (key: string) => {
-    const active = isSlotActive(key)
-    const hovered = isSlotHovered(key)
-    const count = getSlotCount(key)
-
-    if (active) {
+    if (isActive) {
       return {
-        stroke: '#09090b',
-        strokeWidth: 2.2,
-        fill: 'rgba(9, 9, 11, 0.12)',
-        filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.12))',
+        fill: '#f0f0f3',
+        stroke: '#18181b',
+        strokeWidth: 1.15,
       }
     }
-    if (hovered) {
+    if (isHov) {
       return {
-        stroke: '#18181b',
-        strokeWidth: 2,
-        fill: 'rgba(24, 24, 27, 0.06)',
-        filter: 'none',
+        fill: '#f8f8fa',
+        stroke: '#71717a',
+        strokeWidth: 0.95,
       }
     }
     if (count > 0) {
       return {
-        stroke: '#27272a',
-        strokeWidth: 1.6,
-        fill: 'rgba(39, 39, 42, 0.05)',
-        filter: 'none',
+        fill: '#f4f4f7',
+        stroke: '#a1a1aa',
+        strokeWidth: 0.9,
       }
     }
     return {
-      stroke: '#a1a1aa',
-      strokeWidth: 1.3,
-      fill: 'transparent',
-      filter: 'none',
+      fill: '#ffffff',
+      stroke: '#d4d4d8',
+      strokeWidth: 0.8,
     }
   }
 
+  // 结构细节线颜色
+  const detailColor = (zone: string) => {
+    if (activeZone === zone) return 'rgba(24, 24, 27, 0.35)'
+    if (hovered === zone) return 'rgba(24, 24, 27, 0.22)'
+    return 'rgba(9, 9, 11, 0.12)'
+  }
+
+  const zoneProps = (zone: string) => ({
+    onClick: () => !disabled && onSelectZone(zone),
+    onMouseEnter: () => setHovered(zone),
+    onMouseLeave: () => setHovered(null),
+    style: { cursor: disabled ? 'default' : 'pointer' } as React.CSSProperties,
+  })
+
   return (
-    <div
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
       style={{
-        position: 'relative',
         width: '100%',
-        maxWidth: 290,
-        margin: '0 auto',
+        display: 'block',
         userSelect: 'none',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
+        borderRadius: 10,
+        backgroundColor: '#fafafa',
       }}
     >
-      {/* 顶部简明提示 */}
-      <div
-        style={{
-          fontSize: 11,
-          color: '#71717a',
-          marginBottom: 6,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-        }}
-      >
-        <span
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: '50%',
-            backgroundColor: '#09090b',
-            display: 'inline-block',
-          }}
+      <defs>
+        {/* 地面微渐变投影 */}
+        <radialGradient id="mqGround" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0%" stopColor="#09090b" stopOpacity={0.06} />
+          <stop offset="100%" stopColor="#09090b" stopOpacity={0} />
+        </radialGradient>
+      </defs>
+
+      {/* ── 1. 地面投影 ── */}
+      <ellipse cx={90} cy={367} rx={44} ry={5} fill="url(#mqGround)" />
+
+      {/* ── 2. 裸露肢体（皮肤底层，被服饰包裹与穿透） ── */}
+      <g fill="#fafafa" stroke="#d4d4d8" strokeWidth={0.75}>
+        {/* 颈部：插在衣领深处 */}
+        <path d={NECK_PATH} />
+        {/* 头部面廓 */}
+        <path d={HEAD_SKULL} />
+        {/* 袖口伸出的手部 */}
+        <path d={HAND_L} />
+        <path d={HAND_R} />
+        {/* 裤脚伸出的踝部 */}
+        <path d={SOCK_L} />
+        <path d={SOCK_R} />
+      </g>
+
+      {/* ── 3. 下装（裤子） ── */}
+      <g {...zoneProps('lower')}>
+        <path d={PANTS_GARMENT} {...garment('lower')} />
+        {/* 腰带线 */}
+        <path
+          d="M 68 200 Q 90 204 112 200"
+          stroke={detailColor('lower')}
+          strokeWidth={0.7}
+          fill="none"
         />
-        <span>点击人体部位或标签选择更替</span>
-      </div>
-
-      <div
-        style={{
-          position: 'relative',
-          width: '100%',
-          height: 380,
-          background: 'linear-gradient(180deg, #ffffff 0%, #fbfbfb 100%)',
-          borderRadius: 14,
-          border: '1px solid #e4e4e7',
-          boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.02)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          overflow: 'hidden',
-        }}
-      >
-        {/* 背景微网格线，营造设计工作台质感 */}
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            backgroundImage:
-              'radial-gradient(circle, #e4e4e7 0.8px, transparent 0.8px)',
-            backgroundSize: '16px 16px',
-            opacity: 0.5,
-            pointerEvents: 'none',
-          }}
+        {/* 门襟 */}
+        <path
+          d="M 90 200 L 90 226 C 90 231, 93 233, 95 233"
+          stroke={detailColor('lower')}
+          strokeWidth={0.7}
+          fill="none"
         />
+        {/* 两侧裤管中缝折线（极简考究裁线） */}
+        <path
+          d="M 79 204 L 79 324 M 101 204 L 101 324"
+          stroke={detailColor('lower')}
+          strokeWidth={0.6}
+          strokeDasharray="2 4"
+          fill="none"
+        />
+        {/* 裤脚折边 */}
+        <path
+          d="M 73 325 L 85 325 M 95 325 L 107 325"
+          stroke={detailColor('lower')}
+          strokeWidth={0.6}
+          fill="none"
+        />
+      </g>
 
-        {/* 交互式人体 SVG */}
-        <svg
-          viewBox="0 0 240 400"
-          style={{
-            width: '100%',
-            height: '100%',
-            overflow: 'visible',
-            cursor: disabled ? 'default' : 'pointer',
-          }}
-        >
-          <defs>
-            {/* 模特基础轮廓柔和渐变 */}
-            <linearGradient id="bodyBaseGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#f4f4f5" />
-              <stop offset="100%" stopColor="#e4e4e7" />
-            </linearGradient>
-          </defs>
+      {/* ── 4. 上衣（外套/卫衣/T恤：衣袖包裹双臂、衣领包裹颈部） ── */}
+      <g {...zoneProps('upper')}>
+        {/* 衣身与袖筒整体 */}
+        <path d={UPPER_GARMENT} {...garment('upper')} />
+        {/* 前衣领结构弧线 */}
+        <path
+          d="M 82 76 Q 90 86 98 76"
+          stroke={garment('upper').stroke}
+          strokeWidth={garment('upper').strokeWidth}
+          fill="none"
+        />
+        {/* 领口罗纹内沿 */}
+        <path
+          d="M 81 74 Q 90 83 99 74"
+          stroke={detailColor('upper')}
+          strokeWidth={0.6}
+          fill="none"
+        />
+        {/* 躯干中心虚线（门襟/拉链中线，极简科技感，与参考图一致） */}
+        <path
+          d="M 90 88 L 90 194"
+          stroke={detailColor('upper')}
+          strokeWidth={0.75}
+          strokeDasharray="3 3"
+          fill="none"
+        />
+        {/* 袖口罗纹缝线 */}
+        <path
+          d="M 44 163 L 54 163 M 126 163 L 136 163"
+          stroke={detailColor('upper')}
+          strokeWidth={0.6}
+          fill="none"
+        />
+        {/* 下摆包边 */}
+        <path
+          d="M 68 189 Q 90 193 112 189"
+          stroke={detailColor('upper')}
+          strokeWidth={0.6}
+          fill="none"
+        />
+      </g>
 
-          {/* 模特底层参考轮廓（淡灰骨架线） */}
-          <g opacity={0.35} stroke="#d4d4d8" strokeWidth={1} fill="none">
-            {/* 脊椎中轴虚线 */}
-            <line x1="120" y1="20" x2="120" y2="370" strokeDasharray="3 3" />
-            {/* 肩宽水平线 */}
-            <line x1="85" y1="92" x2="155" y2="92" strokeDasharray="2 2" />
-            {/* 腰节水平线 */}
-            <line x1="98" y1="168" x2="142" y2="168" strokeDasharray="2 2" />
-            {/* 臀围水平线 */}
-            <line x1="94" y1="204" x2="146" y2="204" strokeDasharray="2 2" />
-          </g>
+      {/* ── 5. 头部与帽子 ── */}
+      <g {...zoneProps('head')}>
+        {/* 宽容点击热区 */}
+        <ellipse cx={90} cy={44} rx={24} ry={26} fill="transparent" />
+        {/* 帽冠与帽檐（紧贴颅顶佩戴） */}
+        <path d={CAP_CROWN} {...garment('head')} />
+        <path d={CAP_VISOR} {...garment('head')} />
+        <circle cx={90} cy={23} r={1.3} fill={garment('head').stroke as string} />
+      </g>
 
-          {/* ── 1. 帽子 / 头部 (hat) ── */}
-          <g
-            id="slot-hat"
-            onClick={() => !disabled && onSelectSlot('hat')}
-            onMouseEnter={() => setHoveredSlot('hat')}
-            onMouseLeave={() => setHoveredSlot(null)}
-            style={{ transition: 'all 0.15s ease' }}
-          >
-            {/* 头部椭圆底稿 */}
-            <ellipse
-              cx="120"
-              cy="46"
-              rx="15"
-              ry="19"
-              stroke="#d4d4d8"
-              strokeWidth={1}
-              fill="#fafafa"
-            />
-            {/* 帽子主体造型（贝雷帽/礼帽/棒球帽流线） */}
+      {/* ── 6. 底部（鞋子与袜子） ── */}
+      <g {...zoneProps('feet')}>
+        {/* 宽容点击热区 */}
+        <rect x={54} y={328} width={74} height={42} fill="transparent" />
+        {/* 袜子袜口细纹 */}
+        <path
+          d="M 75 336 L 83 336 M 97 336 L 105 336"
+          stroke={detailColor('feet')}
+          strokeWidth={0.6}
+          strokeDasharray="1.5 1.5"
+          fill="none"
+        />
+        {/* 鞋子轮廓与鞋底 */}
+        <path d={SHOE_L} {...garment('feet')} />
+        <path d={SHOE_R} {...garment('feet')} />
+        <path
+          d="M 56 361 L 86 361 M 94 361 L 124 361"
+          stroke={detailColor('feet')}
+          strokeWidth={0.7}
+          fill="none"
+        />
+      </g>
+
+      {/* ── 7. 引线与标签卡片（与参考图一致的点+水平虚线导引） ── */}
+      {OUTFIT_ZONES.map((zone) => {
+        const [ax, ay, ly] = CALLOUTS[zone.key]
+        const active = activeZone === zone.key
+        const isHover = hovered === zone.key
+        const count = zoneCounts[zone.key] || 0
+        const lineColor = active ? '#18181b' : isHover ? '#71717a' : '#d4d4d8'
+
+        return (
+          <g key={zone.key} {...zoneProps(zone.key)}>
+            {/* 水平虚线引线 */}
             <path
-              d="M 102 38 C 104 22, 136 20, 138 38 C 145 42, 142 46, 120 45 C 98 46, 95 42, 102 38 Z"
-              {...getSlotStyle('hat')}
-            />
-            {/* 帽檐 */}
-            <path
-              d="M 96 44 Q 120 40 144 44"
-              stroke={getSlotStyle('hat').stroke}
-              strokeWidth={getSlotStyle('hat').strokeWidth}
+              d={`M ${ax} ${ay} L ${LABEL_X} ${ly}`}
               fill="none"
+              stroke={lineColor}
+              strokeWidth={active ? 1.1 : 0.8}
+              strokeDasharray={active ? undefined : '2 3'}
             />
-          </g>
-
-          {/* ── 2. 配饰 / 颈部 (accessory) ── */}
-          <g
-            id="slot-accessory"
-            onClick={() => !disabled && onSelectSlot('accessory')}
-            onMouseEnter={() => setHoveredSlot('accessory')}
-            onMouseLeave={() => setHoveredSlot(null)}
-            style={{ transition: 'all 0.15s ease' }}
-          >
-            {/* 颈部 */}
-            <path
-              d="M 115 65 L 115 80 Q 120 84 125 80 L 125 65 Z"
-              fill="#fafafa"
-              stroke="#e4e4e7"
-              strokeWidth={1}
-            />
-            {/* 项链/领饰流线 */}
-            <path
-              d="M 112 76 Q 120 88 128 76"
-              {...getSlotStyle('accessory')}
-              fill="none"
-            />
-            {/* 饰品小吊坠 */}
+            {/* 部位锚点圆点 */}
             <circle
-              cx="120"
-              cy="88"
-              r="2.5"
-              fill={getSlotStyle('accessory').stroke}
+              cx={ax}
+              cy={ay}
+              r={active ? 2.5 : 2}
+              fill={active ? '#18181b' : '#ffffff'}
+              stroke={lineColor}
+              strokeWidth={0.9}
             />
-          </g>
 
-          {/* ── 3. 外套 (outerwear) ── */}
-          <g
-            id="slot-outerwear"
-            onClick={() => !disabled && onSelectSlot('outerwear')}
-            onMouseEnter={() => setHoveredSlot('outerwear')}
-            onMouseLeave={() => setHoveredSlot(null)}
-            style={{ transition: 'all 0.15s ease' }}
-          >
-            {/* 外套外围轮廓：双肩翻领延伸至手臂外侧 */}
-            <path
-              d="M 92 92 C 80 102, 70 145, 68 190 C 72 192, 80 190, 82 184 C 84 146, 92 110, 98 100 L 108 140 L 98 190 L 108 200 L 120 178 L 132 200 L 142 190 L 132 140 L 142 100 C 148 110, 156 146, 158 184 C 160 190, 168 192, 172 190 C 170 145, 160 102, 148 92 C 136 86, 104 86, 92 92 Z"
-              {...getSlotStyle('outerwear')}
-            />
-          </g>
-
-          {/* ── 4. 上衣 (top) ── */}
-          <g
-            id="slot-top"
-            onClick={() => !disabled && onSelectSlot('top')}
-            onMouseEnter={() => setHoveredSlot('top')}
-            onMouseLeave={() => setHoveredSlot(null)}
-            style={{ transition: 'all 0.15s ease' }}
-          >
-            {/* 上衣躯干（T恤/衬衫） */}
-            <path
-              d="M 106 86 C 114 92, 126 92, 134 86 L 144 94 L 140 120 L 134 116 L 132 168 C 124 170, 116 170, 108 168 L 106 116 L 100 120 L 96 94 Z"
-              {...getSlotStyle('top')}
-            />
-            {/* 领口轮廓细线 */}
-            <path
-              d="M 112 85 Q 120 94 128 85"
-              stroke={getSlotStyle('top').stroke}
-              strokeWidth={1.2}
-              fill="none"
-            />
-          </g>
-
-          {/* ── 5. 包袋 (bag) ── */}
-          <g
-            id="slot-bag"
-            onClick={() => !disabled && onSelectSlot('bag')}
-            onMouseEnter={() => setHoveredSlot('bag')}
-            onMouseLeave={() => setHoveredSlot(null)}
-            style={{ transition: 'all 0.15s ease' }}
-          >
-            {/* 斜挎带 */}
-            <path
-              d="M 136 88 L 84 172"
-              stroke={getSlotStyle('bag').stroke}
-              strokeWidth={1.2}
-              strokeDasharray="2 2"
-              fill="none"
-            />
-            {/* 侧边单肩包 / 手提包 */}
+            {/* 标签卡片：浅白底 + 细边框 */}
             <rect
-              x="62"
-              y="172"
-              width="24"
-              height="30"
-              rx="4"
-              {...getSlotStyle('bag')}
+              x={LABEL_X}
+              y={ly - 16}
+              width={LABEL_W}
+              height={32}
+              rx={6}
+              fill={active ? '#ffffff' : isHover ? '#f7f7f9' : '#ffffff'}
+              stroke={active ? '#18181b' : count ? '#a1a1aa' : '#e4e4e7'}
+              strokeWidth={active ? 1.1 : 0.8}
             />
-            {/* 包盖/搭扣 */}
-            <path
-              d="M 62 182 Q 74 186 86 182"
-              stroke={getSlotStyle('bag').stroke}
-              strokeWidth={1.2}
-              fill="none"
-            />
-            <circle
-              cx="74"
-              cy="188"
-              r="2"
-              fill={getSlotStyle('bag').stroke}
-            />
+            <text
+              x={LABEL_X + 9}
+              y={ly - 2}
+              fontSize={11.5}
+              fontWeight={active ? 600 : 500}
+              fill={active ? '#09090b' : '#27272a'}
+            >
+              {zone.label}
+            </text>
+            <text
+              x={LABEL_X + 9}
+              y={ly + 10}
+              fontSize={9}
+              fill={active ? '#71717a' : '#a1a1aa'}
+            >
+              {zone.items.map((i) => i.label).join(' · ')}
+            </text>
+
+            {/* 数量角标 */}
+            {count > 0 && (
+              <g>
+                <circle
+                  cx={LABEL_X + LABEL_W - 13}
+                  cy={ly}
+                  r={7}
+                  fill={active ? '#18181b' : '#71717a'}
+                />
+                <text
+                  x={LABEL_X + LABEL_W - 13}
+                  y={ly + 3}
+                  fontSize={9}
+                  fontWeight={600}
+                  textAnchor="middle"
+                  fill="#ffffff"
+                >
+                  {count}
+                </text>
+              </g>
+            )}
           </g>
-
-          {/* ── 6. 下装 / 裤子 (bottom) ── */}
-          <g
-            id="slot-bottom"
-            onClick={() => !disabled && onSelectSlot('bottom')}
-            onMouseEnter={() => setHoveredSlot('bottom')}
-            onMouseLeave={() => setHoveredSlot(null)}
-            style={{ transition: 'all 0.15s ease' }}
-          >
-            {/* 裤子（高腰裤/直筒裤双腿） */}
-            <path
-              d="M 108 168 Q 120 171 132 168 L 138 206 C 139 240, 142 280, 140 326 L 126 326 C 127 285, 126 248, 120 220 C 114 248, 113 285, 114 326 L 100 326 C 98 280, 101 240, 102 206 Z"
-              {...getSlotStyle('bottom')}
-            />
-            {/* 裤中缝中轴细线 */}
-            <line
-              x1="120"
-              y1="170"
-              x2="120"
-              y2="216"
-              stroke={getSlotStyle('bottom').stroke}
-              strokeWidth={1}
-            />
-          </g>
-
-          {/* ── 7. 鞋子 (shoes) ── */}
-          <g
-            id="slot-shoes"
-            onClick={() => !disabled && onSelectSlot('shoes')}
-            onMouseEnter={() => setHoveredSlot('shoes')}
-            onMouseLeave={() => setHoveredSlot(null)}
-            style={{ transition: 'all 0.15s ease' }}
-          >
-            {/* 左脚鞋 */}
-            <path
-              d="M 100 326 L 114 326 L 114 346 C 114 350, 110 354, 96 354 C 94 350, 96 346, 100 326 Z"
-              {...getSlotStyle('shoes')}
-            />
-            {/* 右脚鞋 */}
-            <path
-              d="M 126 326 L 140 326 L 140 346 C 144 346, 146 350, 144 354 C 130 354, 126 350, 126 346 Z"
-              {...getSlotStyle('shoes')}
-            />
-            {/* 鞋底站立线 */}
-            <line
-              x1="92"
-              y1="355"
-              x2="148"
-              y2="355"
-              stroke="#d4d4d8"
-              strokeWidth={1}
-              strokeDasharray="2 2"
-            />
-          </g>
-        </svg>
-
-        {/* ── 模特周边的引线指示标签 (Callout Pins) ── */}
-        {/* 左侧标签：帽子、外套、上衣、包袋 */}
-        <div
-          style={{
-            position: 'absolute',
-            left: 8,
-            top: 24,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 22,
-            zIndex: 10,
-          }}
-        >
-          {MANNEQUIN_SLOTS.filter((s) =>
-            ['hat', 'outerwear', 'top', 'bag'].includes(s.key)
-          ).map((slot) => {
-            const active = isSlotActive(slot.key)
-            const count = getSlotCount(slot.key)
-            const hovered = isSlotHovered(slot.key)
-            return (
-              <button
-                key={slot.key}
-                type="button"
-                onClick={() => !disabled && onSelectSlot(slot.key)}
-                onMouseEnter={() => setHoveredSlot(slot.key)}
-                onMouseLeave={() => setHoveredSlot(null)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  padding: '4px 8px',
-                  borderRadius: 6,
-                  border: active
-                    ? '1px solid #09090b'
-                    : count > 0
-                    ? '1px solid #71717a'
-                    : hovered
-                    ? '1px solid #a1a1aa'
-                    : '1px solid #e4e4e7',
-                  backgroundColor: active
-                    ? '#09090b'
-                    : hovered
-                    ? '#f4f4f5'
-                    : count > 0
-                    ? '#fafafa'
-                    : '#ffffff',
-                  color: active ? '#ffffff' : count > 0 ? '#09090b' : '#52525b',
-                  fontSize: 11,
-                  fontWeight: active || count > 0 ? 600 : 500,
-                  cursor: disabled ? 'default' : 'pointer',
-                  boxShadow: active
-                    ? '0 2px 8px rgba(0,0,0,0.15)'
-                    : '0 1px 2px rgba(0,0,0,0.03)',
-                  transition: 'all 0.15s ease',
-                  textAlign: 'left',
-                }}
-              >
-                <span>{slot.shortLabel}</span>
-                {count > 0 && (
-                  <span
-                    style={{
-                      fontSize: 10,
-                      padding: '0 4px',
-                      borderRadius: 999,
-                      backgroundColor: active ? 'rgba(255,255,255,0.25)' : '#18181b',
-                      color: '#ffffff',
-                    }}
-                  >
-                    {count}
-                  </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
-
-        {/* 右侧标签：配饰、下装、鞋子 */}
-        <div
-          style={{
-            position: 'absolute',
-            right: 8,
-            top: 70,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 65,
-            zIndex: 10,
-          }}
-        >
-          {MANNEQUIN_SLOTS.filter((s) =>
-            ['accessory', 'bottom', 'shoes'].includes(s.key)
-          ).map((slot) => {
-            const active = isSlotActive(slot.key)
-            const count = getSlotCount(slot.key)
-            const hovered = isSlotHovered(slot.key)
-            return (
-              <button
-                key={slot.key}
-                type="button"
-                onClick={() => !disabled && onSelectSlot(slot.key)}
-                onMouseEnter={() => setHoveredSlot(slot.key)}
-                onMouseLeave={() => setHoveredSlot(null)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  padding: '4px 8px',
-                  borderRadius: 6,
-                  border: active
-                    ? '1px solid #09090b'
-                    : count > 0
-                    ? '1px solid #71717a'
-                    : hovered
-                    ? '1px solid #a1a1aa'
-                    : '1px solid #e4e4e7',
-                  backgroundColor: active
-                    ? '#09090b'
-                    : hovered
-                    ? '#f4f4f5'
-                    : count > 0
-                    ? '#fafafa'
-                    : '#ffffff',
-                  color: active ? '#ffffff' : count > 0 ? '#09090b' : '#52525b',
-                  fontSize: 11,
-                  fontWeight: active || count > 0 ? 600 : 500,
-                  cursor: disabled ? 'default' : 'pointer',
-                  boxShadow: active
-                    ? '0 2px 8px rgba(0,0,0,0.15)'
-                    : '0 1px 2px rgba(0,0,0,0.03)',
-                  transition: 'all 0.15s ease',
-                  textAlign: 'left',
-                }}
-              >
-                <span>{slot.shortLabel}</span>
-                {count > 0 && (
-                  <span
-                    style={{
-                      fontSize: 10,
-                      padding: '0 4px',
-                      borderRadius: 999,
-                      backgroundColor: active ? 'rgba(255,255,255,0.25)' : '#18181b',
-                      color: '#ffffff',
-                    }}
-                  >
-                    {count}
-                  </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
-
-        {/* 底部悬浮指示：当前悬停部位说明 */}
-        {hoveredSlot && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: 10,
-              padding: '3px 10px',
-              backgroundColor: 'rgba(9, 9, 11, 0.85)',
-              backdropFilter: 'blur(8px)',
-              color: '#ffffff',
-              borderRadius: 999,
-              fontSize: 11,
-              pointerEvents: 'none',
-              animation: 'fadeIn 0.15s ease',
-            }}
-          >
-            {MANNEQUIN_SLOTS.find((s) => s.key === hoveredSlot)?.label} · 点击切换配置
-          </div>
-        )}
-      </div>
-    </div>
+        )
+      })}
+    </svg>
   )
 }

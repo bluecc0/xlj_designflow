@@ -112,6 +112,13 @@ PRESET_SLOTS: dict[str, dict[str, Any]] = {
         "replace_directive": "将图1人物的外层外套替换为参考图中的外套商品（或在内搭外层自然穿上该外套），版型轮廓与门襟细节严格参照参考图。",
         "keep_directive": "外套保持图1原样不变（若原图无外套则不额外添加）。",
     },
+    "socks": {
+        "key": "socks",
+        "label": "袜子",
+        "region": "脚踝与小腿区域",
+        "replace_directive": "将图1人物的袜子替换为参考图中的袜子商品，袜口高度、罗纹与图案细节严格参照参考图，与鞋口自然衔接。",
+        "keep_directive": "袜子保持图1原样不变。",
+    },
     "dress": {
         "key": "dress",
         "label": "连衣裙/连体衣",
