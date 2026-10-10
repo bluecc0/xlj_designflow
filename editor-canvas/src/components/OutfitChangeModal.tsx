@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Search,
   Shirt,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
   X,
@@ -25,8 +26,8 @@ import {
   type OutfitAsset,
   type OutfitAssetSearchResult,
   type OutfitChangeRequest,
-  type PresetSlotInfo,
 } from '../services/aiImageService'
+import { InteractiveMannequin } from './InteractiveMannequin'
 
 interface Props {
   image: CanvasImage
@@ -60,17 +61,6 @@ type AnalysisState =
 const DEFAULT_MAX_REFS = 8
 const ACCEPTED_UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
-const SLOT_ICONS: Record<string, string> = {
-  top: '👕',
-  bottom: '👖',
-  shoes: '👟',
-  hat: '🧢',
-  outerwear: '🧥',
-  dress: '👗',
-  bag: '👜',
-  accessory: '✨',
-}
-
 // 记住全局模型配置
 let lastModel: OutfitChangeRequest['model'] = 'gpt-image-2.5'
 let lastResolution: OutfitChangeRequest['resolution'] = '1K'
@@ -81,7 +71,7 @@ const MODEL_OPTIONS: { key: OutfitChangeRequest['model']; label: string; desc: s
 ]
 
 export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit }) => {
-  // ── 1. VLM 识别状态（默认 idle，用户自主点击触发） ──
+  // ── 1. VLM 识别状态（默认 idle，用户点击触发） ──
   const [analysis, setAnalysis] = useState<AnalysisState>({ status: 'idle' })
   const [targetIds, setTargetIds] = useState<string[]>([])
 
@@ -110,7 +100,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
   const [resolution, setResolution] = useState<OutfitChangeRequest['resolution']>(lastResolution)
   const [batchCount, setBatchCount] = useState(1)
   const [extraPrompt, setExtraPrompt] = useState('')
-  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
 
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -147,6 +137,17 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
   const maxRefs = DEFAULT_MAX_REFS
   const remaining = maxRefs - totalSelected
 
+  // 计算每个部位已选素材总数，传递给人偶组件
+  const configuredCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    PRESET_SLOTS.forEach((s) => {
+      const st = slotStates[s.key]
+      const count = (st?.selected.length || 0) + (st?.uploads.length || 0)
+      if (count > 0) counts[s.key] = count
+    })
+    return counts
+  }, [slotStates])
+
   // 已配置素材的部位列表
   const configuredSlots = useMemo(() => {
     return PRESET_SLOTS.filter((s) => {
@@ -174,7 +175,6 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
       .then((data) => {
         if (!cancelled) {
           setAnalysis({ status: 'done', data })
-          // 若有识别出的部位，默认全部高亮选中
           setTargetIds(data.garments.map((g) => g.id))
         }
       })
@@ -207,11 +207,12 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
       if (e.key !== 'Escape') return
       e.stopPropagation()
       if (preview) setPreview(null)
+      else if (showSettings) setShowSettings(false)
       else if (!submitting) onClose()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [preview, submitting, onClose])
+  }, [preview, showSettings, submitting, onClose])
 
   // ── 当前部位 SKU 检索 ──
   const handleSearch = async () => {
@@ -230,32 +231,31 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
     updateSlotState(activeSlotKey, { searching: true, searchError: null })
     try {
       const result = await searchOutfitAssets(parsedSkus)
-      // 保留当前部位已选择项中仍然有效的
       const newAssetKeys = new Set(result.items.flatMap((it) => it.assets.map((a) => a.id + '|' + a.sku)))
       const preservedSelected = activeState.selected.filter((a) => newAssetKeys.has(a.id + '|' + a.sku))
 
       let errorMsg: string | null = null
       if (!result.library_exists) {
-        errorMsg = '当前服务器未挂载素材库，可点击「本地上传」添加素材图'
+        errorMsg = '当前未挂载素材库，可点击「本地上传」添加图片'
       } else if (!result.items.some((it) => it.found)) {
-        errorMsg = `素材库中未找到货号素材图，请检查货号或使用本地上传`
+        errorMsg = `未在商品库中找到货号：${parsedSkus.join(', ')}`
       }
 
       updateSlotState(activeSlotKey, {
+        searching: false,
         searchResult: result,
-        typeFilter: 'all',
-        selected: preservedSelected,
         searchError: errorMsg,
+        selected: preservedSelected,
       })
     } catch (err: any) {
-      updateSlotState(activeSlotKey, { searchError: err?.message || '检索失败' })
-    } finally {
-      updateSlotState(activeSlotKey, { searching: false })
+      updateSlotState(activeSlotKey, {
+        searching: false,
+        searchError: err?.message || '检索失败，请重试',
+      })
     }
   }
 
-  // 素材选中状态
-  const assetKey = (a: OutfitAsset) => `${a.sku}|${a.id}`
+  const assetKey = (a: OutfitAsset) => `${a.id}|${a.sku}`
   const activeSelectedKeys = useMemo(
     () => new Set(activeState.selected.map(assetKey)),
     [activeState.selected]
@@ -263,120 +263,87 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
 
   const toggleAsset = (asset: OutfitAsset) => {
     const key = assetKey(asset)
-    if (activeSelectedKeys.has(key)) {
+    const exists = activeSelectedKeys.has(key)
+    if (exists) {
       updateSlotState(activeSlotKey, {
         selected: activeState.selected.filter((a) => assetKey(a) !== key),
       })
-      return
+    } else {
+      if (remaining <= 0) return
+      const assetWithSlot: OutfitAsset = { ...asset, slot: activeSlotKey }
+      updateSlotState(activeSlotKey, {
+        selected: [...activeState.selected, assetWithSlot],
+      })
     }
-    if (remaining <= 0) {
-      setSubmitError(`最多选择 ${maxRefs} 张素材（含原图共 9 张参考图）`)
-      return
-    }
-    setSubmitError(null)
-    // 标记该资产属于当前部位
-    const assetWithSlot: OutfitAsset = { ...asset, slot: activeSlotKey }
-    updateSlotState(activeSlotKey, {
-      selected: [...activeState.selected, assetWithSlot],
-    })
   }
 
   const selectAllOfSku = (assets: OutfitAsset[]) => {
-    const toAdd = assets.filter((a) => !activeSelectedKeys.has(assetKey(a)))
-    if (toAdd.length === 0) {
-      const keys = new Set(assets.map(assetKey))
+    const currentKeys = new Set(activeState.selected.map(assetKey))
+    const skuKeys = new Set(assets.map(assetKey))
+    const allChosen = assets.every((a) => currentKeys.has(assetKey(a)))
+
+    if (allChosen) {
       updateSlotState(activeSlotKey, {
-        selected: activeState.selected.filter((a) => !keys.has(assetKey(a))),
+        selected: activeState.selected.filter((a) => !skuKeys.has(assetKey(a))),
       })
-      return
+    } else {
+      const needed = assets.filter((a) => !currentKeys.has(assetKey(a)))
+      const canTake = needed.slice(0, remaining).map((a) => ({ ...a, slot: activeSlotKey }))
+      updateSlotState(activeSlotKey, {
+        selected: [...activeState.selected, ...canTake],
+      })
     }
-    const allowed = toAdd.slice(0, Math.max(0, remaining))
-    if (allowed.length < toAdd.length) {
-      setSubmitError(`已达上限，仅添加了 ${allowed.length} 张（最多 ${maxRefs} 张）`)
-    }
-    const assetsWithSlot = allowed.map((a) => ({ ...a, slot: activeSlotKey }))
-    updateSlotState(activeSlotKey, {
-      selected: [...activeState.selected, ...assetsWithSlot],
-    })
   }
 
-  // 本地上传兜底（归属于当前部位）
   const addFilesToActiveSlot = (files: FileList | File[]) => {
-    const list = Array.from(files).filter((f) => ACCEPTED_UPLOAD_TYPES.includes(f.type))
-    if (list.length === 0) {
-      setSubmitError('仅支持 PNG / JPG / WEBP 图片')
-      return
-    }
-    const allowed = list.slice(0, Math.max(0, remaining))
-    if (allowed.length < list.length) {
-      setSubmitError(`已达上限，仅添加了 ${allowed.length} 张（最多 ${maxRefs} 张）`)
-    } else {
-      setSubmitError(null)
-    }
-    const newItems: UploadItem[] = allowed.map((file) => ({
-      id: 'up-' + Math.random().toString(36).slice(2, 10),
+    const validFiles = Array.from(files).filter((f) => ACCEPTED_UPLOAD_TYPES.includes(f.type))
+    if (validFiles.length === 0) return
+    const canTakeCount = Math.max(0, remaining)
+    const toAdd = validFiles.slice(0, canTakeCount).map((file) => ({
+      id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       file,
       previewUrl: URL.createObjectURL(file),
       slot: activeSlotKey,
     }))
     updateSlotState(activeSlotKey, {
-      uploads: [...activeState.uploads, ...newItems],
+      uploads: [...activeState.uploads, ...toAdd],
     })
   }
 
   const removeUploadFromActiveSlot = (id: string) => {
-    const hit = activeState.uploads.find((u) => u.id === id)
-    if (hit) URL.revokeObjectURL(hit.previewUrl)
+    const target = activeState.uploads.find((u) => u.id === id)
+    if (target) URL.revokeObjectURL(target.previewUrl)
     updateSlotState(activeSlotKey, {
       uploads: activeState.uploads.filter((u) => u.id !== id),
     })
   }
 
-  const clearActiveSlot = () => {
-    activeState.uploads.forEach((u) => URL.revokeObjectURL(u.previewUrl))
-    updateSlotState(activeSlotKey, {
-      selected: [],
-      uploads: [],
-      searchResult: null,
-      searchError: null,
-      skuInput: '',
-    })
+  const clearSlotAssets = (slotKey: string) => {
+    const st = slotStates[slotKey]
+    if (st) {
+      st.uploads.forEach((u) => URL.revokeObjectURL(u.previewUrl))
+      updateSlotState(slotKey, { selected: [], uploads: [] })
+    }
   }
 
   const toggleTarget = (id: string) => {
     setTargetIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
   }
 
-  // ── 提交换装 ──
   const canSubmit = totalSelected > 0 && !submitting
 
   const handleSubmit = async () => {
     if (!canSubmit) return
     setSubmitting(true)
     setSubmitError(null)
+
     lastModel = model
     lastResolution = resolution
 
-    // 收集所有部位的素材与上传图片
-    const targetSlotsList: string[] = []
-    const gatheredAssets: OutfitAsset[] = []
-    const gatheredUploads: File[] = []
-    const gatheredUploadSlots: string[] = []
-
-    PRESET_SLOTS.forEach((slot) => {
-      const st = slotStates[slot.key]
-      if (!st) return
-      const hasAssets = st.selected.length > 0
-      const hasUploads = st.uploads.length > 0
-      if (hasAssets || hasUploads) {
-        targetSlotsList.push(slot.key)
-        st.selected.forEach((a) => gatheredAssets.push({ ...a, slot: slot.key }))
-        st.uploads.forEach((u) => {
-          gatheredUploads.push(u.file)
-          gatheredUploadSlots.push(slot.key)
-        })
-      }
-    })
+    const gatheredAssets = PRESET_SLOTS.flatMap((s) => slotStates[s.key]?.selected || [])
+    const gatheredUploads = PRESET_SLOTS.flatMap((s) => (slotStates[s.key]?.uploads || []).map((u) => u.file))
+    const gatheredUploadSlots = PRESET_SLOTS.flatMap((s) => (slotStates[s.key]?.uploads || []).map((u) => u.slot))
+    const targetSlotsList = configuredSlots.map((s) => s.key)
 
     try {
       await onSubmit({
@@ -407,13 +374,6 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
     return Array.from(map.entries())
   }, [activeState.searchResult])
 
-  const submitLabel =
-    totalSelected === 0
-      ? '请在上方选择部位并勾选素材'
-      : `开始换装（${totalSelected} 张素材 · ${configuredSlots.length} 个部位${
-          batchCount > 1 ? ` · 出 ${batchCount} 张` : ''
-        }）`
-
   return (
     <div
       data-modal="outfit-change"
@@ -422,27 +382,24 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
         e.stopPropagation()
         if (e.target === e.currentTarget && !submitting) onClose()
       }}
-      onMouseUp={(e) => e.stopPropagation()}
-      onMouseMove={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => {
         e.preventDefault()
         e.stopPropagation()
       }}
-      onKeyDown={(e) => e.stopPropagation()}
-      onKeyUp={(e) => e.stopPropagation()}
     >
       <div style={styles.dialog} onMouseDown={(e) => e.stopPropagation()}>
-        {/* 标题栏 */}
+        {/* ── 顶部 Header ── */}
         <div style={styles.header}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={styles.headerIcon}>
-              <Shirt size={18} strokeWidth={2.2} />
+              <Shirt size={17} strokeWidth={2.2} />
             </div>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: '#0f172a' }}>AI 虚拟换装</div>
-              <div style={{ fontSize: 11, color: '#64748b' }}>
-                选择换装部位（如上衣、下装、鞋子）→ 输入货号添加素材图 → 提交生成，结果自动插入画布原图右侧
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#09090b', letterSpacing: '-0.01em' }}>
+                AI 虚拟换装 · Virtual Try-On
+              </div>
+              <div style={{ fontSize: 12, color: '#71717a', marginTop: 1 }}>
+                点击人体部位或标签选择更替 · 检索商品多角度素材 · 智能自然融合
               </div>
             </div>
           </div>
@@ -457,206 +414,172 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
           </button>
         </div>
 
+        {/* ── 主体分栏 ── */}
         <div style={styles.body}>
-          {/* ── 左栏：原图 + 可选 VLM 分析 ── */}
+          {/* ── 左栏：人体线框模特 + 原图底图微缩卡片 (宽 320px) ── */}
           <div style={styles.leftCol}>
-            <div style={styles.sectionLabel}>原图底图</div>
-            <div style={styles.sourceBox} onClick={() => setPreview(normalizeAssetUrl(image.url))}>
-              <img src={normalizeAssetUrl(image.url)} alt="" style={styles.sourceImg} draggable={false} />
+            {/* 1. 交互式人体线框模特 */}
+            <div style={styles.mannequinCard}>
+              <InteractiveMannequin
+                activeSlot={activeSlotKey}
+                configuredCounts={configuredCounts}
+                onSelectSlot={(slotKey) => setActiveSlotKey(slotKey)}
+                disabled={submitting}
+              />
             </div>
 
-            <div
-              style={{
-                ...styles.sectionLabel,
-                marginTop: 14,
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-              }}
-            >
-              <span>原图服饰识别（可选）</span>
-              {analysis.status === 'done' && (
-                <span style={styles.typeBadge}>{analysis.data.image_type_label}</span>
-              )}
-            </div>
-
-            {/* VLM 初始状态：展示触发按钮，不自动执行 */}
-            {analysis.status === 'idle' && (
-              <div style={styles.analysisBox}>
-                <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
-                  AI 智能分析原图已穿服饰，可辅助精准替换。无需识别也可直接在右侧选部位换装。
-                </div>
-                <button
-                  type="button"
-                  style={styles.vlmTriggerButton}
-                  onClick={() => runAnalysis()}
-                  title="点击启动视觉大模型解析图中穿搭"
+            {/* 2. 原图底图微缩卡片 + VLM 辅助 */}
+            <div style={styles.sourceCard}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  width: '100%',
+                }}
+              >
+                {/* 紧凑原图预览（点击放大） */}
+                <div
+                  style={styles.sourceThumb}
+                  onClick={() => setPreview(normalizeAssetUrl(image.url))}
+                  title="点击查看原图大图"
                 >
-                  <Sparkles size={13} color="#4338ca" />
-                  <span>智能识别原图服饰</span>
-                </button>
-              </div>
-            )}
-
-            {/* VLM 正在加载：不阻塞右侧操作与提交 */}
-            {analysis.status === 'loading' && (
-              <div style={styles.analysisBox}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#4338ca', fontSize: 12, fontWeight: 500 }}>
-                  <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                  <span>正在识别图中服饰…</span>
-                </div>
-                {[72, 54, 64].map((w, i) => (
-                  <div key={i} style={{ ...styles.skeleton, width: `${w}%` }} />
-                ))}
-                <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                  分析中不影响在右侧继续勾选素材与提交
-                </div>
-              </div>
-            )}
-
-            {/* VLM 失败：友好提示 */}
-            {analysis.status === 'error' && (
-              <div style={{ ...styles.analysisBox, borderColor: '#fde68a', backgroundColor: '#fffbeb' }}>
-                <div style={{ display: 'flex', gap: 6, fontSize: 12, color: '#92400e', lineHeight: 1.5 }}>
-                  <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 2 }} />
-                  <span>识别未成功：{analysis.error}。不影响正常换装，系统将按您选择的部位精准替换。</span>
-                </div>
-                <button type="button" style={styles.linkButton} onClick={() => runAnalysis()}>
-                  <RefreshCw size={12} /> 重新识别
-                </button>
-              </div>
-            )}
-
-            {/* VLM 完成：展示穿搭摘要与单品胶囊 */}
-            {analysis.status === 'done' && (
-              <div style={styles.analysisBox}>
-                {analysis.data.summary && (
-                  <div style={{ fontSize: 12, color: '#334155', lineHeight: 1.5 }}>
-                    {analysis.data.summary}
+                  <img
+                    src={normalizeAssetUrl(image.url)}
+                    alt=""
+                    style={styles.sourceThumbImg}
+                    draggable={false}
+                  />
+                  <div style={styles.zoomHover}>
+                    <ZoomIn size={12} color="#fff" />
                   </div>
-                )}
-                {analysis.data.garments.length > 0 ? (
-                  <>
-                    <div style={{ fontSize: 11, color: '#64748b' }}>
-                      识别到的单品（点击定位对应部位）：
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                      {analysis.data.garments.map((g) => {
-                        const active = targetIds.includes(g.id)
-                        return (
-                          <button
-                            key={g.id}
-                            type="button"
-                            onClick={() => {
-                              toggleTarget(g.id)
-                              // 自动切换到对应部位 Tab
-                              if (g.slot && PRESET_SLOTS.some((s) => s.key === g.slot)) {
-                                setActiveSlotKey(g.slot)
-                              }
-                            }}
-                            title={[g.color, g.material, g.details, g.position].filter(Boolean).join(' · ')}
-                            style={{
-                              ...styles.garmentChip,
-                              borderColor: active ? '#0f172a' : '#e2e8f0',
-                              backgroundColor: active ? '#0f172a' : '#ffffff',
-                              color: active ? '#ffffff' : '#334155',
-                            }}
-                          >
-                            {active && <Check size={11} strokeWidth={3} />}
-                            <span style={{ opacity: active ? 0.75 : 0.6 }}>{g.slot_label}</span>
-                            <span>
-                              {g.color}
-                              {g.name}
-                            </span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </>
-                ) : (
-                  <div style={{ fontSize: 12, color: '#64748b' }}>
-                    已完成识别，将按右侧选定的部位精准替换。
-                  </div>
-                )}
-                <button type="button" style={styles.linkButton} onClick={() => runAnalysis()}>
-                  <RefreshCw size={11} /> 重新识别
-                </button>
-              </div>
-            )}
-          </div>
+                </div>
 
-          {/* ── 右栏：部位驱动导航与素材选择 ── */}
-          <div style={styles.rightCol}>
-            {/* 1. 部位选择 Tabs 导航 */}
-            <div>
-              <div style={{ ...styles.sectionLabel, display: 'flex', justifyContent: 'space-between' }}>
-                <span>选择替换部位</span>
-                <span style={{ fontWeight: 500, color: remaining <= 0 ? '#ef4444' : '#64748b' }}>
-                  已选 {totalSelected} / {maxRefs} 张参考图
-                </span>
-              </div>
-              <div style={styles.slotTabsContainer}>
-                {PRESET_SLOTS.map((slot) => {
-                  const isActive = slot.key === activeSlotKey
-                  const st = slotStates[slot.key]
-                  const count = (st?.selected.length || 0) + (st?.uploads.length || 0)
-                  const icon = SLOT_ICONS[slot.key] || '👕'
-                  return (
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#09090b' }}>原图基准</span>
+                    {analysis.status === 'done' && (
+                      <span style={styles.typeBadge}>{analysis.data.image_type_label}</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#71717a', lineHeight: 1.4 }}>
+                    模特身姿与光影保持一致
+                  </div>
+
+                  {/* VLM 触发按钮 */}
+                  {analysis.status === 'idle' && (
                     <button
-                      key={slot.key}
                       type="button"
-                      onClick={() => setActiveSlotKey(slot.key)}
-                      style={{
-                        ...styles.slotTab,
-                        ...(isActive ? styles.slotTabActive : null),
-                      }}
+                      style={styles.vlmButton}
+                      onClick={() => runAnalysis()}
+                      title="AI 智能解析原图人物穿搭单品"
                     >
-                      <span style={{ fontSize: 14 }}>{icon}</span>
-                      <span style={{ fontWeight: isActive ? 600 : 500 }}>{slot.label}</span>
-                      {count > 0 && (
-                        <span
+                      <Sparkles size={11} strokeWidth={2.5} />
+                      <span>智能识别穿搭 (可选)</span>
+                    </button>
+                  )}
+
+                  {analysis.status === 'loading' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#18181b', marginTop: 4 }}>
+                      <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
+                      <span>正在识别…</span>
+                    </div>
+                  )}
+
+                  {analysis.status === 'error' && (
+                    <div style={{ fontSize: 11, color: '#71717a', marginTop: 4 }}>
+                      识别跳过 · 不影响换装
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 识别出的单品胶囊（点击可联动切换模特部位） */}
+              {analysis.status === 'done' && analysis.data.garments.length > 0 && (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #f4f4f5', width: '100%' }}>
+                  <div style={{ fontSize: 10, color: '#a1a1aa', marginBottom: 4 }}>
+                    已识别穿搭（点击联动定位部位）：
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    {analysis.data.garments.map((g) => {
+                      const isLinked = g.slot === activeSlotKey
+                      return (
+                        <button
+                          key={g.id}
+                          type="button"
+                          onClick={() => {
+                            toggleTarget(g.id)
+                            if (g.slot && PRESET_SLOTS.some((s) => s.key === g.slot)) {
+                              setActiveSlotKey(g.slot)
+                            }
+                          }}
                           style={{
-                            ...styles.slotCountBadge,
-                            backgroundColor: isActive ? '#ffffff' : '#0f172a',
-                            color: isActive ? '#0f172a' : '#ffffff',
+                            ...styles.garmentPill,
+                            border: isLinked ? '1px solid #09090b' : '1px solid #e4e4e7',
+                            backgroundColor: isLinked ? '#09090b' : '#fafafa',
+                            color: isLinked ? '#ffffff' : '#27272a',
                           }}
                         >
-                          {count}
-                        </span>
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
+                          <span>{g.slot_label}</span>
+                          <span style={{ opacity: 0.75 }}>
+                            {g.color}
+                            {g.name}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
+          </div>
 
-            {/* 2. 当前部位操作指示与检索栏 */}
-            <div style={styles.activeSlotHeader}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 16 }}>{SLOT_ICONS[activeSlot.key] || '👕'}</span>
-                <span style={{ fontWeight: 600, fontSize: 13, color: '#0f172a' }}>
-                  当前部位：【{activeSlot.label}】
-                </span>
-                <span style={{ fontSize: 12, color: '#64748b' }}>（{activeSlot.region || activeSlot.desc}）</span>
+          {/* ── 右栏：当前激活部位的素材装配台 (Flex 弹性宽) ── */}
+          <div style={styles.rightCol}>
+            {/* 1. 当前部位标题与指引条 */}
+            <div style={styles.slotHeaderBar}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 16, fontWeight: 600, color: '#09090b' }}>
+                    {activeSlot.label}
+                  </span>
+                  <span style={{ fontSize: 11, color: '#71717a', textTransform: 'uppercase' }}>
+                    · {activeSlot.key}
+                  </span>
+                  {activeState.selected.length + activeState.uploads.length > 0 ? (
+                    <span style={styles.configuredActiveBadge}>
+                      已配置 {activeState.selected.length + activeState.uploads.length} 张素材
+                    </span>
+                  ) : (
+                    <span style={styles.unconfiguredBadge}>未配置</span>
+                  )}
+                </div>
+                <div style={{ fontSize: 12, color: '#71717a', marginTop: 2 }}>
+                  {activeSlot.region ? `${activeSlot.region} · ${activeSlot.desc}` : activeSlot.desc}
+                </div>
               </div>
+
+              {/* 快速清除当前部位 */}
               {(activeState.selected.length > 0 || activeState.uploads.length > 0) && (
                 <button
                   type="button"
-                  onClick={clearActiveSlot}
+                  onClick={() => clearSlotAssets(activeSlotKey)}
                   style={styles.clearSlotButton}
-                  title="清空当前部位已选素材"
+                  title="清除该部位已选素材"
                 >
-                  <Trash2 size={12} /> 清空本部位素材
+                  <Trash2 size={12} />
+                  <span>清空该部位</span>
                 </button>
               )}
             </div>
 
-            {/* SKU 检索与上传输入行 */}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <div style={styles.searchBox}>
-                <Search size={14} color="#94a3b8" />
+            {/* 2. 极简 SKU 检索输入条 + 本地上传按钮 */}
+            <div style={styles.searchBarContainer}>
+              <div style={styles.searchInputBox}>
+                <Search size={14} color="#71717a" style={{ flexShrink: 0 }} />
                 <input
                   ref={skuInputRef}
+                  type="text"
                   value={activeState.skuInput}
                   onChange={(e) => updateSlotState(activeSlotKey, { skuInput: e.target.value })}
                   onKeyDown={(e) => {
@@ -665,58 +588,83 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                       handleSearch()
                     }
                   }}
-                  placeholder={`输入【${activeSlot.label}】货号 SKU，按回车检索素材库`}
+                  placeholder={`输入【${activeSlot.label}】商品货号 SKU（如 ABC-01），按回车检索`}
                   style={styles.searchInput}
+                  disabled={activeState.searching}
                 />
+                {activeState.skuInput && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateSlotState(activeSlotKey, { skuInput: '', searchError: null })
+                      skuInputRef.current?.focus()
+                    }}
+                    style={styles.clearSearchBtn}
+                  >
+                    <X size={13} />
+                  </button>
+                )}
               </div>
+
               <button
                 type="button"
                 onClick={handleSearch}
                 disabled={activeState.searching}
-                style={{ ...styles.secondaryButton, minWidth: 72 }}
+                style={styles.searchSubmitBtn}
               >
                 {activeState.searching ? (
-                  <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                  <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
                 ) : (
-                  '检索素材'
+                  '检索'
                 )}
               </button>
+
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                style={styles.secondaryButton}
-                title={`为【${activeSlot.label}】上传本地商品图片`}
+                style={styles.uploadBtn}
+                title="上传本地图片作为当前部位素材"
               >
-                <ImagePlus size={14} /> 本地上传
+                <ImagePlus size={14} />
+                <span>本地上传</span>
               </button>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept={ACCEPTED_UPLOAD_TYPES.join(',')}
                 multiple
-                style={{ display: 'none' }}
+                accept={ACCEPTED_UPLOAD_TYPES.join(',')}
                 onChange={(e) => {
                   if (e.target.files) addFilesToActiveSlot(e.target.files)
                   e.target.value = ''
                 }}
+                style={{ display: 'none' }}
               />
             </div>
 
-            {/* 角度/品类筛选器 */}
+            {/* 角度多分类筛选胶囊条 */}
             {availableTypes.length > 1 && (
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {[['all', '全部角度'] as [string, string], ...availableTypes].map(([key, label]) => (
+              <div style={styles.filterPillsRow}>
+                <button
+                  type="button"
+                  onClick={() => updateSlotState(activeSlotKey, { typeFilter: 'all' })}
+                  style={{
+                    ...styles.filterPill,
+                    ...(activeState.typeFilter === 'all' ? styles.filterPillActive : null),
+                  }}
+                >
+                  全部角度
+                </button>
+                {availableTypes.map(([typeKey, typeLabel]) => (
                   <button
-                    key={key}
+                    key={typeKey}
                     type="button"
-                    onClick={() => updateSlotState(activeSlotKey, { typeFilter: key })}
+                    onClick={() => updateSlotState(activeSlotKey, { typeFilter: typeKey })}
                     style={{
-                      ...styles.filterChip,
-                      backgroundColor: activeState.typeFilter === key ? '#0f172a' : '#f1f5f9',
-                      color: activeState.typeFilter === key ? '#ffffff' : '#475569',
+                      ...styles.filterPill,
+                      ...(activeState.typeFilter === typeKey ? styles.filterPillActive : null),
                     }}
                   >
-                    {label}
+                    {typeLabel}
                   </button>
                 ))}
               </div>
@@ -724,8 +672,8 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
 
             {/* 检索异常提醒 */}
             {activeState.searchError && (
-              <div style={styles.infoBar}>
-                <AlertCircle size={14} style={{ flexShrink: 0 }} />
+              <div style={styles.errorNotice}>
+                <AlertCircle size={13} style={{ flexShrink: 0 }} />
                 <span>{activeState.searchError}</span>
               </div>
             )}
@@ -734,8 +682,8 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
             <div
               style={{
                 ...styles.assetArea,
-                borderColor: isDragOver ? '#3b82f6' : '#e2e8f0',
-                backgroundColor: isDragOver ? '#eff6ff' : '#f8fafc',
+                borderColor: isDragOver ? '#09090b' : '#e4e4e7',
+                backgroundColor: isDragOver ? '#f4f4f5' : '#fafafa',
               }}
               onDragOver={(e) => {
                 if (e.dataTransfer.types.includes('Files')) {
@@ -752,13 +700,13 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
             >
               {/* 本部位本地上传项 */}
               {activeState.uploads.length > 0 && (
-                <div style={{ marginBottom: 12 }}>
+                <div style={{ marginBottom: 14 }}>
                   <div style={styles.groupHeader}>
-                    <span style={{ fontWeight: 600, color: '#0f172a' }}>
+                    <span style={{ fontWeight: 600, color: '#09090b' }}>
                       【{activeSlot.label}】本地上传素材
                     </span>
-                    <span style={{ color: '#94a3b8' }}>
-                      {activeState.uploads.length} 张 · 已全部应用
+                    <span style={{ color: '#71717a' }}>
+                      {activeState.uploads.length} 张已应用
                     </span>
                   </div>
                   <div style={styles.grid}>
@@ -766,14 +714,14 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                       <div key={u.id} style={{ ...styles.tile, ...styles.tileSelected }}>
                         <img src={u.previewUrl} alt="" style={styles.tileImg} draggable={false} />
                         <div style={styles.tileFooter}>
-                          <span style={styles.tileAngle}>上传图片 {idx + 1}</span>
+                          <span style={styles.tileAngle}>上传 {idx + 1}</span>
                           <span style={styles.tileType}>{activeSlot.label}</span>
                         </div>
                         <button
                           type="button"
                           onClick={() => removeUploadFromActiveSlot(u.id)}
                           style={styles.tileRemove}
-                          title="移除此图片"
+                          title="移除图片"
                         >
                           <X size={11} />
                         </button>
@@ -792,7 +740,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                   return (
                     <div key={group.sku} style={{ marginBottom: 12 }}>
                       <div style={styles.groupHeader}>
-                        <span style={{ fontWeight: 600, color: '#0f172a' }}>{group.sku}</span>
+                        <span style={{ fontWeight: 600, color: '#09090b' }}>{group.sku}</span>
                         <span style={{ color: '#ef4444' }}>未找到素材</span>
                       </div>
                     </div>
@@ -801,10 +749,12 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 if (assets.length === 0) return null
                 const allChosen = assets.every((a) => activeSelectedKeys.has(assetKey(a)))
                 return (
-                  <div key={group.sku} style={{ marginBottom: 12 }}>
+                  <div key={group.sku} style={{ marginBottom: 14 }}>
                     <div style={styles.groupHeader}>
-                      <span style={{ fontWeight: 600, color: '#0f172a' }}>{group.sku}</span>
-                      <span style={{ color: '#94a3b8' }}>{assets.length} 张多角度素材</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontWeight: 600, color: '#09090b' }}>{group.sku}</span>
+                        <span style={{ color: '#71717a' }}>({assets.length} 张多角度)</span>
+                      </div>
                       <button
                         type="button"
                         style={styles.linkButton}
@@ -826,17 +776,11 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                             aria-checked={isSelected}
                             tabIndex={0}
                             onClick={() => toggleAsset(asset)}
-                            onKeyDown={(e) => {
-                              if (e.key === ' ' || e.key === 'Enter') {
-                                e.preventDefault()
-                                toggleAsset(asset)
-                              }
-                            }}
                             title={`${asset.filename}（${asset.type_label}）`}
                             style={{
                               ...styles.tile,
                               ...(isSelected ? styles.tileSelected : null),
-                              opacity: !isSelected && remaining <= 0 ? 0.5 : 1,
+                              opacity: !isSelected && remaining <= 0 ? 0.45 : 1,
                             }}
                           >
                             <img
@@ -853,8 +797,8 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                             <div
                               style={{
                                 ...styles.checkbox,
-                                backgroundColor: isSelected ? '#0f172a' : 'rgba(255,255,255,0.92)',
-                                borderColor: isSelected ? '#0f172a' : '#cbd5e1',
+                                backgroundColor: isSelected ? '#09090b' : 'rgba(255,255,255,0.92)',
+                                border: isSelected ? '1px solid #09090b' : '1px solid #d4d4d8',
                               }}
                             >
                               {isSelected && (
@@ -882,192 +826,229 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 )
               })}
 
+              {/* 空状态指引 */}
               {!activeState.searchResult && activeState.uploads.length === 0 && (
                 <div style={styles.emptyState}>
-                  <div style={{ fontSize: 32, marginBottom: 4 }}>
-                    {SLOT_ICONS[activeSlot.key] || '👕'}
+                  <div style={styles.emptyIconBox}>
+                    <Shirt size={24} strokeWidth={1.5} color="#71717a" />
                   </div>
-                  <div style={{ fontSize: 13, color: '#334155', fontWeight: 600 }}>
-                    输入【{activeSlot.label}】货号 SKU，检索多角度商品图
+                  <div style={{ fontSize: 13, color: '#18181b', fontWeight: 600 }}>
+                    输入【{activeSlot.label}】货号检索，或拖拽图片到此处
                   </div>
-                  <div style={{ fontSize: 11, color: '#94a3b8', maxWidth: 360, lineHeight: 1.6 }}>
-                    建议勾选 2–4 个角度（正面、侧面或细节），让模型精准还原款式。选好后可切换上方其他部位（如裤子、鞋子）继续配置。
+                  <div style={{ fontSize: 12, color: '#71717a', maxWidth: 360, lineHeight: 1.6 }}>
+                    推荐勾选 2–4 个角度（正面、侧面或细节），让生成模型精准还原版型。
                   </div>
                 </div>
               )}
             </div>
 
-            {/* 4. 已配置部位汇总微标签 */}
+            {/* 4. 已配置部位快捷托盘 */}
             {configuredSlots.length > 0 && (
-              <div style={styles.configuredSummaryBar}>
-                <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600 }}>已配置部位：</span>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <div style={styles.configuredBar}>
+                <span style={{ fontSize: 11, color: '#71717a', fontWeight: 500 }}>已配部位：</span>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                   {configuredSlots.map((s) => {
                     const st = slotStates[s.key]
                     const count = (st?.selected.length || 0) + (st?.uploads.length || 0)
                     const isCur = s.key === activeSlotKey
                     return (
-                      <button
+                      <div
                         key={s.key}
-                        type="button"
                         onClick={() => setActiveSlotKey(s.key)}
                         style={{
-                          ...styles.configuredSlotChip,
-                          borderColor: isCur ? '#0f172a' : '#cbd5e1',
-                          backgroundColor: isCur ? '#f1f5f9' : '#ffffff',
+                          ...styles.configuredPill,
+                          border: isCur ? '1px solid #09090b' : '1px solid #e4e4e7',
+                          backgroundColor: isCur ? '#09090b' : '#ffffff',
+                          color: isCur ? '#ffffff' : '#18181b',
                         }}
                       >
-                        <span>{SLOT_ICONS[s.key] || '👕'}</span>
                         <span style={{ fontWeight: 600 }}>{s.label}</span>
-                        <span style={{ color: '#2563eb' }}>({count}张)</span>
-                      </button>
+                        <span style={{ opacity: isCur ? 0.75 : 0.6 }}>({count}张)</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            clearSlotAssets(s.key)
+                          }}
+                          style={{
+                            border: 'none',
+                            background: 'transparent',
+                            color: isCur ? '#ffffff' : '#71717a',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            padding: 0,
+                            marginLeft: 2,
+                          }}
+                          title="移除该部位"
+                        >
+                          <X size={11} />
+                        </button>
+                      </div>
                     )
                   })}
                 </div>
               </div>
             )}
+          </div>
+        </div>
 
-            {/* 5. 高级生成设置 */}
+        {/* ── 底部控制栏 ── */}
+        <div style={styles.footer}>
+          {/* 左侧：已选资产统计与生成设置抽屉开关 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ fontSize: 12, color: '#52525b' }}>
+              {totalSelected > 0 ? (
+                <>
+                  已选 <strong style={{ color: '#09090b' }}>{totalSelected}</strong> / {maxRefs} 张参考图 ·{' '}
+                  <strong style={{ color: '#09090b' }}>{configuredSlots.length}</strong> 个部位
+                </>
+              ) : (
+                '请在上方选择部位并添加素材图'
+              )}
+            </div>
+
+            {/* 生成设置切换按钮 */}
             <button
               type="button"
-              style={styles.advancedToggle}
-              onClick={() => setShowAdvanced((v) => !v)}
+              onClick={() => setShowSettings((v) => !v)}
+              style={styles.settingsToggle}
             >
-              {showAdvanced ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-              <span>生成设置</span>
-              <span style={{ color: '#94a3b8', fontWeight: 400 }}>
-                {MODEL_OPTIONS.find((m) => m.key === model)?.label} · {resolution} · {batchCount} 张
-                {extraPrompt.trim() ? ' · 有补充要求' : ''}
+              <SlidersHorizontal size={13} />
+              <span>
+                {MODEL_OPTIONS.find((m) => m.key === model)?.label} · {resolution}
+                {batchCount > 1 ? ` · 出 ${batchCount} 张` : ''}
               </span>
+              {showSettings ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
             </button>
-            {showAdvanced && (
-              <div style={styles.advancedBox}>
-                <div style={styles.settingRow}>
-                  <span style={styles.settingLabel}>模型</span>
-                  <div style={styles.segment}>
-                    {MODEL_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.key}
-                        type="button"
-                        title={opt.desc}
-                        onClick={() => setModel(opt.key)}
-                        style={{
-                          ...styles.segmentItem,
-                          ...(model === opt.key ? styles.segmentActive : null),
-                        }}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div style={styles.settingRow}>
-                  <span style={styles.settingLabel}>清晰度</span>
-                  <div style={styles.segment}>
-                    {(['1K', '2K'] as const).map((r) => (
-                      <button
-                        key={r}
-                        type="button"
-                        onClick={() => setResolution(r)}
-                        style={{
-                          ...styles.segmentItem,
-                          ...(resolution === r ? styles.segmentActive : null),
-                        }}
-                      >
-                        {r}
-                      </button>
-                    ))}
-                  </div>
-                  <span style={styles.settingLabel}>出图数</span>
-                  <div style={styles.segment}>
-                    {[1, 2, 4].map((n) => (
-                      <button
-                        key={n}
-                        type="button"
-                        onClick={() => setBatchCount(n)}
-                        style={{
-                          ...styles.segmentItem,
-                          ...(batchCount === n ? styles.segmentActive : null),
-                        }}
-                      >
-                        {n}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <textarea
-                  value={extraPrompt}
-                  onChange={(e) => setExtraPrompt(e.target.value)}
-                  rows={2}
-                  maxLength={500}
-                  placeholder="补充要求（可选），如：上衣下摆塞进裤腰、袖子稍微挽起、保持自然站立光影"
-                  style={styles.textarea}
-                />
-              </div>
+          </div>
+
+          {/* 右侧：操作按钮 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {submitError && (
+              <span style={{ fontSize: 11, color: '#ef4444', marginRight: 4 }}>
+                {submitError}
+              </span>
             )}
+            <button type="button" onClick={onClose} disabled={submitting} style={styles.cancelBtn}>
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={!canSubmit}
+              style={{
+                ...styles.primaryBtn,
+                opacity: canSubmit ? 1 : 0.45,
+                cursor: canSubmit ? 'pointer' : 'not-allowed',
+              }}
+            >
+              {submitting ? (
+                <>
+                  <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
+                  <span>提交中…</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles size={13} />
+                  <span>
+                    {totalSelected === 0
+                      ? '请选择部位添加素材'
+                      : `开始换装 (${totalSelected}张 · ${configuredSlots.length}部位)`}
+                  </span>
+                  {canSubmit && <ArrowRight size={13} />}
+                </>
+              )}
+            </button>
           </div>
         </div>
 
-        {/* 底部提交栏 */}
-        <div style={styles.footer}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {submitError ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#ef4444' }}>
-                <AlertCircle size={13} style={{ flexShrink: 0 }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {submitError}
-                </span>
+        {/* ── 高级设置浮层抽屉 ── */}
+        {showSettings && (
+          <div style={styles.settingsPopover}>
+            <div style={styles.settingRow}>
+              <span style={styles.settingLabel}>生图模型</span>
+              <div style={styles.segment}>
+                {MODEL_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    title={opt.desc}
+                    onClick={() => setModel(opt.key)}
+                    style={{
+                      ...styles.segmentItem,
+                      ...(model === opt.key ? styles.segmentActive : null),
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
               </div>
-            ) : totalSelected > 0 ? (
-              <div style={{ fontSize: 12, color: '#475569' }}>
-                已配置 <strong style={{ color: '#0f172a' }}>{configuredSlots.length}</strong> 个部位，共{' '}
-                <strong style={{ color: '#0f172a' }}>{totalSelected}</strong> 张素材图（未选部位保持原图不变）
+            </div>
+
+            <div style={styles.settingRow}>
+              <span style={styles.settingLabel}>分辨率</span>
+              <div style={styles.segment}>
+                {(['1K', '2K'] as const).map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setResolution(r)}
+                    style={{
+                      ...styles.segmentItem,
+                      ...(resolution === r ? styles.segmentActive : null),
+                    }}
+                  >
+                    {r}
+                  </button>
+                ))}
               </div>
-            ) : (
-              <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                请在上方选择要替换的部位并添加素材图
+
+              <span style={{ ...styles.settingLabel, marginLeft: 16 }}>批次数量</span>
+              <div style={styles.segment}>
+                {[1, 2, 4].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setBatchCount(n)}
+                    style={{
+                      ...styles.segmentItem,
+                      ...(batchCount === n ? styles.segmentActive : null),
+                    }}
+                  >
+                    {n}
+                  </button>
+                ))}
               </div>
-            )}
+            </div>
+
+            <textarea
+              value={extraPrompt}
+              onChange={(e) => setExtraPrompt(e.target.value)}
+              rows={2}
+              maxLength={500}
+              placeholder="补充指令（可选），如：上衣下摆自然塞入腰际、袖口微挽、保持自然摄影光影"
+              style={styles.textarea}
+            />
           </div>
-          <button type="button" onClick={onClose} disabled={submitting} style={styles.cancelButton}>
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!canSubmit}
-            style={{
-              ...styles.primaryButton,
-              opacity: canSubmit ? 1 : 0.55,
-              cursor: canSubmit ? 'pointer' : 'not-allowed',
-            }}
-          >
-            {submitting ? (
-              <>
-                <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                <span>正在提交换装任务…</span>
-              </>
-            ) : (
-              <>
-                <Sparkles size={14} />
-                <span>{submitLabel}</span>
-                {canSubmit && <ArrowRight size={14} />}
-              </>
-            )}
-          </button>
-        </div>
+        )}
+
+        {/* ── 大图灯箱 ── */}
+        {preview && (
+          <div style={styles.lightbox} onClick={() => setPreview(null)}>
+            <div style={styles.lightboxBox} onClick={(e) => e.stopPropagation()}>
+              <img src={preview} alt="" style={styles.lightboxImg} />
+              <button
+                type="button"
+                onClick={() => setPreview(null)}
+                style={styles.lightboxClose}
+              >
+                <X size={16} />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
-
-      {/* 大图预览灯箱 */}
-      {preview && (
-        <div style={styles.lightbox} onMouseDown={() => setPreview(null)}>
-          <img
-            src={preview}
-            alt=""
-            style={{ maxWidth: '86vw', maxHeight: '86vh', borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.45)' }}
-          />
-        </div>
-      )}
     </div>
   )
 }
@@ -1076,337 +1057,361 @@ const styles: Record<string, React.CSSProperties> = {
   backdrop: {
     position: 'fixed',
     inset: 0,
-    zIndex: 10000,
+    backgroundColor: 'rgba(9, 9, 11, 0.45)',
+    backdropFilter: 'blur(10px)',
+    WebkitBackdropFilter: 'blur(10px)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.45)',
-    backdropFilter: 'blur(8px)',
-    WebkitBackdropFilter: 'blur(8px)',
-    animation: 'fadeIn 150ms ease-out',
+    zIndex: 9999,
+    padding: 16,
+    userSelect: 'none',
   },
   dialog: {
-    width: 'min(980px, calc(100vw - 32px))',
-    maxHeight: 'calc(100vh - 48px)',
+    position: 'relative',
+    width: 'min(1160px, 96vw)',
+    height: 'min(860px, 92vh)',
     backgroundColor: '#ffffff',
     borderRadius: 16,
-    boxShadow: '0 24px 48px -12px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(226, 232, 240, 0.9)',
-    overflow: 'hidden',
+    boxShadow: '0 24px 60px rgba(9, 9, 11, 0.16), 0 4px 16px rgba(9, 9, 11, 0.06)',
+    border: '1px solid #e4e4e7',
     display: 'flex',
     flexDirection: 'column',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    color: '#1e293b',
+    overflow: 'hidden',
   },
   header: {
-    padding: '14px 20px',
-    borderBottom: '1px solid #f1f5f9',
+    height: 58,
+    padding: '0 20px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    background: 'linear-gradient(to bottom, #ffffff, #fbfcfe)',
+    borderBottom: '1px solid #f4f4f5',
+    flexShrink: 0,
   },
   headerIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: '#f1f5f9',
-    color: '#0f172a',
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#f4f4f5',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    color: '#09090b',
   },
   iconButton: {
-    background: 'transparent',
+    width: 30,
+    height: 30,
+    borderRadius: 6,
     border: 'none',
-    padding: 6,
-    borderRadius: 8,
-    cursor: 'pointer',
-    color: '#94a3b8',
+    backgroundColor: 'transparent',
+    color: '#71717a',
     display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    transition: 'background 0.15s ease, color 0.15s ease',
   },
   body: {
-    display: 'flex',
-    gap: 20,
-    padding: 20,
-    minHeight: 0,
     flex: 1,
+    minHeight: 0,
+    display: 'flex',
     overflow: 'hidden',
   },
   leftCol: {
-    width: 240,
-    flexShrink: 0,
+    width: 320,
+    borderRight: '1px solid #f4f4f5',
+    backgroundColor: '#fcfcfc',
+    padding: '16px 16px 12px',
     display: 'flex',
     flexDirection: 'column',
+    gap: 12,
     overflowY: 'auto',
+    flexShrink: 0,
+  },
+  mannequinCard: {
+    width: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+  },
+  sourceCard: {
+    padding: '10px 12px',
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    border: '1px solid #e4e4e7',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
+  sourceThumb: {
+    position: 'relative',
+    width: 54,
+    height: 70,
+    borderRadius: 6,
+    overflow: 'hidden',
+    backgroundColor: '#f4f4f5',
+    border: '1px solid #e4e4e7',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  sourceThumbImg: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+  },
+  zoomHover: {
+    position: 'absolute',
+    inset: 0,
+    backgroundColor: 'rgba(9, 9, 11, 0.4)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0,
+    transition: 'opacity 0.15s ease',
+  },
+  typeBadge: {
+    fontSize: 10,
+    fontWeight: 600,
+    padding: '1px 6px',
+    borderRadius: 999,
+    backgroundColor: '#f4f4f5',
+    color: '#18181b',
+  },
+  vlmButton: {
+    marginTop: 6,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    padding: '3px 8px',
+    borderRadius: 6,
+    border: '1px solid #e4e4e7',
+    backgroundColor: '#ffffff',
+    color: '#18181b',
+    fontSize: 11,
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'all 0.15s ease',
+  },
+  garmentPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '2px 7px',
+    borderRadius: 4,
+    border: '1px solid #e4e4e7',
+    fontSize: 10,
+    cursor: 'pointer',
+    transition: 'all 0.15s ease',
   },
   rightCol: {
     flex: 1,
     minWidth: 0,
+    padding: '16px 20px',
     display: 'flex',
     flexDirection: 'column',
-    gap: 10,
-    minHeight: 0,
-  },
-  sectionLabel: {
-    fontSize: 12,
-    fontWeight: 600,
-    color: '#334155',
-    marginBottom: 8,
-  },
-  sourceBox: {
-    width: '100%',
-    height: 250,
-    borderRadius: 12,
-    border: '1px solid #e2e8f0',
-    backgroundColor: '#f8fafc',
-    backgroundImage:
-      'linear-gradient(45deg, #f1f5f9 25%, transparent 25%), linear-gradient(-45deg, #f1f5f9 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #f1f5f9 75%), linear-gradient(-45deg, transparent 75%, #f1f5f9 75%)',
-    backgroundSize: '16px 16px',
-    backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-    cursor: 'zoom-in',
-  },
-  sourceImg: { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' },
-  typeBadge: {
-    fontSize: 11,
-    fontWeight: 600,
-    padding: '1px 8px',
-    borderRadius: 99,
-    backgroundColor: '#eef2ff',
-    color: '#4338ca',
-  },
-  analysisBox: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-    padding: 12,
-    borderRadius: 10,
-    border: '1px solid #e2e8f0',
+    overflowY: 'auto',
     backgroundColor: '#ffffff',
   },
-  vlmTriggerButton: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    height: 32,
-    padding: '0 12px',
-    borderRadius: 8,
-    border: '1px solid #e0e7ff',
-    backgroundColor: '#eef2ff',
-    color: '#4338ca',
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: 'pointer',
-    transition: 'all 120ms ease',
-  },
-  skeleton: {
-    height: 10,
-    borderRadius: 5,
-    background: 'linear-gradient(90deg, #f1f5f9 0%, #e2e8f0 50%, #f1f5f9 100%)',
-    backgroundSize: '200% 100%',
-    animation: 'shimmer 1.4s ease-in-out infinite',
-  },
-  garmentChip: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 4,
-    padding: '4px 9px',
-    borderRadius: 99,
-    border: '1px solid',
-    fontSize: 11,
-    fontWeight: 500,
-    cursor: 'pointer',
-    transition: 'all 120ms ease',
-  },
-  linkButton: {
-    alignSelf: 'flex-start',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 4,
-    background: 'none',
-    border: 'none',
-    padding: 0,
-    fontSize: 12,
-    color: '#2563eb',
-    cursor: 'pointer',
-  },
-  slotTabsContainer: {
+  slotHeaderBar: {
     display: 'flex',
-    gap: 6,
-    overflowX: 'auto',
-    paddingBottom: 4,
-  },
-  slotTab: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '6px 12px',
-    borderRadius: 8,
-    border: '1px solid #e2e8f0',
-    backgroundColor: '#f8fafc',
-    color: '#334155',
-    fontSize: 12,
-    cursor: 'pointer',
-    transition: 'all 120ms ease',
-    whiteSpace: 'nowrap',
-  },
-  slotTabActive: {
-    backgroundColor: '#0f172a',
-    borderColor: '#0f172a',
-    color: '#ffffff',
-    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.2)',
-  },
-  slotCountBadge: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minWidth: 16,
-    height: 16,
-    padding: '0 4px',
-    borderRadius: 99,
-    fontSize: 10,
-    fontWeight: 700,
-  },
-  activeSlotHeader: {
-    display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    padding: '6px 10px',
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
-    border: '1px solid #e2e8f0',
+    paddingBottom: 12,
+    borderBottom: '1px solid #f4f4f5',
+    marginBottom: 12,
+  },
+  configuredActiveBadge: {
+    fontSize: 11,
+    fontWeight: 600,
+    padding: '2px 7px',
+    borderRadius: 999,
+    backgroundColor: '#f4f4f5',
+    color: '#09090b',
+  },
+  unconfiguredBadge: {
+    fontSize: 11,
+    color: '#a1a1aa',
   },
   clearSlotButton: {
-    display: 'inline-flex',
+    display: 'flex',
     alignItems: 'center',
     gap: 4,
-    background: 'none',
-    border: 'none',
-    color: '#94a3b8',
     fontSize: 11,
+    color: '#71717a',
+    backgroundColor: 'transparent',
+    border: 'none',
     cursor: 'pointer',
     padding: '2px 6px',
     borderRadius: 4,
   },
-  searchBox: {
-    flex: 1,
+  searchBarContainer: {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
+    marginBottom: 10,
+  },
+  searchInputBox: {
+    flex: 1,
     height: 36,
-    padding: '0 12px',
-    borderRadius: 9,
-    border: '1px solid #cbd5e1',
+    borderRadius: 8,
+    border: '1px solid #e4e4e7',
     backgroundColor: '#ffffff',
+    padding: '0 10px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    transition: 'border-color 0.15s ease',
   },
   searchInput: {
     flex: 1,
     border: 'none',
     outline: 'none',
-    fontSize: 13,
-    color: '#0f172a',
-    background: 'transparent',
-    fontFamily: 'inherit',
-  },
-  secondaryButton: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    height: 36,
-    padding: '0 12px',
-    borderRadius: 9,
-    border: '1px solid #e2e8f0',
-    backgroundColor: '#f8fafc',
-    color: '#0f172a',
+    backgroundColor: 'transparent',
     fontSize: 12,
-    fontWeight: 600,
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
+    color: '#09090b',
   },
-  filterChip: {
+  clearSearchBtn: {
     border: 'none',
-    padding: '3px 10px',
-    borderRadius: 99,
-    fontSize: 11,
-    fontWeight: 600,
+    background: 'transparent',
+    color: '#a1a1aa',
     cursor: 'pointer',
+    padding: 2,
+    display: 'flex',
   },
-  infoBar: {
+  searchSubmitBtn: {
+    height: 36,
+    padding: '0 14px',
+    borderRadius: 8,
+    border: 'none',
+    backgroundColor: '#09090b',
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 500,
+    cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
-    padding: '7px 12px',
+    justifyContent: 'center',
+  },
+  uploadBtn: {
+    height: 36,
+    padding: '0 12px',
     borderRadius: 8,
-    backgroundColor: '#fffbeb',
-    border: '1px solid #fde68a',
-    color: '#92400e',
+    border: '1px solid #e4e4e7',
+    backgroundColor: '#ffffff',
+    color: '#18181b',
     fontSize: 12,
+    fontWeight: 500,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 5,
+  },
+  filterPillsRow: {
+    display: 'flex',
+    gap: 6,
+    marginBottom: 10,
+  },
+  filterPill: {
+    padding: '3px 9px',
+    borderRadius: 999,
+    border: '1px solid #e4e4e7',
+    backgroundColor: '#ffffff',
+    color: '#71717a',
+    fontSize: 11,
+    cursor: 'pointer',
+  },
+  filterPillActive: {
+    backgroundColor: '#09090b',
+    border: '1px solid #09090b',
+    color: '#ffffff',
+    fontWeight: 500,
+  },
+  errorNotice: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 10px',
+    borderRadius: 6,
+    backgroundColor: '#fef2f2',
+    border: '1px solid #fee2e2',
+    color: '#b91c1c',
+    fontSize: 11,
+    marginBottom: 10,
   },
   assetArea: {
     flex: 1,
-    minHeight: 200,
-    overflowY: 'auto',
+    minHeight: 280,
+    borderRadius: 10,
+    border: '1px dashed #e4e4e7',
     padding: 12,
-    borderRadius: 12,
-    border: '1px dashed',
-    transition: 'all 120ms ease',
+    overflowY: 'auto',
+    transition: 'all 0.15s ease',
   },
   groupHeader: {
     display: 'flex',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'space-between',
     fontSize: 12,
     marginBottom: 8,
   },
+  linkButton: {
+    border: 'none',
+    background: 'transparent',
+    color: '#09090b',
+    fontSize: 11,
+    fontWeight: 600,
+    cursor: 'pointer',
+    padding: 0,
+  },
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(112px, 1fr))',
-    gap: 10,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))',
+    gap: 8,
   },
   tile: {
     position: 'relative',
-    borderRadius: 10,
-    border: '1.5px solid #e2e8f0',
+    aspectRatio: '1',
+    borderRadius: 8,
+    border: '1px solid #e4e4e7',
     backgroundColor: '#ffffff',
     overflow: 'hidden',
     cursor: 'pointer',
-    transition: 'border-color 120ms ease, box-shadow 120ms ease',
-    outline: 'none',
+    transition: 'all 0.15s ease',
   },
   tileSelected: {
-    borderColor: '#0f172a',
-    boxShadow: '0 0 0 2px rgba(15, 23, 42, 0.14)',
+    border: '1.5px solid #09090b',
+    boxShadow: '0 0 0 1px #09090b',
   },
   tileImg: {
     width: '100%',
-    aspectRatio: '1 / 1',
-    objectFit: 'contain',
-    display: 'block',
-    backgroundColor: '#f8fafc',
+    height: '100%',
+    objectFit: 'cover',
   },
   tileFooter: {
+    position: 'absolute',
+    bottom: 0,
+    insetInline: 0,
+    padding: '4px 6px',
+    background: 'linear-gradient(to top, rgba(9, 9, 11, 0.75) 0%, transparent 100%)',
     display: 'flex',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 4,
-    padding: '5px 7px',
-    borderTop: '1px solid #f1f5f9',
+    color: '#ffffff',
+    fontSize: 10,
   },
-  tileAngle: { fontSize: 11, fontWeight: 600, color: '#0f172a', whiteSpace: 'nowrap' },
-  tileType: { fontSize: 10, color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  tileAngle: {
+    fontWeight: 500,
+  },
+  tileType: {
+    opacity: 0.8,
+  },
   checkbox: {
     position: 'absolute',
     top: 6,
     left: 6,
     width: 18,
     height: 18,
-    borderRadius: 5,
-    border: '1.5px solid',
+    borderRadius: 4,
+    border: '1px solid #d4d4d8',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1415,28 +1420,28 @@ const styles: Record<string, React.CSSProperties> = {
     position: 'absolute',
     top: 6,
     right: 6,
-    width: 22,
-    height: 22,
-    borderRadius: 6,
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.9)',
     border: 'none',
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    color: '#475569',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    cursor: 'zoom-in',
-    boxShadow: '0 1px 3px rgba(15,23,42,0.12)',
+    cursor: 'pointer',
+    opacity: 0,
+    transition: 'opacity 0.15s ease',
   },
   tileRemove: {
     position: 'absolute',
     top: 6,
     right: 6,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    border: 'none',
-    backgroundColor: 'rgba(15,23,42,0.75)',
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    backgroundColor: '#09090b',
     color: '#ffffff',
+    border: 'none',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1444,135 +1449,175 @@ const styles: Record<string, React.CSSProperties> = {
   },
   emptyState: {
     height: '100%',
-    minHeight: 180,
+    minHeight: 240,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
     textAlign: 'center',
+    gap: 6,
   },
-  configuredSummaryBar: {
+  emptyIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    border: '1px solid #e4e4e7',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  configuredBar: {
+    marginTop: 10,
+    paddingTop: 8,
+    borderTop: '1px solid #f4f4f5',
     display: 'flex',
     alignItems: 'center',
     gap: 8,
-    padding: '6px 10px',
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
-    border: '1px solid #e2e8f0',
   },
-  configuredSlotChip: {
+  configuredPill: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 4,
     padding: '3px 8px',
     borderRadius: 6,
-    border: '1px solid',
+    border: '1px solid #e4e4e7',
     fontSize: 11,
     cursor: 'pointer',
-    color: '#0f172a',
+    transition: 'all 0.15s ease',
   },
-  advancedToggle: {
+  footer: {
+    height: 56,
+    padding: '0 20px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderTop: '1px solid #f4f4f5',
+    backgroundColor: '#ffffff',
+    flexShrink: 0,
+  },
+  settingsToggle: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '4px 8px',
+    borderRadius: 6,
+    border: '1px solid #e4e4e7',
+    backgroundColor: '#ffffff',
+    color: '#18181b',
+    fontSize: 11,
+    cursor: 'pointer',
+  },
+  cancelBtn: {
+    height: 34,
+    padding: '0 14px',
+    borderRadius: 8,
+    border: '1px solid #e4e4e7',
+    backgroundColor: '#ffffff',
+    color: '#18181b',
+    fontSize: 12,
+    fontWeight: 500,
+    cursor: 'pointer',
+  },
+  primaryBtn: {
+    height: 34,
+    padding: '0 16px',
+    borderRadius: 8,
+    border: 'none',
+    backgroundColor: '#09090b',
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 500,
     display: 'flex',
     alignItems: 'center',
     gap: 6,
-    background: 'none',
-    border: 'none',
-    padding: 0,
-    fontSize: 12,
-    fontWeight: 600,
-    color: '#334155',
-    cursor: 'pointer',
-    textAlign: 'left',
   },
-  advancedBox: {
+  settingsPopover: {
+    position: 'absolute',
+    bottom: 60,
+    left: 20,
+    width: 440,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    border: '1px solid #e4e4e7',
+    boxShadow: '0 12px 30px rgba(9, 9, 11, 0.12)',
+    padding: 14,
     display: 'flex',
     flexDirection: 'column',
     gap: 10,
-    padding: 12,
-    borderRadius: 10,
-    backgroundColor: '#f8fafc',
-    border: '1px solid #e2e8f0',
+    zIndex: 20,
   },
-  settingRow: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
-  settingLabel: { fontSize: 12, color: '#64748b', minWidth: 40 },
+  settingRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+  },
+  settingLabel: {
+    fontSize: 11,
+    color: '#71717a',
+    width: 52,
+  },
   segment: {
     display: 'inline-flex',
+    borderRadius: 6,
+    border: '1px solid #e4e4e7',
     padding: 2,
-    borderRadius: 8,
-    backgroundColor: '#e2e8f0',
+    backgroundColor: '#f4f4f5',
   },
   segmentItem: {
+    padding: '3px 9px',
+    borderRadius: 4,
     border: 'none',
-    background: 'transparent',
-    padding: '4px 12px',
-    borderRadius: 6,
-    fontSize: 12,
+    backgroundColor: 'transparent',
+    color: '#71717a',
+    fontSize: 11,
     fontWeight: 500,
-    color: '#475569',
     cursor: 'pointer',
   },
   segmentActive: {
     backgroundColor: '#ffffff',
-    color: '#0f172a',
-    fontWeight: 600,
-    boxShadow: '0 1px 2px rgba(15,23,42,0.12)',
+    color: '#09090b',
+    boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
   },
   textarea: {
     width: '100%',
-    padding: '8px 10px',
-    borderRadius: 8,
-    border: '1px solid #cbd5e1',
-    fontSize: 12,
-    lineHeight: 1.5,
-    resize: 'none',
+    borderRadius: 6,
+    border: '1px solid #e4e4e7',
+    padding: '6px 8px',
+    fontSize: 11,
     outline: 'none',
-    boxSizing: 'border-box',
+    resize: 'none',
     fontFamily: 'inherit',
-    backgroundColor: '#ffffff',
-  },
-  footer: {
-    padding: '12px 20px',
-    backgroundColor: '#f8fafc',
-    borderTop: '1px solid #f1f5f9',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-  },
-  cancelButton: {
-    height: 36,
-    padding: '0 16px',
-    borderRadius: 8,
-    border: '1px solid #e2e8f0',
-    backgroundColor: '#ffffff',
-    color: '#475569',
-    fontSize: 13,
-    fontWeight: 500,
-    cursor: 'pointer',
-  },
-  primaryButton: {
-    height: 36,
-    padding: '0 18px',
-    borderRadius: 8,
-    border: 'none',
-    backgroundColor: '#0f172a',
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: 600,
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    boxShadow: '0 2px 4px rgba(15, 23, 42, 0.15)',
-    whiteSpace: 'nowrap',
+    color: '#09090b',
   },
   lightbox: {
     position: 'fixed',
     inset: 0,
-    zIndex: 10001,
-    backgroundColor: 'rgba(15, 23, 42, 0.78)',
+    backgroundColor: 'rgba(9, 9, 11, 0.8)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    cursor: 'zoom-out',
+    zIndex: 10000,
+  },
+  lightboxBox: {
+    position: 'relative',
+    maxWidth: '90vw',
+    maxHeight: '90vh',
+  },
+  lightboxImg: {
+    maxWidth: '85vw',
+    maxHeight: '85vh',
+    objectFit: 'contain',
+    borderRadius: 8,
+  },
+  lightboxClose: {
+    position: 'absolute',
+    top: -36,
+    right: 0,
+    color: '#ffffff',
+    border: 'none',
+    backgroundColor: 'transparent',
+    cursor: 'pointer',
   },
 }
