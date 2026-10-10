@@ -75,6 +75,66 @@ GARMENT_SLOTS: dict[str, str] = {
     "other": "其他",
 }
 
+# 预设常用换装部位及其标准指令定义（规范电商换装术语，杜绝敏感词）
+PRESET_SLOTS: dict[str, dict[str, Any]] = {
+    "top": {
+        "key": "top",
+        "label": "上衣",
+        "region": "上身躯干部位",
+        "replace_directive": "将图1人物的上身衣物替换为参考图中的上衣商品，领口、袖子与下摆自然贴合模特身体姿态与轮廓。",
+        "keep_directive": "上身衣物保持图1原样不变，不得改变其颜色、款式与版型。",
+    },
+    "bottom": {
+        "key": "bottom",
+        "label": "裤子/下装",
+        "region": "下身腿部区域",
+        "replace_directive": "将图1人物的下装（裤子/裙子）替换为参考图中的下装商品，腰部贴合与裤腿垂坠符合人体站姿。",
+        "keep_directive": "下装裤子/裙子保持图1原样不变，原有版型、垂坠与色彩均不改变。",
+    },
+    "shoes": {
+        "key": "shoes",
+        "label": "鞋子",
+        "region": "脚部区域",
+        "replace_directive": "将图1人物脚上的鞋履替换为参考图中的鞋子，透视角度、鞋型与地面阴影自然贴合脚型与站立地面。",
+        "keep_directive": "脚部鞋履保持图1原样不变，不得改变鞋型或颜色。",
+    },
+    "hat": {
+        "key": "hat",
+        "label": "帽子/头饰",
+        "region": "头部发顶区域",
+        "replace_directive": "替换或佩戴参考图中的帽子/头饰商品，帽檐角度与发型头型自然贴合，严禁遮挡或修改脸部五官特征。",
+        "keep_directive": "头部与发型保持图1原样，不得擅自添加或更改帽子。",
+    },
+    "outerwear": {
+        "key": "outerwear",
+        "label": "外套",
+        "region": "外层服装区域",
+        "replace_directive": "将图1人物的外层外套替换为参考图中的外套商品（或在内搭外层自然穿上该外套），版型轮廓与门襟细节严格参照参考图。",
+        "keep_directive": "外套保持图1原样不变（若原图无外套则不额外添加）。",
+    },
+    "dress": {
+        "key": "dress",
+        "label": "连衣裙/连体衣",
+        "region": "全身裙装区域",
+        "replace_directive": "将图1人物身上的服装替换为参考图中的连衣裙商品，裙摆垂坠褶皱与腰线比例自然真实。",
+        "keep_directive": "全身裙装保持图1原样不变。",
+    },
+    "bag": {
+        "key": "bag",
+        "label": "包袋",
+        "region": "配包区域",
+        "replace_directive": "将图1中的包袋替换为参考图中的包袋商品，背带贴合身体曲线，包身立体轮廓真实呈现。",
+        "keep_directive": "包袋保持图1原样不变。",
+    },
+    "accessory": {
+        "key": "accessory",
+        "label": "配饰/眼镜",
+        "region": "饰品区域",
+        "replace_directive": "将图1中的对应饰品替换为参考图中的配饰商品，细节精致且与整体服饰协调。",
+        "keep_directive": "原有饰品与配件保持原样不变。",
+    },
+}
+
 IMAGE_TYPE_LABELS: dict[str, str] = {
     "model": "真人模特图",
     "mannequin": "人台/隐形模特图",
@@ -529,25 +589,37 @@ def _describe_garment(g: dict[str, Any]) -> str:
 
 def build_outfit_prompt(
     *,
-    analysis: Optional[dict[str, Any]],
+    analysis: Optional[dict[str, Any]] = None,
     references: list[dict[str, Any]],
-    target_garment_ids: list[str],
+    target_garment_ids: Optional[list[str]] = None,
+    target_slots: Optional[list[str]] = None,
     extra_prompt: str = "",
 ) -> str:
     """拼装内置换装 prompt。
 
     references 顺序即上传顺序：图1 为原图，references[i] 对应图 i+2。
-    每个 reference: {sku, type_label, angle, source: library|upload}
+    每个 reference: {sku, type_label, angle, source: library|upload, slot?: str}
     """
     analysis = analysis or {}
     image_type = analysis.get("image_type") or "other"
     garments: list[dict[str, Any]] = analysis.get("garments") or []
-    targets = [g for g in garments if g.get("id") in set(target_garment_ids or [])]
+    target_ids_set = set(target_garment_ids or [])
+    targets = [g for g in garments if g.get("id") in target_ids_set]
     keep = [g for g in garments if g not in targets]
 
-    # 按 SKU 分组，同一 SKU 的多张图是同一件商品的不同角度
+    # 规范化目标部位列表
+    raw_slots = [str(s).strip().lower() for s in (target_slots or []) if str(s).strip()]
+    active_slots: list[str] = list(dict.fromkeys(
+        raw_slots + [g.get("slot") for g in targets if g.get("slot")]
+    ))
+
+    # 按 SKU 和 部位 分组，同一 SKU 的多张图是同一件商品的不同角度
     groups: "OrderedDict[str, list[int]]" = OrderedDict()
+    slot_to_indices: dict[str, list[int]] = {}
     for idx, ref in enumerate(references):
+        ref_slot = str(ref.get("slot") or "").strip().lower()
+        if ref_slot:
+            slot_to_indices.setdefault(ref_slot, []).append(idx + 2)
         key = ref.get("sku") or f"上传素材{idx + 1}"
         groups.setdefault(key, []).append(idx + 2)
 
@@ -555,7 +627,8 @@ def build_outfit_prompt(
         return "、".join(f"图{i}" for i in indices)
 
     lines: list[str] = []
-    is_person = image_type in ("model", "mannequin")
+    has_specific_targets = bool(targets or active_slots)
+    is_person = image_type in ("model", "mannequin") or (image_type in ("", "other") and has_specific_targets)
     if is_person:
         lines.append("任务：电商虚拟换装（virtual try-on）。以图1为底图，把参考图中的服饰穿到图1的人物身上，输出一张换装后的完整照片。")
     else:
@@ -567,24 +640,51 @@ def build_outfit_prompt(
     lines.append(f"- 图1：原图（底图）{('，' + summary) if summary else ''}。")
     for sku, indices in groups.items():
         meta = [references[i - 2] for i in indices]
+        ref_slot = next((m.get("slot") for m in meta if m.get("slot")), "")
+        slot_tag = f"【{PRESET_SLOTS.get(ref_slot, {}).get('label') or GARMENT_SLOTS.get(ref_slot, ref_slot)}】" if ref_slot else ""
         angle_desc = "、".join(
             f"图{i}={m.get('angle') or '素材'}{('/' + m['type_label']) if m.get('type_label') else ''}"
             for i, m in zip(indices, meta)
         )
         if len(indices) > 1:
-            lines.append(f"- {image_refs(indices)}：同一件商品（货号 {sku}）的不同角度素材（{angle_desc}），请综合多个角度理解它的完整外观。")
+            lines.append(f"- {image_refs(indices)}：{slot_tag}同一件商品（货号 {sku}）的不同角度素材（{angle_desc}），请综合多个角度理解它的完整外观。")
         else:
-            lines.append(f"- {image_refs(indices)}：商品（货号 {sku}）素材（{angle_desc}）。")
+            lines.append(f"- {image_refs(indices)}：{slot_tag}商品（货号 {sku}）素材（{angle_desc}）。")
     if len(groups) > 1:
         lines.append("- 不同货号是不同的商品，需要分别穿戴/替换到各自对应的部位，不要把它们融合成一件。")
 
     lines.append("")
     lines.append("替换要求：")
-    if targets:
+    if raw_slots:
+        slot_lines: list[str] = []
+        for slot in active_slots:
+            slot_meta = PRESET_SLOTS.get(slot, {})
+            slot_label = slot_meta.get("label") or GARMENT_SLOTS.get(slot, slot)
+            region = slot_meta.get("region", "")
+            region_str = f"（{region}）" if region else ""
+            img_indices = slot_to_indices.get(slot) or []
+            target_img_desc = f"{image_refs(img_indices)}展示的" if img_indices else "参考图中对应的"
+
+            base_directive = slot_meta.get("replace_directive") or f"将图1人物该部位的服饰替换为{target_img_desc}{slot_label}商品。"
+            if img_indices and "参考图中的" in base_directive:
+                directive = base_directive.replace("参考图中的", f"{target_img_desc}")
+            else:
+                directive = base_directive
+
+            # 若 VLM 识别到了原图对应的服饰
+            vlm_items = [g for g in targets if g.get("slot") == slot]
+            if vlm_items:
+                vlm_desc = "、".join(_describe_garment(g) for g in vlm_items)
+                slot_lines.append(f"  * 【{slot_label}】{region_str}：将图1人物原有的【{vlm_desc}】替换为{target_img_desc}{slot_label}商品。{directive}")
+            else:
+                slot_lines.append(f"  * 【{slot_label}】{region_str}：{directive}")
+        lines.append("- 只替换图1中的以下指定部位：\n" + "\n".join(slot_lines))
+    elif targets:
         target_desc = "；".join(f"{g.get('slot_label')}：{_describe_garment(g)}" for g in targets)
         lines.append(f"- 只替换图1中的这些部位：{target_desc}。用参考图中对应品类的商品替换它们。")
     else:
         lines.append("- 自动识别参考图商品的品类（如帽子、上衣、裤子、鞋），只替换图1中相同品类、相同部位的服饰。")
+
     lines.append("- 商品外观必须与参考图严格一致：颜色与色号、图案与印花、logo 与文字、材质质感、版型廓形、长度比例、领口袖口、纽扣拉链、缝线等细节都不能改动或臆造。")
     lines.append("- 参考图中的背景、阴影、衣架、模特、白底边框等都不是商品本身，忽略它们。")
     if is_person:
@@ -598,11 +698,20 @@ def build_outfit_prompt(
         subject = analysis.get("subject") or {}
         pose = "，".join(p for p in (subject.get("pose"), subject.get("view"), subject.get("framing")) if p)
         lines.append(f"- 人物身份：脸部五官、表情、发型、肤色、体型与手部完全不变{('；姿态与取景：' + pose) if pose else '；姿态与取景不变'}。")
+    if raw_slots:
+        unselected_core = [
+            PRESET_SLOTS[s]["label"]
+            for s in ("top", "bottom", "shoes", "hat", "outerwear", "dress")
+            if s not in raw_slots and not any(g.get("slot") == s for g in targets)
+        ]
+        if unselected_core:
+            lines.append(f"- 未选择替换的部位（如{'、'.join(unselected_core)}）严格保持图1原样不变，不得改变颜色、版型或款式。")
     if keep:
         keep_desc = "、".join(_describe_garment(g) for g in keep)
         lines.append(f"- 未被替换的服饰与配饰保持原样：{keep_desc}。")
-    else:
+    elif not raw_slots:
         lines.append("- 与本次替换无关的服饰、配饰保持原样。")
+
     background = analysis.get("background")
     lighting = analysis.get("lighting")
     env = "；".join(p for p in (f"背景：{background}" if background else "", f"光线：{lighting}" if lighting else "") if p)

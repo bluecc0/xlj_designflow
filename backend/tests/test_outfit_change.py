@@ -168,6 +168,51 @@ class PromptAndHelpersTest(unittest.TestCase):
         self.assertIn("商品替换", prompt)
         self.assertIn("自动识别参考图商品的品类", prompt)
 
+    def test_prompt_with_target_slots_no_vlm_generates_safe_region_instructions(self) -> None:
+        prompt = outfit_change.build_outfit_prompt(
+            analysis=None,
+            references=[
+                {"sku": "TOP1", "slot": "top", "type_label": "白底图", "angle": "正面"},
+                {"sku": "PANT1", "slot": "bottom", "type_label": "白底图", "angle": "正面"},
+            ],
+            target_slots=["top", "bottom"],
+        )
+        # 指定部位自动识别为虚拟换装任务
+        self.assertIn("电商虚拟换装", prompt)
+        # 包含指定部位
+        self.assertIn("【上衣】", prompt)
+        self.assertIn("【裤子/下装】", prompt)
+        self.assertIn("图2展示的", prompt)
+        self.assertIn("图3展示的", prompt)
+        # 保护未选核心部位
+        self.assertIn("鞋子", prompt)
+        self.assertIn("帽子/头饰", prompt)
+        self.assertIn("未选择替换的部位", prompt)
+        # 安全规范：严禁出现敏感词
+        self.assertNotIn("脱下", prompt)
+        self.assertNotIn("脱去", prompt)
+        self.assertNotIn("裸露", prompt)
+
+    def test_prompt_with_slots_and_vlm_fusion(self) -> None:
+        analysis = {
+            "image_type": "model",
+            "summary": "女模特",
+            "garments": [
+                {"id": "g1", "slot": "top", "slot_label": "上衣", "name": "短袖T恤", "color": "白色"},
+                {"id": "g2", "slot": "shoes", "slot_label": "鞋", "name": "板鞋", "color": "白色"},
+            ],
+        }
+        prompt = outfit_change.build_outfit_prompt(
+            analysis=analysis,
+            references=[{"sku": "A1", "slot": "top", "type_label": "白底图", "angle": "主图"}],
+            target_slots=["top"],
+            target_garment_ids=["g1"],
+        )
+        self.assertIn("【上衣】", prompt)
+        self.assertIn("白色短袖T恤", prompt)
+        self.assertIn("未被替换的服饰与配饰保持原样：白色板鞋", prompt)
+        self.assertNotIn("脱下", prompt)
+
 
 class OutfitEndpointTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -292,6 +337,32 @@ class OutfitEndpointTest(unittest.TestCase):
         self.assertEqual(meta["reference_images"][3]["label"], "图4 · 本地上传 / 上传素材 1")
         job = job_store.load_ai_image_job(body["job_id"])
         self.assertEqual(job["status"], "processing")
+
+    def test_outfit_change_endpoint_accepts_target_slots(self) -> None:
+        captured: dict = {}
+
+        async def fake_background(**kwargs):
+            captured.update(kwargs)
+
+        with patch.object(main, "_run_ai_image_background", new=fake_background):
+            resp = self.client.post(
+                "/ai-image/outfit-change",
+                files=[
+                    ("image", ("src.jpg", _jpg_bytes((750, 1000)), "image/jpeg")),
+                ],
+                data={
+                    "assets": json.dumps([
+                        {"sku": "SKU9", "slot": "top", "asset_type": "white", "path": "SKU9.png", "angle": "主图"},
+                    ]),
+                    "target_slots": json.dumps(["top", "shoes"]),
+                    "model": "gpt-image-2.5",
+                },
+            )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertIn("【上衣】", captured["prompt"])
+        self.assertIn("【鞋子】", captured["prompt"])
+        meta = captured["request_meta"]["outfit"]
+        self.assertEqual(meta["target_slots"], ["top", "shoes"])
 
     def test_outfit_change_validation(self) -> None:
         src = ("image", ("src.jpg", _jpg_bytes(), "image/jpeg"))

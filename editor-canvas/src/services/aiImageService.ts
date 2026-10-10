@@ -502,6 +502,7 @@ export interface OutfitAnalysis {
 export interface OutfitAsset {
   id: string
   sku: string
+  slot?: string
   asset_type: string
   type_label: string
   folder: string
@@ -511,6 +512,24 @@ export interface OutfitAsset {
   url: string
   thumb_url: string
 }
+
+export interface PresetSlotInfo {
+  key: string
+  label: string
+  desc: string
+  region?: string
+}
+
+export const PRESET_SLOTS: PresetSlotInfo[] = [
+  { key: 'top', label: '上衣', desc: 'T恤、衬衫、卫衣、针织衫等', region: '上身躯干部位' },
+  { key: 'bottom', label: '裤子/下装', desc: '长裤、短裤、半裙、牛仔裤等', region: '下身腿部区域' },
+  { key: 'shoes', label: '鞋子', desc: '运动鞋、皮鞋、板鞋、靴子等', region: '脚部区域' },
+  { key: 'hat', label: '帽子', desc: '棒球帽、渔夫帽、鸭舌帽等', region: '头部发顶区域' },
+  { key: 'outerwear', label: '外套', desc: '夹克、风衣、西装、羽绒服等', region: '外层躯干部位' },
+  { key: 'dress', label: '连衣裙', desc: '连身裙、套装等', region: '全身躯干区域' },
+  { key: 'bag', label: '包袋', desc: '单肩包、斜挎包、手提包等', region: '手提/肩挎区域' },
+  { key: 'accessory', label: '配饰', desc: '眼镜、围巾、皮带等', region: '细节配饰部位' },
+]
 
 export interface OutfitAssetSearchResult {
   library_exists: boolean
@@ -563,8 +582,10 @@ export interface OutfitChangeRequest {
   sourceName?: string
   assets: OutfitAsset[]
   uploads: File[]
+  uploadSlots?: string[]
   analysis: OutfitAnalysis | null
   targetGarmentIds: string[]
+  targetSlots?: string[]
   extraPrompt: string
   model: 'gpt-image-2.5' | 'nano-banana-pro'
   resolution: '1K' | '2K'
@@ -584,12 +605,22 @@ export async function submitOutfitChange(
   fd.append(
     'assets',
     JSON.stringify(
-      req.assets.map((a) => ({ sku: a.sku, asset_type: a.asset_type, path: a.path, angle: a.angle }))
+      req.assets.map((a) => ({
+        sku: a.sku,
+        slot: a.slot || '',
+        asset_type: a.asset_type,
+        path: a.path,
+        angle: a.angle,
+      }))
     )
   )
   req.uploads.forEach((file) => fd.append('uploads', file))
+  if (req.uploadSlots && req.uploadSlots.length > 0) {
+    fd.append('upload_slots', JSON.stringify(req.uploadSlots))
+  }
   if (req.analysis) fd.append('analysis', JSON.stringify(req.analysis))
   fd.append('target_garments', JSON.stringify(req.targetGarmentIds))
+  fd.append('target_slots', JSON.stringify(req.targetSlots || []))
   fd.append('extra_prompt', req.extraPrompt || '')
   fd.append('model', req.model)
   fd.append('resolution', req.resolution)

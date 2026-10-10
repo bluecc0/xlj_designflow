@@ -11,6 +11,7 @@ import {
   Search,
   Shirt,
   Sparkles,
+  Trash2,
   X,
   ZoomIn,
 } from 'lucide-react'
@@ -18,11 +19,13 @@ import type { CanvasImage } from '../types'
 import {
   analyzeOutfit,
   normalizeAssetUrl,
+  PRESET_SLOTS,
   searchOutfitAssets,
   type OutfitAnalysis,
   type OutfitAsset,
   type OutfitAssetSearchResult,
   type OutfitChangeRequest,
+  type PresetSlotInfo,
 } from '../services/aiImageService'
 
 interface Props {
@@ -35,19 +38,40 @@ interface UploadItem {
   id: string
   file: File
   previewUrl: string
+  slot: string
+}
+
+interface SlotState {
+  skuInput: string
+  searchResult: OutfitAssetSearchResult | null
+  searching: boolean
+  searchError: string | null
+  typeFilter: string
+  selected: OutfitAsset[]
+  uploads: UploadItem[]
 }
 
 type AnalysisState =
+  | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'done'; data: OutfitAnalysis }
   | { status: 'error'; error: string }
-  | { status: 'skipped' }
 
 const DEFAULT_MAX_REFS = 8
 const ACCEPTED_UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
-// 跨次打开记住上一次的货号与生成设置，便于同款连续换装
-let lastSkuInput = ''
+const SLOT_ICONS: Record<string, string> = {
+  top: '👕',
+  bottom: '👖',
+  shoes: '👟',
+  hat: '🧢',
+  outerwear: '🧥',
+  dress: '👗',
+  bag: '👜',
+  accessory: '✨',
+}
+
+// 记住全局模型配置
 let lastModel: OutfitChangeRequest['model'] = 'gpt-image-2.5'
 let lastResolution: OutfitChangeRequest['resolution'] = '1K'
 
@@ -57,18 +81,31 @@ const MODEL_OPTIONS: { key: OutfitChangeRequest['model']; label: string; desc: s
 ]
 
 export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit }) => {
-  const [analysis, setAnalysis] = useState<AnalysisState>({ status: 'loading' })
+  // ── 1. VLM 识别状态（默认 idle，用户自主点击触发） ──
+  const [analysis, setAnalysis] = useState<AnalysisState>({ status: 'idle' })
   const [targetIds, setTargetIds] = useState<string[]>([])
 
-  const [skuInput, setSkuInput] = useState(lastSkuInput)
-  const [searching, setSearching] = useState(false)
-  const [searchError, setSearchError] = useState<string | null>(null)
-  const [searchResult, setSearchResult] = useState<OutfitAssetSearchResult | null>(null)
-  const [typeFilter, setTypeFilter] = useState<string>('all')
-  const [selected, setSelected] = useState<OutfitAsset[]>([])
-  const [uploads, setUploads] = useState<UploadItem[]>([])
+  // ── 2. 部位驱动状态 ──
+  const [activeSlotKey, setActiveSlotKey] = useState<string>('top')
+  const [slotStates, setSlotStates] = useState<Record<string, SlotState>>(() => {
+    const initial: Record<string, SlotState> = {}
+    PRESET_SLOTS.forEach((slot) => {
+      initial[slot.key] = {
+        skuInput: '',
+        searchResult: null,
+        searching: false,
+        searchError: null,
+        typeFilter: 'all',
+        selected: [],
+        uploads: [],
+      }
+    })
+    return initial
+  })
+
   const [isDragOver, setIsDragOver] = useState(false)
 
+  // ── 3. 生成参数 ──
   const [model, setModel] = useState<OutfitChangeRequest['model']>(lastModel)
   const [resolution, setResolution] = useState<OutfitChangeRequest['resolution']>(lastResolution)
   const [batchCount, setBatchCount] = useState(1)
@@ -81,20 +118,65 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
 
   const skuInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const uploadsRef = useRef<UploadItem[]>([])
-  uploadsRef.current = uploads
 
-  const maxRefs = searchResult?.max_references || DEFAULT_MAX_REFS
-  const totalSelected = selected.length + uploads.length
+  // 当前激活部位的信息与状态
+  const activeSlot = useMemo(
+    () => PRESET_SLOTS.find((s) => s.key === activeSlotKey) || PRESET_SLOTS[0],
+    [activeSlotKey]
+  )
+  const activeState = slotStates[activeSlotKey] || {
+    skuInput: '',
+    searchResult: null,
+    searching: false,
+    searchError: null,
+    typeFilter: 'all',
+    selected: [],
+    uploads: [],
+  }
+
+  // 计算全局所有部位选中的素材总量
+  const allSelectedAssets = useMemo(() => {
+    return PRESET_SLOTS.flatMap((s) => slotStates[s.key]?.selected || [])
+  }, [slotStates])
+
+  const allUploads = useMemo(() => {
+    return PRESET_SLOTS.flatMap((s) => slotStates[s.key]?.uploads || [])
+  }, [slotStates])
+
+  const totalSelected = allSelectedAssets.length + allUploads.length
+  const maxRefs = DEFAULT_MAX_REFS
   const remaining = maxRefs - totalSelected
 
-  // ── 1. 打开即触发 VLM 分析 ──
+  // 已配置素材的部位列表
+  const configuredSlots = useMemo(() => {
+    return PRESET_SLOTS.filter((s) => {
+      const st = slotStates[s.key]
+      return st && (st.selected.length > 0 || st.uploads.length > 0)
+    })
+  }, [slotStates])
+
+  // 更新指定部位状态的 helper
+  const updateSlotState = useCallback((slotKey: string, patch: Partial<SlotState>) => {
+    setSlotStates((prev) => ({
+      ...prev,
+      [slotKey]: {
+        ...prev[slotKey],
+        ...patch,
+      },
+    }))
+  }, [])
+
+  // ── VLM 智能分析（用户手动触发） ──
   const runAnalysis = useCallback(() => {
     setAnalysis({ status: 'loading' })
     let cancelled = false
     analyzeOutfit(image.url)
       .then((data) => {
-        if (!cancelled) setAnalysis({ status: 'done', data })
+        if (!cancelled) {
+          setAnalysis({ status: 'done', data })
+          // 若有识别出的部位，默认全部高亮选中
+          setTargetIds(data.garments.map((g) => g.id))
+        }
       })
       .catch((err: any) => {
         if (!cancelled) setAnalysis({ status: 'error', error: err?.message || '分析失败' })
@@ -104,22 +186,22 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
     }
   }, [image.url])
 
-  useEffect(() => runAnalysis(), [runAnalysis])
-
+  // 切换部位时聚焦输入框
   useEffect(() => {
     const t = setTimeout(() => skuInputRef.current?.focus(), 60)
     return () => clearTimeout(t)
-  }, [])
+  }, [activeSlotKey])
 
-  // 卸载时释放本地预览 URL
-  useEffect(
-    () => () => {
-      uploadsRef.current.forEach((u) => URL.revokeObjectURL(u.previewUrl))
-    },
-    []
-  )
+  // 卸载时释放所有本地预览 URL
+  useEffect(() => {
+    return () => {
+      Object.values(slotStates).forEach((st) => {
+        st.uploads.forEach((u) => URL.revokeObjectURL(u.previewUrl))
+      })
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Esc：先关大图预览，再关弹窗
+  // Esc 键监听
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
@@ -131,47 +213,60 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
     return () => window.removeEventListener('keydown', onKey, true)
   }, [preview, submitting, onClose])
 
-  const parsedSkus = useMemo(() => {
-    const tokens = skuInput.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean)
-    return Array.from(new Set(tokens))
-  }, [skuInput])
-
-  // ── 2. SKU 检索 ──
+  // ── 当前部位 SKU 检索 ──
   const handleSearch = async () => {
+    const tokens = activeState.skuInput
+      .split(/[,，\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const parsedSkus = Array.from(new Set(tokens))
+
     if (parsedSkus.length === 0) {
-      setSearchError('请输入商品货号（SKU）')
+      updateSlotState(activeSlotKey, { searchError: `请输入【${activeSlot.label}】商品货号（SKU）` })
       skuInputRef.current?.focus()
       return
     }
-    lastSkuInput = skuInput
-    setSearching(true)
-    setSearchError(null)
+
+    updateSlotState(activeSlotKey, { searching: true, searchError: null })
     try {
       const result = await searchOutfitAssets(parsedSkus)
-      setSearchResult(result)
-      setTypeFilter('all')
-      // 保留仍在新结果中的已选项
-      const ids = new Set(result.items.flatMap((it) => it.assets.map((a) => a.id + '|' + a.sku)))
-      setSelected((prev) => prev.filter((a) => ids.has(a.id + '|' + a.sku)))
+      // 保留当前部位已选择项中仍然有效的
+      const newAssetKeys = new Set(result.items.flatMap((it) => it.assets.map((a) => a.id + '|' + a.sku)))
+      const preservedSelected = activeState.selected.filter((a) => newAssetKeys.has(a.id + '|' + a.sku))
+
+      let errorMsg: string | null = null
       if (!result.library_exists) {
-        setSearchError('当前服务器未挂载素材库，可点击「本地上传」添加素材图')
+        errorMsg = '当前服务器未挂载素材库，可点击「本地上传」添加素材图'
       } else if (!result.items.some((it) => it.found)) {
-        setSearchError('素材库中未找到这些货号的素材图，请检查货号或使用本地上传')
+        errorMsg = `素材库中未找到货号素材图，请检查货号或使用本地上传`
       }
+
+      updateSlotState(activeSlotKey, {
+        searchResult: result,
+        typeFilter: 'all',
+        selected: preservedSelected,
+        searchError: errorMsg,
+      })
     } catch (err: any) {
-      setSearchError(err?.message || '检索失败')
+      updateSlotState(activeSlotKey, { searchError: err?.message || '检索失败' })
     } finally {
-      setSearching(false)
+      updateSlotState(activeSlotKey, { searching: false })
     }
   }
 
+  // 素材选中状态
   const assetKey = (a: OutfitAsset) => `${a.sku}|${a.id}`
-  const selectedKeys = useMemo(() => new Set(selected.map(assetKey)), [selected])
+  const activeSelectedKeys = useMemo(
+    () => new Set(activeState.selected.map(assetKey)),
+    [activeState.selected]
+  )
 
   const toggleAsset = (asset: OutfitAsset) => {
     const key = assetKey(asset)
-    if (selectedKeys.has(key)) {
-      setSelected((prev) => prev.filter((a) => assetKey(a) !== key))
+    if (activeSelectedKeys.has(key)) {
+      updateSlotState(activeSlotKey, {
+        selected: activeState.selected.filter((a) => assetKey(a) !== key),
+      })
       return
     }
     if (remaining <= 0) {
@@ -179,25 +274,34 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
       return
     }
     setSubmitError(null)
-    setSelected((prev) => [...prev, asset])
+    // 标记该资产属于当前部位
+    const assetWithSlot: OutfitAsset = { ...asset, slot: activeSlotKey }
+    updateSlotState(activeSlotKey, {
+      selected: [...activeState.selected, assetWithSlot],
+    })
   }
 
   const selectAllOfSku = (assets: OutfitAsset[]) => {
-    const toAdd = assets.filter((a) => !selectedKeys.has(assetKey(a)))
+    const toAdd = assets.filter((a) => !activeSelectedKeys.has(assetKey(a)))
     if (toAdd.length === 0) {
       const keys = new Set(assets.map(assetKey))
-      setSelected((prev) => prev.filter((a) => !keys.has(assetKey(a))))
+      updateSlotState(activeSlotKey, {
+        selected: activeState.selected.filter((a) => !keys.has(assetKey(a))),
+      })
       return
     }
     const allowed = toAdd.slice(0, Math.max(0, remaining))
     if (allowed.length < toAdd.length) {
       setSubmitError(`已达上限，仅添加了 ${allowed.length} 张（最多 ${maxRefs} 张）`)
     }
-    setSelected((prev) => [...prev, ...allowed])
+    const assetsWithSlot = allowed.map((a) => ({ ...a, slot: activeSlotKey }))
+    updateSlotState(activeSlotKey, {
+      selected: [...activeState.selected, ...assetsWithSlot],
+    })
   }
 
-  // ── 本地上传兜底 ──
-  const addFiles = (files: FileList | File[]) => {
+  // 本地上传兜底（归属于当前部位）
+  const addFilesToActiveSlot = (files: FileList | File[]) => {
     const list = Array.from(files).filter((f) => ACCEPTED_UPLOAD_TYPES.includes(f.type))
     if (list.length === 0) {
       setSubmitError('仅支持 PNG / JPG / WEBP 图片')
@@ -209,21 +313,33 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
     } else {
       setSubmitError(null)
     }
-    setUploads((prev) => [
-      ...prev,
-      ...allowed.map((file) => ({
-        id: 'up-' + Math.random().toString(36).slice(2, 10),
-        file,
-        previewUrl: URL.createObjectURL(file),
-      })),
-    ])
+    const newItems: UploadItem[] = allowed.map((file) => ({
+      id: 'up-' + Math.random().toString(36).slice(2, 10),
+      file,
+      previewUrl: URL.createObjectURL(file),
+      slot: activeSlotKey,
+    }))
+    updateSlotState(activeSlotKey, {
+      uploads: [...activeState.uploads, ...newItems],
+    })
   }
 
-  const removeUpload = (id: string) => {
-    setUploads((prev) => {
-      const hit = prev.find((u) => u.id === id)
-      if (hit) URL.revokeObjectURL(hit.previewUrl)
-      return prev.filter((u) => u.id !== id)
+  const removeUploadFromActiveSlot = (id: string) => {
+    const hit = activeState.uploads.find((u) => u.id === id)
+    if (hit) URL.revokeObjectURL(hit.previewUrl)
+    updateSlotState(activeSlotKey, {
+      uploads: activeState.uploads.filter((u) => u.id !== id),
+    })
+  }
+
+  const clearActiveSlot = () => {
+    activeState.uploads.forEach((u) => URL.revokeObjectURL(u.previewUrl))
+    updateSlotState(activeSlotKey, {
+      selected: [],
+      uploads: [],
+      searchResult: null,
+      searchError: null,
+      skuInput: '',
     })
   }
 
@@ -231,9 +347,8 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
     setTargetIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
   }
 
-  // ── 3. 提交 ──
-  const analysisPending = analysis.status === 'loading'
-  const canSubmit = totalSelected > 0 && !analysisPending && !submitting
+  // ── 提交换装 ──
+  const canSubmit = totalSelected > 0 && !submitting
 
   const handleSubmit = async () => {
     if (!canSubmit) return
@@ -241,14 +356,38 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
     setSubmitError(null)
     lastModel = model
     lastResolution = resolution
+
+    // 收集所有部位的素材与上传图片
+    const targetSlotsList: string[] = []
+    const gatheredAssets: OutfitAsset[] = []
+    const gatheredUploads: File[] = []
+    const gatheredUploadSlots: string[] = []
+
+    PRESET_SLOTS.forEach((slot) => {
+      const st = slotStates[slot.key]
+      if (!st) return
+      const hasAssets = st.selected.length > 0
+      const hasUploads = st.uploads.length > 0
+      if (hasAssets || hasUploads) {
+        targetSlotsList.push(slot.key)
+        st.selected.forEach((a) => gatheredAssets.push({ ...a, slot: slot.key }))
+        st.uploads.forEach((u) => {
+          gatheredUploads.push(u.file)
+          gatheredUploadSlots.push(slot.key)
+        })
+      }
+    })
+
     try {
       await onSubmit({
         sourceUrl: image.url,
         sourceName: image.name,
-        assets: selected,
-        uploads: uploads.map((u) => u.file),
+        assets: gatheredAssets,
+        uploads: gatheredUploads,
+        uploadSlots: gatheredUploadSlots,
         analysis: analysis.status === 'done' ? analysis.data : null,
         targetGarmentIds: analysis.status === 'done' ? targetIds : [],
+        targetSlots: targetSlotsList,
         extraPrompt: extraPrompt.trim(),
         model,
         resolution,
@@ -262,21 +401,23 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
 
   const availableTypes = useMemo(() => {
     const map = new Map<string, string>()
-    searchResult?.items.forEach((it) => it.assets.forEach((a) => map.set(a.asset_type, a.type_label)))
+    activeState.searchResult?.items.forEach((it) =>
+      it.assets.forEach((a) => map.set(a.asset_type, a.type_label))
+    )
     return Array.from(map.entries())
-  }, [searchResult])
+  }, [activeState.searchResult])
 
-  const submitLabel = analysisPending
-    ? '等待图片分析…'
-    : totalSelected === 0
-    ? '请先勾选素材图'
-    : `开始换装（${totalSelected} 张素材${batchCount > 1 ? ` · 出 ${batchCount} 张` : ''}）`
+  const submitLabel =
+    totalSelected === 0
+      ? '请在上方选择部位并勾选素材'
+      : `开始换装（${totalSelected} 张素材 · ${configuredSlots.length} 个部位${
+          batchCount > 1 ? ` · 出 ${batchCount} 张` : ''
+        }）`
 
   return (
     <div
       data-modal="outfit-change"
       style={styles.backdrop}
-      // 弹窗内的鼠标/键盘事件不能冒泡到画布（否则会触发框选、右键菜单、Delete 删除选中图等）
       onMouseDown={(e) => {
         e.stopPropagation()
         if (e.target === e.currentTarget && !submitting) onClose()
@@ -299,56 +440,86 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
               <Shirt size={18} strokeWidth={2.2} />
             </div>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: '#0f172a' }}>AI 换装</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#0f172a' }}>AI 虚拟换装</div>
               <div style={{ fontSize: 11, color: '#64748b' }}>
-                识别当前图片服饰 → 选择货号素材角度图 → 参考图生图，结果自动放到原图右侧
+                选择换装部位（如上衣、下装、鞋子）→ 输入货号添加素材图 → 提交生成，结果自动插入画布原图右侧
               </div>
             </div>
           </div>
-          <button type="button" onClick={onClose} disabled={submitting} style={styles.iconButton} title="关闭 (Esc)">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            style={styles.iconButton}
+            title="关闭 (Esc)"
+          >
             <X size={16} />
           </button>
         </div>
 
         <div style={styles.body}>
-          {/* ── 左栏：原图 + 分析 ── */}
+          {/* ── 左栏：原图 + 可选 VLM 分析 ── */}
           <div style={styles.leftCol}>
-            <div style={styles.sectionLabel}>原图</div>
+            <div style={styles.sectionLabel}>原图底图</div>
             <div style={styles.sourceBox} onClick={() => setPreview(normalizeAssetUrl(image.url))}>
               <img src={normalizeAssetUrl(image.url)} alt="" style={styles.sourceImg} draggable={false} />
             </div>
 
-            <div style={{ ...styles.sectionLabel, marginTop: 14, display: 'flex', justifyContent: 'space-between' }}>
-              <span>服饰识别</span>
+            <div
+              style={{
+                ...styles.sectionLabel,
+                marginTop: 14,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <span>原图服饰识别（可选）</span>
               {analysis.status === 'done' && (
                 <span style={styles.typeBadge}>{analysis.data.image_type_label}</span>
               )}
             </div>
 
+            {/* VLM 初始状态：展示触发按钮，不自动执行 */}
+            {analysis.status === 'idle' && (
+              <div style={styles.analysisBox}>
+                <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
+                  AI 智能分析原图已穿服饰，可辅助精准替换。无需识别也可直接在右侧选部位换装。
+                </div>
+                <button
+                  type="button"
+                  style={styles.vlmTriggerButton}
+                  onClick={() => runAnalysis()}
+                  title="点击启动视觉大模型解析图中穿搭"
+                >
+                  <Sparkles size={13} color="#4338ca" />
+                  <span>智能识别原图服饰</span>
+                </button>
+              </div>
+            )}
+
+            {/* VLM 正在加载：不阻塞右侧操作与提交 */}
             {analysis.status === 'loading' && (
               <div style={styles.analysisBox}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#475569', fontSize: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#4338ca', fontSize: 12, fontWeight: 500 }}>
                   <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                  <span>VLM 正在识别图中服饰…</span>
+                  <span>正在识别图中服饰…</span>
                 </div>
                 {[72, 54, 64].map((w, i) => (
                   <div key={i} style={{ ...styles.skeleton, width: `${w}%` }} />
                 ))}
-                <button
-                  type="button"
-                  style={styles.linkButton}
-                  onClick={() => setAnalysis({ status: 'skipped' })}
-                >
-                  跳过分析，直接换装
-                </button>
+                <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                  分析中不影响在右侧继续勾选素材与提交
+                </div>
               </div>
             )}
 
+            {/* VLM 失败：友好提示 */}
             {analysis.status === 'error' && (
               <div style={{ ...styles.analysisBox, borderColor: '#fde68a', backgroundColor: '#fffbeb' }}>
                 <div style={{ display: 'flex', gap: 6, fontSize: 12, color: '#92400e', lineHeight: 1.5 }}>
                   <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 2 }} />
-                  <span>识别失败：{analysis.error}。仍可直接换装，模型会自动判断替换部位。</span>
+                  <span>识别未成功：{analysis.error}。不影响正常换装，系统将按您选择的部位精准替换。</span>
                 </div>
                 <button type="button" style={styles.linkButton} onClick={() => runAnalysis()}>
                   <RefreshCw size={12} /> 重新识别
@@ -356,26 +527,18 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
               </div>
             )}
 
-            {analysis.status === 'skipped' && (
-              <div style={styles.analysisBox}>
-                <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
-                  已跳过识别，模型将根据素材品类自动替换对应部位。
-                </div>
-                <button type="button" style={styles.linkButton} onClick={() => runAnalysis()}>
-                  <RefreshCw size={12} /> 重新识别
-                </button>
-              </div>
-            )}
-
+            {/* VLM 完成：展示穿搭摘要与单品胶囊 */}
             {analysis.status === 'done' && (
               <div style={styles.analysisBox}>
                 {analysis.data.summary && (
-                  <div style={{ fontSize: 12, color: '#334155', lineHeight: 1.5 }}>{analysis.data.summary}</div>
+                  <div style={{ fontSize: 12, color: '#334155', lineHeight: 1.5 }}>
+                    {analysis.data.summary}
+                  </div>
                 )}
                 {analysis.data.garments.length > 0 ? (
                   <>
                     <div style={{ fontSize: 11, color: '#64748b' }}>
-                      点选要替换的部位（不选则按素材品类自动匹配）
+                      识别到的单品（点击定位对应部位）：
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                       {analysis.data.garments.map((g) => {
@@ -384,7 +547,13 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                           <button
                             key={g.id}
                             type="button"
-                            onClick={() => toggleTarget(g.id)}
+                            onClick={() => {
+                              toggleTarget(g.id)
+                              // 自动切换到对应部位 Tab
+                              if (g.slot && PRESET_SLOTS.some((s) => s.key === g.slot)) {
+                                setActiveSlotKey(g.slot)
+                              }
+                            }}
                             title={[g.color, g.material, g.details, g.position].filter(Boolean).join(' · ')}
                             style={{
                               ...styles.garmentChip,
@@ -405,51 +574,118 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                     </div>
                   </>
                 ) : (
-                  <div style={{ fontSize: 12, color: '#64748b' }}>未识别到明确的服饰，将按素材品类自动替换。</div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                    已完成识别，将按右侧选定的部位精准替换。
+                  </div>
                 )}
+                <button type="button" style={styles.linkButton} onClick={() => runAnalysis()}>
+                  <RefreshCw size={11} /> 重新识别
+                </button>
               </div>
             )}
           </div>
 
-          {/* ── 右栏：素材检索与勾选 ── */}
+          {/* ── 右栏：部位驱动导航与素材选择 ── */}
           <div style={styles.rightCol}>
-            <div style={{ ...styles.sectionLabel, display: 'flex', justifyContent: 'space-between' }}>
-              <span>换装素材</span>
-              <span style={{ fontWeight: 500, color: remaining <= 0 ? '#ef4444' : '#64748b' }}>
-                已选 {totalSelected} / {maxRefs}
-              </span>
+            {/* 1. 部位选择 Tabs 导航 */}
+            <div>
+              <div style={{ ...styles.sectionLabel, display: 'flex', justifyContent: 'space-between' }}>
+                <span>选择替换部位</span>
+                <span style={{ fontWeight: 500, color: remaining <= 0 ? '#ef4444' : '#64748b' }}>
+                  已选 {totalSelected} / {maxRefs} 张参考图
+                </span>
+              </div>
+              <div style={styles.slotTabsContainer}>
+                {PRESET_SLOTS.map((slot) => {
+                  const isActive = slot.key === activeSlotKey
+                  const st = slotStates[slot.key]
+                  const count = (st?.selected.length || 0) + (st?.uploads.length || 0)
+                  const icon = SLOT_ICONS[slot.key] || '👕'
+                  return (
+                    <button
+                      key={slot.key}
+                      type="button"
+                      onClick={() => setActiveSlotKey(slot.key)}
+                      style={{
+                        ...styles.slotTab,
+                        ...(isActive ? styles.slotTabActive : null),
+                      }}
+                    >
+                      <span style={{ fontSize: 14 }}>{icon}</span>
+                      <span style={{ fontWeight: isActive ? 600 : 500 }}>{slot.label}</span>
+                      {count > 0 && (
+                        <span
+                          style={{
+                            ...styles.slotCountBadge,
+                            backgroundColor: isActive ? '#ffffff' : '#0f172a',
+                            color: isActive ? '#0f172a' : '#ffffff',
+                          }}
+                        >
+                          {count}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
             </div>
 
+            {/* 2. 当前部位操作指示与检索栏 */}
+            <div style={styles.activeSlotHeader}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 16 }}>{SLOT_ICONS[activeSlot.key] || '👕'}</span>
+                <span style={{ fontWeight: 600, fontSize: 13, color: '#0f172a' }}>
+                  当前部位：【{activeSlot.label}】
+                </span>
+                <span style={{ fontSize: 12, color: '#64748b' }}>（{activeSlot.region || activeSlot.desc}）</span>
+              </div>
+              {(activeState.selected.length > 0 || activeState.uploads.length > 0) && (
+                <button
+                  type="button"
+                  onClick={clearActiveSlot}
+                  style={styles.clearSlotButton}
+                  title="清空当前部位已选素材"
+                >
+                  <Trash2 size={12} /> 清空本部位素材
+                </button>
+              )}
+            </div>
+
+            {/* SKU 检索与上传输入行 */}
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={styles.searchBox}>
                 <Search size={14} color="#94a3b8" />
                 <input
                   ref={skuInputRef}
-                  value={skuInput}
-                  onChange={(e) => setSkuInput(e.target.value)}
+                  value={activeState.skuInput}
+                  onChange={(e) => updateSlotState(activeSlotKey, { skuInput: e.target.value })}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault()
                       handleSearch()
                     }
                   }}
-                  placeholder="输入货号 SKU，多个用逗号分隔，回车检索"
+                  placeholder={`输入【${activeSlot.label}】货号 SKU，按回车检索素材库`}
                   style={styles.searchInput}
                 />
               </div>
               <button
                 type="button"
                 onClick={handleSearch}
-                disabled={searching}
+                disabled={activeState.searching}
                 style={{ ...styles.secondaryButton, minWidth: 72 }}
               >
-                {searching ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : '检索'}
+                {activeState.searching ? (
+                  <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                ) : (
+                  '检索素材'
+                )}
               </button>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 style={styles.secondaryButton}
-                title="素材库没有时，可上传本地服饰图"
+                title={`为【${activeSlot.label}】上传本地商品图片`}
               >
                 <ImagePlus size={14} /> 本地上传
               </button>
@@ -460,23 +696,24 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 multiple
                 style={{ display: 'none' }}
                 onChange={(e) => {
-                  if (e.target.files) addFiles(e.target.files)
+                  if (e.target.files) addFilesToActiveSlot(e.target.files)
                   e.target.value = ''
                 }}
               />
             </div>
 
+            {/* 角度/品类筛选器 */}
             {availableTypes.length > 1 && (
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {[['all', '全部'] as [string, string], ...availableTypes].map(([key, label]) => (
+                {[['all', '全部角度'] as [string, string], ...availableTypes].map(([key, label]) => (
                   <button
                     key={key}
                     type="button"
-                    onClick={() => setTypeFilter(key)}
+                    onClick={() => updateSlotState(activeSlotKey, { typeFilter: key })}
                     style={{
                       ...styles.filterChip,
-                      backgroundColor: typeFilter === key ? '#0f172a' : '#f1f5f9',
-                      color: typeFilter === key ? '#ffffff' : '#475569',
+                      backgroundColor: activeState.typeFilter === key ? '#0f172a' : '#f1f5f9',
+                      color: activeState.typeFilter === key ? '#ffffff' : '#475569',
                     }}
                   >
                     {label}
@@ -485,14 +722,15 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
               </div>
             )}
 
-            {searchError && (
+            {/* 检索异常提醒 */}
+            {activeState.searchError && (
               <div style={styles.infoBar}>
                 <AlertCircle size={14} style={{ flexShrink: 0 }} />
-                <span>{searchError}</span>
+                <span>{activeState.searchError}</span>
               </div>
             )}
 
-            {/* 素材网格（可拖入本地图片） */}
+            {/* 3. 素材展示与勾选网格 */}
             <div
               style={{
                 ...styles.assetArea,
@@ -509,27 +747,33 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
               onDrop={(e) => {
                 e.preventDefault()
                 setIsDragOver(false)
-                if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files)
+                if (e.dataTransfer.files?.length) addFilesToActiveSlot(e.dataTransfer.files)
               }}
             >
-              {uploads.length > 0 && (
+              {/* 本部位本地上传项 */}
+              {activeState.uploads.length > 0 && (
                 <div style={{ marginBottom: 12 }}>
                   <div style={styles.groupHeader}>
-                    <span style={{ fontWeight: 600, color: '#0f172a' }}>本地上传</span>
-                    <span style={{ color: '#94a3b8' }}>{uploads.length} 张 · 已全部选用</span>
+                    <span style={{ fontWeight: 600, color: '#0f172a' }}>
+                      【{activeSlot.label}】本地上传素材
+                    </span>
+                    <span style={{ color: '#94a3b8' }}>
+                      {activeState.uploads.length} 张 · 已全部应用
+                    </span>
                   </div>
                   <div style={styles.grid}>
-                    {uploads.map((u, idx) => (
+                    {activeState.uploads.map((u, idx) => (
                       <div key={u.id} style={{ ...styles.tile, ...styles.tileSelected }}>
                         <img src={u.previewUrl} alt="" style={styles.tileImg} draggable={false} />
                         <div style={styles.tileFooter}>
-                          <span style={styles.tileAngle}>上传素材 {idx + 1}</span>
+                          <span style={styles.tileAngle}>上传图片 {idx + 1}</span>
+                          <span style={styles.tileType}>{activeSlot.label}</span>
                         </div>
                         <button
                           type="button"
-                          onClick={() => removeUpload(u.id)}
+                          onClick={() => removeUploadFromActiveSlot(u.id)}
                           style={styles.tileRemove}
-                          title="移除"
+                          title="移除此图片"
                         >
                           <X size={11} />
                         </button>
@@ -539,8 +783,11 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 </div>
               )}
 
-              {searchResult?.items.map((group) => {
-                const assets = group.assets.filter((a) => typeFilter === 'all' || a.asset_type === typeFilter)
+              {/* 素材库检索结果列表 */}
+              {activeState.searchResult?.items.map((group) => {
+                const assets = group.assets.filter(
+                  (a) => activeState.typeFilter === 'all' || a.asset_type === activeState.typeFilter
+                )
                 if (!group.found) {
                   return (
                     <div key={group.sku} style={{ marginBottom: 12 }}>
@@ -552,20 +799,26 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                   )
                 }
                 if (assets.length === 0) return null
-                const allChosen = assets.every((a) => selectedKeys.has(assetKey(a)))
+                const allChosen = assets.every((a) => activeSelectedKeys.has(assetKey(a)))
                 return (
                   <div key={group.sku} style={{ marginBottom: 12 }}>
                     <div style={styles.groupHeader}>
                       <span style={{ fontWeight: 600, color: '#0f172a' }}>{group.sku}</span>
-                      <span style={{ color: '#94a3b8' }}>{assets.length} 张角度图</span>
-                      <button type="button" style={styles.linkButton} onClick={() => selectAllOfSku(assets)}>
-                        {allChosen ? '取消全选' : '全选'}
+                      <span style={{ color: '#94a3b8' }}>{assets.length} 张多角度素材</span>
+                      <button
+                        type="button"
+                        style={styles.linkButton}
+                        onClick={() => selectAllOfSku(assets)}
+                      >
+                        {allChosen ? '取消全选' : '全选此款'}
                       </button>
                     </div>
                     <div style={styles.grid}>
                       {assets.map((asset) => {
-                        const isSelected = selectedKeys.has(assetKey(asset))
-                        const order = isSelected ? selected.findIndex((a) => assetKey(a) === assetKey(asset)) : -1
+                        const isSelected = activeSelectedKeys.has(assetKey(asset))
+                        const order = isSelected
+                          ? activeState.selected.findIndex((a) => assetKey(a) === assetKey(asset))
+                          : -1
                         return (
                           <div
                             key={assetKey(asset)}
@@ -605,7 +858,9 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                               }}
                             >
                               {isSelected && (
-                                <span style={{ fontSize: 10, fontWeight: 700, color: '#fff' }}>{order + 1}</span>
+                                <span style={{ fontSize: 10, fontWeight: 700, color: '#fff' }}>
+                                  {order + 1}
+                                </span>
                               )}
                             </div>
                             <button
@@ -627,19 +882,57 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 )
               })}
 
-              {!searchResult && uploads.length === 0 && (
+              {!activeState.searchResult && activeState.uploads.length === 0 && (
                 <div style={styles.emptyState}>
-                  <Shirt size={28} color="#cbd5e1" />
-                  <div style={{ fontSize: 13, color: '#475569', fontWeight: 500 }}>输入货号检索素材库中的各角度素材图</div>
-                  <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                    同一货号建议勾选 2–4 个角度（正面/背面/细节），也可拖入本地图片
+                  <div style={{ fontSize: 32, marginBottom: 4 }}>
+                    {SLOT_ICONS[activeSlot.key] || '👕'}
+                  </div>
+                  <div style={{ fontSize: 13, color: '#334155', fontWeight: 600 }}>
+                    输入【{activeSlot.label}】货号 SKU，检索多角度商品图
+                  </div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', maxWidth: 360, lineHeight: 1.6 }}>
+                    建议勾选 2–4 个角度（正面、侧面或细节），让模型精准还原款式。选好后可切换上方其他部位（如裤子、鞋子）继续配置。
                   </div>
                 </div>
               )}
             </div>
 
-            {/* 生成设置 */}
-            <button type="button" style={styles.advancedToggle} onClick={() => setShowAdvanced((v) => !v)}>
+            {/* 4. 已配置部位汇总微标签 */}
+            {configuredSlots.length > 0 && (
+              <div style={styles.configuredSummaryBar}>
+                <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600 }}>已配置部位：</span>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {configuredSlots.map((s) => {
+                    const st = slotStates[s.key]
+                    const count = (st?.selected.length || 0) + (st?.uploads.length || 0)
+                    const isCur = s.key === activeSlotKey
+                    return (
+                      <button
+                        key={s.key}
+                        type="button"
+                        onClick={() => setActiveSlotKey(s.key)}
+                        style={{
+                          ...styles.configuredSlotChip,
+                          borderColor: isCur ? '#0f172a' : '#cbd5e1',
+                          backgroundColor: isCur ? '#f1f5f9' : '#ffffff',
+                        }}
+                      >
+                        <span>{SLOT_ICONS[s.key] || '👕'}</span>
+                        <span style={{ fontWeight: 600 }}>{s.label}</span>
+                        <span style={{ color: '#2563eb' }}>({count}张)</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* 5. 高级生成设置 */}
+            <button
+              type="button"
+              style={styles.advancedToggle}
+              onClick={() => setShowAdvanced((v) => !v)}
+            >
               {showAdvanced ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
               <span>生成设置</span>
               <span style={{ color: '#94a3b8', fontWeight: 400 }}>
@@ -658,7 +951,10 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                         type="button"
                         title={opt.desc}
                         onClick={() => setModel(opt.key)}
-                        style={{ ...styles.segmentItem, ...(model === opt.key ? styles.segmentActive : null) }}
+                        style={{
+                          ...styles.segmentItem,
+                          ...(model === opt.key ? styles.segmentActive : null),
+                        }}
                       >
                         {opt.label}
                       </button>
@@ -673,7 +969,10 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                         key={r}
                         type="button"
                         onClick={() => setResolution(r)}
-                        style={{ ...styles.segmentItem, ...(resolution === r ? styles.segmentActive : null) }}
+                        style={{
+                          ...styles.segmentItem,
+                          ...(resolution === r ? styles.segmentActive : null),
+                        }}
                       >
                         {r}
                       </button>
@@ -686,7 +985,10 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                         key={n}
                         type="button"
                         onClick={() => setBatchCount(n)}
-                        style={{ ...styles.segmentItem, ...(batchCount === n ? styles.segmentActive : null) }}
+                        style={{
+                          ...styles.segmentItem,
+                          ...(batchCount === n ? styles.segmentActive : null),
+                        }}
                       >
                         {n}
                       </button>
@@ -698,7 +1000,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                   onChange={(e) => setExtraPrompt(e.target.value)}
                   rows={2}
                   maxLength={500}
-                  placeholder="补充要求（可选），如：上衣下摆塞进裤腰、袖子挽起"
+                  placeholder="补充要求（可选），如：上衣下摆塞进裤腰、袖子稍微挽起、保持自然站立光影"
                   style={styles.textarea}
                 />
               </div>
@@ -706,13 +1008,24 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
           </div>
         </div>
 
-        {/* 底部 */}
+        {/* 底部提交栏 */}
         <div style={styles.footer}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            {submitError && (
+            {submitError ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#ef4444' }}>
                 <AlertCircle size={13} style={{ flexShrink: 0 }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{submitError}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {submitError}
+                </span>
+              </div>
+            ) : totalSelected > 0 ? (
+              <div style={{ fontSize: 12, color: '#475569' }}>
+                已配置 <strong style={{ color: '#0f172a' }}>{configuredSlots.length}</strong> 个部位，共{' '}
+                <strong style={{ color: '#0f172a' }}>{totalSelected}</strong> 张素材图（未选部位保持原图不变）
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                请在上方选择要替换的部位并添加素材图
               </div>
             )}
           </div>
@@ -732,7 +1045,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
             {submitting ? (
               <>
                 <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                <span>正在提交…</span>
+                <span>正在提交换装任务…</span>
               </>
             ) : (
               <>
@@ -745,10 +1058,14 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
         </div>
       </div>
 
-      {/* 大图预览 */}
+      {/* 大图预览灯箱 */}
       {preview && (
         <div style={styles.lightbox} onMouseDown={() => setPreview(null)}>
-          <img src={preview} alt="" style={{ maxWidth: '86vw', maxHeight: '86vh', borderRadius: 8 }} />
+          <img
+            src={preview}
+            alt=""
+            style={{ maxWidth: '86vw', maxHeight: '86vh', borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.45)' }}
+          />
         </div>
       )}
     </div>
@@ -763,13 +1080,13 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.42)',
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
     backdropFilter: 'blur(8px)',
     WebkitBackdropFilter: 'blur(8px)',
     animation: 'fadeIn 150ms ease-out',
   },
   dialog: {
-    width: 'min(920px, calc(100vw - 32px))',
+    width: 'min(980px, calc(100vw - 32px))',
     maxHeight: 'calc(100vh - 48px)',
     backgroundColor: '#ffffff',
     borderRadius: 16,
@@ -835,11 +1152,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     color: '#334155',
     marginBottom: 8,
-    alignItems: 'center',
   },
   sourceBox: {
     width: '100%',
-    height: 260,
+    height: 250,
     borderRadius: 12,
     border: '1px solid #e2e8f0',
     backgroundColor: '#f8fafc',
@@ -871,6 +1187,22 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid #e2e8f0',
     backgroundColor: '#ffffff',
   },
+  vlmTriggerButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 32,
+    padding: '0 12px',
+    borderRadius: 8,
+    border: '1px solid #e0e7ff',
+    backgroundColor: '#eef2ff',
+    color: '#4338ca',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'all 120ms ease',
+  },
   skeleton: {
     height: 10,
     borderRadius: 5,
@@ -901,6 +1233,64 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     color: '#2563eb',
     cursor: 'pointer',
+  },
+  slotTabsContainer: {
+    display: 'flex',
+    gap: 6,
+    overflowX: 'auto',
+    paddingBottom: 4,
+  },
+  slotTab: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 12px',
+    borderRadius: 8,
+    border: '1px solid #e2e8f0',
+    backgroundColor: '#f8fafc',
+    color: '#334155',
+    fontSize: 12,
+    cursor: 'pointer',
+    transition: 'all 120ms ease',
+    whiteSpace: 'nowrap',
+  },
+  slotTabActive: {
+    backgroundColor: '#0f172a',
+    borderColor: '#0f172a',
+    color: '#ffffff',
+    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.2)',
+  },
+  slotCountBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 16,
+    height: 16,
+    padding: '0 4px',
+    borderRadius: 99,
+    fontSize: 10,
+    fontWeight: 700,
+  },
+  activeSlotHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '6px 10px',
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    border: '1px solid #e2e8f0',
+  },
+  clearSlotButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    background: 'none',
+    border: 'none',
+    color: '#94a3b8',
+    fontSize: 11,
+    cursor: 'pointer',
+    padding: '2px 6px',
+    borderRadius: 4,
   },
   searchBox: {
     flex: 1,
@@ -959,7 +1349,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   assetArea: {
     flex: 1,
-    minHeight: 220,
+    minHeight: 200,
     overflowY: 'auto',
     padding: 12,
     borderRadius: 12,
@@ -1054,13 +1444,33 @@ const styles: Record<string, React.CSSProperties> = {
   },
   emptyState: {
     height: '100%',
-    minHeight: 190,
+    minHeight: 180,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
     textAlign: 'center',
+  },
+  configuredSummaryBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '6px 10px',
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    border: '1px solid #e2e8f0',
+  },
+  configuredSlotChip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '3px 8px',
+    borderRadius: 6,
+    border: '1px solid',
+    fontSize: 11,
+    cursor: 'pointer',
+    color: '#0f172a',
   },
   advancedToggle: {
     display: 'flex',

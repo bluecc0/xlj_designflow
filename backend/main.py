@@ -7090,8 +7090,10 @@ async def ai_image_outfit_change(
     image: UploadFile = File(...),
     assets: str = Form("[]"),
     uploads: List[UploadFile] = File(default=[]),
+    upload_slots: str = Form("[]"),
     analysis: str = Form(""),
     target_garments: str = Form("[]"),
+    target_slots: str = Form("[]"),
     extra_prompt: str = Form(""),
     model: str = Form(""),
     resolution: str = Form("1K"),
@@ -7121,6 +7123,15 @@ async def ai_image_outfit_change(
     asset_list = _parse_json_form(assets, [], field="assets")
     analysis_obj = _parse_json_form(analysis, {}, field="analysis")
     target_ids = [str(x) for x in _parse_json_form(target_garments, [], field="target_garments")][:12]
+    target_slot_list = [
+        str(x).strip().lower()
+        for x in _parse_json_form(target_slots, [], field="target_slots")
+        if str(x).strip()
+    ][:12]
+    upload_slot_list = [
+        str(x).strip().lower()
+        for x in _parse_json_form(upload_slots, [], field="upload_slots")
+    ]
     analysis_obj = outfit_change.normalize_analysis(analysis_obj) if analysis_obj else {}
     uploads = uploads or []
 
@@ -7153,9 +7164,11 @@ async def ai_image_outfit_change(
         prepared = await _prepare_outfit_image(raw, file_path.stem, label=f"素材图 {file_path.name}")
         refs.append((prepared[0], f"{idx + 2:02d}_{prepared[1]}"))
         sku_value = str(item.get("sku") or "").strip()[:64]
+        slot_value = str(item.get("slot") or "").strip().lower()[:32]
         ref_meta.append({
             "source": "library",
             "sku": sku_value,
+            "slot": slot_value,
             "asset_type": asset_type,
             "type_label": outfit_change.ASSET_TYPE_LABELS.get(asset_type, asset_type),
             "path": rel_path,
@@ -7169,9 +7182,11 @@ async def ai_image_outfit_change(
         raw = await _read_outfit_upload(upload, label=label)
         prepared = await _prepare_outfit_image(raw, Path(upload.filename or "upload").stem, label=label)
         refs.append((prepared[0], f"{len(refs) + 1:02d}_{prepared[1]}"))
+        upload_slot = upload_slot_list[idx] if idx < len(upload_slot_list) else ""
         ref_meta.append({
             "source": "upload",
             "sku": "",
+            "slot": upload_slot,
             "asset_type": "upload",
             "type_label": "本地上传",
             "path": (upload.filename or "")[:120],
@@ -7182,10 +7197,16 @@ async def ai_image_outfit_change(
         analysis=analysis_obj,
         references=ref_meta,
         target_garment_ids=target_ids,
+        target_slots=target_slot_list,
         extra_prompt=extra_prompt,
     )
     skus = list(dict.fromkeys(m["sku"] for m in ref_meta if m["sku"]))
-    display_prompt = f"AI 换装：{'、'.join(skus) if skus else '本地素材'}"
+    slot_labels = [
+        outfit_change.PRESET_SLOTS.get(s, {}).get("label") or outfit_change.GARMENT_SLOTS.get(s, s)
+        for s in target_slot_list
+    ]
+    slot_desc = f"（{'、'.join(slot_labels)}）" if slot_labels else ""
+    display_prompt = f"AI 换装{slot_desc}：{'、'.join(skus) if skus else '本地素材'}"
     if extra_prompt.strip():
         display_prompt += f"（{extra_prompt.strip()[:60]}）"
 
@@ -7248,6 +7269,7 @@ async def ai_image_outfit_change(
                 "skus": skus,
                 "assets": ref_meta,
                 "target_garments": target_ids,
+                "target_slots": target_slot_list,
                 "image_type": analysis_obj.get("image_type") or "",
                 "summary": analysis_obj.get("summary") or "",
                 "source_name": (source_name or "")[:120],
