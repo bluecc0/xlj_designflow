@@ -129,6 +129,22 @@ slot/variant_a/2
 
 新旧画布迁移是单向兼容策略。旧版不支持的涂鸦等内容可能不会迁移；重要数据应依赖服务端快照和每日数据库备份恢复。
 
+## Loom AI Photoshop 插件
+
+Loom AI 是配套的 Photoshop CEP 插件，适合需要在 Photoshop 内继续完成 AI 绘画、局部编辑和特殊品素材处理的场景。它与网页端画布是两条互补工作流：网页端用于模板、任务和画布管理，Loom 用于 Photoshop 内的继续处理。
+
+插件通常从共享目录获取最新版：
+
+```text
+\\192.168.150.52\素材库\工具\loom
+```
+
+Windows 安装：复制最新版插件文件夹到 `C:\Program Files (x86)\Common Files\Adobe\CEP\extensions`，重启 Photoshop，然后从 **窗口 → 扩展（旧版）→ Loom AI** 打开。
+
+macOS 安装：复制到 `~/Library/Application Support/Adobe/CEP/extensions`，重启 Photoshop，再从 **窗口 → 扩展（旧版）→ Loom AI** 打开。
+
+Loom 可以调用 Nano Banana Pro 等图像能力、处理高分辨率素材、打开特殊品模板副本并将结果交给 Photoshop 继续编辑。使用时注意：中文输入偶尔需要从其它应用复制；整图重绘可能改变不需要修改的区域，应使用蒙版；扩图可能重新缩放，prompt 中应明确尺寸和构图。
+
 ## 产品图库
 
 图库根目录由服务配置。常见目录：
