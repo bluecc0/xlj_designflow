@@ -24,6 +24,7 @@ import {
   Package,
   Info,
   Sparkles,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
@@ -43,6 +44,7 @@ interface Props {
   onOpenImportModal?: (pos: { x: number; y: number }) => void
   onOpenPropertiesModal?: (image: CanvasImage) => void
   onOpenQuickEdit?: (image: CanvasImage) => void
+  onOpenCompareModal?: (imageA: CanvasImage, imageB: CanvasImage) => void
 }
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
@@ -54,6 +56,7 @@ export const ContextMenu = memo(function ContextMenu({
   onOpenImportModal,
   onOpenPropertiesModal,
   onOpenQuickEdit,
+  onOpenCompareModal,
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null)
@@ -110,7 +113,9 @@ export const ContextMenu = memo(function ContextMenu({
   const posY = menuState.y + menuHeight > winH - 12 ? Math.max(12, menuState.y - menuHeight) : menuState.y
 
   const isMultipleSelected = selectedIds.length > 1
+  const selectedImages = images.filter((im) => selectedIds.includes(im.id))
   const isSingleImage = selectedType === 'image' && selectedIds.length === 1
+  const isTwoImages = selectedType === 'image' && selectedImages.length === 2
   const singleImage = isSingleImage ? images.find((im) => im.id === selectedIds[0]) : null
 
   // 创建画板
@@ -573,6 +578,27 @@ export const ContextMenu = memo(function ContextMenu({
                 <Info size={14} color="#687083" strokeWidth={1.8} style={{ pointerEvents: 'none' }} />
                 <span style={{ flex: 1, color: '#1e232d' }}>属性</span>
                 <span style={shortcutStyle}>{isMac ? '⌥I' : 'Alt+I'}</span>
+              </div>
+            </>
+          )}
+
+          {/* 选中恰好 2 张图片：Before / After 对比 */}
+          {isTwoImages && (
+            <>
+              <div style={dividerStyle} />
+              <div
+                data-action="image-compare"
+                onClick={() => {
+                  onOpenCompareModal?.(selectedImages[0], selectedImages[1])
+                  onClose()
+                }}
+                style={{ ...menuItemStyle, color: '#2563eb' }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#eff6ff')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              >
+                <SlidersHorizontal size={14} color="#2563eb" strokeWidth={1.8} style={{ pointerEvents: 'none' }} />
+                <span style={{ flex: 1, fontWeight: 500 }}>对比两张图片 (Before/After)</span>
+                <span style={{ ...shortcutStyle, color: '#3b82f6' }}>C</span>
               </div>
             </>
           )}

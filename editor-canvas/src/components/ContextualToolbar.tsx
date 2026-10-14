@@ -3,7 +3,8 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
 import { useAIOperationStore } from '../store/aiOperationStore'
 import { TextToolbar } from './TextToolbar'
-import type { OutpaintMargins } from '../types'
+import { SlidersHorizontal } from 'lucide-react'
+import type { OutpaintMargins, CanvasImage } from '../types'
 import {
   runMatting,
   runUpscale,
@@ -24,6 +25,7 @@ interface Props {
   onStartOutpainting: (imageId: string) => void
   onExecuteOutpainting?: () => void
   onCancelOutpainting?: () => void
+  onOpenCompareModal?: (imageA: CanvasImage, imageB: CanvasImage) => void
 }
 
 /**
@@ -118,6 +120,7 @@ export function ContextualToolbar({
   onStartOutpainting,
   onExecuteOutpainting,
   onCancelOutpainting,
+  onOpenCompareModal,
 }: Props) {
   const selectedIds = useCanvasStore((s) => s.selectedIds)
   const selectedType = useCanvasStore((s) => s.selectedType)
@@ -585,6 +588,38 @@ export function ContextualToolbar({
         ) : (
           /* 多图选中：批量打包下载与对齐操作组 */
           <>
+            {/* 选中恰好 2 张图片时显示 Before / After 叠加滑动对比按钮 */}
+            {selectedImages.length === 2 && onOpenCompareModal && (
+              <>
+                <button
+                  onClick={() => onOpenCompareModal(selectedImages[0], selectedImages[1])}
+                  className="designflow-toolbar-button"
+                  title="对比选中的两张图片 (Before/After 叠加滑动对比) [快捷键 C]"
+                  style={{
+                    backgroundColor: '#2563eb',
+                    color: '#ffffff',
+                    fontWeight: 500,
+                    padding: '0 10px',
+                    gap: 6,
+                  }}
+                >
+                  <SlidersHorizontal size={15} strokeWidth={2.2} />
+                  <span
+                    className="designflow-toolbar-label"
+                    style={{
+                      maxWidth: 140,
+                      opacity: 1,
+                      marginInlineStart: 4,
+                      color: '#ffffff',
+                    }}
+                  >
+                    对比 (Before/After)
+                  </span>
+                </button>
+                <span className="designflow-toolbar-divider" />
+              </>
+            )}
+
             <button
               onClick={handleBatchDownload}
               className="designflow-toolbar-button"
