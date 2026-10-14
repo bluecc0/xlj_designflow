@@ -66,7 +66,7 @@ class Settings:
     sub2api_monitor_retention_days: int = int(os.getenv("SUB2API_MONITOR_RETENTION_DAYS", "30"))
 
     # 默认对话 LLM：优先使用订阅 OpenAI-compatible line，SiliconFlow Qwen 作为兜底
-    chat_llm_model: str = os.getenv("CHAT_LLM_MODEL", "") or "gpt-5.5"
+    chat_llm_model: str = os.getenv("CHAT_LLM_MODEL", "") or "gpt-6-luna"
     chat_llm_base_url: str = os.getenv("CHAT_LLM_BASE_URL", "") or cliproxy_base_url
     chat_llm_api_key: str = os.getenv("CHAT_LLM_API_KEY", "") or cliproxy_api_key
     chat_llm_timeout_seconds: int = int(os.getenv("CHAT_LLM_TIMEOUT_SECONDS", "30"))
@@ -162,7 +162,7 @@ class Settings:
     kie_result_download_retries: int = int(os.getenv("KIE_RESULT_DOWNLOAD_RETRIES", "1"))
 
     # agent mode
-    agent_llm_model: str = os.getenv("AGENT_LLM_MODEL", "") or "gpt-5.5"
+    agent_llm_model: str = os.getenv("AGENT_LLM_MODEL", "") or "gpt-6-luna"
     agent_llm_base_url: str = os.getenv("AGENT_LLM_BASE_URL", "") or cliproxy_base_url
     agent_llm_api_key: str = os.getenv("AGENT_LLM_API_KEY", "") or cliproxy_api_key
     agent_llm_timeout_seconds: int = int(os.getenv("AGENT_LLM_TIMEOUT_SECONDS", "60"))
@@ -182,7 +182,7 @@ class Settings:
 
     # Skill planner LLM. Defaults to the subscription OpenAI-compatible line so
     # SKILL.md interpretation can use a stronger model without affecting chat.
-    skill_llm_model: str = os.getenv("SKILL_LLM_MODEL", "gpt-5.5")
+    skill_llm_model: str = os.getenv("SKILL_LLM_MODEL", "gpt-6-luna")
     skill_llm_base_url: str = os.getenv("SKILL_LLM_BASE_URL", "") or cliproxy_base_url
     skill_llm_api_key: str = os.getenv("SKILL_LLM_API_KEY", "") or cliproxy_api_key
     skill_llm_timeout_seconds: int = int(os.getenv("SKILL_LLM_TIMEOUT_SECONDS", "60"))

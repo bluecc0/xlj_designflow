@@ -699,11 +699,21 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         chat_source = (
             Path(__file__).resolve().parents[2] / "frontend" / "src" / "Chat.jsx"
         ).read_text(encoding="utf-8")
-        branch_start = chat_source.index(
-            "if (activeSkill && !isAiImageMode && aiOptions.workflow !== 'download')"
+        skill_start = chat_source.index(
+            "if (activeSkill && aiOptions.workflow !== 'download')"
         )
-        branch_end = chat_source.index("// 检测\"重新生成\"关键词", branch_start)
-        skill_branch = chat_source[branch_start:branch_end]
+        agent_start = chat_source.index(
+            "if (agentEnabled && aiOptions.workflow !== 'ai-image')"
+        )
+        branch_end = chat_source.index("// 检测\"重新生成\"关键词", agent_start)
+        self.assertLess(skill_start, agent_start)
+        skill_branch = chat_source[skill_start:agent_start]
+        self.assertIn("runAiImageGeneration", skill_branch)
+        self.assertIn("aiOptions.model || 'gpt-image-2.5'", skill_branch)
+        self.assertIn("skill: activeSkill", skill_branch)
+        self.assertIn("batchCount: aiOptions.batchCount || 1", skill_branch)
+        self.assertNotIn("batchCount: 1", skill_branch)
+        self.assertIn("activeMode === 'ai-image' || Boolean(skillInvocation.skill)", chat_source)
         self.assertIn("provider: 'auto'", skill_branch)
         self.assertNotIn("provider: 'sub2api'", skill_branch)
 
