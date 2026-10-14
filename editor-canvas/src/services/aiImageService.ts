@@ -476,29 +476,6 @@ export async function loadImageAsUploadFile(rawUrl: string, baseName = 'image'):
   }
 }
 
-export interface OutfitGarment {
-  id: string
-  slot: string
-  slot_label: string
-  name: string
-  color?: string
-  material?: string
-  details?: string
-  position?: string
-}
-
-export interface OutfitAnalysis {
-  image_type: 'model' | 'mannequin' | 'product' | 'flatlay' | 'other'
-  image_type_label: string
-  summary: string
-  subject: { gender?: string; pose?: string; framing?: string; view?: string }
-  garments: OutfitGarment[]
-  background?: string
-  lighting?: string
-  cached?: boolean
-  elapsed_ms?: number
-}
-
 export interface OutfitAsset {
   id: string
   sku: string
@@ -538,34 +515,6 @@ export interface OutfitAssetSearchResult {
   items: { sku: string; found: boolean; assets: OutfitAsset[] }[]
 }
 
-// 同一张图在一次会话内只分析一次（按图片 URL 缓存）
-const outfitAnalysisCache = new Map<string, Promise<OutfitAnalysis>>()
-
-/**
- * VLM 快速分析图片中的人物/商品与服饰
- */
-export function analyzeOutfit(imageUrl: string): Promise<OutfitAnalysis> {
-  const key = normalizeAssetUrl(imageUrl)
-  const cached = outfitAnalysisCache.get(key)
-  if (cached) return cached
-  const task = (async () => {
-    const file = await loadImageAsUploadFile(key, 'analyze')
-    const fd = new FormData()
-    fd.append('image', file)
-    const resp = await fetch('/ai-image/outfit-analyze', {
-      method: 'POST',
-      credentials: 'include',
-      body: fd,
-    })
-    if (!resp.ok) throw new Error(await readErrorMessage(resp))
-    return (await resp.json()) as OutfitAnalysis
-  })()
-  outfitAnalysisCache.set(key, task)
-  // 失败不缓存，允许重试
-  task.catch(() => outfitAnalysisCache.delete(key))
-  return task
-}
-
 /**
  * 按 SKU 检索素材库多角度素材
  */
@@ -583,8 +532,6 @@ export interface OutfitChangeRequest {
   assets: OutfitAsset[]
   uploads: File[]
   uploadSlots?: string[]
-  analysis: OutfitAnalysis | null
-  targetGarmentIds: string[]
   targetSlots?: string[]
   extraPrompt: string
   model: 'gpt-image-2.5' | 'nano-banana-pro'
@@ -618,8 +565,6 @@ export async function submitOutfitChange(
   if (req.uploadSlots && req.uploadSlots.length > 0) {
     fd.append('upload_slots', JSON.stringify(req.uploadSlots))
   }
-  if (req.analysis) fd.append('analysis', JSON.stringify(req.analysis))
-  fd.append('target_garments', JSON.stringify(req.targetGarmentIds))
   fd.append('target_slots', JSON.stringify(req.targetSlots || []))
   fd.append('extra_prompt', req.extraPrompt || '')
   fd.append('model', req.model)

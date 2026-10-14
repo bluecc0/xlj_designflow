@@ -7027,7 +7027,7 @@ async def ai_image_endpoint(
         })
 
 
-# ─── AI 换装：VLM 分析 + 参考图生图 ──────────────────────────────────────────
+# ─── AI 换装：参考图生图 ─────────────────────────────────────────────────────
 
 OUTFIT_MAX_SOURCE_BYTES = 20 * 1024 * 1024
 OUTFIT_MODELS = {"gpt-image-2.5", "nano-banana-pro"}
@@ -7059,30 +7059,6 @@ def _parse_json_form(raw: str, default, *, field: str):
     return value if isinstance(value, type(default)) else default
 
 
-@app.post("/ai-image/outfit-analyze")
-async def ai_image_outfit_analyze(request: Request, image: UploadFile = File(...)):
-    """AI 换装第一步：VLM 快速识别图片类型、人物姿态与服饰清单。"""
-    user = _current_user(request)
-    content = await _read_outfit_upload(image, label="待分析图片")
-    started = time.monotonic()
-    try:
-        analysis = await outfit_change.analyze_outfit_image(content, sse_parser=_extract_sse_chat_content)
-    except outfit_change.OutfitAnalysisError as exc:
-        raise HTTPException(exc.status_code, str(exc)) from exc
-    except Exception as exc:
-        logger.exception("outfit analyze failed")
-        raise HTTPException(502, f"图片分析失败: {exc}") from exc
-    elapsed_ms = int((time.monotonic() - started) * 1000)
-    if not analysis.get("cached"):
-        log_operation(
-            user_id=user["id"], username=user["username"],
-            action="outfit_analyze",
-            detail=f"type={analysis.get('image_type')} garments={len(analysis.get('garments') or [])} ms={elapsed_ms}",
-            payload=json.dumps({"summary": analysis.get("summary"), "elapsed_ms": elapsed_ms}, ensure_ascii=False),
-        )
-    return {**analysis, "elapsed_ms": elapsed_ms}
-
-
 @app.post("/ai-image/outfit-change")
 @_ai_image_submit_dedup
 async def ai_image_outfit_change(
@@ -7091,8 +7067,6 @@ async def ai_image_outfit_change(
     assets: str = Form("[]"),
     uploads: List[UploadFile] = File(default=[]),
     upload_slots: str = Form("[]"),
-    analysis: str = Form(""),
-    target_garments: str = Form("[]"),
     target_slots: str = Form("[]"),
     extra_prompt: str = Form(""),
     model: str = Form(""),
@@ -7101,7 +7075,7 @@ async def ai_image_outfit_change(
     source_name: str = Form(""),
     client_request_id: str = Form(""),
 ):
-    """AI 换装第二步：原图 + 勾选的素材角度图，以参考图生图模式提交（内置换装 prompt）。
+    """AI 换装：原图 + 勾选的素材角度图，以参考图生图模式提交（内置换装 prompt）。
 
     assets: [{"sku": "...", "asset_type": "white", "path": "SKU_2.png", "angle": "角度 2"}]
     返回结构与 /ai-image 一致（job_id / job_ids），前端轮询 GET /ai-image/{job_id}。
@@ -7121,8 +7095,6 @@ async def ai_image_outfit_change(
     batch_count = max(1, min(int(batch_count or 1), 4))
 
     asset_list = _parse_json_form(assets, [], field="assets")
-    analysis_obj = _parse_json_form(analysis, {}, field="analysis")
-    target_ids = [str(x) for x in _parse_json_form(target_garments, [], field="target_garments")][:12]
     target_slot_list = [
         str(x).strip().lower()
         for x in _parse_json_form(target_slots, [], field="target_slots")
@@ -7132,7 +7104,6 @@ async def ai_image_outfit_change(
         str(x).strip().lower()
         for x in _parse_json_form(upload_slots, [], field="upload_slots")
     ]
-    analysis_obj = outfit_change.normalize_analysis(analysis_obj) if analysis_obj else {}
     uploads = uploads or []
 
     garment_total = len(asset_list) + len(uploads)
@@ -7194,9 +7165,7 @@ async def ai_image_outfit_change(
         })
 
     prompt = outfit_change.build_outfit_prompt(
-        analysis=analysis_obj,
         references=ref_meta,
-        target_garment_ids=target_ids,
         target_slots=target_slot_list,
         extra_prompt=extra_prompt,
     )
@@ -7268,10 +7237,7 @@ async def ai_image_outfit_change(
             "outfit": {
                 "skus": skus,
                 "assets": ref_meta,
-                "target_garments": target_ids,
                 "target_slots": target_slot_list,
-                "image_type": analysis_obj.get("image_type") or "",
-                "summary": analysis_obj.get("summary") or "",
                 "source_name": (source_name or "")[:120],
                 "extra_prompt": extra_prompt.strip()[:500],
             },

@@ -109,7 +109,7 @@ const LiteLoginGate = ({ onLogin, loading, error, initialName }) => {
         <button type="submit" className="lg-btn" disabled={!canSubmit}>
           {loading ? '进入中...' : '进入工作台'}
         </button>
-        <div className="lg-foot">AI 驱动 · 批量生成电商海报</div>
+        <div className="lg-foot">AI 驱动·关联本地素材库·团队共享</div>
       </form>
     </div>
   );

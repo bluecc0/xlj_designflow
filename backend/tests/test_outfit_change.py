@@ -5,7 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -122,55 +122,35 @@ class PromptAndHelpersTest(unittest.TestCase):
         data, name, _, _ = outfit_change.prepare_reference_image(_jpg_bytes(), "source")
         self.assertTrue(name.endswith(".jpg"))
 
-    def test_normalize_analysis_clamps_unknown_values(self) -> None:
-        result = outfit_change.normalize_analysis({
-            "image_type": "Model",
-            "garments": [{"slot": "hat", "name": "棒球帽", "color": "黑色"}, {"slot": "cape"}, "bad"],
-        })
-        self.assertEqual(result["image_type"], "model")
-        self.assertEqual([g["id"] for g in result["garments"]], ["g1", "g2"])
-        self.assertEqual(result["garments"][1]["slot"], "other")
-
     def test_prompt_groups_angles_and_keeps_untargeted_garments(self) -> None:
-        analysis = outfit_change.normalize_analysis({
-            "image_type": "model",
-            "summary": "女模特白底站立",
-            "subject": {"pose": "站立", "view": "正面"},
-            "garments": [
-                {"slot": "hat", "name": "棒球帽", "color": "黑色"},
-                {"slot": "top", "name": "T恤", "color": "白色"},
-            ],
-        })
         prompt = outfit_change.build_outfit_prompt(
-            analysis=analysis,
             references=[
                 {"sku": "A1", "type_label": "白底图", "angle": "主图"},
                 {"sku": "A1", "type_label": "白底图", "angle": "背面"},
                 {"sku": "B2", "type_label": "模特图", "angle": "主图"},
             ],
-            target_garment_ids=["g2"],
+            target_slots=["top"],
             extra_prompt="衣摆塞进裤腰",
         )
         self.assertIn("虚拟换装", prompt)
         self.assertIn("图2、图3：同一件商品（货号 A1）", prompt)
         self.assertIn("图4：商品（货号 B2）", prompt)
         self.assertIn("不同货号是不同的商品", prompt)
-        self.assertIn("只替换图1中的这些部位：上衣：白色T恤", prompt)
-        self.assertIn("未被替换的服饰与配饰保持原样：黑色棒球帽", prompt)
+        self.assertIn("只替换图1中的以下指定部位", prompt)
+        self.assertIn("【上衣】", prompt)
+        self.assertIn("未选择替换的部位", prompt)
+        self.assertIn("帽子/头饰", prompt)
         self.assertIn("衣摆塞进裤腰", prompt)
 
-    def test_prompt_without_analysis_falls_back_to_product_mode(self) -> None:
+    def test_prompt_without_target_slots_falls_back_to_product_mode(self) -> None:
         prompt = outfit_change.build_outfit_prompt(
-            analysis=None,
             references=[{"sku": "", "type_label": "本地上传", "angle": "上传素材 1"}],
-            target_garment_ids=[],
         )
         self.assertIn("商品替换", prompt)
         self.assertIn("自动识别参考图商品的品类", prompt)
 
-    def test_prompt_with_target_slots_no_vlm_generates_safe_region_instructions(self) -> None:
+    def test_prompt_with_target_slots_generates_region_instructions(self) -> None:
         prompt = outfit_change.build_outfit_prompt(
-            analysis=None,
             references=[
                 {"sku": "TOP1", "slot": "top", "type_label": "白底图", "angle": "正面"},
                 {"sku": "PANT1", "slot": "bottom", "type_label": "白底图", "angle": "正面"},
@@ -193,25 +173,6 @@ class PromptAndHelpersTest(unittest.TestCase):
         self.assertNotIn("脱去", prompt)
         self.assertNotIn("裸露", prompt)
 
-    def test_prompt_with_slots_and_vlm_fusion(self) -> None:
-        analysis = {
-            "image_type": "model",
-            "summary": "女模特",
-            "garments": [
-                {"id": "g1", "slot": "top", "slot_label": "上衣", "name": "短袖T恤", "color": "白色"},
-                {"id": "g2", "slot": "shoes", "slot_label": "鞋", "name": "板鞋", "color": "白色"},
-            ],
-        }
-        prompt = outfit_change.build_outfit_prompt(
-            analysis=analysis,
-            references=[{"sku": "A1", "slot": "top", "type_label": "白底图", "angle": "主图"}],
-            target_slots=["top"],
-            target_garment_ids=["g1"],
-        )
-        self.assertIn("【上衣】", prompt)
-        self.assertIn("白色短袖T恤", prompt)
-        self.assertIn("未被替换的服饰与配饰保持原样：白色板鞋", prompt)
-        self.assertNotIn("脱下", prompt)
 
 
 class OutfitEndpointTest(unittest.TestCase):
@@ -232,7 +193,6 @@ class OutfitEndpointTest(unittest.TestCase):
             p.start()
         job_store.init_db()
         outfit_change._ASSET_CACHE.clear()
-        outfit_change._ANALYSIS_CACHE.clear()
         self.client = TestClient(main.app)
 
     def tearDown(self) -> None:
@@ -257,44 +217,8 @@ class OutfitEndpointTest(unittest.TestCase):
         bad = self.client.get("/products/library-image", params={"asset_type": "white", "path": "../x.png"})
         self.assertEqual(bad.status_code, 400)
 
-    def test_analyze_endpoint_reports_missing_vlm(self) -> None:
-        with patch.object(settings, "vlm_api_key", ""):
-            resp = self.client.post(
-                "/ai-image/outfit-analyze",
-                files={"image": ("a.png", _png_bytes(), "image/png")},
-            )
-        self.assertEqual(resp.status_code, 503)
-
-    def test_analyze_endpoint_parses_vlm_json(self) -> None:
-        vlm_json = json.dumps({
-            "image_type": "model",
-            "summary": "模特",
-            "garments": [{"slot": "top", "name": "T恤", "color": "白"}],
-        }, ensure_ascii=False)
-
-        class FakeResp:
-            is_success = True
-            status_code = 200
-            text = ""
-
-            def json(self):
-                return {"choices": [{"message": {"content": f"```json\n{vlm_json}\n```"}}]}
-
-        with patch.object(settings, "vlm_api_key", "k"), patch("httpx.AsyncClient.post", new=AsyncMock(return_value=FakeResp())):
-            resp = self.client.post(
-                "/ai-image/outfit-analyze",
-                files={"image": ("a.png", _png_bytes(), "image/png")},
-            )
-            again = self.client.post(
-                "/ai-image/outfit-analyze",
-                files={"image": ("a.png", _png_bytes(), "image/png")},
-            )
-        self.assertEqual(resp.status_code, 200, resp.text)
-        data = resp.json()
-        self.assertEqual(data["image_type"], "model")
-        self.assertEqual(data["garments"][0]["slot_label"], "上衣")
-        self.assertFalse(data["cached"])
-        self.assertTrue(again.json()["cached"])
+    def test_retired_analysis_endpoint_is_not_registered(self) -> None:
+        self.assertNotIn("/ai-image/outfit-analyze", {route.path for route in main.app.routes})
 
     def test_outfit_change_submits_job_with_ordered_references(self) -> None:
         captured: dict = {}
@@ -314,8 +238,7 @@ class OutfitEndpointTest(unittest.TestCase):
                         {"sku": "SKU9", "asset_type": "white", "path": "SKU9.png", "angle": "主图"},
                         {"sku": "SKU9", "asset_type": "white", "path": "SKU9_2.png"},
                     ]),
-                    "analysis": json.dumps({"image_type": "model", "garments": [{"slot": "top", "name": "T恤"}]}),
-                    "target_garments": json.dumps(["g1"]),
+                    "target_slots": json.dumps(["top"]),
                     "model": "nano-banana-pro",
                     "client_request_id": "req-1",
                 },
@@ -328,7 +251,8 @@ class OutfitEndpointTest(unittest.TestCase):
         self.assertEqual(len(captured["refs"]), 4)
         self.assertTrue(captured["refs"][0][1].startswith("source"))
         self.assertIn("图2、图3：同一件商品（货号 SKU9）", captured["prompt"])
-        self.assertIn("只替换图1中的这些部位：上衣", captured["prompt"])
+        self.assertIn("只替换图1中的以下指定部位", captured["prompt"])
+        self.assertIn("【上衣】", captured["prompt"])
         meta = captured["request_meta"]
         self.assertEqual(meta["operation"], "outfit-change")
         self.assertEqual(meta["outfit"]["skus"], ["SKU9"])

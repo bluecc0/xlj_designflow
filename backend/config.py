@@ -116,7 +116,6 @@ class Settings:
     product_angle_max: int = int(os.getenv("PRODUCT_ANGLE_MAX", "12"))
     # 换装弹窗检索的素材类型（IMAGE_TYPE_FOLDERS 的 key，逗号分隔）
     outfit_asset_types: str = os.getenv("OUTFIT_ASSET_TYPES", "white,png,white2x,shadow,model")
-    outfit_vlm_timeout_seconds: int = int(os.getenv("OUTFIT_VLM_TIMEOUT_SECONDS", "45"))
     outfit_default_model: str = os.getenv("OUTFIT_DEFAULT_MODEL", "gpt-image-2.5")
 
     # BFL FLUX 扩图。运行参数统一由根目录 .env 管理，真实 API key 不进入仓库。

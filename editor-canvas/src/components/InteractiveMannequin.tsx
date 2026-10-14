@@ -114,37 +114,37 @@ export const InteractiveMannequin: React.FC<Props> = ({
 
     if (isActive) {
       return {
-        fill: '#f0f0f3',
-        stroke: '#18181b',
-        strokeWidth: 1.15,
+        fill: 'rgba(134, 134, 134, .12)',
+        stroke: '#555555',
+        strokeWidth: 1.25,
       }
     }
     if (isHov) {
       return {
-        fill: '#f8f8fa',
-        stroke: '#71717a',
-        strokeWidth: 0.95,
+        fill: 'rgba(134, 134, 134, .08)',
+        stroke: '#777777',
+        strokeWidth: 1,
       }
     }
     if (count > 0) {
       return {
-        fill: '#f4f4f7',
-        stroke: '#a1a1aa',
+        fill: 'rgba(134, 134, 134, .07)',
+        stroke: '#a9a9a9',
         strokeWidth: 0.9,
       }
     }
     return {
       fill: '#ffffff',
-      stroke: '#d4d4d8',
+      stroke: '#c7c7c7',
       strokeWidth: 0.8,
     }
   }
 
   // 结构细节线颜色
   const detailColor = (zone: string) => {
-    if (activeZone === zone) return 'rgba(24, 24, 27, 0.35)'
-    if (hovered === zone) return 'rgba(24, 24, 27, 0.22)'
-    return 'rgba(9, 9, 11, 0.12)'
+    if (activeZone === zone) return 'rgba(127, 127, 127, .58)'
+    if (hovered === zone) return 'rgba(156, 156, 156, .42)'
+    return 'rgba(132, 132, 132, .28)'
   }
 
   const zoneProps = (zone: string) => ({
@@ -156,28 +156,31 @@ export const InteractiveMannequin: React.FC<Props> = ({
 
   return (
     <svg
+      className="mannequin-shell"
       viewBox={`0 0 ${W} ${H}`}
       style={{
         width: '100%',
         display: 'block',
         userSelect: 'none',
-        borderRadius: 10,
-        backgroundColor: '#fafafa',
+        backgroundColor: 'transparent',
       }}
     >
       <defs>
         {/* 地面微渐变投影 */}
         <radialGradient id="mqGround" cx="0.5" cy="0.5" r="0.5">
-          <stop offset="0%" stopColor="#09090b" stopOpacity={0.06} />
-          <stop offset="100%" stopColor="#09090b" stopOpacity={0} />
+          <stop offset="0%" stopColor="#666666" stopOpacity={0.18} />
+          <stop offset="100%" stopColor="#666666" stopOpacity={0} />
         </radialGradient>
       </defs>
+
+      <path d="M 24 78 H 236" stroke="#666666" strokeOpacity=".16" strokeWidth=".5" strokeDasharray="2 5" />
+      <path d="M 24 280 H 236" stroke="#666666" strokeOpacity=".16" strokeWidth=".5" strokeDasharray="2 5" />
 
       {/* ── 1. 地面投影 ── */}
       <ellipse cx={90} cy={367} rx={44} ry={5} fill="url(#mqGround)" />
 
       {/* ── 2. 裸露肢体（皮肤底层，被服饰包裹与穿透） ── */}
-      <g fill="#fafafa" stroke="#d4d4d8" strokeWidth={0.75}>
+      <g fill="#f7f7f7" stroke="#969696" strokeOpacity=".88" strokeWidth={0.75}>
         {/* 颈部：插在衣领深处 */}
         <path d={NECK_PATH} />
         {/* 头部面廓 */}
@@ -188,6 +191,19 @@ export const InteractiveMannequin: React.FC<Props> = ({
         {/* 裤脚伸出的踝部 */}
         <path d={SOCK_L} />
         <path d={SOCK_R} />
+      </g>
+
+      {/* 人体结构辅助线：面部、关节、手部和踝部 */}
+      <g fill="none" stroke="#888888" strokeWidth={0.55} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none">
+        <path d="M 79 43 Q 82 39 86 41 M 94 41 Q 98 39 101 43" />
+        <path d="M 90 42 L 89 51 L 93 53 M 84 58 Q 90 61 96 58" />
+        <path d="M 76 45 Q 72 47 76 51 M 104 45 Q 108 47 104 51" />
+        <path d="M 83 67 Q 90 71 97 67 M 83 70 L 83 78 M 97 70 L 97 78" />
+        <path d="M 45 176 L 52 176 M 45 181 L 53 181 M 45 186 L 53 186" />
+        <path d="M 127 176 L 134 176 M 127 181 L 135 181 M 127 186 L 135 186" />
+        <path d="M 76 340 L 83 340 M 97 340 L 104 340" />
+        <circle cx="68" cy="195" r="1.6" /><circle cx="112" cy="195" r="1.6" />
+        <circle cx="72" cy="270" r="1.6" /><circle cx="108" cy="270" r="1.6" />
       </g>
 
       {/* ── 3. 下装（裤子） ── */}
@@ -222,6 +238,11 @@ export const InteractiveMannequin: React.FC<Props> = ({
           strokeWidth={0.6}
           fill="none"
         />
+        {/* 裤装立体裁片、膝位和口袋结构 */}
+        <path d="M 69 216 Q 79 220 87 216 M 91 216 Q 101 220 111 216" stroke={detailColor('lower')} strokeWidth={0.55} fill="none" />
+        <path d="M 69 236 Q 77 242 84 240 M 111 236 Q 103 242 96 240" stroke={detailColor('lower')} strokeWidth={0.5} fill="none" />
+        <path d="M 70 260 Q 78 264 85 260 M 110 260 Q 102 264 95 260" stroke={detailColor('lower')} strokeWidth={0.65} fill="none" />
+        <path d="M 70 215 L 80 225 M 110 215 L 100 225" stroke={detailColor('lower')} strokeWidth={0.55} fill="none" />
       </g>
 
       {/* ── 4. 上衣（外套/卫衣/T恤：衣袖包裹双臂、衣领包裹颈部） ── */}
@@ -264,6 +285,12 @@ export const InteractiveMannequin: React.FC<Props> = ({
           strokeWidth={0.6}
           fill="none"
         />
+        {/* 肩线、袖片、袋口和侧缝 */}
+        <path d="M 61 91 Q 68 96 73 102 M 119 91 Q 112 96 107 102" stroke={detailColor('upper')} strokeWidth={0.65} fill="none" />
+        <path d="M 57 108 Q 61 124 61 145 M 123 108 Q 119 124 119 145" stroke={detailColor('upper')} strokeWidth={0.55} fill="none" />
+        <path d="M 71 145 L 82 151 L 82 166 L 72 161 Z M 109 145 L 98 151 L 98 166 L 108 161 Z" stroke={detailColor('upper')} strokeWidth={0.6} fill="none" />
+        <path d="M 74 174 Q 90 180 106 174" stroke={detailColor('upper')} strokeWidth={0.55} strokeDasharray="1.5 2" fill="none" />
+        <path d="M 68 94 L 68 188 M 112 94 L 112 188" stroke={detailColor('upper')} strokeWidth={0.4} strokeDasharray="1 3" fill="none" />
       </g>
 
       {/* ── 5. 头部与帽子 ── */}
@@ -297,6 +324,9 @@ export const InteractiveMannequin: React.FC<Props> = ({
           strokeWidth={0.7}
           fill="none"
         />
+        <path d="M 67 353 L 82 355 M 98 355 L 113 353" stroke={detailColor('feet')} strokeWidth={0.55} fill="none" />
+        <path d="M 70 350 L 78 359 M 74 349 L 82 358 M 103 358 L 110 350 M 99 359 L 106 349" stroke={detailColor('feet')} strokeWidth={0.5} fill="none" />
+        <path d="M 60 365 Q 71 367 84 365 M 96 365 Q 109 367 121 365" stroke={detailColor('feet')} strokeWidth={0.55} fill="none" />
       </g>
 
       {/* ── 7. 引线与标签卡片（与参考图一致的点+水平虚线导引） ── */}
@@ -305,7 +335,7 @@ export const InteractiveMannequin: React.FC<Props> = ({
         const active = activeZone === zone.key
         const isHover = hovered === zone.key
         const count = zoneCounts[zone.key] || 0
-        const lineColor = active ? '#18181b' : isHover ? '#71717a' : '#d4d4d8'
+        const lineColor = active ? '#555555' : isHover ? '#777777' : '#999999'
 
         return (
           <g key={zone.key} {...zoneProps(zone.key)}>
@@ -322,7 +352,7 @@ export const InteractiveMannequin: React.FC<Props> = ({
               cx={ax}
               cy={ay}
               r={active ? 2.5 : 2}
-              fill={active ? '#18181b' : '#ffffff'}
+              fill={active ? '#555555' : '#ffffff'}
               stroke={lineColor}
               strokeWidth={0.9}
             />
@@ -334,8 +364,8 @@ export const InteractiveMannequin: React.FC<Props> = ({
               width={LABEL_W}
               height={32}
               rx={6}
-              fill={active ? '#ffffff' : isHover ? '#f7f7f9' : '#ffffff'}
-              stroke={active ? '#18181b' : count ? '#a1a1aa' : '#e4e4e7'}
+              fill={active ? 'rgba(134, 134, 134,.12)' : isHover ? 'rgba(134, 134, 134,.07)' : '#ffffff'}
+              stroke={active ? '#555555' : count ? '#999999' : '#d3d3d3'}
               strokeWidth={active ? 1.1 : 0.8}
             />
             <text
@@ -343,7 +373,7 @@ export const InteractiveMannequin: React.FC<Props> = ({
               y={ly - 2}
               fontSize={11.5}
               fontWeight={active ? 600 : 500}
-              fill={active ? '#09090b' : '#27272a'}
+              fill={active ? '#505050' : '#535353'}
             >
               {zone.label}
             </text>
@@ -351,7 +381,7 @@ export const InteractiveMannequin: React.FC<Props> = ({
               x={LABEL_X + 9}
               y={ly + 10}
               fontSize={9}
-              fill={active ? '#71717a' : '#a1a1aa'}
+              fill={active ? '#737373' : '#8b8b8b'}
             >
               {zone.items.map((i) => i.label).join(' · ')}
             </text>
@@ -363,7 +393,7 @@ export const InteractiveMannequin: React.FC<Props> = ({
                   cx={LABEL_X + LABEL_W - 13}
                   cy={ly}
                   r={7}
-                  fill={active ? '#18181b' : '#71717a'}
+                  fill={active ? '#555555' : '#888888'}
                 />
                 <text
                   x={LABEL_X + LABEL_W - 13}

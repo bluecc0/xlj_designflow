@@ -4,8 +4,7 @@ AI 换装（Outfit Change）
 画布右键「AI 换装」的后端能力：
 - 按 SKU 列出素材库中的多角度素材图（主图 + 角度变体 + SKU 子文件夹）
 - 安全读取素材库单个文件、生成缩略图（避免把高清原图塞给弹窗网格）
-- VLM 快速分析画布图片中的人物/商品与服饰清单
-- 根据分析结果 + 用户勾选的素材拼装内置换装 prompt
+- 根据用户选择的部位与素材拼装内置换装 prompt
 
 素材库目录约定（全部可选，按顺序探测；只做路径拼接 + exists()，
 不对大目录 iterdir()，见 CLAUDE.md "Product image matching is path-based"）：
@@ -16,10 +15,8 @@ AI 换装（Outfit Change）
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import io
-import json
 import logging
 import re
 import threading
@@ -27,9 +24,7 @@ import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, Optional
-
-import httpx
+from typing import Any, Optional
 
 from .config import settings
 from .product_library import EXT_PRIORITY, SUPPORTED_EXTS
@@ -60,7 +55,7 @@ _ANGLE_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
     (("45",), "45°"),
 ]
 
-# 服饰部位（VLM 输出 slot 的取值范围）
+# 服饰部位显示名称
 GARMENT_SLOTS: dict[str, str] = {
     "hat": "帽子/头饰",
     "glasses": "眼镜",
@@ -140,14 +135,6 @@ PRESET_SLOTS: dict[str, dict[str, Any]] = {
         "replace_directive": "将图1中的对应饰品替换为参考图中的配饰商品，细节精致且与整体服饰协调。",
         "keep_directive": "原有饰品与配件保持原样不变。",
     },
-}
-
-IMAGE_TYPE_LABELS: dict[str, str] = {
-    "model": "真人模特图",
-    "mannequin": "人台/隐形模特图",
-    "product": "商品图",
-    "flatlay": "平铺图",
-    "other": "其他",
 }
 
 MAX_REFERENCE_IMAGES = 9  # 上游生图接口上限（含原图）
@@ -403,202 +390,11 @@ def nearest_aspect_ratio(width: int, height: int) -> str:
     return min(_SUPPORTED_RATIOS, key=lambda item: abs(item[1] - ratio))[0]
 
 
-# ─── VLM 分析 ────────────────────────────────────────────────────────────────
-
-_ANALYSIS_PROMPT = """你是电商服饰视觉分析助手。请快速分析这张图片，为后续「AI 换装」做准备，只输出 JSON，不要 Markdown，不要解释。
-
-JSON 结构：
-{
-  "image_type": "model | mannequin | product | flatlay | other",
-  "summary": "一句话中文概括画面（30字内）",
-  "subject": {
-    "gender": "男/女/儿童/无人物",
-    "pose": "姿态，如 站立正面、侧身行走、坐姿",
-    "framing": "全身 / 半身 / 特写 / 局部",
-    "view": "正面 / 侧面 / 背面 / 3/4 侧"
-  },
-  "garments": [
-    {
-      "slot": "hat | glasses | top | outerwear | dress | bottom | socks | shoes | bag | accessory | other",
-      "name": "具体品类，如 棒球帽、圆领短袖T恤、阔腿牛仔裤",
-      "color": "主色",
-      "material": "可见材质，看不出写空字符串",
-      "details": "版型/图案/logo/长度等关键特征（20字内）",
-      "position": "在画面中的位置，如 头部、上身、脚部"
-    }
-  ],
-  "background": "背景简述",
-  "lighting": "光线简述"
-}
-
-要求：
-1. image_type：真人穿着为 model；人台或隐形模特为 mannequin；单独商品陈列为 product；平铺摆拍为 flatlay。
-2. garments 按从头到脚的顺序列出所有清晰可见的服饰与配饰，看不见的不要编造。
-3. 所有文字字段用中文，简洁准确。"""
-
-
-def _clean_str(value: Any, limit: int = 80) -> str:
-    return str(value or "").strip()[:limit]
-
-
-def normalize_analysis(parsed: dict[str, Any]) -> dict[str, Any]:
-    """把 VLM 输出规整为固定结构，未知取值回落到 other。"""
-    image_type = _clean_str(parsed.get("image_type"), 20).casefold()
-    if image_type not in IMAGE_TYPE_LABELS:
-        image_type = "other"
-    subject_raw = parsed.get("subject") if isinstance(parsed.get("subject"), dict) else {}
-    subject = {k: _clean_str(subject_raw.get(k), 40) for k in ("gender", "pose", "framing", "view")}
-
-    garments: list[dict[str, Any]] = []
-    raw_garments = parsed.get("garments") if isinstance(parsed.get("garments"), list) else []
-    for idx, raw in enumerate(raw_garments[:12]):
-        if not isinstance(raw, dict):
-            continue
-        slot = _clean_str(raw.get("slot"), 20).casefold()
-        if slot not in GARMENT_SLOTS:
-            slot = "other"
-        name = _clean_str(raw.get("name"), 30) or GARMENT_SLOTS[slot]
-        garments.append({
-            "id": f"g{idx + 1}",
-            "slot": slot,
-            "slot_label": GARMENT_SLOTS[slot],
-            "name": name,
-            "color": _clean_str(raw.get("color"), 20),
-            "material": _clean_str(raw.get("material"), 20),
-            "details": _clean_str(raw.get("details"), 60),
-            "position": _clean_str(raw.get("position"), 20),
-        })
-
-    return {
-        "image_type": image_type,
-        "image_type_label": IMAGE_TYPE_LABELS[image_type],
-        "summary": _clean_str(parsed.get("summary"), 120),
-        "subject": subject,
-        "garments": garments,
-        "background": _clean_str(parsed.get("background"), 80),
-        "lighting": _clean_str(parsed.get("lighting"), 60),
-    }
-
-
-def _parse_json_payload(text: str) -> Optional[dict[str, Any]]:
-    clean = (text or "").strip()
-    if clean.startswith("```"):
-        clean = clean.strip("`").strip()
-        if clean.lower().startswith("json"):
-            clean = clean[4:].strip()
-    try:
-        parsed = json.loads(clean)
-        return parsed if isinstance(parsed, dict) else None
-    except Exception:
-        match = re.search(r"(\{.*\})", clean, flags=re.S)
-        if match:
-            try:
-                parsed = json.loads(match.group(1))
-                return parsed if isinstance(parsed, dict) else None
-            except Exception:
-                return None
-    return None
-
-
-_ANALYSIS_CACHE: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
-_ANALYSIS_CACHE_MAX = 128
-
-
-class OutfitAnalysisError(RuntimeError):
-    def __init__(self, message: str, status_code: int = 502) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-
-
-async def analyze_outfit_image(
-    image_bytes: bytes,
-    *,
-    sse_parser: Optional[Callable[[str], str]] = None,
-) -> dict[str, Any]:
-    """调用 VLM 分析图片中的服饰；同一图片内容命中内存缓存直接返回。
-
-    sse_parser：部分 OpenAI-compatible 代理即使 stream=False 也返回 SSE，传入解析器兜底。
-    """
-    from .agent_mode import _chat_completions_endpoint
-    from .ai_image import compress_image_to_data_url
-
-    if not settings.vlm_api_key:
-        raise OutfitAnalysisError("VLM 未配置（VLM_API_KEY），无法分析图片", 503)
-
-    digest = hashlib.sha1(image_bytes).hexdigest()
-    cached = _ANALYSIS_CACHE.get(digest)
-    if cached is not None:
-        _ANALYSIS_CACHE.move_to_end(digest)
-        return {**cached, "cached": True}
-
-    # 分析只需要看清服饰，长边 1024 足够，能显著降低 VLM 延迟
-    data_url = await asyncio.to_thread(compress_image_to_data_url, image_bytes, 1024)
-    messages = [{
-        "role": "user",
-        "content": [
-            {"type": "text", "text": _ANALYSIS_PROMPT},
-            {"type": "image_url", "image_url": {"url": data_url}},
-        ],
-    }]
-    endpoint = _chat_completions_endpoint(settings.vlm_base_url)
-    timeout = float(getattr(settings, "outfit_vlm_timeout_seconds", 45) or 45)
-    try:
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-            resp = await client.post(
-                endpoint,
-                headers={"Authorization": f"Bearer {settings.vlm_api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": settings.vlm_model,
-                    "messages": messages,
-                    "temperature": 0.1,
-                    "max_tokens": 900,
-                    "stream": False,
-                },
-            )
-    except httpx.TimeoutException as exc:
-        raise OutfitAnalysisError("VLM 分析超时，请稍后重试", 504) from exc
-    except httpx.HTTPError as exc:
-        raise OutfitAnalysisError(f"VLM 请求失败: {exc}") from exc
-
-    if not resp.is_success:
-        raise OutfitAnalysisError(f"VLM 分析失败 (HTTP {resp.status_code}): {resp.text[:200]}")
-
-    content = ""
-    try:
-        payload = resp.json()
-        content = (((payload or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        if isinstance(content, list):
-            content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
-    except Exception:
-        content = sse_parser(resp.text or "") if sse_parser else ""
-
-    parsed = _parse_json_payload(str(content))
-    if not parsed:
-        logger.warning("outfit analyze: unparsable VLM output: %s", str(content)[:300])
-        raise OutfitAnalysisError("VLM 未返回可解析的分析结果")
-
-    result = normalize_analysis(parsed)
-    _ANALYSIS_CACHE[digest] = result
-    _ANALYSIS_CACHE.move_to_end(digest)
-    while len(_ANALYSIS_CACHE) > _ANALYSIS_CACHE_MAX:
-        _ANALYSIS_CACHE.popitem(last=False)
-    return {**result, "cached": False}
-
-
 # ─── 内置换装 prompt ─────────────────────────────────────────────────────────
-
-def _describe_garment(g: dict[str, Any]) -> str:
-    parts = [g.get("color") or "", g.get("name") or g.get("slot_label") or ""]
-    text = "".join(p for p in parts if p)
-    extra = "，".join(p for p in (g.get("material") or "", g.get("details") or "") if p)
-    return f"{text}（{extra}）" if extra else text
-
 
 def build_outfit_prompt(
     *,
-    analysis: Optional[dict[str, Any]] = None,
     references: list[dict[str, Any]],
-    target_garment_ids: Optional[list[str]] = None,
     target_slots: Optional[list[str]] = None,
     extra_prompt: str = "",
 ) -> str:
@@ -607,17 +403,8 @@ def build_outfit_prompt(
     references 顺序即上传顺序：图1 为原图，references[i] 对应图 i+2。
     每个 reference: {sku, type_label, angle, source: library|upload, slot?: str}
     """
-    analysis = analysis or {}
-    image_type = analysis.get("image_type") or "other"
-    garments: list[dict[str, Any]] = analysis.get("garments") or []
-    target_ids_set = set(target_garment_ids or [])
-    targets = [g for g in garments if g.get("id") in target_ids_set]
-    keep = [g for g in garments if g not in targets]
-
-    # 规范化目标部位列表
-    raw_slots = [str(s).strip().lower() for s in (target_slots or []) if str(s).strip()]
-    active_slots: list[str] = list(dict.fromkeys(
-        raw_slots + [g.get("slot") for g in targets if g.get("slot")]
+    active_slots = list(dict.fromkeys(
+        str(s).strip().lower() for s in (target_slots or []) if str(s).strip()
     ))
 
     # 按 SKU 和 部位 分组，同一 SKU 的多张图是同一件商品的不同角度
@@ -634,8 +421,7 @@ def build_outfit_prompt(
         return "、".join(f"图{i}" for i in indices)
 
     lines: list[str] = []
-    has_specific_targets = bool(targets or active_slots)
-    is_person = image_type in ("model", "mannequin") or (image_type in ("", "other") and has_specific_targets)
+    is_person = bool(active_slots)
     if is_person:
         lines.append("任务：电商虚拟换装（virtual try-on）。以图1为底图，把参考图中的服饰穿到图1的人物身上，输出一张换装后的完整照片。")
     else:
@@ -643,8 +429,7 @@ def build_outfit_prompt(
 
     lines.append("")
     lines.append("图片说明：")
-    summary = analysis.get("summary")
-    lines.append(f"- 图1：原图（底图）{('，' + summary) if summary else ''}。")
+    lines.append("- 图1：原图（底图）。")
     for sku, indices in groups.items():
         meta = [references[i - 2] for i in indices]
         ref_slot = next((m.get("slot") for m in meta if m.get("slot")), "")
@@ -662,7 +447,7 @@ def build_outfit_prompt(
 
     lines.append("")
     lines.append("替换要求：")
-    if raw_slots:
+    if active_slots:
         slot_lines: list[str] = []
         for slot in active_slots:
             slot_meta = PRESET_SLOTS.get(slot, {})
@@ -678,17 +463,8 @@ def build_outfit_prompt(
             else:
                 directive = base_directive
 
-            # 若 VLM 识别到了原图对应的服饰
-            vlm_items = [g for g in targets if g.get("slot") == slot]
-            if vlm_items:
-                vlm_desc = "、".join(_describe_garment(g) for g in vlm_items)
-                slot_lines.append(f"  * 【{slot_label}】{region_str}：将图1人物原有的【{vlm_desc}】替换为{target_img_desc}{slot_label}商品。{directive}")
-            else:
-                slot_lines.append(f"  * 【{slot_label}】{region_str}：{directive}")
+            slot_lines.append(f"  * 【{slot_label}】{region_str}：{directive}")
         lines.append("- 只替换图1中的以下指定部位：\n" + "\n".join(slot_lines))
-    elif targets:
-        target_desc = "；".join(f"{g.get('slot_label')}：{_describe_garment(g)}" for g in targets)
-        lines.append(f"- 只替换图1中的这些部位：{target_desc}。用参考图中对应品类的商品替换它们。")
     else:
         lines.append("- 自动识别参考图商品的品类（如帽子、上衣、裤子、鞋），只替换图1中相同品类、相同部位的服饰。")
 
@@ -702,27 +478,18 @@ def build_outfit_prompt(
     lines.append("")
     lines.append("必须保持不变：")
     if is_person:
-        subject = analysis.get("subject") or {}
-        pose = "，".join(p for p in (subject.get("pose"), subject.get("view"), subject.get("framing")) if p)
-        lines.append(f"- 人物身份：脸部五官、表情、发型、肤色、体型与手部完全不变{('；姿态与取景：' + pose) if pose else '；姿态与取景不变'}。")
-    if raw_slots:
+        lines.append("- 人物身份：脸部五官、表情、发型、肤色、体型与手部完全不变；姿态与取景不变。")
+    if active_slots:
         unselected_core = [
             PRESET_SLOTS[s]["label"]
             for s in ("top", "bottom", "shoes", "hat", "outerwear", "dress")
-            if s not in raw_slots and not any(g.get("slot") == s for g in targets)
+            if s not in active_slots
         ]
         if unselected_core:
             lines.append(f"- 未选择替换的部位（如{'、'.join(unselected_core)}）严格保持图1原样不变，不得改变颜色、版型或款式。")
-    if keep:
-        keep_desc = "、".join(_describe_garment(g) for g in keep)
-        lines.append(f"- 未被替换的服饰与配饰保持原样：{keep_desc}。")
-    elif not raw_slots:
+    if not active_slots:
         lines.append("- 与本次替换无关的服饰、配饰保持原样。")
-
-    background = analysis.get("background")
-    lighting = analysis.get("lighting")
-    env = "；".join(p for p in (f"背景：{background}" if background else "", f"光线：{lighting}" if lighting else "") if p)
-    lines.append(f"- 背景、光线、色调、镜头视角、构图与画面比例保持与图1一致{('（' + env + '）') if env else ''}。")
+    lines.append("- 背景、光线、色调、镜头视角、构图与画面比例保持与图1一致。")
     lines.append("- 不要添加任何新的文字、水印、边框或多余物品；不要输出拼图或多宫格，只输出一张图。")
     lines.append("- 画质：商业级电商摄影质感，清晰锐利，细节真实。")
 

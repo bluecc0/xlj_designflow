@@ -14476,7 +14476,7 @@ const LiteLoginGate = ({
     disabled: !canSubmit
   }, loading ? '进入中...' : '进入工作台'), /*#__PURE__*/React.createElement("div", {
     className: "lg-foot"
-  }, "AI \u9A71\u52A8 \xB7 \u6279\u91CF\u751F\u6210\u7535\u5546\u6D77\u62A5")));
+  }, "AI \u9A71\u52A8\xB7\u5173\u8054\u672C\u5730\u7D20\u6750\u5E93\xB7\u56E2\u961F\u5171\u4EAB")));
 };
 const FlipStage = ({
   inspirationOpen,
