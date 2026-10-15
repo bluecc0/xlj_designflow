@@ -88,6 +88,7 @@ SUPPORTED_MODELS: dict[str, str] = {
 SLASH_MODEL_MAP = SUPPORTED_MODELS
 
 PROVIDER_APIMART = "apimart"
+PROVIDER_APIMART_EXT = "apimart-ext"
 PROVIDER_ADOBE2API = "adobe2api"
 PROVIDER_TUZI = "tuzi"
 
@@ -907,6 +908,7 @@ async def _submit_generation_task(
     variant: str = "flare",
     quality: str = "",
     reference_urls: list[str] | None = None,
+    apimart_ext: bool = False,
 ) -> str:
     model_name = _apimart_model_name(model, variant)
     ratio, resolution = _normalize_size(size, resolution)
@@ -914,15 +916,25 @@ async def _submit_generation_task(
     if model_name == "gpt-image-2" or model_name in _APIMART_GPT_IMAGE_25_MODELS:
         resolution = resolution.lower()
     final_prompt = normalize_reference_prompt(prompt) if reference_urls else prompt
-    payload: dict[str, Any] = {
-        "model": model_name,
-        "prompt": final_prompt,
-        "size": ratio,
-        "resolution": resolution,
-    }
-    if model_name == "gpt-image-2":
+    if apimart_ext:
+        payload: dict[str, Any] = {
+            "model": "gpt-image-2.5-ext",
+            "version": (variant or "flare").strip().lower() if (variant or "").strip().lower() in {"flare", "sunburst"} else "flare",
+            "prompt": final_prompt,
+            "size": ratio,
+            "resolution": resolution.upper(),
+            "n": 1,
+        }
+    else:
+        payload = {
+            "model": model_name,
+            "prompt": final_prompt,
+            "size": ratio,
+            "resolution": resolution,
+        }
+    if not apimart_ext and model_name == "gpt-image-2":
         payload["official_fallback"] = True
-    elif model_name in _APIMART_GPT_IMAGE_25_MODELS:
+    elif not apimart_ext and model_name in _APIMART_GPT_IMAGE_25_MODELS:
         clean_quality = (quality or getattr(settings, "ai_image_gpt_25_quality", "auto") or "auto").strip().lower()
         if clean_quality not in {"auto", "low", "medium", "high", "xhigh", "max"}:
             clean_quality = "auto"
@@ -930,7 +942,11 @@ async def _submit_generation_task(
     if reference_urls:
         payload["image_urls"] = reference_urls
     endpoint = f"{base_url}/v1/images/generations"
-    resp = await client.post(endpoint, json=payload, headers=headers)
+    request_headers = dict(headers)
+    if apimart_ext:
+        request_headers["X-APIMart-Response-Version"] = "2026-07-27"
+        request_headers["Idempotency-Key"] = str(uuid.uuid4())
+    resp = await client.post(endpoint, json=payload, headers=request_headers)
     if not resp.is_success:
         # 已拿到明确 HTTP 错误码：本请求不会返回图，记失败并允许智能路由切换
         raise RuntimeError(
@@ -1126,6 +1142,7 @@ async def generate_image(
     user_id: str = "anonymous",
     variant: str = "flare",
     quality: str = "",
+    apimart_ext: bool = False,
 ) -> dict:
     model_name = _normalize_model_name(model)
     base_url, api_key = _model_credentials(model_name)
@@ -1144,6 +1161,7 @@ async def generate_image(
             resolution=resolution,
             variant=variant,
             quality=quality,
+            apimart_ext=apimart_ext,
         )
         result_url, _, _task_detail = await _wait_for_task_result(
             client,
@@ -1176,6 +1194,7 @@ async def generate_image_with_reference(
     user_id: str = "anonymous",
     variant: str = "flare",
     quality: str = "",
+    apimart_ext: bool = False,
 ) -> dict:
     model_name = _normalize_model_name(model)
     base_url, api_key = _model_credentials(model_name)
@@ -1201,6 +1220,7 @@ async def generate_image_with_reference(
             reference_urls=reference_urls,
             variant=variant,
             quality=quality,
+            apimart_ext=apimart_ext,
         )
         result_url, _, _task_detail = await _wait_for_task_result(
             client,
@@ -1235,6 +1255,7 @@ async def generate_image_async(
     quality: str = "",
     on_progress: Callable[[int, str], Any] | None = None,
     on_accepted: Callable[[str], Any] | None = None,
+    apimart_ext: bool = False,
 ) -> dict:
     """异步生图：提交任务 → 轮询进度 → 下载结果。
 
@@ -1258,6 +1279,7 @@ async def generate_image_async(
             resolution=resolution,
             variant=variant,
             quality=quality,
+            apimart_ext=apimart_ext,
         )
         if on_accepted:
             on_accepted(str(task_id))
@@ -1297,6 +1319,7 @@ async def generate_image_with_reference_async(
     quality: str = "",
     on_progress: Callable[[int], Any] | None = None,
     on_accepted: Callable[[str], Any] | None = None,
+    apimart_ext: bool = False,
 ) -> dict:
     """异步图生图：上传参考图 → 提交任务 → 轮询进度 → 下载结果。"""
     model_name = _normalize_model_name(model)
@@ -1323,6 +1346,7 @@ async def generate_image_with_reference_async(
             reference_urls=reference_urls,
             variant=variant,
             quality=quality,
+            apimart_ext=apimart_ext,
         )
         if on_accepted:
             on_accepted(str(task_id))
@@ -2061,6 +2085,7 @@ PROVIDER_MODEL_CAPABILITIES: dict[str, set[str] | None] = {
     PROVIDER_SUB2API: {"gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"},
     PROVIDER_TUZI: {"gpt-image-2.5", "gpt-image-2.5-flare"},
     PROVIDER_ADOBE2API: {"gemini-3-pro-image-preview", "gpt-image-2"},
+    PROVIDER_APIMART_EXT: {"gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"},
     PROVIDER_APIMART: None,  # APIMart 适配通用架构，全支持
 }
 
@@ -2201,7 +2226,7 @@ def get_provider_freeze_status(*, now: float | None = None) -> dict[str, dict[st
     status: dict[str, dict[str, Any]] = {}
     with _provider_circuit_lock:
         all_keys = set(_provider_consecutive_failures.keys()) | set(_provider_frozen_until.keys())
-        for p in (PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_ADOBE2API, PROVIDER_TUZI):
+        for p in (PROVIDER_SUB2API, PROVIDER_APIMART_EXT, PROVIDER_APIMART, PROVIDER_ADOBE2API, PROVIDER_TUZI):
             all_keys.add(p)
         for k in all_keys:
             fails = _provider_consecutive_failures.get(k, 0)
@@ -2275,8 +2300,9 @@ def get_smart_route_candidates(
         preferred_order = custom_rules[model_name]
     elif model_name == "gpt-image-2.5" or model_name in _APIMART_GPT_IMAGE_25_MODELS:
         effective_variant = "sunburst" if (variant_name == "sunburst" or model_name == "gpt-image-2.5-sunburst") else "flare"
-        if quality_clean in ("high", "xhigh", "max"):
-            # Sub2API / Tuzi 等非官方渠道无高/最高画质档位，必须定向路由至 APIMart
+        if quality_clean not in ("", "auto"):
+            # Ext 不接受 quality；用户明确选择画质时先尝试不带 quality 的 Ext，
+            # 失败后再由普通 APIMart 发送完整 quality 参数。
             preferred_order = [PROVIDER_APIMART]
         elif res_upper == "1K":
             if effective_variant == "flare":
@@ -2296,6 +2322,17 @@ def get_smart_route_candidates(
         preferred_order = (custom_rules and custom_rules.get("default")) or DEFAULT_MODEL_ROUTING_RULES["default"]
 
     candidates: list[str] = []
+
+    # APIMart Ext 使用独立的 version 参数，不支持旧版 quality 参数。
+    # 它只作为普通 APIMart 之前的内部优先尝试；若失败，后续普通 APIMart
+    # 会收到完整的原始 quality 参数。
+    if model_name == "gpt-image-2.5" or model_name in _APIMART_GPT_IMAGE_25_MODELS:
+        preferred_order = [
+            PROVIDER_APIMART_EXT if provider == PROVIDER_APIMART else provider
+            for provider in preferred_order
+        ]
+        if PROVIDER_APIMART_EXT in preferred_order:
+            preferred_order.insert(preferred_order.index(PROVIDER_APIMART_EXT) + 1, PROVIDER_APIMART)
 
     # 2. 能力表 & 静态 Key 双重过滤
     for provider in preferred_order:
@@ -2317,7 +2354,7 @@ def get_smart_route_candidates(
         elif provider == PROVIDER_ADOBE2API:
             if settings.adobe2api_base_url and settings.adobe2api_api_key:
                 candidates.append(provider)
-        elif provider == PROVIDER_APIMART:
+        elif provider in (PROVIDER_APIMART, PROVIDER_APIMART_EXT):
             if settings.ai_image_api_key:
                 candidates.append(provider)
 
@@ -2459,12 +2496,13 @@ async def smart_generate_image_async(
                     size=size, resolution=resolution, user_id=user_id,
                     on_progress=on_progress, on_accepted=provider_on_accepted,
                 )
-            else:  # APIMart
+            else:  # APIMart / APIMart Ext
                 if images:
                     result = await generate_image_with_reference_async(
                         model=provider_model, prompt=prompt, images=images,
                         size=size, resolution=resolution, user_id=user_id,
                         variant=variant, quality=quality,
+                        apimart_ext=provider == PROVIDER_APIMART_EXT,
                         on_progress=on_progress, on_accepted=provider_on_accepted,
                     )
                 else:
@@ -2472,6 +2510,7 @@ async def smart_generate_image_async(
                         model=provider_model, prompt=prompt,
                         size=size, resolution=resolution, user_id=user_id,
                         variant=variant, quality=quality,
+                        apimart_ext=provider == PROVIDER_APIMART_EXT,
                         on_progress=on_progress, on_accepted=provider_on_accepted,
                     )
 
