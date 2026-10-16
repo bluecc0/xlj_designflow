@@ -169,6 +169,12 @@ export const QuickEditMarkerOverlay = memo(function QuickEditMarkerOverlay({
     const onMouseMove = (e: MouseEvent) => {
       // 1. 处理标记点拖拽
       if (draggingMarkerId && dragStartRef.current) {
+        // 鼠标已在窗口外松开（未收到 mouseup），立即结束拖拽
+        if ((e.buttons & 1) === 0) {
+          dragStartRef.current = null
+          setDraggingMarkerId(null)
+          return
+        }
         const start = dragStartRef.current
         const dx = Math.abs(e.clientX - start.startX)
         const dy = Math.abs(e.clientY - start.startY)
@@ -219,11 +225,12 @@ export const QuickEditMarkerOverlay = memo(function QuickEditMarkerOverlay({
       }
     }
 
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
+    // 捕获阶段监听：图层上的 onMouseUp 会 stopPropagation，冒泡阶段收不到 mouseup，拖拽将无法结束
+    window.addEventListener('mousemove', onMouseMove, true)
+    window.addEventListener('mouseup', onMouseUp, true)
     return () => {
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
+      window.removeEventListener('mousemove', onMouseMove, true)
+      window.removeEventListener('mouseup', onMouseUp, true)
     }
   }, [draggingMarkerId, drawingBox, markers, onAddMarker, onUpdateMarker])
 
