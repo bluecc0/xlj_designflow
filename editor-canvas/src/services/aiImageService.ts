@@ -534,8 +534,8 @@ export interface OutfitChangeRequest {
   uploadSlots?: string[]
   targetSlots?: string[]
   extraPrompt: string
-  model: 'gpt-image-2.5' | 'nano-banana-pro'
-  resolution: '1K' | '2K'
+  model: 'gpt-image-2.5' | 'flux-vto'
+  resolution: '1K' | '2K' | '4K'
   batchCount: number
 }
 

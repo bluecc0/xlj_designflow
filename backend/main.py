@@ -102,6 +102,7 @@ from .agent_mode import (
     summarize_project_title,
 )
 from . import outfit_change
+from .bfl_vto import FLUX_VTO_MODEL, PROVIDER_BFL, generate_vto_async
 from .psd_layered import create_layered_psd_from_image
 from .matting_service import matting_service
 from .bfl_outpainting import (
@@ -4878,6 +4879,13 @@ async def _run_ai_image_background(
                 ),
                 timeout=max(60, int(settings.ai_image_smart_route_timeout_seconds or 360)),
             )
+        elif provider == PROVIDER_BFL:
+            if len(refs) < 2:
+                raise RuntimeError("FLUX 换装缺少人物图或服装图")
+            result = await generate_vto_async(
+                prompt=prompt, person=refs[0][0], garment=refs[1][0], user_id=user_id,
+                on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_BFL, tid),
+            )
         elif provider == PROVIDER_SUB2API:
             result = await generate_sub2api_async(
                 model=model, prompt=prompt,
@@ -5902,6 +5910,8 @@ async def ai_image_retry(request: Request):
     effective_prompt = resolved_prompt or prompt
     prompt_trace = old_job.get("prompt_trace") or ""
     model = (old_job.get("model") or "gpt-image-2.5").strip()
+    # FLUX 换装任务的参考图已是 [人物图, 服装拼图]，重试必须仍走 BFL
+    retry_provider = PROVIDER_BFL if model == FLUX_VTO_MODEL else PROVIDER_AUTO
     size = (old_job.get("size") or "1024x1024").strip()
     resolution = (old_job.get("resolution") or "").strip()
     variant = str(request_meta.get("variant") or "flare").strip().lower()
@@ -5977,7 +5987,7 @@ async def ai_image_retry(request: Request):
     save_ai_image_job(
         job_id=new_job_id, user_id=user["id"], status="processing",
         model=model, prompt=effective_prompt, size=size,
-        provider=PROVIDER_AUTO, resolution=resolution,
+        provider=retry_provider, resolution=resolution,
         original_prompt=original_prompt or prompt, resolved_prompt=effective_prompt,
         prompt_trace=prompt_trace,
         has_reference=has_reference, reference_count=len(all_refs),
@@ -6006,14 +6016,14 @@ async def ai_image_retry(request: Request):
         user_id=user["id"], username=user["username"],
         action="ai_image",
         detail=f"job={new_job_id[:8]} model={model} size={size} result=retry_auto refs={len(all_refs)}",
-        payload=json.dumps({"job_id": new_job_id, "model": model, "size": size, "provider": PROVIDER_AUTO, "retry_from": job_id}, ensure_ascii=False),
+        payload=json.dumps({"job_id": new_job_id, "model": model, "size": size, "provider": retry_provider, "retry_from": job_id}, ensure_ascii=False),
     )
     # 重试消息不重新写入聊天记录（不重复显示 prompt），后台任务完成/失败时会自动追加
     asyncio.create_task(
         _run_ai_image_background(
             job_id=new_job_id, user_id=user["id"], username=user["username"],
             session_id=session_id,
-            provider=PROVIDER_AUTO,
+            provider=retry_provider,
             model=model, prompt=effective_prompt,
             size=size, resolution=resolution,
             variant=variant, quality=quality,
@@ -6045,7 +6055,7 @@ async def ai_image_retry(request: Request):
     return {
         "job_id": new_job_id,
         "status": "processing",
-        "provider": PROVIDER_AUTO,
+        "provider": retry_provider,
         "resolved_prompt": effective_prompt,
         "original_prompt": original_prompt or prompt,
         "prompt_trace": prompt_trace,
@@ -7034,7 +7044,7 @@ async def ai_image_endpoint(
 # ─── AI 换装：参考图生图 ─────────────────────────────────────────────────────
 
 OUTFIT_MAX_SOURCE_BYTES = 20 * 1024 * 1024
-OUTFIT_MODELS = {"gpt-image-2.5", "nano-banana-pro"}
+OUTFIT_MODELS = {"gpt-image-2.5", FLUX_VTO_MODEL}
 
 
 async def _read_outfit_upload(upload: UploadFile, *, label: str) -> bytes:
@@ -7092,10 +7102,18 @@ async def ai_image_outfit_change(
     model_key = (model or settings.outfit_default_model or "gpt-image-2.5").strip().lower()
     if model_key not in OUTFIT_MODELS:
         raise HTTPException(400, f"AI 换装不支持模型: {model}")
-    resolved_model = normalize_model_name(model_key)
+    # FLUX 走 BFL 官方虚拟试穿接口（人物图 + 单张服装拼图），其余模型走通用参考图生图
+    is_flux = model_key == FLUX_VTO_MODEL
+    if is_flux and not settings.bfl_api_key:
+        raise HTTPException(503, "FLUX 换装未配置 BFL_API_KEY")
+    resolved_model = FLUX_VTO_MODEL if is_flux else normalize_model_name(model_key)
+    outfit_provider = PROVIDER_BFL if is_flux else PROVIDER_AUTO
     resolution = (resolution or "1K").strip().upper()
-    if resolution not in {"1K", "2K"}:
+    if resolution not in {"1K", "2K", "4K"}:
         resolution = "1K"
+    if is_flux and resolution == "4K":
+        # vto-v2 输出尺寸跟随人物图，官方上限约 4MP，达不到 4K
+        raise HTTPException(400, "FLUX 换装最高支持 2K（约 4MP），4K 请使用 GPT Image 2.5")
     batch_count = max(1, min(int(batch_count or 1), 4))
 
     asset_list = _parse_json_form(assets, [], field="assets")
@@ -7173,6 +7191,19 @@ async def ai_image_outfit_change(
         target_slots=target_slot_list,
         extra_prompt=extra_prompt,
     )
+    if is_flux:
+        garment_board = await asyncio.to_thread(
+            outfit_change.compose_garment_board, [content for content, _name in refs[1:]]
+        )
+        person = await asyncio.to_thread(
+            outfit_change.fit_person_image, source_bytes, 4.0 if resolution == "2K" else 1.0
+        )
+        refs = [(person, "01_person.jpg"), (garment_board, "02_garments.jpg")]
+        prompt = outfit_change.build_vto_prompt(
+            references=ref_meta,
+            target_slots=target_slot_list,
+            extra_prompt=extra_prompt,
+        )
     skus = list(dict.fromkeys(m["sku"] for m in ref_meta if m["sku"]))
     slot_labels = [
         outfit_change.PRESET_SLOTS.get(s, {}).get("label") or outfit_change.GARMENT_SLOTS.get(s, s)
@@ -7211,14 +7242,22 @@ async def ai_image_outfit_change(
         "url": stored_urls[0] if stored_urls else "",
         "label": "图1 · 原图",
     }]
-    for i, meta in enumerate(ref_meta):
-        label_bits = [b for b in (meta["sku"], meta["type_label"], meta["angle"]) if b]
+    if is_flux:
         reference_images.append({
             "type": "manual",
-            "name": refs[i + 1][1],
-            "url": stored_urls[i + 1] if i + 1 < len(stored_urls) else "",
-            "label": f"图{i + 2} · {' / '.join(label_bits)}",
+            "name": refs[1][1],
+            "url": stored_urls[1] if len(stored_urls) > 1 else "",
+            "label": f"图2 · 服装拼图（{len(ref_meta)} 张素材）",
         })
+    else:
+        for i, meta in enumerate(ref_meta):
+            label_bits = [b for b in (meta["sku"], meta["type_label"], meta["angle"]) if b]
+            reference_images.append({
+                "type": "manual",
+                "name": refs[i + 1][1],
+                "url": stored_urls[i + 1] if i + 1 < len(stored_urls) else "",
+                "label": f"图{i + 2} · {' / '.join(label_bits)}",
+            })
 
     job_ids: list[str] = []
     for batch_index in range(batch_count):
@@ -7249,7 +7288,7 @@ async def ai_image_outfit_change(
         save_ai_image_job(
             job_id=jid, user_id=user["id"], status="processing",
             model=resolved_model, prompt=display_prompt, size=size,
-            provider="auto", resolution=resolution,
+            provider=outfit_provider, resolution=resolution,
             original_prompt=display_prompt, resolved_prompt=prompt,
             has_reference=True, reference_count=len(refs),
             request_meta=request_meta, created_at=created_at,
@@ -7268,7 +7307,7 @@ async def ai_image_outfit_change(
             _run_ai_image_background(
                 job_id=jid, user_id=user["id"], username=user["username"],
                 session_id=session_id,
-                provider="auto",
+                provider=outfit_provider,
                 model=resolved_model, prompt=prompt,
                 size=size, resolution=resolution,
                 variant="flare", quality="auto",

@@ -499,3 +499,87 @@ def build_outfit_prompt(
         lines.append(f"补充要求（优先满足，但不得违背以上一致性要求）：{clean_extra[:500]}")
 
     return "\n".join(lines)
+
+
+# ─── FLUX 虚拟试穿（BFL vto-v2）专用：单张服装拼图 + 英文 prompt ──────────────
+
+# 部位 → VTO prompt 里的英文品类名
+VTO_SLOT_NAMES: dict[str, str] = {
+    "hat": "cap",
+    "glasses": "glasses",
+    "top": "top",
+    "outerwear": "jacket",
+    "dress": "dress",
+    "bottom": "pants",
+    "socks": "socks",
+    "shoes": "shoes",
+    "bag": "bag",
+    "accessory": "accessory",
+}
+
+
+def fit_person_image(image_bytes: bytes, megapixels: float) -> bytes:
+    """VTO 输出尺寸跟随人物图：按目标像素量等比缩小（只缩不放），输出 JPEG。"""
+    from PIL import Image, ImageOps
+
+    with Image.open(io.BytesIO(image_bytes)) as src:
+        src.load()
+        img = ImageOps.exif_transpose(src).convert("RGB")
+    limit = megapixels * 1_000_000
+    pixels = img.width * img.height
+    if pixels > limit:
+        scale = (limit / pixels) ** 0.5
+        img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))), Image.LANCZOS)
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=93, optimize=True)
+    return out.getvalue()
+
+
+def compose_garment_board(images: list[bytes], *, cell: int = 512, gap: int = 16) -> bytes:
+    """VTO 只接受一张服装图：把多张素材按网格排在白底上（官方建议 2x2 拼图）。"""
+    from PIL import Image, ImageOps
+
+    if not images:
+        raise ValueError("至少需要一张服装素材")
+    n = len(images)
+    cols = 1 if n == 1 else 2 if n <= 4 else 3
+    rows = (n + cols - 1) // cols
+    cell_w, cell_h = cell, int(cell * 4 / 3)
+    board = Image.new("RGB", (cols * cell_w + (cols + 1) * gap, rows * cell_h + (rows + 1) * gap), "white")
+    for i, raw in enumerate(images):
+        with Image.open(io.BytesIO(raw)) as src:
+            src.load()
+            img = ImageOps.exif_transpose(src).convert("RGBA")
+        img.thumbnail((cell_w, cell_h), Image.LANCZOS)
+        x = gap + (i % cols) * (cell_w + gap) + (cell_w - img.width) // 2
+        y = gap + (i // cols) * (cell_h + gap) + (cell_h - img.height) // 2
+        board.paste(img, (x, y), img)
+    out = io.BytesIO()
+    board.save(out, format="JPEG", quality=92, optimize=True)
+    return out.getvalue()
+
+
+def build_vto_prompt(*, references: list[dict[str, Any]], target_slots: Optional[list[str]] = None, extra_prompt: str = "") -> str:
+    """按官方公式拼 prompt：保持图1人物脸与姿势，穿上图2中的指定服饰。"""
+    slots = list(dict.fromkeys(
+        str(s).strip().lower() for s in (target_slots or []) if str(s).strip()
+    )) or list(dict.fromkeys(str(r.get("slot") or "").strip().lower() for r in references if r.get("slot")))
+    names = [VTO_SLOT_NAMES.get(s, s) for s in slots if s]
+    if not names:
+        garments = "garments"
+    elif len(names) == 1:
+        garments = names[0]
+    else:
+        garments = ", ".join(names[:-1]) + " and " + names[-1]
+
+    prompt = (
+        f"The person of image 1, maintaining exactly their face and pose, wearing the {garments} of image 2. "
+        "Keep every other clothing item, the background, lighting and framing of image 1 unchanged."
+    )
+    skus = [r.get("sku") for r in references if r.get("sku")]
+    if len(skus) != len(set(skus)) or len(references) > len(names or [None]):
+        prompt += " Image 2 contains several reference views; views of the same item show one single garment."
+    clean_extra = (extra_prompt or "").strip()
+    if clean_extra:
+        prompt += f" Additional styling: {clean_extra[:500]}"
+    return prompt

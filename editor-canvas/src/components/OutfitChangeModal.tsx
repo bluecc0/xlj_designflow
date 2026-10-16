@@ -53,9 +53,17 @@ const zoneOfItem = (itemKey: string) => OUTFIT_ZONES.find((z) => z.items.some((i
 let lastModel: OutfitChangeRequest['model'] = 'gpt-image-2.5'
 let lastResolution: OutfitChangeRequest['resolution'] = '1K'
 
-const MODEL_OPTIONS: { key: OutfitChangeRequest['model']; label: string; desc: string }[] = [
-  { key: 'gpt-image-2.5', label: 'GPT Image 2.5', desc: '中文理解强，智能路由' },
-  { key: 'nano-banana-pro', label: 'Nano Banana Pro', desc: '编辑一致性高' },
+const RESOLUTIONS: OutfitChangeRequest['resolution'][] = ['1K', '2K', '4K']
+
+// FLUX vto-v2 输出跟随人物图，官方上限约 4MP，因此最高只到 2K
+const MODEL_OPTIONS: {
+  key: OutfitChangeRequest['model']
+  label: string
+  desc: string
+  resolutions: OutfitChangeRequest['resolution'][]
+}[] = [
+  { key: 'gpt-image-2.5', label: 'GPT Image 2.5', desc: '中文理解强，智能路由', resolutions: RESOLUTIONS },
+  { key: 'flux-vto', label: 'FLUX Try-On', desc: 'BFL 官方虚拟试穿，保持脸部与姿势', resolutions: ['1K', '2K'] },
 ]
 
 // 与画布其余界面一致的冷灰（slate）色板
@@ -716,6 +724,9 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                             className="oc-menu-item"
                             onClick={() => {
                               setModel(opt.key)
+                              if (!opt.resolutions.includes(resolution)) {
+                                setResolution(opt.resolutions[opt.resolutions.length - 1])
+                              }
                               setModelMenuOpen(false)
                             }}
                             style={styles.menuItem}
@@ -740,18 +751,27 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 <div style={{ ...styles.field, flex: 1 }}>
                   <div style={styles.fieldLabel}>分辨率</div>
                   <div style={styles.segment}>
-                    {(['1K', '2K'] as const).map((r) => (
-                      <button
-                        key={r}
-                        type="button"
-                        aria-pressed={resolution === r}
-                        className="oc-seg"
-                        onClick={() => setResolution(r)}
-                        style={{ ...styles.segmentItem, ...(resolution === r ? styles.segmentActive : null) }}
-                      >
-                        {r}
-                      </button>
-                    ))}
+                    {RESOLUTIONS.map((r) => {
+                      const unsupported = !currentModel.resolutions.includes(r)
+                      return (
+                        <button
+                          key={r}
+                          type="button"
+                          aria-pressed={resolution === r}
+                          disabled={unsupported}
+                          title={unsupported ? `${currentModel.label} 最高支持 ${currentModel.resolutions[currentModel.resolutions.length - 1]}` : undefined}
+                          className="oc-seg"
+                          onClick={() => setResolution(r)}
+                          style={{
+                            ...styles.segmentItem,
+                            ...(resolution === r ? styles.segmentActive : null),
+                            ...(unsupported ? styles.segmentDisabled : null),
+                          }}
+                        >
+                          {r}
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
                 <div style={{ ...styles.field, flex: 1 }}>
@@ -860,7 +880,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
         [data-modal="outfit-change"] .oc-mini:hover .oc-mini-remove, [data-modal="outfit-change"] .oc-mini-remove:focus-visible { opacity: 1; }
         [data-modal="outfit-change"] .oc-select:hover { border-color: ${C.subtle}; }
         [data-modal="outfit-change"] .oc-menu-item:hover, [data-modal="outfit-change"] .oc-menu-item[aria-selected="true"] { background: ${C.hover}; }
-        [data-modal="outfit-change"] .oc-seg:hover { color: ${C.ink}; }
+        [data-modal="outfit-change"] .oc-seg:hover:not(:disabled) { color: ${C.ink}; }
         [data-modal="outfit-change"] .oc-textarea:focus { border-color: ${C.ink}; box-shadow: 0 0 0 3px rgba(30,35,45,.08); outline: none; }
         [data-modal="outfit-change"] .oc-primary:hover:not(:disabled) { background: #2d3442; }
         [data-modal="outfit-change"] input::placeholder, [data-modal="outfit-change"] textarea::placeholder { color: ${C.subtle}; }
@@ -1540,6 +1560,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 500,
     cursor: 'pointer',
     fontVariantNumeric: 'tabular-nums',
+  },
+  segmentDisabled: {
+    color: C.lineStrong,
+    cursor: 'not-allowed',
   },
   segmentActive: {
     backgroundColor: C.surface,
