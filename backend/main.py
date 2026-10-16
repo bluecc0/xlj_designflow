@@ -4459,6 +4459,10 @@ async def _build_context_aware_prompt(
     根据当前 session 的历史对话，用 LLM 将用户的简短修改指令
     改写为包含上下文的完整生图 prompt。对用户透明。
     """
+    # 如果用户当前指令已经包含精准局部修改坐标信息，跳过 LLM 上下文改写，保护精确坐标
+    if "[精准局部修改需求]" in current_prompt or ("坐标" in current_prompt and ("%" in current_prompt or "归一化" in current_prompt)):
+        return current_prompt
+
     messages = load_ai_chat_messages(session_id, user_id=user_id)
     # 至少需要一轮以上对话才有上下文意义
     text_messages = [m for m in messages if m.get("who") in ("user", "ai")]

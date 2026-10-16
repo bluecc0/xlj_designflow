@@ -16,8 +16,9 @@ import { ContextMenu, type ContextMenuState } from './components/ContextMenu'
 import { ImportProductModal } from './components/ImportProductModal'
 import { ImagePropertiesModal } from './components/ImagePropertiesModal'
 import { QuickEditPopover } from './components/QuickEditPopover'
+import { QuickEditMarkerOverlay } from './components/QuickEditMarkerOverlay'
 import { SnapGuides } from './components/SnapGuides'
-import type { OutpaintMargins, CanvasImage } from './types'
+import type { OutpaintMargins, CanvasImage, QuickEditMarker } from './types'
 import { useViewportStore } from './store/viewportStore'
 import { useCanvasStore } from './store/canvasStore'
 import { useHistoryStore } from './store/historyStore'
@@ -120,6 +121,7 @@ export function App() {
   }>({ visible: false, targetPos: null })
   const [propertiesModalImage, setPropertiesModalImage] = useState<any>(null)
   const [quickEditImage, setQuickEditImage] = useState<CanvasImage | null>(null)
+  const [quickEditMarkers, setQuickEditMarkers] = useState<QuickEditMarker[]>([])
   const [quickEditToast, setQuickEditToast] = useState<string | null>(null)
   const [isQuickEditSubmitting, setIsQuickEditSubmitting] = useState(false)
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
@@ -313,16 +315,56 @@ export function App() {
     }
   }, [outpaintingImageId, images, outpaintMargins, outpaintInitialImage, claimOperation, updateOperation, releaseOperation, addImage, setSelected])
 
+  const handleAddQuickEditMarker = useCallback((marker: QuickEditMarker) => {
+    setQuickEditMarkers((prev) => [...prev, marker])
+  }, [])
+
+  const handleUpdateQuickEditMarker = useCallback((marker: QuickEditMarker) => {
+    setQuickEditMarkers((prev) => prev.map((m) => (m.id === marker.id ? marker : m)))
+  }, [])
+
+  const handleRemoveQuickEditMarker = useCallback((id: string) => {
+    setQuickEditMarkers((prev) => prev.filter((m) => m.id !== id))
+  }, [])
+
+  const handleClearQuickEditMarkers = useCallback(() => {
+    setQuickEditMarkers([])
+  }, [])
+
   const handleQuickEditSubmit = useCallback(
-    async (prompt: string, targetImage: CanvasImage) => {
+    async (prompt: string, targetImage: CanvasImage, markers: QuickEditMarker[] = []) => {
       setIsQuickEditSubmitting(true)
       try {
+        let finalPrompt = prompt.trim()
+        if (markers && markers.length > 0) {
+          const sorted = [...markers].sort((a, b) => a.number - b.number)
+          const markerLines = sorted.map((m) => {
+            const pctX = Math.round(m.ratioX * 100)
+            const pctY = Math.round(m.ratioY * 100)
+            const normX = Math.round(m.ratioX * 1000)
+            const normY = Math.round(m.ratioY * 1000)
+
+            if (m.type === 'rect' && m.ratioWidth && m.ratioHeight) {
+              const pctW = Math.round(m.ratioWidth * 100)
+              const pctH = Math.round(m.ratioHeight * 100)
+              const ymin = normY
+              const xmin = normX
+              const ymax = Math.round((m.ratioY + m.ratioHeight) * 1000)
+              const xmax = Math.round((m.ratioX + m.ratioWidth) * 1000)
+              return `- 标记 ${m.number} [选框区域]: 左上角 (x: ${pctX}%, y: ${pctY}%), 宽高 (w: ${pctW}%, h: ${pctH}%), 归一化选框 [ymin: ${ymin}, xmin: ${xmin}, ymax: ${ymax}, xmax: ${xmax}], 像素范围 [x: ${m.pixelX}px, y: ${m.pixelY}px, 宽: ${m.pixelWidth || 0}px, 高: ${m.pixelHeight || 0}px]`
+            }
+
+            return `- 标记 ${m.number} [坐标点]: 坐标 (x: ${pctX}%, y: ${pctY}%), 归一化坐标 (${normX}, ${normY}), 像素位置 (x: ${m.pixelX}px, y: ${m.pixelY}px)`
+          })
+          finalPrompt = `[精准局部修改需求]\n用户指定了参考图中的局部修改位置，坐标信息如下（以参考图左上角为原点 (0%, 0%)，包含归一化坐标与百分比坐标）：\n${markerLines.join('\n')}\n\n修改要求：\n${finalPrompt}`
+        }
+
         const isEmbedded = typeof window !== 'undefined' && window.parent && window.parent !== window
         if (isEmbedded) {
           window.parent.postMessage(
             {
               type: 'designflow:quick-edit-generate',
-              prompt,
+              prompt: finalPrompt,
               image: {
                 id: targetImage.id,
                 src: targetImage.url,
@@ -334,18 +376,25 @@ export function App() {
             },
             '*'
           )
-          setQuickEditToast('已提交生图任务，正在使用 gpt-image-2.5 智能路由生成...')
+          const toastMsg = markers && markers.length > 0
+            ? `已提交生图任务，包含 ${markers.length} 处精准坐标标记...`
+            : '已提交生图任务，正在使用 gpt-image-2.5 智能路由生成...'
+          setQuickEditToast(toastMsg)
           setTimeout(() => {
             setQuickEditToast(null)
           }, 3500)
           setQuickEditImage(null)
+          setQuickEditMarkers([])
         } else {
           // 独立运行时的直接调用
           claimOperation('quick-edit', '正在提交快捷编辑任务...')
-          setQuickEditToast('正在使用 gpt-image-2.5 生成图片...')
+          const toastMsg = markers && markers.length > 0
+            ? `正在使用 gpt-image-2.5 结合 ${markers.length} 处坐标精准生图...`
+            : '正在使用 gpt-image-2.5 生成图片...'
+          setQuickEditToast(toastMsg)
           const result = await runQuickEdit(
             targetImage.url,
-            prompt,
+            finalPrompt,
             (msg, progress) => {
               updateOperation({ message: msg, progress })
             }
@@ -371,6 +420,7 @@ export function App() {
           setQuickEditToast('快捷编辑生图完成')
           setTimeout(() => setQuickEditToast(null), 3000)
           setQuickEditImage(null)
+          setQuickEditMarkers([])
         }
       } catch (err: any) {
         alert(`快捷编辑失败: ${err.message}`)
@@ -1405,6 +1455,7 @@ export function App() {
                 }
                 setSelected([im.id], 'image')
                 setQuickEditImage(im)
+                setQuickEditMarkers([])
               }}
               onContextMenu={(e) => {
                 if (outpaintingImageIdRef.current && outpaintingImageIdRef.current !== im.id) {
@@ -1464,12 +1515,13 @@ export function App() {
         <SnapGuides />
 
         {/* 单选中图片的变换拉伸手柄 Overlay */}
-        {singleSelectedImage && !outpaintingImageId && (
+        {singleSelectedImage && !outpaintingImageId && !quickEditImage && (
           <div style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
             <SelectionOverlay
               image={singleSelectedImage}
               onDoubleClick={() => {
                 setQuickEditImage(singleSelectedImage)
+                setQuickEditMarkers([])
               }}
               onContextMenu={(e) => {
                 setContextMenu({
@@ -1480,6 +1532,19 @@ export function App() {
                   targetType: 'image',
                 })
               }}
+            />
+          </div>
+        )}
+
+        {/* 快捷修改精准标记点交互浮层 */}
+        {quickEditImage && (
+          <div style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
+            <QuickEditMarkerOverlay
+              image={quickEditImage}
+              markers={quickEditMarkers}
+              onAddMarker={handleAddQuickEditMarker}
+              onUpdateMarker={handleUpdateQuickEditMarker}
+              onRemoveMarker={handleRemoveQuickEditMarker}
             />
           </div>
         )}
@@ -1526,6 +1591,7 @@ export function App() {
         onOpenQuickEdit={(img) => {
           setSelected([img.id], 'image')
           setQuickEditImage(img)
+          setQuickEditMarkers([])
         }}
       />
 
@@ -1548,7 +1614,13 @@ export function App() {
       {quickEditImage && (
         <QuickEditPopover
           image={quickEditImage}
-          onClose={() => setQuickEditImage(null)}
+          markers={quickEditMarkers}
+          onRemoveMarker={handleRemoveQuickEditMarker}
+          onClearMarkers={handleClearQuickEditMarkers}
+          onClose={() => {
+            setQuickEditImage(null)
+            setQuickEditMarkers([])
+          }}
           onSubmit={handleQuickEditSubmit}
           isSubmitting={isQuickEditSubmitting}
         />
