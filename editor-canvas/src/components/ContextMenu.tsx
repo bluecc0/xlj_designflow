@@ -592,13 +592,13 @@ export const ContextMenu = memo(function ContextMenu({
                   onOpenCompareModal?.(selectedImages[0], selectedImages[1])
                   onClose()
                 }}
-                style={{ ...menuItemStyle, color: '#2563eb' }}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#eff6ff')}
+                style={menuItemStyle}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f4f8')}
                 onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
               >
-                <SlidersHorizontal size={14} color="#2563eb" strokeWidth={1.8} style={{ pointerEvents: 'none' }} />
-                <span style={{ flex: 1, fontWeight: 500 }}>对比两张图片 (Before/After)</span>
-                <span style={{ ...shortcutStyle, color: '#3b82f6' }}>C</span>
+                <SlidersHorizontal size={14} color="#687083" strokeWidth={1.8} style={{ pointerEvents: 'none' }} />
+                <span style={{ flex: 1, color: '#1e232d' }}>前后对比</span>
+                <span style={shortcutStyle}>C</span>
               </div>
             </>
           )}

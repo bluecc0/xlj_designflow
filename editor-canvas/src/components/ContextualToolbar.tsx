@@ -3,7 +3,6 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
 import { useAIOperationStore } from '../store/aiOperationStore'
 import { TextToolbar } from './TextToolbar'
-import { SlidersHorizontal } from 'lucide-react'
 import type { OutpaintMargins, CanvasImage } from '../types'
 import {
   runMatting,
@@ -31,7 +30,7 @@ interface Props {
 /**
  * 还原原版 tldraw 自研矢量线性图标（17×17）
  */
-function DesignflowToolbarIcon({ name }: { name: 'download' | 'outpaint' | 'upscale' | 'vectorize' | 'matting' | 'layers' }) {
+function DesignflowToolbarIcon({ name }: { name: 'download' | 'outpaint' | 'upscale' | 'vectorize' | 'matting' | 'layers' | 'compare' }) {
   const commonProps = {
     viewBox: '0 0 24 24',
     width: 17,
@@ -106,6 +105,16 @@ function DesignflowToolbarIcon({ name }: { name: 'download' | 'outpaint' | 'upsc
         <path d="M12 3l8 4.5-8 4.5-8-4.5z" />
         <path d="M4 12.5l8 4.5 8-4.5" />
         <path d="M4 16.5l8 4.5 8-4.5" />
+      </svg>
+    )
+  }
+
+  if (name === 'compare') {
+    return (
+      <svg {...commonProps}>
+        <path d="M12 5h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-7z" fill="currentColor" fillOpacity={0.16} stroke="none" />
+        <rect x="3" y="5" width="18" height="14" rx="2" />
+        <path d="M12 2.5v19" />
       </svg>
     )
   }
@@ -588,33 +597,16 @@ export function ContextualToolbar({
         ) : (
           /* 多图选中：批量打包下载与对齐操作组 */
           <>
-            {/* 选中恰好 2 张图片时显示 Before / After 叠加滑动对比按钮 */}
+            {/* 选中恰好 2 张图片时显示前后对比按钮 */}
             {selectedImages.length === 2 && onOpenCompareModal && (
               <>
                 <button
                   onClick={() => onOpenCompareModal(selectedImages[0], selectedImages[1])}
                   className="designflow-toolbar-button"
-                  title="对比选中的两张图片 (Before/After 叠加滑动对比) [快捷键 C]"
-                  style={{
-                    backgroundColor: '#2563eb',
-                    color: '#ffffff',
-                    fontWeight: 500,
-                    padding: '0 10px',
-                    gap: 6,
-                  }}
+                  title="前后对比 (C)"
                 >
-                  <SlidersHorizontal size={15} strokeWidth={2.2} />
-                  <span
-                    className="designflow-toolbar-label"
-                    style={{
-                      maxWidth: 140,
-                      opacity: 1,
-                      marginInlineStart: 4,
-                      color: '#ffffff',
-                    }}
-                  >
-                    对比 (Before/After)
-                  </span>
+                  <DesignflowToolbarIcon name="compare" />
+                  <span className="designflow-toolbar-label">前后对比</span>
                 </button>
                 <span className="designflow-toolbar-divider" />
               </>
