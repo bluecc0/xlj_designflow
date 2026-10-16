@@ -5,43 +5,62 @@ export interface OutfitItem {
   /** 提交给后端的部位 slot */
   slot: string
   label: string
-  placeholder: string
 }
 
 export interface OutfitZone {
   key: string
   label: string
+  /** 单品未标注品类（自动识别）时提交的部位 slot */
+  slot: string
+  /** 是否允许「自动识别」品类；不允许时默认取 items[0] */
+  allowAuto: boolean
   items: OutfitItem[]
 }
 
-// 人偶 4 个可点区域，每个区域下细分具体单品
+// 人偶 4 个可点区域；items 是可选的下一级品类，用户可直接在区域内添加单品
 export const OUTFIT_ZONES: OutfitZone[] = [
   {
     key: 'head',
     label: '头部',
-    items: [{ key: 'hat', slot: 'hat', label: '帽子', placeholder: '帽子货号' }],
+    slot: 'hat',
+    allowAuto: false,
+    items: [{ key: 'hat', slot: 'hat', label: '帽子' }],
   },
   {
     key: 'upper',
     label: '上衣',
+    slot: 'top',
+    allowAuto: true,
     items: [
-      { key: 'outerwear', slot: 'outerwear', label: '外套', placeholder: '外套货号' },
-      { key: 'hoodie', slot: 'top', label: '卫衣', placeholder: '卫衣货号' },
-      { key: 'tshirt', slot: 'top', label: 'T恤', placeholder: 'T恤货号' },
+      { key: 'outerwear', slot: 'outerwear', label: '外套' },
+      { key: 'hoodie', slot: 'top', label: '卫衣' },
+      { key: 'tshirt', slot: 'top', label: 'T恤' },
     ],
   },
   {
     key: 'lower',
     label: '下装',
-    items: [{ key: 'pants', slot: 'bottom', label: '裤子', placeholder: '裤子货号' }],
+    slot: 'bottom',
+    allowAuto: false,
+    items: [{ key: 'pants', slot: 'bottom', label: '裤子' }],
   },
   {
     key: 'feet',
     label: '鞋袜',
+    slot: 'shoes',
+    allowAuto: false,
     items: [
-      { key: 'shoes', slot: 'shoes', label: '鞋子', placeholder: '鞋子货号' },
-      { key: 'socks', slot: 'socks', label: '袜子', placeholder: '袜子货号' },
+      { key: 'shoes', slot: 'shoes', label: '鞋子' },
+      { key: 'socks', slot: 'socks', label: '袜子' },
     ],
+  },
+  {
+    key: 'accessory',
+    label: '配件',
+    slot: 'bag',
+    allowAuto: false,
+    // 目前配件只支持包袋一个品类（背包、斜挎包、手提包等由参考图决定）
+    items: [{ key: 'bag', slot: 'bag', label: '包袋' }],
   },
 ]
 
@@ -58,6 +77,7 @@ const CALLOUTS: Record<string, [number, number, number]> = {
   upper: [126, 122, 122],
   lower: [112, 252, 256],
   feet: [122, 356, 350],
+  accessory: [106, 132, 189],
 }
 
 const LABEL_X = 146
@@ -94,6 +114,13 @@ const PANTS_GARMENT =
 // 裤脚露出的脚踝与袜子
 const SOCK_L = 'M 75 330 L 76 348 L 84 348 L 83 330 Z'
 const SOCK_R = 'M 97 330 L 96 348 L 104 348 L 105 330 Z'
+
+// 背包：包身背在身后（只从肩头上沿、手臂与躯干的缝隙露出），肩带与胸带在身前
+const BAG_BODY =
+  'M 66 84 Q 66 72 78 72 L 102 72 Q 114 72 114 84 L 115 172 Q 115 178 109 178 L 71 178 Q 65 178 65 172 Z'
+const BAG_HANDLE = 'M 84 72 Q 90 64 96 72'
+const BAG_STRAPS = 'M 78 80 C 75 96, 73 118, 74 138 M 102 80 C 105 96, 107 118, 106 138'
+const BAG_CHEST_STRAP = 'M 75 112 L 105 112'
 
 // 鞋子（脚踏地面，平稳扎实）
 const SHOE_L = 'M 75 348 Q 72 354 67 358 C 61 360, 56 361, 56 364 L 86 364 C 88 364, 88 358, 87 352 L 85 348 Z'
@@ -141,6 +168,13 @@ export const InteractiveMannequin: React.FC<Props> = ({
     }
   }
 
+  // 肩带内芯：不透明，盖住外描边中间形成有宽度的带子
+  const strapFill = (zone: string) => {
+    if (activeZone === zone) return '#e6e8ec'
+    if (hovered === zone) return '#f0f2f5'
+    return '#ffffff'
+  }
+
   // 结构细节线颜色
   const detailColor = (zone: string) => {
     if (activeZone === zone) return 'rgba(30, 35, 45, .5)'
@@ -178,6 +212,13 @@ export const InteractiveMannequin: React.FC<Props> = ({
 
       {/* ── 1. 地面投影 ── */}
       <ellipse cx={90} cy={367} rx={44} ry={5} fill="url(#mqGround)" />
+
+      {/* ── 1.5 背包包身（背在身后，最底层） ── */}
+      <g {...zoneProps('accessory')}>
+        <path d={BAG_BODY} {...garment('accessory')} />
+        <path d={BAG_HANDLE} fill="none" stroke={garment('accessory').stroke} strokeWidth={1.6} strokeLinecap="round" />
+        <path d="M 70 92 L 110 92" stroke={detailColor('accessory')} strokeWidth={0.6} fill="none" />
+      </g>
 
       {/* ── 2. 裸露肢体（皮肤底层，被服饰包裹与穿透） ── */}
       <g fill="#f8f9fb" stroke="#8a92a0" strokeOpacity=".9" strokeWidth={0.75}>
@@ -291,6 +332,16 @@ export const InteractiveMannequin: React.FC<Props> = ({
         <path d="M 71 145 L 82 151 L 82 166 L 72 161 Z M 109 145 L 98 151 L 98 166 L 108 161 Z" stroke={detailColor('upper')} strokeWidth={0.6} fill="none" />
         <path d="M 74 174 Q 90 180 106 174" stroke={detailColor('upper')} strokeWidth={0.55} strokeDasharray="1.5 2" fill="none" />
         <path d="M 68 94 L 68 188 M 112 94 L 112 188" stroke={detailColor('upper')} strokeWidth={0.4} strokeDasharray="1 3" fill="none" />
+      </g>
+
+      {/* ── 4.5 背包肩带与胸带（压在上衣外面） ── */}
+      <g {...zoneProps('accessory')}>
+        {/* 加宽的透明热区，细肩带也容易点中 */}
+        <path d={BAG_STRAPS} fill="none" stroke="transparent" strokeWidth={9} />
+        <path d={BAG_STRAPS} fill="none" stroke={garment('accessory').stroke} strokeWidth={3.6} strokeLinecap="round" />
+        <path d={BAG_STRAPS} fill="none" stroke={strapFill('accessory')} strokeWidth={2.2} strokeLinecap="round" />
+        <path d={BAG_CHEST_STRAP} fill="none" stroke={garment('accessory').stroke} strokeWidth={1} />
+        <rect x={87} y={109.5} width={6} height={5} rx={1} fill={strapFill('accessory')} stroke={garment('accessory').stroke} strokeWidth={0.8} />
       </g>
 
       {/* ── 5. 头部与帽子 ── */}

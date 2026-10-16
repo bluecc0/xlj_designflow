@@ -480,6 +480,8 @@ export interface OutfitAsset {
   id: string
   sku: string
   slot?: string
+  /** 用户标注的细分品类（outerwear / hoodie / tshirt / shoes / socks），'' 表示自动识别 */
+  item?: string
   asset_type: string
   type_label: string
   folder: string
@@ -532,6 +534,7 @@ export interface OutfitChangeRequest {
   assets: OutfitAsset[]
   uploads: File[]
   uploadSlots?: string[]
+  uploadItems?: string[]
   targetSlots?: string[]
   extraPrompt: string
   model: 'gpt-image-2.5' | 'flux-vto'
@@ -555,6 +558,7 @@ export async function submitOutfitChange(
       req.assets.map((a) => ({
         sku: a.sku,
         slot: a.slot || '',
+        item: a.item || '',
         asset_type: a.asset_type,
         path: a.path,
         angle: a.angle,
@@ -564,6 +568,9 @@ export async function submitOutfitChange(
   req.uploads.forEach((file) => fd.append('uploads', file))
   if (req.uploadSlots && req.uploadSlots.length > 0) {
     fd.append('upload_slots', JSON.stringify(req.uploadSlots))
+  }
+  if (req.uploadItems && req.uploadItems.length > 0) {
+    fd.append('upload_items', JSON.stringify(req.uploadItems))
   }
   fd.append('target_slots', JSON.stringify(req.targetSlots || []))
   fd.append('extra_prompt', req.extraPrompt || '')

@@ -20,7 +20,7 @@ import {
   type OutfitAssetSearchResult,
   type OutfitChangeRequest,
 } from '../services/aiImageService'
-import { InteractiveMannequin, OUTFIT_ZONES, type OutfitItem } from './InteractiveMannequin'
+import { InteractiveMannequin, OUTFIT_ZONES, type OutfitZone } from './InteractiveMannequin'
 
 interface Props {
   image: CanvasImage
@@ -34,20 +34,60 @@ interface UploadItem {
   previewUrl: string
 }
 
-interface ItemState {
+interface ZoneState {
   skuInput: string
   searchResult: OutfitAssetSearchResult | null
   searching: boolean
   searchError: string | null
   selected: OutfitAsset[]
   uploads: UploadItem[]
+  /** 单品 → 品类 key（'' = 自动识别）；单品 key 为 `sku:<货号>` 或 `upload:<id>` */
+  types: Record<string, string>
+}
+
+/** 一件单品：同一货号的多张角度图，或一张本地上传图 */
+interface Piece {
+  key: string
+  zone: OutfitZone
+  sku: string
+  assets: OutfitAsset[]
+  upload?: UploadItem
+  type: string
 }
 
 const DEFAULT_MAX_REFS = 8
 const ACCEPTED_UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
-const ALL_ITEMS: OutfitItem[] = OUTFIT_ZONES.flatMap((z) => z.items)
-const zoneOfItem = (itemKey: string) => OUTFIT_ZONES.find((z) => z.items.some((i) => i.key === itemKey))!
+const AUTO_LABEL = '自动识别'
+const skuPieceKey = (sku: string) => `sku:${sku}`
+const uploadPieceKey = (id: string) => `upload:${id}`
+const hasTypes = (zone: OutfitZone) => zone.items.length > 1
+const defaultType = (zone: OutfitZone) => (zone.allowAuto ? '' : zone.items[0].key)
+const typeOptions = (zone: OutfitZone) => [
+  ...(zone.allowAuto ? [{ key: '', label: AUTO_LABEL }] : []),
+  ...zone.items.map((i) => ({ key: i.key, label: i.label })),
+]
+const typeItem = (p: Piece) => p.zone.items.find((i) => i.key === p.type)
+// 只有多品类部位才把品类传给后端；单品类部位（帽子、下装）只传部位，避免把半裙写成“裤子”
+const pieceItemKey = (p: Piece) => (hasTypes(p.zone) ? typeItem(p)?.key || '' : '')
+const pieceSlot = (p: Piece) => typeItem(p)?.slot || p.zone.slot
+const pieceLabel = (p: Piece) => (hasTypes(p.zone) ? typeItem(p)?.label || p.zone.label : p.zone.items[0].label)
+const pieceCount = (p: Piece) => (p.upload ? 1 : p.assets.length)
+
+function zonePieces(zone: OutfitZone, st: ZoneState): Piece[] {
+  const valid = new Set(typeOptions(zone).map((o) => o.key))
+  const typeOf = (key: string) => (key in st.types && valid.has(st.types[key]) ? st.types[key] : defaultType(zone))
+  const bySku = new Map<string, OutfitAsset[]>()
+  st.selected.forEach((a) => {
+    const list = bySku.get(a.sku)
+    if (list) list.push(a)
+    else bySku.set(a.sku, [a])
+  })
+  return [
+    ...Array.from(bySku, ([sku, assets]) => ({ key: skuPieceKey(sku), zone, sku, assets, type: typeOf(skuPieceKey(sku)) })),
+    ...st.uploads.map((u) => ({ key: uploadPieceKey(u.id), zone, sku: '', assets: [], upload: u, type: typeOf(uploadPieceKey(u.id)) })),
+  ]
+}
 
 // 记住全局模型配置
 let lastModel: OutfitChangeRequest['model'] = 'gpt-image-2.5'
@@ -81,19 +121,20 @@ const C = {
   dangerBg: '#fdf1f1',
 }
 
-const emptyItemState = (): ItemState => ({
+const emptyZoneState = (): ZoneState => ({
   skuInput: '',
   searchResult: null,
   searching: false,
   searchError: null,
   selected: [],
   uploads: [],
+  types: {},
 })
 
 export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit }) => {
-  const [activeItemKey, setActiveItemKey] = useState<string>('tshirt')
-  const [itemStates, setItemStates] = useState<Record<string, ItemState>>(() =>
-    Object.fromEntries(ALL_ITEMS.map((i) => [i.key, emptyItemState()]))
+  const [activeZoneKey, setActiveZoneKey] = useState<string>('upper')
+  const [zoneStates, setZoneStates] = useState<Record<string, ZoneState>>(() =>
+    Object.fromEntries(OUTFIT_ZONES.map((z) => [z.key, emptyZoneState()]))
   )
   const [isDragOver, setIsDragOver] = useState(false)
 
@@ -111,50 +152,45 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
   const fileInputRef = useRef<HTMLInputElement>(null)
   const modelMenuRef = useRef<HTMLDivElement>(null)
 
-  const activeItem = ALL_ITEMS.find((i) => i.key === activeItemKey) || ALL_ITEMS[0]
-  const activeZone = zoneOfItem(activeItem.key)
-  const activeState = itemStates[activeItem.key]
+  const activeZone = OUTFIT_ZONES.find((z) => z.key === activeZoneKey) || OUTFIT_ZONES[0]
+  const activeState = zoneStates[activeZone.key]
 
-  const itemCount = useCallback(
-    (key: string) => (itemStates[key]?.selected.length || 0) + (itemStates[key]?.uploads.length || 0),
-    [itemStates]
-  )
-  const configuredItems = useMemo(() => ALL_ITEMS.filter((i) => itemCount(i.key) > 0), [itemCount])
-  const totalSelected = useMemo(() => ALL_ITEMS.reduce((n, i) => n + itemCount(i.key), 0), [itemCount])
+  const pieces = useMemo(() => OUTFIT_ZONES.flatMap((z) => zonePieces(z, zoneStates[z.key])), [zoneStates])
+  const activePieces = pieces.filter((p) => p.zone.key === activeZone.key)
+  const totalSelected = pieces.reduce((n, p) => n + pieceCount(p), 0)
   const maxRefs = DEFAULT_MAX_REFS
   const remaining = maxRefs - totalSelected
 
   const zoneCounts = useMemo(() => {
     const counts: Record<string, number> = {}
-    OUTFIT_ZONES.forEach((z) => {
-      const n = z.items.reduce((sum, i) => sum + itemCount(i.key), 0)
-      if (n > 0) counts[z.key] = n
+    pieces.forEach((p) => {
+      counts[p.zone.key] = (counts[p.zone.key] || 0) + pieceCount(p)
     })
     return counts
-  }, [itemCount])
+  }, [pieces])
 
-  const updateItem = useCallback((key: string, patch: Partial<ItemState>) => {
-    setItemStates((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }))
+  const updateZone = useCallback((key: string, patch: Partial<ZoneState>) => {
+    setZoneStates((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }))
   }, [])
 
-  // 点击人偶区域：已配置过的单品优先，否则进入该区域第一个单品
-  const selectZone = (zoneKey: string) => {
-    const zone = OUTFIT_ZONES.find((z) => z.key === zoneKey)
-    if (!zone) return
-    if (zone.key === activeZone.key) return
-    const configured = zone.items.find((i) => itemCount(i.key) > 0)
-    setActiveItemKey((configured || zone.items[0]).key)
+  const setPieceType = (zoneKey: string, pieceKey: string, type: string) => {
+    setZoneStates((prev) => ({
+      ...prev,
+      [zoneKey]: { ...prev[zoneKey], types: { ...prev[zoneKey].types, [pieceKey]: type } },
+    }))
   }
+
+  const selectZone = (zoneKey: string) => setActiveZoneKey(zoneKey)
 
   useEffect(() => {
     const t = setTimeout(() => skuInputRef.current?.focus(), 60)
     return () => clearTimeout(t)
-  }, [activeItemKey])
+  }, [activeZoneKey])
 
   // 卸载时释放所有本地预览 URL
   useEffect(() => {
     return () => {
-      Object.values(itemStates).forEach((st) => st.uploads.forEach((u) => URL.revokeObjectURL(u.previewUrl)))
+      Object.values(zoneStates).forEach((st) => st.uploads.forEach((u) => URL.revokeObjectURL(u.previewUrl)))
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -184,16 +220,16 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
   const activeSelectedKeys = useMemo(() => new Set(activeState.selected.map(assetKey)), [activeState.selected])
 
   const handleSearch = async () => {
-    const item = activeItem
-    const state = itemStates[item.key]
+    const zone = activeZone
+    const state = zoneStates[zone.key]
     const skus = Array.from(new Set(state.skuInput.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean)))
     if (skus.length === 0) {
-      updateItem(item.key, { searchError: `请输入${item.label}货号` })
+      updateZone(zone.key, { searchError: `请输入${zone.label}货号` })
       skuInputRef.current?.focus()
       return
     }
 
-    updateItem(item.key, { searching: true, searchError: null })
+    updateZone(zone.key, { searching: true, searchError: null })
     try {
       const result = await searchOutfitAssets(skus)
       const newKeys = new Set(result.items.flatMap((it) => it.assets.map(assetKey)))
@@ -203,7 +239,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
       if (!result.library_exists) errorMsg = '未挂载商品素材库，可用「上传」添加图片'
       else if (!result.items.some((it) => it.found)) errorMsg = `未找到货号：${skus.join(', ')}`
 
-      updateItem(item.key, {
+      updateZone(zone.key, {
         searching: false,
         searchResult: result,
         searchError: errorMsg,
@@ -211,22 +247,22 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
         selected: kept,
       })
     } catch (err: any) {
-      updateItem(item.key, { searching: false, searchError: err?.message || '检索失败，请重试' })
+      updateZone(zone.key, { searching: false, searchError: err?.message || '检索失败，请重试' })
     }
   }
 
   const toggleAsset = (asset: OutfitAsset) => {
     const key = assetKey(asset)
     if (activeSelectedKeys.has(key)) {
-      updateItem(activeItem.key, { selected: activeState.selected.filter((a) => assetKey(a) !== key) })
+      updateZone(activeZone.key, { selected: activeState.selected.filter((a) => assetKey(a) !== key) })
     } else if (remaining > 0) {
-      updateItem(activeItem.key, { selected: [...activeState.selected, { ...asset, slot: activeItem.slot }] })
+      updateZone(activeZone.key, { selected: [...activeState.selected, asset] })
     }
   }
 
-  const removeAsset = (itemKey: string, asset: OutfitAsset) => {
-    const st = itemStates[itemKey]
-    updateItem(itemKey, { selected: st.selected.filter((a) => assetKey(a) !== assetKey(asset)) })
+  const removeAsset = (zoneKey: string, asset: OutfitAsset) => {
+    const st = zoneStates[zoneKey]
+    updateZone(zoneKey, { selected: st.selected.filter((a) => assetKey(a) !== assetKey(asset)) })
   }
 
   const addFiles = (files: FileList | File[]) => {
@@ -237,14 +273,14 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
       file,
       previewUrl: URL.createObjectURL(file),
     }))
-    updateItem(activeItem.key, { uploads: [...activeState.uploads, ...toAdd] })
+    updateZone(activeZone.key, { uploads: [...activeState.uploads, ...toAdd] })
   }
 
-  const removeUpload = (itemKey: string, id: string) => {
-    const st = itemStates[itemKey]
+  const removeUpload = (zoneKey: string, id: string) => {
+    const st = zoneStates[zoneKey]
     const target = st.uploads.find((u) => u.id === id)
     if (target) URL.revokeObjectURL(target.previewUrl)
-    updateItem(itemKey, { uploads: st.uploads.filter((u) => u.id !== id) })
+    updateZone(zoneKey, { uploads: st.uploads.filter((u) => u.id !== id) })
   }
 
   const canSubmit = totalSelected > 0 && !submitting
@@ -256,10 +292,13 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
     lastModel = model
     lastResolution = resolution
 
-    const assets = ALL_ITEMS.flatMap((i) => itemStates[i.key].selected)
-    const uploads = ALL_ITEMS.flatMap((i) => itemStates[i.key].uploads.map((u) => u.file))
-    const uploadSlots = ALL_ITEMS.flatMap((i) => itemStates[i.key].uploads.map(() => i.slot))
-    const targetSlots = Array.from(new Set(configuredItems.map((i) => i.slot)))
+    // 部位与品类在提交时按单品统一计算，素材本身不记部位
+    const assets = pieces.flatMap((p) => p.assets.map((a) => ({ ...a, slot: pieceSlot(p), item: pieceItemKey(p) })))
+    const uploadPieces = pieces.filter((p) => p.upload)
+    const uploads = uploadPieces.map((p) => p.upload!.file)
+    const uploadSlots = uploadPieces.map(pieceSlot)
+    const uploadItems = uploadPieces.map(pieceItemKey)
+    const targetSlots = Array.from(new Set(pieces.map(pieceSlot)))
     try {
       await onSubmit({
         sourceUrl: image.url,
@@ -267,6 +306,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
         assets,
         uploads,
         uploadSlots,
+        uploadItems,
         targetSlots,
         extraPrompt: extraPrompt.trim(),
         model,
@@ -281,6 +321,44 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
 
   const currentModel = MODEL_OPTIONS.find((m) => m.key === model) || MODEL_OPTIONS[0]
   const hasActiveContent = !!activeState.searchResult || activeState.uploads.length > 0
+  const pieceLabels = Array.from(new Set(pieces.map(pieceLabel)))
+
+  // 同一部位多件单品：未标注或品类重复时提示标注，上衣含外套时说明叠穿关系
+  const layeringHint = (() => {
+    if (activePieces.length < 2 || !hasTypes(activeZone)) return null
+    const types = activePieces.map((p) => p.type)
+    if (types.includes('') || new Set(types).size < types.length) {
+      return {
+        warn: true,
+        text: `${activeZone.label}有 ${activePieces.length} 件单品，请为每件标注品类${
+          activeZone.key === 'upper' ? '（如 外套 + T恤），AI 会按内外层叠穿' : '，避免混淆'
+        }`,
+      }
+    }
+    if (activeZone.key === 'upper' && types.includes('outerwear')) {
+      const inner = activePieces.filter((p) => p.type !== 'outerwear').map(pieceLabel)
+      return { warn: false, text: `将按「外套在外、${inner.join('、')}内搭」叠穿` }
+    }
+    return null
+  })()
+
+  const renderTypeSelect = (pieceKey: string, value: string) => (
+    <select
+      className="oc-type"
+      value={value}
+      aria-label="品类"
+      onChange={(e) => setPieceType(activeZone.key, pieceKey, e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+      style={styles.typeSelect}
+    >
+      {typeOptions(activeZone).map((o) => (
+        <option key={o.key} value={o.key}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  )
   const sourceUrl = normalizeAssetUrl(image.url)
 
   const onTileKey = (e: React.KeyboardEvent, fn: () => void) => {
@@ -373,28 +451,9 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
           <section style={styles.centerCol}>
             <div style={styles.centerHead}>
               <div style={styles.zoneTitle}>{activeZone.label}</div>
-              {activeZone.items.length > 1 && (
-                <div style={styles.tabs} role="tablist" aria-label={`${activeZone.label}单品类型`}>
-                  {activeZone.items.map((it) => {
-                    const n = itemCount(it.key)
-                    const active = it.key === activeItem.key
-                    return (
-                      <button
-                        key={it.key}
-                        type="button"
-                        role="tab"
-                        aria-selected={active}
-                        onClick={() => setActiveItemKey(it.key)}
-                        className="oc-tab"
-                        style={{ ...styles.tab, ...(active ? styles.tabActive : null) }}
-                      >
-                        {it.label}
-                        {n > 0 && (
-                          <span style={{ ...styles.tabCount, ...(active ? styles.tabCountActive : null) }}>{n}</span>
-                        )}
-                      </button>
-                    )
-                  })}
+              {hasTypes(activeZone) && (
+                <div style={styles.zoneHint}>
+                  可直接添加；选中后可标注品类：{activeZone.items.map((i) => i.label).join(' / ')}
                 </div>
               )}
             </div>
@@ -407,15 +466,15 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                   ref={skuInputRef}
                   type="text"
                   value={activeState.skuInput}
-                  onChange={(e) => updateItem(activeItem.key, { skuInput: e.target.value })}
+                  onChange={(e) => updateZone(activeZone.key, { skuInput: e.target.value })}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault()
                       handleSearch()
                     }
                   }}
-                  placeholder={`输入${activeItem.placeholder}`}
-                  aria-label={activeItem.placeholder}
+                  placeholder={`输入${activeZone.label}货号`}
+                  aria-label={`${activeZone.label}货号`}
                   style={styles.searchInput}
                   disabled={activeState.searching}
                 />
@@ -467,6 +526,12 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                   : '多个货号用空格或逗号分隔，回车检索'}
               </div>
             )}
+            {layeringHint && (
+              <div style={{ ...styles.layerNotice, ...(layeringHint.warn ? styles.layerNoticeWarn : null) }}>
+                <AlertCircle size={13} style={{ flexShrink: 0 }} />
+                <span>{layeringHint.text}</span>
+              </div>
+            )}
 
             {/* 素材区（支持拖拽上传） */}
             <div
@@ -491,7 +556,14 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 return (
                   <div key={group.sku} style={styles.group}>
                     <div style={styles.groupHeader}>
-                      <span style={styles.groupSku}>{group.sku}</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={styles.groupSku}>{group.sku}</span>
+                        {group.found && picked > 0 && hasTypes(activeZone) &&
+                          renderTypeSelect(
+                            skuPieceKey(group.sku),
+                            activePieces.find((p) => p.key === skuPieceKey(group.sku))?.type ?? defaultType(activeZone)
+                          )}
+                      </span>
                       {group.found ? (
                         <span style={{ color: picked ? C.text : C.subtle }}>
                           已选 {picked} / {group.assets.length}
@@ -565,7 +637,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                           <img src={u.previewUrl} alt="" style={styles.containImg} draggable={false} />
                           <button
                             type="button"
-                            onClick={() => removeUpload(activeItem.key, u.id)}
+                            onClick={() => removeUpload(activeZone.key, u.id)}
                             style={styles.tileRemove}
                             title="移除"
                             aria-label="移除"
@@ -573,7 +645,16 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                             <X size={11} />
                           </button>
                         </div>
-                        <div style={styles.tileLabel}>上传 {idx + 1}</div>
+                        {hasTypes(activeZone) ? (
+                          <div style={{ padding: '5px 0 1px' }}>
+                            {renderTypeSelect(
+                              uploadPieceKey(u.id),
+                              activePieces.find((p) => p.key === uploadPieceKey(u.id))?.type ?? defaultType(activeZone)
+                            )}
+                          </div>
+                        ) : (
+                          <div style={styles.tileLabel}>上传 {idx + 1}</div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -592,7 +673,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                   <div style={styles.emptyIcon}>
                     <UploadCloud size={20} strokeWidth={1.6} />
                   </div>
-                  <div style={styles.emptyTitle}>添加{activeItem.label}参考图</div>
+                  <div style={styles.emptyTitle}>添加{activeZone.label}参考图</div>
                   <div style={styles.emptyHint}>在上方输入货号自动带出多角度图</div>
                   <div style={styles.emptyHint}>或将图片拖到这里、点击选择本地文件</div>
                   <div style={styles.emptyMeta}>PNG / JPG / WebP · 全部部位合计最多 {maxRefs} 张</div>
@@ -602,7 +683,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
               {isDragOver && (
                 <div style={styles.dropOverlay}>
                   <UploadCloud size={22} strokeWidth={1.6} />
-                  <span>松开即可添加为{activeItem.label}参考图</span>
+                  <span>松开即可添加为{activeZone.label}参考图</span>
                 </div>
               )}
             </div>
@@ -621,7 +702,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 <div style={{ ...styles.meterFill, width: `${(totalSelected / maxRefs) * 100}%` }} />
               </div>
 
-              {configuredItems.length === 0 ? (
+              {pieces.length === 0 ? (
                 <div style={styles.cartEmpty}>
                   还没有选择单品
                   <br />
@@ -629,27 +710,31 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 </div>
               ) : (
                 <div style={styles.cartList}>
-                  {configuredItems.map((it) => {
-                    const st = itemStates[it.key]
-                    const isCur = it.key === activeItem.key
+                  {pieces.map((p) => {
+                    const isCur = p.zone.key === activeZone.key
                     return (
                       <div
-                        key={it.key}
+                        key={`${p.zone.key}|${p.key}`}
                         role="button"
                         tabIndex={0}
                         className="oc-cart-item"
-                        onClick={() => setActiveItemKey(it.key)}
-                        onKeyDown={(e) => onTileKey(e, () => setActiveItemKey(it.key))}
+                        onClick={() => setActiveZoneKey(p.zone.key)}
+                        onKeyDown={(e) => onTileKey(e, () => setActiveZoneKey(p.zone.key))}
                         style={{ ...styles.cartItem, ...(isCur ? styles.cartItemActive : null) }}
                       >
                         <div style={styles.cartItemHead}>
-                          <span style={{ fontWeight: 600, color: C.ink }}>{it.label}</span>
-                          <span style={{ color: C.subtle }}>
-                            {zoneOfItem(it.key).label} · {itemCount(it.key)} 张
+                          <span style={{ fontWeight: 600, color: C.ink }}>
+                            {pieceLabel(p)}
+                            {hasTypes(p.zone) && p.type === '' && (
+                              <span style={{ fontWeight: 400, color: C.subtle }}> · {AUTO_LABEL}</span>
+                            )}
+                          </span>
+                          <span style={styles.cartItemMeta}>
+                            {p.sku || '本地上传'} · {pieceCount(p)} 张
                           </span>
                         </div>
                         <div style={styles.cartThumbs}>
-                          {st.selected.map((a) => (
+                          {p.assets.map((a) => (
                             <div key={assetKey(a)} className="oc-mini" style={styles.miniThumb} title={`${a.sku} · ${a.angle}`}>
                               <img src={a.thumb_url} alt="" style={styles.containImg} draggable={false} />
                               <button
@@ -659,16 +744,16 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                                 aria-label="移除"
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  removeAsset(it.key, a)
+                                  removeAsset(p.zone.key, a)
                                 }}
                               >
                                 <X size={9} />
                               </button>
                             </div>
                           ))}
-                          {st.uploads.map((u) => (
-                            <div key={u.id} className="oc-mini" style={styles.miniThumb}>
-                              <img src={u.previewUrl} alt="" style={styles.containImg} draggable={false} />
+                          {p.upload && (
+                            <div className="oc-mini" style={styles.miniThumb}>
+                              <img src={p.upload.previewUrl} alt="" style={styles.containImg} draggable={false} />
                               <button
                                 type="button"
                                 className="oc-mini-remove"
@@ -676,13 +761,13 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                                 aria-label="移除"
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  removeUpload(it.key, u.id)
+                                  removeUpload(p.zone.key, p.upload!.id)
                                 }}
                               >
                                 <X size={9} />
                               </button>
                             </div>
-                          ))}
+                          )}
                         </div>
                       </div>
                     )
@@ -832,7 +917,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                   <>
                     <Sparkles size={14} />
                     <span style={styles.primaryLabel}>
-                      {totalSelected === 0 ? '开始换装' : `换装 ${configuredItems.map((i) => i.label).join(' + ')}`}
+                      {totalSelected === 0 ? '开始换装' : `换装 ${pieceLabels.join(' + ')}`}
                     </span>
                   </>
                 )}
@@ -863,7 +948,8 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
         [data-modal="outfit-change"] :focus-visible { outline: 2px solid ${C.ink}; outline-offset: 2px; }
         [data-modal="outfit-change"] .oc-icon-btn:hover:not(:disabled) { background: ${C.hover}; color: ${C.ink}; }
         [data-modal="outfit-change"] .oc-source:hover { border-color: ${C.lineStrong}; background: ${C.surface}; }
-        [data-modal="outfit-change"] .oc-tab:hover { color: ${C.ink}; }
+        [data-modal="outfit-change"] .oc-type:hover { border-color: ${C.subtle}; }
+        [data-modal="outfit-change"] .oc-type:focus-visible { outline: 2px solid ${C.ink}; outline-offset: 1px; }
         [data-modal="outfit-change"] .oc-search:focus-within { border-color: ${C.ink}; box-shadow: 0 0 0 3px rgba(30,35,45,.08); }
         [data-modal="outfit-change"] .oc-search :focus-visible { outline: none; }
         [data-modal="outfit-change"] .oc-search-btn:hover:not(:disabled) { background: #2d3442; }
@@ -1059,8 +1145,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   centerHead: {
     display: 'flex',
-    alignItems: 'center',
-    gap: 16,
+    alignItems: 'baseline',
+    gap: 12,
     height: 32,
     marginBottom: 12,
   },
@@ -1070,50 +1156,9 @@ const styles: Record<string, React.CSSProperties> = {
     color: C.ink,
     letterSpacing: '-0.01em',
   },
-  tabs: {
-    display: 'flex',
-    gap: 2,
-    padding: 3,
-    borderRadius: 9,
-    backgroundColor: C.hover,
-  },
-  tab: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    height: 26,
-    padding: '0 12px',
-    border: 'none',
-    borderRadius: 7,
-    backgroundColor: 'transparent',
-    color: C.muted,
-    fontSize: 12.5,
-    fontWeight: 500,
-    cursor: 'pointer',
-    transition: 'background .15s ease, color .15s ease',
-  },
-  tabActive: {
-    backgroundColor: C.surface,
-    color: C.ink,
-    fontWeight: 600,
-    boxShadow: '0 1px 2px rgba(20,30,50,.1), 0 0 0 1px rgba(20,30,50,.04)',
-  },
-  tabCount: {
-    minWidth: 16,
-    height: 16,
-    padding: '0 4px',
-    borderRadius: 8,
-    backgroundColor: C.lineStrong,
-    color: C.text,
-    fontSize: 10,
-    fontWeight: 600,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tabCountActive: {
-    backgroundColor: C.ink,
-    color: '#fff',
+  zoneHint: {
+    fontSize: 11.5,
+    color: C.subtle,
   },
   searchRow: {
     display: 'flex',
@@ -1180,6 +1225,35 @@ const styles: Record<string, React.CSSProperties> = {
     color: C.subtle,
     margin: '8px 2px 0',
     minHeight: 16,
+  },
+  layerNotice: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    margin: '8px 0 0',
+    padding: '6px 10px',
+    borderRadius: 7,
+    backgroundColor: C.hover,
+    color: C.text,
+    fontSize: 11.5,
+    lineHeight: 1.4,
+  },
+  layerNoticeWarn: {
+    backgroundColor: '#fdf6e7',
+    color: '#8a5a12',
+  },
+  typeSelect: {
+    height: 24,
+    maxWidth: '100%',
+    padding: '0 6px',
+    borderRadius: 6,
+    border: `1px solid ${C.lineStrong}`,
+    backgroundColor: C.surface,
+    color: C.ink,
+    fontSize: 11.5,
+    fontWeight: 500,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
   },
   errorNotice: {
     display: 'flex',
@@ -1439,6 +1513,13 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
     fontSize: 12,
     marginBottom: 8,
+  },
+  cartItemMeta: {
+    color: C.subtle,
+    maxWidth: 140,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   cartThumbs: {
     display: 'flex',

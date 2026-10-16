@@ -71,6 +71,21 @@ GARMENT_SLOTS: dict[str, str] = {
 }
 
 # 预设常用换装部位及其标准指令定义（规范电商换装术语，杜绝敏感词）
+# 用户在弹窗里为单品标注的细分品类（同一部位下的下一级）；未标注 = 自动识别
+ITEM_LABELS: dict[str, str] = {
+    "outerwear": "外套",
+    "hoodie": "卫衣",
+    "tshirt": "T恤",
+    "shoes": "鞋子",
+    "socks": "袜子",
+}
+
+
+def normalize_item(value: Any) -> str:
+    item = str(value or "").strip().lower()
+    return item if item in ITEM_LABELS else ""
+
+
 PRESET_SLOTS: dict[str, dict[str, Any]] = {
     "top": {
         "key": "top",
@@ -97,14 +112,14 @@ PRESET_SLOTS: dict[str, dict[str, Any]] = {
         "key": "hat",
         "label": "帽子/头饰",
         "region": "头部发顶区域",
-        "replace_directive": "替换或佩戴参考图中的帽子/头饰商品，帽檐角度与发型头型自然贴合，严禁遮挡或修改脸部五官特征。",
+        "replace_directive": "将图1人物头上的帽子/头饰替换为参考图中的帽子/头饰商品，帽檐角度与发型头型自然贴合，严禁遮挡或修改脸部五官特征。",
         "keep_directive": "头部与发型保持图1原样，不得擅自添加或更改帽子。",
     },
     "outerwear": {
         "key": "outerwear",
         "label": "外套",
         "region": "外层服装区域",
-        "replace_directive": "将图1人物的外层外套替换为参考图中的外套商品（或在内搭外层自然穿上该外套），版型轮廓与门襟细节严格参照参考图。",
+        "replace_directive": "将图1人物的外层外套替换为参考图中的外套商品，版型轮廓与门襟细节严格参照参考图。",
         "keep_directive": "外套保持图1原样不变（若原图无外套则不额外添加）。",
     },
     "socks": {
@@ -410,10 +425,14 @@ def build_outfit_prompt(
     # 按 SKU 和 部位 分组，同一 SKU 的多张图是同一件商品的不同角度
     groups: "OrderedDict[str, list[int]]" = OrderedDict()
     slot_to_indices: dict[str, list[int]] = {}
+    slot_items: dict[str, list[str]] = {}
     for idx, ref in enumerate(references):
         ref_slot = str(ref.get("slot") or "").strip().lower()
         if ref_slot:
             slot_to_indices.setdefault(ref_slot, []).append(idx + 2)
+            ref_item = normalize_item(ref.get("item"))
+            if ref_item and ref_item not in slot_items.setdefault(ref_slot, []):
+                slot_items[ref_slot].append(ref_item)
         key = ref.get("sku") or f"上传素材{idx + 1}"
         groups.setdefault(key, []).append(idx + 2)
 
@@ -423,7 +442,7 @@ def build_outfit_prompt(
     lines: list[str] = []
     is_person = bool(active_slots)
     if is_person:
-        lines.append("任务：电商虚拟换装（virtual try-on）。以图1为底图，把参考图中的服饰穿到图1的人物身上，输出一张换装后的完整照片。")
+        lines.append("任务：电商虚拟换装（virtual try-on）。以图1为底图，用参考图中的商品替换图1人物身上已有的对应单品，输出一张换装后的完整照片。")
     else:
         lines.append("任务：电商商品替换。以图1为底图，把图1中的对应商品替换为参考图中的商品，输出一张替换后的完整商品图。")
 
@@ -441,7 +460,7 @@ def build_outfit_prompt(
         else:
             lines.append(f"- {image_refs(indices)}：商品素材（{angle_desc}）。")
     if len(groups) > 1:
-        lines.append("- 不同的商品需要分别穿戴/替换到各自对应的部位，不要把它们融合成一件。")
+        lines.append("- 不同的商品需要分别替换到各自对应的部位，不要把它们融合成一件。")
 
     lines.append("")
     lines.append("替换要求：")
@@ -449,7 +468,9 @@ def build_outfit_prompt(
         slot_lines: list[str] = []
         for slot in active_slots:
             slot_meta = PRESET_SLOTS.get(slot, {})
-            slot_label = slot_meta.get("label") or GARMENT_SLOTS.get(slot, slot)
+            # 用户标注了细分品类（如卫衣/T恤）时，用品类名代替笼统的部位名
+            slot_label = "、".join(ITEM_LABELS[i] for i in slot_items.get(slot, [])) \
+                or slot_meta.get("label") or GARMENT_SLOTS.get(slot, slot)
             region = slot_meta.get("region", "")
             region_str = f"（{region}）" if region else ""
             img_indices = slot_to_indices.get(slot) or []
@@ -463,6 +484,9 @@ def build_outfit_prompt(
 
             slot_lines.append(f"  * {slot_label}{region_str}：{directive}")
         lines.append("- 只替换图1中的以下指定部位：\n" + "\n".join(slot_lines))
+        if "outerwear" in active_slots and "top" in active_slots:
+            inner_label = "、".join(ITEM_LABELS[i] for i in slot_items.get("top", [])) or "上衣"
+            lines.append(f"- 叠穿关系：替换后外套在外层、{inner_label}在内层，内层在领口与门襟处自然露出。")
     else:
         lines.append("- 自动识别参考图商品的品类（如帽子、上衣、裤子、鞋），只替换图1中相同品类、相同部位的服饰。")
 
@@ -500,6 +524,15 @@ def build_outfit_prompt(
 
 
 # ─── FLUX 虚拟试穿（BFL vto-v2）专用：单张服装拼图 + 英文 prompt ──────────────
+
+# 细分品类 → VTO prompt 里的英文名（优先于部位名）
+VTO_ITEM_NAMES: dict[str, str] = {
+    "outerwear": "jacket",
+    "hoodie": "hoodie",
+    "tshirt": "t-shirt",
+    "shoes": "shoes",
+    "socks": "socks",
+}
 
 # 部位 → VTO prompt 里的英文品类名
 VTO_SLOT_NAMES: dict[str, str] = {
@@ -562,7 +595,17 @@ def build_vto_prompt(*, references: list[dict[str, Any]], target_slots: Optional
     slots = list(dict.fromkeys(
         str(s).strip().lower() for s in (target_slots or []) if str(s).strip()
     )) or list(dict.fromkeys(str(r.get("slot") or "").strip().lower() for r in references if r.get("slot")))
-    names = [VTO_SLOT_NAMES.get(s, s) for s in slots if s]
+    slot_items: dict[str, list[str]] = {}
+    for r in references:
+        ref_slot = str(r.get("slot") or "").strip().lower()
+        ref_item = normalize_item(r.get("item"))
+        if ref_slot and ref_item and ref_item not in slot_items.setdefault(ref_slot, []):
+            slot_items[ref_slot].append(ref_item)
+
+    def slot_names(slot: str) -> list[str]:
+        return [VTO_ITEM_NAMES[i] for i in slot_items.get(slot, [])] or [VTO_SLOT_NAMES.get(slot, slot)]
+
+    names = [n for s in slots if s for n in slot_names(s)]
     if not names:
         garments = "garments"
     elif len(names) == 1:
@@ -572,8 +615,12 @@ def build_vto_prompt(*, references: list[dict[str, Any]], target_slots: Optional
 
     prompt = (
         f"The person of image 1, maintaining exactly their face and pose, wearing the {garments} of image 2. "
+        "Only replace the matching items the person already has in image 1; do not add any item that image 1 does not have. "
         "Keep every other clothing item, the background, lighting and framing of image 1 unchanged."
     )
+    if "outerwear" in slots and "top" in slots:
+        inner = " and ".join(slot_names("top"))
+        prompt += f" The jacket is worn as the outer layer over the {inner}."
     skus = [r.get("sku") for r in references if r.get("sku")]
     if len(skus) != len(set(skus)) or len(references) > len(names or [None]):
         prompt += " Image 2 contains several reference views; views of the same item show one single garment."

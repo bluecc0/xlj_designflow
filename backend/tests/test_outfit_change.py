@@ -139,7 +139,7 @@ class PromptAndHelpersTest(unittest.TestCase):
         self.assertIn("虚拟换装", prompt)
         self.assertIn("图2、图3：同一件商品的不同角度素材", prompt)
         self.assertIn("图4：商品素材", prompt)
-        self.assertIn("不同的商品需要分别穿戴", prompt)
+        self.assertIn("不同的商品需要分别替换到各自对应的部位", prompt)
         self.assertIn("只替换图1中的以下指定部位", prompt)
         self.assertIn("  * 上衣（", prompt)
         # 不再自动拼装【部位】标签，也不在 prompt 中引用货号
@@ -381,6 +381,34 @@ class OutfitEndpointTest(unittest.TestCase):
             self.assertEqual(resp.status_code, 400)
             self.assertIn("2K", resp.json()["detail"])
 
+    def test_outfit_change_records_item_types(self) -> None:
+        captured: dict = {}
+
+        async def fake_background(**kwargs):
+            captured.update(kwargs)
+
+        with patch.object(main, "_run_ai_image_background", new=fake_background):
+            resp = self.client.post(
+                "/ai-image/outfit-change",
+                files=[
+                    ("image", ("src.jpg", _jpg_bytes(), "image/jpeg")),
+                    ("uploads", ("tee.png", _png_bytes(), "image/png")),
+                ],
+                data={
+                    "assets": json.dumps([
+                        {"sku": "SKU9", "slot": "outerwear", "item": "outerwear", "asset_type": "white", "path": "SKU9.png"},
+                    ]),
+                    "upload_slots": json.dumps(["top"]),
+                    "upload_items": json.dumps(["bogus"]),
+                    "target_slots": json.dumps(["outerwear", "top"]),
+                    "model": "gpt-image-2.5",
+                },
+            )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        assets = captured["request_meta"]["outfit"]["assets"]
+        self.assertEqual([(a["slot"], a["item"]) for a in assets], [("outerwear", "outerwear"), ("top", "")])
+        self.assertIn("叠穿关系：替换后外套在外层、上衣在内层", captured["prompt"])
+
     def test_flux_outfit_requires_api_key(self) -> None:
         with patch.object(settings, "bfl_api_key", ""):
             resp = self.client.post(
@@ -389,6 +417,72 @@ class OutfitEndpointTest(unittest.TestCase):
                 data={"assets": json.dumps([{"asset_type": "white", "path": "SKU9.png"}]), "model": "flux-vto"},
             )
         self.assertEqual(resp.status_code, 503)
+
+
+class ItemTypeTest(unittest.TestCase):
+    LAYERED = [
+        {"sku": "J1", "slot": "outerwear", "item": "outerwear", "type_label": "白底图", "angle": "主图"},
+        {"sku": "T1", "slot": "top", "item": "tshirt", "type_label": "白底图", "angle": "主图"},
+    ]
+
+    def test_normalize_item_only_keeps_known_types(self) -> None:
+        self.assertEqual(outfit_change.normalize_item(" Hoodie "), "hoodie")
+        self.assertEqual(outfit_change.normalize_item("dress"), "")
+        self.assertEqual(outfit_change.normalize_item(None), "")
+
+    def test_item_label_refines_slot_and_auto_keeps_generic(self) -> None:
+        tagged = outfit_change.build_outfit_prompt(
+            references=[{"sku": "H1", "slot": "top", "item": "hoodie", "type_label": "白底图", "angle": "主图"}],
+            target_slots=["top"],
+        )
+        self.assertIn("  * 卫衣（", tagged)
+        auto = outfit_change.build_outfit_prompt(
+            references=[{"sku": "H1", "slot": "top", "item": "", "type_label": "白底图", "angle": "主图"}],
+            target_slots=["top"],
+        )
+        self.assertIn("  * 上衣（", auto)
+
+    def test_outerwear_with_inner_top_adds_layering(self) -> None:
+        prompt = outfit_change.build_outfit_prompt(references=self.LAYERED, target_slots=["outerwear", "top"])
+        self.assertIn("  * 外套（", prompt)
+        self.assertIn("  * T恤（", prompt)
+        self.assertIn("叠穿关系：替换后外套在外层、T恤在内层", prompt)
+        single = outfit_change.build_outfit_prompt(references=self.LAYERED[1:], target_slots=["top"])
+        self.assertNotIn("叠穿关系", single)
+
+    def test_all_slot_directives_only_replace(self) -> None:
+        # 换装只换不加：任何部位的指令都不能暗示在原图没有时新增
+        for key, meta in outfit_change.PRESET_SLOTS.items():
+            directive = meta["replace_directive"]
+            self.assertIn("替换", directive, key)
+            for word in ("佩戴", "背上", "挎上", "穿上", "新增", "原图没有"):
+                self.assertNotIn(word, directive, f"{key}: {word}")
+        layered = outfit_change.build_outfit_prompt(references=self.LAYERED, target_slots=["outerwear", "top"])
+        self.assertIn("用参考图中的商品替换图1人物身上已有的对应单品", layered)
+        self.assertNotIn("穿到图1的人物身上", layered)
+        vto = outfit_change.build_vto_prompt(references=self.LAYERED, target_slots=["outerwear", "top"])
+        self.assertTrue(vto.startswith("The person of image 1, maintaining exactly their face and pose, wearing the"))
+        self.assertIn("Only replace the matching items the person already has in image 1; "
+                      "do not add any item that image 1 does not have.", vto)
+        layer_line = next(l for l in layered.split("\n") if "叠穿关系" in l)
+        for word in ("穿上", "加上", "新增", "添加"):
+            self.assertNotIn(word, layer_line)
+
+    def test_bag_prompt_only_replaces_existing_bag(self) -> None:
+        refs = [{"sku": "BG1", "slot": "bag", "item": "", "type_label": "白底图", "angle": "主图"}]
+        prompt = outfit_change.build_outfit_prompt(references=refs, target_slots=["bag"])
+        self.assertIn("  * 包袋（配包区域）：将图1中的包袋替换为图2展示的包袋商品", prompt)
+        # 只换不加：不能出现新增包袋的说法
+        for token in ("背包", "背上", "挎上", "原图没有"):
+            self.assertNotIn(token, prompt)
+        self.assertIn("不要添加任何新的文字、水印、边框或多余物品", prompt)
+        vto = outfit_change.build_vto_prompt(references=refs, target_slots=["bag"])
+        self.assertIn("wearing the bag of image 2", vto)
+
+    def test_vto_prompt_uses_item_names_and_layering(self) -> None:
+        prompt = outfit_change.build_vto_prompt(references=self.LAYERED, target_slots=["outerwear", "top"])
+        self.assertIn("wearing the jacket and t-shirt of image 2", prompt)
+        self.assertIn("The jacket is worn as the outer layer over the t-shirt.", prompt)
 
 
 class FluxVtoHelpersTest(unittest.TestCase):

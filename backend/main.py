@@ -7081,6 +7081,7 @@ async def ai_image_outfit_change(
     assets: str = Form("[]"),
     uploads: List[UploadFile] = File(default=[]),
     upload_slots: str = Form("[]"),
+    upload_items: str = Form("[]"),
     target_slots: str = Form("[]"),
     extra_prompt: str = Form(""),
     model: str = Form(""),
@@ -7126,6 +7127,10 @@ async def ai_image_outfit_change(
         str(x).strip().lower()
         for x in _parse_json_form(upload_slots, [], field="upload_slots")
     ]
+    upload_item_list = [
+        outfit_change.normalize_item(x)
+        for x in _parse_json_form(upload_items, [], field="upload_items")
+    ]
     uploads = uploads or []
 
     garment_total = len(asset_list) + len(uploads)
@@ -7158,10 +7163,12 @@ async def ai_image_outfit_change(
         refs.append((prepared[0], f"{idx + 2:02d}_{prepared[1]}"))
         sku_value = str(item.get("sku") or "").strip()[:64]
         slot_value = str(item.get("slot") or "").strip().lower()[:32]
+        item_value = outfit_change.normalize_item(item.get("item"))
         ref_meta.append({
             "source": "library",
             "sku": sku_value,
             "slot": slot_value,
+            "item": item_value,
             "asset_type": asset_type,
             "type_label": outfit_change.ASSET_TYPE_LABELS.get(asset_type, asset_type),
             "path": rel_path,
@@ -7176,10 +7183,12 @@ async def ai_image_outfit_change(
         prepared = await _prepare_outfit_image(raw, Path(upload.filename or "upload").stem, label=label)
         refs.append((prepared[0], f"{len(refs) + 1:02d}_{prepared[1]}"))
         upload_slot = upload_slot_list[idx] if idx < len(upload_slot_list) else ""
+        upload_item = upload_item_list[idx] if idx < len(upload_item_list) else ""
         ref_meta.append({
             "source": "upload",
             "sku": "",
             "slot": upload_slot,
+            "item": upload_item,
             "asset_type": "upload",
             "type_label": "本地上传",
             "path": (upload.filename or "")[:120],
