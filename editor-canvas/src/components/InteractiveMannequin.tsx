@@ -135,7 +135,7 @@ export const InteractiveMannequin: React.FC<Props> = ({
     }
     return {
       fill: '#ffffff',
-      stroke: '#c7c7c7',
+      stroke: '#b8b8b8',
       strokeWidth: 0.8,
     }
   }
@@ -144,7 +144,7 @@ export const InteractiveMannequin: React.FC<Props> = ({
   const detailColor = (zone: string) => {
     if (activeZone === zone) return 'rgba(127, 127, 127, .58)'
     if (hovered === zone) return 'rgba(156, 156, 156, .42)'
-    return 'rgba(132, 132, 132, .28)'
+    return 'rgba(116, 116, 116, .34)'
   }
 
   const zoneProps = (zone: string) => ({
@@ -160,6 +160,8 @@ export const InteractiveMannequin: React.FC<Props> = ({
       viewBox={`0 0 ${W} ${H}`}
       style={{
         width: '100%',
+        height: 350,
+        objectFit: 'contain',
         display: 'block',
         userSelect: 'none',
         backgroundColor: 'transparent',
@@ -180,7 +182,7 @@ export const InteractiveMannequin: React.FC<Props> = ({
       <ellipse cx={90} cy={367} rx={44} ry={5} fill="url(#mqGround)" />
 
       {/* ── 2. 裸露肢体（皮肤底层，被服饰包裹与穿透） ── */}
-      <g fill="#f7f7f7" stroke="#969696" strokeOpacity=".88" strokeWidth={0.75}>
+      <g fill="#f7f7f7" stroke="#858585" strokeOpacity=".88" strokeWidth={0.75}>
         {/* 颈部：插在衣领深处 */}
         <path d={NECK_PATH} />
         {/* 头部面廓 */}
