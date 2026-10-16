@@ -137,11 +137,14 @@ class PromptAndHelpersTest(unittest.TestCase):
             extra_prompt="衣摆塞进裤腰",
         )
         self.assertIn("虚拟换装", prompt)
-        self.assertIn("图2、图3：同一件商品（货号 A1）", prompt)
-        self.assertIn("图4：商品（货号 B2）", prompt)
-        self.assertIn("不同货号是不同的商品", prompt)
+        self.assertIn("图2、图3：同一件商品的不同角度素材", prompt)
+        self.assertIn("图4：商品素材", prompt)
+        self.assertIn("不同的商品需要分别穿戴", prompt)
         self.assertIn("只替换图1中的以下指定部位", prompt)
-        self.assertIn("【上衣】", prompt)
+        self.assertIn("  * 上衣（", prompt)
+        # 不再自动拼装【部位】标签，也不在 prompt 中引用货号
+        for token in ("【", "】", "货号", "A1", "B2"):
+            self.assertNotIn(token, prompt)
         self.assertIn("未选择替换的部位", prompt)
         self.assertIn("帽子/头饰", prompt)
         self.assertIn("衣摆塞进裤腰", prompt)
@@ -164,8 +167,9 @@ class PromptAndHelpersTest(unittest.TestCase):
         # 指定部位自动识别为虚拟换装任务
         self.assertIn("电商虚拟换装", prompt)
         # 包含指定部位
-        self.assertIn("【上衣】", prompt)
-        self.assertIn("【裤子/下装】", prompt)
+        self.assertIn("  * 上衣（", prompt)
+        self.assertIn("  * 裤子/下装（", prompt)
+        self.assertNotIn("【", prompt)
         self.assertIn("图2展示的", prompt)
         self.assertIn("图3展示的", prompt)
         # 保护未选核心部位
@@ -255,9 +259,10 @@ class OutfitEndpointTest(unittest.TestCase):
         self.assertEqual(captured["provider"], "auto")
         self.assertEqual(len(captured["refs"]), 4)
         self.assertTrue(captured["refs"][0][1].startswith("source"))
-        self.assertIn("图2、图3：同一件商品（货号 SKU9）", captured["prompt"])
+        self.assertIn("图2、图3：同一件商品的不同角度素材", captured["prompt"])
+        self.assertNotIn("SKU9", captured["prompt"])
         self.assertIn("只替换图1中的以下指定部位", captured["prompt"])
-        self.assertIn("【上衣】", captured["prompt"])
+        self.assertIn("  * 上衣（", captured["prompt"])
         meta = captured["request_meta"]
         self.assertEqual(meta["operation"], "outfit-change")
         self.assertEqual(meta["outfit"]["skus"], ["SKU9"])
@@ -288,8 +293,8 @@ class OutfitEndpointTest(unittest.TestCase):
                 },
             )
         self.assertEqual(resp.status_code, 200, resp.text)
-        self.assertIn("【上衣】", captured["prompt"])
-        self.assertIn("【鞋子】", captured["prompt"])
+        self.assertIn("  * 上衣（", captured["prompt"])
+        self.assertIn("  * 鞋子（", captured["prompt"])
         meta = captured["request_meta"]["outfit"]
         self.assertEqual(meta["target_slots"], ["top", "shoes"])
 

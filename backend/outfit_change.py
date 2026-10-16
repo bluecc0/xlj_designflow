@@ -430,20 +430,18 @@ def build_outfit_prompt(
     lines.append("")
     lines.append("图片说明：")
     lines.append("- 图1：原图（底图）。")
-    for sku, indices in groups.items():
+    for indices in groups.values():
         meta = [references[i - 2] for i in indices]
-        ref_slot = next((m.get("slot") for m in meta if m.get("slot")), "")
-        slot_tag = f"【{PRESET_SLOTS.get(ref_slot, {}).get('label') or GARMENT_SLOTS.get(ref_slot, ref_slot)}】" if ref_slot else ""
         angle_desc = "、".join(
             f"图{i}={m.get('angle') or '素材'}{('/' + m['type_label']) if m.get('type_label') else ''}"
             for i, m in zip(indices, meta)
         )
         if len(indices) > 1:
-            lines.append(f"- {image_refs(indices)}：{slot_tag}同一件商品（货号 {sku}）的不同角度素材（{angle_desc}），请综合多个角度理解它的完整外观。")
+            lines.append(f"- {image_refs(indices)}：同一件商品的不同角度素材（{angle_desc}），请综合多个角度理解它的完整外观。")
         else:
-            lines.append(f"- {image_refs(indices)}：{slot_tag}商品（货号 {sku}）素材（{angle_desc}）。")
+            lines.append(f"- {image_refs(indices)}：商品素材（{angle_desc}）。")
     if len(groups) > 1:
-        lines.append("- 不同货号是不同的商品，需要分别穿戴/替换到各自对应的部位，不要把它们融合成一件。")
+        lines.append("- 不同的商品需要分别穿戴/替换到各自对应的部位，不要把它们融合成一件。")
 
     lines.append("")
     lines.append("替换要求：")
@@ -463,7 +461,7 @@ def build_outfit_prompt(
             else:
                 directive = base_directive
 
-            slot_lines.append(f"  * 【{slot_label}】{region_str}：{directive}")
+            slot_lines.append(f"  * {slot_label}{region_str}：{directive}")
         lines.append("- 只替换图1中的以下指定部位：\n" + "\n".join(slot_lines))
     else:
         lines.append("- 自动识别参考图商品的品类（如帽子、上衣、裤子、鞋），只替换图1中相同品类、相同部位的服饰。")
