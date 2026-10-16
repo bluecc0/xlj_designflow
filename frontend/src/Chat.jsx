@@ -2290,7 +2290,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       model: activeAiModel,
       mode: selectedMode,
       specialRouteMode: specialRouteMode,
-      batchCount: activeMode === 'ai-image' ? normalizedBatchCount : 1,
+      batchCount: (activeMode === 'ai-image' || Boolean(skillInvocation.skill)) ? normalizedBatchCount : 1,
       skill: skillInvocation.skill || '',
       skillPrompt: executionMessage,
     });
@@ -5412,6 +5412,30 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
       });
     }
 
+    // 显式 Skill 是一条直接执行的生图链路：先由 Skill planner 解读需求，
+    // 再把 planned_prompt 提交给 Image API。不能让 Agent 分支提前截获它，
+    // 否则 Skill 只会作为上下文参与问答/确认，永远不会进入 planner。
+    if (activeSkill && aiOptions.workflow !== 'download') {
+      const skillImageOptions = Object.assign({}, aiOptions, {
+        provider: 'auto',
+        size: aiOptions.size || 'auto',
+        resolution: aiOptions.resolution || '1K',
+        quality: aiOptions.quality || 'auto',
+        // Skill 只共享一次规划结果，生图仍按用户选择的并发数提交。
+        batchCount: aiOptions.batchCount || 1,
+        skill: activeSkill,
+      });
+      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta, activeSkill: activeSkill }]);
+      await runAiImageGeneration(
+        aiOptions.model || 'gpt-image-2.5',
+        executionText,
+        text.trim(),
+        refImages,
+        skillImageOptions
+      );
+      return;
+    }
+
     if (agentEnabled && aiOptions.workflow !== 'ai-image') {
       setIsLoading(true);
       var projectId = '';
@@ -5782,20 +5806,6 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
     const targetAiModel = aiOptions.model || (aiOptions.mode === 'nano-banana-pro' ? 'nano-banana-pro' : (aiOptions.workflow === 'ai-image' ? 'gpt-image-2.5' : ''));
     const isAiImageMode = Boolean(targetAiModel) || aiOptions.workflow === 'ai-image';
     const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
-
-    if (activeSkill && !isAiImageMode && aiOptions.workflow !== 'download') {
-      const skillImageOptions = Object.assign({}, aiOptions, {
-        provider: 'auto',
-        size: 'auto',
-        resolution: aiOptions.resolution || '1K',
-        quality: aiOptions.quality || 'auto',
-        batchCount: 1,
-        skill: activeSkill,
-      });
-      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta, activeSkill: activeSkill }]);
-      await runAiImageGeneration('gpt-image-2.5', executionText, text.trim(), refImages, skillImageOptions);
-      return;
-    }
 
     // 检测"重新生成"关键词
     const rawPrompt = text.trim();

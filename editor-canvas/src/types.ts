@@ -132,6 +132,20 @@ export interface OutpaintMargins {
   left: number
 }
 
+export interface QuickEditMarker {
+  id: string
+  number: number // 标记序号 1, 2, 3...
+  type?: 'point' | 'rect' // 标记类型：单点标记 或 选框区域标记
+  ratioX: number // 相对图片宽度比例 0 ~ 1 (单点坐标 或 矩形左上角)
+  ratioY: number // 相对图片高度比例 0 ~ 1 (单点坐标 或 矩形左上角)
+  ratioWidth?: number // 矩形选框宽度比例 0 ~ 1
+  ratioHeight?: number // 矩形选框高度比例 0 ~ 1
+  pixelX: number // 对应图片天然或当前尺寸像素横坐标
+  pixelY: number // 对应图片天然或当前尺寸像素纵坐标
+  pixelWidth?: number // 对应图片天然或当前尺寸像素宽度
+  pixelHeight?: number // 对应图片天然或当前尺寸像素高度
+}
+
 export interface AIOperationState {
   type: 'outpainting' | 'upscale' | 'matting' | 'vectorize' | 'layer-extract' | 'quick-edit' | null
   status: 'idle' | 'running' | 'done' | 'error'

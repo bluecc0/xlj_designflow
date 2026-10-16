@@ -175,6 +175,7 @@ class ApimartLayerDecompositionClient:
         timeout_seconds: int = 900,
         poll_interval_seconds: float = 3.0,
         download_retries: int = 2,
+        proxy_url: str = "",
     ) -> None:
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "https://api.apimart.ai").rstrip("/")
@@ -183,6 +184,7 @@ class ApimartLayerDecompositionClient:
         self.timeout_seconds = max(60, int(timeout_seconds or 900))
         self.poll_interval_seconds = max(1.0, float(poll_interval_seconds or 3.0))
         self.download_retries = max(0, int(download_retries or 0))
+        self.proxy_url = str(proxy_url or "").strip()
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -347,11 +349,14 @@ class ApimartLayerDecompositionClient:
 
         image_data_url = _image_to_data_url(image_path)
         timeout = httpx.Timeout(self.timeout_seconds + 30, connect=30.0)
-        async with httpx.AsyncClient(
-            timeout=timeout,
-            follow_redirects=True,
-            trust_env=False,
-        ) as client:
+        client_kwargs: dict[str, Any] = {
+            "timeout": timeout,
+            "follow_redirects": True,
+            "trust_env": False,
+        }
+        if self.proxy_url:
+            client_kwargs["proxy"] = self.proxy_url
+        async with httpx.AsyncClient(**client_kwargs) as client:
             task_id = await self.create_task(client, image_input=image_data_url, prompt=prompt)
             result_layers, task_data = await self.poll_task(client, task_id)
 

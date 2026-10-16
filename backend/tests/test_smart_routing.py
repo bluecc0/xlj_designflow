@@ -60,34 +60,34 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
              patch.object(ai_image.settings, "ai_image_api_key", "sk-apimart"):
             self.assertEqual(
                 ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K"),
-                ["sub2api", "tuzi", "apimart"],
+                ["sub2api", "tuzi", "apimart-ext", "apimart"],
             )
             self.assertEqual(
                 ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="2K"),
-                ["apimart"],
+                ["apimart-ext", "apimart"],
             )
             # 1K sunburst 变体下，Sub2API 同样作为第一顺位，APIMart 作为降级
             self.assertEqual(
                 ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", variant="sunburst"),
-                ["sub2api", "apimart"],
+                ["sub2api", "apimart-ext", "apimart"],
             )
             # 1K 下如果指定了 high 或 max/xhigh 质量，Sub2API 不支持，必须直接路由至 APIMart
             self.assertEqual(
                 ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", quality="high"),
-                ["apimart"],
+                ["apimart-ext", "apimart"],
             )
             self.assertEqual(
                 ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", quality="max"),
-                ["apimart"],
+                ["apimart-ext", "apimart"],
             )
             self.assertEqual(
                 ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", variant="sunburst", quality="high"),
-                ["apimart"],
+                ["apimart-ext", "apimart"],
             )
 
     def test_gpt_image_25_xhigh_routes_to_apimart(self) -> None:
         with patch.object(ai_image.settings, "ai_image_api_key", "test"), patch.object(ai_image.settings, "smart_routing_rules_json", ""):
-            self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", quality="xhigh", filter_frozen=False), ["apimart"])
+            self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", quality="xhigh", filter_frozen=False), ["apimart-ext", "apimart"])
 
     def test_gpt_image_25_route_ignores_adobe(self) -> None:
         with patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api:8080"), \
@@ -99,11 +99,11 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
              patch.object(ai_image.settings, "ai_image_api_key", "sk-apimart"):
             self.assertEqual(
                 ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K"),
-                ["sub2api", "tuzi", "apimart"],
+                ["sub2api", "tuzi", "apimart-ext", "apimart"],
             )
             self.assertEqual(
                 ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="2K"),
-                ["apimart"],
+                ["apimart-ext", "apimart"],
             )
 
     def test_custom_routing_rules_json_override(self) -> None:
@@ -240,12 +240,16 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("CLIProxyAPI 生图失败：HTTP 400 - invalid prompt parameter")
 
         async def mock_apimart(*args, **kwargs):
+            if kwargs.get("apimart_ext"):
+                raise RuntimeError("HTTP 400 - ext unavailable")
             return {"url": "/res.png", "provider": "apimart"}
 
         with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api_400), \
              patch.object(ai_image, "generate_image_async", side_effect=mock_apimart), \
              patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api:8080"), \
              patch.object(ai_image.settings, "cliproxy_api_key", "sk-sub2api"), \
+             patch.object(ai_image.settings, "tuzi_base_url", ""), \
+             patch.object(ai_image.settings, "tuzi_api_key", ""), \
              patch.object(ai_image.settings, "ai_image_api_key", "sk-apimart"):
 
             # 任务 1: Sub2API 400 失败，切线到 APIMart 成功
@@ -512,6 +516,69 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["json"]["resolution"], "1k")
         self.assertEqual(captured["json"]["quality"], "high")
 
+    async def test_apimart_ext_payload_uses_version_and_omits_quality(self) -> None:
+        captured = {}
+
+        class FakeResponse:
+            is_success = True
+            status_code = 202
+            text = '{"code":202,"data":{"id":"task-ext"}}'
+
+            def json(self):
+                return {"code": 202, "data": {"id": "task-ext"}}
+
+        class FakeClient:
+            async def post(self, *args, **kwargs):
+                captured.update(kwargs)
+                return FakeResponse()
+
+        task_id = await ai_image._submit_generation_task(
+            FakeClient(),
+            base_url="http://apimart",
+            headers={"Authorization": "Bearer test", "Content-Type": "application/json"},
+            model="gpt-image-2.5",
+            prompt="a cute cat",
+            size="auto",
+            resolution="1K",
+            variant="sunburst",
+            quality="high",
+            apimart_ext=True,
+        )
+
+        self.assertEqual(task_id, "task-ext")
+        self.assertEqual(captured["json"], {
+            "model": "gpt-image-2.5-ext",
+            "version": "sunburst",
+            "prompt": "a cute cat",
+            "size": "auto",
+            "resolution": "1K",
+            "n": 1,
+        })
+        self.assertEqual(captured["headers"]["X-APIMart-Response-Version"], "2026-07-27")
+        self.assertTrue(captured["headers"].get("Idempotency-Key"))
+
+    async def test_apimart_ext_failure_falls_back_to_normal_apimart_with_quality(self) -> None:
+        calls = []
+
+        async def mock_generate(*args, **kwargs):
+            calls.append((kwargs.get("apimart_ext"), kwargs.get("quality")))
+            if kwargs.get("apimart_ext"):
+                raise RuntimeError("HTTP 400 - ext unavailable")
+            return {"url": "/x.png", "provider": "apimart"}
+
+        with patch.object(ai_image, "get_smart_route_candidates", return_value=["apimart-ext", "apimart"]), \
+             patch.object(ai_image, "generate_image_async", side_effect=mock_generate):
+            result = await ai_image.smart_generate_image_async(
+                model="gpt-image-2.5",
+                prompt="a cute cat",
+                resolution="2K",
+                quality="high",
+                user_id="test_user",
+            )
+
+        self.assertEqual(result["provider"], "apimart")
+        self.assertEqual(calls, [(True, "high"), (False, "high")])
+
     async def test_apimart_gpt_image_25_explicit_quality_options(self) -> None:
         captured = {}
 
@@ -699,11 +766,21 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         chat_source = (
             Path(__file__).resolve().parents[2] / "frontend" / "src" / "Chat.jsx"
         ).read_text(encoding="utf-8")
-        branch_start = chat_source.index(
-            "if (activeSkill && !isAiImageMode && aiOptions.workflow !== 'download')"
+        skill_start = chat_source.index(
+            "if (activeSkill && aiOptions.workflow !== 'download')"
         )
-        branch_end = chat_source.index("// 检测\"重新生成\"关键词", branch_start)
-        skill_branch = chat_source[branch_start:branch_end]
+        agent_start = chat_source.index(
+            "if (agentEnabled && aiOptions.workflow !== 'ai-image')"
+        )
+        branch_end = chat_source.index("// 检测\"重新生成\"关键词", agent_start)
+        self.assertLess(skill_start, agent_start)
+        skill_branch = chat_source[skill_start:agent_start]
+        self.assertIn("runAiImageGeneration", skill_branch)
+        self.assertIn("aiOptions.model || 'gpt-image-2.5'", skill_branch)
+        self.assertIn("skill: activeSkill", skill_branch)
+        self.assertIn("batchCount: aiOptions.batchCount || 1", skill_branch)
+        self.assertNotIn("batchCount: 1", skill_branch)
+        self.assertIn("activeMode === 'ai-image' || Boolean(skillInvocation.skill)", chat_source)
         self.assertIn("provider: 'auto'", skill_branch)
         self.assertNotIn("provider: 'sub2api'", skill_branch)
 
