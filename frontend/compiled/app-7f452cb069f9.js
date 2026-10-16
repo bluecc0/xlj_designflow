@@ -8687,58 +8687,6 @@ const Chat = ({
       document.removeEventListener('mousedown', handlePointerDown);
     };
   }, [historyOpen]);
-  const parseProductRefs = React.useCallback(function (message) {
-    var refs = [];
-    var text = String(message || '');
-    var pattern = /\[([^\[\]]+)\]/g;
-    var match;
-    while ((match = pattern.exec(text)) !== null) {
-      var rawInner = (match[1] || '').trim();
-      if (!rawInner) continue;
-      var normalized = rawInner.replace(/\s+/g, '');
-      var isAngle = /一双鞋角度$/i.test(normalized);
-      var sku = isAngle ? normalized.replace(/一双鞋角度$/i, '') : normalized;
-      if (!sku) continue;
-      refs.push({
-        raw: match[0],
-        sku: sku,
-        asset_type: isAngle ? 'white2x' : 'white'
-      });
-    }
-    return refs;
-  }, []);
-  const loadResolvedRefFiles = React.useCallback(async function (resolvedRefs) {
-    var files = [];
-    for (var i = 0; i < resolvedRefs.length; i++) {
-      var ref = resolvedRefs[i];
-      if (!ref || !ref.matched) continue;
-      var blob = null;
-      if (ref.content_base64) {
-        var binary = atob(ref.content_base64);
-        var bytes = new Uint8Array(binary.length);
-        for (var j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
-        blob = new Blob([bytes], {
-          type: ref.mime_type || 'image/png'
-        });
-      } else if (ref.url) {
-        var apiBase = window.API_BASE || window.location.origin;
-        var resp = await fetch(apiBase + ref.url, {
-          credentials: 'include'
-        });
-        if (!resp.ok) throw new Error('素材图下载失败: ' + (ref.sku || 'unknown'));
-        blob = await resp.blob();
-      }
-      if (!blob) throw new Error('素材图下载失败: ' + (ref.sku || 'unknown'));
-      files.push({
-        file: new File([blob], ref.filename || (ref.sku || 'product') + '.png', {
-          type: blob.type || ref.mime_type || 'image/png'
-        }),
-        previewUrl: URL.createObjectURL(blob),
-        _resolvedRef: ref
-      });
-    }
-    return files;
-  }, []);
   const materializeReferenceImages = React.useCallback(async function (refImages) {
     var refs = Array.isArray(refImages) ? refImages : [];
     return Promise.all(refs.map(async function (item, idx) {
@@ -8762,15 +8710,6 @@ const Chat = ({
       });
     }));
   }, [normalizeReferenceUrl]);
-  const enhancePromptWithProductRefs = React.useCallback(function (prompt, resolvedRefs, hasSceneReference) {
-    var cleanPrompt = String(prompt || '');
-    resolvedRefs.forEach(function (ref, index) {
-      var replacement = resolvedRefs.length > 1 ? '这个白底产品图' + (index + 1) : '这个白底产品图';
-      cleanPrompt = cleanPrompt.split(ref.raw).join(replacement);
-    });
-    var instructions = [cleanPrompt, '', hasSceneReference ? '同时参考用户上传的场景图，除非用户另有要求，否则尽量保持原有构图、机位、透视关系、光影和版式。' : '除非用户另有要求，否则尽量保持原有构图、机位、透视关系、光影和版式。', '把白底产品图作为商品外观参考，严格参考它的款式、配色、材质、轮廓和细节，不要自行改动商品外观。'];
-    return instructions.join('\n').trim();
-  }, []);
 
   // 从当前消息列表中找出上一个 AI 生图使用的模型、尺寸、分辨率
   const getLastAiImageOptions = React.useCallback(() => {
@@ -8947,24 +8886,7 @@ const Chat = ({
     var activeSkill = String(aiOptions.skill || '').trim();
     var plannedPrompt = String(aiOptions.plannedPrompt || '').trim();
     var plannedPromptTrace = String(aiOptions.promptTrace || '').trim();
-
-    // 预解析 product refs（一次，多 job 共享）
     try {
-      var productRefs = parseProductRefs(prompt);
-      if (productRefs.length > 0) {
-        var resolvedRefs = await window.API.resolveProductRefs(productRefs);
-        var missingRefs = resolvedRefs.filter(function (ref) {
-          return !ref.matched;
-        });
-        if (missingRefs.length > 0) {
-          throw new Error('未找到素材图：' + missingRefs.map(function (ref) {
-            return (ref.sku || '') + (ref.asset_type === 'white2x' ? ' 一双鞋角度' : '');
-          }).join('，'));
-        }
-        var productRefFiles = await loadResolvedRefFiles(resolvedRefs);
-        finalRefImages = finalRefImages.concat(productRefFiles);
-        finalPrompt = enhancePromptWithProductRefs(prompt, resolvedRefs, refImages.length > 0);
-      }
       var oversizedFinalRefs = listOversizedReferences(finalRefImages);
       if (oversizedFinalRefs.length) {
         throw new Error(formatOversizedReferenceAlert(oversizedFinalRefs));
@@ -9676,7 +9598,7 @@ const Chat = ({
     } finally {
       setIsLoading(false);
     }
-  }, [currentAiChatId, enhancePromptWithProductRefs, loadAiChatHistory, loadResolvedRefFiles, onComposeComplete, parseProductRefs]);
+  }, [currentAiChatId, loadAiChatHistory, onComposeComplete]);
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
     if (!text.trim() || isLoading) return;
     const activeSkill = String(aiOptions.skill || '').trim();
@@ -10230,7 +10152,7 @@ const Chat = ({
         refPreviews: userRefPreviews,
         refMeta: userRefMeta
       }]);
-      await runAiImageGeneration(targetAiModel || 'gpt-image-2.5', plainText, plainText, refImages, aiOptions);
+      await runAiImageGeneration(targetAiModel || 'gpt-image-2.5', aiOptions.quickEditPrompt || plainText, plainText, refImages, aiOptions);
       return;
     }
 
@@ -10467,7 +10389,7 @@ const Chat = ({
       } : m));
     }
     setIsLoading(false);
-  }, [agentEnabled, currentAiChatId, ensureAgentProject, enhancePromptWithProductRefs, getLastAiImageOptions, hasDoneAiImageInCurrentThread, isLikelyAiImageFollowup, isLoading, loadAiChatHistory, loadResolvedRefFiles, materializeReferenceImages, normalizeAiImageModel, onComposeComplete, parseProductRefs, runAiImageGeneration, template]);
+  }, [agentEnabled, currentAiChatId, ensureAgentProject, getLastAiImageOptions, hasDoneAiImageInCurrentThread, isLikelyAiImageFollowup, isLoading, loadAiChatHistory, materializeReferenceImages, normalizeAiImageModel, onComposeComplete, runAiImageGeneration, template]);
 
   // ── 快捷回复：点击选项按钮触发 ──────────────────────────────────────────────
   const handleQuickReply = React.useCallback(function (value) {
@@ -10482,6 +10404,7 @@ const Chat = ({
     lastQuickEditKeyRef.current = quickEditRequest.key;
     const promptText = String(quickEditRequest.prompt).trim();
     if (!promptText) return;
+    const displayText = String(quickEditRequest.displayPrompt || '').trim() || promptText;
     const rawImg = quickEditRequest.image;
     const src = rawImg && (rawImg.src || rawImg.url || '');
     const refs = src ? [{
@@ -10490,8 +10413,10 @@ const Chat = ({
       src: src,
       name: rawImg && rawImg.name || 'reference.png'
     }] : [];
-    handleSend(promptText, refs, {
+    handleSend(displayText, refs, {
       workflow: 'ai-image',
+      // 带坐标标记的完整提示词只用于生图，不显示在聊天框
+      quickEditPrompt: promptText,
       model: 'gpt-image-2.5',
       provider: 'auto',
       quality: 'auto',
@@ -14593,6 +14518,7 @@ const App = () => {
     setQuickEditRequest({
       key: Date.now() + Math.random(),
       prompt: payload.prompt,
+      displayPrompt: payload.displayPrompt,
       image: payload.image
     });
   }, []);

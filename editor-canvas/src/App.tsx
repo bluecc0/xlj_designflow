@@ -367,6 +367,8 @@ export function App() {
             {
               type: 'designflow:quick-edit-generate',
               prompt: finalPrompt,
+              // 聊天框只展示用户在编辑框里输入的内容，坐标信息仅用于生图
+              displayPrompt: prompt.trim(),
               image: {
                 id: targetImage.id,
                 src: targetImage.url,

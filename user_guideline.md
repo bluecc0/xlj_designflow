@@ -19,10 +19,6 @@ Nano banana pro ➡️ 高度一致性，应用场景主要是 图片编辑 （�
 
 
 
-# 货号索引
-货号索引的逻辑是按[]的内容去后端查找并上传图片，并把内容更改为“这个白底产品”增强Prompt发送给大模型
-当前支持白底和一双鞋角度。所以可以输入[ATSW042-4]，[ATSW042-4一双鞋角度]
-把模特穿的衣服换成[ATSW042-4]
 https://store.lining.com/goods/detail?rid=11899238&spuId=11906749&init=false
 
 

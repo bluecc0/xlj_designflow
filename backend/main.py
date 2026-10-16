@@ -545,7 +545,6 @@ _AUTH_EXEMPT_PREFIXES = (
     "/product-library",
     "/products/reference-image",
     "/products/mock-image",
-    "/products/resolve-references",
     "/avatars",
     "/editor-beta",
     "/editor-canvas",
@@ -3511,70 +3510,6 @@ def find_product(name: str):
         "best_match": path,
         "all_matches": all_matches,
     }
-
-
-@app.post("/products/resolve-references")
-def resolve_product_references(payload: dict):
-    refs = payload.get("refs") if isinstance(payload, dict) else None
-    if not isinstance(refs, list):
-        raise HTTPException(400, "refs must be a list")
-
-    alias_map = {
-        "": "white",
-        "default": "white",
-        "white": "white",
-        "white_base": "white",
-        "whitebase": "white",
-        "x2": "white2x",
-        "white2x": "white2x",
-        "whitex2": "white2x",
-        "white_basex2": "white2x",
-        "whitebasex2": "white2x",
-        "一双鞋角度": "white2x",
-    }
-
-    library = ProductLibrary(settings.product_library_path)
-    results = []
-    for item in refs:
-        if not isinstance(item, dict):
-            continue
-        raw = str(item.get("raw") or "").strip()
-        sku = str(item.get("sku") or "").strip()
-        asset_type_input = str(item.get("asset_type") or "").strip()
-        normalized_key = alias_map.get(asset_type_input.casefold(), "")
-        if not normalized_key and asset_type_input:
-            normalized_key = alias_map.get(asset_type_input.lower(), "")
-        normalized_key = normalized_key or "white"
-        folder = settings.IMAGE_TYPE_FOLDERS.get(normalized_key)
-        matched_path = library.find_in_folder(sku, folder) if (sku and folder) else None
-
-        full_path = Path(matched_path) if matched_path else None
-        if full_path:
-            url = (
-                "/products/reference-image?"
-                f"sku={quote(sku)}&asset_type={quote(normalized_key)}"
-            )
-            mime_type = "image/png" if full_path.suffix.lower() == ".png" else "image/jpeg"
-            content_base64 = base64.b64encode(full_path.read_bytes()).decode("ascii")
-        else:
-            url = None
-            mime_type = None
-            content_base64 = None
-
-        results.append({
-            "raw": raw,
-            "sku": sku,
-            "asset_type": normalized_key,
-            "folder": folder,
-            "matched": bool(full_path),
-            "path": str(full_path) if full_path else None,
-            "url": url,
-            "filename": full_path.name if full_path else None,
-            "mime_type": mime_type,
-            "content_base64": content_base64,
-        })
-
-    return {"refs": results}
 
 
 @app.get("/products/search-sku")
