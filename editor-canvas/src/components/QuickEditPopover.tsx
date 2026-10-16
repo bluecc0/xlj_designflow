@@ -1,31 +1,35 @@
 import React, { memo, useEffect, useRef, useState } from 'react'
 import { ArrowUp, Loader2 } from 'lucide-react'
-import type { CanvasImage } from '../types'
+import type { CanvasImage, QuickEditMarker } from '../types'
 import { useViewportStore } from '../store/viewportStore'
 
 interface Props {
   image: CanvasImage
+  markers?: QuickEditMarker[]
+  onRemoveMarker?: (id: string) => void
+  onClearMarkers?: () => void
   onClose: () => void
-  onSubmit: (prompt: string, image: CanvasImage) => void | Promise<void>
+  onSubmit: (prompt: string, image: CanvasImage, markers: QuickEditMarker[]) => void | Promise<void>
   isSubmitting?: boolean
 }
 
 export const QuickEditPopover = memo(function QuickEditPopover({
   image,
+  markers = [],
   onClose,
   onSubmit,
   isSubmitting = false,
 }: Props) {
-  // 输入框初始为空，展示预输入灰色提示文案
   const [prompt, setPrompt] = useState('')
   const popoverRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const prevMarkerCountRef = useRef(markers.length)
 
   const zoom = useViewportStore((s) => s.zoom)
   const panX = useViewportStore((s) => s.panX)
   const panY = useViewportStore((s) => s.panY)
 
-  // 自动聚焦
+  // 初始自动聚焦
   useEffect(() => {
     const timer = setTimeout(() => {
       inputRef.current?.focus()
@@ -33,12 +37,36 @@ export const QuickEditPopover = memo(function QuickEditPopover({
     return () => clearTimeout(timer)
   }, [image.id])
 
-  // 点击外部与全局 Esc 监听
+  // 当在图片上新添加标记时：自动在主输入框中引入 <标记N> 标签并激活聚焦
+  useEffect(() => {
+    if (markers.length > prevMarkerCountRef.current) {
+      const latestMarker = markers[markers.length - 1]
+      const tag = `<标记${latestMarker.number}>`
+      setPrompt((prev) => {
+        if (prev.includes(tag)) return prev
+        const trimmed = prev.trimEnd()
+        return trimmed ? `${trimmed} ${tag}` : tag
+      })
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus()
+          const len = inputRef.current.value.length
+          inputRef.current.setSelectionRange(len, len)
+        }
+      }, 30)
+    }
+    prevMarkerCountRef.current = markers.length
+  }, [markers])
+
+  // 点击外部与全局 Esc 监听（排除标记区域与自身）
   useEffect(() => {
     const handleMouseDown = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        onClose()
-      }
+      const target = e.target as HTMLElement | null
+      if (!target) return
+      if (popoverRef.current && popoverRef.current.contains(target)) return
+      if (target.closest && target.closest('[data-quick-edit-area="true"]')) return
+
+      onClose()
     }
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -56,11 +84,11 @@ export const QuickEditPopover = memo(function QuickEditPopover({
   const handleSubmit = () => {
     const cleanPrompt = prompt.trim()
     if (!cleanPrompt || isSubmitting) return
-    onSubmit(cleanPrompt, image)
+    onSubmit(cleanPrompt, image, markers)
   }
 
-  // 视口坐标计算（极简暗色圆形胶囊坞）
-  const popoverWidth = 420
+  // 视口坐标计算（统一停靠在图片下方或屏幕底端，避免与顶部的工具条冲突遮挡）
+  const popoverWidth = 440
   const popoverHeight = 44
   const winW = typeof window !== 'undefined' ? window.innerWidth : 1200
   const winH = typeof window !== 'undefined' ? window.innerHeight : 800
@@ -70,21 +98,18 @@ export const QuickEditPopover = memo(function QuickEditPopover({
   const imgScreenW = image.width * zoom
   const imgScreenH = image.height * zoom
   const centerX = imgScreenX + imgScreenW / 2
-  const bottomY = imgScreenY + imgScreenH + 8
+  const bottomY = imgScreenY + imgScreenH + 12
 
   const clampedX = Math.max(popoverWidth / 2 + 14, Math.min(winW - (popoverWidth / 2 + 14), centerX))
 
-  // 优先在图片底部显示；若底部空间不足则翻转至图片上方
-  let finalTop = bottomY
-  if (bottomY + popoverHeight > winH - 16) {
-    if (imgScreenY - popoverHeight > 56) {
-      finalTop = imgScreenY - popoverHeight - 8
-    } else {
-      finalTop = Math.max(56, winH - popoverHeight - 16)
-    }
-  }
+  // 始终在图片下方；若超出屏幕则停靠在视口底端，绝不上翻遮挡顶部的工具栏
+  const finalTop = Math.min(winH - popoverHeight - 20, Math.max(72, bottomY))
 
   const canSubmit = Boolean(prompt.trim()) && !isSubmitting
+
+  const placeholderText = markers.length > 0
+    ? '如：<标记1>改为红色 <标记2>增加反光...'
+    : '输入修改需求，或在图片上标记/框选局部...'
 
   return (
     <div
@@ -103,99 +128,110 @@ export const QuickEditPopover = memo(function QuickEditPopover({
         maxWidth: 'calc(100vw - 28px)',
         height: popoverHeight,
         zIndex: 900,
-        backgroundColor: 'rgba(32, 34, 40, 0.96)',
-        backdropFilter: 'blur(24px)',
-        WebkitBackdropFilter: 'blur(24px)',
-        borderRadius: 9999,
-        border: '1px solid rgba(255, 255, 255, 0.10)',
-        boxShadow: '0 16px 40px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.22)',
-        display: 'flex',
-        alignItems: 'center',
-        padding: '0 6px 0 18px',
-        boxSizing: 'border-box',
-        gap: 10,
         userSelect: 'none',
       }}
     >
       <style>{`
-        .quick-edit-pill-input::placeholder {
-          color: #848999;
+        .quick-edit-pill-input-light::placeholder {
+          color: #94a3b8;
           opacity: 1;
         }
       `}</style>
 
-      <input
-        ref={inputRef}
-        type="text"
-        className="quick-edit-pill-input"
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        onKeyDown={(e) => {
-          e.stopPropagation()
-          if (e.key === 'Enter') {
-            if (e.nativeEvent.isComposing || (e as any).keyCode === 229) {
-              return
-            }
-            e.preventDefault()
-            handleSubmit()
-          } else if (e.key === 'Escape') {
-            e.preventDefault()
-            onClose()
-          }
-        }}
-        onKeyUp={(e) => e.stopPropagation()}
-        placeholder="输入改图提示词，描述你想生成的图片..."
-        disabled={isSubmitting}
+      {/* 主输入浅色黑白灰胶囊坞 */}
+      <div
         style={{
-          flex: 1,
-          minWidth: 0,
-          border: 'none',
-          outline: 'none',
-          backgroundColor: 'transparent',
-          fontSize: 13.5,
-          color: '#ffffff',
-          padding: 0,
-          fontFamily: 'inherit',
-          caretColor: '#ffffff',
-        }}
-      />
-
-      <button
-        type="button"
-        onClick={handleSubmit}
-        disabled={!canSubmit}
-        aria-label="生成"
-        style={{
-          width: 32,
-          height: 32,
-          borderRadius: '50%',
-          border: 'none',
+          width: '100%',
+          height: 44,
           backgroundColor: '#ffffff',
-          color: '#181b24',
-          cursor: canSubmit ? 'pointer' : 'not-allowed',
-          opacity: canSubmit ? 1 : 0.4,
-          display: 'inline-flex',
+          borderRadius: 9999,
+          border: '1px solid #cbd5e1',
+          boxShadow: '0 8px 28px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04)',
+          display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-          transition: 'opacity 150ms ease, transform 120ms ease, background-color 150ms ease',
-          boxShadow: canSubmit ? '0 2px 8px rgba(0, 0, 0, 0.2)' : 'none',
-        }}
-        onMouseEnter={(e) => {
-          if (canSubmit) {
-            e.currentTarget.style.transform = 'scale(1.05)'
-          }
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'scale(1)'
+          padding: '0 6px 0 18px',
+          boxSizing: 'border-box',
+          gap: 10,
         }}
       >
-        {isSubmitting ? (
-          <Loader2 size={15} className="animate-spin" />
-        ) : (
-          <ArrowUp size={16} strokeWidth={2.4} />
-        )}
-      </button>
+        <input
+          ref={inputRef}
+          type="text"
+          className="quick-edit-pill-input-light"
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') {
+              if (e.nativeEvent.isComposing || (e as any).keyCode === 229) {
+                return
+              }
+              e.preventDefault()
+              handleSubmit()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              onClose()
+            }
+          }}
+          onKeyUp={(e) => e.stopPropagation()}
+          placeholder={placeholderText}
+          disabled={isSubmitting}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            border: 'none',
+            outline: 'none',
+            backgroundColor: 'transparent',
+            fontSize: 13.5,
+            color: '#0f172a',
+            padding: 0,
+            fontFamily: 'inherit',
+            caretColor: '#181b24',
+          }}
+        />
+
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={!canSubmit}
+          aria-label="生成"
+          title={markers.length > 0 ? `提交精准编辑 (包含 ${markers.length} 处标记坐标)` : '提交生成'}
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: '50%',
+            border: 'none',
+            backgroundColor: canSubmit ? '#181b24' : '#f1f5f9',
+            color: canSubmit ? '#ffffff' : '#94a3b8',
+            cursor: canSubmit ? 'pointer' : 'not-allowed',
+            opacity: canSubmit ? 1 : 0.6,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            transition: 'opacity 150ms ease, transform 120ms ease, background-color 150ms ease',
+            boxShadow: canSubmit ? '0 2px 6px rgba(0, 0, 0, 0.2)' : 'none',
+          }}
+          onMouseEnter={(e) => {
+            if (canSubmit) {
+              e.currentTarget.style.transform = 'scale(1.05)'
+              e.currentTarget.style.backgroundColor = '#000000'
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (canSubmit) {
+              e.currentTarget.style.transform = 'scale(1)'
+              e.currentTarget.style.backgroundColor = '#181b24'
+            }
+          }}
+        >
+          {isSubmitting ? (
+            <Loader2 size={15} className="animate-spin" />
+          ) : (
+            <ArrowUp size={16} strokeWidth={2.4} />
+          )}
+        </button>
+      </div>
     </div>
   )
 })

@@ -99,6 +99,33 @@ cd ..
 
 不要把真实 key 写进源码、示例 env、README 或日志。
 
+## Loom AI Photoshop 插件
+
+Loom AI 是 DesignFlow 配套的 Photoshop CEP 插件，仍是实际工作流的一部分。它主要用于在 Photoshop 内继续完成 AI 绘画和编辑、处理高分辨率素材、交接特殊品场景图，以及打开特殊品模板副本而不破坏 Penpot 母版。
+
+插件不是本仓库的前端 bundle，也不随 `frontend/build.py` 或画布 `npm run build` 构建。安装和升级通过共享目录分发：
+
+```text
+\\192.168.150.52\素材库\工具\loom
+```
+
+### Windows 安装
+
+1. 从共享目录复制最新版插件文件夹，例如 `loom-ai-1.0.10`。
+2. 放到 `C:\Program Files (x86)\Common Files\Adobe\CEP\extensions`。
+3. 重启 Photoshop。
+4. 在 Photoshop 菜单选择 **窗口 → 扩展（旧版）→ Loom AI**。
+
+### macOS 安装
+
+将插件文件夹复制到 `~/Library/Application Support/Adobe/CEP/extensions`，重启 Photoshop，再从 **窗口 → 扩展（旧版）→ Loom AI** 打开。Finder 使用“前往 → 前往文件夹”可以打开该路径。
+
+### 已知问题
+
+- 偶尔不能直接输入中文，可从其它应用复制，或关闭后重新打开插件。
+- 重绘整图可能产生细微变化，需要保持不变的区域应使用蒙版锁定。
+- 扩图可能发生不必要的缩放，提交前应在 prompt 中明确尺寸和构图要求。
+
 ## 数据与备份
 
 正式数据默认是根目录 `jobs.db`。后端会幂等建表并做缺列迁移，保存任务、会话、画布快照、灵感、Agent 和审计日志。
