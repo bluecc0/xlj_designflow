@@ -1,19 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
-  ArrowRight,
-  CheckCircle2,
+  Check,
   ChevronDown,
-  ChevronRight,
-  Crosshair,
   ImagePlus,
   Loader2,
+  Maximize2,
   Search,
-  SlidersHorizontal,
+  Shirt,
   Sparkles,
   UploadCloud,
   X,
-  ZoomIn,
 } from 'lucide-react'
 import type { CanvasImage } from '../types'
 import {
@@ -61,6 +58,21 @@ const MODEL_OPTIONS: { key: OutfitChangeRequest['model']; label: string; desc: s
   { key: 'nano-banana-pro', label: 'Nano Banana Pro', desc: '编辑一致性高' },
 ]
 
+// 与画布其余界面一致的冷灰（slate）色板
+const C = {
+  ink: '#1e232d',
+  text: '#3a4150',
+  muted: '#687083',
+  subtle: '#98a0ae',
+  line: '#e7e9ee',
+  lineStrong: '#d5d9e1',
+  panel: '#f7f8fa',
+  hover: '#eef1f6',
+  surface: '#ffffff',
+  danger: '#c43d3d',
+  dangerBg: '#fdf1f1',
+}
+
 const emptyItemState = (): ItemState => ({
   skuInput: '',
   searchResult: null,
@@ -81,7 +93,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
   const [resolution, setResolution] = useState<OutfitChangeRequest['resolution']>(lastResolution)
   const [batchCount, setBatchCount] = useState(1)
   const [extraPrompt, setExtraPrompt] = useState('')
-  const [showSettings, setShowSettings] = useState(false)
+  const [modelMenuOpen, setModelMenuOpen] = useState(false)
 
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -89,6 +101,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
 
   const skuInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const modelMenuRef = useRef<HTMLDivElement>(null)
 
   const activeItem = ALL_ITEMS.find((i) => i.key === activeItemKey) || ALL_ITEMS[0]
   const activeZone = zoneOfItem(activeItem.key)
@@ -142,12 +155,22 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
       if (e.key !== 'Escape') return
       e.stopPropagation()
       if (preview) setPreview(null)
-      else if (showSettings) setShowSettings(false)
+      else if (modelMenuOpen) setModelMenuOpen(false)
       else if (!submitting) onClose()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [preview, showSettings, submitting, onClose])
+  }, [preview, modelMenuOpen, submitting, onClose])
+
+  // 模型下拉：点击外部收起
+  useEffect(() => {
+    if (!modelMenuOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (!modelMenuRef.current?.contains(e.target as Node)) setModelMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown, true)
+    return () => document.removeEventListener('mousedown', onDown, true)
+  }, [modelMenuOpen])
 
   const assetKey = (a: OutfitAsset) => `${a.id}|${a.sku}`
   const activeSelectedKeys = useMemo(() => new Set(activeState.selected.map(assetKey)), [activeState.selected])
@@ -248,7 +271,16 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
     }
   }
 
+  const currentModel = MODEL_OPTIONS.find((m) => m.key === model) || MODEL_OPTIONS[0]
   const hasActiveContent = !!activeState.searchResult || activeState.uploads.length > 0
+  const sourceUrl = normalizeAssetUrl(image.url)
+
+  const onTileKey = (e: React.KeyboardEvent, fn: () => void) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      fn()
+    }
+  }
 
   return (
     <div
@@ -263,78 +295,106 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
         e.stopPropagation()
       }}
     >
-      <div style={styles.dialog} onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="outfit-change-title"
+        style={styles.dialog}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         {/* ── Header ── */}
         <div style={styles.header}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-            <Crosshair size={16} strokeWidth={2.1} color="#444444" />
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#282828', letterSpacing: '-0.02em' }}>AI 换装</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={styles.headerIcon}>
+              <Shirt size={15} strokeWidth={1.9} />
+            </div>
+            <div>
+              <div id="outfit-change-title" style={styles.title}>AI 换装</div>
+              <div style={styles.subtitle}>选择部位并添加单品参考图，未选择的部位保持原样</div>
+            </div>
           </div>
-          <button type="button" onClick={onClose} disabled={submitting} style={styles.iconButton} title="关闭 (Esc)">
+          <button
+            type="button"
+            className="oc-icon-btn"
+            onClick={onClose}
+            disabled={submitting}
+            style={styles.iconButton}
+            title="关闭 (Esc)"
+            aria-label="关闭"
+          >
             <X size={16} />
           </button>
         </div>
 
         <div style={styles.body}>
-          {/* ── 左栏：人偶 + 原图 ── */}
-          <div style={styles.leftCol}>
-            <div style={styles.panelHeading}>
-              <div>
-                <div style={styles.panelKicker}>换装区域</div>
-                <div style={styles.panelTitle}>选择要替换的部位</div>
+          {/* ── 左栏：原图 + 换装部位 ── */}
+          <aside className="oc-left" style={styles.leftCol}>
+            <div style={styles.sectionLabel}>原图</div>
+            <button
+              type="button"
+              className="oc-source"
+              style={styles.sourceCard}
+              onClick={() => setPreview(sourceUrl)}
+              title="查看原图"
+            >
+              <div style={styles.sourceThumb}>
+                <img src={sourceUrl} alt="" style={styles.containImg} draggable={false} />
               </div>
-              <span style={styles.panelIndex}>01 / 02</span>
-            </div>
-            <InteractiveMannequin
-              activeZone={activeZone.key}
-              zoneCounts={zoneCounts}
-              onSelectZone={selectZone}
-              disabled={submitting}
-            />
+              <div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+                <div style={styles.sourceName}>{image.name || '未命名图片'}</div>
+                <div style={styles.sourceHint}>以此图为基础生成</div>
+              </div>
+              <Maximize2 size={13} color={C.subtle} style={{ flexShrink: 0 }} />
+            </button>
 
-            <div style={styles.sourceRow}>
-              <div style={styles.sourceThumb} onClick={() => setPreview(normalizeAssetUrl(image.url))} title="查看原图">
-                <img src={normalizeAssetUrl(image.url)} alt="" style={styles.coverImg} draggable={false} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 11, fontWeight: 650, color: '#3d3d3d', letterSpacing: '0.04em' }}>
-                  原图
-                </div>
-                <div style={styles.sourceHint}>换装将以当前原图为基础生成</div>
-              </div>
+            <div style={{ ...styles.sectionLabel, marginTop: 18 }}>
+              换装部位
+              <span style={styles.sectionHint}>点击人台切换</span>
             </div>
-          </div>
+            <div style={styles.mannequinWrap}>
+              <InteractiveMannequin
+                activeZone={activeZone.key}
+                zoneCounts={zoneCounts}
+                onSelectZone={selectZone}
+                disabled={submitting}
+              />
+            </div>
+          </aside>
 
-          {/* ── 右栏：当前部位的单品配置 ── */}
-          <div style={styles.rightCol}>
-            {/* 单品切换：同一区域下的细分品类 */}
-            <div style={styles.zoneBar}>
+          {/* ── 中栏：当前单品的素材检索 ── */}
+          <section style={styles.centerCol}>
+            <div style={styles.centerHead}>
               <div style={styles.zoneTitle}>{activeZone.label}</div>
-              <div style={styles.zoneSegment} role="tablist" aria-label={`${activeZone.label}单品类型`}>
-                {activeZone.items.map((it) => {
-                  const n = itemCount(it.key)
-                  return (
-                    <button
-                      key={it.key}
-                      type="button"
-                      role="tab"
-                      aria-selected={it.key === activeItem.key}
-                      onClick={() => setActiveItemKey(it.key)}
-                      className="outfit-zone-tab"
-                      style={{ ...styles.zoneSegmentItem, ...(it.key === activeItem.key ? styles.zoneSegmentActive : null) }}
-                    >
-                      {it.label}
-                      {n > 0 && <span style={styles.segmentCount}>{n}</span>}
-                    </button>
-                  )
-                })}
-              </div>
+              {activeZone.items.length > 1 && (
+                <div style={styles.tabs} role="tablist" aria-label={`${activeZone.label}单品类型`}>
+                  {activeZone.items.map((it) => {
+                    const n = itemCount(it.key)
+                    const active = it.key === activeItem.key
+                    return (
+                      <button
+                        key={it.key}
+                        type="button"
+                        role="tab"
+                        aria-selected={active}
+                        onClick={() => setActiveItemKey(it.key)}
+                        className="oc-tab"
+                        style={{ ...styles.tab, ...(active ? styles.tabActive : null) }}
+                      >
+                        {it.label}
+                        {n > 0 && (
+                          <span style={{ ...styles.tabCount, ...(active ? styles.tabCountActive : null) }}>{n}</span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </div>
 
             {/* 货号检索 */}
             <div style={styles.searchRow}>
-              <div style={styles.searchBox}>
-                <Search size={14} color="#8b8b8b" style={{ flexShrink: 0 }} />
+              <div className="oc-search" style={styles.searchBox}>
+                <Search size={14} color={C.subtle} style={{ flexShrink: 0 }} />
                 <input
                   ref={skuInputRef}
                   type="text"
@@ -346,15 +406,34 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                       handleSearch()
                     }
                   }}
-                  placeholder={`${activeItem.placeholder}，回车检索（多个用空格分隔）`}
+                  placeholder={`输入${activeItem.placeholder}`}
+                  aria-label={activeItem.placeholder}
                   style={styles.searchInput}
                   disabled={activeState.searching}
                 />
-                {activeState.searching && <Loader2 size={13} color="#727272" style={{ animation: 'spin 1s linear infinite' }} />}
+                <button
+                  type="button"
+                  className="oc-search-btn"
+                  onClick={handleSearch}
+                  disabled={activeState.searching}
+                  style={styles.searchBtn}
+                >
+                  {activeState.searching ? (
+                    <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
+                  ) : (
+                    '检索'
+                  )}
+                </button>
               </div>
-              <button type="button" onClick={() => fileInputRef.current?.click()} style={styles.ghostBtn} title="上传本地图片">
+              <button
+                type="button"
+                className="oc-ghost"
+                onClick={() => fileInputRef.current?.click()}
+                style={styles.ghostBtn}
+                title="上传本地图片（PNG / JPG / WebP）"
+              >
                 <ImagePlus size={14} />
-                <span>上传</span>
+                <span>上传图片</span>
               </button>
               <input
                 ref={fileInputRef}
@@ -368,106 +447,122 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 style={{ display: 'none' }}
               />
             </div>
-
-            {activeState.searchError && (
-              <div style={styles.errorNotice}>
+            {activeState.searchError ? (
+              <div style={styles.errorNotice} role="alert">
                 <AlertCircle size={13} style={{ flexShrink: 0 }} />
                 <span>{activeState.searchError}</span>
+              </div>
+            ) : (
+              <div style={styles.searchHint}>
+                {activeState.searchResult
+                  ? '点击图片选择要提供给 AI 的角度，可跨货号多选'
+                  : '多个货号用空格或逗号分隔，回车检索'}
               </div>
             )}
 
             {/* 素材区（支持拖拽上传） */}
             <div
-              style={{
-                ...styles.assetArea,
-                backgroundColor: isDragOver ? 'rgba(134, 134, 134,.08)' : 'transparent',
-              }}
+              style={styles.assetArea}
               onDragOver={(e) => {
                 if (e.dataTransfer.types.includes('Files')) {
                   e.preventDefault()
                   setIsDragOver(true)
                 }
               }}
-              onDragLeave={() => setIsDragOver(false)}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setIsDragOver(false)
+              }}
               onDrop={(e) => {
                 e.preventDefault()
                 setIsDragOver(false)
                 if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files)
               }}
             >
-              {activeState.searchResult?.items.map((group) => (
-                <div key={group.sku} style={{ marginBottom: 14 }}>
-                  <div style={styles.groupHeader}>
-                    <span style={{ fontWeight: 650, color: '#333333', letterSpacing: '0.04em' }}>{group.sku}</span>
-                    {group.found ? (
-                    <span style={{ color: '#8a8a8a' }}>
-                        已选 {group.assets.filter((a) => activeSelectedKeys.has(assetKey(a))).length}/{group.assets.length}
-                      </span>
-                    ) : (
-                      <span style={{ color: '#686868' }}>未找到</span>
+              {activeState.searchResult?.items.map((group) => {
+                const picked = group.assets.filter((a) => activeSelectedKeys.has(assetKey(a))).length
+                return (
+                  <div key={group.sku} style={styles.group}>
+                    <div style={styles.groupHeader}>
+                      <span style={styles.groupSku}>{group.sku}</span>
+                      {group.found ? (
+                        <span style={{ color: picked ? C.text : C.subtle }}>
+                          已选 {picked} / {group.assets.length}
+                        </span>
+                      ) : (
+                        <span style={{ color: C.danger }}>未找到</span>
+                      )}
+                    </div>
+                    {group.found && (
+                      <div style={styles.grid}>
+                        {group.assets.map((asset) => {
+                          const isSelected = activeSelectedKeys.has(assetKey(asset))
+                          const blocked = !isSelected && remaining <= 0
+                          return (
+                            <div
+                              key={assetKey(asset)}
+                              role="checkbox"
+                              aria-checked={isSelected}
+                              aria-disabled={blocked}
+                              aria-label={`${asset.sku} ${asset.angle}`}
+                              tabIndex={0}
+                              className="oc-tile"
+                              onClick={() => toggleAsset(asset)}
+                              onKeyDown={(e) => onTileKey(e, () => toggleAsset(asset))}
+                              title={blocked ? `最多 ${maxRefs} 张参考图` : `${asset.angle} · ${asset.type_label}`}
+                              style={{
+                                ...styles.tile,
+                                ...(isSelected ? styles.tileSelected : null),
+                                ...(blocked ? styles.tileBlocked : null),
+                              }}
+                            >
+                              <div style={styles.tileImgBox}>
+                                <img src={asset.thumb_url} alt="" loading="lazy" style={styles.containImg} draggable={false} />
+                                <div style={{ ...styles.tileCheck, ...(isSelected ? styles.tileCheckOn : null) }}>
+                                  {isSelected && <Check size={11} strokeWidth={3} />}
+                                </div>
+                                <button
+                                  type="button"
+                                  className="oc-tile-zoom"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setPreview(asset.url)
+                                  }}
+                                  style={styles.tileZoom}
+                                  title="查看大图"
+                                  aria-label="查看大图"
+                                >
+                                  <Maximize2 size={11} />
+                                </button>
+                              </div>
+                              <div style={styles.tileLabel}>{asset.angle}</div>
+                            </div>
+                          )
+                        })}
+                      </div>
                     )}
                   </div>
-                  {group.found && (
-                    <div style={styles.grid}>
-                      {group.assets.map((asset) => {
-                        const isSelected = activeSelectedKeys.has(assetKey(asset))
-                        return (
-                          <div
-                            key={assetKey(asset)}
-                            role="checkbox"
-                            aria-checked={isSelected}
-                            className="outfit-tile"
-                            onClick={() => toggleAsset(asset)}
-                            title={`${asset.angle} · ${asset.type_label}`}
-                            style={{
-                              ...styles.tile,
-                              ...(isSelected ? styles.tileSelected : null),
-                              opacity: !isSelected && remaining <= 0 ? 0.4 : 1,
-                            }}
-                          >
-                            <div style={styles.tileImgBox}>
-                              <img src={asset.thumb_url} alt="" loading="lazy" style={styles.coverImg} draggable={false} />
-                            {isSelected && <div style={styles.tileCheck}><CheckCircle2 size={12} /></div>}
-                              <button
-                                type="button"
-                                className="outfit-tile-zoom"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setPreview(asset.url)
-                                }}
-                                style={styles.tileZoom}
-                                title="查看大图"
-                              >
-                                <ZoomIn size={11} />
-                              </button>
-                            </div>
-                            <div style={styles.tileLabel}>{asset.angle}</div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              ))}
+                )
+              })}
 
               {activeState.uploads.length > 0 && (
-                <div style={{ marginBottom: 14 }}>
+                <div style={styles.group}>
                   <div style={styles.groupHeader}>
-                    <span style={{ fontWeight: 650, color: '#333333' }}>本地上传</span>
-                    <span style={{ color: '#8a8a8a' }}>{activeState.uploads.length} 张</span>
+                    <span style={styles.groupSku}>本地上传</span>
+                    <span style={{ color: C.text }}>{activeState.uploads.length} 张</span>
                   </div>
                   <div style={styles.grid}>
                     {activeState.uploads.map((u, idx) => (
-                      <div key={u.id} style={{ ...styles.tile, ...styles.tileSelected }}>
+                      <div key={u.id} className="oc-tile" style={{ ...styles.tile, ...styles.tileSelected }}>
                         <div style={styles.tileImgBox}>
-                          <img src={u.previewUrl} alt="" style={styles.coverImg} draggable={false} />
+                          <img src={u.previewUrl} alt="" style={styles.containImg} draggable={false} />
                           <button
                             type="button"
                             onClick={() => removeUpload(activeItem.key, u.id)}
                             style={styles.tileRemove}
                             title="移除"
+                            aria-label="移除"
                           >
-                            <X size={10} />
+                            <X size={11} />
                           </button>
                         </div>
                         <div style={styles.tileLabel}>上传 {idx + 1}</div>
@@ -478,182 +573,264 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
               )}
 
               {!hasActiveContent && (
-                <div style={styles.emptyState}>
-                  <div style={styles.emptyIcon}><UploadCloud size={18} strokeWidth={1.7} /></div>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  className="oc-dropzone"
+                  style={styles.emptyState}
+                  onClick={() => fileInputRef.current?.click()}
+                  onKeyDown={(e) => onTileKey(e, () => fileInputRef.current?.click())}
+                >
+                  <div style={styles.emptyIcon}>
+                    <UploadCloud size={20} strokeWidth={1.6} />
+                  </div>
                   <div style={styles.emptyTitle}>添加{activeItem.label}参考图</div>
-                  <div style={styles.emptyHint}>输入货号检索，或上传图片 · 选择后才会加入换装</div>
+                  <div style={styles.emptyHint}>在上方输入货号自动带出多角度图</div>
+                  <div style={styles.emptyHint}>或将图片拖到这里、点击选择本地文件</div>
+                  <div style={styles.emptyMeta}>PNG / JPG / WebP · 全部部位合计最多 {maxRefs} 张</div>
+                </div>
+              )}
+
+              {isDragOver && (
+                <div style={styles.dropOverlay}>
+                  <UploadCloud size={22} strokeWidth={1.6} />
+                  <span>松开即可添加为{activeItem.label}参考图</span>
                 </div>
               )}
             </div>
+          </section>
 
-            {/* 换装清单：全部部位的已选素材一览 */}
-            <div style={styles.summary}>
-              <div style={styles.summaryHead}>
-                <span>换装清单</span>
-                  <span style={{ color: remaining <= 0 ? '#5a5a5a' : '#8b8b8b', fontWeight: 400 }}>
-                  {totalSelected}/{maxRefs} 张参考图
+          {/* ── 右栏：换装清单 + 生成设置 + 提交 ── */}
+          <aside className="oc-right" style={styles.rightCol}>
+            <div style={styles.rightScroll}>
+              <div style={styles.cartHead}>
+                <span style={styles.sectionLabelInline}>换装清单</span>
+                <span style={{ ...styles.cartCount, color: remaining <= 0 ? C.ink : C.muted }}>
+                  {totalSelected} / {maxRefs}
                 </span>
               </div>
+              <div style={styles.meter} aria-hidden>
+                <div style={{ ...styles.meterFill, width: `${(totalSelected / maxRefs) * 100}%` }} />
+              </div>
+
               {configuredItems.length === 0 ? (
-                  <div style={{ fontSize: 11, color: '#8a8a8a', padding: '6px 0' }}>
-                  尚未添加 · 未选择的部位将保持原图不变
+                <div style={styles.cartEmpty}>
+                  还没有选择单品
+                  <br />
+                  在中间选择参考图后会出现在这里
                 </div>
               ) : (
-                <div style={styles.summaryList}>
+                <div style={styles.cartList}>
                   {configuredItems.map((it) => {
                     const st = itemStates[it.key]
                     const isCur = it.key === activeItem.key
                     return (
                       <div
                         key={it.key}
+                        role="button"
+                        tabIndex={0}
+                        className="oc-cart-item"
                         onClick={() => setActiveItemKey(it.key)}
-                        style={{ ...styles.summaryItem, ...(isCur ? styles.summaryItemActive : null) }}
+                        onKeyDown={(e) => onTileKey(e, () => setActiveItemKey(it.key))}
+                        style={{ ...styles.cartItem, ...(isCur ? styles.cartItemActive : null) }}
                       >
-                        <span style={styles.summaryLabel}>{it.label}</span>
-                        {st.selected.map((a) => (
-                          <div key={assetKey(a)} style={styles.miniThumb} title={`${a.sku} · ${a.angle}`}>
-                            <img src={a.thumb_url} alt="" style={styles.coverImg} draggable={false} />
-                            <button
-                              type="button"
-                              style={styles.miniRemove}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                removeAsset(it.key, a)
-                              }}
-                            >
-                              <X size={8} />
-                            </button>
-                          </div>
-                        ))}
-                        {st.uploads.map((u) => (
-                          <div key={u.id} style={styles.miniThumb}>
-                            <img src={u.previewUrl} alt="" style={styles.coverImg} draggable={false} />
-                            <button
-                              type="button"
-                              style={styles.miniRemove}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                removeUpload(it.key, u.id)
-                              }}
-                            >
-                              <X size={8} />
-                            </button>
-                          </div>
-                        ))}
+                        <div style={styles.cartItemHead}>
+                          <span style={{ fontWeight: 600, color: C.ink }}>{it.label}</span>
+                          <span style={{ color: C.subtle }}>
+                            {zoneOfItem(it.key).label} · {itemCount(it.key)} 张
+                          </span>
+                        </div>
+                        <div style={styles.cartThumbs}>
+                          {st.selected.map((a) => (
+                            <div key={assetKey(a)} className="oc-mini" style={styles.miniThumb} title={`${a.sku} · ${a.angle}`}>
+                              <img src={a.thumb_url} alt="" style={styles.containImg} draggable={false} />
+                              <button
+                                type="button"
+                                className="oc-mini-remove"
+                                style={styles.miniRemove}
+                                aria-label="移除"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  removeAsset(it.key, a)
+                                }}
+                              >
+                                <X size={9} />
+                              </button>
+                            </div>
+                          ))}
+                          {st.uploads.map((u) => (
+                            <div key={u.id} className="oc-mini" style={styles.miniThumb}>
+                              <img src={u.previewUrl} alt="" style={styles.containImg} draggable={false} />
+                              <button
+                                type="button"
+                                className="oc-mini-remove"
+                                style={styles.miniRemove}
+                                aria-label="移除"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  removeUpload(it.key, u.id)
+                                }}
+                              >
+                                <X size={9} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )
                   })}
                 </div>
               )}
+
+              <div style={styles.divider} />
+
+              <div style={styles.sectionLabelInline}>生成设置</div>
+              <div style={styles.field}>
+                <div style={styles.fieldLabel}>模型</div>
+                <div ref={modelMenuRef} style={{ position: 'relative' }}>
+                  <button
+                    type="button"
+                    className="oc-select"
+                    aria-haspopup="listbox"
+                    aria-expanded={modelMenuOpen}
+                    onClick={() => setModelMenuOpen((v) => !v)}
+                    style={{ ...styles.select, ...(modelMenuOpen ? styles.selectOpen : null) }}
+                  >
+                    <span style={styles.selectValue}>{currentModel.label}</span>
+                    <ChevronDown
+                      size={14}
+                      color={C.muted}
+                      style={{ flexShrink: 0, transition: 'transform .15s ease', transform: modelMenuOpen ? 'rotate(180deg)' : 'none' }}
+                    />
+                  </button>
+                  {modelMenuOpen && (
+                    <div role="listbox" aria-label="模型" style={styles.menu}>
+                      {MODEL_OPTIONS.map((opt) => {
+                        const on = model === opt.key
+                        return (
+                          <button
+                            key={opt.key}
+                            type="button"
+                            role="option"
+                            aria-selected={on}
+                            className="oc-menu-item"
+                            onClick={() => {
+                              setModel(opt.key)
+                              setModelMenuOpen(false)
+                            }}
+                            style={styles.menuItem}
+                          >
+                            <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+                              <span style={{ display: 'block', fontSize: 12.5, fontWeight: on ? 600 : 500, color: C.ink }}>
+                                {opt.label}
+                              </span>
+                              <span style={{ display: 'block', fontSize: 11, color: C.muted, marginTop: 2 }}>{opt.desc}</span>
+                            </span>
+                            {on && <Check size={14} color={C.ink} style={{ flexShrink: 0 }} />}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+                <div style={styles.fieldHint}>{currentModel.desc}</div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <div style={{ ...styles.field, flex: 1 }}>
+                  <div style={styles.fieldLabel}>分辨率</div>
+                  <div style={styles.segment}>
+                    {(['1K', '2K'] as const).map((r) => (
+                      <button
+                        key={r}
+                        type="button"
+                        aria-pressed={resolution === r}
+                        className="oc-seg"
+                        onClick={() => setResolution(r)}
+                        style={{ ...styles.segmentItem, ...(resolution === r ? styles.segmentActive : null) }}
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ ...styles.field, flex: 1 }}>
+                  <div style={styles.fieldLabel}>生成数量</div>
+                  <div style={styles.segment}>
+                    {[1, 2, 4].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        aria-pressed={batchCount === n}
+                        className="oc-seg"
+                        onClick={() => setBatchCount(n)}
+                        style={{ ...styles.segmentItem, ...(batchCount === n ? styles.segmentActive : null) }}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div style={styles.field}>
+                <div style={styles.fieldLabel}>
+                  补充指令<span style={{ color: C.subtle, fontWeight: 400 }}>（可选）</span>
+                </div>
+                <textarea
+                  value={extraPrompt}
+                  onChange={(e) => setExtraPrompt(e.target.value)}
+                  rows={3}
+                  maxLength={500}
+                  placeholder="如：上衣下摆塞进裤腰、袖口微挽"
+                  className="oc-textarea"
+                  style={styles.textarea}
+                />
+              </div>
             </div>
-          </div>
-        </div>
 
-        {/* ── Footer ── */}
-        <div style={styles.footer}>
-          <button type="button" onClick={() => setShowSettings((v) => !v)} style={styles.settingsToggle}>
-            <SlidersHorizontal size={13} />
-            <span>
-              {MODEL_OPTIONS.find((m) => m.key === model)?.label} · {resolution}
-              {batchCount > 1 ? ` · ${batchCount} 张` : ''}
-              {extraPrompt.trim() ? ' · 有补充指令' : ''}
-            </span>
-            {showSettings ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          </button>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {submitError && <span style={{ fontSize: 11, color: '#686868', marginRight: 4 }}>{submitError}</span>}
-            <button type="button" onClick={onClose} disabled={submitting} style={styles.cancelBtn}>
-              取消
-            </button>
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={!canSubmit}
-              style={{ ...styles.primaryBtn, opacity: canSubmit ? 1 : 0.4, cursor: canSubmit ? 'pointer' : 'not-allowed' }}
-            >
-              {submitting ? (
-                <>
-                  <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
-                  <span>提交中…</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles size={13} />
-                  <span>
-                    {totalSelected === 0
-                      ? '开始换装'
-                      : `换装 ${configuredItems.map((i) => i.label).join(' + ')}`}
-                  </span>
-                  {canSubmit && <ArrowRight size={13} />}
-                </>
+            <div style={styles.submitBar}>
+              {submitError && (
+                <div style={{ ...styles.errorNotice, margin: '0 0 10px' }} role="alert">
+                  <AlertCircle size={13} style={{ flexShrink: 0 }} />
+                  <span>{submitError}</span>
+                </div>
               )}
-            </button>
-          </div>
+              <button
+                type="button"
+                className="oc-primary"
+                onClick={handleSubmit}
+                disabled={!canSubmit}
+                style={{ ...styles.primaryBtn, ...(canSubmit ? null : styles.primaryBtnDisabled) }}
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                    <span>提交中…</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={14} />
+                    <span style={styles.primaryLabel}>
+                      {totalSelected === 0 ? '开始换装' : `换装 ${configuredItems.map((i) => i.label).join(' + ')}`}
+                    </span>
+                  </>
+                )}
+              </button>
+              <div style={styles.submitHint}>
+                {totalSelected === 0
+                  ? '至少选择 1 张参考图'
+                  : `生成 ${batchCount} 张 · ${resolution} · 完成后放在原图右侧`}
+              </div>
+            </div>
+          </aside>
         </div>
-
-        {showSettings && (
-          <div style={styles.settingsPopover}>
-            <div style={styles.settingRow}>
-              <span style={styles.settingLabel}>模型</span>
-              <div style={styles.segment}>
-                {MODEL_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.key}
-                    type="button"
-                    title={opt.desc}
-                    onClick={() => setModel(opt.key)}
-                    style={{ ...styles.segmentItem, ...(model === opt.key ? styles.segmentActive : null) }}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div style={styles.settingRow}>
-              <span style={styles.settingLabel}>分辨率</span>
-              <div style={styles.segment}>
-                {(['1K', '2K'] as const).map((r) => (
-                  <button
-                    key={r}
-                    type="button"
-                    onClick={() => setResolution(r)}
-                    style={{ ...styles.segmentItem, ...(resolution === r ? styles.segmentActive : null) }}
-                  >
-                    {r}
-                  </button>
-                ))}
-              </div>
-              <span style={{ ...styles.settingLabel, marginLeft: 12 }}>数量</span>
-              <div style={styles.segment}>
-                {[1, 2, 4].map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setBatchCount(n)}
-                    style={{ ...styles.segmentItem, ...(batchCount === n ? styles.segmentActive : null) }}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <textarea
-              value={extraPrompt}
-              onChange={(e) => setExtraPrompt(e.target.value)}
-              rows={2}
-              maxLength={500}
-              placeholder="补充指令（可选），如：上衣下摆塞进裤腰、袖口微挽"
-              style={styles.textarea}
-            />
-          </div>
-        )}
 
         {preview && (
           <div style={styles.lightbox} onClick={() => setPreview(null)}>
             <div style={styles.lightboxBox} onClick={(e) => e.stopPropagation()}>
               <img src={preview} alt="" style={styles.lightboxImg} />
-              <button type="button" onClick={() => setPreview(null)} style={styles.lightboxClose}>
+              <button type="button" onClick={() => setPreview(null)} style={styles.lightboxClose} aria-label="关闭预览">
                 <X size={16} />
               </button>
             </div>
@@ -661,13 +838,34 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
         )}
       </div>
       <style>{`
-        [data-modal="outfit-change"]::before { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .18; background-image: linear-gradient(rgba(109, 109, 109,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(109, 109, 109,.04) 1px, transparent 1px); background-size: 36px 36px; mask-image: linear-gradient(to bottom, #000000, transparent 70%); }
         [data-modal="outfit-change"] .mannequin-shell { animation: outfit-rise .45s cubic-bezier(.2,.8,.2,1) both; }
-        [data-modal="outfit-change"] .outfit-tile:hover .outfit-tile-zoom { opacity: 1; }
-        [data-modal="outfit-change"] .outfit-tile:hover { border-color: #555555; transform: translateY(-2px); box-shadow: 0 8px 18px rgba(0, 0, 0, .1); }
-        [data-modal="outfit-change"] .outfit-tile { transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease; }
-        [data-modal="outfit-change"] .outfit-zone-tab:hover { color: #1b1b1b; background: #f0f0f0; }
-        [data-modal="outfit-change"] input::placeholder, [data-modal="outfit-change"] textarea::placeholder { color: #989898; }
+        [data-modal="outfit-change"] button { font-family: inherit; }
+        [data-modal="outfit-change"] :focus-visible { outline: 2px solid ${C.ink}; outline-offset: 2px; }
+        [data-modal="outfit-change"] .oc-icon-btn:hover:not(:disabled) { background: ${C.hover}; color: ${C.ink}; }
+        [data-modal="outfit-change"] .oc-source:hover { border-color: ${C.lineStrong}; background: ${C.surface}; }
+        [data-modal="outfit-change"] .oc-tab:hover { color: ${C.ink}; }
+        [data-modal="outfit-change"] .oc-search:focus-within { border-color: ${C.ink}; box-shadow: 0 0 0 3px rgba(30,35,45,.08); }
+        [data-modal="outfit-change"] .oc-search :focus-visible { outline: none; }
+        [data-modal="outfit-change"] .oc-search-btn:hover:not(:disabled) { background: #2d3442; }
+        [data-modal="outfit-change"] .oc-ghost:hover { background: ${C.hover}; border-color: ${C.lineStrong}; color: ${C.ink}; }
+        [data-modal="outfit-change"] .oc-tile { transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
+        [data-modal="outfit-change"] .oc-tile:hover:not([aria-disabled="true"]) { border-color: ${C.subtle}; box-shadow: 0 6px 16px rgba(20, 30, 50, .08); transform: translateY(-1px); }
+        [data-modal="outfit-change"] .oc-tile[aria-checked="true"]:hover { border-color: ${C.ink}; }
+        [data-modal="outfit-change"] .oc-tile:hover .oc-tile-zoom, [data-modal="outfit-change"] .oc-tile:focus-within .oc-tile-zoom { opacity: 1; }
+        [data-modal="outfit-change"] .oc-dropzone:hover { border-color: ${C.subtle}; background: ${C.hover}; }
+        [data-modal="outfit-change"] .mq-label:focus { outline: none; }
+        [data-modal="outfit-change"] .mq-label:focus-visible rect { stroke: ${C.ink}; stroke-width: 1.4px; }
+        [data-modal="outfit-change"] .oc-cart-item:hover { border-color: ${C.lineStrong}; }
+        [data-modal="outfit-change"] .oc-mini-remove { opacity: 0; transition: opacity .12s ease; }
+        [data-modal="outfit-change"] .oc-mini:hover .oc-mini-remove, [data-modal="outfit-change"] .oc-mini-remove:focus-visible { opacity: 1; }
+        [data-modal="outfit-change"] .oc-select:hover { border-color: ${C.subtle}; }
+        [data-modal="outfit-change"] .oc-menu-item:hover, [data-modal="outfit-change"] .oc-menu-item[aria-selected="true"] { background: ${C.hover}; }
+        [data-modal="outfit-change"] .oc-seg:hover { color: ${C.ink}; }
+        [data-modal="outfit-change"] .oc-textarea:focus { border-color: ${C.ink}; box-shadow: 0 0 0 3px rgba(30,35,45,.08); outline: none; }
+        [data-modal="outfit-change"] .oc-primary:hover:not(:disabled) { background: #2d3442; }
+        [data-modal="outfit-change"] input::placeholder, [data-modal="outfit-change"] textarea::placeholder { color: ${C.subtle}; }
+        @media (max-width: 1100px) { [data-modal="outfit-change"] .oc-left { width: 224px !important; } [data-modal="outfit-change"] .oc-right { width: 264px !important; } }
+        @media (max-width: 860px) { [data-modal="outfit-change"] .oc-left { width: 196px !important; padding: 12px !important; } [data-modal="outfit-change"] .oc-right { width: 236px !important; } }
         @keyframes outfit-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
       `}</style>
     </div>
@@ -678,8 +876,8 @@ const styles: Record<string, React.CSSProperties> = {
   backdrop: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(36, 36, 36, 0.36)',
-    backdropFilter: 'blur(16px)',
+    backgroundColor: 'rgba(20, 24, 32, 0.32)',
+    backdropFilter: 'blur(10px)',
     WebkitBackdropFilter: 'blur(10px)',
     display: 'flex',
     alignItems: 'center',
@@ -690,34 +888,55 @@ const styles: Record<string, React.CSSProperties> = {
   },
   dialog: {
     position: 'relative',
-    width: 'min(1040px, 94vw)',
-    height: 'min(640px, 82vh)',
-    backgroundColor: '#fafafa',
-    backgroundImage: 'radial-gradient(circle at 6% 0%, rgba(165, 165, 165, .09), transparent 32%), radial-gradient(circle at 96% 100%, rgba(126, 126, 126, .07), transparent 35%)',
+    width: 'min(1160px, 96vw)',
+    height: 'min(720px, 90vh)',
+    backgroundColor: C.surface,
     borderRadius: 14,
-    boxShadow: '0 30px 80px rgba(46, 46, 46, 0.2), 0 0 0 1px rgba(135, 135, 135, .16)',
-    border: '1px solid #dcdcdc',
+    boxShadow: '0 24px 70px rgba(20, 30, 50, 0.18), 0 0 0 1px rgba(20, 30, 50, .06)',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
+    color: C.text,
   },
   header: {
-    height: 58,
-    padding: '0 18px 0 20px',
+    height: 60,
+    padding: '0 16px 0 20px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    borderBottom: '1px solid #dedede',
-    backgroundColor: 'rgba(255, 255, 255, .9)',
+    borderBottom: `1px solid ${C.line}`,
     flexShrink: 0,
   },
-  iconButton: {
+  headerIcon: {
     width: 30,
     height: 30,
-    borderRadius: 6,
+    borderRadius: 8,
+    backgroundColor: C.panel,
+    border: `1px solid ${C.line}`,
+    color: C.ink,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: {
+    fontSize: 15,
+    fontWeight: 650,
+    color: C.ink,
+    letterSpacing: '-0.01em',
+    lineHeight: 1.2,
+  },
+  subtitle: {
+    fontSize: 11.5,
+    color: C.muted,
+    marginTop: 2,
+  },
+  iconButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     border: 'none',
     backgroundColor: 'transparent',
-    color: '#737373',
+    color: C.muted,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -729,520 +948,707 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     overflow: 'hidden',
   },
+
+  // ── 左栏 ──
   leftCol: {
-    width: 280,
-    borderRight: '1px solid #e2e2e2',
-    backgroundColor: '#fafafa',
-    padding: '15px 14px 12px',
+    width: 260,
+    flexShrink: 0,
+    borderRight: `1px solid ${C.line}`,
+    backgroundColor: C.panel,
+    padding: '16px 16px 12px',
     display: 'flex',
     flexDirection: 'column',
-    justifyContent: 'flex-start',
-    gap: 10,
     overflowY: 'auto',
-    flexShrink: 0,
   },
-  panelHeading: {
+  sectionLabel: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    fontSize: 11,
+    fontWeight: 600,
+    color: C.muted,
+    letterSpacing: '0.04em',
+    marginBottom: 8,
+  },
+  sectionLabelInline: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: C.muted,
+    letterSpacing: '0.04em',
+  },
+  sectionHint: {
+    fontWeight: 400,
+    color: C.subtle,
+    letterSpacing: 0,
+  },
+  sourceCard: {
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 0,
-  },
-  panelKicker: {
-    fontSize: 10,
-    color: '#8a8a8a',
-    letterSpacing: '0.12em',
-    textTransform: 'uppercase',
-    marginBottom: 3,
-  },
-  panelTitle: {
-    fontSize: 15,
-    color: '#2f2f2f',
-    fontWeight: 650,
-    letterSpacing: '-0.01em',
-  },
-  panelIndex: {
-    fontSize: 10,
-    color: '#9b9b9b',
-    letterSpacing: '0.08em',
-  },
-  sourceRow: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 8,
-    padding: '8px 0 0',
-    borderRadius: 0,
-    backgroundColor: 'transparent',
-    border: 'none',
-    borderTop: '1px solid #dedede',
-    marginTop: 10,
-    color: '#3c3c3c',
-  },
-  sourceHint: {
-    marginTop: 4,
-    fontSize: 11,
-    color: '#8a8a8a',
+    gap: 10,
+    width: '100%',
+    padding: 8,
+    borderRadius: 10,
+    border: `1px solid ${C.line}`,
+    backgroundColor: 'rgba(255,255,255,.7)',
+    cursor: 'zoom-in',
+    transition: 'border-color .15s ease, background .15s ease',
   },
   sourceThumb: {
-    width: 32,
-    height: 42,
-    borderRadius: 4,
+    width: 52,
+    height: 64,
+    borderRadius: 6,
     overflow: 'hidden',
-    backgroundColor: '#f3f3f3',
-    cursor: 'zoom-in',
     flexShrink: 0,
+    backgroundColor: C.hover,
+    border: `1px solid ${C.line}`,
   },
-  coverImg: {
-    width: '100%',
-    height: '100%',
-    objectFit: 'cover',
-    display: 'block',
-  },
-  rightCol: {
-    flex: 1,
-    minWidth: 0,
-    padding: '16px 22px 12px',
-    display: 'flex',
-    flexDirection: 'column',
+  sourceName: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: C.ink,
     overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
-  zoneBar: {
+  sourceHint: {
+    fontSize: 11,
+    color: C.muted,
+    marginTop: 3,
+  },
+  mannequinWrap: {
+    flex: 1,
+    minHeight: 0,
     display: 'flex',
     alignItems: 'center',
-    gap: 22,
+    justifyContent: 'center',
+    padding: '14px 10px',
+    borderRadius: 10,
+    border: `1px solid ${C.line}`,
+    backgroundColor: C.surface,
+    backgroundImage: 'radial-gradient(rgba(30,35,45,.07) 1px, transparent 1px)',
+    backgroundSize: '14px 14px',
+  },
+
+  // ── 中栏 ──
+  centerCol: {
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    padding: '16px 20px 0',
+  },
+  centerHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 16,
+    height: 32,
     marginBottom: 12,
-    paddingBottom: 10,
-    borderBottom: '1px solid #dedede',
   },
   zoneTitle: {
-    minWidth: 42,
-    fontSize: 11,
-    color: '#8a8a8a',
-    letterSpacing: '0.08em',
+    fontSize: 16,
+    fontWeight: 650,
+    color: C.ink,
+    letterSpacing: '-0.01em',
   },
-  zoneSegment: {
-    display: 'inline-flex',
-    alignItems: 'stretch',
-    gap: 18,
-    padding: 0,
-    border: 'none',
-    borderRadius: 0,
-    backgroundColor: 'transparent',
-    boxShadow: 'none',
+  tabs: {
+    display: 'flex',
+    gap: 2,
+    padding: 3,
+    borderRadius: 9,
+    backgroundColor: C.hover,
   },
-  zoneSegmentItem: {
-    minHeight: 30,
-    padding: '0 0 7px',
+  tab: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    height: 26,
+    padding: '0 12px',
     border: 'none',
-    borderRadius: 0,
+    borderRadius: 7,
     backgroundColor: 'transparent',
-    color: '#5f5f5f',
-    fontSize: 15,
-    fontWeight: 550,
+    color: C.muted,
+    fontSize: 12.5,
+    fontWeight: 500,
     cursor: 'pointer',
+    transition: 'background .15s ease, color .15s ease',
+  },
+  tabActive: {
+    backgroundColor: C.surface,
+    color: C.ink,
+    fontWeight: 600,
+    boxShadow: '0 1px 2px rgba(20,30,50,.1), 0 0 0 1px rgba(20,30,50,.04)',
+  },
+  tabCount: {
+    minWidth: 16,
+    height: 16,
+    padding: '0 4px',
+    borderRadius: 8,
+    backgroundColor: C.lineStrong,
+    color: C.text,
+    fontSize: 10,
+    fontWeight: 600,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    borderBottom: '2px solid transparent',
-    transition: 'color .15s ease, border-color .15s ease',
   },
-  zoneSegmentActive: {
-    backgroundColor: 'transparent',
-    color: '#171717',
-    borderBottomColor: '#171717',
-    boxShadow: 'none',
+  tabCountActive: {
+    backgroundColor: C.ink,
+    color: '#fff',
   },
   searchRow: {
     display: 'flex',
-    alignItems: 'center',
     gap: 8,
-    marginBottom: 10,
+    alignItems: 'center',
   },
   searchBox: {
     flex: 1,
-    height: 36,
-    borderRadius: 6,
-    border: 'none',
-    borderBottom: '1px solid #bcbcbc',
-    backgroundColor: 'transparent',
-    padding: '0 10px',
+    height: 38,
     display: 'flex',
     alignItems: 'center',
     gap: 8,
+    padding: '0 4px 0 12px',
+    borderRadius: 9,
+    border: `1px solid ${C.lineStrong}`,
+    backgroundColor: C.surface,
+    transition: 'border-color .15s ease, box-shadow .15s ease',
   },
   searchInput: {
     flex: 1,
+    minWidth: 0,
+    height: '100%',
     border: 'none',
     outline: 'none',
-    backgroundColor: 'transparent',
+    background: 'transparent',
     fontSize: 13,
-    color: '#313131',
+    color: C.ink,
+    userSelect: 'text',
   },
-  ghostBtn: {
-    height: 36,
-    padding: '0 12px',
-    borderRadius: 6,
+  searchBtn: {
+    height: 30,
+    minWidth: 56,
+    padding: '0 14px',
+    borderRadius: 7,
     border: 'none',
-    borderBottom: '1px solid #bcbcbc',
-    backgroundColor: 'transparent',
-    color: '#3d3d3d',
+    backgroundColor: C.ink,
+    color: '#fff',
     fontSize: 12,
-    cursor: 'pointer',
+    fontWeight: 600,
     display: 'flex',
     alignItems: 'center',
-    gap: 5,
+    justifyContent: 'center',
+    cursor: 'pointer',
+    transition: 'background .15s ease',
+  },
+  ghostBtn: {
+    height: 38,
+    padding: '0 14px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 9,
+    border: `1px solid ${C.lineStrong}`,
+    backgroundColor: C.surface,
+    color: C.text,
+    fontSize: 12.5,
+    fontWeight: 500,
+    cursor: 'pointer',
+    flexShrink: 0,
+    transition: 'background .15s ease, border-color .15s ease, color .15s ease',
+  },
+  searchHint: {
+    fontSize: 11,
+    color: C.subtle,
+    margin: '8px 2px 0',
+    minHeight: 16,
   },
   errorNotice: {
     display: 'flex',
     alignItems: 'center',
     gap: 6,
+    margin: '8px 0 0',
     padding: '6px 10px',
-    borderRadius: 0,
-    backgroundColor: '#f1f1f1',
-    color: '#434343',
-    fontSize: 11,
-    marginBottom: 10,
+    borderRadius: 7,
+    backgroundColor: C.dangerBg,
+    color: C.danger,
+    fontSize: 11.5,
+    lineHeight: 1.4,
   },
   assetArea: {
+    position: 'relative',
     flex: 1,
-    borderRadius: 0,
-    border: 'none',
-    minHeight: 190,
-    padding: '6px 0',
+    minHeight: 0,
     overflowY: 'auto',
+    margin: '14px -20px 0',
+    padding: '2px 20px 20px',
+  },
+  group: {
+    marginBottom: 18,
   },
   groupHeader: {
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
-    fontSize: 12,
-    marginBottom: 6,
+    justifyContent: 'space-between',
+    fontSize: 11.5,
+    marginBottom: 8,
+  },
+  groupSku: {
+    fontWeight: 650,
+    color: C.ink,
+    letterSpacing: '0.03em',
+    fontVariantNumeric: 'tabular-nums',
   },
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, 76px)',
-    gap: 8,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))',
+    gap: 10,
   },
   tile: {
     position: 'relative',
-    width: 76,
-    padding: 0,
-    borderRadius: 5,
-    border: '1px solid #d7d7d7',
-    backgroundColor: '#f7f7f7',
+    borderRadius: 10,
+    border: `1px solid ${C.line}`,
+    backgroundColor: C.surface,
+    padding: 4,
     cursor: 'pointer',
-    transition: 'border-color 0.12s ease',
   },
   tileSelected: {
-    borderColor: '#333333',
-    boxShadow: '0 0 0 1px #333333',
+    borderColor: C.ink,
+    boxShadow: `0 0 0 1px ${C.ink}`,
+  },
+  tileBlocked: {
+    opacity: 0.4,
+    cursor: 'not-allowed',
   },
   tileImgBox: {
     position: 'relative',
     width: '100%',
-    aspectRatio: '1',
-    borderRadius: 5,
+    aspectRatio: '3 / 4',
+    borderRadius: 7,
     overflow: 'hidden',
-    backgroundColor: '#f4f4f4',
+    backgroundColor: C.panel,
   },
   tileCheck: {
     position: 'absolute',
-    top: 3,
-    left: 3,
-    width: 15,
-    height: 15,
-    borderRadius: 4,
-    backgroundColor: '#555555',
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: 700,
+    top: 6,
+    left: 6,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    border: '1.5px solid rgba(255,255,255,.95)',
+    backgroundColor: 'rgba(20,24,32,.18)',
+    color: '#fff',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    boxShadow: '0 1px 3px rgba(0,0,0,.15)',
+  },
+  tileCheckOn: {
+    backgroundColor: C.ink,
+    borderColor: C.ink,
   },
   tileZoom: {
     position: 'absolute',
-    top: 3,
-    right: 3,
-    width: 17,
-    height: 17,
-    borderRadius: 4,
-    backgroundColor: 'rgba(255, 255, 255,0.92)',
+    top: 5,
+    right: 5,
+    width: 22,
+    height: 22,
+    borderRadius: 6,
     border: 'none',
+    backgroundColor: 'rgba(255,255,255,.92)',
+    color: C.ink,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    cursor: 'pointer',
+    cursor: 'zoom-in',
     opacity: 0,
-    transition: 'opacity 0.12s ease',
+    transition: 'opacity .15s ease',
+    boxShadow: '0 1px 3px rgba(0,0,0,.12)',
   },
   tileRemove: {
     position: 'absolute',
-    top: 3,
-    right: 3,
-    width: 16,
-    height: 16,
-    borderRadius: 4,
-    backgroundColor: '#090909',
-    color: '#ffffff',
+    top: 5,
+    right: 5,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     border: 'none',
+    backgroundColor: 'rgba(20,24,32,.72)',
+    color: '#fff',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
   },
   tileLabel: {
-    marginTop: 3,
-    fontSize: 10,
-    color: '#696969',
+    fontSize: 11,
+    color: C.text,
     textAlign: 'center',
-    whiteSpace: 'nowrap',
+    padding: '6px 2px 2px',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   emptyState: {
     height: '100%',
-    minHeight: 220,
+    minHeight: 240,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'flex-start',
+    justifyContent: 'center',
+    gap: 4,
     textAlign: 'center',
-    gap: 8,
-    paddingTop: 48,
-    color: '#666666',
+    borderRadius: 12,
+    border: `1.5px dashed ${C.lineStrong}`,
+    backgroundColor: C.panel,
+    cursor: 'pointer',
+    transition: 'border-color .15s ease, background .15s ease',
   },
   emptyIcon: {
-    width: 38,
-    height: 38,
-    border: '1px solid #d3d3d3',
-    borderRadius: 10,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: C.surface,
+    border: `1px solid ${C.line}`,
+    color: C.muted,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#777777',
-    marginBottom: 2,
+    marginBottom: 8,
   },
   emptyTitle: {
-    fontSize: 14,
-    fontWeight: 650,
-    color: '#343434',
+    fontSize: 13.5,
+    fontWeight: 600,
+    color: C.ink,
   },
   emptyHint: {
-    fontSize: 11,
-    color: '#969696',
-    lineHeight: 1.5,
+    fontSize: 12,
+    color: C.muted,
+    lineHeight: 1.6,
+  },
+  emptyMeta: {
+    marginTop: 12,
+    padding: '3px 10px',
+    borderRadius: 999,
+    backgroundColor: C.surface,
+    border: `1px solid ${C.line}`,
+    fontSize: 10.5,
+    color: C.subtle,
+  },
+  dropOverlay: {
+    position: 'absolute',
+    inset: '2px 20px 20px',
+    borderRadius: 12,
+    border: `1.5px dashed ${C.ink}`,
+    backgroundColor: 'rgba(247,248,250,.94)',
+    color: C.ink,
+    fontSize: 13,
+    fontWeight: 600,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    pointerEvents: 'none',
+  },
+
+  // ── 右栏 ──
+  rightCol: {
+    width: 300,
+    flexShrink: 0,
+    borderLeft: `1px solid ${C.line}`,
+    backgroundColor: C.panel,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  rightScroll: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    padding: '16px 16px 12px',
+  },
+  cartHead: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+  },
+  cartCount: {
+    fontSize: 12,
+    fontWeight: 600,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  meter: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: C.line,
+    overflow: 'hidden',
+    margin: '8px 0 12px',
+  },
+  meterFill: {
+    height: '100%',
+    borderRadius: 2,
+    backgroundColor: C.ink,
+    transition: 'width .2s ease',
+  },
+  cartEmpty: {
+    padding: '18px 12px',
+    borderRadius: 10,
+    border: `1px dashed ${C.lineStrong}`,
+    fontSize: 11.5,
+    lineHeight: 1.7,
+    color: C.subtle,
     textAlign: 'center',
   },
-  summary: {
-    marginTop: 10,
-    paddingTop: 10,
-    borderTop: 'none',
-    flexShrink: 0,
-  },
-  summaryHead: {
+  cartList: {
     display: 'flex',
-    justifyContent: 'space-between',
-    fontSize: 11,
-    fontWeight: 600,
-    color: '#3c3c3c',
-    marginBottom: 6,
+    flexDirection: 'column',
+    gap: 8,
   },
-  summaryList: {
+  cartItem: {
+    padding: '9px 10px 10px',
+    borderRadius: 10,
+    border: `1px solid ${C.line}`,
+    backgroundColor: C.surface,
+    cursor: 'pointer',
+    transition: 'border-color .15s ease',
+  },
+  cartItemActive: {
+    borderColor: C.ink,
+  },
+  cartItemHead: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    fontSize: 12,
+    marginBottom: 8,
+  },
+  cartThumbs: {
     display: 'flex',
     flexWrap: 'wrap',
     gap: 6,
   },
-  summaryItem: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 4,
-    padding: '3px 4px 3px 0',
-    borderRadius: 0,
-    border: 'none',
-    borderBottom: '1px solid #dedede',
-    cursor: 'pointer',
-  },
-  summaryItemActive: {
-    borderBottomColor: '#333333',
-  },
-  summaryLabel: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: '#4d4d4d',
-    marginRight: 2,
-  },
   miniThumb: {
     position: 'relative',
-    width: 28,
-    height: 28,
-    borderRadius: 4,
+    width: 40,
+    height: 50,
+    borderRadius: 6,
     overflow: 'hidden',
-    backgroundColor: '#f4f4f4',
+    backgroundColor: C.panel,
+    border: `1px solid ${C.line}`,
   },
   miniRemove: {
     position: 'absolute',
-    top: 0,
-    right: 0,
-    width: 12,
-    height: 12,
-    padding: 0,
+    top: 2,
+    right: 2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     border: 'none',
-    borderBottomLeftRadius: 4,
-    backgroundColor: 'rgba(9, 9, 9,0.7)',
-    color: '#ffffff',
+    backgroundColor: 'rgba(20,24,32,.75)',
+    color: '#fff',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
+    padding: 0,
   },
-  footer: {
-    height: 54,
-    padding: '0 18px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderTop: '1px solid #dedede',
-    backgroundColor: 'rgba(255, 255, 255, .92)',
-    flexShrink: 0,
+  divider: {
+    height: 1,
+    backgroundColor: C.line,
+    margin: '18px 0 14px',
   },
-  settingsToggle: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '5px 0',
-    borderRadius: 0,
-    border: 'none',
-    backgroundColor: 'transparent',
-    color: '#5f5f5f',
-    fontSize: 11,
-    cursor: 'pointer',
+  field: {
+    marginTop: 12,
   },
-  cancelBtn: {
-    height: 34,
-    padding: '0 14px',
-    borderRadius: 6,
-    border: '1px solid #cfcfcf',
-    backgroundColor: 'transparent',
-    color: '#5f5f5f',
-    fontSize: 12,
-    cursor: 'pointer',
-  },
-  primaryBtn: {
-    height: 34,
-    padding: '0 16px',
-    borderRadius: 8,
-    border: 'none',
-    backgroundColor: '#2f2f2f',
-    color: '#ffffff',
-    boxShadow: '0 8px 18px rgba(120, 120, 120, .2)',
-    fontSize: 12,
+  fieldLabel: {
+    fontSize: 11.5,
     fontWeight: 500,
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
+    color: C.text,
+    marginBottom: 6,
   },
-  settingsPopover: {
-    position: 'absolute',
-    bottom: 58,
-    left: 18,
-    width: 400,
-    backgroundColor: '#ffffff',
-    borderRadius: 8,
-    border: '1px solid #cfcfcf',
-    boxShadow: '0 18px 40px rgba(61, 61, 61, .16)',
-    padding: 14,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 10,
-    zIndex: 20,
-  },
-  settingRow: {
+  select: {
+    width: '100%',
+    height: 36,
     display: 'flex',
     alignItems: 'center',
     gap: 8,
+    padding: '0 10px 0 12px',
+    borderRadius: 9,
+    border: `1px solid ${C.lineStrong}`,
+    backgroundColor: C.surface,
+    cursor: 'pointer',
+    transition: 'border-color .15s ease, box-shadow .15s ease',
   },
-  settingLabel: {
+  selectOpen: {
+    borderColor: C.ink,
+    boxShadow: '0 0 0 3px rgba(30,35,45,.08)',
+  },
+  selectValue: {
+    flex: 1,
+    minWidth: 0,
+    textAlign: 'left',
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: C.ink,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  menu: {
+    position: 'absolute',
+    top: 'calc(100% + 4px)',
+    left: 0,
+    right: 0,
+    zIndex: 5,
+    maxHeight: 240,
+    overflowY: 'auto',
+    padding: 4,
+    borderRadius: 10,
+    border: `1px solid ${C.line}`,
+    backgroundColor: C.surface,
+    boxShadow: '0 12px 32px rgba(20, 30, 50, .14), 0 2px 6px rgba(20, 30, 50, .05)',
+  },
+  menuItem: {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '7px 10px',
+    border: 'none',
+    borderRadius: 7,
+    backgroundColor: 'transparent',
+    cursor: 'pointer',
+  },
+  fieldHint: {
     fontSize: 11,
-    color: '#7d7d7d',
-    width: 40,
+    color: C.subtle,
+    marginTop: 6,
   },
   segment: {
-    display: 'inline-flex',
-    borderRadius: 7,
-    padding: 2,
-    backgroundColor: '#f5f5f5',
+    display: 'flex',
+    padding: 3,
+    gap: 2,
+    borderRadius: 8,
+    backgroundColor: C.hover,
   },
   segmentItem: {
-    padding: '4px 12px',
-    borderRadius: 5,
+    flex: 1,
+    height: 26,
     border: 'none',
+    borderRadius: 6,
     backgroundColor: 'transparent',
-    color: '#666666',
+    color: C.muted,
     fontSize: 12,
     fontWeight: 500,
     cursor: 'pointer',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 5,
+    fontVariantNumeric: 'tabular-nums',
   },
   segmentActive: {
-    backgroundColor: '#ededed',
-    color: '#5b5b5b',
-    boxShadow: '0 2px 8px rgba(129, 129, 129, .14)',
-  },
-  segmentCount: {
-    fontSize: 10,
-    minWidth: 15,
-    height: 15,
-    padding: '0 4px',
-    borderRadius: 999,
-    backgroundColor: '#747474',
-    color: '#ffffff',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: C.surface,
+    color: C.ink,
+    fontWeight: 600,
+    boxShadow: '0 1px 2px rgba(20,30,50,.1), 0 0 0 1px rgba(20,30,50,.04)',
   },
   textarea: {
     width: '100%',
-    boxSizing: 'border-box',
-    borderRadius: 6,
-    border: '1px solid #dcdcdc',
-    backgroundColor: '#ffffff',
-    padding: '6px 8px',
-    fontSize: 12,
-    outline: 'none',
     resize: 'none',
+    padding: '8px 10px',
+    borderRadius: 9,
+    border: `1px solid ${C.lineStrong}`,
+    backgroundColor: C.surface,
+    fontSize: 12,
+    lineHeight: 1.55,
+    color: C.ink,
     fontFamily: 'inherit',
-    color: '#3c3c3c',
+    userSelect: 'text',
+    transition: 'border-color .15s ease, box-shadow .15s ease',
   },
-  lightbox: {
-    position: 'fixed',
-    inset: 0,
-    backgroundColor: 'rgba(9, 9, 9, 0.8)',
+  submitBar: {
+    flexShrink: 0,
+    padding: '12px 16px 14px',
+    borderTop: `1px solid ${C.line}`,
+    backgroundColor: C.surface,
+  },
+  primaryBtn: {
+    width: '100%',
+    height: 42,
+    borderRadius: 10,
+    border: 'none',
+    backgroundColor: C.ink,
+    color: '#fff',
+    fontSize: 13.5,
+    fontWeight: 600,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 10000,
+    gap: 8,
+    cursor: 'pointer',
+    transition: 'background .15s ease',
+    padding: '0 14px',
+  },
+  primaryBtnDisabled: {
+    backgroundColor: C.lineStrong,
+    color: '#fff',
+    cursor: 'not-allowed',
+  },
+  primaryLabel: {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  submitHint: {
+    fontSize: 11,
+    color: C.subtle,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+
+  containImg: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'contain',
+    display: 'block',
+  },
+
+  lightbox: {
+    position: 'absolute',
+    inset: 0,
+    zIndex: 10,
+    backgroundColor: 'rgba(20, 24, 32, .55)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+    cursor: 'zoom-out',
   },
   lightboxBox: {
     position: 'relative',
-    maxWidth: '90vw',
-    maxHeight: '90vh',
+    maxWidth: '100%',
+    maxHeight: '100%',
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: C.surface,
+    boxShadow: '0 20px 60px rgba(0,0,0,.25)',
+    cursor: 'default',
   },
   lightboxImg: {
-    maxWidth: '85vw',
-    maxHeight: '85vh',
+    display: 'block',
+    maxWidth: '100%',
+    maxHeight: 'calc(min(720px, 90vh) - 64px)',
     objectFit: 'contain',
-    borderRadius: 8,
   },
   lightboxClose: {
     position: 'absolute',
-    top: -36,
-    right: 0,
-    color: '#ffffff',
+    top: 10,
+    right: 10,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     border: 'none',
-    backgroundColor: 'transparent',
+    backgroundColor: 'rgba(255,255,255,.92)',
+    color: C.ink,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     cursor: 'pointer',
+    boxShadow: '0 1px 4px rgba(0,0,0,.15)',
   },
 }

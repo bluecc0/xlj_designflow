@@ -60,10 +60,11 @@ const CALLOUTS: Record<string, [number, number, number]> = {
   feet: [122, 356, 350],
 }
 
-const W = 260
-const H = 390
 const LABEL_X = 146
-const LABEL_W = 106
+const LABEL_W = 62
+const LABEL_H = 30
+// 只保留人台与标签的包围盒：细长构图，在窄栏里可按高度撑满
+const VIEWBOX = '38 14 176 362'
 
 // ── 几何轮廓：人物真正“穿”着服饰，无多余重复裸体衬底 ──
 
@@ -114,37 +115,37 @@ export const InteractiveMannequin: React.FC<Props> = ({
 
     if (isActive) {
       return {
-        fill: 'rgba(134, 134, 134, .12)',
-        stroke: '#555555',
+        fill: 'rgba(30, 35, 45, .07)',
+        stroke: '#1e232d',
         strokeWidth: 1.25,
       }
     }
     if (isHov) {
       return {
-        fill: 'rgba(134, 134, 134, .08)',
-        stroke: '#777777',
+        fill: 'rgba(30, 35, 45, .04)',
+        stroke: '#687083',
         strokeWidth: 1,
       }
     }
     if (count > 0) {
       return {
-        fill: 'rgba(134, 134, 134, .07)',
-        stroke: '#a9a9a9',
+        fill: 'rgba(30, 35, 45, .05)',
+        stroke: '#98a0ae',
         strokeWidth: 0.9,
       }
     }
     return {
       fill: '#ffffff',
-      stroke: '#b8b8b8',
+      stroke: '#b4bac5',
       strokeWidth: 0.8,
     }
   }
 
   // 结构细节线颜色
   const detailColor = (zone: string) => {
-    if (activeZone === zone) return 'rgba(127, 127, 127, .58)'
-    if (hovered === zone) return 'rgba(156, 156, 156, .42)'
-    return 'rgba(116, 116, 116, .34)'
+    if (activeZone === zone) return 'rgba(30, 35, 45, .5)'
+    if (hovered === zone) return 'rgba(30, 35, 45, .36)'
+    return 'rgba(30, 35, 45, .22)'
   }
 
   const zoneProps = (zone: string) => ({
@@ -157,11 +158,10 @@ export const InteractiveMannequin: React.FC<Props> = ({
   return (
     <svg
       className="mannequin-shell"
-      viewBox={`0 0 ${W} ${H}`}
+      viewBox={VIEWBOX}
       style={{
         width: '100%',
-        height: 350,
-        objectFit: 'contain',
+        height: '100%',
         display: 'block',
         userSelect: 'none',
         backgroundColor: 'transparent',
@@ -170,19 +170,17 @@ export const InteractiveMannequin: React.FC<Props> = ({
       <defs>
         {/* 地面微渐变投影 */}
         <radialGradient id="mqGround" cx="0.5" cy="0.5" r="0.5">
-          <stop offset="0%" stopColor="#666666" stopOpacity={0.18} />
-          <stop offset="100%" stopColor="#666666" stopOpacity={0} />
+          <stop offset="0%" stopColor="#1e232d" stopOpacity={0.14} />
+          <stop offset="100%" stopColor="#1e232d" stopOpacity={0} />
         </radialGradient>
       </defs>
 
-      <path d="M 24 78 H 236" stroke="#666666" strokeOpacity=".16" strokeWidth=".5" strokeDasharray="2 5" />
-      <path d="M 24 280 H 236" stroke="#666666" strokeOpacity=".16" strokeWidth=".5" strokeDasharray="2 5" />
 
       {/* ── 1. 地面投影 ── */}
       <ellipse cx={90} cy={367} rx={44} ry={5} fill="url(#mqGround)" />
 
       {/* ── 2. 裸露肢体（皮肤底层，被服饰包裹与穿透） ── */}
-      <g fill="#f7f7f7" stroke="#858585" strokeOpacity=".88" strokeWidth={0.75}>
+      <g fill="#f8f9fb" stroke="#8a92a0" strokeOpacity=".9" strokeWidth={0.75}>
         {/* 颈部：插在衣领深处 */}
         <path d={NECK_PATH} />
         {/* 头部面廓 */}
@@ -196,7 +194,7 @@ export const InteractiveMannequin: React.FC<Props> = ({
       </g>
 
       {/* 人体结构辅助线：面部、关节、手部和踝部 */}
-      <g fill="none" stroke="#888888" strokeWidth={0.55} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none">
+      <g fill="none" stroke="#9aa1ad" strokeWidth={0.55} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none">
         <path d="M 79 43 Q 82 39 86 41 M 94 41 Q 98 39 101 43" />
         <path d="M 90 42 L 89 51 L 93 53 M 84 58 Q 90 61 96 58" />
         <path d="M 76 45 Q 72 47 76 51 M 104 45 Q 108 47 104 51" />
@@ -331,83 +329,71 @@ export const InteractiveMannequin: React.FC<Props> = ({
         <path d="M 60 365 Q 71 367 84 365 M 96 365 Q 109 367 121 365" stroke={detailColor('feet')} strokeWidth={0.55} fill="none" />
       </g>
 
-      {/* ── 7. 引线与标签卡片（与参考图一致的点+水平虚线导引） ── */}
+      {/* ── 7. 引线与标签：第二行显示该部位的配置状态 ── */}
       {OUTFIT_ZONES.map((zone) => {
         const [ax, ay, ly] = CALLOUTS[zone.key]
         const active = activeZone === zone.key
         const isHover = hovered === zone.key
         const count = zoneCounts[zone.key] || 0
-        const lineColor = active ? '#555555' : isHover ? '#777777' : '#999999'
+        const lineColor = active ? '#1e232d' : isHover ? '#687083' : '#b4bac5'
+        const status = count > 0 ? `已选 ${count} 张` : '未设置'
 
         return (
-          <g key={zone.key} {...zoneProps(zone.key)}>
-            {/* 水平虚线引线 */}
+          <g
+            key={zone.key}
+            {...zoneProps(zone.key)}
+            className="mq-label"
+            role="button"
+            tabIndex={disabled ? -1 : 0}
+            aria-pressed={active}
+            aria-label={`${zone.label}，${status}`}
+            onFocus={() => setHovered(zone.key)}
+            onBlur={() => setHovered(null)}
+            onKeyDown={(e) => {
+              if (disabled || (e.key !== 'Enter' && e.key !== ' ')) return
+              e.preventDefault()
+              onSelectZone(zone.key)
+            }}
+          >
             <path
               d={`M ${ax} ${ay} L ${LABEL_X} ${ly}`}
               fill="none"
               stroke={lineColor}
-              strokeWidth={active ? 1.1 : 0.8}
+              strokeWidth={active ? 1 : 0.75}
               strokeDasharray={active ? undefined : '2 3'}
             />
-            {/* 部位锚点圆点 */}
             <circle
               cx={ax}
               cy={ay}
-              r={active ? 2.5 : 2}
-              fill={active ? '#555555' : '#ffffff'}
+              r={active ? 2.4 : 2}
+              fill={active ? '#1e232d' : '#ffffff'}
               stroke={lineColor}
               strokeWidth={0.9}
             />
-
-            {/* 标签卡片：浅白底 + 细边框 */}
             <rect
               x={LABEL_X}
-              y={ly - 16}
+              y={ly - LABEL_H / 2}
               width={LABEL_W}
-              height={32}
-              rx={6}
-              fill={active ? 'rgba(134, 134, 134,.12)' : isHover ? 'rgba(134, 134, 134,.07)' : '#ffffff'}
-              stroke={active ? '#555555' : count ? '#999999' : '#d3d3d3'}
-              strokeWidth={active ? 1.1 : 0.8}
+              height={LABEL_H}
+              rx={7}
+              fill={active ? '#1e232d' : isHover ? '#eef1f6' : '#ffffff'}
+              stroke={active ? '#1e232d' : count ? '#98a0ae' : '#dfe3e9'}
+              strokeWidth={0.8}
             />
-            <text
-              x={LABEL_X + 9}
-              y={ly - 2}
-              fontSize={11.5}
-              fontWeight={active ? 600 : 500}
-              fill={active ? '#505050' : '#535353'}
-            >
+            <text x={LABEL_X + 8} y={ly - 2} fontSize={11} fontWeight={600} fill={active ? '#ffffff' : '#1e232d'}>
               {zone.label}
             </text>
             <text
-              x={LABEL_X + 9}
-              y={ly + 10}
-              fontSize={9}
-              fill={active ? '#737373' : '#8b8b8b'}
+              x={LABEL_X + 8}
+              y={ly + 9.5}
+              fontSize={8.5}
+              fontWeight={count > 0 ? 600 : 400}
+              fill={active ? 'rgba(255,255,255,.72)' : count > 0 ? '#3a4150' : '#98a0ae'}
             >
-              {zone.items.map((i) => i.label).join(' · ')}
+              {status}
             </text>
-
-            {/* 数量角标 */}
             {count > 0 && (
-              <g>
-                <circle
-                  cx={LABEL_X + LABEL_W - 13}
-                  cy={ly}
-                  r={7}
-                  fill={active ? '#555555' : '#888888'}
-                />
-                <text
-                  x={LABEL_X + LABEL_W - 13}
-                  y={ly + 3}
-                  fontSize={9}
-                  fontWeight={600}
-                  textAnchor="middle"
-                  fill="#ffffff"
-                >
-                  {count}
-                </text>
-              </g>
+              <circle cx={LABEL_X + LABEL_W - 8} cy={ly - 6} r={2.2} fill={active ? '#ffffff' : '#1e232d'} />
             )}
           </g>
         )
