@@ -380,8 +380,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
             <div
               style={{
                 ...styles.assetArea,
-                borderColor: isDragOver ? '#555555' : hasActiveContent ? 'transparent' : '#d4d4d4',
-                backgroundColor: isDragOver ? 'rgba(134, 134, 134,.08)' : 'rgba(255, 255, 255, .55)',
+                backgroundColor: isDragOver ? 'rgba(134, 134, 134,.08)' : 'transparent',
               }}
               onDragOver={(e) => {
                 if (e.dataTransfer.types.includes('Files')) {
@@ -691,8 +690,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   dialog: {
     position: 'relative',
-    width: 'min(1120px, 96vw)',
-    height: 'min(700px, 84vh)',
+    width: 'min(1040px, 94vw)',
+    height: 'min(640px, 82vh)',
     backgroundColor: '#fafafa',
     backgroundImage: 'radial-gradient(circle at 6% 0%, rgba(165, 165, 165, .09), transparent 32%), radial-gradient(circle at 96% 100%, rgba(126, 126, 126, .07), transparent 35%)',
     borderRadius: 14,
@@ -731,7 +730,7 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
   },
   leftCol: {
-    width: 292,
+    width: 280,
     borderRight: '1px solid #e2e2e2',
     backgroundColor: '#fafafa',
     padding: '15px 14px 12px',
@@ -801,7 +800,7 @@ const styles: Record<string, React.CSSProperties> = {
   rightCol: {
     flex: 1,
     minWidth: 0,
-    padding: '18px 28px 14px',
+    padding: '16px 22px 12px',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
@@ -906,10 +905,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   assetArea: {
     flex: 1,
-    minHeight: 0,
     borderRadius: 0,
     border: 'none',
-    padding: '8px 2px',
+    minHeight: 190,
+    padding: '6px 0',
     overflowY: 'auto',
   },
   groupHeader: {
@@ -1010,7 +1009,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'flex-start',
     textAlign: 'center',
     gap: 8,
-    paddingTop: 86,
+    paddingTop: 48,
     color: '#666666',
   },
   emptyIcon: {
