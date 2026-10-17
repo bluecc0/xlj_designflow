@@ -10183,33 +10183,8 @@ const Chat = ({
     // 用户通过 UI 功能面板选择模型，输入框仅作为图片描述。
     const targetAiModel = aiOptions.model || (aiOptions.mode === 'nano-banana-pro' ? 'nano-banana-pro' : aiOptions.workflow === 'ai-image' ? 'gpt-image-2.5' : '');
     const isAiImageMode = Boolean(targetAiModel) || aiOptions.workflow === 'ai-image';
-    const FRESH_KEYWORDS = ['重新生成', '重新生图', '全新生成'];
 
-    // 检测"重新生成"关键词
-    const rawPrompt = text.trim();
-    const freshMatch = FRESH_KEYWORDS.find(kw => rawPrompt.startsWith(kw));
-    if (freshMatch) {
-      const rest = rawPrompt.slice(freshMatch.length).trim();
-      const freshPrompt = rest || '重新生成';
-      const lastOpts = getLastAiImageOptions();
-      const model = isAiImageMode ? targetAiModel : lastOpts?.model || 'gpt-image-2.5';
-      const opts = isAiImageMode ? aiOptions : {
-        ...aiOptions,
-        size: lastOpts?.size || aiOptions.size,
-        resolution: lastOpts?.resolution || aiOptions.resolution,
-        variant: lastOpts?.variant || aiOptions.variant || 'flare',
-        quality: lastOpts?.quality || aiOptions.quality || 'auto',
-        provider: aiOptions.provider
-      };
-      setMessages(msgs => [...msgs, {
-        who: 'user',
-        text: rawPrompt,
-        refPreviews: userRefPreviews,
-        refMeta: userRefMeta
-      }]);
-      await runAiImageGeneration(model, freshPrompt, freshPrompt, refImages, opts);
-      return;
-    }
+    // 继承上一张图修改、沿用需求重新生成还是全新需求，由后端 VLM 判断。
     if (isAiImageMode) {
       const plainText = text.trim();
       if (!plainText) {
