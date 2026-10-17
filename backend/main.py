@@ -16,6 +16,7 @@ import asyncio
 import base64
 import functools
 import html
+import io
 import json
 import logging
 import mimetypes
@@ -87,6 +88,7 @@ from .agent_mode import (
     _chat_completions_endpoint,
     _coarse_subject_from_message,
     _deep_copy_json,
+    _extract_first_json_object,
     _resolve_image_data_url,
     decide_next_action,
     default_project_state,
@@ -4512,6 +4514,92 @@ async def agent_skill_plan_stream_endpoint(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+CONTEXT_INTENT_MODES = {"edit", "regenerate", "new"}
+
+
+def _context_image_data_url(path: Path) -> str:
+    """上一张结果图压成小 JPEG 给 VLM 看，避免大图拖慢意图判断。"""
+    from PIL import Image
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        im.thumbnail((768, 768))
+        buffer = io.BytesIO()
+        im.save(buffer, format="JPEG", quality=80)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+async def _judge_context_intent(
+    history_messages: list[dict],
+    current_prompt: str,
+    prev_image_path: Path | None,
+    has_user_refs: bool,
+) -> dict:
+    """
+    用 VLM 判断本轮生图怎么继承上下文：
+    - edit：在上一张图基础上修改（改写 prompt + 上一张图作参考）
+    - regenerate：沿用之前的需求重新出图（改写 prompt，不带上一张图）
+    - new：与之前无关的新需求（不改写、不带图）
+    VLM 不可用或返回异常时按 edit 处理，保持原有行为。
+    """
+    fallback = {"mode": "edit", "reason": "", "source": "fallback"}
+    vlm_base_url, vlm_api_key, vlm_model = settings.current_vlm_config()
+    if not vlm_api_key:
+        return {**fallback, "reason": "VLM 未配置"}
+
+    history_lines = []
+    for m in history_messages[-8:]:
+        who = "用户" if m.get("who") == "user" else "AI"
+        text = (m.get("text") or m.get("prompt") or "").strip()
+        if text:
+            history_lines.append(f"[{who}] {text[:120]}{'…' if len(text) > 120 else ''}")
+    instruction = f"""你在一个电商 AI 生图工具里判断用户本轮指令与之前对话的关系。只输出 JSON：{{"mode": "...", "reason": "..."}}
+mode 取值：
+- "edit"：要在上一张结果图的基础上修改（换颜色、改背景、调构图、加减元素、继续优化等）
+- "regenerate"：沿用之前的需求重新出一张，但不需要以上一张图为底（再来一张、换个方案、重新生成等）
+- "new"：与之前的需求无关的全新需求
+reason 用一句中文说明依据。
+{"附图是上一张生成结果。" if prev_image_path else "上一轮没有可用的结果图。"}用户本轮{"附带了新的参考图" if has_user_refs else "没有附带新的参考图"}。
+
+[对话历史]
+{chr(10).join(history_lines) or "（无）"}
+
+[用户本轮指令]
+{current_prompt}"""
+    content: list[dict] = [{"type": "text", "text": instruction}]
+    try:
+        if prev_image_path:
+            content.append({"type": "image_url", "image_url": {"url": _context_image_data_url(prev_image_path)}})
+        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+            resp = await client.post(
+                _chat_completions_endpoint(vlm_base_url),
+                headers={"Authorization": f"Bearer {vlm_api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": vlm_model,
+                    "messages": [{"role": "user", "content": content}],
+                    "temperature": 0,
+                    "stream": False,
+                },
+            )
+        if not resp.is_success:
+            logger.warning("Context intent VLM error: %s", resp.text[:200])
+            return {**fallback, "reason": f"VLM HTTP {resp.status_code}"}
+        try:
+            raw = resp.json()["choices"][0]["message"]["content"] or ""
+        except Exception:
+            raw = _extract_sse_chat_content(resp.text or "")
+        parsed = _extract_first_json_object(raw) or {}
+        mode = str(parsed.get("mode") or "").strip().lower()
+        if mode not in CONTEXT_INTENT_MODES:
+            logger.warning("Context intent VLM returned unexpected content: %s", raw[:200])
+            return {**fallback, "reason": "VLM 返回无法解析"}
+        result = {"mode": mode, "reason": str(parsed.get("reason") or "")[:200], "source": "vlm"}
+        logger.info("Context intent [%s]: %s → %s (%s)", vlm_model, current_prompt[:60], mode, result["reason"][:60])
+        return result
+    except Exception as exc:
+        logger.exception("Context intent judge failed, falling back to edit")
+        return {**fallback, "reason": f"VLM 调用失败: {exc.__class__.__name__}"}
+
+
 async def _build_context_aware_prompt(
     session_id: str,
     user_id: str,
@@ -6808,8 +6896,28 @@ async def ai_image_endpoint(
         prompt_trace_text = (prompt_trace or "").strip()
         context_ref_bytes: list[tuple[bytes, str]] = []
 
-        # 1. LLM 根据历史改写 prompt
-        if session_id and settings.siliconflow_api_key:
+        # 1. 找上一张生成的图，并用 VLM 判断本轮是修改、重新生成还是全新需求
+        prev_messages = load_ai_chat_messages(session_id, user_id=user["id"])
+        # 本轮用户消息已写入会话，判断时只看之前的历史
+        history_messages = [m for m in prev_messages if m.get("who") in ("user", "ai")][:-1]
+        prev_image_url = ""
+        prev_image_path: Path | None = None
+        for m in reversed(prev_messages):
+            prev_url = m.get("imageUrl") or ""
+            if prev_url and prev_url.startswith("/ai-images/"):
+                local_path = settings.output_path / "ai-images" / prev_url[len("/ai-images/"):]
+                if local_path.is_file():
+                    prev_image_url, prev_image_path = prev_url, local_path
+                    break
+        if history_messages:
+            context_intent = await _judge_context_intent(
+                history_messages, original_prompt, prev_image_path, has_user_refs=bool(images),
+            )
+        else:
+            context_intent = {"mode": "new", "reason": "会话首轮", "source": "rule"}
+
+        # 2. LLM 根据历史改写 prompt（全新需求不改写）
+        if context_intent["mode"] != "new" and settings.siliconflow_api_key:
             enriched_prompt = await _build_context_aware_prompt(
                 session_id=session_id,
                 user_id=user["id"],
@@ -6833,24 +6941,17 @@ async def ai_image_endpoint(
                 active_skill_context,
             )
 
-        # 2. 取上一张生成的图片作为参考图
+        # 3. 只有在上一张图基础上修改时，才把它作为参考图
         context_ref_url = ""
-        if session_id:
-            prev_messages = load_ai_chat_messages(session_id, user_id=user["id"])
-            for m in reversed(prev_messages):
-                prev_url = m.get("imageUrl") or ""
-                if prev_url and prev_url.startswith("/ai-images/"):
-                    local_path = settings.output_path / "ai-images" / prev_url[len("/ai-images/"):]
-                    try:
-                        if local_path.exists():
-                            context_ref_bytes.append((local_path.read_bytes(), local_path.name))
-                            context_ref_url = prev_url
-                            logger.info("Using previous image as reference: %s", local_path.name)
-                            break
-                    except Exception:
-                        pass
+        if context_intent["mode"] == "edit" and prev_image_path:
+            try:
+                context_ref_bytes.append((prev_image_path.read_bytes(), prev_image_path.name))
+                context_ref_url = prev_image_url
+                logger.info("Using previous image as reference: %s", prev_image_path.name)
+            except Exception:
+                pass
 
-        # 3. 合并用户上传的参考图与上下文的参考图
+        # 4. 合并用户上传的参考图与上下文的参考图
         user_refs: list[tuple[bytes, str]] = []
         for i, f in enumerate(images):
             user_refs.append(await _aread_reference_upload(f, index=i))
@@ -6915,6 +7016,7 @@ async def ai_image_endpoint(
                 "context_reference_count": actual_context_count,
                 "context_reference_url": context_ref_url if context_ref_bytes else "",
                 "context_image_url": context_ref_url if context_ref_bytes else "",
+                "context_intent": context_intent,
                 "reference_names": [name for _content, name in all_refs_batch],
                 "reference_images": reference_images,
                 # data URL 缩略图体积很大，不写入任务库；站内 URL 可以安全保留用于排障。
