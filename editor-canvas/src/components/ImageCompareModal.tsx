@@ -50,7 +50,9 @@ export const ImageCompareModal = memo(function ImageCompareModal({ imageA, image
   }, [])
 
   useEffect(() => {
+    // 捕获阶段拦截全部按键：弹窗打开时画布快捷键（删除、撤销、切换工具等）不得作用于背后选中的图片
     const onKeyDown = (e: KeyboardEvent) => {
+      e.stopPropagation()
       if (e.key === 'Escape') {
         e.preventDefault()
         onClose()
@@ -65,8 +67,8 @@ export const ImageCompareModal = memo(function ImageCompareModal({ imageA, image
         setSliderPos((p) => Math.min(100, p + 5))
       }
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [onClose])
 
   const maxW = Math.max(120, viewport.w - STAGE_PADDING_X * 2)
