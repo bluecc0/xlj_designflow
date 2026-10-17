@@ -256,13 +256,6 @@
       return fetch(BASE + '/templates/cache', { method: 'DELETE' }).then(r => r.json());
     },
     fetchProducts: function() { return request('/products'); },
-    resolveProductRefs: function(refs) {
-      return request('/products/resolve-references', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refs: refs || [] }),
-      }).then(function(res) { return res.refs || []; });
-    },
     proxyDownloadInspect: function(url) {
       return request('/proxy-download/inspect', {
         method: 'POST',

@@ -225,6 +225,7 @@ const App = () => {
     setQuickEditRequest({
       key: Date.now() + Math.random(),
       prompt: payload.prompt,
+      displayPrompt: payload.displayPrompt,
       image: payload.image,
     });
   }, []);
