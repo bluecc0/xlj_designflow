@@ -13,7 +13,13 @@
       "Bash(python -c \"from dotenv import load_dotenv; load_dotenv\\('.env'\\); import os; print\\(os.environ.get\\('PENPOT_BASE_URL', 'NOT FOUND'\\)\\)\")",
       "Bash(netstat -ano)",
       "Bash(tasklist *)",
-      "Read(//Users/xuduo/**)"
+      "Read(//Users/xuduo/**)",
+      "Bash(gh pr *)",
+      "Bash(pytest /Users/xuduo/Documents/xlj_designflow/backend/tests/test_outfit_change.py)",
+      "Bash(/Users/xuduo/Documents/xlj_designflow/.venv/bin/pytest /Users/xuduo/Documents/xlj_designflow/backend/tests/test_outfit_change.py)",
+      "Bash(/Users/xuduo/Documents/xlj_designflow/.venv/bin/python3 -m unittest /Users/xuduo/Documents/xlj_designflow/backend/tests/test_outfit_change.py)",
+      "Bash(/Users/xuduo/.local/share/mise/installs/python/latest/bin/python3 -c \"import fastapi; print\\(fastapi.__file__\\)\")",
+      "Bash(PYTHONPATH=/Users/xuduo/Documents/xlj_designflow /Users/xuduo/.local/share/mise/installs/python/latest/bin/python3 -m unittest backend/tests/test_outfit_change.py)"
     ]
   }
 }
