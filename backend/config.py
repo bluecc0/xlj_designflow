@@ -124,7 +124,10 @@ class Settings:
     bfl_api_url: str = os.getenv("BFL_API_URL", "https://api.bfl.ai").strip()
     bfl_outpainting_proxy_url: str = os.getenv("BFL_OUTPAINTING_PROXY_URL", "").strip()
     # FLUX 换装（vto-v2）等其它 BFL 接口的代理；未设置时沿用扩图代理。
-    bfl_proxy_url: str = os.getenv("BFL_PROXY_URL", os.getenv("BFL_OUTPAINTING_PROXY_URL", "")).strip()
+    # 先去空白再判空：.env 里的 BFL_PROXY_URL= 空值同样要回退到扩图代理
+    bfl_proxy_url: str = (
+        os.getenv("BFL_PROXY_URL", "").strip() or os.getenv("BFL_OUTPAINTING_PROXY_URL", "").strip()
+    )
     bfl_outpainting_mode: str = os.getenv("BFL_OUTPAINTING_MODE", "fast").strip().lower() or "fast"
     bfl_outpainting_output_format: str = os.getenv("BFL_OUTPAINTING_OUTPUT_FORMAT", "PNG").strip().upper() or "PNG"
     bfl_outpainting_auto_crop: bool = os.getenv("BFL_OUTPAINTING_AUTO_CROP", "false").strip().lower() in {"1", "true", "yes", "on"}

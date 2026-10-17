@@ -525,18 +525,52 @@ class FluxVtoHelpersTest(unittest.TestCase):
         self.assertIn("several reference views", multi)
 
 
+class BflProxyConfigTest(unittest.TestCase):
+    def _proxy(self, **env: str) -> str:
+        import os
+        import subprocess
+        import sys
+
+        full_env = {k: v for k, v in os.environ.items() if not k.startswith("BFL_")}
+        full_env.update(env)
+        out = subprocess.run(
+            [sys.executable, "-c", "from backend.config import settings; print(repr(settings.bfl_proxy_url))"],
+            cwd=Path(__file__).resolve().parents[2], env=full_env, capture_output=True, text=True, check=True,
+        )
+        return out.stdout.strip().splitlines()[-1]
+
+    def test_blank_vto_proxy_falls_back_to_outpainting_proxy(self) -> None:
+        self.assertEqual(self._proxy(BFL_PROXY_URL="", BFL_OUTPAINTING_PROXY_URL="http://p:1"), "'http://p:1'")
+        self.assertEqual(self._proxy(BFL_PROXY_URL="  ", BFL_OUTPAINTING_PROXY_URL="http://p:1"), "'http://p:1'")
+        self.assertEqual(self._proxy(BFL_PROXY_URL="http://v:2", BFL_OUTPAINTING_PROXY_URL="http://p:1"), "'http://v:2'")
+        # 显式置空，避免本机 .env 的值渗入（load_dotenv 不覆盖已存在的变量）
+        self.assertEqual(self._proxy(BFL_PROXY_URL="", BFL_OUTPAINTING_PROXY_URL=""), "''")
+
+
 class FluxVtoClientTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.requests: list[httpx.Request] = []
         self.poll_statuses = ["Pending", "Ready"]
+        self.post_failures: list = []  # 依次消费：异常实例或 HTTP 状态码
+        self.poll_failures: list = []
         real_client = httpx.AsyncClient
+
+        def fail(queue: list, request: httpx.Request):
+            item = queue.pop(0)
+            if isinstance(item, int):
+                return httpx.Response(item, json={"detail": "x"})
+            raise item
 
         def handler(request: httpx.Request) -> httpx.Response:
             self.requests.append(request)
             if request.method == "POST":
+                if self.post_failures:
+                    return fail(self.post_failures, request)
                 return httpx.Response(200, json={"id": "t1", "polling_url": "https://api.bfl.ai/v1/get_result?id=t1"})
             if request.url.path == "/v1/get_result":
+                if self.poll_failures:
+                    return fail(self.poll_failures, request)
                 status = self.poll_statuses.pop(0)
                 body = {"id": "t1", "status": status}
                 if status == "Ready":
@@ -553,6 +587,7 @@ class FluxVtoClientTest(unittest.TestCase):
             patch.object(settings, "bfl_api_url", "https://api.bfl.ai"),
             patch.object(ai_image, "_OUTPUT_DIR", Path(self.temp_dir.name)),
             patch.object(bfl_vto, "POLL_INTERVAL_SECONDS", 0),
+            patch.object(bfl_vto.asyncio, "sleep", self._no_sleep),
             patch.object(bfl_vto.httpx, "AsyncClient", client_factory),
         ]
         for p in self.patchers:
@@ -562,6 +597,13 @@ class FluxVtoClientTest(unittest.TestCase):
         for p in self.patchers:
             p.stop()
         self.temp_dir.cleanup()
+
+    @staticmethod
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    def _posts(self) -> int:
+        return sum(1 for r in self.requests if r.method == "POST")
 
     def _run(self) -> dict:
         return asyncio.run(bfl_vto.generate_vto_async(
@@ -586,6 +628,31 @@ class FluxVtoClientTest(unittest.TestCase):
         self.assertEqual(set(body), {"prompt", "person", "garment", "output_format"})
         saved = list(Path(self.temp_dir.name).rglob("vto_*.jpg"))
         self.assertEqual(len(saved), 1)
+
+    def test_create_read_timeout_is_not_resubmitted(self) -> None:
+        # 服务端可能已建任务但响应丢失：只能发一次创建请求
+        self.post_failures = [httpx.ReadTimeout("read timed out")]
+        with self.assertRaisesRegex(bfl_vto.BflVtoError, "未收到确认"):
+            self._run()
+        self.assertEqual(self._posts(), 1)
+
+    def test_create_ambiguous_http_error_is_not_resubmitted(self) -> None:
+        self.post_failures = [503]
+        with self.assertRaises(bfl_vto.BflVtoError):
+            self._run()
+        self.assertEqual(self._posts(), 1)
+
+    def test_create_retries_only_when_request_never_reached_server(self) -> None:
+        self.post_failures = [httpx.ConnectError("refused"), 429]
+        result = self._run()
+        self.assertEqual(result["task_id"], "t1")
+        self.assertEqual(self._posts(), 3)
+
+    def test_polling_still_retries_transient_errors(self) -> None:
+        self.poll_failures = [httpx.ReadTimeout("read timed out"), 502]
+        result = self._run()
+        self.assertEqual(result["task_id"], "t1")
+        self.assertEqual(self._posts(), 1)
 
     def test_moderated_task_raises_readable_error(self) -> None:
         self.poll_statuses = ["Content Moderated"]

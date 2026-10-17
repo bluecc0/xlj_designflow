@@ -458,10 +458,14 @@ export function App() {
       const state = useCanvasStore.getState()
       // 原图可能已被移动，优先取最新位置
       const anchor = state.images.find((im) => im.id === source.id) || source
+      // 结果写回原图所在页面（用户可能在生成期间切换了画布）；原页面已删除/归档时才退回当前页面
+      const pageId = state.pages.some((p) => p.id === anchor.pageId && !p.archived) ? anchor.pageId : state.activePageId
+      const frameId =
+        anchor.frameId && state.frames.some((f) => f.id === anchor.frameId && f.pageId === pageId) ? anchor.frameId : null
       const height = anchor.height
       const width = Math.max(1, Math.round((height * (result.width || 1)) / (result.height || 1)))
       const gap = 24
-      const pageImages = state.images.filter((im) => im.pageId === state.activePageId)
+      const pageImages = state.images.filter((im) => im.pageId === pageId)
       let x = anchor.x + anchor.width + gap
       const y = anchor.y
       // 向右寻找不与已有图片重叠的位置（多次换装的结果依次排开）
@@ -474,7 +478,8 @@ export function App() {
       }
       addImage({
         id: 'img-' + Math.random().toString(36).slice(2, 10),
-        frameId: anchor.frameId ?? null,
+        pageId,
+        frameId,
         x,
         y,
         width,

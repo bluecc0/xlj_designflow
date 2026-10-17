@@ -67,16 +67,29 @@ def _failure_message(status: str) -> str:
     return "FLUX 换装生成失败，请重试"
 
 
-async def _request(client: httpx.AsyncClient, method: str, url: str, **kwargs) -> dict[str, Any]:
-    """带少量瞬时重试的 JSON 请求。"""
+# 创建任务是付费请求：只有确定请求没被服务端受理时才能重发，否则可能重复建任务
+_CREATE_SAFE_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout)
+_CREATE_SAFE_HTTP = {429}
+
+
+async def _request(
+    client: httpx.AsyncClient, method: str, url: str, *, create: bool = False, **kwargs
+) -> dict[str, Any]:
+    """带少量瞬时重试的 JSON 请求；create=True 时只在请求确定未被受理时重试。"""
     last: Exception | None = None
     for attempt in range(3):
         try:
             resp = await client.request(method, url, **kwargs)
         except httpx.RequestError as exc:
+            if create and not isinstance(exc, _CREATE_SAFE_ERRORS):
+                # 读超时 / 连接中断等：服务端可能已建任务，不能盲目重发
+                raise BflVtoError(
+                    "FLUX 换装提交后未收到确认，任务可能已创建，请稍后在任务记录中核对，避免重复提交"
+                ) from exc
             last = exc
         else:
-            if resp.status_code in _TRANSIENT_HTTP and attempt < 2:
+            retryable = _CREATE_SAFE_HTTP if create else _TRANSIENT_HTTP
+            if resp.status_code in retryable and attempt < 2:
                 last = BflVtoError(_http_error_message(resp.status_code))
             elif not resp.is_success:
                 raise BflVtoError(_http_error_message(resp.status_code))
@@ -125,7 +138,7 @@ async def generate_vto_async(
         proxy=settings.bfl_proxy_url or None,
         trust_env=False,
     ) as client:
-        submitted = await _request(client, "POST", f"{api_url}{VTO_PATH}", json=payload, headers=headers)
+        submitted = await _request(client, "POST", f"{api_url}{VTO_PATH}", create=True, json=payload, headers=headers)
         task_id = str(submitted.get("id") or "").strip()
         if not task_id:
             raise BflVtoError("FLUX 换装返回了无效响应")
