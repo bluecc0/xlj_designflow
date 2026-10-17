@@ -92,7 +92,8 @@ cd ..
 | `AI_IMAGE_BASE_URL` / `AI_IMAGE_API_KEY` | APIMart 默认线路 |
 | `CLIPROXY_BASE_URL` / `CLIPROXY_API_KEY` | 订阅线路 |
 | `ADOBE2API_BASE_URL` / `ADOBE2API_API_KEY` | Adobe 兼容线路 |
-| `KIE_API_KEY` | PSD 分层、Topaz 高清放大 |
+| `KIE_API_KEY` | PSD 分层能力 |
+| `UPSCALE_CLI_PATH` | 本地高清放大 CLI |
 | `AGENT_SKILL_PATHS` | Skill 搜索路径，Windows 用 `;` |
 | `PROXY_DOWNLOAD_*` | 花瓣下载中继配置 |
 

@@ -215,7 +215,6 @@ from .models import (
     TemplateInfo,
 )
 from .product_library import ProductLibrary
-from .kie_upscale import UPSCALE_FACTOR, KieUpscaleClient
 from .slot_schema import schema as slot_schema
 from .special_compose import detect_special_materials, parse_special_command, run_special_compose
 from .proxy_download_relay import inspect_url as proxy_download_inspect_url, download_url as proxy_download_download_url, stop as proxy_download_stop, check_login_status as proxy_download_check_login, login_shell as proxy_download_login_shell
@@ -954,30 +953,67 @@ def _find_latest_image_file(folder: Path, after_ts: float) -> Path | None:
     return max(candidates, key=lambda item: item.stat().st_mtime)
 
 
+def _run_local_upscale(src_path: Path, out_path: Path, scale: int) -> tuple[int, int, str]:
+    scale = max(1, min(int(scale or 2), 4))
+    cli_path = settings.upscale_cli_path.strip()
+    if not cli_path:
+        raise RuntimeError("本机未配置高清放大工具，请先配置 UPSCALE_CLI_PATH")
+
+    exe = Path(cli_path)
+    executable = str(exe) if exe.exists() else cli_path
+    cmd = [
+        sys.executable,
+        "-m", "backend.upscale_worker",
+        "--exe", executable,
+        "--src", str(src_path),
+        "--out", str(out_path),
+        "--scale", str(scale),
+        "--timeout", str(max(30, int(settings.upscale_cli_timeout_seconds or 900))),
+    ]
+    if settings.upscale_cli_model:
+        cmd.extend(["--model", settings.upscale_cli_model])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        cmd,
+        cwd=str(settings.root_dir),
+        capture_output=True,
+        text=True,
+        timeout=max(45, int(settings.upscale_cli_timeout_seconds or 900) + 15),
+        check=False,
+    )
+    if proc.returncode != 0:
+        try:
+            payload = json.loads((proc.stdout or "").strip().splitlines()[-1])
+            detail = str(payload.get("error") or "")
+        except Exception:
+            detail = (proc.stderr or proc.stdout or "").strip()[-800:]
+        raise RuntimeError(f"Gigapixel CLI 执行失败: {detail or proc.returncode}")
+    if not out_path.exists():
+        raise RuntimeError("Gigapixel CLI 未输出图片")
+    try:
+        from PIL import Image
+        with Image.open(out_path) as im:
+            return im.width, im.height, "gigapixel"
+    except Exception:
+        return 0, 0, "gigapixel"
+
+
 async def _run_upscale_background(job_id: str, user: dict, src_path: Path, scale: int, created_at: float) -> None:
-    prompt = f"kie topaz upscale x{scale}"
+    prompt = f"local upscale x{scale}"
     out_dir = settings.output_path / "ai-images" / user["id"] / "upscaled"
     out_path = out_dir / f"{job_id}.png"
     try:
         save_ai_image_job(
             job_id=job_id, user_id=user["id"], status="processing",
-            model="kie-topaz", prompt=prompt, size="",
+            model="local-upscale", prompt=prompt, size="",
             original_prompt=prompt, resolved_prompt=prompt,
             has_reference=True, progress=15, created_at=created_at,
         )
-        client = KieUpscaleClient(
-            api_key=settings.kie_api_key,
-            base_url=settings.kie_base_url,
-            upload_base_url=settings.kie_upload_base_url,
-            model=settings.kie_upscale_model,
-            timeout_seconds=settings.kie_timeout_seconds,
-            poll_interval_seconds=settings.kie_poll_interval_seconds,
-        )
-        width, height, task_id = await client.upscale(src_path, out_path)
+        width, height, method = await asyncio.to_thread(_run_local_upscale, src_path, out_path, scale)
         image_url = f"/ai-images/{quote(user['id'])}/upscaled/{quote(out_path.name)}"
         save_ai_image_job(
             job_id=job_id, user_id=user["id"], status="done",
-            model="kie-topaz", prompt=prompt, size=f"{width}x{height}" if width and height else "",
+            model=f"local-upscale:{method}", prompt=prompt, size=f"{width}x{height}" if width and height else "",
             original_prompt=prompt, resolved_prompt=prompt, image_url=image_url,
             has_reference=True, progress=100, created_at=created_at,
         )
@@ -988,13 +1024,13 @@ async def _run_upscale_background(job_id: str, user: dict, src_path: Path, scale
         log_operation(
             user_id=user["id"], username=user.get("username", ""),
             action="ai_image_upscale",
-            detail=f"job={job_id[:8]} scale={scale} task={task_id} result=done",
-            payload=json.dumps({"job_id": job_id, "image_url": image_url, "scale": scale, "kie_task_id": task_id}, ensure_ascii=False),
+            detail=f"job={job_id[:8]} scale={scale} method={method} result=done",
+            payload=json.dumps({"job_id": job_id, "image_url": image_url, "scale": scale, "method": method}, ensure_ascii=False),
         )
     except Exception as exc:
         save_ai_image_job(
             job_id=job_id, user_id=user["id"], status="failed",
-            model="kie-topaz", prompt=prompt, size="",
+            model="local-upscale", prompt=prompt, size="",
             original_prompt=prompt, resolved_prompt=prompt,
             has_reference=True, error=str(exc), progress=100, created_at=created_at,
         )
@@ -5313,22 +5349,26 @@ async def ai_image_outpainting(request: Request):
 
 @app.post("/ai-image/upscale")
 async def ai_image_upscale(request: Request):
-    """对站内图片执行 Kie Topaz 2x 高清放大，返回可轮询的 ai-image job。"""
+    """对站内图片执行本地高清放大，返回可轮询的 ai-image job。"""
     user = _current_user(request)
     body = await request.json()
     image_url = str(body.get("image_url") or "").strip()
+    try:
+        scale = int(body.get("scale") or settings.upscale_cli_scale or 2)
+    except Exception:
+        scale = settings.upscale_cli_scale or 2
     job_id = uuid.uuid4().hex
-    scale = UPSCALE_FACTOR
+    scale = max(1, min(scale, 4))
     if image_url.startswith("data:image/"):
         src_path = _persist_data_url_image(image_url, user_id=user["id"], job_id=job_id)
     else:
         src_path = _resolve_public_asset_path(image_url, user)
     created_at = time.time()
-    prompt = f"kie topaz upscale x{scale}"
+    prompt = f"local upscale x{scale}"
     save_ai_image_job(
         job_id=job_id, user_id=user["id"], status="processing",
-        model="kie-topaz", prompt=prompt, size="",
-        provider="kie", reference_count=1,
+        model="local-upscale", prompt=prompt, size="",
+        provider="local", reference_count=1,
         request_meta={"operation": "upscale", "scale": scale, "source_image_url": image_url},
         original_prompt=prompt, resolved_prompt=prompt,
         has_reference=True, progress=0, created_at=created_at,
