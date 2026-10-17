@@ -156,6 +156,7 @@ class Settings:
     kie_layer_model: str = os.getenv("KIE_LAYER_MODEL", "seedream/5-pro-layer-decomposition")
     kie_layer_size: str = os.getenv("KIE_LAYER_SIZE", "auto")
     kie_layer_output_format: str = os.getenv("KIE_LAYER_OUTPUT_FORMAT", "png")
+    kie_upscale_model: str = os.getenv("KIE_UPSCALE_MODEL", "topaz/image-upscale")
     kie_timeout_seconds: int = int(os.getenv("KIE_TIMEOUT_SECONDS", "900"))
     kie_poll_interval_seconds: float = float(os.getenv("KIE_POLL_INTERVAL_SECONDS", "3"))
     kie_input_download_retries: int = int(os.getenv("KIE_INPUT_DOWNLOAD_RETRIES", "1"))
@@ -198,12 +199,6 @@ class Settings:
     proxy_download_login_url: str = os.getenv("PROXY_DOWNLOAD_LOGIN_URL", "https://huaban.com/")
     proxy_download_request_timeout_seconds: int = int(os.getenv("PROXY_DOWNLOAD_REQUEST_TIMEOUT_SECONDS", "180"))
     proxy_download_navigation_timeout_ms: int = int(os.getenv("PROXY_DOWNLOAD_NAVIGATION_TIMEOUT_MS", "30000"))
-
-    # 本地高清放大 CLI。必须配置 gigapixel-beta.exe 路径；留空则高清放大不可用。
-    upscale_cli_path: str = os.getenv("UPSCALE_CLI_PATH", "").strip()
-    upscale_cli_model: str = os.getenv("UPSCALE_CLI_MODEL", "").strip()
-    upscale_cli_scale: int = int(os.getenv("UPSCALE_CLI_SCALE", "2"))
-    upscale_cli_timeout_seconds: int = int(os.getenv("UPSCALE_CLI_TIMEOUT_SECONDS", "900"))
 
     # 本地智能抠图 (BiRefNet)
     matting_enabled: bool = os.getenv("MATTING_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
