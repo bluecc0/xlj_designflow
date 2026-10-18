@@ -199,6 +199,7 @@ export async function runLayerExtract(
 ): Promise<{
   psdUrl: string
   layers?: Array<{ url: string; x: number; y: number; width: number; height: number; name?: string }>
+  sourceSize?: [number, number]
 }> {
   onProgress?.('正在提交图层分离任务...')
   const resp = await fetch('/ai-image/layer-extract', {
@@ -245,9 +246,14 @@ export async function runLayerExtract(
     })
     .filter(Boolean) as Array<{ url: string; x: number; y: number; width: number; height: number; name?: string }>
 
+  const rawSize = Array.isArray(extract.source_size) ? extract.source_size : []
+  const sourceSize: [number, number] | undefined =
+    Number(rawSize[0]) > 0 && Number(rawSize[1]) > 0 ? [Number(rawSize[0]), Number(rawSize[1])] : undefined
+
   return {
     psdUrl,
     layers: formattedLayers,
+    sourceSize,
   }
 }
 
