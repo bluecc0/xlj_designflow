@@ -353,3 +353,19 @@ button {
   pointer-events: auto;
 }
 
+
+/* 弹窗通用动画（导入产品图 / AI 换装） */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
