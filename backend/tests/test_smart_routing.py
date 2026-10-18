@@ -772,7 +772,6 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         agent_start = chat_source.index(
             "if (agentEnabled && aiOptions.workflow !== 'ai-image')"
         )
-        branch_end = chat_source.index("// 检测\"重新生成\"关键词", agent_start)
         self.assertLess(skill_start, agent_start)
         skill_branch = chat_source[skill_start:agent_start]
         self.assertIn("runAiImageGeneration", skill_branch)

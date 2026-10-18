@@ -319,6 +319,26 @@ class Settings:
                     })
         return users or default_users
 
+    def current_vlm_config(self) -> tuple[str, str, str]:
+        """每次调用重新读取 .env 里的 VLM 配置，返回 (base_url, api_key, model)。
+
+        更换 VLM_MODEL / VLM_BASE_URL / VLM_API_KEY 后无需重启后端。
+        """
+        file_env = dotenv_values(_env_path) if _env_path.exists() else {}
+
+        def read(key: str) -> str:
+            value = file_env.get(key)
+            if value is None:
+                value = os.getenv(key, "")
+            return str(value or "").strip()
+
+        base_url = read("VLM_BASE_URL") or read("AI_IMAGE_BASE_URL") or "https://api.apimart.ai"
+        if not base_url.startswith("http"):
+            base_url = "https://" + base_url
+        api_key = read("VLM_API_KEY") or read("AI_IMAGE_API_KEY")
+        model = read("VLM_MODEL") or "qwen2.5-vl-72b-instruct"
+        return base_url, api_key, model
+
     def reload_login_users(self) -> list[dict[str, str]]:
         """从 login_users.json 重新读取用户列表（热加载用）。"""
         self.allowed_login_users = self._load_login_users()

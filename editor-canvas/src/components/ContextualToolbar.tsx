@@ -135,6 +135,7 @@ export function ContextualToolbar({
   const selectedType = useCanvasStore((s) => s.selectedType)
   const images = useCanvasStore((s) => s.images)
   const addImage = useCanvasStore((s) => s.addImage)
+  const addImages = useCanvasStore((s) => s.addImages)
   const alignSelected = useCanvasStore((s) => s.alignSelected)
   const tidyUpSelected = useCanvasStore((s) => s.tidyUpSelected)
   const reflowSequentialImages = useCanvasStore((s) => s.reflowSequentialImages)
@@ -375,23 +376,28 @@ export function ContextualToolbar({
       }
 
       if (res.layers && res.layers.length > 0) {
-        let offsetX = target.x + target.width + 36
-        for (const l of res.layers) {
-          addImage({
+        // 图层坐标是原图像素坐标：按原图尺寸等比缩放到画布上，在原图右侧拼合还原
+        const sourceWidth =
+          res.sourceSize?.[0] || Math.max(...res.layers.map((l) => l.x + l.width)) || target.width
+        const scale = target.width / sourceWidth
+        const originX = target.x + target.width + 36
+        const originY = target.y
+        addImages(
+          res.layers.map((l) => ({
             id: 'img-' + Math.random().toString(36).slice(2, 10),
             frameId: target.frameId,
-            x: offsetX,
-            y: target.y,
-            width: l.width || target.width,
-            height: l.height || target.height,
+            x: originX + l.x * scale,
+            y: originY + l.y * scale,
+            width: (l.width || sourceWidth) * scale,
+            height: (l.height || target.height / scale) * scale,
             rotation: 0,
             url: l.url,
-            name: `${target.name}-分层`,
+            name: `${target.name}-${l.name || '分层'}`,
             locked: false,
             opacity: 1,
-          })
-          offsetX += (l.width || target.width) + 24
-        }
+            meta: { layerExtractFrom: target.id },
+          }))
+        )
       }
     } catch (e: any) {
       alert(`分层提取失败: ${e.message}`)
