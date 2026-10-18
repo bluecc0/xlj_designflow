@@ -571,6 +571,9 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!snapshotHydratedRef.current) return
+      // 换装弹窗打开时只处理弹窗内的按键，避免按钮聚焦时误删、撤销或复制画布内容。
+      // 不拦截事件本身，保留检索回车、部位方向键及输入框的正常行为。
+      if (outfitImage) return
       // 忽略在输入框内的快捷键
       const target = e.target as HTMLElement | null
       const isInput =
@@ -829,6 +832,7 @@ export function App() {
       window.removeEventListener('paste', onPasteWindow)
     }
   }, [
+    outfitImage,
     selectedIds,
     selectedType,
     images,
