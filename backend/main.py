@@ -549,7 +549,6 @@ _AUTH_EXEMPT_PREFIXES = (
     "/product-library",
     "/products/reference-image",
     "/products/mock-image",
-    "/products/resolve-references",
     "/avatars",
     "/editor-beta",
     "/editor-canvas",
@@ -3515,70 +3514,6 @@ def find_product(name: str):
         "best_match": path,
         "all_matches": all_matches,
     }
-
-
-@app.post("/products/resolve-references")
-def resolve_product_references(payload: dict):
-    refs = payload.get("refs") if isinstance(payload, dict) else None
-    if not isinstance(refs, list):
-        raise HTTPException(400, "refs must be a list")
-
-    alias_map = {
-        "": "white",
-        "default": "white",
-        "white": "white",
-        "white_base": "white",
-        "whitebase": "white",
-        "x2": "white2x",
-        "white2x": "white2x",
-        "whitex2": "white2x",
-        "white_basex2": "white2x",
-        "whitebasex2": "white2x",
-        "一双鞋角度": "white2x",
-    }
-
-    library = ProductLibrary(settings.product_library_path)
-    results = []
-    for item in refs:
-        if not isinstance(item, dict):
-            continue
-        raw = str(item.get("raw") or "").strip()
-        sku = str(item.get("sku") or "").strip()
-        asset_type_input = str(item.get("asset_type") or "").strip()
-        normalized_key = alias_map.get(asset_type_input.casefold(), "")
-        if not normalized_key and asset_type_input:
-            normalized_key = alias_map.get(asset_type_input.lower(), "")
-        normalized_key = normalized_key or "white"
-        folder = settings.IMAGE_TYPE_FOLDERS.get(normalized_key)
-        matched_path = library.find_in_folder(sku, folder) if (sku and folder) else None
-
-        full_path = Path(matched_path) if matched_path else None
-        if full_path:
-            url = (
-                "/products/reference-image?"
-                f"sku={quote(sku)}&asset_type={quote(normalized_key)}"
-            )
-            mime_type = "image/png" if full_path.suffix.lower() == ".png" else "image/jpeg"
-            content_base64 = base64.b64encode(full_path.read_bytes()).decode("ascii")
-        else:
-            url = None
-            mime_type = None
-            content_base64 = None
-
-        results.append({
-            "raw": raw,
-            "sku": sku,
-            "asset_type": normalized_key,
-            "folder": folder,
-            "matched": bool(full_path),
-            "path": str(full_path) if full_path else None,
-            "url": url,
-            "filename": full_path.name if full_path else None,
-            "mime_type": mime_type,
-            "content_base64": content_base64,
-        })
-
-    return {"refs": results}
 
 
 @app.get("/products/search-sku")
@@ -6800,6 +6735,7 @@ async def ai_image_endpoint(
     model: str = Form(...),
     provider: str = Form(""),
     prompt: str = Form(...),
+    display_prompt: str = Form(""),
     size: str = Form("1024x1024"),
     resolution: str = Form(""),
     variant: str = Form("flare"),
@@ -6848,6 +6784,8 @@ async def ai_image_endpoint(
     if quality not in {"auto", "low", "medium", "high", "xhigh", "max"}:
         quality = "auto"
     original_prompt = prompt.strip()
+    # 展示文案单独持久化；局部编辑坐标等完整指令仍用于生图、任务元数据和重试。
+    display_prompt = display_prompt.strip() or original_prompt
     ref_previews_list = []
     try:
         ref_previews_list = json.loads(ref_previews or "[]")
@@ -6875,7 +6813,7 @@ async def ai_image_endpoint(
     session_id = (chat_session_id or "").strip()
     session = get_ai_chat_session(session_id, user_id=user["id"]) if session_id else None
     if not session:
-        session = create_ai_chat_session(user_id=user["id"], title=_build_ai_chat_title(original_prompt), created_at=time.time())
+        session = create_ai_chat_session(user_id=user["id"], title=_build_ai_chat_title(display_prompt), created_at=time.time())
         session_id = session["id"]
 
     images = image[:9] if image else []
@@ -6885,7 +6823,7 @@ async def ai_image_endpoint(
         user_id=user["id"],
         role="user",
         type="user_text",
-        text=original_prompt,
+        text=display_prompt,
         meta={"model": resolved, "size": size, "resolution": resolution, "variant": variant, "quality": quality, "refPreviews": ref_previews_list, "batchCount": batch_count, "skill": active_skill_name},
         created_at=created_at,
     )

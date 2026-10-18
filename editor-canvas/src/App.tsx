@@ -15,6 +15,7 @@ import { MarqueeSelection } from './components/MarqueeSelection'
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu'
 import { ImportProductModal } from './components/ImportProductModal'
 import { ImagePropertiesModal } from './components/ImagePropertiesModal'
+import { ImageCompareModal } from './components/ImageCompareModal'
 import { QuickEditPopover } from './components/QuickEditPopover'
 import { OutfitChangeModal } from './components/OutfitChangeModal'
 import { OutfitTaskTray, type OutfitTask } from './components/OutfitTaskTray'
@@ -130,6 +131,7 @@ export function App() {
     targetPos: { x: number; y: number } | null
   }>({ visible: false, targetPos: null })
   const [propertiesModalImage, setPropertiesModalImage] = useState<any>(null)
+  const [compareImages, setCompareImages] = useState<[CanvasImage, CanvasImage] | null>(null)
   const [quickEditImage, setQuickEditImage] = useState<CanvasImage | null>(null)
   const [quickEditMarkers, setQuickEditMarkers] = useState<QuickEditMarker[]>([])
   const [quickEditToast, setQuickEditToast] = useState<string | null>(null)
@@ -377,6 +379,8 @@ export function App() {
             {
               type: 'designflow:quick-edit-generate',
               prompt: finalPrompt,
+              // 聊天框只展示用户在编辑框里输入的内容，坐标信息仅用于生图
+              displayPrompt: prompt.trim(),
               image: {
                 id: targetImage.id,
                 src: targetImage.url,
@@ -650,6 +654,18 @@ export function App() {
           if (targetImg) {
             e.preventDefault()
             setPropertiesModalImage(targetImg)
+            return
+          }
+        }
+      }
+
+      // 双图对比快捷键 (C 键，选中恰好 2 张图片时)
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'c' || e.key === 'C')) {
+        if (selectedType === 'image' && selectedIds.length === 2) {
+          const selectedImgs = images.filter((im) => selectedIds.includes(im.id))
+          if (selectedImgs.length === 2) {
+            e.preventDefault()
+            setCompareImages([selectedImgs[0], selectedImgs[1]])
             return
           }
         }
@@ -1719,6 +1735,7 @@ export function App() {
           onStartOutpainting={handleStartOutpainting}
           onExecuteOutpainting={handleExecuteOutpainting}
           onCancelOutpainting={handleCancelOutpainting}
+          onOpenCompareModal={(imgA, imgB) => setCompareImages([imgA, imgB])}
         />
       </div>
 
@@ -1736,6 +1753,7 @@ export function App() {
           setQuickEditImage(img)
           setQuickEditMarkers([])
         }}
+        onOpenCompareModal={(imgA, imgB) => setCompareImages([imgA, imgB])}
         onOpenOutfitChange={(img) => {
           setSelected([img.id], 'image')
           setQuickEditImage(null)
@@ -1755,6 +1773,15 @@ export function App() {
         <ImagePropertiesModal
           image={propertiesModalImage}
           onClose={() => setPropertiesModalImage(null)}
+        />
+      )}
+
+      {/* 选中两张图片的 Before / After 对比弹窗 */}
+      {compareImages && (
+        <ImageCompareModal
+          imageA={compareImages[0]}
+          imageB={compareImages[1]}
+          onClose={() => setCompareImages(null)}
         />
       )}
 
