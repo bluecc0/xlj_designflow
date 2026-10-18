@@ -6664,6 +6664,7 @@ async def ai_image_endpoint(
     model: str = Form(...),
     provider: str = Form(""),
     prompt: str = Form(...),
+    display_prompt: str = Form(""),
     size: str = Form("1024x1024"),
     resolution: str = Form(""),
     variant: str = Form("flare"),
@@ -6712,6 +6713,8 @@ async def ai_image_endpoint(
     if quality not in {"auto", "low", "medium", "high", "xhigh", "max"}:
         quality = "auto"
     original_prompt = prompt.strip()
+    # 展示文案单独持久化；局部编辑坐标等完整指令仍用于生图、任务元数据和重试。
+    display_prompt = display_prompt.strip() or original_prompt
     ref_previews_list = []
     try:
         ref_previews_list = json.loads(ref_previews or "[]")
@@ -6739,7 +6742,7 @@ async def ai_image_endpoint(
     session_id = (chat_session_id or "").strip()
     session = get_ai_chat_session(session_id, user_id=user["id"]) if session_id else None
     if not session:
-        session = create_ai_chat_session(user_id=user["id"], title=_build_ai_chat_title(original_prompt), created_at=time.time())
+        session = create_ai_chat_session(user_id=user["id"], title=_build_ai_chat_title(display_prompt), created_at=time.time())
         session_id = session["id"]
 
     images = image[:9] if image else []
@@ -6749,7 +6752,7 @@ async def ai_image_endpoint(
         user_id=user["id"],
         role="user",
         type="user_text",
-        text=original_prompt,
+        text=display_prompt,
         meta={"model": resolved, "size": size, "resolution": resolution, "variant": variant, "quality": quality, "refPreviews": ref_previews_list, "batchCount": batch_count, "skill": active_skill_name},
         created_at=created_at,
     )

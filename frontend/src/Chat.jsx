@@ -4763,6 +4763,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
         fd.append('model', model);
         fd.append('provider', provider);
         fd.append('prompt', finalPrompt);
+        fd.append('display_prompt', String(displayText || prompt || '').trim());
         fd.append('size', aiOptions.size || '1024x1024');
         fd.append('resolution', aiOptions.resolution || '1K');
         fd.append('variant', aiOptions.variant || 'flare');
@@ -5020,6 +5021,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
         fd.append('model', model);
         fd.append('provider', provider);
         fd.append('prompt', finalPrompt);
+        fd.append('display_prompt', String(displayText || prompt || '').trim());
         fd.append('size', aiOptions.size || '1024x1024');
         fd.append('resolution', aiOptions.resolution || '1K');
         fd.append('variant', aiOptions.variant || 'flare');
