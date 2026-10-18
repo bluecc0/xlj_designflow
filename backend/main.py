@@ -103,6 +103,8 @@ from .agent_mode import (
     stream_generation_events,
     summarize_project_title,
 )
+from . import outfit_change
+from .bfl_vto import FLUX_VTO_MODEL, PROVIDER_BFL, generate_vto_async
 from .psd_layered import create_layered_psd_from_image
 from .matting_service import matting_service
 from .bfl_outpainting import (
@@ -3693,6 +3695,66 @@ def get_product_reference_image(request: Request, sku: str, asset_type: str = "w
     return FileResponse(str(path), media_type=media_type, filename=path.name)
 
 
+# ─── AI 换装：素材库多角度素材 ────────────────────────────────────────────────
+
+_OUTFIT_MAX_SKUS = 6
+
+
+@app.get("/products/outfit-assets")
+async def product_outfit_assets(request: Request, sku: str):
+    """按 SKU 列出素材库中各类型、各角度的素材图，供 AI 换装弹窗勾选。"""
+    _current_user(request)
+    raw_skus = [s.strip() for s in re.split(r"[,，\s]+", sku or "") if s.strip()]
+    sku_list = list(dict.fromkeys(raw_skus))[:_OUTFIT_MAX_SKUS]
+    if not sku_list:
+        raise HTTPException(400, "SKU 不能为空")
+    library_exists = settings.product_library_path.exists()
+    if library_exists:
+        groups = await asyncio.gather(*(
+            asyncio.to_thread(outfit_change.list_sku_assets, clean_sku) for clean_sku in sku_list
+        ))
+    else:
+        groups = [[] for _ in sku_list]
+
+    items = []
+    for clean_sku, assets in zip(sku_list, groups):
+        rows = []
+        for asset in assets:
+            query = f"asset_type={quote(asset['asset_type'])}&path={quote(asset['path'])}"
+            rows.append({
+                **asset,
+                "url": f"/products/library-image?{query}",
+                "thumb_url": f"/products/library-image?{query}&thumb=1",
+            })
+        items.append({"sku": clean_sku, "found": bool(rows), "assets": rows})
+    return {
+        "library_exists": library_exists,
+        "items": items,
+        "max_references": outfit_change.MAX_GARMENT_REFERENCES,
+        "truncated": len(raw_skus) > len(sku_list),
+    }
+
+
+@app.get("/products/library-image")
+async def product_library_image(asset_type: str, path: str, thumb: int = 0):
+    """读取素材库中的单个素材文件（thumb=1 返回缓存的 webp 缩略图）。"""
+    try:
+        file_path = await asyncio.to_thread(outfit_change.resolve_library_asset, asset_type, path)
+    except FileNotFoundError:
+        raise HTTPException(404, "素材图不存在")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    headers = {"Cache-Control": "private, max-age=3600"}
+    if thumb:
+        try:
+            thumb_path = await asyncio.to_thread(outfit_change.library_thumbnail, file_path)
+            return FileResponse(str(thumb_path), media_type="image/webp", headers=headers)
+        except Exception:
+            logger.warning("library thumbnail failed: %s", file_path, exc_info=True)
+    media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    return FileResponse(str(file_path), media_type=media_type, headers=headers)
+
+
 @app.delete("/products/{filename}")
 def delete_product(filename: str):
     """从图库中删除指定图片文件"""
@@ -4840,6 +4902,13 @@ async def _run_ai_image_background(
                 ),
                 timeout=max(60, int(settings.ai_image_smart_route_timeout_seconds or 360)),
             )
+        elif provider == PROVIDER_BFL:
+            if len(refs) < 2:
+                raise RuntimeError("FLUX 换装缺少人物图或服装图")
+            result = await generate_vto_async(
+                prompt=prompt, person=refs[0][0], garment=refs[1][0], user_id=user_id,
+                on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_BFL, tid),
+            )
         elif provider == PROVIDER_SUB2API:
             result = await generate_sub2api_async(
                 model=model, prompt=prompt,
@@ -5864,6 +5933,8 @@ async def ai_image_retry(request: Request):
     effective_prompt = resolved_prompt or prompt
     prompt_trace = old_job.get("prompt_trace") or ""
     model = (old_job.get("model") or "gpt-image-2.5").strip()
+    # FLUX 换装任务的参考图已是 [人物图, 服装拼图]，重试必须仍走 BFL
+    retry_provider = PROVIDER_BFL if model == FLUX_VTO_MODEL else PROVIDER_AUTO
     size = (old_job.get("size") or "1024x1024").strip()
     resolution = (old_job.get("resolution") or "").strip()
     variant = str(request_meta.get("variant") or "flare").strip().lower()
@@ -5939,7 +6010,7 @@ async def ai_image_retry(request: Request):
     save_ai_image_job(
         job_id=new_job_id, user_id=user["id"], status="processing",
         model=model, prompt=effective_prompt, size=size,
-        provider=PROVIDER_AUTO, resolution=resolution,
+        provider=retry_provider, resolution=resolution,
         original_prompt=original_prompt or prompt, resolved_prompt=effective_prompt,
         prompt_trace=prompt_trace,
         has_reference=has_reference, reference_count=len(all_refs),
@@ -5968,14 +6039,14 @@ async def ai_image_retry(request: Request):
         user_id=user["id"], username=user["username"],
         action="ai_image",
         detail=f"job={new_job_id[:8]} model={model} size={size} result=retry_auto refs={len(all_refs)}",
-        payload=json.dumps({"job_id": new_job_id, "model": model, "size": size, "provider": PROVIDER_AUTO, "retry_from": job_id}, ensure_ascii=False),
+        payload=json.dumps({"job_id": new_job_id, "model": model, "size": size, "provider": retry_provider, "retry_from": job_id}, ensure_ascii=False),
     )
     # 重试消息不重新写入聊天记录（不重复显示 prompt），后台任务完成/失败时会自动追加
     asyncio.create_task(
         _run_ai_image_background(
             job_id=new_job_id, user_id=user["id"], username=user["username"],
             session_id=session_id,
-            provider=PROVIDER_AUTO,
+            provider=retry_provider,
             model=model, prompt=effective_prompt,
             size=size, resolution=resolution,
             variant=variant, quality=quality,
@@ -6007,7 +6078,7 @@ async def ai_image_retry(request: Request):
     return {
         "job_id": new_job_id,
         "status": "processing",
-        "provider": PROVIDER_AUTO,
+        "provider": retry_provider,
         "resolved_prompt": effective_prompt,
         "original_prompt": original_prompt or prompt,
         "prompt_trace": prompt_trace,
@@ -7008,6 +7079,308 @@ async def ai_image_endpoint(
             "chat_session_id": session_id,
             "job_ids": failed_ids,
         })
+
+
+# ─── AI 换装：参考图生图 ─────────────────────────────────────────────────────
+
+OUTFIT_MAX_SOURCE_BYTES = 20 * 1024 * 1024
+OUTFIT_MODELS = {"gpt-image-2.5", FLUX_VTO_MODEL}
+
+
+async def _read_outfit_upload(upload: UploadFile, *, label: str) -> bytes:
+    content = await upload.read(OUTFIT_MAX_SOURCE_BYTES + 1)
+    if not content:
+        raise HTTPException(400, f"{label}为空")
+    if len(content) > OUTFIT_MAX_SOURCE_BYTES:
+        raise HTTPException(400, f"{label}不能超过 20MB")
+    return content
+
+
+async def _prepare_outfit_image(content: bytes, name: str, *, label: str) -> tuple[bytes, str, int, int]:
+    try:
+        return await asyncio.to_thread(outfit_change.prepare_reference_image, content, name)
+    except Exception as exc:
+        raise HTTPException(400, f"{label}无法解析，请确认是 PNG/JPG/WEBP 图片") from exc
+
+
+def _parse_json_form(raw: str, default, *, field: str):
+    if not (raw or "").strip():
+        return default
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(400, f"{field} 不是合法 JSON") from exc
+    return value if isinstance(value, type(default)) else default
+
+
+@app.post("/ai-image/outfit-change")
+@_ai_image_submit_dedup
+async def ai_image_outfit_change(
+    request: Request,
+    image: UploadFile = File(...),
+    assets: str = Form("[]"),
+    uploads: List[UploadFile] = File(default=[]),
+    upload_slots: str = Form("[]"),
+    upload_items: str = Form("[]"),
+    target_slots: str = Form("[]"),
+    extra_prompt: str = Form(""),
+    model: str = Form(""),
+    resolution: str = Form("1K"),
+    batch_count: int = Form(1),
+    source_name: str = Form(""),
+    client_request_id: str = Form(""),
+):
+    """AI 换装：原图 + 勾选的素材角度图，以参考图生图模式提交（内置换装 prompt）。
+
+    assets: [{"sku": "...", "asset_type": "white", "path": "SKU_2.png", "angle": "角度 2"}]
+    返回结构与 /ai-image 一致（job_id / job_ids），前端轮询 GET /ai-image/{job_id}。
+    """
+    user = _current_user(request)
+    client_req = _sanitize_log_field(
+        (client_request_id or "").strip() or (request.headers.get("x-client-request-id") or "").strip() or "-",
+        64,
+    )
+    model_key = (model or settings.outfit_default_model or "gpt-image-2.5").strip().lower()
+    if model_key not in OUTFIT_MODELS:
+        raise HTTPException(400, f"AI 换装不支持模型: {model}")
+    # FLUX 走 BFL 官方虚拟试穿接口（人物图 + 单张服装拼图），其余模型走通用参考图生图
+    is_flux = model_key == FLUX_VTO_MODEL
+    if is_flux and not settings.bfl_api_key:
+        raise HTTPException(503, "FLUX 换装未配置 BFL_API_KEY")
+    resolved_model = FLUX_VTO_MODEL if is_flux else normalize_model_name(model_key)
+    outfit_provider = PROVIDER_BFL if is_flux else PROVIDER_AUTO
+    resolution = (resolution or "1K").strip().upper()
+    if resolution not in {"1K", "2K", "4K"}:
+        resolution = "1K"
+    if is_flux and resolution == "4K":
+        # vto-v2 输出尺寸跟随人物图，官方上限约 4MP，达不到 4K
+        raise HTTPException(400, "FLUX 换装最高支持 2K（约 4MP），4K 请使用 GPT Image 2.5")
+    batch_count = max(1, min(int(batch_count or 1), 4))
+
+    asset_list = _parse_json_form(assets, [], field="assets")
+    target_slot_list = [
+        str(x).strip().lower()
+        for x in _parse_json_form(target_slots, [], field="target_slots")
+        if str(x).strip()
+    ][:12]
+    upload_slot_list = [
+        str(x).strip().lower()
+        for x in _parse_json_form(upload_slots, [], field="upload_slots")
+    ]
+    upload_item_list = [
+        outfit_change.normalize_item(x)
+        for x in _parse_json_form(upload_items, [], field="upload_items")
+    ]
+    uploads = uploads or []
+
+    garment_total = len(asset_list) + len(uploads)
+    if garment_total == 0:
+        raise HTTPException(400, "请至少勾选一张素材图")
+    if garment_total > outfit_change.MAX_GARMENT_REFERENCES:
+        raise HTTPException(400, f"素材图最多 {outfit_change.MAX_GARMENT_REFERENCES} 张（含原图共 9 张）")
+
+    # 1. 原图
+    source_bytes = await _read_outfit_upload(image, label="原图")
+    source_ref = await _prepare_outfit_image(source_bytes, "source", label="原图")
+    size = outfit_change.nearest_aspect_ratio(source_ref[2], source_ref[3])
+
+    # 2. 素材库角度图（服务端直接读库，前端只传定位信息）
+    refs: list[tuple[bytes, str]] = [(source_ref[0], source_ref[1])]
+    ref_meta: list[dict] = []
+    for idx, item in enumerate(asset_list):
+        if not isinstance(item, dict):
+            raise HTTPException(400, "assets 格式错误")
+        asset_type = str(item.get("asset_type") or "").strip()
+        rel_path = str(item.get("path") or "").strip()
+        try:
+            file_path = await asyncio.to_thread(outfit_change.resolve_library_asset, asset_type, rel_path)
+            raw = await asyncio.to_thread(file_path.read_bytes)
+        except FileNotFoundError:
+            raise HTTPException(404, f"素材图不存在：{rel_path}")
+        except ValueError as exc:
+            raise HTTPException(400, f"{exc}：{rel_path}")
+        prepared = await _prepare_outfit_image(raw, file_path.stem, label=f"素材图 {file_path.name}")
+        refs.append((prepared[0], f"{idx + 2:02d}_{prepared[1]}"))
+        sku_value = str(item.get("sku") or "").strip()[:64]
+        slot_value = str(item.get("slot") or "").strip().lower()[:32]
+        item_value = outfit_change.normalize_item(item.get("item"))
+        ref_meta.append({
+            "source": "library",
+            "sku": sku_value,
+            "slot": slot_value,
+            "item": item_value,
+            "asset_type": asset_type,
+            "type_label": outfit_change.ASSET_TYPE_LABELS.get(asset_type, asset_type),
+            "path": rel_path,
+            "angle": str(item.get("angle") or "").strip()[:20]
+                     or outfit_change.angle_label_from_name(file_path.stem, sku_value),
+        })
+
+    # 3. 用户本地上传的素材（素材库缺图时的兜底）
+    for idx, upload in enumerate(uploads):
+        label = f"上传素材 {idx + 1}"
+        raw = await _read_outfit_upload(upload, label=label)
+        prepared = await _prepare_outfit_image(raw, Path(upload.filename or "upload").stem, label=label)
+        refs.append((prepared[0], f"{len(refs) + 1:02d}_{prepared[1]}"))
+        upload_slot = upload_slot_list[idx] if idx < len(upload_slot_list) else ""
+        upload_item = upload_item_list[idx] if idx < len(upload_item_list) else ""
+        ref_meta.append({
+            "source": "upload",
+            "sku": "",
+            "slot": upload_slot,
+            "item": upload_item,
+            "asset_type": "upload",
+            "type_label": "本地上传",
+            "path": (upload.filename or "")[:120],
+            "angle": label,
+        })
+
+    prompt = outfit_change.build_outfit_prompt(
+        references=ref_meta,
+        target_slots=target_slot_list,
+        extra_prompt=extra_prompt,
+    )
+    if is_flux:
+        garment_board = await asyncio.to_thread(
+            outfit_change.compose_garment_board, [content for content, _name in refs[1:]]
+        )
+        person = await asyncio.to_thread(
+            outfit_change.fit_person_image, source_bytes, 4.0 if resolution == "2K" else 1.0
+        )
+        refs = [(person, "01_person.jpg"), (garment_board, "02_garments.jpg")]
+        prompt = outfit_change.build_vto_prompt(
+            references=ref_meta,
+            target_slots=target_slot_list,
+            extra_prompt=extra_prompt,
+        )
+    skus = list(dict.fromkeys(m["sku"] for m in ref_meta if m["sku"]))
+    slot_labels = [
+        outfit_change.PRESET_SLOTS.get(s, {}).get("label") or outfit_change.GARMENT_SLOTS.get(s, s)
+        for s in target_slot_list
+    ]
+    slot_desc = f"（{'、'.join(slot_labels)}）" if slot_labels else ""
+    display_prompt = f"AI 换装{slot_desc}：{'、'.join(skus) if skus else '本地素材'}"
+    if extra_prompt.strip():
+        display_prompt += f"（{extra_prompt.strip()[:60]}）"
+
+    created_at = time.time()
+    session = create_ai_chat_session(user_id=user["id"], title=_build_ai_chat_title(display_prompt), created_at=created_at)
+    session_id = session["id"]
+    append_ai_chat_message(
+        session_id=session_id,
+        user_id=user["id"],
+        role="user",
+        type="user_text",
+        text=display_prompt,
+        meta={"model": resolved_model, "size": size, "resolution": resolution, "batchCount": batch_count, "operation": "outfit-change"},
+        created_at=created_at,
+    )
+
+    batch_id = uuid.uuid4().hex if batch_count > 1 else ""
+    reference_storage_id = batch_id or uuid.uuid4().hex
+    stored_urls: list[str] = []
+    try:
+        for ref_path in save_user_refs(user["id"], reference_storage_id, refs):
+            stored_urls.append(_ai_image_public_url(Path(ref_path)))
+    except Exception:
+        logger.warning("outfit: failed to save refs for %s", reference_storage_id, exc_info=True)
+
+    reference_images = [{
+        "type": "manual",
+        "name": refs[0][1],
+        "url": stored_urls[0] if stored_urls else "",
+        "label": "图1 · 原图",
+    }]
+    if is_flux:
+        reference_images.append({
+            "type": "manual",
+            "name": refs[1][1],
+            "url": stored_urls[1] if len(stored_urls) > 1 else "",
+            "label": f"图2 · 服装拼图（{len(ref_meta)} 张素材）",
+        })
+    else:
+        for i, meta in enumerate(ref_meta):
+            label_bits = [b for b in (meta["sku"], meta["type_label"], meta["angle"]) if b]
+            reference_images.append({
+                "type": "manual",
+                "name": refs[i + 1][1],
+                "url": stored_urls[i + 1] if i + 1 < len(stored_urls) else "",
+                "label": f"图{i + 2} · {' / '.join(label_bits)}",
+            })
+
+    job_ids: list[str] = []
+    for batch_index in range(batch_count):
+        jid = uuid.uuid4().hex
+        job_ids.append(jid)
+        request_meta = {
+            "operation": "outfit-change",
+            "client_request_id": client_req,
+            "chat_session_id": session_id,
+            "variant": "flare",
+            "quality": "auto",
+            "batch_id": batch_id,
+            "batch_index": batch_index,
+            "batch_count": batch_count,
+            "reference_storage_job_id": reference_storage_id,
+            "manual_reference_count": len(refs),
+            "context_reference_count": 0,
+            "reference_names": [name for _content, name in refs],
+            "reference_images": reference_images,
+            "outfit": {
+                "skus": skus,
+                "assets": ref_meta,
+                "target_slots": target_slot_list,
+                "source_name": (source_name or "")[:120],
+                "extra_prompt": extra_prompt.strip()[:500],
+            },
+        }
+        save_ai_image_job(
+            job_id=jid, user_id=user["id"], status="processing",
+            model=resolved_model, prompt=display_prompt, size=size,
+            provider=outfit_provider, resolution=resolution,
+            original_prompt=display_prompt, resolved_prompt=prompt,
+            has_reference=True, reference_count=len(refs),
+            request_meta=request_meta, created_at=created_at,
+        )
+        log_operation(
+            user_id=user["id"], username=user["username"],
+            action="ai_image",
+            detail=f"outfit job={jid[:8]} client={client_req} model={resolved_model} size={size} skus={','.join(skus)[:60]} refs={len(refs)} batch={batch_count}",
+            payload=json.dumps({
+                "job_id": jid, "operation": "outfit-change", "client_request_id": client_req,
+                "model": resolved_model, "size": size, "resolution": resolution,
+                "skus": skus, "refs": len(refs), "batch_count": batch_count,
+            }, ensure_ascii=False),
+        )
+        asyncio.create_task(
+            _run_ai_image_background(
+                job_id=jid, user_id=user["id"], username=user["username"],
+                session_id=session_id,
+                provider=outfit_provider,
+                model=resolved_model, prompt=prompt,
+                size=size, resolution=resolution,
+                variant="flare", quality="auto",
+                refs=refs, has_reference=True, created_at=created_at,
+                original_prompt=display_prompt, resolved_prompt=prompt,
+                request_meta=request_meta,
+                batch_id=batch_id, batch_index=batch_index, batch_count=batch_count,
+            )
+        )
+
+    response = {
+        "chat_session_id": session_id,
+        "status": "processing",
+        "client_request_id": client_req,
+        "resolved_prompt": prompt,
+        "size": size,
+        "model": resolved_model,
+    }
+    if batch_count == 1:
+        response["job_id"] = job_ids[0]
+    else:
+        response["job_ids"] = job_ids
+        response["batch_id"] = batch_id
+    return response
 
 
 @app.post("/psd/layered")

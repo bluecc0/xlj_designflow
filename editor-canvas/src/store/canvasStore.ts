@@ -76,7 +76,8 @@ interface CanvasState {
   deleteFrame: (id: string) => void
 
   // 图片操作
-  addImage: (image: Omit<CanvasImage, 'pageId'>) => CanvasImage
+  /** pageId 默认当前页面；异步结果（如 AI 换装）需写回原图所在页面时显式传入 */
+  addImage: (image: Omit<CanvasImage, 'pageId'> & { pageId?: string }) => CanvasImage
   addImages: (images: Omit<CanvasImage, 'pageId'>[]) => CanvasImage[]
   updateImage: (id: string, patch: Partial<CanvasImage>) => void
   updateImages: (patches: { id: string; patch: Partial<CanvasImage> }[]) => void
@@ -657,9 +658,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   addImage: (imageData) => {
     recordHistory(get)
     const { activePageId, frames } = get()
+    const pageId = imageData.pageId ?? activePageId
     let frameId = imageData.frameId ?? null
     if (frameId === null) {
-      const pageFrames = frames.filter((f) => f.pageId === activePageId)
+      const pageFrames = frames.filter((f) => f.pageId === pageId)
       const cx = imageData.x + imageData.width / 2
       const cy = imageData.y + imageData.height / 2
       for (let i = pageFrames.length - 1; i >= 0; i--) {
@@ -673,13 +675,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const newImg: CanvasImage = {
       ...imageData,
       frameId,
-      pageId: activePageId,
+      pageId,
     }
-    set((s) => withMutation(s, {
-      images: [...s.images, newImg],
-      selectedIds: [newImg.id],
-      selectedType: 'image',
-    }))
+    // 写入其他页面时不改动当前页面的选中状态
+    set((s) => withMutation(s, pageId === activePageId
+      ? { images: [...s.images, newImg], selectedIds: [newImg.id], selectedType: 'image' }
+      : { images: [...s.images, newImg] }))
     return newImg
   },
 
