@@ -2,12 +2,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   Check,
-  ChevronDown,
   ImagePlus,
   Loader2,
   Maximize2,
   Search,
-  Shirt,
+  SlidersHorizontal,
   Sparkles,
   UploadCloud,
   X,
@@ -20,7 +19,7 @@ import {
   type OutfitAssetSearchResult,
   type OutfitChangeRequest,
 } from '../services/aiImageService'
-import { InteractiveMannequin, OUTFIT_ZONES, type OutfitZone } from './InteractiveMannequin'
+import { OUTFIT_ZONES, type OutfitZone } from './outfitZones'
 
 interface Props {
   image: CanvasImage
@@ -142,7 +141,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
   const [resolution, setResolution] = useState<OutfitChangeRequest['resolution']>(lastResolution)
   const [batchCount, setBatchCount] = useState(1)
   const [extraPrompt, setExtraPrompt] = useState('')
-  const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -150,7 +149,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
 
   const skuInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const modelMenuRef = useRef<HTMLDivElement>(null)
+  const settingsRef = useRef<HTMLDivElement>(null)
 
   const activeZone = OUTFIT_ZONES.find((z) => z.key === activeZoneKey) || OUTFIT_ZONES[0]
   const activeState = zoneStates[activeZone.key]
@@ -180,12 +179,27 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
     }))
   }
 
-  const selectZone = (zoneKey: string) => setActiveZoneKey(zoneKey)
+  // 鼠标切换部位后聚焦检索框；键盘方向键切 tab 时焦点留在 tab 上，避免打断方向键导航
+  const focusSearchRef = useRef(true)
+  const selectZone = (zoneKey: string, focusSearch = true) => {
+    focusSearchRef.current = focusSearch
+    setActiveZoneKey(zoneKey)
+  }
 
   useEffect(() => {
+    if (!focusSearchRef.current) return
     const t = setTimeout(() => skuInputRef.current?.focus(), 60)
     return () => clearTimeout(t)
   }, [activeZoneKey])
+
+  const onZoneTabsKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    e.preventDefault()
+    const idx = OUTFIT_ZONES.findIndex((z) => z.key === activeZone.key)
+    const next = (idx + (e.key === 'ArrowRight' ? 1 : -1) + OUTFIT_ZONES.length) % OUTFIT_ZONES.length
+    selectZone(OUTFIT_ZONES[next].key, false)
+    e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
+  }
 
   // 卸载时释放所有本地预览 URL
   useEffect(() => {
@@ -199,22 +213,22 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
       if (e.key !== 'Escape') return
       e.stopPropagation()
       if (preview) setPreview(null)
-      else if (modelMenuOpen) setModelMenuOpen(false)
+      else if (settingsOpen) setSettingsOpen(false)
       else if (!submitting) onClose()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [preview, modelMenuOpen, submitting, onClose])
+  }, [preview, settingsOpen, submitting, onClose])
 
-  // 模型下拉：点击外部收起
+  // 设置弹层：点击外部收起
   useEffect(() => {
-    if (!modelMenuOpen) return
+    if (!settingsOpen) return
     const onDown = (e: MouseEvent) => {
-      if (!modelMenuRef.current?.contains(e.target as Node)) setModelMenuOpen(false)
+      if (!settingsRef.current?.contains(e.target as Node)) setSettingsOpen(false)
     }
     document.addEventListener('mousedown', onDown, true)
     return () => document.removeEventListener('mousedown', onDown, true)
-  }, [modelMenuOpen])
+  }, [settingsOpen])
 
   const assetKey = (a: OutfitAsset) => `${a.id}|${a.sku}`
   const activeSelectedKeys = useMemo(() => new Set(activeState.selected.map(assetKey)), [activeState.selected])
@@ -321,26 +335,6 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
 
   const currentModel = MODEL_OPTIONS.find((m) => m.key === model) || MODEL_OPTIONS[0]
   const hasActiveContent = !!activeState.searchResult || activeState.uploads.length > 0
-  const pieceLabels = Array.from(new Set(pieces.map(pieceLabel)))
-
-  // 同一部位多件单品：未标注或品类重复时提示标注，上衣含外套时说明叠穿关系
-  const layeringHint = (() => {
-    if (activePieces.length < 2 || !hasTypes(activeZone)) return null
-    const types = activePieces.map((p) => p.type)
-    if (types.includes('') || new Set(types).size < types.length) {
-      return {
-        warn: true,
-        text: `${activeZone.label}有 ${activePieces.length} 件单品，请为每件标注品类${
-          activeZone.key === 'upper' ? '（如 外套 + T恤），AI 会按内外层叠穿' : '，避免混淆'
-        }`,
-      }
-    }
-    if (activeZone.key === 'upper' && types.includes('outerwear')) {
-      const inner = activePieces.filter((p) => p.type !== 'outerwear').map(pieceLabel)
-      return { warn: false, text: `将按「外套在外、${inner.join('、')}内搭」叠穿` }
-    }
-    return null
-  })()
 
   const renderTypeSelect = (pieceKey: string, value: string) => (
     <select
@@ -388,17 +382,8 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
         style={styles.dialog}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {/* ── Header ── */}
         <div style={styles.header}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={styles.headerIcon}>
-              <Shirt size={15} strokeWidth={1.9} />
-            </div>
-            <div>
-              <div id="outfit-change-title" style={styles.title}>AI 换装</div>
-              <div style={styles.subtitle}>选择部位并添加单品参考图，未选择的部位保持原样</div>
-            </div>
-          </div>
+          <div id="outfit-change-title" style={styles.title}>AI 换装</div>
           <button
             type="button"
             className="oc-icon-btn"
@@ -413,55 +398,52 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
         </div>
 
         <div style={styles.body}>
-          {/* ── 左栏：原图 + 换装部位 ── */}
+          {/* ── 左：原图（换装只替换图中已有的单品） ── */}
           <aside className="oc-left" style={styles.leftCol}>
-            <div style={styles.sectionLabel}>原图</div>
             <button
               type="button"
               className="oc-source"
-              style={styles.sourceCard}
+              style={styles.sourceStage}
               onClick={() => setPreview(sourceUrl)}
               title="查看原图"
+              aria-label="查看原图大图"
             >
-              <div style={styles.sourceThumb}>
-                <img src={sourceUrl} alt="" style={styles.containImg} draggable={false} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
-                <div style={styles.sourceName}>{image.name || '未命名图片'}</div>
-                <div style={styles.sourceHint}>以此图为基础生成</div>
-              </div>
-              <Maximize2 size={13} color={C.subtle} style={{ flexShrink: 0 }} />
+              <img src={sourceUrl} alt="" style={styles.containImg} draggable={false} />
+              <span className="oc-source-zoom" style={styles.sourceZoom}>
+                <Maximize2 size={12} />
+              </span>
             </button>
-
-            <div style={{ ...styles.sectionLabel, marginTop: 18 }}>
-              换装部位
-              <span style={styles.sectionHint}>点击人台切换</span>
-            </div>
-            <div style={styles.mannequinWrap}>
-              <InteractiveMannequin
-                activeZone={activeZone.key}
-                zoneCounts={zoneCounts}
-                onSelectZone={selectZone}
-                disabled={submitting}
-              />
-            </div>
+            <div style={styles.ruleNote}>只替换原图中已有的单品</div>
           </aside>
 
-          {/* ── 中栏：当前单品的素材检索 ── */}
-          <section style={styles.centerCol}>
-            <div style={styles.centerHead}>
-              <div style={styles.zoneTitle}>{activeZone.label}</div>
-              {hasTypes(activeZone) && (
-                <div style={styles.zoneHint}>
-                  可直接添加；选中后可标注品类：{activeZone.items.map((i) => i.label).join(' / ')}
-                </div>
-              )}
+          {/* ── 右：部位 → 素材 ── */}
+          <section style={styles.workCol}>
+            <div style={styles.zoneTabs} role="tablist" aria-label="换装部位" onKeyDown={onZoneTabsKey}>
+              {OUTFIT_ZONES.map((z) => {
+                const on = z.key === activeZone.key
+                const n = zoneCounts[z.key] || 0
+                return (
+                  <button
+                    key={z.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    tabIndex={on ? 0 : -1}
+                    className="oc-zone-tab"
+                    disabled={submitting}
+                    onClick={() => selectZone(z.key)}
+                    style={{ ...styles.zoneTab, ...(on ? styles.zoneTabActive : null) }}
+                  >
+                    {z.label}
+                    {n > 0 && <span style={{ ...styles.zoneCount, ...(on ? styles.zoneCountActive : null) }}>{n}</span>}
+                  </button>
+                )
+              })}
             </div>
 
-            {/* 货号检索 */}
-            <div style={styles.searchRow}>
+            <div style={styles.searchWrap}>
               <div className="oc-search" style={styles.searchBox}>
-                <Search size={14} color={C.subtle} style={{ flexShrink: 0 }} />
+                <Search size={15} color={C.subtle} style={{ flexShrink: 0 }} />
                 <input
                   ref={skuInputRef}
                   type="text"
@@ -473,35 +455,24 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                       handleSearch()
                     }
                   }}
-                  placeholder={`输入${activeZone.label}货号`}
+                  placeholder={`输入${activeZone.label}货号，回车检索`}
                   aria-label={`${activeZone.label}货号`}
                   style={styles.searchInput}
                   disabled={activeState.searching}
                 />
+                {activeState.searching && <Loader2 size={14} color={C.muted} style={{ animation: 'spin 1s linear infinite' }} />}
+                <span style={styles.searchDivider} />
                 <button
                   type="button"
-                  className="oc-search-btn"
-                  onClick={handleSearch}
-                  disabled={activeState.searching}
-                  style={styles.searchBtn}
+                  className="oc-icon-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                  style={styles.uploadBtn}
+                  title="上传本地图片（PNG / JPG / WebP）"
+                  aria-label="上传本地图片"
                 >
-                  {activeState.searching ? (
-                    <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
-                  ) : (
-                    '检索'
-                  )}
+                  <ImagePlus size={16} />
                 </button>
               </div>
-              <button
-                type="button"
-                className="oc-ghost"
-                onClick={() => fileInputRef.current?.click()}
-                style={styles.ghostBtn}
-                title="上传本地图片（PNG / JPG / WebP）"
-              >
-                <ImagePlus size={14} />
-                <span>上传图片</span>
-              </button>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -513,25 +484,13 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 }}
                 style={{ display: 'none' }}
               />
+              {activeState.searchError && (
+                <div style={styles.errorNotice} role="alert">
+                  <AlertCircle size={13} style={{ flexShrink: 0 }} />
+                  <span>{activeState.searchError}</span>
+                </div>
+              )}
             </div>
-            {activeState.searchError ? (
-              <div style={styles.errorNotice} role="alert">
-                <AlertCircle size={13} style={{ flexShrink: 0 }} />
-                <span>{activeState.searchError}</span>
-              </div>
-            ) : (
-              <div style={styles.searchHint}>
-                {activeState.searchResult
-                  ? '点击图片选择要提供给 AI 的角度，可跨货号多选'
-                  : '多个货号用空格或逗号分隔，回车检索'}
-              </div>
-            )}
-            {layeringHint && (
-              <div style={{ ...styles.layerNotice, ...(layeringHint.warn ? styles.layerNoticeWarn : null) }}>
-                <AlertCircle size={13} style={{ flexShrink: 0 }} />
-                <span>{layeringHint.text}</span>
-              </div>
-            )}
 
             {/* 素材区（支持拖拽上传） */}
             <div
@@ -556,21 +515,15 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 return (
                   <div key={group.sku} style={styles.group}>
                     <div style={styles.groupHeader}>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={styles.groupSku}>{group.sku}</span>
-                        {group.found && picked > 0 && hasTypes(activeZone) &&
-                          renderTypeSelect(
-                            skuPieceKey(group.sku),
-                            activePieces.find((p) => p.key === skuPieceKey(group.sku))?.type ?? defaultType(activeZone)
-                          )}
+                      <span style={styles.groupSku}>{group.sku}</span>
+                      {group.found && picked > 0 && hasTypes(activeZone) &&
+                        renderTypeSelect(
+                          skuPieceKey(group.sku),
+                          activePieces.find((p) => p.key === skuPieceKey(group.sku))?.type ?? defaultType(activeZone)
+                        )}
+                      <span style={{ marginLeft: 'auto', color: group.found ? (picked ? C.text : C.subtle) : C.danger }}>
+                        {group.found ? `${picked} / ${group.assets.length}` : '未找到'}
                       </span>
-                      {group.found ? (
-                        <span style={{ color: picked ? C.text : C.subtle }}>
-                          已选 {picked} / {group.assets.length}
-                        </span>
-                      ) : (
-                        <span style={{ color: C.danger }}>未找到</span>
-                      )}
                     </div>
                     {group.found && (
                       <div style={styles.grid}>
@@ -595,26 +548,25 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                                 ...(blocked ? styles.tileBlocked : null),
                               }}
                             >
-                              <div style={styles.tileImgBox}>
-                                <img src={asset.thumb_url} alt="" loading="lazy" style={styles.containImg} draggable={false} />
-                                <div style={{ ...styles.tileCheck, ...(isSelected ? styles.tileCheckOn : null) }}>
-                                  {isSelected && <Check size={11} strokeWidth={3} />}
-                                </div>
-                                <button
-                                  type="button"
-                                  className="oc-tile-zoom"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setPreview(asset.url)
-                                  }}
-                                  style={styles.tileZoom}
-                                  title="查看大图"
-                                  aria-label="查看大图"
-                                >
-                                  <Maximize2 size={11} />
-                                </button>
-                              </div>
-                              <div style={styles.tileLabel}>{asset.angle}</div>
+                              <img src={asset.thumb_url} alt="" loading="lazy" style={styles.containImg} draggable={false} />
+                              {isSelected && (
+                                <span style={styles.tileCheck}>
+                                  <Check size={11} strokeWidth={3} />
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                className="oc-tile-zoom"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setPreview(asset.url)
+                                }}
+                                style={styles.tileZoom}
+                                title="查看大图"
+                                aria-label="查看大图"
+                              >
+                                <Maximize2 size={11} />
+                              </button>
                             </div>
                           )
                         })}
@@ -628,12 +580,11 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 <div style={styles.group}>
                   <div style={styles.groupHeader}>
                     <span style={styles.groupSku}>本地上传</span>
-                    <span style={{ color: C.text }}>{activeState.uploads.length} 张</span>
                   </div>
                   <div style={styles.grid}>
-                    {activeState.uploads.map((u, idx) => (
-                      <div key={u.id} className="oc-tile" style={{ ...styles.tile, ...styles.tileSelected }}>
-                        <div style={styles.tileImgBox}>
+                    {activeState.uploads.map((u) => (
+                      <div key={u.id} style={styles.uploadCell}>
+                        <div className="oc-tile" style={{ ...styles.tile, ...styles.tileSelected }}>
                           <img src={u.previewUrl} alt="" style={styles.containImg} draggable={false} />
                           <button
                             type="button"
@@ -645,16 +596,11 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                             <X size={11} />
                           </button>
                         </div>
-                        {hasTypes(activeZone) ? (
-                          <div style={{ padding: '5px 0 1px' }}>
-                            {renderTypeSelect(
-                              uploadPieceKey(u.id),
-                              activePieces.find((p) => p.key === uploadPieceKey(u.id))?.type ?? defaultType(activeZone)
-                            )}
-                          </div>
-                        ) : (
-                          <div style={styles.tileLabel}>上传 {idx + 1}</div>
-                        )}
+                        {hasTypes(activeZone) &&
+                          renderTypeSelect(
+                            uploadPieceKey(u.id),
+                            activePieces.find((p) => p.key === uploadPieceKey(u.id))?.type ?? defaultType(activeZone)
+                          )}
                       </div>
                     ))}
                   </div>
@@ -670,265 +616,205 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                   onClick={() => fileInputRef.current?.click()}
                   onKeyDown={(e) => onTileKey(e, () => fileInputRef.current?.click())}
                 >
-                  <div style={styles.emptyIcon}>
-                    <UploadCloud size={20} strokeWidth={1.6} />
-                  </div>
-                  <div style={styles.emptyTitle}>添加{activeZone.label}参考图</div>
-                  <div style={styles.emptyHint}>在上方输入货号自动带出多角度图</div>
-                  <div style={styles.emptyHint}>或将图片拖到这里、点击选择本地文件</div>
-                  <div style={styles.emptyMeta}>PNG / JPG / WebP · 全部部位合计最多 {maxRefs} 张</div>
+                  <UploadCloud size={22} strokeWidth={1.5} color={C.subtle} />
+                  <div style={styles.emptyTitle}>搜索货号，或拖入图片</div>
+                  <div style={styles.emptyHint}>选中的素材会用来替换原图中的{activeZone.label}</div>
                 </div>
               )}
 
               {isDragOver && (
                 <div style={styles.dropOverlay}>
                   <UploadCloud size={22} strokeWidth={1.6} />
-                  <span>松开即可添加为{activeZone.label}参考图</span>
+                  <span>松开添加为{activeZone.label}素材</span>
                 </div>
               )}
             </div>
           </section>
+        </div>
 
-          {/* ── 右栏：换装清单 + 生成设置 + 提交 ── */}
-          <aside className="oc-right" style={styles.rightCol}>
-            <div style={styles.rightScroll}>
-              <div style={styles.cartHead}>
-                <span style={styles.sectionLabelInline}>换装清单</span>
-                <span style={{ ...styles.cartCount, color: remaining <= 0 ? C.ink : C.muted }}>
-                  {totalSelected} / {maxRefs}
-                </span>
-              </div>
-              <div style={styles.meter} aria-hidden>
-                <div style={{ ...styles.meterFill, width: `${(totalSelected / maxRefs) * 100}%` }} />
-              </div>
-
-              {pieces.length === 0 ? (
-                <div style={styles.cartEmpty}>
-                  还没有选择单品
-                  <br />
-                  在中间选择参考图后会出现在这里
-                </div>
-              ) : (
-                <div style={styles.cartList}>
-                  {pieces.map((p) => {
-                    const isCur = p.zone.key === activeZone.key
-                    return (
-                      <div
-                        key={`${p.zone.key}|${p.key}`}
-                        role="button"
-                        tabIndex={0}
-                        className="oc-cart-item"
-                        onClick={() => setActiveZoneKey(p.zone.key)}
-                        onKeyDown={(e) => onTileKey(e, () => setActiveZoneKey(p.zone.key))}
-                        style={{ ...styles.cartItem, ...(isCur ? styles.cartItemActive : null) }}
-                      >
-                        <div style={styles.cartItemHead}>
-                          <span style={{ fontWeight: 600, color: C.ink }}>
-                            {pieceLabel(p)}
-                            {hasTypes(p.zone) && p.type === '' && (
-                              <span style={{ fontWeight: 400, color: C.subtle }}> · {AUTO_LABEL}</span>
-                            )}
-                          </span>
-                          <span style={styles.cartItemMeta}>
-                            {p.sku || '本地上传'} · {pieceCount(p)} 张
-                          </span>
-                        </div>
-                        <div style={styles.cartThumbs}>
-                          {p.assets.map((a) => (
-                            <div key={assetKey(a)} className="oc-mini" style={styles.miniThumb} title={`${a.sku} · ${a.angle}`}>
-                              <img src={a.thumb_url} alt="" style={styles.containImg} draggable={false} />
-                              <button
-                                type="button"
-                                className="oc-mini-remove"
-                                style={styles.miniRemove}
-                                aria-label="移除"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  removeAsset(p.zone.key, a)
-                                }}
-                              >
-                                <X size={9} />
-                              </button>
-                            </div>
-                          ))}
-                          {p.upload && (
-                            <div className="oc-mini" style={styles.miniThumb}>
-                              <img src={p.upload.previewUrl} alt="" style={styles.containImg} draggable={false} />
-                              <button
-                                type="button"
-                                className="oc-mini-remove"
-                                style={styles.miniRemove}
-                                aria-label="移除"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  removeUpload(p.zone.key, p.upload!.id)
-                                }}
-                              >
-                                <X size={9} />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-
-              <div style={styles.divider} />
-
-              <div style={styles.sectionLabelInline}>生成设置</div>
-              <div style={styles.field}>
-                <div style={styles.fieldLabel}>模型</div>
-                <div ref={modelMenuRef} style={{ position: 'relative' }}>
-                  <button
-                    type="button"
-                    className="oc-select"
-                    aria-haspopup="listbox"
-                    aria-expanded={modelMenuOpen}
-                    onClick={() => setModelMenuOpen((v) => !v)}
-                    style={{ ...styles.select, ...(modelMenuOpen ? styles.selectOpen : null) }}
-                  >
-                    <span style={styles.selectValue}>{currentModel.label}</span>
-                    <ChevronDown
-                      size={14}
-                      color={C.muted}
-                      style={{ flexShrink: 0, transition: 'transform .15s ease', transform: modelMenuOpen ? 'rotate(180deg)' : 'none' }}
-                    />
-                  </button>
-                  {modelMenuOpen && (
-                    <div role="listbox" aria-label="模型" style={styles.menu}>
-                      {MODEL_OPTIONS.map((opt) => {
-                        const on = model === opt.key
-                        return (
-                          <button
-                            key={opt.key}
-                            type="button"
-                            role="option"
-                            aria-selected={on}
-                            className="oc-menu-item"
-                            onClick={() => {
-                              setModel(opt.key)
-                              if (!opt.resolutions.includes(resolution)) {
-                                setResolution(opt.resolutions[opt.resolutions.length - 1])
-                              }
-                              setModelMenuOpen(false)
-                            }}
-                            style={styles.menuItem}
-                          >
-                            <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
-                              <span style={{ display: 'block', fontSize: 12.5, fontWeight: on ? 600 : 500, color: C.ink }}>
-                                {opt.label}
-                              </span>
-                              <span style={{ display: 'block', fontSize: 11, color: C.muted, marginTop: 2 }}>{opt.desc}</span>
-                            </span>
-                            {on && <Check size={14} color={C.ink} style={{ flexShrink: 0 }} />}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-                <div style={styles.fieldHint}>{currentModel.desc}</div>
-              </div>
-
-              <div style={{ display: 'flex', gap: 10 }}>
-                <div style={{ ...styles.field, flex: 1 }}>
-                  <div style={styles.fieldLabel}>分辨率</div>
-                  <div style={styles.segment}>
-                    {RESOLUTIONS.map((r) => {
-                      const unsupported = !currentModel.resolutions.includes(r)
-                      return (
+        {/* ── 底部：已选素材 + 设置 + 生成 ── */}
+        <div style={styles.footer}>
+          <div style={styles.tray}>
+            {pieces.length === 0 ? (
+              <span style={{ color: C.subtle }}>还没有选择素材</span>
+            ) : (
+              pieces.map((p) => (
+                <div
+                  key={`${p.zone.key}|${p.key}`}
+                  role="button"
+                  tabIndex={0}
+                  className="oc-piece"
+                  title={`${p.zone.label} · ${p.sku || '本地上传'}`}
+                  onClick={() => selectZone(p.zone.key)}
+                  onKeyDown={(e) => onTileKey(e, () => selectZone(p.zone.key))}
+                  style={{ ...styles.piece, ...(p.zone.key === activeZone.key ? styles.pieceActive : null) }}
+                >
+                  <span style={styles.pieceLabel}>{pieceLabel(p)}</span>
+                  {(p.upload ? [{ key: p.upload.id, src: p.upload.previewUrl }] : p.assets.map((a) => ({ key: assetKey(a), src: a.thumb_url }))).map(
+                    (t) => (
+                      <span key={t.key} className="oc-mini" style={styles.miniThumb}>
+                        <img src={t.src} alt="" style={styles.containImg} draggable={false} />
                         <button
-                          key={r}
                           type="button"
-                          aria-pressed={resolution === r}
-                          disabled={unsupported}
-                          title={unsupported ? `${currentModel.label} 最高支持 ${currentModel.resolutions[currentModel.resolutions.length - 1]}` : undefined}
-                          className="oc-seg"
-                          onClick={() => setResolution(r)}
-                          style={{
-                            ...styles.segmentItem,
-                            ...(resolution === r ? styles.segmentActive : null),
-                            ...(unsupported ? styles.segmentDisabled : null),
+                          className="oc-mini-remove"
+                          style={styles.miniRemove}
+                          aria-label="移除"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (p.upload) removeUpload(p.zone.key, p.upload.id)
+                            else {
+                              const a = p.assets.find((x) => assetKey(x) === t.key)
+                              if (a) removeAsset(p.zone.key, a)
+                            }
                           }}
                         >
-                          {r}
+                          <X size={9} />
+                        </button>
+                      </span>
+                    )
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+
+          <div style={styles.footerActions}>
+            {submitError && (
+              <span style={styles.submitError} role="alert" title={submitError}>
+                {submitError}
+              </span>
+            )}
+            <span style={{ ...styles.refCount, color: remaining <= 0 ? C.ink : C.subtle }}>
+              {totalSelected}/{maxRefs}
+            </span>
+            <div ref={settingsRef} style={{ position: 'relative' }}>
+              <button
+                type="button"
+                className="oc-settings"
+                aria-haspopup="dialog"
+                aria-expanded={settingsOpen}
+                onClick={() => setSettingsOpen((v) => !v)}
+                style={{ ...styles.settingsBtn, ...(settingsOpen ? styles.settingsBtnOpen : null) }}
+                title="生成设置"
+              >
+                <SlidersHorizontal size={14} />
+                <span>
+                  {currentModel.label} · {resolution}
+                  {batchCount > 1 ? ` · ${batchCount} 张` : ''}
+                  {extraPrompt.trim() ? ' · 补充' : ''}
+                </span>
+              </button>
+              {settingsOpen && (
+                <div role="dialog" aria-label="生成设置" style={styles.popover}>
+                  <div style={styles.popLabel}>模型</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {MODEL_OPTIONS.map((opt) => {
+                      const on = model === opt.key
+                      return (
+                        <button
+                          key={opt.key}
+                          type="button"
+                          role="radio"
+                          aria-checked={on}
+                          className="oc-menu-item"
+                          onClick={() => {
+                            setModel(opt.key)
+                            if (!opt.resolutions.includes(resolution)) {
+                              setResolution(opt.resolutions[opt.resolutions.length - 1])
+                            }
+                          }}
+                          style={styles.menuItem}
+                        >
+                          <span style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+                            <span style={{ display: 'block', fontSize: 12.5, fontWeight: on ? 600 : 500, color: C.ink }}>
+                              {opt.label}
+                            </span>
+                            <span style={{ display: 'block', fontSize: 11, color: C.muted, marginTop: 2 }}>{opt.desc}</span>
+                          </span>
+                          {on && <Check size={14} color={C.ink} style={{ flexShrink: 0 }} />}
                         </button>
                       )
                     })}
                   </div>
-                </div>
-                <div style={{ ...styles.field, flex: 1 }}>
-                  <div style={styles.fieldLabel}>生成数量</div>
-                  <div style={styles.segment}>
-                    {[1, 2, 4].map((n) => (
-                      <button
-                        key={n}
-                        type="button"
-                        aria-pressed={batchCount === n}
-                        className="oc-seg"
-                        onClick={() => setBatchCount(n)}
-                        style={{ ...styles.segmentItem, ...(batchCount === n ? styles.segmentActive : null) }}
-                      >
-                        {n}
-                      </button>
-                    ))}
+
+                  <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={styles.popLabel}>分辨率</div>
+                      <div style={styles.segment}>
+                        {RESOLUTIONS.map((r) => {
+                          const unsupported = !currentModel.resolutions.includes(r)
+                          return (
+                            <button
+                              key={r}
+                              type="button"
+                              aria-pressed={resolution === r}
+                              disabled={unsupported}
+                              title={
+                                unsupported
+                                  ? `${currentModel.label} 最高支持 ${currentModel.resolutions[currentModel.resolutions.length - 1]}`
+                                  : undefined
+                              }
+                              className="oc-seg"
+                              onClick={() => setResolution(r)}
+                              style={{
+                                ...styles.segmentItem,
+                                ...(resolution === r ? styles.segmentActive : null),
+                                ...(unsupported ? styles.segmentDisabled : null),
+                              }}
+                            >
+                              {r}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={styles.popLabel}>数量</div>
+                      <div style={styles.segment}>
+                        {[1, 2, 4].map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            aria-pressed={batchCount === n}
+                            className="oc-seg"
+                            onClick={() => setBatchCount(n)}
+                            style={{ ...styles.segmentItem, ...(batchCount === n ? styles.segmentActive : null) }}
+                          >
+                            {n}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              <div style={styles.field}>
-                <div style={styles.fieldLabel}>
-                  补充指令<span style={{ color: C.subtle, fontWeight: 400 }}>（可选）</span>
-                </div>
-                <textarea
-                  value={extraPrompt}
-                  onChange={(e) => setExtraPrompt(e.target.value)}
-                  rows={3}
-                  maxLength={500}
-                  placeholder="如：上衣下摆塞进裤腰、袖口微挽"
-                  className="oc-textarea"
-                  style={styles.textarea}
-                />
-              </div>
-            </div>
-
-            <div style={styles.submitBar}>
-              {submitError && (
-                <div style={{ ...styles.errorNotice, margin: '0 0 10px' }} role="alert">
-                  <AlertCircle size={13} style={{ flexShrink: 0 }} />
-                  <span>{submitError}</span>
+                  <div style={{ ...styles.popLabel, marginTop: 12 }}>补充指令（可选）</div>
+                  <textarea
+                    value={extraPrompt}
+                    onChange={(e) => setExtraPrompt(e.target.value)}
+                    rows={2}
+                    maxLength={500}
+                    placeholder="如：上衣下摆塞进裤腰"
+                    className="oc-textarea"
+                    style={styles.textarea}
+                  />
                 </div>
               )}
-              <button
-                type="button"
-                className="oc-primary"
-                onClick={handleSubmit}
-                disabled={!canSubmit}
-                style={{ ...styles.primaryBtn, ...(canSubmit ? null : styles.primaryBtnDisabled) }}
-              >
-                {submitting ? (
-                  <>
-                    <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                    <span>提交中…</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={14} />
-                    <span style={styles.primaryLabel}>
-                      {totalSelected === 0 ? '开始换装' : `换装 ${pieceLabels.join(' + ')}`}
-                    </span>
-                  </>
-                )}
-              </button>
-              <div style={styles.submitHint}>
-                {totalSelected === 0
-                  ? '至少选择 1 张参考图'
-                  : `生成 ${batchCount} 张 · ${resolution} · 完成后放在原图右侧`}
-              </div>
             </div>
-          </aside>
+            <button
+              type="button"
+              className="oc-primary"
+              onClick={handleSubmit}
+              disabled={!canSubmit}
+              style={{ ...styles.primaryBtn, ...(canSubmit ? null : styles.primaryBtnDisabled) }}
+            >
+              {submitting ? (
+                <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+              ) : (
+                <Sparkles size={14} />
+              )}
+              <span>{submitting ? '提交中…' : 'AI 换装'}</span>
+            </button>
+          </div>
         </div>
 
         {preview && (
@@ -943,36 +829,29 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
         )}
       </div>
       <style>{`
-        [data-modal="outfit-change"] .mannequin-shell { animation: outfit-rise .45s cubic-bezier(.2,.8,.2,1) both; }
         [data-modal="outfit-change"] button { font-family: inherit; }
         [data-modal="outfit-change"] :focus-visible { outline: 2px solid ${C.ink}; outline-offset: 2px; }
         [data-modal="outfit-change"] .oc-icon-btn:hover:not(:disabled) { background: ${C.hover}; color: ${C.ink}; }
-        [data-modal="outfit-change"] .oc-source:hover { border-color: ${C.lineStrong}; background: ${C.surface}; }
-        [data-modal="outfit-change"] .oc-type:hover { border-color: ${C.subtle}; }
-        [data-modal="outfit-change"] .oc-type:focus-visible { outline: 2px solid ${C.ink}; outline-offset: 1px; }
+        [data-modal="outfit-change"] .oc-source:hover .oc-source-zoom { opacity: 1; }
+        [data-modal="outfit-change"] .oc-zone-tab:hover:not(:disabled) { color: ${C.ink}; }
         [data-modal="outfit-change"] .oc-search:focus-within { border-color: ${C.ink}; box-shadow: 0 0 0 3px rgba(30,35,45,.08); }
         [data-modal="outfit-change"] .oc-search :focus-visible { outline: none; }
-        [data-modal="outfit-change"] .oc-search-btn:hover:not(:disabled) { background: #2d3442; }
-        [data-modal="outfit-change"] .oc-ghost:hover { background: ${C.hover}; border-color: ${C.lineStrong}; color: ${C.ink}; }
-        [data-modal="outfit-change"] .oc-tile { transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
-        [data-modal="outfit-change"] .oc-tile:hover:not([aria-disabled="true"]) { border-color: ${C.subtle}; box-shadow: 0 6px 16px rgba(20, 30, 50, .08); transform: translateY(-1px); }
-        [data-modal="outfit-change"] .oc-tile[aria-checked="true"]:hover { border-color: ${C.ink}; }
+        [data-modal="outfit-change"] .oc-tile { transition: box-shadow .15s ease, transform .15s ease; }
+        [data-modal="outfit-change"] .oc-tile:hover:not([aria-disabled="true"]) { box-shadow: 0 6px 16px rgba(20, 30, 50, .1); transform: translateY(-1px); }
         [data-modal="outfit-change"] .oc-tile:hover .oc-tile-zoom, [data-modal="outfit-change"] .oc-tile:focus-within .oc-tile-zoom { opacity: 1; }
         [data-modal="outfit-change"] .oc-dropzone:hover { border-color: ${C.subtle}; background: ${C.hover}; }
-        [data-modal="outfit-change"] .mq-label:focus { outline: none; }
-        [data-modal="outfit-change"] .mq-label:focus-visible rect { stroke: ${C.ink}; stroke-width: 1.4px; }
-        [data-modal="outfit-change"] .oc-cart-item:hover { border-color: ${C.lineStrong}; }
+        [data-modal="outfit-change"] .oc-type:hover { border-color: ${C.subtle}; }
+        [data-modal="outfit-change"] .oc-piece:hover { border-color: ${C.lineStrong}; }
         [data-modal="outfit-change"] .oc-mini-remove { opacity: 0; transition: opacity .12s ease; }
         [data-modal="outfit-change"] .oc-mini:hover .oc-mini-remove, [data-modal="outfit-change"] .oc-mini-remove:focus-visible { opacity: 1; }
-        [data-modal="outfit-change"] .oc-select:hover { border-color: ${C.subtle}; }
-        [data-modal="outfit-change"] .oc-menu-item:hover, [data-modal="outfit-change"] .oc-menu-item[aria-selected="true"] { background: ${C.hover}; }
+        [data-modal="outfit-change"] .oc-settings:hover { border-color: ${C.subtle}; color: ${C.ink}; }
+        [data-modal="outfit-change"] .oc-menu-item:hover, [data-modal="outfit-change"] .oc-menu-item[aria-checked="true"] { background: ${C.hover}; }
         [data-modal="outfit-change"] .oc-seg:hover:not(:disabled) { color: ${C.ink}; }
         [data-modal="outfit-change"] .oc-textarea:focus { border-color: ${C.ink}; box-shadow: 0 0 0 3px rgba(30,35,45,.08); outline: none; }
         [data-modal="outfit-change"] .oc-primary:hover:not(:disabled) { background: #2d3442; }
         [data-modal="outfit-change"] input::placeholder, [data-modal="outfit-change"] textarea::placeholder { color: ${C.subtle}; }
-        @media (max-width: 1100px) { [data-modal="outfit-change"] .oc-left { width: 224px !important; } [data-modal="outfit-change"] .oc-right { width: 264px !important; } }
-        @media (max-width: 860px) { [data-modal="outfit-change"] .oc-left { width: 196px !important; padding: 12px !important; } [data-modal="outfit-change"] .oc-right { width: 236px !important; } }
-        @keyframes outfit-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        @media (max-width: 1100px) { [data-modal="outfit-change"] .oc-left { width: 220px !important; } }
+        @media (max-width: 860px) { [data-modal="outfit-change"] .oc-left { width: 180px !important; padding: 12px !important; } }
       `}</style>
     </div>
   )
@@ -994,8 +873,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   dialog: {
     position: 'relative',
-    width: 'min(1160px, 96vw)',
-    height: 'min(720px, 90vh)',
+    width: 'min(1040px, 94vw)',
+    height: 'min(680px, 88vh)',
     backgroundColor: C.surface,
     borderRadius: 14,
     boxShadow: '0 24px 70px rgba(20, 30, 50, 0.18), 0 0 0 1px rgba(20, 30, 50, .06)',
@@ -1005,36 +884,18 @@ const styles: Record<string, React.CSSProperties> = {
     color: C.text,
   },
   header: {
-    height: 60,
-    padding: '0 16px 0 20px',
+    height: 52,
+    padding: '0 12px 0 20px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    borderBottom: `1px solid ${C.line}`,
     flexShrink: 0,
-  },
-  headerIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 8,
-    backgroundColor: C.panel,
-    border: `1px solid ${C.line}`,
-    color: C.ink,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   title: {
     fontSize: 15,
     fontWeight: 650,
     color: C.ink,
     letterSpacing: '-0.01em',
-    lineHeight: 1.2,
-  },
-  subtitle: {
-    fontSize: 11.5,
-    color: C.muted,
-    marginTop: 2,
   },
   iconButton: {
     width: 32,
@@ -1055,124 +916,112 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
   },
 
-  // ── 左栏 ──
+  // ── 左：原图 ──
   leftCol: {
     width: 260,
     flexShrink: 0,
-    borderRight: `1px solid ${C.line}`,
-    backgroundColor: C.panel,
-    padding: '16px 16px 12px',
+    padding: '4px 0 16px 20px',
     display: 'flex',
     flexDirection: 'column',
-    overflowY: 'auto',
   },
-  sectionLabel: {
-    display: 'flex',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    fontSize: 11,
-    fontWeight: 600,
-    color: C.muted,
-    letterSpacing: '0.04em',
-    marginBottom: 8,
-  },
-  sectionLabelInline: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: C.muted,
-    letterSpacing: '0.04em',
-  },
-  sectionHint: {
-    fontWeight: 400,
-    color: C.subtle,
-    letterSpacing: 0,
-  },
-  sourceCard: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    width: '100%',
-    padding: 8,
-    borderRadius: 10,
-    border: `1px solid ${C.line}`,
-    backgroundColor: 'rgba(255,255,255,.7)',
-    cursor: 'zoom-in',
-    transition: 'border-color .15s ease, background .15s ease',
-  },
-  sourceThumb: {
-    width: 52,
-    height: 64,
-    borderRadius: 6,
-    overflow: 'hidden',
-    flexShrink: 0,
-    backgroundColor: C.hover,
-    border: `1px solid ${C.line}`,
-  },
-  sourceName: {
-    fontSize: 12,
-    fontWeight: 600,
-    color: C.ink,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  sourceHint: {
-    fontSize: 11,
-    color: C.muted,
-    marginTop: 3,
-  },
-  mannequinWrap: {
+  sourceStage: {
+    position: 'relative',
     flex: 1,
     minHeight: 0,
+    width: '100%',
+    padding: 0,
+    borderRadius: 10,
+    border: 'none',
+    backgroundColor: C.panel,
+    overflow: 'hidden',
+    cursor: 'zoom-in',
+  },
+  sourceZoom: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 26,
+    height: 26,
+    borderRadius: 7,
+    backgroundColor: 'rgba(255,255,255,.92)',
+    color: C.ink,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: '14px 10px',
-    borderRadius: 10,
-    border: `1px solid ${C.line}`,
-    backgroundColor: C.surface,
-    backgroundImage: 'radial-gradient(rgba(30,35,45,.07) 1px, transparent 1px)',
-    backgroundSize: '14px 14px',
+    boxShadow: '0 1px 3px rgba(0,0,0,.12)',
+    opacity: 0,
+    transition: 'opacity .15s ease',
+  },
+  ruleNote: {
+    marginTop: 8,
+    fontSize: 11,
+    color: C.subtle,
+    textAlign: 'center',
   },
 
-  // ── 中栏 ──
-  centerCol: {
+  // ── 右：工作区 ──
+  workCol: {
     flex: 1,
     minWidth: 0,
+    marginLeft: 12,
     display: 'flex',
     flexDirection: 'column',
-    padding: '16px 20px 0',
   },
-  centerHead: {
+  zoneTabs: {
     display: 'flex',
-    alignItems: 'baseline',
-    gap: 12,
-    height: 32,
-    marginBottom: 12,
+    gap: 2,
+    padding: '0 14px',
+    borderBottom: `1px solid ${C.line}`,
   },
-  zoneTitle: {
-    fontSize: 16,
-    fontWeight: 650,
-    color: C.ink,
-    letterSpacing: '-0.01em',
-  },
-  zoneHint: {
-    fontSize: 11.5,
-    color: C.subtle,
-  },
-  searchRow: {
+  zoneTab: {
     display: 'flex',
-    gap: 8,
     alignItems: 'center',
+    gap: 6,
+    height: 38,
+    padding: '0 10px',
+    marginBottom: -1,
+    border: 'none',
+    borderBottom: '2px solid transparent',
+    backgroundColor: 'transparent',
+    color: C.muted,
+    fontSize: 13.5,
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'color .15s ease, border-color .15s ease',
+  },
+  zoneTabActive: {
+    color: C.ink,
+    fontWeight: 650,
+    borderBottomColor: C.ink,
+  },
+  zoneCount: {
+    minWidth: 16,
+    height: 16,
+    padding: '0 4px',
+    borderRadius: 8,
+    backgroundColor: C.hover,
+    color: C.text,
+    fontSize: 10,
+    fontWeight: 600,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  zoneCountActive: {
+    backgroundColor: C.ink,
+    color: '#fff',
+  },
+  searchWrap: {
+    padding: '14px 24px 0',
   },
   searchBox: {
-    flex: 1,
-    height: 38,
+    height: 40,
     display: 'flex',
     alignItems: 'center',
     gap: 8,
     padding: '0 4px 0 12px',
-    borderRadius: 9,
+    borderRadius: 10,
     border: `1px solid ${C.lineStrong}`,
     backgroundColor: C.surface,
     transition: 'border-color .15s ease, box-shadow .15s ease',
@@ -1184,82 +1033,32 @@ const styles: Record<string, React.CSSProperties> = {
     border: 'none',
     outline: 'none',
     background: 'transparent',
-    fontSize: 13,
+    fontSize: 13.5,
     color: C.ink,
     userSelect: 'text',
   },
-  searchBtn: {
-    height: 30,
-    minWidth: 56,
-    padding: '0 14px',
+  searchDivider: {
+    width: 1,
+    height: 18,
+    backgroundColor: C.line,
+  },
+  uploadBtn: {
+    width: 32,
+    height: 32,
     borderRadius: 7,
     border: 'none',
-    backgroundColor: C.ink,
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 600,
+    backgroundColor: 'transparent',
+    color: C.muted,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    cursor: 'pointer',
-    transition: 'background .15s ease',
-  },
-  ghostBtn: {
-    height: 38,
-    padding: '0 14px',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    borderRadius: 9,
-    border: `1px solid ${C.lineStrong}`,
-    backgroundColor: C.surface,
-    color: C.text,
-    fontSize: 12.5,
-    fontWeight: 500,
-    cursor: 'pointer',
-    flexShrink: 0,
-    transition: 'background .15s ease, border-color .15s ease, color .15s ease',
-  },
-  searchHint: {
-    fontSize: 11,
-    color: C.subtle,
-    margin: '8px 2px 0',
-    minHeight: 16,
-  },
-  layerNotice: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    margin: '8px 0 0',
-    padding: '6px 10px',
-    borderRadius: 7,
-    backgroundColor: C.hover,
-    color: C.text,
-    fontSize: 11.5,
-    lineHeight: 1.4,
-  },
-  layerNoticeWarn: {
-    backgroundColor: '#fdf6e7',
-    color: '#8a5a12',
-  },
-  typeSelect: {
-    height: 24,
-    maxWidth: '100%',
-    padding: '0 6px',
-    borderRadius: 6,
-    border: `1px solid ${C.lineStrong}`,
-    backgroundColor: C.surface,
-    color: C.ink,
-    fontSize: 11.5,
-    fontWeight: 500,
-    fontFamily: 'inherit',
     cursor: 'pointer',
   },
   errorNotice: {
     display: 'flex',
     alignItems: 'center',
     gap: 6,
-    margin: '8px 0 0',
+    marginTop: 8,
     padding: '6px 10px',
     borderRadius: 7,
     backgroundColor: C.dangerBg,
@@ -1272,8 +1071,7 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     minHeight: 0,
     overflowY: 'auto',
-    margin: '14px -20px 0',
-    padding: '2px 20px 20px',
+    padding: '16px 24px 20px',
   },
   group: {
     marginBottom: 18,
@@ -1281,7 +1079,8 @@ const styles: Record<string, React.CSSProperties> = {
   groupHeader: {
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: 8,
+    minHeight: 24,
     fontSize: 11.5,
     marginBottom: 8,
   },
@@ -1291,34 +1090,46 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: '0.03em',
     fontVariantNumeric: 'tabular-nums',
   },
+  // 去掉原生下拉箭头（无法控制边距），改用自绘箭头并留出右侧空间
+  typeSelect: {
+    height: 26,
+    maxWidth: '100%',
+    padding: '0 26px 0 9px',
+    borderRadius: 7,
+    border: `1px solid ${C.lineStrong}`,
+    backgroundColor: C.surface,
+    backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23687083' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
+    backgroundRepeat: 'no-repeat',
+    backgroundPosition: 'right 9px center',
+    backgroundSize: '10px 6px',
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    MozAppearance: 'none',
+    color: C.ink,
+    fontSize: 12,
+    fontWeight: 500,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+  },
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))',
     gap: 10,
   },
   tile: {
     position: 'relative',
+    aspectRatio: '3 / 4',
     borderRadius: 10,
-    border: `1px solid ${C.line}`,
-    backgroundColor: C.surface,
-    padding: 4,
+    overflow: 'hidden',
+    backgroundColor: C.panel,
     cursor: 'pointer',
   },
   tileSelected: {
-    borderColor: C.ink,
-    boxShadow: `0 0 0 1px ${C.ink}`,
+    boxShadow: `0 0 0 2px ${C.ink}`,
   },
   tileBlocked: {
     opacity: 0.4,
     cursor: 'not-allowed',
-  },
-  tileImgBox: {
-    position: 'relative',
-    width: '100%',
-    aspectRatio: '3 / 4',
-    borderRadius: 7,
-    overflow: 'hidden',
-    backgroundColor: C.panel,
   },
   tileCheck: {
     position: 'absolute',
@@ -1327,17 +1138,11 @@ const styles: Record<string, React.CSSProperties> = {
     width: 18,
     height: 18,
     borderRadius: 9,
-    border: '1.5px solid rgba(255,255,255,.95)',
-    backgroundColor: 'rgba(20,24,32,.18)',
+    backgroundColor: C.ink,
     color: '#fff',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    boxShadow: '0 1px 3px rgba(0,0,0,.15)',
-  },
-  tileCheckOn: {
-    backgroundColor: C.ink,
-    borderColor: C.ink,
   },
   tileZoom: {
     position: 'absolute',
@@ -1372,64 +1177,38 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     cursor: 'pointer',
   },
-  tileLabel: {
-    fontSize: 11,
-    color: C.text,
-    textAlign: 'center',
-    padding: '6px 2px 2px',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+  uploadCell: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
   },
   emptyState: {
     height: '100%',
-    minHeight: 240,
+    minHeight: 220,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 6,
     textAlign: 'center',
     borderRadius: 12,
     border: `1.5px dashed ${C.lineStrong}`,
-    backgroundColor: C.panel,
     cursor: 'pointer',
     transition: 'border-color .15s ease, background .15s ease',
   },
-  emptyIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: C.surface,
-    border: `1px solid ${C.line}`,
-    color: C.muted,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
   emptyTitle: {
+    marginTop: 4,
     fontSize: 13.5,
     fontWeight: 600,
     color: C.ink,
   },
   emptyHint: {
     fontSize: 12,
-    color: C.muted,
-    lineHeight: 1.6,
-  },
-  emptyMeta: {
-    marginTop: 12,
-    padding: '3px 10px',
-    borderRadius: 999,
-    backgroundColor: C.surface,
-    border: `1px solid ${C.line}`,
-    fontSize: 10.5,
     color: C.subtle,
   },
   dropOverlay: {
     position: 'absolute',
-    inset: '2px 20px 20px',
+    inset: '16px 24px 20px',
     borderRadius: 12,
     border: `1.5px dashed ${C.ink}`,
     backgroundColor: 'rgba(247,248,250,.94)',
@@ -1444,106 +1223,63 @@ const styles: Record<string, React.CSSProperties> = {
     pointerEvents: 'none',
   },
 
-  // ── 右栏 ──
-  rightCol: {
-    width: 300,
+  // ── 底部操作栏 ──
+  footer: {
     flexShrink: 0,
-    borderLeft: `1px solid ${C.line}`,
-    backgroundColor: C.panel,
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  rightScroll: {
-    flex: 1,
-    minHeight: 0,
-    overflowY: 'auto',
-    padding: '16px 16px 12px',
-  },
-  cartHead: {
-    display: 'flex',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-  },
-  cartCount: {
-    fontSize: 12,
-    fontWeight: 600,
-    fontVariantNumeric: 'tabular-nums',
-  },
-  meter: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: C.line,
-    overflow: 'hidden',
-    margin: '8px 0 12px',
-  },
-  meterFill: {
-    height: '100%',
-    borderRadius: 2,
-    backgroundColor: C.ink,
-    transition: 'width .2s ease',
-  },
-  cartEmpty: {
-    padding: '18px 12px',
-    borderRadius: 10,
-    border: `1px dashed ${C.lineStrong}`,
-    fontSize: 11.5,
-    lineHeight: 1.7,
-    color: C.subtle,
-    textAlign: 'center',
-  },
-  cartList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-  },
-  cartItem: {
-    padding: '9px 10px 10px',
-    borderRadius: 10,
-    border: `1px solid ${C.line}`,
-    backgroundColor: C.surface,
-    cursor: 'pointer',
-    transition: 'border-color .15s ease',
-  },
-  cartItemActive: {
-    borderColor: C.ink,
-  },
-  cartItemHead: {
+    height: 64,
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    fontSize: 12,
-    marginBottom: 8,
+    gap: 16,
+    padding: '0 20px',
+    borderTop: `1px solid ${C.line}`,
   },
-  cartItemMeta: {
-    color: C.subtle,
-    maxWidth: 140,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  cartThumbs: {
+  tray: {
+    flex: 1,
+    minWidth: 0,
     display: 'flex',
-    flexWrap: 'wrap',
-    gap: 6,
+    alignItems: 'center',
+    gap: 8,
+    overflowX: 'auto',
+    fontSize: 12,
+  },
+  piece: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    height: 44,
+    padding: '0 5px 0 10px',
+    borderRadius: 9,
+    border: `1px solid ${C.line}`,
+    cursor: 'pointer',
+    transition: 'border-color .15s ease, background .15s ease',
+  },
+  pieceActive: {
+    backgroundColor: C.panel,
+    borderColor: C.lineStrong,
+  },
+  pieceLabel: {
+    marginRight: 4,
+    fontSize: 12,
+    fontWeight: 600,
+    color: C.ink,
+    whiteSpace: 'nowrap',
   },
   miniThumb: {
     position: 'relative',
-    width: 40,
-    height: 50,
-    borderRadius: 6,
+    width: 26,
+    height: 34,
+    borderRadius: 5,
     overflow: 'hidden',
     backgroundColor: C.panel,
-    border: `1px solid ${C.line}`,
   },
   miniRemove: {
     position: 'absolute',
-    top: 2,
-    right: 2,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
+    inset: 0,
+    width: '100%',
+    height: '100%',
     border: 'none',
-    backgroundColor: 'rgba(20,24,32,.75)',
+    backgroundColor: 'rgba(20,24,32,.6)',
     color: '#fff',
     display: 'flex',
     alignItems: 'center',
@@ -1551,77 +1287,75 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     padding: 0,
   },
-  divider: {
-    height: 1,
-    backgroundColor: C.line,
-    margin: '18px 0 14px',
-  },
-  field: {
-    marginTop: 12,
-  },
-  fieldLabel: {
-    fontSize: 11.5,
-    fontWeight: 500,
-    color: C.text,
-    marginBottom: 6,
-  },
-  select: {
-    width: '100%',
-    height: 36,
+  footerActions: {
+    flexShrink: 0,
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
-    padding: '0 10px 0 12px',
-    borderRadius: 9,
-    border: `1px solid ${C.lineStrong}`,
-    backgroundColor: C.surface,
-    cursor: 'pointer',
-    transition: 'border-color .15s ease, box-shadow .15s ease',
+    gap: 10,
   },
-  selectOpen: {
-    borderColor: C.ink,
-    boxShadow: '0 0 0 3px rgba(30,35,45,.08)',
-  },
-  selectValue: {
-    flex: 1,
-    minWidth: 0,
-    textAlign: 'left',
-    fontSize: 12.5,
-    fontWeight: 600,
-    color: C.ink,
+  submitError: {
+    maxWidth: 200,
+    fontSize: 11.5,
+    color: C.danger,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
-  menu: {
+  refCount: {
+    fontSize: 12,
+    fontWeight: 600,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  settingsBtn: {
+    height: 36,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '0 12px',
+    borderRadius: 9,
+    border: `1px solid ${C.lineStrong}`,
+    backgroundColor: C.surface,
+    color: C.text,
+    fontSize: 12.5,
+    fontWeight: 500,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    transition: 'border-color .15s ease, color .15s ease',
+  },
+  settingsBtnOpen: {
+    borderColor: C.ink,
+    color: C.ink,
+  },
+  popover: {
     position: 'absolute',
-    top: 'calc(100% + 4px)',
-    left: 0,
     right: 0,
+    bottom: 'calc(100% + 10px)',
     zIndex: 5,
-    maxHeight: 240,
-    overflowY: 'auto',
-    padding: 4,
-    borderRadius: 10,
+    width: 300,
+    padding: 14,
+    borderRadius: 12,
     border: `1px solid ${C.line}`,
     backgroundColor: C.surface,
-    boxShadow: '0 12px 32px rgba(20, 30, 50, .14), 0 2px 6px rgba(20, 30, 50, .05)',
+    boxShadow: '0 16px 40px rgba(20, 30, 50, .16), 0 2px 6px rgba(20, 30, 50, .05)',
   },
+  popLabel: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: C.muted,
+    margin: '0 0 6px',
+  },
+  // 悬停底色向两侧外扩，文字仍与其它控件左对齐
   menuItem: {
-    width: '100%',
+    width: 'calc(100% + 16px)',
+    margin: '0 -8px',
     display: 'flex',
     alignItems: 'center',
     gap: 10,
-    padding: '7px 10px',
+    padding: '7px 8px',
     border: 'none',
-    borderRadius: 7,
+    borderRadius: 8,
     backgroundColor: 'transparent',
     cursor: 'pointer',
-  },
-  fieldHint: {
-    fontSize: 11,
-    color: C.subtle,
-    marginTop: 6,
   },
   segment: {
     display: 'flex',
@@ -1666,44 +1400,28 @@ const styles: Record<string, React.CSSProperties> = {
     userSelect: 'text',
     transition: 'border-color .15s ease, box-shadow .15s ease',
   },
-  submitBar: {
-    flexShrink: 0,
-    padding: '12px 16px 14px',
-    borderTop: `1px solid ${C.line}`,
-    backgroundColor: C.surface,
-  },
   primaryBtn: {
-    width: '100%',
-    height: 42,
-    borderRadius: 10,
+    height: 36,
+    maxWidth: 260,
+    borderRadius: 9,
     border: 'none',
     backgroundColor: C.ink,
     color: '#fff',
-    fontSize: 13.5,
+    fontSize: 13,
     fontWeight: 600,
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
+    gap: 7,
+    padding: '0 16px',
     cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
     transition: 'background .15s ease',
-    padding: '0 14px',
   },
   primaryBtnDisabled: {
-    backgroundColor: C.lineStrong,
-    color: '#fff',
-    cursor: 'not-allowed',
-  },
-  primaryLabel: {
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  submitHint: {
-    fontSize: 11,
+    backgroundColor: C.line,
     color: C.subtle,
-    textAlign: 'center',
-    marginTop: 8,
+    cursor: 'not-allowed',
   },
 
   containImg: {
@@ -1737,7 +1455,7 @@ const styles: Record<string, React.CSSProperties> = {
   lightboxImg: {
     display: 'block',
     maxWidth: '100%',
-    maxHeight: 'calc(min(720px, 90vh) - 64px)',
+    maxHeight: 'calc(min(680px, 88vh) - 64px)',
     objectFit: 'contain',
   },
   lightboxClose: {

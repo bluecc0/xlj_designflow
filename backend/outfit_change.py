@@ -78,6 +78,8 @@ ITEM_LABELS: dict[str, str] = {
     "tshirt": "T恤",
     "shoes": "鞋子",
     "socks": "袜子",
+    "bag": "包袋",
+    "hat": "帽子",
 }
 
 
@@ -425,14 +427,14 @@ def build_outfit_prompt(
     # 按 SKU 和 部位 分组，同一 SKU 的多张图是同一件商品的不同角度
     groups: "OrderedDict[str, list[int]]" = OrderedDict()
     slot_to_indices: dict[str, list[int]] = {}
-    slot_items: dict[str, list[str]] = {}
+    # 部位 → 用户标注的品类（'' = 未标注）→ 图片序号；按用户的标注逐条下指令，不做推断
+    slot_item_indices: dict[str, dict[str, list[int]]] = {}
     for idx, ref in enumerate(references):
         ref_slot = str(ref.get("slot") or "").strip().lower()
         if ref_slot:
             slot_to_indices.setdefault(ref_slot, []).append(idx + 2)
             ref_item = normalize_item(ref.get("item"))
-            if ref_item and ref_item not in slot_items.setdefault(ref_slot, []):
-                slot_items[ref_slot].append(ref_item)
+            slot_item_indices.setdefault(ref_slot, {}).setdefault(ref_item, []).append(idx + 2)
         key = ref.get("sku") or f"上传素材{idx + 1}"
         groups.setdefault(key, []).append(idx + 2)
 
@@ -468,25 +470,24 @@ def build_outfit_prompt(
         slot_lines: list[str] = []
         for slot in active_slots:
             slot_meta = PRESET_SLOTS.get(slot, {})
-            # 用户标注了细分品类（如卫衣/T恤）时，用品类名代替笼统的部位名
-            slot_label = "、".join(ITEM_LABELS[i] for i in slot_items.get(slot, [])) \
-                or slot_meta.get("label") or GARMENT_SLOTS.get(slot, slot)
             region = slot_meta.get("region", "")
             region_str = f"（{region}）" if region else ""
-            img_indices = slot_to_indices.get(slot) or []
-            target_img_desc = f"{image_refs(img_indices)}展示的" if img_indices else "参考图中对应的"
-
-            base_directive = slot_meta.get("replace_directive") or f"将图1人物该部位的服饰替换为{target_img_desc}{slot_label}商品。"
-            if img_indices and "参考图中的" in base_directive:
-                directive = base_directive.replace("参考图中的", f"{target_img_desc}")
-            else:
-                directive = base_directive
-
-            slot_lines.append(f"  * {slot_label}{region_str}：{directive}")
+            item_groups = slot_item_indices.get(slot) or {"": slot_to_indices.get(slot) or []}
+            for item, img_indices in item_groups.items():
+                target_img_desc = f"{image_refs(img_indices)}展示的" if img_indices else "参考图中对应的"
+                if item:
+                    # 用户标注了品类：照字面替换同名单品
+                    label = ITEM_LABELS[item]
+                    directive = f"将图1人物身上的{label}替换为{target_img_desc}{label}，版型、颜色与细节严格参照参考图。"
+                else:
+                    label = slot_meta.get("label") or GARMENT_SLOTS.get(slot, slot)
+                    base_directive = slot_meta.get("replace_directive") or f"将图1人物该部位的服饰替换为{target_img_desc}{label}商品。"
+                    if img_indices and "参考图中的" in base_directive:
+                        directive = base_directive.replace("参考图中的", f"{target_img_desc}")
+                    else:
+                        directive = base_directive
+                slot_lines.append(f"  * {label}{region_str}：{directive}")
         lines.append("- 只替换图1中的以下指定部位：\n" + "\n".join(slot_lines))
-        if "outerwear" in active_slots and "top" in active_slots:
-            inner_label = "、".join(ITEM_LABELS[i] for i in slot_items.get("top", [])) or "上衣"
-            lines.append(f"- 叠穿关系：替换后外套在外层、{inner_label}在内层，内层在领口与门襟处自然露出。")
     else:
         lines.append("- 自动识别参考图商品的品类（如帽子、上衣、裤子、鞋），只替换图1中相同品类、相同部位的服饰。")
 
@@ -532,6 +533,8 @@ VTO_ITEM_NAMES: dict[str, str] = {
     "tshirt": "t-shirt",
     "shoes": "shoes",
     "socks": "socks",
+    "bag": "bag",
+    "hat": "hat",
 }
 
 # 部位 → VTO prompt 里的英文品类名
@@ -618,9 +621,6 @@ def build_vto_prompt(*, references: list[dict[str, Any]], target_slots: Optional
         "Only replace the matching items the person already has in image 1; do not add any item that image 1 does not have. "
         "Keep every other clothing item, the background, lighting and framing of image 1 unchanged."
     )
-    if "outerwear" in slots and "top" in slots:
-        inner = " and ".join(slot_names("top"))
-        prompt += f" The jacket is worn as the outer layer over the {inner}."
     skus = [r.get("sku") for r in references if r.get("sku")]
     if len(skus) != len(set(skus)) or len(references) > len(names or [None]):
         prompt += " Image 2 contains several reference views; views of the same item show one single garment."
