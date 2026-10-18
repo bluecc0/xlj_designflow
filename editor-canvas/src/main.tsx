@@ -7,7 +7,7 @@ import './style.css'
 // Bump this when shipping a canvas UI build. It is intentionally referenced
 // below so Vite emits a new hashed entry and browsers do not reuse an older
 // immutable editor bundle during local verification.
-const CANVAS_BUILD_REVISION = '2026-10-18-outfit-merge-master'
+const CANVAS_BUILD_REVISION = '2026-10-18-outfit-tab-state'
 
 if (typeof window !== 'undefined') {
   ;(window as any).__canvasStore = useCanvasStore

@@ -989,10 +989,12 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     transition: 'color .15s ease, border-color .15s ease',
   },
+  // 状态样式写完整的 border 简写：只覆盖 borderBottomColor 时，取消选中后 React 会把它清成 ''，
+  // 颜色回落到 currentColor，表现为点过的 tab 一直带下划线
   zoneTabActive: {
     color: C.ink,
     fontWeight: 650,
-    borderBottomColor: C.ink,
+    borderBottom: `2px solid ${C.ink}`,
   },
   zoneCount: {
     minWidth: 16,
@@ -1256,7 +1258,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   pieceActive: {
     backgroundColor: C.panel,
-    borderColor: C.lineStrong,
+    border: `1px solid ${C.lineStrong}`,
   },
   pieceLabel: {
     marginRight: 4,
@@ -1323,7 +1325,7 @@ const styles: Record<string, React.CSSProperties> = {
     transition: 'border-color .15s ease, color .15s ease',
   },
   settingsBtnOpen: {
-    borderColor: C.ink,
+    border: `1px solid ${C.ink}`,
     color: C.ink,
   },
   popover: {
