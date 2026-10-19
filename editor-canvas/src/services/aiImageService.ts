@@ -526,9 +526,10 @@ export interface OutfitAssetSearchResult {
 /**
  * 按 SKU 检索素材库多角度素材
  */
-export async function searchOutfitAssets(skus: string[]): Promise<OutfitAssetSearchResult> {
+export async function searchOutfitAssets(skus: string[], signal?: AbortSignal): Promise<OutfitAssetSearchResult> {
   const resp = await fetch(`/products/outfit-assets?sku=${encodeURIComponent(skus.join(','))}`, {
     credentials: 'include',
+    signal,
   })
   if (!resp.ok) throw new Error(await readErrorMessage(resp))
   return resp.json()

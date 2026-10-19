@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   Check,
@@ -33,21 +33,15 @@ interface UploadItem {
   previewUrl: string
 }
 
-interface ZoneState {
-  skuInput: string
-  searchResult: OutfitAssetSearchResult | null
-  searching: boolean
-  searchError: string | null
-  selected: OutfitAsset[]
-  uploads: UploadItem[]
-  /** 单品 → 品类 key（'' = 自动识别）；单品 key 为 `sku:<货号>` 或 `upload:<id>` */
-  types: Record<string, string>
+interface PieceAssignment {
+  zoneKey: string
+  type: string
 }
 
 /** 一件单品：同一货号的多张角度图，或一张本地上传图 */
 interface Piece {
   key: string
-  zone: OutfitZone
+  zone: OutfitZone | null
   sku: string
   assets: OutfitAsset[]
   upload?: UploadItem
@@ -55,7 +49,10 @@ interface Piece {
 }
 
 const DEFAULT_MAX_REFS = 8
+const SEARCH_DELAY_MS = 400
 const ACCEPTED_UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp']
+const ZONE_TABS = [{ key: 'all', label: '全部' }, ...OUTFIT_ZONES]
+type AssetGroup = OutfitAssetSearchResult['items'][number]
 
 const AUTO_LABEL = '自动识别'
 const skuPieceKey = (sku: string) => `sku:${sku}`
@@ -66,27 +63,13 @@ const typeOptions = (zone: OutfitZone) => [
   ...(zone.allowAuto ? [{ key: '', label: AUTO_LABEL }] : []),
   ...zone.items.map((i) => ({ key: i.key, label: i.label })),
 ]
-const typeItem = (p: Piece) => p.zone.items.find((i) => i.key === p.type)
-// 只有多品类部位才把品类传给后端；单品类部位（帽子、下装）只传部位，避免把半裙写成“裤子”
-const pieceItemKey = (p: Piece) => (hasTypes(p.zone) ? typeItem(p)?.key || '' : '')
-const pieceSlot = (p: Piece) => typeItem(p)?.slot || p.zone.slot
-const pieceLabel = (p: Piece) => (hasTypes(p.zone) ? typeItem(p)?.label || p.zone.label : p.zone.items[0].label)
+const typeItem = (p: Piece) => p.zone?.items.find((i) => i.key === p.type)
+// 单品类部位只传部位，避免把半裙写成“裤子”。
+const pieceItemKey = (p: Piece) => (p.zone && hasTypes(p.zone) ? typeItem(p)?.key || '' : '')
+const pieceSlot = (p: Piece) => typeItem(p)?.slot || p.zone?.slot || ''
+const pieceLabel = (p: Piece) => (p.zone && hasTypes(p.zone) ? typeItem(p)?.label : '') || p.zone?.label || '待分类'
 const pieceCount = (p: Piece) => (p.upload ? 1 : p.assets.length)
-
-function zonePieces(zone: OutfitZone, st: ZoneState): Piece[] {
-  const valid = new Set(typeOptions(zone).map((o) => o.key))
-  const typeOf = (key: string) => (key in st.types && valid.has(st.types[key]) ? st.types[key] : defaultType(zone))
-  const bySku = new Map<string, OutfitAsset[]>()
-  st.selected.forEach((a) => {
-    const list = bySku.get(a.sku)
-    if (list) list.push(a)
-    else bySku.set(a.sku, [a])
-  })
-  return [
-    ...Array.from(bySku, ([sku, assets]) => ({ key: skuPieceKey(sku), zone, sku, assets, type: typeOf(skuPieceKey(sku)) })),
-    ...st.uploads.map((u) => ({ key: uploadPieceKey(u.id), zone, sku: '', assets: [], upload: u, type: typeOf(uploadPieceKey(u.id)) })),
-  ]
-}
+const assetKey = (a: OutfitAsset) => `${a.id}|${a.sku}`
 
 // 记住全局模型配置
 let lastModel: OutfitChangeRequest['model'] = 'gpt-image-2.5'
@@ -120,21 +103,18 @@ const C = {
   dangerBg: '#fdf1f1',
 }
 
-const emptyZoneState = (): ZoneState => ({
-  skuInput: '',
-  searchResult: null,
-  searching: false,
-  searchError: null,
-  selected: [],
-  uploads: [],
-  types: {},
-})
-
 export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit }) => {
-  const [activeZoneKey, setActiveZoneKey] = useState<string>('upper')
-  const [zoneStates, setZoneStates] = useState<Record<string, ZoneState>>(() =>
-    Object.fromEntries(OUTFIT_ZONES.map((z) => [z.key, emptyZoneState()]))
-  )
+  const [activeZoneKey, setActiveZoneKey] = useState('all')
+  const [skuInput, setSkuInput] = useState('')
+  const [searchResult, setSearchResult] = useState<OutfitAssetSearchResult | null>(null)
+  const [assetGroups, setAssetGroups] = useState<Record<string, AssetGroup>>({})
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [searchAttempt, setSearchAttempt] = useState(0)
+  const [isComposing, setIsComposing] = useState(false)
+  const [selected, setSelected] = useState<OutfitAsset[]>([])
+  const [uploads, setUploads] = useState<UploadItem[]>([])
+  const [assignments, setAssignments] = useState<Record<string, PieceAssignment>>({})
   const [isDragOver, setIsDragOver] = useState(false)
 
   const [model, setModel] = useState<OutfitChangeRequest['model']>(lastModel)
@@ -151,33 +131,31 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
   const fileInputRef = useRef<HTMLInputElement>(null)
   const settingsRef = useRef<HTMLDivElement>(null)
 
-  const activeZone = OUTFIT_ZONES.find((z) => z.key === activeZoneKey) || OUTFIT_ZONES[0]
-  const activeState = zoneStates[activeZone.key]
-
-  const pieces = useMemo(() => OUTFIT_ZONES.flatMap((z) => zonePieces(z, zoneStates[z.key])), [zoneStates])
-  const activePieces = pieces.filter((p) => p.zone.key === activeZone.key)
+  const activeZone = OUTFIT_ZONES.find((z) => z.key === activeZoneKey)
+  const pieces = useMemo<Piece[]>(() => {
+    const bySku = new Map<string, OutfitAsset[]>()
+    selected.forEach((a) => bySku.set(a.sku, [...(bySku.get(a.sku) || []), a]))
+    const assignmentFor = (key: string) => ({
+      zone: OUTFIT_ZONES.find((z) => z.key === assignments[key]?.zoneKey) || null,
+      type: assignments[key]?.type || '',
+    })
+    return [
+      ...Array.from(bySku, ([sku, assets]) => ({ key: skuPieceKey(sku), sku, assets, ...assignmentFor(skuPieceKey(sku)) })),
+      ...uploads.map((u) => ({ key: uploadPieceKey(u.id), sku: '', assets: [], upload: u, ...assignmentFor(uploadPieceKey(u.id)) })),
+    ]
+  }, [selected, uploads, assignments])
   const totalSelected = pieces.reduce((n, p) => n + pieceCount(p), 0)
+  const unassignedCount = pieces.filter((p) => !p.zone).length
   const maxRefs = DEFAULT_MAX_REFS
   const remaining = maxRefs - totalSelected
 
   const zoneCounts = useMemo(() => {
     const counts: Record<string, number> = {}
     pieces.forEach((p) => {
-      counts[p.zone.key] = (counts[p.zone.key] || 0) + pieceCount(p)
+      if (p.zone) counts[p.zone.key] = (counts[p.zone.key] || 0) + pieceCount(p)
     })
     return counts
   }, [pieces])
-
-  const updateZone = useCallback((key: string, patch: Partial<ZoneState>) => {
-    setZoneStates((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }))
-  }, [])
-
-  const setPieceType = (zoneKey: string, pieceKey: string, type: string) => {
-    setZoneStates((prev) => ({
-      ...prev,
-      [zoneKey]: { ...prev[zoneKey], types: { ...prev[zoneKey].types, [pieceKey]: type } },
-    }))
-  }
 
   // 鼠标切换部位后聚焦检索框；键盘方向键切 tab 时焦点留在 tab 上，避免打断方向键导航
   const focusSearchRef = useRef(true)
@@ -195,18 +173,17 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
   const onZoneTabsKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
     e.preventDefault()
-    const idx = OUTFIT_ZONES.findIndex((z) => z.key === activeZone.key)
-    const next = (idx + (e.key === 'ArrowRight' ? 1 : -1) + OUTFIT_ZONES.length) % OUTFIT_ZONES.length
-    selectZone(OUTFIT_ZONES[next].key, false)
+    const idx = ZONE_TABS.findIndex((z) => z.key === activeZoneKey)
+    const next = (idx + (e.key === 'ArrowRight' ? 1 : -1) + ZONE_TABS.length) % ZONE_TABS.length
+    selectZone(ZONE_TABS[next].key, false)
     e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
   }
 
   // 卸载时释放所有本地预览 URL
-  useEffect(() => {
-    return () => {
-      Object.values(zoneStates).forEach((st) => st.uploads.forEach((u) => URL.revokeObjectURL(u.previewUrl)))
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const uploadUrlsRef = useRef(new Set<string>())
+  useEffect(() => () => {
+    uploadUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -230,74 +207,95 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
     return () => document.removeEventListener('mousedown', onDown, true)
   }, [settingsOpen])
 
-  const assetKey = (a: OutfitAsset) => `${a.id}|${a.sku}`
-  const activeSelectedKeys = useMemo(() => new Set(activeState.selected.map(assetKey)), [activeState.selected])
-
-  const handleSearch = async () => {
-    const zone = activeZone
-    const state = zoneStates[zone.key]
-    const skus = Array.from(new Set(state.skuInput.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean)))
-    if (skus.length === 0) {
-      updateZone(zone.key, { searchError: `请输入${zone.label}货号` })
-      skuInputRef.current?.focus()
+  const selectedKeys = useMemo(() => new Set(selected.map(assetKey)), [selected])
+  // 规范化后的货号相同时不重复检索；输入法组字期间不请求。
+  const queryKey = JSON.stringify(Array.from(new Set(skuInput.split(/[,，;；、\s]+/).filter(Boolean))))
+  useEffect(() => {
+    const skus: string[] = JSON.parse(queryKey)
+    setSearchError(null)
+    setSearchResult(null)
+    if (!skus.length || isComposing) {
+      setSearching(false)
       return
     }
 
-    updateZone(zone.key, { searching: true, searchError: null })
-    try {
-      const result = await searchOutfitAssets(skus)
-      const newKeys = new Set(result.items.flatMap((it) => it.assets.map(assetKey)))
-      const kept = state.selected.filter((a) => newKeys.has(assetKey(a)))
+    let current = true
+    const controller = new AbortController()
+    setSearching(true)
+    const timer = setTimeout(async () => {
+      try {
+        const result = await searchOutfitAssets(skus, controller.signal)
+        if (!current) return
+        setSearchResult(result)
+        setAssetGroups((prev) => ({
+          ...prev,
+          ...Object.fromEntries(result.items.filter((group) => group.found).map((group) => [group.sku, group])),
+        }))
+        if (!result.library_exists) setSearchError('未挂载商品素材库，可用「上传图片」添加素材')
+      } catch (err: any) {
+        if (current) setSearchError(err?.message || '检索失败，请重试')
+      } finally {
+        if (current) setSearching(false)
+      }
+    }, SEARCH_DELAY_MS)
 
-      let errorMsg: string | null = null
-      if (!result.library_exists) errorMsg = '未挂载商品素材库，可用「上传」添加图片'
-      else if (!result.items.some((it) => it.found)) errorMsg = `未找到货号：${skus.join(', ')}`
-
-      updateZone(zone.key, {
-        searching: false,
-        searchResult: result,
-        searchError: errorMsg,
-        // 检索只展示素材，选择权交给用户，不自动勾选任何角度图。
-        selected: kept,
-      })
-    } catch (err: any) {
-      updateZone(zone.key, { searching: false, searchError: err?.message || '检索失败，请重试' })
+    return () => {
+      current = false
+      clearTimeout(timer)
+      controller.abort()
     }
-  }
+  }, [queryKey, isComposing, searchAttempt])
+
+  // 搜索和部位筛选共用素材池；继续输入或清空搜索都保留已选商品及其全部角度。
+  const visibleGroups = useMemo(() => {
+    const groups = new Map((searchResult?.items || []).map((group) => [group.sku, group]))
+    selected.forEach((asset) => {
+      if (!groups.get(asset.sku)?.found) {
+        groups.set(asset.sku, assetGroups[asset.sku] || { sku: asset.sku, found: true, assets: selected.filter((a) => a.sku === asset.sku) })
+      }
+    })
+    return Array.from(groups.values()).filter((group) =>
+      activeZoneKey === 'all' || assignments[skuPieceKey(group.sku)]?.zoneKey === activeZoneKey
+    )
+  }, [searchResult, selected, assetGroups, assignments, activeZoneKey])
+  const visibleUploads = uploads.filter((u) => activeZoneKey === 'all' || assignments[uploadPieceKey(u.id)]?.zoneKey === activeZoneKey)
 
   const toggleAsset = (asset: OutfitAsset) => {
     const key = assetKey(asset)
-    if (activeSelectedKeys.has(key)) {
-      updateZone(activeZone.key, { selected: activeState.selected.filter((a) => assetKey(a) !== key) })
-    } else if (remaining > 0) {
-      updateZone(activeZone.key, { selected: [...activeState.selected, asset] })
+    setSelected((prev) => prev.some((a) => assetKey(a) === key)
+      ? prev.filter((a) => assetKey(a) !== key)
+      : prev.length + uploads.length < maxRefs ? [...prev, asset] : prev)
+  }
+
+  const removeAsset = (asset: OutfitAsset) => setSelected((prev) => prev.filter((a) => assetKey(a) !== assetKey(asset)))
+
+  const addFiles = (files: FileList | File[]) => {
+    if (submitting || remaining <= 0) return
+    const valid = Array.from(files).filter((f) => ACCEPTED_UPLOAD_TYPES.includes(f.type))
+    if (valid.length === 0) return
+    const toAdd = valid.slice(0, Math.max(0, remaining)).map((file) => {
+      const previewUrl = URL.createObjectURL(file)
+      uploadUrlsRef.current.add(previewUrl)
+      return { id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, file, previewUrl }
+    })
+    setUploads((prev) => [...prev, ...toAdd])
+    if (activeZone) {
+      setAssignments((prev) => ({ ...prev, ...Object.fromEntries(toAdd.map((u) => [
+        uploadPieceKey(u.id), { zoneKey: activeZone.key, type: defaultType(activeZone) },
+      ])) }))
     }
   }
 
-  const removeAsset = (zoneKey: string, asset: OutfitAsset) => {
-    const st = zoneStates[zoneKey]
-    updateZone(zoneKey, { selected: st.selected.filter((a) => assetKey(a) !== assetKey(asset)) })
+  const removeUpload = (id: string) => {
+    const target = uploads.find((u) => u.id === id)
+    if (target) {
+      URL.revokeObjectURL(target.previewUrl)
+      uploadUrlsRef.current.delete(target.previewUrl)
+    }
+    setUploads((prev) => prev.filter((u) => u.id !== id))
   }
 
-  const addFiles = (files: FileList | File[]) => {
-    const valid = Array.from(files).filter((f) => ACCEPTED_UPLOAD_TYPES.includes(f.type))
-    if (valid.length === 0) return
-    const toAdd = valid.slice(0, Math.max(0, remaining)).map((file) => ({
-      id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-    }))
-    updateZone(activeZone.key, { uploads: [...activeState.uploads, ...toAdd] })
-  }
-
-  const removeUpload = (zoneKey: string, id: string) => {
-    const st = zoneStates[zoneKey]
-    const target = st.uploads.find((u) => u.id === id)
-    if (target) URL.revokeObjectURL(target.previewUrl)
-    updateZone(zoneKey, { uploads: st.uploads.filter((u) => u.id !== id) })
-  }
-
-  const canSubmit = totalSelected > 0 && !submitting
+  const canSubmit = totalSelected > 0 && unassignedCount === 0 && !submitting
 
   const handleSubmit = async () => {
     if (!canSubmit) return
@@ -334,22 +332,36 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
   }
 
   const currentModel = MODEL_OPTIONS.find((m) => m.key === model) || MODEL_OPTIONS[0]
-  const hasActiveContent = !!activeState.searchResult || activeState.uploads.length > 0
+  const hasActiveContent = visibleGroups.length > 0 || visibleUploads.length > 0
 
-  const renderTypeSelect = (pieceKey: string, value: string) => (
+  const renderTypeSelect = (pieceKey: string, label: string) => (
     <select
       className="oc-type"
-      value={value}
-      aria-label="品类"
-      onChange={(e) => setPieceType(activeZone.key, pieceKey, e.target.value)}
+      value={assignments[pieceKey] ? `${assignments[pieceKey].zoneKey}:${assignments[pieceKey].type}` : ''}
+      aria-label={`${label}换装部位`}
+      disabled={submitting}
+      onChange={(e) => {
+        const [zoneKey, type = ''] = e.target.value.split(':')
+        setAssignments((prev) => {
+          const next = { ...prev }
+          if (zoneKey) next[pieceKey] = { zoneKey, type }
+          else delete next[pieceKey]
+          return next
+        })
+      }}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
       style={styles.typeSelect}
     >
-      {typeOptions(activeZone).map((o) => (
-        <option key={o.key} value={o.key}>
-          {o.label}
-        </option>
+      <option value="">选择部位</option>
+      {OUTFIT_ZONES.map((zone) => (
+        <optgroup key={zone.key} label={zone.label}>
+          {typeOptions(zone).map((o) => (
+            <option key={o.key} value={`${zone.key}:${o.key}`}>
+              {o.key === '' ? `${zone.label}（自动识别）` : zone.key === 'lower' ? '下装（裤子 / 半裙）' : o.label}
+            </option>
+          ))}
+        </optgroup>
       ))}
     </select>
   )
@@ -416,12 +428,12 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
             <div style={styles.ruleNote}>只替换原图中已有的单品</div>
           </aside>
 
-          {/* ── 右：部位 → 素材 ── */}
+          {/* ── 右：统一检索，按部位筛选素材 ── */}
           <section style={styles.workCol}>
             <div style={styles.zoneTabs} role="tablist" aria-label="换装部位" onKeyDown={onZoneTabsKey}>
-              {OUTFIT_ZONES.map((z) => {
-                const on = z.key === activeZone.key
-                const n = zoneCounts[z.key] || 0
+              {ZONE_TABS.map((z) => {
+                const on = z.key === activeZoneKey
+                const n = z.key === 'all' ? totalSelected : zoneCounts[z.key] || 0
                 return (
                   <button
                     key={z.key}
@@ -447,20 +459,37 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 <input
                   ref={skuInputRef}
                   type="text"
-                  value={activeState.skuInput}
-                  onChange={(e) => updateZone(activeZone.key, { skuInput: e.target.value })}
+                  value={skuInput}
+                  onChange={(e) => {
+                    setSkuInput(e.target.value)
+                    setActiveZoneKey('all')
+                  }}
+                  onPaste={(e) => {
+                    const text = e.clipboardData.getData('text')
+                    if (!/[\r\n\t]/.test(text)) return
+                    e.preventDefault()
+                    const input = e.currentTarget
+                    const next = skuInput.slice(0, input.selectionStart ?? skuInput.length)
+                      + text.replace(/[\r\n\t]+/g, ' ')
+                      + skuInput.slice(input.selectionEnd ?? skuInput.length)
+                    setSkuInput(next)
+                    setActiveZoneKey('all')
+                  }}
+                  onCompositionStart={() => setIsComposing(true)}
+                  onCompositionEnd={() => setIsComposing(false)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
                       e.preventDefault()
-                      handleSearch()
+                      setSearchAttempt((n) => n + 1)
                     }
                   }}
-                  placeholder={`输入${activeZone.label}货号，回车检索`}
-                  aria-label={`${activeZone.label}货号`}
+                  placeholder="输入或粘贴多个货号，自动显示素材"
+                  aria-label="商品货号"
+                  aria-describedby="outfit-search-hint"
                   style={styles.searchInput}
-                  disabled={activeState.searching}
+                  disabled={submitting}
                 />
-                {activeState.searching && <Loader2 size={14} color={C.muted} style={{ animation: 'spin 1s linear infinite' }} />}
+                {searching && <Loader2 size={14} color={C.muted} style={{ animation: 'spin 1s linear infinite' }} />}
                 <span style={styles.searchDivider} />
                 <button
                   type="button"
@@ -469,9 +498,13 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                   style={styles.uploadBtn}
                   title="上传本地图片（PNG / JPG / WebP）"
                   aria-label="上传本地图片"
+                  disabled={submitting || remaining <= 0}
                 >
                   <ImagePlus size={16} />
                 </button>
+              </div>
+              <div id="outfit-search-hint" style={styles.searchHint}>
+                输入后自动检索，多个货号用空格、逗号或换行分隔；每件商品可单独选择部位。
               </div>
               <input
                 ref={fileInputRef}
@@ -484,10 +517,20 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 }}
                 style={{ display: 'none' }}
               />
-              {activeState.searchError && (
+              {searchError && (
                 <div style={styles.errorNotice} role="alert">
                   <AlertCircle size={13} style={{ flexShrink: 0 }} />
-                  <span>{activeState.searchError}</span>
+                  <span>{searchError}</span>
+                  <button type="button" style={styles.textButton} onClick={() => setSearchAttempt((n) => n + 1)} disabled={submitting || searching}>重试</button>
+                </div>
+              )}
+              {searchResult?.truncated && (
+                <div style={styles.searchHint} role="status">一次最多检索 6 个不同货号，超出的请分批输入，已选素材会保留。</div>
+              )}
+              {unassignedCount > 0 && (
+                <div style={styles.assignmentNotice} role="status">
+                  <span>还有 {unassignedCount} 件已选商品待分类，请选择换装部位。</span>
+                  {activeZoneKey !== 'all' && <button type="button" style={styles.textButton} onClick={() => selectZone('all')}>查看全部</button>}
                 </div>
               )}
             </div>
@@ -495,6 +538,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
             {/* 素材区（支持拖拽上传） */}
             <div
               style={styles.assetArea}
+              aria-busy={searching}
               onDragOver={(e) => {
                 if (e.dataTransfer.types.includes('Files')) {
                   e.preventDefault()
@@ -510,17 +554,13 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files)
               }}
             >
-              {activeState.searchResult?.items.map((group) => {
-                const picked = group.assets.filter((a) => activeSelectedKeys.has(assetKey(a))).length
+              {visibleGroups.map((group) => {
+                const picked = group.assets.filter((a) => selectedKeys.has(assetKey(a))).length
                 return (
                   <div key={group.sku} style={styles.group}>
                     <div style={styles.groupHeader}>
                       <span style={styles.groupSku}>{group.sku}</span>
-                      {group.found && picked > 0 && hasTypes(activeZone) &&
-                        renderTypeSelect(
-                          skuPieceKey(group.sku),
-                          activePieces.find((p) => p.key === skuPieceKey(group.sku))?.type ?? defaultType(activeZone)
-                        )}
+                      {group.found && renderTypeSelect(skuPieceKey(group.sku), group.sku)}
                       <span style={{ marginLeft: 'auto', color: group.found ? (picked ? C.text : C.subtle) : C.danger }}>
                         {group.found ? `${picked} / ${group.assets.length}` : '未找到'}
                       </span>
@@ -528,8 +568,8 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                     {group.found && (
                       <div style={styles.grid}>
                         {group.assets.map((asset) => {
-                          const isSelected = activeSelectedKeys.has(assetKey(asset))
-                          const blocked = !isSelected && remaining <= 0
+                          const isSelected = selectedKeys.has(assetKey(asset))
+                          const blocked = submitting || (!isSelected && remaining <= 0)
                           return (
                             <div
                               key={assetKey(asset)}
@@ -539,8 +579,8 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                               aria-label={`${asset.sku} ${asset.angle}`}
                               tabIndex={0}
                               className="oc-tile"
-                              onClick={() => toggleAsset(asset)}
-                              onKeyDown={(e) => onTileKey(e, () => toggleAsset(asset))}
+                              onClick={() => !blocked && toggleAsset(asset)}
+                              onKeyDown={(e) => onTileKey(e, () => !blocked && toggleAsset(asset))}
                               title={blocked ? `最多 ${maxRefs} 张参考图` : `${asset.angle} · ${asset.type_label}`}
                               style={{
                                 ...styles.tile,
@@ -561,6 +601,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                                   e.stopPropagation()
                                   setPreview(asset.url)
                                 }}
+                                onKeyDown={(e) => e.stopPropagation()}
                                 style={styles.tileZoom}
                                 title="查看大图"
                                 aria-label="查看大图"
@@ -576,19 +617,20 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 )
               })}
 
-              {activeState.uploads.length > 0 && (
+              {visibleUploads.length > 0 && (
                 <div style={styles.group}>
                   <div style={styles.groupHeader}>
                     <span style={styles.groupSku}>本地上传</span>
                   </div>
                   <div style={styles.grid}>
-                    {activeState.uploads.map((u) => (
+                    {visibleUploads.map((u) => (
                       <div key={u.id} style={styles.uploadCell}>
                         <div className="oc-tile" style={{ ...styles.tile, ...styles.tileSelected }}>
                           <img src={u.previewUrl} alt="" style={styles.containImg} draggable={false} />
                           <button
                             type="button"
-                            onClick={() => removeUpload(activeZone.key, u.id)}
+                            onClick={() => removeUpload(u.id)}
+                            disabled={submitting}
                             style={styles.tileRemove}
                             title="移除"
                             aria-label="移除"
@@ -596,11 +638,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                             <X size={11} />
                           </button>
                         </div>
-                        {hasTypes(activeZone) &&
-                          renderTypeSelect(
-                            uploadPieceKey(u.id),
-                            activePieces.find((p) => p.key === uploadPieceKey(u.id))?.type ?? defaultType(activeZone)
-                          )}
+                        {renderTypeSelect(uploadPieceKey(u.id), u.file.name)}
                       </div>
                     ))}
                   </div>
@@ -609,23 +647,20 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
 
               {!hasActiveContent && (
                 <div
-                  role="button"
-                  tabIndex={0}
                   className="oc-dropzone"
                   style={styles.emptyState}
-                  onClick={() => fileInputRef.current?.click()}
-                  onKeyDown={(e) => onTileKey(e, () => fileInputRef.current?.click())}
                 >
                   <UploadCloud size={22} strokeWidth={1.5} color={C.subtle} />
-                  <div style={styles.emptyTitle}>搜索货号，或拖入图片</div>
-                  <div style={styles.emptyHint}>选中的素材会用来替换原图中的{activeZone.label}</div>
+                  <div style={styles.emptyTitle}>{searching ? '正在检索素材…' : activeZone ? `暂无${activeZone.label}素材` : '输入货号，自动显示素材'}</div>
+                  <div style={styles.emptyHint}>{activeZone ? '可在「全部」中为商品选择部位，或拖入图片' : '支持混合粘贴上衣、下装、鞋袜和配件货号，也可上传图片'}</div>
+                  {activeZone && <button type="button" style={styles.textButton} onClick={(e) => { e.stopPropagation(); selectZone('all') }}>查看全部素材</button>}
                 </div>
               )}
 
               {isDragOver && (
                 <div style={styles.dropOverlay}>
                   <UploadCloud size={22} strokeWidth={1.6} />
-                  <span>松开添加为{activeZone.label}素材</span>
+                  <span>{activeZone ? `松开添加为${activeZone.label}素材` : '松开添加图片，随后选择换装部位'}</span>
                 </div>
               )}
             </div>
@@ -640,14 +675,14 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
             ) : (
               pieces.map((p) => (
                 <div
-                  key={`${p.zone.key}|${p.key}`}
+                  key={p.key}
                   role="button"
                   tabIndex={0}
                   className="oc-piece"
-                  title={`${p.zone.label} · ${p.sku || '本地上传'}`}
-                  onClick={() => selectZone(p.zone.key)}
-                  onKeyDown={(e) => onTileKey(e, () => selectZone(p.zone.key))}
-                  style={{ ...styles.piece, ...(p.zone.key === activeZone.key ? styles.pieceActive : null) }}
+                  title={`${p.zone?.label || '待分类'} · ${p.sku || '本地上传'}`}
+                  onClick={() => selectZone(p.zone?.key || 'all')}
+                  onKeyDown={(e) => onTileKey(e, () => selectZone(p.zone?.key || 'all'))}
+                  style={{ ...styles.piece, ...(p.zone?.key === activeZoneKey ? styles.pieceActive : null) }}
                 >
                   <span style={styles.pieceLabel}>{pieceLabel(p)}</span>
                   {(p.upload ? [{ key: p.upload.id, src: p.upload.previewUrl }] : p.assets.map((a) => ({ key: assetKey(a), src: a.thumb_url }))).map(
@@ -659,12 +694,14 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                           className="oc-mini-remove"
                           style={styles.miniRemove}
                           aria-label="移除"
+                          disabled={submitting}
+                          onKeyDown={(e) => e.stopPropagation()}
                           onClick={(e) => {
                             e.stopPropagation()
-                            if (p.upload) removeUpload(p.zone.key, p.upload.id)
+                            if (p.upload) removeUpload(p.upload.id)
                             else {
                               const a = p.assets.find((x) => assetKey(x) === t.key)
-                              if (a) removeAsset(p.zone.key, a)
+                              if (a) removeAsset(a)
                             }
                           }}
                         >
@@ -805,6 +842,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
               className="oc-primary"
               onClick={handleSubmit}
               disabled={!canSubmit}
+              title={unassignedCount > 0 ? '请先为已选商品选择换装部位' : undefined}
               style={{ ...styles.primaryBtn, ...(canSubmit ? null : styles.primaryBtnDisabled) }}
             >
               {submitting ? (
@@ -839,7 +877,6 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
         [data-modal="outfit-change"] .oc-tile { transition: box-shadow .15s ease, transform .15s ease; }
         [data-modal="outfit-change"] .oc-tile:hover:not([aria-disabled="true"]) { box-shadow: 0 6px 16px rgba(20, 30, 50, .1); transform: translateY(-1px); }
         [data-modal="outfit-change"] .oc-tile:hover .oc-tile-zoom, [data-modal="outfit-change"] .oc-tile:focus-within .oc-tile-zoom { opacity: 1; }
-        [data-modal="outfit-change"] .oc-dropzone:hover { border-color: ${C.subtle}; background: ${C.hover}; }
         [data-modal="outfit-change"] .oc-type:hover { border-color: ${C.subtle}; }
         [data-modal="outfit-change"] .oc-piece:hover { border-color: ${C.lineStrong}; }
         [data-modal="outfit-change"] .oc-mini-remove { opacity: 0; transition: opacity .12s ease; }
@@ -1039,6 +1076,33 @@ const styles: Record<string, React.CSSProperties> = {
     color: C.ink,
     userSelect: 'text',
   },
+  searchHint: {
+    marginTop: 7,
+    fontSize: 11,
+    lineHeight: 1.6,
+    color: C.muted,
+  },
+  assignmentNotice: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+    padding: '6px 10px',
+    borderRadius: 7,
+    backgroundColor: C.panel,
+    color: C.text,
+    fontSize: 11.5,
+  },
+  textButton: {
+    border: 'none',
+    background: 'transparent',
+    padding: '2px 0',
+    color: C.ink,
+    textDecoration: 'underline',
+    fontSize: 11.5,
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
   searchDivider: {
     width: 1,
     height: 18,
@@ -1081,6 +1145,7 @@ const styles: Record<string, React.CSSProperties> = {
   groupHeader: {
     display: 'flex',
     alignItems: 'center',
+    flexWrap: 'wrap',
     gap: 8,
     minHeight: 24,
     fontSize: 11.5,
@@ -1091,6 +1156,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: C.ink,
     letterSpacing: '0.03em',
     fontVariantNumeric: 'tabular-nums',
+    overflowWrap: 'anywhere',
   },
   // 去掉原生下拉箭头（无法控制边距），改用自绘箭头并留出右侧空间
   typeSelect: {
@@ -1195,8 +1261,6 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'center',
     borderRadius: 12,
     border: `1.5px dashed ${C.lineStrong}`,
-    cursor: 'pointer',
-    transition: 'border-color .15s ease, background .15s ease',
   },
   emptyTitle: {
     marginTop: 4,
