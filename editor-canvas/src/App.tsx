@@ -38,6 +38,7 @@ import {
 } from './services/aiImageService'
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 import { loadImagesFromFiles } from './utils/imageLoader'
+import { DEFAULT_OUTPAINTING_LIMITS, getOutpaintingPlan } from './utils/outpainting'
 
 const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
 const editorSnapshotUrl = `/editor/snapshot?user_id=${encodeURIComponent(editorUserId)}`
@@ -120,6 +121,55 @@ export function App() {
     bottom: 120,
     left: 120,
   })
+  const [outpaintingLimits, setOutpaintingLimits] = useState(DEFAULT_OUTPAINTING_LIMITS)
+  const [outpaintingConfigError, setOutpaintingConfigError] = useState<string | null>('正在检查扩图参数…')
+  const [outpaintingHighMode, setOutpaintingHighMode] = useState(false)
+  const [outpaintingSourceError, setOutpaintingSourceError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const syncShift = (event: KeyboardEvent | MouseEvent) => setOutpaintingHighMode(event.shiftKey)
+    const resetShift = () => setOutpaintingHighMode(false)
+    window.addEventListener('keydown', syncShift)
+    window.addEventListener('keyup', syncShift)
+    window.addEventListener('mousemove', syncShift)
+    window.addEventListener('blur', resetShift)
+    return () => {
+      window.removeEventListener('keydown', syncShift)
+      window.removeEventListener('keyup', syncShift)
+      window.removeEventListener('mousemove', syncShift)
+      window.removeEventListener('blur', resetShift)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!outpaintingImageId) return
+    const controller = new AbortController()
+    setOutpaintingConfigError('正在检查扩图参数…')
+    fetch('/ai-image/outpainting/config', { credentials: 'include', signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('配置加载失败')
+        const config = await response.json()
+        if (controller.signal.aborted) return
+        if (!config.enabled) {
+          setOutpaintingConfigError('扩图服务暂不可用，请联系管理员')
+          return
+        }
+        const capped = (value: unknown, fallback: number) =>
+          typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? Math.min(value, fallback) : fallback
+        const maxAreaPixels = capped(config.max_area_pixels, DEFAULT_OUTPAINTING_LIMITS.maxAreaPixels)
+        setOutpaintingLimits({
+          maxWidth: capped(config.max_width, DEFAULT_OUTPAINTING_LIMITS.maxWidth),
+          maxHeight: capped(config.max_height, DEFAULT_OUTPAINTING_LIMITS.maxHeight),
+          maxAreaPixels,
+          fastMaxAreaPixels: Math.min(maxAreaPixels, capped(config.fast_max_area_pixels, DEFAULT_OUTPAINTING_LIMITS.fastMaxAreaPixels)),
+        })
+        setOutpaintingConfigError(null)
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setOutpaintingConfigError('扩图配置加载失败，请退出扩图后重试')
+      })
+    return () => controller.abort()
+  }, [outpaintingImageId])
 
   // 框选状态
   const [marqueeStart, setMarqueeStart] = useState<{ x: number; y: number } | null>(null)
@@ -168,6 +218,8 @@ export function App() {
   outpaintInitialImageRef.current = outpaintInitialImage
 
   const handleStartOutpainting = useCallback(async (id: string) => {
+    setOutpaintingConfigError('正在检查扩图参数…')
+    setOutpaintingSourceError(null)
     outpaintingImageIdRef.current = id
     setOutpaintingImageId(id)
     setOutpaintMargins({
@@ -191,6 +243,7 @@ export function App() {
       setOutpaintInitialImage(initialSnapshot)
 
       if (!target.naturalWidth || !target.naturalHeight) {
+        setOutpaintingSourceError('正在读取原图尺寸…')
         try {
           const dims = await getImageDimensions(target.url)
           if (outpaintingImageIdRef.current === id) {
@@ -204,9 +257,12 @@ export function App() {
               outpaintInitialImageRef.current = updated
               return updated
             })
+            setOutpaintingSourceError(null)
           }
         } catch {
-          // 忽略探测失败，保持初始已记录尺寸
+          if (outpaintingImageIdRef.current === id) {
+            setOutpaintingSourceError('无法读取原图尺寸，请重新选择图片后重试')
+          }
         }
       }
     }
@@ -247,9 +303,10 @@ export function App() {
     const target = images.find((im) => im.id === outpaintingImageId)
     if (!target) return
 
-    const totalOutpaint = outpaintMargins.top + outpaintMargins.right + outpaintMargins.bottom + outpaintMargins.left
-    if (totalOutpaint <= 0) {
-      alert('请先向外拖拽扩图手柄以设定扩展边距')
+    const plan = getOutpaintingPlan(target, outpaintInitialImage, outpaintMargins, mode, outpaintingLimits)
+    const validationError = outpaintingConfigError || outpaintingSourceError || plan.error
+    if (validationError) {
+      alert(validationError)
       return
     }
 
@@ -259,39 +316,12 @@ export function App() {
     }
 
     try {
-      // 1. 获取原图基础物理尺寸与当前缩放倍率
-      const natW = outpaintInitialImage?.naturalWidth || target.naturalWidth || target.width
-      const natH = outpaintInitialImage?.naturalHeight || target.naturalHeight || target.height
-      const initW = outpaintInitialImage?.width || target.width
-
-      const scaleMultiplier = initW > 0 ? target.width / initW : 1
-      const baseW = Math.max(64, Math.min(4096, Math.round(natW * scaleMultiplier)))
-      const baseH = Math.max(64, Math.min(4096, Math.round(natH * scaleMultiplier)))
-
-      // 2. 将画布拉伸的视觉边距精确换算为基准物理像素边距
-      const scaleX = baseW / target.width
-      const scaleY = baseH / target.height
-
-      const naturalMargins: OutpaintMargins = {
-        top: Math.max(0, Math.round(outpaintMargins.top * scaleY)),
-        right: Math.max(0, Math.round(outpaintMargins.right * scaleX)),
-        bottom: Math.max(0, Math.round(outpaintMargins.bottom * scaleY)),
-        left: Math.max(0, Math.round(outpaintMargins.left * scaleX)),
-      }
-
-      const totalOutW = baseW + naturalMargins.left + naturalMargins.right
-      const totalOutH = baseH + naturalMargins.top + naturalMargins.bottom
-      if (totalOutW > 4096 || totalOutH > 4096 || totalOutW * totalOutH > 4194304) {
-        alert(`扩图总尺寸 (${totalOutW}×${totalOutH}) 超过 FLUX 400 万像素或 4096px 限制，请缩小原图或调整边距`)
-        return
-      }
-
-      // 3. 提交扩图任务
+      // Submit exactly the physical geometry shown and validated by the toolbar.
       const result = await runOutpainting(
         target.url,
-        baseW,
-        baseH,
-        naturalMargins,
+        plan.processingWidth,
+        plan.processingHeight,
+        plan.margins,
         (msg, progress) => {
           updateOperation({ message: msg, progress })
         },
@@ -329,7 +359,7 @@ export function App() {
     } finally {
       releaseOperation()
     }
-  }, [outpaintingImageId, images, outpaintMargins, outpaintInitialImage, claimOperation, updateOperation, releaseOperation, addImage, setSelected])
+  }, [outpaintingImageId, images, outpaintMargins, outpaintInitialImage, outpaintingLimits, outpaintingConfigError, outpaintingSourceError, claimOperation, updateOperation, releaseOperation, addImage, setSelected])
 
   const handleAddQuickEditMarker = useCallback((marker: QuickEditMarker) => {
     setQuickEditMarkers((prev) => [...prev, marker])
@@ -1490,6 +1520,12 @@ export function App() {
 
   // 正在扩图的目标图元
   const outpaintingTarget = currentImages.find((im) => im.id === outpaintingImageId)
+  const outpaintingPlan = outpaintingTarget
+    ? getOutpaintingPlan(outpaintingTarget, outpaintInitialImage, outpaintMargins, outpaintingHighMode ? 'high' : 'fast', outpaintingLimits)
+    : undefined
+  if (outpaintingPlan && (outpaintingConfigError || outpaintingSourceError)) {
+    outpaintingPlan.error = outpaintingConfigError || outpaintingSourceError
+  }
 
   // 单选中的第一张图片（用于挂载控制手柄）
   const singleSelectedImage =
@@ -1720,6 +1756,7 @@ export function App() {
               initialImage={outpaintInitialImage}
               onImageResize={handleOutpaintImageResize}
               isSubmitting={aiState.status === 'running' && aiState.type === 'outpainting'}
+              outputSize={outpaintingPlan ? { width: outpaintingPlan.outputWidth, height: outpaintingPlan.outputHeight } : undefined}
             />
           </div>
         )}
@@ -1733,7 +1770,7 @@ export function App() {
         <ContextualToolbar
           isOutpainting={Boolean(outpaintingImageId)}
           outpaintMargins={outpaintMargins}
-          outpaintInitialImage={outpaintInitialImage}
+          outpaintingPlan={outpaintingPlan}
           onStartOutpainting={handleStartOutpainting}
           onExecuteOutpainting={handleExecuteOutpainting}
           onCancelOutpainting={handleCancelOutpainting}

@@ -182,6 +182,25 @@ class ImagePreparationTest(unittest.TestCase):
         with self.assertRaisesRegex(bfl.OutpaintingValidationError, "每边至少 64px"):
             bfl._validate_fast_mode_geometry(prepared, geometry)
 
+    def test_fast_padding_safety_budget_and_high_full_canvas_budget(self) -> None:
+        prepared = bfl.prepare_outpainting_image(
+            png_data_uri((1900, 1900)),
+            max_source_bytes=1024 * 1024,
+            max_source_pixels=4_194_304,
+            max_encoded_input_bytes=1024 * 1024,
+        )
+        for right, valid_fast in ((100, True), (101, False)):
+            geometry = bfl.validate_geometry(
+                processing_width=1900, processing_height=1900,
+                top=0, right=right, bottom=0, left=0,
+            )
+            bfl.validate_mode_geometry(prepared, geometry, "high")
+            if valid_fast:
+                bfl.validate_mode_geometry(prepared, geometry, "fast")
+            else:
+                with self.assertRaisesRegex(bfl.OutpaintingValidationError, "安全上限 3.80MP"):
+                    bfl.validate_mode_geometry(prepared, geometry, "fast")
+
     def test_processing_size_upscale_downscale_and_validation(self) -> None:
         common = {
             "max_source_bytes": 1024 * 1024,
@@ -781,6 +800,34 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
 
 
 class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
+    async def test_fast_geometry_is_rejected_before_job_creation(self) -> None:
+        for size, outpaint, reason in (
+            ((32, 32), {"top": 64, "right": 64}, "每边至少 64px"),
+            ((1025, 128), {"right": 64}, "8:1"),
+            ((1900, 1900), {"right": 101}, "安全上限 3.80MP"),
+        ):
+            with (
+                self.subTest(size=size),
+                patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+                patch.object(app_main.settings, "bfl_api_key", "bfl-test-key"),
+                patch.object(app_main, "load_ai_image_job_by_client_request_id", return_value=None),
+                patch.object(app_main, "persist_prepared_source_snapshot") as snapshot,
+                patch.object(app_main, "save_ai_image_job") as save_job,
+                patch.object(app_main, "_track_outpainting_task") as track_task,
+            ):
+                with self.assertRaises(HTTPException) as raised:
+                    await app_main.ai_image_outpainting(json_request({
+                        "image_url": png_data_uri(size),
+                        "outpaint": outpaint,
+                        "mode": "fast",
+                        "client_request_id": TASK_ID,
+                    }))
+                self.assertEqual(raised.exception.status_code, 400)
+                self.assertIn(reason, raised.exception.detail)
+                snapshot.assert_not_called()
+                save_job.assert_not_called()
+                track_task.assert_not_called()
+
     async def test_public_config_is_safe_and_reflects_effective_enablement(self) -> None:
         with (
             patch.object(app_main.settings, "bfl_outpainting_enabled", True),
@@ -796,6 +843,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config["max_width"], 4096)
         self.assertEqual(config["max_height"], 4096)
         self.assertEqual(config["max_area_pixels"], 4_194_304)
+        self.assertEqual(config["fast_max_area_pixels"], 3_800_000)
         self.assertEqual(config["max_source_bytes"], app_main.settings.bfl_outpainting_max_source_bytes)
         self.assertEqual(
             config["timeout_seconds"],

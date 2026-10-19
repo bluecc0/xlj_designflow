@@ -12,16 +12,12 @@ import {
   type OutpaintingMode,
 } from '../services/aiImageService'
 import { downloadImagesAsZip } from '../utils/zipDownload'
+import type { OutpaintingPlan } from '../utils/outpainting'
 
 interface Props {
   isOutpainting?: boolean
   outpaintMargins?: OutpaintMargins
-  outpaintInitialImage?: {
-    width: number
-    height: number
-    naturalWidth: number
-    naturalHeight: number
-  } | null
+  outpaintingPlan?: OutpaintingPlan
   onStartOutpainting: (imageId: string) => void
   onExecuteOutpainting?: (mode: OutpaintingMode) => void
   onCancelOutpainting?: () => void
@@ -126,7 +122,7 @@ function DesignflowToolbarIcon({ name }: { name: 'download' | 'outpaint' | 'upsc
 export function ContextualToolbar({
   isOutpainting = false,
   outpaintMargins,
-  outpaintInitialImage,
+  outpaintingPlan,
   onStartOutpainting,
   onExecuteOutpainting,
   onCancelOutpainting,
@@ -413,26 +409,9 @@ export function ContextualToolbar({
   const isAiBusy = aiState.status === 'running'
   const isOutpaintBusy = isAiBusy && aiState.type === 'outpainting'
 
-  // 扩图原图物理尺寸与最终出图分辨率估算
-  const natW = outpaintInitialImage?.naturalWidth || firstImage?.naturalWidth || firstImage?.width || 0
-  const natH = outpaintInitialImage?.naturalHeight || firstImage?.naturalHeight || firstImage?.height || 0
-  const initW = outpaintInitialImage?.width || firstImage?.width || 1
-  const currentMultiplier = initW > 0 && firstImage ? firstImage.width / initW : 1
-  const phyW = Math.round(natW * currentMultiplier)
-  const phyH = Math.round(natH * currentMultiplier)
-
-  const scaleX = firstImage?.width ? phyW / firstImage.width : 1
-  const scaleY = firstImage?.height ? phyH / firstImage.height : 1
-  const phyTop = Math.max(0, Math.round((outpaintMargins?.top || 0) * scaleY))
-  const phyRight = Math.max(0, Math.round((outpaintMargins?.right || 0) * scaleX))
-  const phyBottom = Math.max(0, Math.round((outpaintMargins?.bottom || 0) * scaleY))
-  const phyLeft = Math.max(0, Math.round((outpaintMargins?.left || 0) * scaleX))
-
-  const totalOutW = phyW + phyLeft + phyRight
-  const totalOutH = phyH + phyTop + phyBottom
-  const totalPixels = totalOutW * totalOutH
-  const isOverLimit = totalOutW > 4096 || totalOutH > 4096 || totalPixels > 4194304
-  const totalMegaPixels = (totalPixels / 1_000_000).toFixed(2)
+  const totalOutW = outpaintingPlan?.outputWidth || 0
+  const totalOutH = outpaintingPlan?.outputHeight || 0
+  const outpaintError = isOutpainting ? outpaintingPlan?.error || (!outpaintingPlan ? '正在检查扩图参数…' : null) : null
 
   return (
     <div
@@ -474,27 +453,25 @@ export function ContextualToolbar({
                     fontWeight: 600,
                     padding: '3px 7px',
                     borderRadius: 5,
-                    backgroundColor: isOverLimit ? '#fef2f2' : '#f8fafc',
-                    color: isOverLimit ? '#dc2626' : '#334155',
-                    border: `1px solid ${isOverLimit ? '#fecaca' : '#e2e8f0'}`,
+                    backgroundColor: outpaintError ? '#fef2f2' : '#f8fafc',
+                    color: outpaintError ? '#dc2626' : '#334155',
+                    border: `1px solid ${outpaintError ? '#fecaca' : '#e2e8f0'}`,
                     whiteSpace: 'nowrap',
                   }}
                   title={
-                    isOverLimit
-                      ? `最终尺寸 ${totalOutW}×${totalOutH} (${totalMegaPixels}MP) 超过 FLUX 400万像素上限，请缩小原图或边距`
-                      : `预计最终出图: ${totalOutW} × ${totalOutH} px (${totalMegaPixels} MP)`
+                    outpaintError || `预计最终出图: ${totalOutW} × ${totalOutH} px`
                   }
                 >
-                  <span>{isOverLimit ? '⚠️ 超出上限' : `最终 ${totalOutW}×${totalOutH}`}</span>
+                  <span>{Number.isFinite(totalOutW + totalOutH) ? `最终 ${totalOutW}×${totalOutH}` : '尺寸无效'}</span>
                 </div>
 
                 <button
                   onClick={(e) => onExecuteOutpainting?.(e.shiftKey ? 'high' : 'fast')}
                   className="designflow-toolbar-button designflow-toolbar-button-ai"
                   data-composing="true"
-                  title={isOverLimit ? '超出 FLUX 400万像素上限，无法生成' : '点击开始 FLUX 扩图 (Enter)；按住 Shift 点击或 Shift+Enter 使用 high 模式'}
-                  disabled={isAiBusy || isOverLimit}
-                  style={isOverLimit ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+                  title={outpaintError || '点击开始 FLUX 扩图 (Enter)；按住 Shift 点击或 Shift+Enter 使用 high 模式'}
+                  disabled={isAiBusy || Boolean(outpaintError)}
+                  style={outpaintError ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
                 >
                   {isOutpaintBusy ? (
                     <span className="designflow-upscale-spinner" />
@@ -795,6 +772,11 @@ export function ContextualToolbar({
           </>
         )}
       </div>
+      {outpaintError && (
+        <div role="status" style={{ marginTop: 6, maxWidth: 440, padding: '7px 10px', borderRadius: 6, background: '#fef2f2', color: '#b91c1c', fontSize: 12 }}>
+          {outpaintError}
+        </div>
+      )}
     </div>
   )
 }

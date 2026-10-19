@@ -48,6 +48,8 @@ BFL_FAILURE_STATUSES = frozenset({
 LEGACY_MARGIN_ALIGNMENT = 64
 MAX_OUTPUT_SIDE = 4096
 MAX_OUTPUT_PIXELS = 4_194_304
+# Product safety margin, not a provider limit: fast latent padding is undocumented.
+FAST_SAFE_OUTPUT_PIXELS = 3_800_000
 MIN_CANVAS_SIDE = 64
 _PROVIDER_GEOMETRY_FIELDS = (
     "provider_top",
@@ -878,6 +880,19 @@ def _validate_fast_mode_geometry(
         raise OutpaintingValidationError(
             f"扩图结果不能小于 {MIN_CANVAS_SIDE} × {MIN_CANVAS_SIDE}px"
         )
+    if geometry.provider_width * geometry.provider_height > FAST_SAFE_OUTPUT_PIXELS:
+        raise OutpaintingValidationError(
+            "fast 模式为内部补齐预留空间，安全上限 3.80MP；请缩小扩图范围或使用 high 模式"
+        )
+
+
+def validate_mode_geometry(
+    prepared: PreparedOutpaintingImage,
+    geometry: OutpaintingGeometry,
+    mode: str,
+) -> None:
+    if mode == "fast":
+        _validate_fast_mode_geometry(prepared, geometry)
 
 
 def _result_cost(item: dict[str, Any] | None) -> float | None:
@@ -1211,8 +1226,7 @@ async def run_outpainting(
                 "扩图服务内部状态无效，请稍后重试",
                 diagnostic="prepared image is required for submission",
             )
-        if normalized_mode == "fast":
-            _validate_fast_mode_geometry(prepared, geometry)
+        validate_mode_geometry(prepared, geometry, normalized_mode)
     else:
         provider_task_id = str(provider_task_id or "").strip()
         polling_url = str(polling_url or "").strip()

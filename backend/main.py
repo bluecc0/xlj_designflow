@@ -110,6 +110,7 @@ from .matting_service import matting_service
 from .bfl_outpainting import (
     BFL_ALLOWED_MODES,
     BFL_OUTPAINTING_MODEL,
+    FAST_SAFE_OUTPUT_PIXELS,
     MAX_OUTPUT_PIXELS,
     MAX_OUTPUT_SIDE,
     MIN_CANVAS_SIDE,
@@ -125,6 +126,7 @@ from .bfl_outpainting import (
     resolve_geometry_from_meta,
     run_outpainting,
     validate_geometry,
+    validate_mode_geometry,
 )
 from .special_compose_full import run_special_full_compose
 from .compose import get_client, run_compose
@@ -1178,6 +1180,7 @@ def _outpainting_effective_limits(mode: str | None = None) -> dict[str, int]:
         "max_width": max_width,
         "max_height": max_height,
         "max_area_pixels": max_area,
+        "fast_max_area_pixels": min(max_area, FAST_SAFE_OUTPUT_PIXELS),
         "recommended_area_pixels": min(
             max_area,
             max(1, int(settings.outpaint_recommended_area_pixels)),
@@ -5314,6 +5317,7 @@ async def ai_image_outpainting(request: Request):
                 max_height=limits["max_height"],
                 max_pixels=limits["max_area_pixels"],
             )
+            validate_mode_geometry(prepared, geometry, mode)
             job_id = uuid.uuid4().hex
             created_at = time.time()
             prompt = "FLUX outpainting"

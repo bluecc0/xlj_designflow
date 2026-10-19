@@ -1,4 +1,6 @@
 import type { OutpaintMargins } from '../types'
+import type { OutpaintingMode } from '../utils/outpainting'
+export type { OutpaintingMode } from '../utils/outpainting'
 
 export function normalizeAssetUrl(rawUrl: string): string {
   if (!rawUrl) return ''
@@ -148,8 +150,6 @@ function generateUUID(): string {
     return v.toString(16)
   })
 }
-
-export type OutpaintingMode = 'fast' | 'high'
 
 /**
  * 智能扩图 (FLUX Outpainting)

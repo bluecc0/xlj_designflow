@@ -14,6 +14,7 @@ interface Props {
   } | null
   onImageResize?: (patch: { x: number; y: number; width: number; height: number }) => void
   isSubmitting?: boolean
+  outputSize?: { width: number; height: number }
 }
 
 export function OutpaintingOverlay({
@@ -23,6 +24,7 @@ export function OutpaintingOverlay({
   initialImage,
   onImageResize,
   isSubmitting = false,
+  outputSize,
 }: Props) {
   const zoom = useViewportStore((s) => s.zoom)
 
@@ -436,7 +438,7 @@ export function OutpaintingOverlay({
           bottom: -28 / zoom,
         }}
       >
-        预计 {expandedWidth} × {expandedHeight} px
+        预计 {outputSize?.width ?? expandedWidth} × {outputSize?.height ?? expandedHeight} px
       </div>
     </div>
   )
