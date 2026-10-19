@@ -9,8 +9,6 @@ export function BottomToolbar() {
   const addFrame = useCanvasStore((s) => s.addFrame)
   const addImage = useCanvasStore((s) => s.addImage)
   const insertImagesAuto = useCanvasStore((s) => s.insertImagesAuto)
-  const frames = useCanvasStore((s) => s.frames)
-  const images = useCanvasStore((s) => s.images)
   const activePageId = useCanvasStore((s) => s.activePageId)
   const getDocument = useCanvasStore((s) => s.getDocument)
   const reflowSequentialImages = useCanvasStore((s) => s.reflowSequentialImages)
@@ -36,6 +34,7 @@ export function BottomToolbar() {
   }, [showFramePresets])
 
   const handleFitAll = () => {
+    const { frames, images, activePageId } = useCanvasStore.getState()
     const currentFrames = frames.filter((f) => f.pageId === activePageId)
     const currentImages = images.filter((im) => im.pageId === activePageId)
 
@@ -75,10 +74,8 @@ export function BottomToolbar() {
   }
 
   const handleReflowGrid = () => {
-    reflowSequentialImages(activePageId)
-    setTimeout(() => {
-      handleFitAll()
-    }, 60)
+    reflowSequentialImages(activePageId, 'visual')
+    handleFitAll()
   }
 
   const handleUploadFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -377,7 +374,7 @@ export function BottomToolbar() {
             e.currentTarget.style.backgroundColor = 'transparent'
             e.currentTarget.style.color = '#687083'
           }}
-          title="一键整理排版 (4 列流式网格)"
+          title="一键整理排版 (按当前顺序，4 列流式网格)"
         >
           {/* Figma / Canvas 经典 Tidy Up 整理图标：左长矩形与右规整排列方块 */}
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">

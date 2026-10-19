@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:layout": "node --test tests/sequential-layout.test.cjs"
   },
   "dependencies": {
     "jszip": "^3.10.2",

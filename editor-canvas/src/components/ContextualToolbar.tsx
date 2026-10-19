@@ -761,9 +761,9 @@ export function ContextualToolbar({
             </button>
 
             <button
-              onClick={() => reflowSequentialImages(activePageId)}
+              onClick={() => reflowSequentialImages(activePageId, 'visual')}
               className="designflow-toolbar-button"
-              title="一键整理 (4 列自动流式网格排版)"
+              title="一键整理 (按当前顺序，4 列流式网格排版)"
             >
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="3" y="3" width="7" height="18" rx="1.5" />

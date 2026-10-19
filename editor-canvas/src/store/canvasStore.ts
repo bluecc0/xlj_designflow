@@ -109,7 +109,7 @@ interface CanvasState {
 
   // 自动排版与流式重排
   insertImagesAuto: (items: (string | { url: string; name?: string; [key: string]: any })[], mode?: string, name?: string) => CanvasImage[]
-  reflowSequentialImages: (pageId?: string) => void
+  reflowSequentialImages: (pageId?: string, order?: 'stored' | 'visual') => void
 
   // 快照与保存
   recordHistory: (snapshot?: CanvasDocument) => void
@@ -275,20 +275,45 @@ export function isSequentialLayoutImage(img: CanvasImage, pageId: string): boole
 }
 
 export function getVisualImageOrder(images: CanvasImage[]): CanvasImage[] {
-  return images.slice().sort((a, b) => {
-    const yDiff = a.y - b.y
-    if (Math.abs(yDiff) > 1) return yDiff
-    const xDiff = a.x - b.x
-    if (Math.abs(xDiff) > 1) return xDiff
-    return a.id.localeCompare(b.id)
+  if (images.length === 0) return []
+
+  // 多于 80 张时，画布按 4 列 × 20 行向右分块；逐块读序，避免反复整理时穿插各块。
+  const blockWidth = DESIGNFLOW_GRID_COLUMNS * (DESIGNFLOW_GRID_CELL_WIDTH + DESIGNFLOW_GRID_GAP)
+  const leftCenter = Math.min(...images.map((im) => im.x + im.width / 2))
+  const blocks = new Map<number, CanvasImage[]>()
+  images.forEach((im) => {
+    const block = images.length > DESIGNFLOW_GRID_COLUMNS * DESIGNFLOW_GRID_ROWS_PER_BLOCK
+      ? Math.max(0, Math.floor((im.x + im.width / 2 - leftCenter + DESIGNFLOW_GRID_GAP / 2) / blockWidth))
+      : 0
+    const list = blocks.get(block) || []
+    list.push(im)
+    blocks.set(block, list)
+  })
+
+  return Array.from(blocks).sort(([a], [b]) => a - b).flatMap(([, block]) => {
+    const byTop = block.slice().sort((a, b) => a.y - b.y || a.x - b.x || a.id.localeCompare(b.id))
+    const rows: { top: number; tolerance: number; images: CanvasImage[] }[] = []
+    byTop.forEach((im) => {
+      // 同一行允许少量上下错位；先分行再按 X 排序，避免轻微拖动打乱整行顺序。
+      const tolerance = Math.max(8, Math.min(DESIGNFLOW_GRID_GAP, im.height / 4))
+      const row = rows[rows.length - 1]
+      if (row && im.y - row.top <= Math.min(row.tolerance, tolerance)) {
+        row.images.push(im)
+        row.tolerance = Math.min(row.tolerance, tolerance)
+      } else {
+        rows.push({ top: im.y, tolerance, images: [im] })
+      }
+    })
+    return rows.flatMap((row) => row.images.sort((a, b) => a.x - b.x || a.y - b.y || a.id.localeCompare(b.id)))
   })
 }
 
-export function getSortedSequentialImages(images: CanvasImage[], pageId: string): CanvasImage[] {
+export function getSortedSequentialImages(images: CanvasImage[], pageId: string, order: 'stored' | 'visual' = 'stored'): CanvasImage[] {
   const targetImages = images.filter((img) => isSequentialLayoutImage(img, pageId))
   if (targetImages.length === 0) return []
 
   const visualOrder = getVisualImageOrder(targetImages)
+  if (order === 'visual') return visualOrder
 
   return targetImages.slice().sort((a, b) => {
     const aOrder = Number(a.meta?.designflowLayoutOrder)
@@ -304,9 +329,10 @@ export function getSortedSequentialImages(images: CanvasImage[], pageId: string)
 export function getSequentialLayoutContext(
   images: CanvasImage[],
   frames: CanvasFrame[],
-  pageId: string
+  pageId: string,
+  order: 'stored' | 'visual' = 'stored'
 ): { anchorX: number; anchorY: number; nextOrder: number } {
-  const ordered = getSortedSequentialImages(images, pageId)
+  const ordered = getSortedSequentialImages(images, pageId, order)
 
   if (ordered.length > 0) {
     const first = ordered[0]
@@ -1256,13 +1282,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   // ─── 4列流式网格自动排版引擎（对齐旧版 Tldraw 规格） ────────────
-  reflowSequentialImages: (pageId?: string) => {
+  reflowSequentialImages: (pageId, order = 'stored') => {
     const targetPageId = pageId || get().activePageId
     const { images, frames } = get()
-    const ordered = getSortedSequentialImages(images, targetPageId)
+    const ordered = getSortedSequentialImages(images, targetPageId, order)
     if (ordered.length === 0) return
 
-    const context = getSequentialLayoutContext(images, frames, targetPageId)
+    // 手动整理以当前摆放为准，记录一次撤销；自动追加仍沿用已保存的顺序。
+    if (order === 'visual') recordHistory(get)
+    const context = getSequentialLayoutContext(images, frames, targetPageId, order)
     const itemsPerBlock = DESIGNFLOW_GRID_COLUMNS * DESIGNFLOW_GRID_ROWS_PER_BLOCK
     const blockWidth = DESIGNFLOW_GRID_COLUMNS * (DESIGNFLOW_GRID_CELL_WIDTH + DESIGNFLOW_GRID_GAP)
 
