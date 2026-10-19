@@ -3,7 +3,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
 import { useAIOperationStore } from '../store/aiOperationStore'
 import { TextToolbar } from './TextToolbar'
-import type { OutpaintMargins } from '../types'
+import type { OutpaintMargins, CanvasImage } from '../types'
 import {
   runMatting,
   runUpscale,
@@ -24,12 +24,13 @@ interface Props {
   onStartOutpainting: (imageId: string) => void
   onExecuteOutpainting?: () => void
   onCancelOutpainting?: () => void
+  onOpenCompareModal?: (imageA: CanvasImage, imageB: CanvasImage) => void
 }
 
 /**
  * 还原原版 tldraw 自研矢量线性图标（17×17）
  */
-function DesignflowToolbarIcon({ name }: { name: 'download' | 'outpaint' | 'upscale' | 'vectorize' | 'matting' | 'layers' }) {
+function DesignflowToolbarIcon({ name }: { name: 'download' | 'outpaint' | 'upscale' | 'vectorize' | 'matting' | 'layers' | 'compare' }) {
   const commonProps = {
     viewBox: '0 0 24 24',
     width: 17,
@@ -108,6 +109,16 @@ function DesignflowToolbarIcon({ name }: { name: 'download' | 'outpaint' | 'upsc
     )
   }
 
+  if (name === 'compare') {
+    return (
+      <svg {...commonProps}>
+        <path d="M12 5h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-7z" fill="currentColor" fillOpacity={0.16} stroke="none" />
+        <rect x="3" y="5" width="18" height="14" rx="2" />
+        <path d="M12 2.5v19" />
+      </svg>
+    )
+  }
+
   return null
 }
 
@@ -118,6 +129,7 @@ export function ContextualToolbar({
   onStartOutpainting,
   onExecuteOutpainting,
   onCancelOutpainting,
+  onOpenCompareModal,
 }: Props) {
   const selectedIds = useCanvasStore((s) => s.selectedIds)
   const selectedType = useCanvasStore((s) => s.selectedType)
@@ -591,6 +603,21 @@ export function ContextualToolbar({
         ) : (
           /* 多图选中：批量打包下载与对齐操作组 */
           <>
+            {/* 选中恰好 2 张图片时显示前后对比按钮 */}
+            {selectedImages.length === 2 && onOpenCompareModal && (
+              <>
+                <button
+                  onClick={() => onOpenCompareModal(selectedImages[0], selectedImages[1])}
+                  className="designflow-toolbar-button"
+                  title="前后对比 (C)"
+                >
+                  <DesignflowToolbarIcon name="compare" />
+                  <span className="designflow-toolbar-label">前后对比</span>
+                </button>
+                <span className="designflow-toolbar-divider" />
+              </>
+            )}
+
             <button
               onClick={handleBatchDownload}
               className="designflow-toolbar-button"

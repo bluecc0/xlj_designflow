@@ -9,7 +9,7 @@
     },
     {
       "name": "backend",
-      "runtimeExecutable": ".venv\\Scripts\\python.exe",
+      "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000", "--reload"],
       "port": 8000
     },

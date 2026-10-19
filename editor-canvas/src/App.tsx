@@ -15,7 +15,10 @@ import { MarqueeSelection } from './components/MarqueeSelection'
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu'
 import { ImportProductModal } from './components/ImportProductModal'
 import { ImagePropertiesModal } from './components/ImagePropertiesModal'
+import { ImageCompareModal } from './components/ImageCompareModal'
 import { QuickEditPopover } from './components/QuickEditPopover'
+import { OutfitChangeModal } from './components/OutfitChangeModal'
+import { OutfitTaskTray, type OutfitTask } from './components/OutfitTaskTray'
 import { QuickEditMarkerOverlay } from './components/QuickEditMarkerOverlay'
 import { SnapGuides } from './components/SnapGuides'
 import type { OutpaintMargins, CanvasImage, QuickEditMarker } from './types'
@@ -23,7 +26,15 @@ import { useViewportStore } from './store/viewportStore'
 import { useCanvasStore } from './store/canvasStore'
 import { useHistoryStore } from './store/historyStore'
 import { useAIOperationStore } from './store/aiOperationStore'
-import { runOutpainting, runQuickEdit, getImageDimensions } from './services/aiImageService'
+import {
+  runOutpainting,
+  runQuickEdit,
+  getImageDimensions,
+  pollJob,
+  normalizeAssetUrl,
+  submitOutfitChange,
+  type OutfitChangeRequest,
+} from './services/aiImageService'
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 import { loadImagesFromFiles } from './utils/imageLoader'
 
@@ -120,10 +131,13 @@ export function App() {
     targetPos: { x: number; y: number } | null
   }>({ visible: false, targetPos: null })
   const [propertiesModalImage, setPropertiesModalImage] = useState<any>(null)
+  const [compareImages, setCompareImages] = useState<[CanvasImage, CanvasImage] | null>(null)
   const [quickEditImage, setQuickEditImage] = useState<CanvasImage | null>(null)
   const [quickEditMarkers, setQuickEditMarkers] = useState<QuickEditMarker[]>([])
   const [quickEditToast, setQuickEditToast] = useState<string | null>(null)
   const [isQuickEditSubmitting, setIsQuickEditSubmitting] = useState(false)
+  const [outfitImage, setOutfitImage] = useState<CanvasImage | null>(null)
+  const [outfitTasks, setOutfitTasks] = useState<OutfitTask[]>([])
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const dragDepthRef = useRef(0)
 
@@ -365,6 +379,8 @@ export function App() {
             {
               type: 'designflow:quick-edit-generate',
               prompt: finalPrompt,
+              // 聊天框只展示用户在编辑框里输入的内容，坐标信息仅用于生图
+              displayPrompt: prompt.trim(),
               image: {
                 id: targetImage.id,
                 src: targetImage.url,
@@ -432,10 +448,136 @@ export function App() {
     [claimOperation, updateOperation, releaseOperation, addImage, setSelected]
   )
 
+  // ─── AI 换装：提交后后台跟踪任务，结果按完成顺序放到原图右侧空位 ───
+  const updateOutfitTask = useCallback((taskId: string, patch: Partial<OutfitTask>) => {
+    setOutfitTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, ...patch } : t)))
+  }, [])
+
+  const dismissOutfitTask = useCallback((taskId: string) => {
+    setOutfitTasks((prev) => prev.filter((t) => t.id !== taskId))
+  }, [])
+
+  const placeOutfitResult = useCallback(
+    (source: CanvasImage, result: { imageUrl: string; width: number; height: number }, meta: Record<string, any>) => {
+      const state = useCanvasStore.getState()
+      // 原图可能已被移动，优先取最新位置
+      const anchor = state.images.find((im) => im.id === source.id) || source
+      // 结果写回原图所在页面（用户可能在生成期间切换了画布）；原页面已删除/归档时才退回当前页面
+      const pageId = state.pages.some((p) => p.id === anchor.pageId && !p.archived) ? anchor.pageId : state.activePageId
+      const frameId =
+        anchor.frameId && state.frames.some((f) => f.id === anchor.frameId && f.pageId === pageId) ? anchor.frameId : null
+      const height = anchor.height
+      const width = Math.max(1, Math.round((height * (result.width || 1)) / (result.height || 1)))
+      const gap = 24
+      const pageImages = state.images.filter((im) => im.pageId === pageId)
+      let x = anchor.x + anchor.width + gap
+      const y = anchor.y
+      // 向右寻找不与已有图片重叠的位置（多次换装的结果依次排开）
+      for (let guard = 0; guard < 200; guard++) {
+        const hit = pageImages.find(
+          (im) => x < im.x + im.width && x + width > im.x && y < im.y + im.height && y + height > im.y
+        )
+        if (!hit) break
+        x = hit.x + hit.width + gap
+      }
+      addImage({
+        id: 'img-' + Math.random().toString(36).slice(2, 10),
+        pageId,
+        frameId,
+        x,
+        y,
+        width,
+        height,
+        rotation: 0,
+        url: result.imageUrl,
+        name: `${anchor.name || 'image'}-换装`,
+        naturalWidth: result.width,
+        naturalHeight: result.height,
+        locked: false,
+        opacity: 1,
+        meta,
+      })
+    },
+    [addImage]
+  )
+
+  const handleOutfitSubmit = useCallback(
+    async (req: OutfitChangeRequest) => {
+      const source = outfitImage
+      if (!source) return
+      // 提交失败直接抛给弹窗展示，弹窗保持打开便于调整后重试
+      const submitted = await submitOutfitChange(req)
+      const skus = Array.from(new Set(req.assets.map((a) => a.sku).filter(Boolean)))
+      const taskId = 'outfit-' + Math.random().toString(36).slice(2, 10)
+      const total = submitted.jobIds.length
+      setOutfitTasks((prev) => [
+        ...prev,
+        {
+          id: taskId,
+          label: skus.length ? skus.join('、') : '本地素材',
+          thumbUrl: normalizeAssetUrl(source.url),
+          status: 'running',
+          total,
+          done: 0,
+          failed: 0,
+          message: '已提交，排队中…',
+        },
+      ])
+      setOutfitImage(null)
+
+      let done = 0
+      let failed = 0
+      let lastError = ''
+      await Promise.all(
+        submitted.jobIds.map(async (jobId) => {
+          try {
+            const job = await pollJob(jobId, 660, (message, progress) => {
+              updateOutfitTask(taskId, {
+                message,
+                progress: typeof progress === 'number' ? progress : undefined,
+              })
+            })
+            const imageUrl = normalizeAssetUrl(job.image_url)
+            const dims = await getImageDimensions(imageUrl).catch(() => ({
+              width: source.naturalWidth || source.width,
+              height: source.naturalHeight || source.height,
+            }))
+            placeOutfitResult(source, { imageUrl, ...dims }, {
+              jobId,
+              model: submitted.model,
+              size: submitted.size,
+              resolvedPrompt: submitted.resolvedPrompt,
+              operation: 'outfit-change',
+              skus,
+            })
+            done += 1
+          } catch (err: any) {
+            failed += 1
+            lastError = err?.message || '生成失败'
+          }
+          updateOutfitTask(taskId, { done, failed })
+        })
+      )
+      updateOutfitTask(taskId, {
+        status: done > 0 ? 'done' : 'error',
+        message:
+          done > 0
+            ? failed > 0
+              ? `完成 ${done} 张，失败 ${failed} 张：${lastError}`
+              : `换装完成，已放到原图右侧`
+            : lastError || '生成失败',
+      })
+    },
+    [outfitImage, placeOutfitResult, updateOutfitTask]
+  )
+
   // 1. 快捷键监听
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!snapshotHydratedRef.current) return
+      // 换装弹窗打开时只处理弹窗内的按键，避免按钮聚焦时误删、撤销或复制画布内容。
+      // 不拦截事件本身，保留检索回车、部位方向键及输入框的正常行为。
+      if (outfitImage) return
       // 忽略在输入框内的快捷键
       const target = e.target as HTMLElement | null
       const isInput =
@@ -512,6 +654,18 @@ export function App() {
           if (targetImg) {
             e.preventDefault()
             setPropertiesModalImage(targetImg)
+            return
+          }
+        }
+      }
+
+      // 双图对比快捷键 (C 键，选中恰好 2 张图片时)
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'c' || e.key === 'C')) {
+        if (selectedType === 'image' && selectedIds.length === 2) {
+          const selectedImgs = images.filter((im) => selectedIds.includes(im.id))
+          if (selectedImgs.length === 2) {
+            e.preventDefault()
+            setCompareImages([selectedImgs[0], selectedImgs[1]])
             return
           }
         }
@@ -694,6 +848,7 @@ export function App() {
       window.removeEventListener('paste', onPasteWindow)
     }
   }, [
+    outfitImage,
     selectedIds,
     selectedType,
     images,
@@ -748,6 +903,8 @@ export function App() {
       if (!snapshotHydratedRef.current) return
       dragDepthRef.current = 0
       setIsDraggingFiles(false)
+      // 弹窗（如 AI 换装的本地上传区）自行处理拖入的文件
+      if ((e.target as HTMLElement | null)?.closest?.('[data-modal]')) return
 
       const files = e.dataTransfer?.files
       if (!files || files.length === 0) return
@@ -780,6 +937,8 @@ export function App() {
     if (!container) return
 
     const handleNativeWheel = (e: WheelEvent) => {
+      // 模态弹窗内的滚轮交给弹窗自身，不平移/缩放画布
+      if ((e.target as HTMLElement | null)?.closest?.('[data-modal]')) return
       // 检查滚轮事件是否发生在下拉框、弹出层或具有滚动条的子元素内，避免拦截子区域的原生滚动
       let el = e.target as HTMLElement | null
       while (el && el !== container) {
@@ -1576,6 +1735,7 @@ export function App() {
           onStartOutpainting={handleStartOutpainting}
           onExecuteOutpainting={handleExecuteOutpainting}
           onCancelOutpainting={handleCancelOutpainting}
+          onOpenCompareModal={(imgA, imgB) => setCompareImages([imgA, imgB])}
         />
       </div>
 
@@ -1592,6 +1752,12 @@ export function App() {
           setSelected([img.id], 'image')
           setQuickEditImage(img)
           setQuickEditMarkers([])
+        }}
+        onOpenCompareModal={(imgA, imgB) => setCompareImages([imgA, imgB])}
+        onOpenOutfitChange={(img) => {
+          setSelected([img.id], 'image')
+          setQuickEditImage(null)
+          setOutfitImage(img)
         }}
       />
 
@@ -1610,6 +1776,15 @@ export function App() {
         />
       )}
 
+      {/* 选中两张图片的 Before / After 对比弹窗 */}
+      {compareImages && (
+        <ImageCompareModal
+          imageA={compareImages[0]}
+          imageB={compareImages[1]}
+          onClose={() => setCompareImages(null)}
+        />
+      )}
+
       {/* 图片快捷编辑弹出输入框 */}
       {quickEditImage && (
         <QuickEditPopover
@@ -1625,6 +1800,21 @@ export function App() {
           isSubmitting={isQuickEditSubmitting}
         />
       )}
+
+      {/* AI 换装弹窗 */}
+      {outfitImage && (
+        <OutfitChangeModal
+          image={outfitImage}
+          onClose={() => setOutfitImage(null)}
+          onSubmit={handleOutfitSubmit}
+        />
+      )}
+
+      {/* AI 换装后台任务进度 */}
+      <OutfitTaskTray
+        tasks={outfitTasks}
+        onDismiss={dismissOutfitTask}
+      />
 
       {/* 快捷操作反馈轻提示 */}
       {quickEditToast && (

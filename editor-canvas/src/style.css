@@ -353,3 +353,129 @@ button {
   pointer-events: auto;
 }
 
+
+/* ------------------------------------------------------------- */
+/* Before / After 滑动对比（黑白灰极简）                          */
+/* ------------------------------------------------------------- */
+
+.designflow-compare-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(245, 246, 248, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  animation: designflow-compare-fade 180ms ease;
+}
+
+@keyframes designflow-compare-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.designflow-compare-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: #687083;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.designflow-compare-close:hover,
+.designflow-compare-close:focus-visible {
+  background: #e7e9ee;
+  color: #20242d;
+  outline: none;
+}
+
+.designflow-compare-stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 24px 60px rgba(20, 24, 33, 0.12), 0 0 0 1px rgba(20, 24, 33, 0.06);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.designflow-compare-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.designflow-compare-tag {
+  position: absolute;
+  bottom: 12px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(20, 24, 33, 0.48);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+
+.designflow-compare-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #ffffff;
+  box-shadow: 0 0 0 0.5px rgba(20, 24, 33, 0.18), 0 0 8px rgba(20, 24, 33, 0.18);
+  pointer-events: none;
+}
+
+.designflow-compare-handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 32px;
+  height: 32px;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #20242d;
+  box-shadow: 0 4px 14px rgba(20, 24, 33, 0.18), 0 0 0 1px rgba(20, 24, 33, 0.06);
+  transition: transform 160ms ease;
+}
+
+
+/* 弹窗通用动画（导入产品图 / AI 换装） */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
