@@ -149,6 +149,8 @@ function generateUUID(): string {
   })
 }
 
+export type OutpaintingMode = 'fast' | 'high'
+
 /**
  * 智能扩图 (FLUX Outpainting)
  */
@@ -157,7 +159,8 @@ export async function runOutpainting(
   processingWidth: number,
   processingHeight: number,
   margins: OutpaintMargins,
-  onProgress?: (msg: string, progress?: number) => void
+  onProgress?: (msg: string, progress?: number) => void,
+  mode: OutpaintingMode = 'fast'
 ): Promise<{ imageUrl: string; width: number; height: number }> {
   const clientRequestId = generateUUID()
   onProgress?.('正在提交扩图任务...')
@@ -173,6 +176,7 @@ export async function runOutpainting(
       processing_width: processingWidth,
       processing_height: processingHeight,
       outpaint: margins,
+      mode,
       client_request_id: clientRequestId,
     }),
   })

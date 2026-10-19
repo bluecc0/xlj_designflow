@@ -535,6 +535,17 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("Content-Type", poll_call["headers"])
         sleep_mock.assert_any_await(7.0)
 
+    async def test_high_mode_is_sent_in_provider_json(self) -> None:
+        fake = FakeClient(
+            post_results=[self.submit_ok()],
+            get_results=[self.ready()],
+            stream_results=[self.png_result()],
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            await self.run_with_client(fake, Path(temp_dir), mode="high")
+        self.assertEqual(len(fake.post_calls), 1)
+        self.assertEqual(fake.post_calls[0]["json"]["mode"], "high")
+
     def test_provider_result_is_cropped_to_exact_requested_geometry(self) -> None:
         payload = coordinate_png_bytes(
             (self.geometry.provider_width, self.geometry.provider_height)
@@ -1020,6 +1031,78 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(initial["request_meta"]["source_image_url"])
             self.assertNotIn("base64", json.dumps(initial["request_meta"]))
 
+    async def test_request_mode_survives_queue_and_global_config_changes(self) -> None:
+        for requested, configured, expected in (
+            (None, "fast", "fast"),
+            ("fast", "high", "fast"),
+            ("high", "fast", "high"),
+        ):
+            with self.subTest(requested=requested, configured=configured):
+                body = {
+                    "image_url": png_data_uri(),
+                    "outpaint": {"top": 64},
+                    "client_request_id": TASK_ID,
+                }
+                if requested is not None:
+                    body["mode"] = requested
+                saved: list[dict] = []
+                run_mock = AsyncMock(return_value=make_result())
+
+                async def run_queued(coroutine, *, claimed_job_id=""):
+                    try:
+                        # The task must use its saved mode even if config changes while queued.
+                        with patch.object(app_main.settings, "bfl_outpainting_mode", "high" if expected == "fast" else "fast"):
+                            await coroutine
+                    finally:
+                        app_main._release_outpainting_claim(claimed_job_id)
+
+                tasks = []
+
+                def track_task(coroutine, *, claimed_job_id=""):
+                    task = asyncio.create_task(run_queued(coroutine, claimed_job_id=claimed_job_id))
+                    tasks.append(task)
+                    return task
+
+                with (
+                    tempfile.TemporaryDirectory() as temp_dir,
+                    patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+                    patch.object(app_main.settings, "bfl_api_key", "bfl-test-key"),
+                    patch.object(app_main.settings, "bfl_outpainting_mode", configured),
+                    patch.object(app_main.settings, "output_path", Path(temp_dir)),
+                    patch.object(app_main, "load_ai_image_job_by_client_request_id", return_value=None),
+                    patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: saved.append(kwargs)),
+                    patch.object(app_main, "_track_outpainting_task", side_effect=track_task),
+                    patch.object(app_main, "run_outpainting", new=run_mock),
+                    patch.object(app_main, "generate_inspiration_thumb"),
+                    patch.object(app_main, "log_operation"),
+                ):
+                    app_main.app.state.outpainting_semaphore = asyncio.Semaphore(1)
+                    await app_main.ai_image_outpainting(json_request(body))
+                    await asyncio.gather(*tasks)
+                self.assertEqual(saved[0]["request_meta"]["mode"], expected)
+                self.assertEqual(run_mock.await_args.kwargs["mode"], expected)
+                self.assertEqual(saved[-1]["status"], "done")
+                self.assertEqual(saved[-1]["request_meta"]["mode"], expected)
+
+    async def test_invalid_request_mode_is_rejected_before_preparing_image(self) -> None:
+        for mode in ("quality", "", None, [], {}, True):
+            with (
+                self.subTest(mode=mode),
+                patch.object(app_main.settings, "bfl_outpainting_enabled", True),
+                patch.object(app_main.settings, "bfl_api_key", "bfl-test-key"),
+                patch.object(app_main, "load_ai_image_job_by_client_request_id", return_value=None),
+                patch.object(app_main, "prepare_outpainting_image") as prepare_image,
+            ):
+                with self.assertRaises(HTTPException) as raised:
+                    await app_main.ai_image_outpainting(json_request({
+                        "client_request_id": TASK_ID,
+                        "image_url": png_data_uri(),
+                        "outpaint": {"top": 64},
+                        "mode": mode,
+                    }))
+                self.assertEqual(raised.exception.status_code, 400)
+                prepare_image.assert_not_called()
+
     async def test_strict_internal_resolver_blocks_foreign_and_external_urls(self) -> None:
         request = json_request({})
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1399,6 +1482,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             "processing_width": 64,
             "processing_height": 64,
             "outpaint": {"top": 1, "right": 65, "bottom": 0, "left": 0},
+            "mode": "high",
             "client_request_id": "77777777-7777-4777-8777-777777777777",
         })
         saved: list[dict] = []
@@ -1451,6 +1535,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             with (
                 patch.object(app_main.settings, "output_path", output_path),
                 patch.object(app_main, "load_active_outpainting_jobs", return_value=[stored_job]),
+                patch.object(app_main.settings, "bfl_outpainting_mode", "fast"),
                 patch.object(app_main, "run_outpainting", new=run_mock),
                 patch.object(app_main, "save_ai_image_job", side_effect=lambda **kwargs: recovered.append(kwargs)),
                 patch.object(app_main, "generate_inspiration_thumb"),
@@ -1461,6 +1546,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
 
             transport = run_mock.await_args.kwargs
             self.assertTrue(transport["submit_request"])
+            self.assertEqual(transport["mode"], "high")
             self.assertIsNotNone(transport["prepared"])
             self.assertEqual(transport.get("provider_task_id") or "", "")
             self.assertEqual(transport["prepared"].processing_width, 64)

@@ -9,6 +9,7 @@ import {
   runUpscale,
   runVectorize,
   runLayerExtract,
+  type OutpaintingMode,
 } from '../services/aiImageService'
 import { downloadImagesAsZip } from '../utils/zipDownload'
 
@@ -22,7 +23,7 @@ interface Props {
     naturalHeight: number
   } | null
   onStartOutpainting: (imageId: string) => void
-  onExecuteOutpainting?: () => void
+  onExecuteOutpainting?: (mode: OutpaintingMode) => void
   onCancelOutpainting?: () => void
   onOpenCompareModal?: (imageA: CanvasImage, imageB: CanvasImage) => void
 }
@@ -488,10 +489,10 @@ export function ContextualToolbar({
                 </div>
 
                 <button
-                  onClick={onExecuteOutpainting}
+                  onClick={(e) => onExecuteOutpainting?.(e.shiftKey ? 'high' : 'fast')}
                   className="designflow-toolbar-button designflow-toolbar-button-ai"
                   data-composing="true"
-                  title={isOverLimit ? '超出 FLUX 400万像素上限，无法生成' : '点击开始 FLUX 扩图 (Enter)'}
+                  title={isOverLimit ? '超出 FLUX 400万像素上限，无法生成' : '点击开始 FLUX 扩图 (Enter)；按住 Shift 点击或 Shift+Enter 使用 high 模式'}
                   disabled={isAiBusy || isOverLimit}
                   style={isOverLimit ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
                 >

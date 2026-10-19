@@ -1165,7 +1165,7 @@ async def _run_matting_background(job_id: str, user: dict, src_path: Path, creat
             logger.exception("matting failure operation log failed: job=%s", job_id)
 
 
-def _outpainting_effective_limits() -> dict[str, int]:
+def _outpainting_effective_limits(mode: str | None = None) -> dict[str, int]:
     max_width = min(MAX_OUTPUT_SIDE, max(1, int(settings.outpaint_max_width)))
     max_height = min(MAX_OUTPUT_SIDE, max(1, int(settings.outpaint_max_height)))
     max_area = min(
@@ -1184,7 +1184,7 @@ def _outpainting_effective_limits() -> dict[str, int]:
         ),
         "min_processing_side": (
             MIN_CANVAS_SIDE
-            if str(settings.bfl_outpainting_mode or "").strip().casefold() == "fast"
+            if str(mode or settings.bfl_outpainting_mode or "").strip().casefold() == "fast"
             else 1
         ),
     }
@@ -1439,7 +1439,7 @@ async def _run_outpainting_background(
                 api_key=settings.bfl_api_key,
                 api_url=settings.bfl_api_url,
                 proxy_url=settings.bfl_outpainting_proxy_url,
-                mode=settings.bfl_outpainting_mode,
+                mode=request_meta.get("mode", settings.bfl_outpainting_mode),
                 output_format=settings.bfl_outpainting_output_format,
                 auto_crop=settings.bfl_outpainting_auto_crop,
                 result_host_suffixes=_outpainting_result_host_suffixes(),
@@ -5256,6 +5256,10 @@ async def ai_image_outpainting(request: Request):
     if existing:
         return _outpainting_job_response(existing)
 
+    mode = body.get("mode", settings.bfl_outpainting_mode)
+    if not isinstance(mode, str) or mode not in BFL_ALLOWED_MODES:
+        raise HTTPException(400, "mode 必须是 fast 或 high")
+
     image_url = str(body.get("image_url") or "").strip()
     if not image_url:
         raise HTTPException(400, "image_url 不能为空")
@@ -5269,7 +5273,7 @@ async def ai_image_outpainting(request: Request):
 
     raw_outpaint = body.get("outpaint")
     outpaint = raw_outpaint if isinstance(raw_outpaint, dict) else body
-    limits = _outpainting_effective_limits()
+    limits = _outpainting_effective_limits(mode)
 
     def prepare_and_claim():
         with _outpainting_submit_lock:
@@ -5350,7 +5354,7 @@ async def ai_image_outpainting(request: Request):
                 "provider_height": geometry.provider_height,
                 "provider_margin_alignment": limits["snap_pixels"],
                 "auto_crop": settings.bfl_outpainting_auto_crop,
-                "mode": settings.bfl_outpainting_mode,
+                "mode": mode,
                 "phase": "queued",
                 "cost": None,
             }

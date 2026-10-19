@@ -34,6 +34,7 @@ import {
   normalizeAssetUrl,
   submitOutfitChange,
   type OutfitChangeRequest,
+  type OutpaintingMode,
 } from './services/aiImageService'
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 import { loadImagesFromFiles } from './utils/imageLoader'
@@ -241,7 +242,7 @@ export function App() {
     [outpaintingImageId, updateImages]
   )
 
-  const handleExecuteOutpainting = useCallback(async () => {
+  const handleExecuteOutpainting = useCallback(async (mode: OutpaintingMode = 'fast') => {
     if (!outpaintingImageId) return
     const target = images.find((im) => im.id === outpaintingImageId)
     if (!target) return
@@ -293,7 +294,8 @@ export function App() {
         naturalMargins,
         (msg, progress) => {
           updateOperation({ message: msg, progress })
-        }
+        },
+        mode
       )
 
       const newX = target.x - outpaintMargins.left
@@ -603,7 +605,7 @@ export function App() {
       } else if (e.key === 'Enter') {
         if (outpaintingImageIdRef.current && aiState.status !== 'running') {
           e.preventDefault()
-          handleExecuteOutpainting()
+          handleExecuteOutpainting(e.shiftKey ? 'high' : 'fast')
           return
         }
       }
