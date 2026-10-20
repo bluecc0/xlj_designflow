@@ -1698,7 +1698,11 @@ async def _run_outpainting_background(
             type(exc).__name__,
             str(diagnostic)[:500],
         )
-        failed_meta = {**request_meta, "phase": "failed"}
+        failed_meta = {
+            **request_meta,
+            "phase": "failed",
+            "retryable": isinstance(exc, BflOutpaintingError) and exc.retryable,
+        }
         try:
             await _save_outpainting_job_with_retries(
                 job_id=job_id,
@@ -5848,6 +5852,7 @@ def ai_image_status(request: Request, job_id: str):
                 "cost",
                 "actual_width",
                 "actual_height",
+                "retryable",
             )
             if key in request_meta
         }

@@ -2,6 +2,20 @@ import type { OutpaintMargins } from '../types'
 import type { OutpaintingMode } from '../utils/outpainting'
 export type { OutpaintingMode } from '../utils/outpainting'
 
+const TRANSIENT_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
+
+class AiImageRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
+}
+
+class AiImageJobError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message)
+  }
+}
+
 export function normalizeAssetUrl(rawUrl: string): string {
   if (!rawUrl) return ''
   if (rawUrl.startsWith('data:') || rawUrl.startsWith('blob:')) return rawUrl
@@ -30,23 +44,35 @@ export function getImageDimensions(url: string): Promise<{ width: number; height
 export async function pollJob(
   jobId: string,
   timeoutSeconds = 300,
-  onProgress?: (message: string, progress?: number) => void
+  onProgress?: (message: string, progress?: number) => void,
+  requestTimeoutMs?: number
 ): Promise<any> {
   const start = Date.now()
   while (Date.now() - start < timeoutSeconds * 1000) {
     await new Promise((res) => setTimeout(res, 1000))
-    const resp = await fetch(`/ai-image/${encodeURIComponent(jobId)}`, {
-      credentials: 'include',
-    })
-    if (!resp.ok) {
-      throw new Error(`查询任务状态失败 (HTTP ${resp.status})`)
+    const controller = requestTimeoutMs ? new AbortController() : undefined
+    const timer = controller ? setTimeout(() => controller.abort(), requestTimeoutMs) : undefined
+    let data: any
+    try {
+      const resp = await fetch(`/ai-image/${encodeURIComponent(jobId)}`, {
+        credentials: 'include',
+        ...(controller ? { signal: controller.signal } : {}),
+      })
+      if (!resp.ok) {
+        throw new AiImageRequestError(`查询任务状态失败 (HTTP ${resp.status})`, resp.status)
+      }
+      data = await resp.json()
+    } catch (error) {
+      if (controller?.signal.aborted) throw new AiImageRequestError('查询扩图任务超时', 408)
+      throw error
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
     }
-    const data = await resp.json()
     if (data.status === 'done') {
       return data
     }
     if (data.status === 'failed') {
-      throw new Error(data.error || '任务处理失败')
+      throw new AiImageJobError(data.error || '任务处理失败', data.outpainting?.retryable === true)
     }
     if (onProgress && data.message) {
       onProgress(data.message, data.progress)
@@ -162,36 +188,81 @@ export async function runOutpainting(
   onProgress?: (msg: string, progress?: number) => void,
   mode: OutpaintingMode = 'fast'
 ): Promise<{ imageUrl: string; width: number; height: number }> {
-  const clientRequestId = generateUUID()
-  onProgress?.('正在提交扩图任务...')
-  const resp = await fetch('/ai-image/outpainting', {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Client-Request-Id': clientRequestId,
-    },
-    body: JSON.stringify({
-      image_url: imageUrl,
-      processing_width: processingWidth,
-      processing_height: processingHeight,
-      outpaint: margins,
-      mode,
-      client_request_id: clientRequestId,
-    }),
-  })
-  if (!resp.ok) {
-    const txt = await resp.text()
-    throw new Error(txt || `HTTP ${resp.status}`)
-  }
-  const { job_id } = await resp.json()
-  if (!job_id) throw new Error('没有返回任务 ID')
+  const maxAttempts = 3
+  let clientRequestId = generateUUID()
+  let jobId = ''
+  let result: any = null
 
-  onProgress?.('FLUX 正在扩散扩图...')
-  const result = await pollJob(job_id, 300, onProgress)
-  const finalUrl = normalizeAssetUrl(result.image_url)
-  const dims = await getImageDimensions(finalUrl)
-  return { imageUrl: finalUrl, ...dims }
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const reportProgress = (message: string, progress?: number) => {
+      onProgress?.(attempt > 1 ? `${message}（第 ${attempt}/${maxAttempts} 次尝试）` : message, progress)
+    }
+    try {
+      if (!jobId) {
+        reportProgress('正在提交扩图任务...')
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 120_000)
+        try {
+          const resp = await fetch('/ai-image/outpainting', {
+            method: 'POST',
+            credentials: 'include',
+            signal: controller.signal,
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Client-Request-Id': clientRequestId,
+            },
+            body: JSON.stringify({
+              image_url: imageUrl,
+              processing_width: processingWidth,
+              processing_height: processingHeight,
+              outpaint: margins,
+              mode,
+              client_request_id: clientRequestId,
+            }),
+          })
+          if (!resp.ok) {
+            const txt = await resp.text()
+            throw new AiImageRequestError(txt || `HTTP ${resp.status}`, resp.status)
+          }
+          const data = await resp.json()
+          if (!data.job_id) throw new Error('没有返回任务 ID')
+          jobId = data.job_id
+        } catch (error) {
+          if (controller.signal.aborted) throw new AiImageRequestError('扩图提交超时', 408)
+          throw error
+        } finally {
+          clearTimeout(timer)
+        }
+      }
+
+      // A polling/image-load failure resumes the accepted job instead of submitting again.
+      if (!result) {
+        reportProgress('FLUX 正在扩散扩图...')
+        result = await pollJob(jobId, 300, reportProgress, 30_000)
+      }
+      const finalUrl = normalizeAssetUrl(result.image_url)
+      if (!finalUrl) throw new Error('扩图任务没有返回结果图片')
+      const dims = await getImageDimensions(finalUrl)
+      return { imageUrl: finalUrl, ...dims }
+    } catch (error) {
+      if (error instanceof AiImageRequestError && !TRANSIENT_HTTP_STATUSES.has(error.status)) throw error
+      if (error instanceof AiImageJobError && !error.retryable) throw error
+
+      const message = error instanceof Error ? error.message : String(error)
+      if (attempt === maxAttempts) {
+        throw new Error(`扩图已尝试 ${maxAttempts} 次仍未成功：${message}`)
+      }
+      if (error instanceof AiImageJobError) {
+        // Only a confirmed terminal failure starts a new generation with a new idempotency key.
+        jobId = ''
+        result = null
+        clientRequestId = generateUUID()
+      }
+      onProgress?.(`网络或服务暂时异常，正在准备第 ${attempt + 1}/${maxAttempts} 次尝试…`)
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1000))
+    }
+  }
+  throw new Error('扩图失败，请稍后重试')
 }
 
 /**

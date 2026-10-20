@@ -603,6 +603,7 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(bfl.BflOutpaintingError) as raised:
                         await self.run_with_client(fake, Path(temp_dir))
                 self.assertIn("连接失败", raised.exception.public_message)
+                self.assertTrue(raised.exception.retryable)
                 self.assertEqual(len(fake.post_calls), 1)
                 self.assertEqual(len(fake.get_calls), 0)
                 self.assertEqual(len(fake.stream_calls), 0)
@@ -682,6 +683,7 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
                     result_download_retry_count=0,
                 )
         self.assertEqual(raised.exception.public_message, "扩图服务账户余额不足，请联系管理员")
+        self.assertFalse(raised.exception.retryable)
         self.assertEqual(len(fake.post_calls), 1)
         self.assertEqual(len(fake.get_calls), 0)
 
@@ -716,6 +718,7 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
                     result_download_retry_count=0,
                 )
         self.assertEqual(raised.exception.public_message, "扩图内容未通过安全审核，请更换图片后重试")
+        self.assertFalse(raised.exception.retryable)
         self.assertEqual(len(fake.get_calls), 1)
         self.assertEqual(len(fake.stream_calls), 0)
 
@@ -738,6 +741,7 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
                     result_download_retry_count=0,
                 )
         self.assertEqual(raised.exception.public_message, "扩图任务无法恢复，请重新扩图")
+        self.assertTrue(raised.exception.retryable)
         self.assertEqual(len(fake.post_calls), 0)
         self.assertEqual(len(fake.get_calls), 1)
 
@@ -1893,6 +1897,36 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                     123.0,
                 )
             self.assertFalse(snapshot_path.exists())
+
+    async def test_terminal_retryability_is_persisted_and_returned_in_status(self) -> None:
+        geometry = bfl.validate_geometry(
+            processing_width=64, processing_height=64,
+            top=64, right=0, bottom=0, left=0,
+        )
+        for retryable in (True, False):
+            with self.subTest(retryable=retryable):
+                app_main.app.state.outpainting_semaphore = asyncio.Semaphore(1)
+                with (
+                    patch.object(app_main, "run_outpainting", new=AsyncMock(
+                        side_effect=bfl.BflOutpaintingError("扩图失败", retryable=retryable),
+                    )),
+                    patch.object(app_main, "save_ai_image_job") as save,
+                    patch.object(app_main, "_discard_outpainting_source_snapshot"),
+                    patch.object(app_main, "log_operation"),
+                ):
+                    await app_main._run_outpainting_background(
+                        "job-retryable", json_request({}).state.user, None, geometry, "",
+                        {"operation": "outpainting"}, 123.0,
+                    )
+                saved = save.call_args.kwargs
+                self.assertEqual(saved["status"], "failed")
+                self.assertIs(saved["request_meta"]["retryable"], retryable)
+                with patch.object(app_main, "load_ai_image_job", return_value={
+                    **saved, "id": saved["job_id"],
+                }):
+                    status = app_main.ai_image_status(json_request({}), "job-retryable")
+                self.assertIs(status["outpainting"]["retryable"], retryable)
+                self.assertEqual(status["error"], "扩图失败")
 
     async def test_done_persistence_retries_without_marking_paid_result_failed(self) -> None:
         prepared = bfl.prepare_outpainting_image(
