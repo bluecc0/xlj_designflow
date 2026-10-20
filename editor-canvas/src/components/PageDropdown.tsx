@@ -38,6 +38,16 @@ export function PageDropdown() {
   const [editingGroupName, setEditingGroupName] = useState('')
 
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const pendingPageSwitch = useRef<ReturnType<typeof window.setTimeout> | null>(null)
+
+  const cancelPendingPageSwitch = () => {
+    if (pendingPageSwitch.current !== null) {
+      window.clearTimeout(pendingPageSwitch.current)
+      pendingPageSwitch.current = null
+    }
+  }
+
+  useEffect(() => cancelPendingPageSwitch, [isOpen])
 
   const activePage = pages.find((p) => p.id === activePageId) || pages[0] || { id: 'page-1', name: '画布 1' }
 
@@ -58,6 +68,7 @@ export function PageDropdown() {
     if (!isOpen) return
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        cancelPendingPageSwitch()
         setIsOpen(false)
         setEditingPageId(null)
         setEditingGroupId(null)
@@ -70,6 +81,7 @@ export function PageDropdown() {
   // 页面重命名
   const handleStartRenamePage = (id: string, currentName: string, e?: React.MouseEvent) => {
     e?.stopPropagation()
+    cancelPendingPageSwitch()
     setEditingPageId(id)
     setEditingPageName(currentName)
   }
@@ -106,8 +118,13 @@ export function PageDropdown() {
         className={`canvas-page-item ${isActive ? 'is-selected' : ''}`}
         onClick={() => {
           if (!isEditing) {
-            switchPage(page.id)
-            setIsOpen(false)
+            // Keep the row mounted long enough for a double-click to start renaming.
+            cancelPendingPageSwitch()
+            pendingPageSwitch.current = window.setTimeout(() => {
+              pendingPageSwitch.current = null
+              switchPage(page.id)
+              setIsOpen(false)
+            }, 500)
           }
         }}
         style={{
@@ -138,6 +155,7 @@ export function PageDropdown() {
           {isEditing ? (
             <input
               autoFocus
+              aria-label="画布名称"
               value={editingPageName}
               onChange={(e) => setEditingPageName(e.target.value)}
               onBlur={() => handleFinishRenamePage(page.id)}
@@ -270,7 +288,7 @@ export function PageDropdown() {
   const rootPages = unarchivedPages.filter((p) => !p.groupId || !groups.some((g) => g.id === p.groupId))
 
   return (
-    <div ref={dropdownRef} style={{ position: 'relative' }}>
+    <div ref={dropdownRef} onMouseDownCapture={cancelPendingPageSwitch} style={{ position: 'relative' }}>
       {/* 顶部触发器胶囊内按钮 */}
       <button
         type="button"
