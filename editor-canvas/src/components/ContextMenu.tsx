@@ -1,5 +1,7 @@
 import React, { memo, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
+  Copy,
   Files,
   Trash2,
   ChevronRight,
@@ -30,6 +32,7 @@ import {
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
 import type { CanvasImage } from '../types'
+import { canCopyImageDirectly, copyOriginalImage } from '../utils/imageClipboard'
 
 export interface ContextMenuState {
   visible: boolean
@@ -63,6 +66,71 @@ export const ContextMenu = memo(function ContextMenu({
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null)
+  const [copyStatus, setCopyStatus] = useState<'copying' | 'copied' | null>(null)
+  const [copyFallbackImage, setCopyFallbackImage] = useState<CanvasImage | null>(null)
+  const copyInFlight = useRef(false)
+
+  useEffect(() => {
+    if (copyStatus !== 'copied') return
+    const timer = window.setTimeout(() => setCopyStatus(null), 2000)
+    return () => window.clearTimeout(timer)
+  }, [copyStatus])
+
+  const handleCopyOriginal = async (image: CanvasImage) => {
+    if (copyInFlight.current) return
+    onClose()
+    if (!canCopyImageDirectly()) {
+      setCopyFallbackImage(image)
+      return
+    }
+    copyInFlight.current = true
+    setCopyStatus('copying')
+    try {
+      await copyOriginalImage(image.url)
+      setCopyStatus('copied')
+    } catch {
+      setCopyStatus(null)
+      setCopyFallbackImage(image)
+    } finally {
+      copyInFlight.current = false
+    }
+  }
+
+  // Keep feedback mounted after the context menu closes.
+  const copyFeedback = createPortal(
+    <>
+      {copyStatus && (
+        <div role="status" style={{ position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)', zIndex: 10000, padding: '10px 16px', borderRadius: 10, background: '#1e232d', color: '#fff', fontSize: 13, pointerEvents: 'none' }}>
+          {copyStatus === 'copying' ? '正在复制原图…' : '已复制原图'}
+        </div>
+      )}
+      {copyFallbackImage && (
+        <div
+          data-modal="copy-original"
+          onMouseDown={(event) => {
+            event.stopPropagation()
+            if (event.target === event.currentTarget) setCopyFallbackImage(null)
+          }}
+          onKeyDown={(event) => {
+            event.stopPropagation()
+            if (event.key === 'Escape') setCopyFallbackImage(null)
+          }}
+          onContextMenu={(event) => event.stopPropagation()}
+          style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+        >
+          <div role="dialog" aria-modal="true" aria-label="复制原图" style={{ maxWidth: '90vw', padding: 20, background: '#fff', borderRadius: 12, boxShadow: '0 16px 60px #0003' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 }}>
+              <strong>复制原图</strong>
+              <button autoFocus onClick={() => setCopyFallbackImage(null)} aria-label="关闭原图复制窗口" className="designflow-toolbar-button">关闭</button>
+            </div>
+            <p style={{ margin: '12px 0', color: '#475569', fontSize: 13 }}>当前无法直接复制。请在下方原图上右键，选择“复制图片”。</p>
+            <img src={copyFallbackImage.url} alt={copyFallbackImage.name || '原图'} draggable={false} style={{ display: 'block', maxWidth: '100%', maxHeight: '65vh', margin: '0 auto', objectFit: 'contain' }} />
+          </div>
+        </div>
+      )}
+    </>,
+    document.body,
+  )
 
   const selectedIds = useCanvasStore((s) => s.selectedIds)
   const selectedType = useCanvasStore((s) => s.selectedType)
@@ -104,12 +172,12 @@ export const ContextMenu = memo(function ContextMenu({
     }
   }, [menuState.visible, onClose])
 
-  if (!menuState.visible) return null
+  if (!menuState.visible) return copyFeedback
 
   // 边界防溢出计算
   const menuWidth = 196
   // 单图菜单含快捷编辑 / AI 换装 / 属性，比通用菜单更高
-  const menuHeight = selectedType === 'image' && selectedIds.length === 1 ? 300 : 220
+  const menuHeight = selectedType === 'image' && selectedIds.length === 1 ? 332 : 220
   const winW = window.innerWidth
   const winH = window.innerHeight
 
@@ -182,9 +250,8 @@ export const ContextMenu = memo(function ContextMenu({
     onClose()
   }
 
-  if (!menuState.visible) return null
-
   return (
+    <>
     <div
       ref={menuRef}
       onMouseDown={(e) => e.stopPropagation()}
@@ -216,6 +283,28 @@ export const ContextMenu = memo(function ContextMenu({
       {selectedIds.length > 0 ? (
         <>
           {/* 剪贴板操作 */}
+          {singleImage && (
+            <div
+              role="menuitem"
+              tabIndex={0}
+              data-action="copy-original"
+              aria-disabled={copyStatus === 'copying'}
+              onClick={() => handleCopyOriginal(singleImage)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  void handleCopyOriginal(singleImage)
+                }
+              }}
+              style={{ ...menuItemStyle, opacity: copyStatus === 'copying' ? 0.5 : 1 }}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f4f8')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+            >
+              <Copy size={14} color="#687083" strokeWidth={1.8} style={{ pointerEvents: 'none' }} />
+              <span style={{ flex: 1 }}>复制原图</span>
+            </div>
+          )}
           <div
             onClick={() => {
               duplicateSelected()
@@ -767,6 +856,8 @@ export const ContextMenu = memo(function ContextMenu({
         </>
       )}
     </div>
+    {copyFeedback}
+    </>
   )
 })
 
