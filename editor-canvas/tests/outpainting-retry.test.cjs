@@ -14,8 +14,8 @@ const response = (data, status = 200) => ({
   text: async () => typeof data === 'string' ? data : JSON.stringify(data),
 })
 const done = () => response({ status: 'done', image_url: '/original-result.png' })
-const failed = (retryable = true) => response({
-  status: 'failed', error: '扩图服务连接失败', outpainting: { retryable },
+const failed = (retryAction = 'resubmit') => response({
+  status: 'failed', error: '扩图服务连接失败', outpainting: { retry_action: retryAction },
 })
 
 function harness(handler, { imageFailures = 0, abortSubmissions = false, abortPolls = false } = {}) {
@@ -150,7 +150,7 @@ test('轮询请求或响应体超时都会中止，共尝试三次并保留原�
   }
 })
 
-test('服务端确认暂时性失败后重新生成，第三次可成功', async () => {
+test('服务端明确允许重新生成时，第三次可成功', async () => {
   let submits = 0
   const h = harness(call => call.method === 'POST' ? response({ job_id: `job-${++submits}` })
     : submits < 3 ? failed() : done())
@@ -190,9 +190,37 @@ test('参数、鉴权等永久性错误立即报错', async () => {
     await assert.rejects(h.run(), /请求需要调整/)
     assert.equal(h.posts().length, 1)
   }
-  const h = harness(call => call.method === 'POST' ? response({ job_id: 'job-original' }) : failed(false))
+  const h = harness(call => call.method === 'POST' ? response({ job_id: 'job-original' }) : failed('none'))
   await assert.rejects(h.run(), /扩图服务连接失败/)
   assert.equal(h.posts().length, 1)
+})
+
+test('受理未知、原任务轮询或下载失败，以及旧版 retryable 均不重新生成', async () => {
+  for (const metadata of [
+    { retry_action: 'submission_unknown', retryable: true },
+    { retry_action: 'poll', retryable: true },
+    { retry_action: 'download', retryable: true },
+    { retry_action: 'none', retryable: true },
+    { retryable: true },
+    {},
+  ]) {
+    const h = harness(call => call.method === 'POST' ? response({ job_id: 'job-original' }) : response({
+      status: 'failed', error: '保留原任务，请核查状态', outpainting: metadata,
+    }))
+    await assert.rejects(h.run(), /保留原任务，请核查状态/)
+    assert.equal(h.posts().length, 1)
+    assert.equal(h.polls().length, 1)
+  }
+})
+
+test('后台恢复原任务时持续轮询，展示恢复次数并保留任务号', async () => {
+  let polls = 0
+  const h = harness(call => call.method === 'POST' ? response({ job_id: 'job-original' })
+    : ++polls < 3 ? response({ status: 'processing', message: `正在恢复原扩图任务（第 ${polls + 1}/3 次尝试）` }) : done())
+  await h.run()
+  assert.equal(h.posts().length, 1)
+  assert.ok(h.polls().every(call => call.url === '/ai-image/job-original'))
+  assert.ok(h.messages.some(message => message.includes('恢复原扩图任务（第 3/3')))
 })
 
 test('结果图读取失败仅重试加载原结果，不重复提交或轮询', async () => {

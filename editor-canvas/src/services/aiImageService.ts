@@ -11,7 +11,7 @@ class AiImageRequestError extends Error {
 }
 
 class AiImageJobError extends Error {
-  constructor(message: string, readonly retryable: boolean) {
+  constructor(message: string, readonly retryAction: string) {
     super(message)
   }
 }
@@ -72,7 +72,7 @@ export async function pollJob(
       return data
     }
     if (data.status === 'failed') {
-      throw new AiImageJobError(data.error || '任务处理失败', data.outpainting?.retryable === true)
+      throw new AiImageJobError(data.error || '任务处理失败', data.outpainting?.retry_action || 'none')
     }
     if (onProgress && data.message) {
       onProgress(data.message, data.progress)
@@ -246,14 +246,14 @@ export async function runOutpainting(
       return { imageUrl: finalUrl, ...dims }
     } catch (error) {
       if (error instanceof AiImageRequestError && !TRANSIENT_HTTP_STATUSES.has(error.status)) throw error
-      if (error instanceof AiImageJobError && !error.retryable) throw error
+      if (error instanceof AiImageJobError && error.retryAction !== 'resubmit') throw error
 
       const message = error instanceof Error ? error.message : String(error)
       if (attempt === maxAttempts) {
         throw new Error(`扩图已尝试 ${maxAttempts} 次仍未成功：${message}`)
       }
       if (error instanceof AiImageJobError) {
-        // Only a confirmed terminal failure starts a new generation with a new idempotency key.
+        // Only explicit permission to resubmit can start another paid generation.
         jobId = ''
         result = null
         clientRequestId = generateUUID()

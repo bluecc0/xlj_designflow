@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import httpx
@@ -71,6 +71,7 @@ _ALLOWED_DATA_MIMES = {
 
 ProgressCallback = Callable[[int, str], Awaitable[None] | None]
 AcceptedCallback = Callable[[str, str], Awaitable[None] | None]
+RetryAction = Literal["none", "resubmit", "submission_unknown", "poll", "download"]
 
 
 class OutpaintingValidationError(ValueError):
@@ -86,13 +87,17 @@ class BflOutpaintingError(RuntimeError):
         *,
         diagnostic: str = "",
         http_status: int | None = None,
-        retryable: bool = False,
+        retry_action: RetryAction = "none",
+        result_url: str = "",
+        cost: float | None = None,
     ) -> None:
         super().__init__(public_message)
         self.public_message = public_message
         self.diagnostic = diagnostic[:800]
         self.http_status = http_status
-        self.retryable = retryable
+        self.retry_action = retry_action
+        self.result_url = result_url
+        self.cost = cost
 
 
 @dataclass(frozen=True)
@@ -717,7 +722,6 @@ def _raise_bfl_http_error(
         public_msg,
         diagnostic=f"HTTP {response.status_code} {detail}".strip(),
         http_status=response.status_code,
-        retryable=response.status_code in _TRANSIENT_HTTP_STATUSES,
     )
 
 
@@ -1173,7 +1177,7 @@ async def _download_result(
                     public_message,
                     diagnostic=f"download transient retries={attempt + 1} error={_safe_text(exc, 120)}",
                     http_status=status_code,
-                    retryable=True,
+                    retry_action="download",
                 ) from exc
             delay = _retry_after_seconds(
                 response,
@@ -1197,6 +1201,8 @@ async def run_outpainting(
     geometry: OutpaintingGeometry,
     provider_task_id: str = "",
     polling_url: str = "",
+    result_url: str = "",
+    result_cost: float | None = None,
     output_root: Path,
     user_id: str,
     job_id: str,
@@ -1252,8 +1258,9 @@ async def run_outpainting(
     }
     request_timeout = min(60.0, max(1.0, timeout_seconds))
     timeout = httpx.Timeout(request_timeout, connect=min(20.0, request_timeout))
-    result_url = ""
-    cost: float | None = None
+    if submit_request and result_url:
+        raise BflOutpaintingError("扩图服务内部状态无效，请稍后重试")
+    cost = result_cost
     deadline = time.monotonic() + timeout_seconds
     submit_url = f"{api_url}{BFL_OUTPAINTING_PATH}"
 
@@ -1300,19 +1307,21 @@ async def run_outpainting(
             try:
                 response = await client.post(submit_url, headers=headers, json=submission_body)
             except httpx.RequestError as exc:
+                # Only failures before any request body can be sent permit another paid submit.
+                unsent = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
                 raise BflOutpaintingError(
-                    "扩图服务连接失败，请稍后重试",
+                    "扩图服务连接失败，请稍后重试" if unsent else "扩图提交结果暂时无法确认，已停止自动重试，请稍后核查任务状态",
                     diagnostic=f"submit {type(exc).__name__}",
-                    retryable=True,
+                    retry_action="resubmit" if unsent else "submission_unknown",
                 ) from exc
             payload = _json_payload(response)
             if response.status_code in _TRANSIENT_HTTP_STATUSES or not response.is_success:
                 if response.status_code in _TRANSIENT_HTTP_STATUSES:
                     raise BflOutpaintingError(
-                        "扩图服务连接失败，请稍后重试",
+                        "扩图提交结果暂时无法确认，已停止自动重试，请稍后核查任务状态",
                         diagnostic=f"submit HTTP {response.status_code} ambiguous",
                         http_status=response.status_code,
-                        retryable=True,
+                        retry_action="submission_unknown",
                     )
                 _raise_bfl_http_error(response, payload=payload)
             provider_task_id, polling_url, cost = _accepted_task(payload)
@@ -1326,12 +1335,13 @@ async def run_outpainting(
                     diagnostic=f"accepted-id persistence failed: {type(exc).__name__}",
                 ) from exc
 
-        await _notify(on_progress, 20, "polling")
+        if not result_url:
+            await _notify(on_progress, 20, "polling")
         transient_failures = 0
         polls = 0
         while not result_url:
             if time.monotonic() >= deadline:
-                raise BflOutpaintingError("扩图服务处理超时，请稍后重试", retryable=True)
+                raise BflOutpaintingError("扩图服务处理超时，请稍后重试", retry_action="poll")
             polls += 1
             try:
                 poll_response = await client.get(polling_url, headers=poll_headers)
@@ -1341,7 +1351,7 @@ async def run_outpainting(
                     raise BflOutpaintingError(
                         "扩图服务连接失败，请稍后重试",
                         diagnostic=f"poll request retries={transient_failures} error={type(exc).__name__}",
-                        retryable=True,
+                        retry_action="poll",
                     ) from exc
                 delay = _retry_after_seconds(
                     None,
@@ -1359,7 +1369,7 @@ async def run_outpainting(
                         public_error_for_status(poll_response.status_code),
                         diagnostic=f"poll HTTP {poll_response.status_code} retries={transient_failures}",
                         http_status=poll_response.status_code,
-                        retryable=True,
+                        retry_action="poll",
                     )
                 delay = _retry_after_seconds(
                     poll_response,
@@ -1377,7 +1387,7 @@ async def run_outpainting(
                 raise BflOutpaintingError(
                     _public_error_for_bfl_status(status),
                     diagnostic=f"poll terminal status={_safe_text(status, 40)}",
-                    retryable=status in {"error", "task not found"},
+                    retry_action="resubmit" if status == "error" else "none",
                 )
             polled_cost = _result_cost(poll_payload)
             if polled_cost is not None:
@@ -1394,23 +1404,29 @@ async def run_outpainting(
             await _notify(on_progress, min(75, 20 + polls * 3), "polling")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise BflOutpaintingError("扩图服务处理超时，请稍后重试", retryable=True)
+                raise BflOutpaintingError("扩图服务处理超时，请稍后重试", retry_action="poll")
             await asyncio.sleep(min(poll_interval_seconds, remaining))
 
         await _notify(on_progress, 85, "downloading")
-        local_url = await _download_result(
-            client,
-            result_url,
-            output_root=output_root,
-            user_id=user_id,
-            job_id=job_id,
-            geometry=geometry,
-            max_result_bytes=max_result_bytes,
-            allowed_host_suffixes=result_host_suffixes,
-            retry_count=result_download_retry_count,
-            retry_backoff_seconds=retry_backoff_seconds,
-            retry_backoff_cap_seconds=retry_backoff_cap_seconds,
-        )
+        try:
+            local_url = await _download_result(
+                client,
+                result_url,
+                output_root=output_root,
+                user_id=user_id,
+                job_id=job_id,
+                geometry=geometry,
+                max_result_bytes=max_result_bytes,
+                allowed_host_suffixes=result_host_suffixes,
+                retry_count=result_download_retry_count,
+                retry_backoff_seconds=retry_backoff_seconds,
+                retry_backoff_cap_seconds=retry_backoff_cap_seconds,
+            )
+        except BflOutpaintingError as exc:
+            if exc.retry_action == "download":
+                exc.result_url = result_url
+                exc.cost = cost
+            raise
     return BflOutpaintingResult(
         image_url=local_url,
         provider_task_id=provider_task_id,

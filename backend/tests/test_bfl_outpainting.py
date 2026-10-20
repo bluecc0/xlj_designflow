@@ -595,18 +595,38 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
         request = httpx.Request("POST", bfl.BFL_API_URL)
         for submit_result in (
             httpx.ReadTimeout("ambiguous", request=request),
+            httpx.WriteTimeout("ambiguous", request=request),
+            httpx.ReadError("disconnected", request=request),
+            httpx.WriteError("disconnected", request=request),
+            httpx.RemoteProtocolError("disconnected", request=request),
+            self.response(408, {}),
+            self.response(429, {}),
+            self.response(500, {}),
+            self.response(502, {}),
             self.response(503, {"status": "error"}),
+            self.response(504, {}),
         ):
             with self.subTest(submit_result=type(submit_result).__name__ if isinstance(submit_result, BaseException) else submit_result.status_code):
                 fake = FakeClient(post_results=[submit_result])
                 with tempfile.TemporaryDirectory() as temp_dir:
                     with self.assertRaises(bfl.BflOutpaintingError) as raised:
                         await self.run_with_client(fake, Path(temp_dir))
-                self.assertIn("连接失败", raised.exception.public_message)
-                self.assertTrue(raised.exception.retryable)
+                self.assertIn("无法确认", raised.exception.public_message)
+                self.assertEqual(raised.exception.retry_action, "submission_unknown")
                 self.assertEqual(len(fake.post_calls), 1)
                 self.assertEqual(len(fake.get_calls), 0)
                 self.assertEqual(len(fake.stream_calls), 0)
+
+    async def test_only_proven_unsent_submission_errors_allow_resubmit(self) -> None:
+        request = httpx.Request("POST", bfl.BFL_API_URL)
+        for exception_type in (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+            with self.subTest(exception_type=exception_type.__name__):
+                fake = FakeClient(post_results=[exception_type("unsent", request=request)])
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    with self.assertRaises(bfl.BflOutpaintingError) as raised:
+                        await self.run_with_client(fake, Path(temp_dir))
+                self.assertEqual(raised.exception.retry_action, "resubmit")
+                self.assertEqual(len(fake.post_calls), 1)
 
     async def test_resume_polls_existing_id_without_submission(self) -> None:
         fake = FakeClient(
@@ -683,7 +703,7 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
                     result_download_retry_count=0,
                 )
         self.assertEqual(raised.exception.public_message, "扩图服务账户余额不足，请联系管理员")
-        self.assertFalse(raised.exception.retryable)
+        self.assertEqual(raised.exception.retry_action, "none")
         self.assertEqual(len(fake.post_calls), 1)
         self.assertEqual(len(fake.get_calls), 0)
 
@@ -718,7 +738,7 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
                     result_download_retry_count=0,
                 )
         self.assertEqual(raised.exception.public_message, "扩图内容未通过安全审核，请更换图片后重试")
-        self.assertFalse(raised.exception.retryable)
+        self.assertEqual(raised.exception.retry_action, "none")
         self.assertEqual(len(fake.get_calls), 1)
         self.assertEqual(len(fake.stream_calls), 0)
 
@@ -741,7 +761,7 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
                     result_download_retry_count=0,
                 )
         self.assertEqual(raised.exception.public_message, "扩图任务无法恢复，请重新扩图")
-        self.assertTrue(raised.exception.retryable)
+        self.assertEqual(raised.exception.retry_action, "none")
         self.assertEqual(len(fake.post_calls), 0)
         self.assertEqual(len(fake.get_calls), 1)
 
@@ -801,6 +821,105 @@ class BflTransportTest(unittest.IsolatedAsyncioTestCase):
                             retry_backoff_cap_seconds=1,
                             result_download_retry_count=0,
                         )
+
+
+    async def run_background_with_client(self, fake: FakeClient):
+        app_main.app.state.outpainting_semaphore = asyncio.Semaphore(1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(bfl.httpx, "AsyncClient", return_value=fake),
+                patch.object(app_main.settings, "output_path", Path(temp_dir)),
+                patch.object(app_main.settings, "bfl_outpainting_transient_retries", 0),
+                patch.object(app_main.settings, "bfl_outpainting_result_download_retries", 0),
+                patch.object(app_main.settings, "bfl_outpainting_timeout_seconds", 1),
+                patch.object(app_main.asyncio, "sleep", new=AsyncMock()),
+                patch.object(app_main, "save_ai_image_job") as save,
+                patch.object(app_main, "_discard_outpainting_source_snapshot") as discard,
+                patch.object(app_main, "generate_inspiration_thumb"),
+                patch.object(app_main, "log_operation"),
+            ):
+                await app_main._run_outpainting_background(
+                    "job-recovery", json_request({}).state.user, self.prepared, self.geometry, "",
+                    {"operation": "outpainting", "mode": "fast"}, 123.0,
+                )
+        return save, discard
+
+    async def test_background_poll_transport_recovery_never_submits_again(self) -> None:
+        request = httpx.Request("GET", POLLING_URL)
+        fake = FakeClient(
+            post_results=[self.submit_ok()],
+            get_results=[httpx.ReadTimeout("offline", request=request), self.response(504, {}), self.ready()],
+            stream_results=[self.png_result()],
+        )
+        save, _discard = await self.run_background_with_client(fake)
+        self.assertEqual(save.call_args.kwargs["status"], "done")
+        self.assertEqual(len(fake.post_calls), 1)
+        self.assertEqual([call["url"] for call in fake.get_calls], [POLLING_URL] * 3)
+
+    async def test_background_poll_deadlines_resume_same_accepted_task(self) -> None:
+        for expires_after_pending in (False, True):
+            with self.subTest(expires_after_pending=expires_after_pending):
+                fake = FakeClient(
+                    post_results=[self.submit_ok()],
+                    get_results=([self.response(200, {"status": "Pending"})] if expires_after_pending else []) + [self.ready()],
+                    stream_results=[self.png_result()],
+                )
+                ticks = [0, 0, 2, 2, 2] if expires_after_pending else [0, 2, 2, 2]
+                with patch.object(bfl, "time", SimpleNamespace(monotonic=Mock(side_effect=ticks))):
+                    save, _discard = await self.run_background_with_client(fake)
+                self.assertEqual(save.call_args.kwargs["status"], "done")
+                self.assertEqual(len(fake.post_calls), 1)
+                self.assertTrue(all(call["url"] == POLLING_URL for call in fake.get_calls))
+
+    async def test_background_download_recovery_reuses_result_without_poll_or_submit(self) -> None:
+        fake = FakeClient(
+            post_results=[self.submit_ok()], get_results=[self.ready(cost=0.04)],
+            stream_results=[self.response(503, {}), self.response(504, {}), self.png_result()],
+        )
+        save, _discard = await self.run_background_with_client(fake)
+        saved = save.call_args.kwargs
+        self.assertEqual(saved["status"], "done")
+        self.assertEqual(saved["request_meta"]["cost"], 0.04)
+        self.assertEqual(len(fake.post_calls), 1)
+        self.assertEqual(len(fake.get_calls), 1)
+        self.assertEqual([call["url"] for call in fake.stream_calls], [RESULT_URL] * 3)
+        self.assertEqual(saved["request_meta"]["recovery_attempt"], 3)
+
+    async def test_recovery_exhaustion_retains_paid_task_without_fourth_attempt(self) -> None:
+        for action in ("poll", "download"):
+            with self.subTest(action=action):
+                fake = FakeClient(
+                    post_results=[self.submit_ok()],
+                    get_results=[self.response(504, {})] * 3 if action == "poll" else [self.ready()],
+                    stream_results=[self.response(503, {})] * 3 if action == "download" else [],
+                )
+                save, discard = await self.run_background_with_client(fake)
+                saved = save.call_args.kwargs
+                self.assertEqual(saved["status"], "failed")
+                self.assertEqual(saved["task_id"], TASK_ID)
+                self.assertEqual(saved["request_meta"]["polling_url"], POLLING_URL)
+                self.assertEqual(saved["request_meta"]["retry_action"], action)
+                self.assertFalse(saved["request_meta"]["retryable"])
+                self.assertIn("已尝试恢复 3 次", saved["error"])
+                self.assertEqual(len(fake.post_calls), 1)
+                self.assertEqual(len(fake.get_calls if action == "poll" else fake.stream_calls), 3)
+                if action == "download":
+                    self.assertEqual(saved["request_meta"]["provider_result_url"], RESULT_URL)
+                discard.assert_not_called()
+
+    async def test_background_ambiguous_submit_stops_without_another_paid_request(self) -> None:
+        request = httpx.Request("POST", bfl.BFL_API_URL)
+        for response in (httpx.ReadTimeout("unknown", request=request), self.response(504, {})):
+            with self.subTest(response=type(response).__name__):
+                fake = FakeClient(post_results=[response])
+                save, discard = await self.run_background_with_client(fake)
+                saved = save.call_args.kwargs
+                self.assertEqual(saved["status"], "failed")
+                self.assertEqual(saved["request_meta"]["retry_action"], "submission_unknown")
+                self.assertFalse(saved["request_meta"]["retryable"])
+                self.assertEqual(len(fake.post_calls), 1)
+                self.assertEqual(len(fake.get_calls), 0)
+                discard.assert_not_called()
 
 
 class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
@@ -1898,17 +2017,27 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertFalse(snapshot_path.exists())
 
-    async def test_terminal_retryability_is_persisted_and_returned_in_status(self) -> None:
+    async def test_legacy_retryable_is_disabled_for_cached_clients(self) -> None:
+        with patch.object(app_main, "load_ai_image_job", return_value={
+            "id": "legacy-job", "user_id": "operator_a", "status": "failed", "progress": 100,
+            "request_meta": {"operation": "outpainting", "phase": "failed", "retryable": True},
+            "error": "扩图失败",
+        }):
+            status = app_main.ai_image_status(json_request({}), "legacy-job")
+        self.assertFalse(status["outpainting"]["retryable"])
+        self.assertNotIn("retry_action", status["outpainting"])
+
+    async def test_terminal_retry_action_is_persisted_and_returned_in_status(self) -> None:
         geometry = bfl.validate_geometry(
             processing_width=64, processing_height=64,
             top=64, right=0, bottom=0, left=0,
         )
-        for retryable in (True, False):
-            with self.subTest(retryable=retryable):
+        for retry_action in ("resubmit", "submission_unknown", "poll", "download", "none"):
+            with self.subTest(retry_action=retry_action):
                 app_main.app.state.outpainting_semaphore = asyncio.Semaphore(1)
                 with (
                     patch.object(app_main, "run_outpainting", new=AsyncMock(
-                        side_effect=bfl.BflOutpaintingError("扩图失败", retryable=retryable),
+                        side_effect=bfl.BflOutpaintingError("扩图失败", retry_action=retry_action),
                     )),
                     patch.object(app_main, "save_ai_image_job") as save,
                     patch.object(app_main, "_discard_outpainting_source_snapshot"),
@@ -1920,12 +2049,14 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                     )
                 saved = save.call_args.kwargs
                 self.assertEqual(saved["status"], "failed")
-                self.assertIs(saved["request_meta"]["retryable"], retryable)
+                self.assertEqual(saved["request_meta"]["retry_action"], retry_action)
+                self.assertFalse(saved["request_meta"]["retryable"])
                 with patch.object(app_main, "load_ai_image_job", return_value={
                     **saved, "id": saved["job_id"],
                 }):
                     status = app_main.ai_image_status(json_request({}), "job-retryable")
-                self.assertIs(status["outpainting"]["retryable"], retryable)
+                self.assertEqual(status["outpainting"]["retry_action"], retry_action)
+                self.assertFalse(status["outpainting"]["retryable"])
                 self.assertEqual(status["error"], "扩图失败")
 
     async def test_done_persistence_retries_without_marking_paid_result_failed(self) -> None:

@@ -1347,6 +1347,7 @@ async def _run_outpainting_background(
     resume_only: bool = False,
     polling_url: str = "",
     acceptance_resume_attempts: int = 1,
+    recovery_attempt: int = 1,
 ) -> None:
     prompt = "FLUX outpainting"
     user_id = str(user.get("id") or "")
@@ -1450,6 +1451,8 @@ async def _run_outpainting_background(
                 geometry=geometry,
                 provider_task_id=accepted["provider_task_id"],
                 polling_url=accepted["polling_url"],
+                result_url=str(request_meta.get("provider_result_url") or ""),
+                result_cost=request_meta.get("cost"),
                 output_root=settings.output_path,
                 user_id=user_id,
                 job_id=job_id,
@@ -1478,6 +1481,8 @@ async def _run_outpainting_background(
             "cost": result.cost,
             "actual_width": result.width,
             "actual_height": result.height,
+            "retry_action": "none",
+            "retryable": False,
         }
         await _save_outpainting_job_with_retries(
             job_id=job_id,
@@ -1624,33 +1629,30 @@ async def _run_outpainting_background(
                 resume_only=True,
                 polling_url=accepted["polling_url"],
                 acceptance_resume_attempts=acceptance_resume_attempts - 1,
+                recovery_attempt=recovery_attempt,
             )
             return
-        # The provider task is already accepted at this point. A transient
-        # poll transport failure must remain recoverable so a restart can poll
-        # the same task instead of deleting the source snapshot and reporting
-        # a terminal failure to the user.
-        diagnostic_text = str(getattr(exc, "diagnostic", "") or "")
-        is_transient_poll_failure = (
+        retry_action = exc.retry_action if isinstance(exc, BflOutpaintingError) else "none"
+        can_resume = bool(
             accepted["provider_task_id"]
             and accepted["polling_url"]
-            and isinstance(exc, BflOutpaintingError)
-            and (
-                diagnostic_text.startswith("poll request retries=")
-                or diagnostic_text.startswith("poll HTTP 408")
-                or diagnostic_text.startswith("poll HTTP 425")
-                or diagnostic_text.startswith("poll HTTP 429")
-                or diagnostic_text.startswith("poll HTTP 500")
-                or diagnostic_text.startswith("poll HTTP 502")
-                or diagnostic_text.startswith("poll HTTP 503")
-                or diagnostic_text.startswith("poll HTTP 504")
-            )
+            and retry_action in {"poll", "download"}
         )
-        if is_transient_poll_failure:
-            retry_meta = {
+        if can_resume:
+            if exc.result_url:
+                request_meta["provider_result_url"] = exc.result_url
+                request_meta["cost"] = exc.cost
+            request_meta.update({
+                "retry_action": retry_action,
+                # Old clients must never interpret recovery as permission to regenerate.
+                "retryable": False,
+                "recovery_attempt": recovery_attempt,
+            })
+        if can_resume and recovery_attempt < 3:
+            request_meta = {
                 **request_meta,
-                "phase": "polling_retry",
-                "last_poll_diagnostic": diagnostic_text[:500],
+                "phase": f"{retry_action}_retry",
+                "recovery_attempt": recovery_attempt + 1,
             }
             try:
                 await _save_outpainting_job_with_retries(
@@ -1666,23 +1668,32 @@ async def _run_outpainting_background(
                     resolution="",
                     has_reference=True,
                     reference_count=1,
-                    request_meta=retry_meta,
+                    request_meta=request_meta,
                     task_id=accepted["provider_task_id"],
                     progress=75,
                     created_at=created_at,
                 )
             except Exception:
                 logger.exception(
-                    "BFL outpainting poll failure recovery persistence failed: job=%s task=%s",
+                    "BFL outpainting recovery persistence failed: job=%s task=%s",
                     job_id,
                     accepted["provider_task_id"],
                 )
+                return
             logger.warning(
-                "BFL outpainting poll failed transiently; keeping task recoverable: "
-                "job=%s task=%s diagnostic=%s",
+                "BFL outpainting recovering accepted task: job=%s task=%s action=%s attempt=%s/3",
                 job_id,
                 accepted["provider_task_id"],
-                diagnostic_text[:500],
+                retry_action,
+                recovery_attempt + 1,
+            )
+            await asyncio.sleep(recovery_attempt)
+            await _run_outpainting_background(
+                job_id, user, None, geometry, accepted["provider_task_id"],
+                request_meta, created_at, resume_only=True,
+                polling_url=accepted["polling_url"],
+                acceptance_resume_attempts=acceptance_resume_attempts,
+                recovery_attempt=recovery_attempt + 1,
             )
             return
         if isinstance(exc, BflOutpaintingError):
@@ -1691,6 +1702,8 @@ async def _run_outpainting_background(
         else:
             public_error = "扩图服务处理失败，请稍后重试"
             diagnostic = type(exc).__name__
+        if can_resume and recovery_attempt >= 3:
+            public_error = f"原扩图任务已尝试恢复 3 次仍未成功：{public_error}"
         logger.error(
             "BFL outpainting failed: job=%s task=%s error=%s diagnostic=%s",
             job_id,
@@ -1701,7 +1714,8 @@ async def _run_outpainting_background(
         failed_meta = {
             **request_meta,
             "phase": "failed",
-            "retryable": isinstance(exc, BflOutpaintingError) and exc.retryable,
+            "retry_action": retry_action,
+            "retryable": False,
         }
         try:
             await _save_outpainting_job_with_retries(
@@ -1723,7 +1737,8 @@ async def _run_outpainting_background(
                 progress=100,
                 created_at=created_at,
             )
-            _discard_outpainting_source_snapshot(request_meta, user_id)
+            if not can_resume and retry_action != "submission_unknown":
+                _discard_outpainting_source_snapshot(request_meta, user_id)
         except Exception:
             logger.exception("BFL outpainting failure persistence failed: job=%s", job_id)
         try:
@@ -5853,9 +5868,13 @@ def ai_image_status(request: Request, job_id: str):
                 "actual_width",
                 "actual_height",
                 "retryable",
+                "retry_action",
+                "recovery_attempt",
             )
             if key in request_meta
         }
+        # Cached clients must not regenerate historical jobs based on the old ambiguous flag.
+        outpainting["retryable"] = False
     error_text = job.get("error") or ""
     # Smart-routed generation errors use a generic two-round message. Operation-specific
     # workers (layer_extract, outpainting, matting, upscale, vectorize) already persist
@@ -5901,6 +5920,11 @@ def ai_image_status(request: Request, job_id: str):
         "providerSwitched": bool(job.get("provider_switched")),
         "layer_extract": layer_extract,
         "outpainting": outpainting,
+        "message": (
+            f"正在恢复原扩图任务（第 {request_meta['recovery_attempt']}/3 次尝试）"
+            if operation == "outpainting" and job.get("status") == "processing"
+            and int(request_meta.get("recovery_attempt") or 1) > 1 else None
+        ),
         "cost": outpainting.get("cost") if outpainting else None,
     }
 
