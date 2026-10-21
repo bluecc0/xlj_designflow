@@ -1,20 +1,17 @@
-import React, { memo, useState, useEffect, useMemo } from 'react'
+import React, { memo, useState, useEffect, useMemo, useId } from 'react'
 import {
   X,
-  Sparkles,
   Copy,
   Check,
   ExternalLink,
   Loader2,
   ChevronDown,
-  ChevronRight,
-  Image as ImageIcon,
   ArrowLeft,
-  SlidersHorizontal,
 } from 'lucide-react'
 import type { CanvasImage, ReferenceImageItem } from '../types'
 import { useCanvasStore } from '../store/canvasStore'
 import { fetchImageMetadata, type ImageMetadataResponse } from '../services/aiImageService'
+import './ImagePropertiesModal.css'
 
 async function copyToClipboard(text: string): Promise<boolean> {
   if (!text) return false
@@ -58,18 +55,18 @@ function formatTimestamp(ts?: number | string): string {
 function formatQualityLabel(quality?: string): string {
   if (!quality) return ''
   const q = quality.toLowerCase()
-  if (q === 'auto') return '自动 (Auto)'
-  if (q === 'standard') return '标准 (Standard)'
-  if (q === 'high') return '高清 (High)'
-  if (q === 'ultra') return '极清 (Ultra)'
+  if (q === 'auto') return '自动'
+  if (q === 'standard') return '标准'
+  if (q === 'high') return '高清'
+  if (q === 'ultra') return '极清'
   return quality
 }
 
 function formatVariantLabel(variant?: string): string {
   if (!variant) return ''
   const v = variant.toLowerCase()
-  if (v === 'flare') return '通透锐利 (flare)'
-  if (v === 'sunburst') return '暖阳柔光 (sunburst)'
+  if (v === 'flare') return '通透锐利'
+  if (v === 'sunburst') return '暖阳柔光'
   return variant
 }
 
@@ -83,7 +80,7 @@ export const ImagePropertiesModal = memo(function ImagePropertiesModal({
   onClose,
 }: Props) {
   if (!image) return null
-  return <ImagePropertiesModalContent image={image} onClose={onClose} />
+  return <ImagePropertiesModalContent key={`${image.id}:${image.url}`} image={image} onClose={onClose} />
 })
 
 const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
@@ -99,10 +96,9 @@ const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
   const [loadingMeta, setLoadingMeta] = useState(false)
   const [remoteMeta, setRemoteMeta] = useState<ImageMetadataResponse | null>(null)
 
-  // 提示词视图切换：'resolved' (最终生成词) | 'original' (用户原始输入)
-  const [promptTab, setPromptTab] = useState<'resolved' | 'original'>('resolved')
-  // 提示词扩充追踪展开
-  const [showTrace, setShowTrace] = useState(false)
+  const titleId = useId()
+  const detailsId = useId()
+  const [showDetails, setShowDetails] = useState(false)
   // 大图放大预览浮层
   const [previewingImg, setPreviewingImg] = useState<{ url: string; title: string } | null>(null)
 
@@ -194,6 +190,7 @@ const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        e.stopPropagation()
         if (previewingImg) {
           setPreviewingImg(null)
         } else {
@@ -246,6 +243,7 @@ const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
     referenceImages.length > 0 ||
     meta.hasReference ||
     aiInfo?.hasReference ||
+    (meta.referenceCount && meta.referenceCount > 0) ||
     (meta.refCount && meta.refCount > 0)
   )
 
@@ -259,6 +257,9 @@ const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
 
   // 文件名
   const fileName = useMemo(() => {
+    if (image.url.startsWith('data:') || image.url.startsWith('blob:')) {
+      return image.name || remoteMeta?.fileName || 'image.png'
+    }
     try {
       const pathname = new URL(image.url, window.location.origin).pathname
       const parts = pathname.split('/')
@@ -266,7 +267,7 @@ const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
     } catch {
       return image.name || 'image.png'
     }
-  }, [image.url, image.name])
+  }, [image.url, image.name, remoteMeta?.fileName])
 
   // 格式徽章
   const format = useMemo(() => {
@@ -288,817 +289,202 @@ const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
     return remoteMeta?.fileSizeFormatted || ''
   }, [meta.fileSize, remoteMeta?.fileSize, remoteMeta?.fileSizeFormatted])
 
-  // 尺寸计算
-  const displayW = Math.round(image.width)
-  const displayH = Math.round(image.height)
-  const scalePercent = naturalSize.w > 0 ? Math.round((displayW / naturalSize.w) * 100) : null
+  const dimensions = naturalSize.w > 0 && naturalSize.h > 0
+    ? `${naturalSize.w} × ${naturalSize.h} px`
+    : ''
+  const summary = [format, dimensions, fileSizeText].filter(Boolean).join(' · ')
+  const name = image.name || fileName
+  const displayName = /^[a-f0-9-]{16,}(?:\.[a-z0-9]+)?$/i.test(name)
+    ? (isAiGenerated ? 'AI 生成图片' : '图片')
+    : name
+  const specification = [size, resolution].filter(Boolean).join(' · ')
+  const referenceCount = referenceImages.length || aiInfo?.referenceCount || meta.referenceCount || meta.refCount
+  const visiblePrompt = resolvedPrompt || originalPrompt
+  const detailRows = [
+    { label: '文件名', value: fileName },
+    { label: '画布尺寸', value: `${Math.round(image.width)} × ${Math.round(image.height)} px` },
+    { label: '画布位置', value: `${Math.round(image.x)}, ${Math.round(image.y)}` },
+    { label: '旋转角度', value: image.rotation ? `${Math.round(image.rotation)}°` : '' },
+    { label: '服务商', value: provider.toUpperCase() },
+    { label: '画质', value: formatQualityLabel(quality) },
+    { label: '风格', value: formatVariantLabel(variant) },
+    { label: '预设', value: skill },
+    { label: '生成时间', value: formatTimestamp(createdAt) },
+    { label: '任务编号', value: jobId, copyKey: 'jobId' },
+    { label: '请求编号', value: clientRequestId, copyKey: 'clientReq' },
+  ].filter((row) => row.value)
 
-  // 复制处理
   const handleCopy = async (key: string, text: string) => {
     if (!text) return
-    const ok = await copyToClipboard(text)
-    if (ok) {
+    if (await copyToClipboard(text)) {
       setCopiedKey(key)
       setTimeout(() => setCopiedKey(null), 2000)
     }
   }
 
-  return (
-    <div
-      data-modal="image-properties"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 10000,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'rgba(15, 23, 42, 0.45)',
-        backdropFilter: 'blur(6px)',
-        WebkitBackdropFilter: 'blur(6px)',
-      }}
-      onClick={onClose}
+  const copyButton = (key: string, text: string, label = '复制') => (
+    <button
+      type="button"
+      className="image-properties__text-button"
+      onClick={() => handleCopy(key, text)}
+      title={`复制${key === 'prompt' ? '提示词' : key === 'original' ? '原始输入' : key === 'trace' ? '提示词记录' : '编号'}`}
     >
+      {copiedKey === key ? <Check size={12} /> : <Copy size={12} />}
+      {copiedKey === key ? '已复制' : label}
+    </button>
+  )
+
+  return (
+    <div data-modal="image-properties" className="image-properties__overlay" onClick={onClose}>
       <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 450,
-          maxWidth: '92vw',
-          maxHeight: '88vh',
-          backgroundColor: '#ffffff',
-          borderRadius: 14,
-          boxShadow: '0 20px 48px -12px rgba(15, 23, 42, 0.22), 0 0 0 1px rgba(15, 23, 42, 0.08)',
-          overflow: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif',
-          color: '#0f172a',
-        }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="image-properties"
+        onClick={(event) => event.stopPropagation()}
       >
-        {/* 标题栏 */}
-        <div
-          style={{
-            padding: '12px 18px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            borderBottom: '1px solid #f1f5f9',
-            backgroundColor: '#ffffff',
-            flexShrink: 0,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            {previewingImg ? (
+        <header className="image-properties__header">
+          <div className="image-properties__heading">
+            {previewingImg && (
               <button
                 type="button"
+                className="image-properties__icon-button"
                 onClick={() => setPreviewingImg(null)}
-                style={{
-                  border: 'none',
-                  backgroundColor: 'transparent',
-                  padding: 2,
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  color: '#475569',
-                }}
-                title="返回详情"
+                aria-label="返回图片属性"
               >
                 <ArrowLeft size={16} />
               </button>
-            ) : null}
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>
-              {previewingImg ? previewingImg.title : '图片属性'}
-            </div>
-            {isAiGenerated && !previewingImg && (
-              <span
-                style={{
-                  fontSize: 10.5,
-                  fontWeight: 600,
-                  padding: '1.5px 6px',
-                  borderRadius: 4,
-                  backgroundColor: '#f1f5f9',
-                  color: '#334155',
-                  border: '1px solid #e2e8f0',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 3.5,
-                }}
-              >
-                <Sparkles size={10} strokeWidth={2.0} color="#475569" />
-                AI 生图档案
-              </span>
             )}
+            <h2 id={titleId}>{previewingImg ? '图片预览' : '图片属性'}</h2>
           </div>
-          <button
-            onClick={onClose}
-            title="关闭 (Esc)"
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: 6,
-              border: 'none',
-              backgroundColor: 'transparent',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              color: '#94a3b8',
-              transition: 'all 120ms ease',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f5f9')}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-          >
-            <X size={15} />
+          <button type="button" className="image-properties__icon-button" onClick={onClose} aria-label="关闭" title="关闭（Esc）">
+            <X size={16} />
           </button>
-        </div>
+        </header>
 
-        {/* 内容主体 - 支持纵向平滑滚动 */}
-        <div
-          style={{
-            padding: '16px 18px',
-            overflowY: 'auto',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 14,
-          }}
-        >
-          {/* 大图预览模式 */}
+        <div className="image-properties__body">
           {previewingImg ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
-              <div
-                style={{
-                  width: '100%',
-                  maxHeight: '55vh',
-                  borderRadius: 8,
-                  overflow: 'hidden',
-                  backgroundColor: '#f8fafc',
-                  border: '1px solid #e2e8f0',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <img
-                  src={previewingImg.url}
-                  alt={previewingImg.title}
-                  style={{
-                    maxWidth: '100%',
-                    maxHeight: '55vh',
-                    objectFit: 'contain',
-                    display: 'block',
-                  }}
-                />
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                <span style={{ fontSize: 11, color: '#64748b' }}>{previewingImg.title}</span>
-                <a
-                  href={previewingImg.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    fontSize: 11,
-                    color: '#0f172a',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 3,
-                    textDecoration: 'none',
-                    fontWeight: 500,
-                  }}
-                >
-                  新窗口打开原图 <ExternalLink size={11} />
-                </a>
-              </div>
+            <div className="image-properties__preview">
+              <img src={previewingImg.url} alt={previewingImg.title} />
+              <a href={previewingImg.url} target="_blank" rel="noopener noreferrer" className="image-properties__text-button">
+                查看原图 <ExternalLink size={12} />
+              </a>
             </div>
           ) : (
             <>
-              {/* 1. 顶栏：缩略图 + 名字 + 标签 */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div
-                  onClick={() => setPreviewingImg({ url: image.url, title: fileName })}
-                  title="点击查看大图"
-                  style={{
-                    width: 48,
-                    height: 48,
-                    borderRadius: 8,
-                    overflow: 'hidden',
-                    flexShrink: 0,
-                    border: '1px solid #e2e8f0',
-                    backgroundColor: '#f8fafc',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer',
-                    position: 'relative',
-                  }}
+              <div className="image-properties__summary">
+                <button
+                  type="button"
+                  className="image-properties__thumbnail"
+                  onClick={() => setPreviewingImg({ url: image.url, title: displayName })}
+                  aria-label="预览图片"
                 >
-                  <img
-                    src={image.url}
-                    alt=""
-                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                  />
-                </div>
-
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    title={fileName}
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: '#0f172a',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      marginBottom: 4,
-                    }}
-                  >
-                    {fileName}
+                  <img src={image.url} alt={displayName} />
+                </button>
+                <div className="image-properties__file">
+                  <div className="image-properties__name" title={fileName}>{displayName}</div>
+                  <div className="image-properties__meta">
+                    <span>{summary}</span>
+                    {loadingMeta && !fileSizeText && <Loader2 size={12} className="animate-spin" aria-label="正在读取图片信息" />}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span
-                      style={{
-                        fontSize: 10,
-                        fontWeight: 600,
-                        padding: '1px 5px',
-                        borderRadius: 4,
-                        backgroundColor: '#f1f5f9',
-                        color: '#64748b',
-                      }}
-                    >
-                      {format}
-                    </span>
-
-                    {isAiGenerated && (
-                      <span
-                        style={{
-                          fontSize: 10,
-                          fontWeight: 600,
-                          padding: '1px 5px',
-                          borderRadius: 4,
-                          backgroundColor: '#f1f5f9',
-                          color: '#334155',
-                          border: '1px solid #e2e8f0',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 3,
-                        }}
-                      >
-                        <Sparkles size={9} strokeWidth={2.0} color="#475569" />
-                        AI 生成
-                      </span>
-                    )}
-
-                    <a
-                      href={image.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="在新标签页查看原图"
-                      style={{
-                        fontSize: 11,
-                        color: '#64748b',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 3,
-                        textDecoration: 'none',
-                        marginLeft: 'auto',
-                        transition: 'color 120ms ease',
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.color = '#0f172a')}
-                      onMouseLeave={(e) => (e.currentTarget.style.color = '#64748b')}
-                    >
-                      原图 <ExternalLink size={10} color="#64748b" />
-                    </a>
-                  </div>
+                  <a href={image.url} target="_blank" rel="noopener noreferrer" className="image-properties__text-button">
+                    查看原图 <ExternalLink size={11} />
+                  </a>
                 </div>
               </div>
 
-              {/* 2. 基础物理与渲染规格 */}
-              <div
-                style={{
-                  backgroundColor: '#f8fafc',
-                  border: '1px solid #f1f5f9',
-                  borderRadius: 10,
-                  padding: '9px 12px',
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(2, 1fr)',
-                  gap: '8px 12px',
-                  fontSize: 11.5,
-                }}
-              >
-                <div>
-                  <div style={{ color: '#64748b', marginBottom: 2 }}>物理分辨率</div>
-                  <div style={{ fontWeight: 600, color: '#0f172a' }}>
-                    {naturalSize.w > 0 && naturalSize.h > 0
-                      ? `${naturalSize.w} × ${naturalSize.h} px`
-                      : '探测中...'}
-                  </div>
-                </div>
-
-                <div>
-                  <div style={{ color: '#64748b', marginBottom: 2 }}>画布渲染</div>
-                  <div style={{ fontWeight: 600, color: '#0f172a' }}>
-                    {displayW} × {displayH} px
-                    {scalePercent !== null && (
-                      <span style={{ color: '#94a3b8', fontWeight: 400, marginLeft: 4 }}>
-                        ({scalePercent}%)
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div>
-                  <div style={{ color: '#64748b', marginBottom: 2 }}>文件大小</div>
-                  <div style={{ fontWeight: 600, color: '#0f172a' }}>
-                    {fileSizeText || (loadingMeta ? '计算中...' : '未知')}
-                  </div>
-                </div>
-
-                <div>
-                  <div style={{ color: '#64748b', marginBottom: 2 }}>画布坐标</div>
-                  <div style={{ fontWeight: 600, color: '#0f172a' }}>
-                    X: {Math.round(image.x)}, Y: {Math.round(image.y)}
-                    {image.rotation ? ` (${Math.round(image.rotation)}°)` : ''}
-                  </div>
-                </div>
-              </div>
-
-              {/* 3. AI 生图全请求参数记录 */}
-              {isAiGenerated && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      borderBottom: '1px solid #f1f5f9',
-                      paddingBottom: 5,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: 11.5,
-                        fontWeight: 600,
-                        color: '#475569',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 4,
-                      }}
-                    >
-                      <SlidersHorizontal size={12} strokeWidth={2.2} />
-                      生图请求参数记录
-                    </div>
-                    {loadingMeta && (
-                      <span style={{ fontSize: 10.5, color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <Loader2 size={10} className="animate-spin" /> 查询中
-                      </span>
-                    )}
-                  </div>
-
-                  <div
-                    style={{
-                      backgroundColor: '#f8fafc',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: 10,
-                      padding: '10px 12px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 7,
-                      fontSize: 11.5,
-                    }}
-                  >
-                    {/* 模型 */}
-                    {model && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ color: '#64748b' }}>生成模型 (Model)</span>
-                        <span style={{ fontWeight: 600, color: '#0f172a' }}>{model}</span>
-                      </div>
-                    )}
-
-                    {/* 服务商 */}
-                    {provider && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ color: '#64748b' }}>服务商 (Provider)</span>
-                        <span style={{ fontWeight: 500, color: '#1e293b' }}>{provider.toUpperCase()}</span>
-                      </div>
-                    )}
-
-                    {/* 比例与规格 */}
-                    {(size || resolution) && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ color: '#64748b' }}>出图规格 (Size)</span>
-                        <span style={{ fontWeight: 500, color: '#1e293b' }}>
-                          {size} {resolution ? `· ${resolution}` : ''}
-                        </span>
-                      </div>
-                    )}
-
-                    {/* 画质 */}
-                    {quality && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ color: '#64748b' }}>画质等级 (Quality)</span>
-                        <span style={{ fontWeight: 500, color: '#1e293b' }}>{formatQualityLabel(quality)}</span>
-                      </div>
-                    )}
-
-                    {/* 风格模式 */}
-                    {variant && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ color: '#64748b' }}>风格模式 (Variant)</span>
-                        <span style={{ fontWeight: 500, color: '#1e293b' }}>{formatVariantLabel(variant)}</span>
-                      </div>
-                    )}
-
-                    {/* 技能预设 */}
-                    {skill && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ color: '#64748b' }}>技能预设 (Skill)</span>
-                        <span style={{ fontWeight: 500, color: '#1e293b' }}>{skill}</span>
-                      </div>
-                    )}
-
-                    {/* 任务编号 Job ID */}
-                    {jobId && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ color: '#64748b' }}>任务编号 (Job ID)</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#334155' }}>
-                            {jobId.slice(0, 12)}...
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleCopy('jobId', jobId)}
-                            title="复制 Job ID"
-                            style={{
-                              border: 'none',
-                              backgroundColor: 'transparent',
-                              cursor: 'pointer',
-                              padding: 2,
-                              color: copiedKey === 'jobId' ? '#0f172a' : '#94a3b8',
-                              display: 'inline-flex',
-                            }}
-                          >
-                            {copiedKey === 'jobId' ? <Check size={11} /> : <Copy size={11} />}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 客户端请求号 Client Request ID */}
-                    {clientRequestId && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ color: '#64748b' }}>请求单号 (Client Req)</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#334155' }}>
-                            {clientRequestId.slice(0, 14)}...
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleCopy('clientReq', clientRequestId)}
-                            title="复制 Client Request ID"
-                            style={{
-                              border: 'none',
-                              backgroundColor: 'transparent',
-                              cursor: 'pointer',
-                              padding: 2,
-                              color: copiedKey === 'clientReq' ? '#0f172a' : '#94a3b8',
-                              display: 'inline-flex',
-                            }}
-                          >
-                            {copiedKey === 'clientReq' ? <Check size={11} /> : <Copy size={11} />}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 生成时间 */}
-                    {createdAt && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ color: '#64748b' }}>生成时间</span>
-                        <span style={{ color: '#475569' }}>{formatTimestamp(createdAt)}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
+              {isAiGenerated && (model || specification) && (
+                <dl className="image-properties__generation" aria-label="生成信息">
+                  {model && <><dt>模型</dt><dd>{model}</dd></>}
+                  {specification && <><dt>规格</dt><dd>{specification}</dd></>}
+                </dl>
               )}
 
-              {/* 4. 参考图全记录 (如有) */}
               {hasReference && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      borderBottom: '1px solid #f1f5f9',
-                      paddingBottom: 5,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: 11.5,
-                        fontWeight: 600,
-                        color: '#475569',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 4,
-                      }}
-                    >
-                      <ImageIcon size={12} strokeWidth={2.2} />
-                      参考图全记录
-                      <span
-                        style={{
-                          fontSize: 10,
-                          fontWeight: 600,
-                          padding: '1px 5px',
-                          borderRadius: 9999,
-                          backgroundColor: '#f1f5f9',
-                          color: '#334155',
-                          border: '1px solid #e2e8f0',
-                        }}
-                      >
-                        {referenceImages.length || 1} 张
-                      </span>
-                    </div>
+                <section className="image-properties__section" aria-label="参考图">
+                  <div className="image-properties__section-heading">
+                    <h3>参考图</h3>
+                    {referenceCount > 0 && <span className="image-properties__count">{referenceCount}</span>}
                   </div>
-
                   {referenceImages.length > 0 ? (
-                    <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: referenceImages.length === 1 ? '1fr' : 'repeat(2, 1fr)',
-                        gap: 8,
-                      }}
-                    >
-                      {referenceImages.map((ref, idx) => {
-                        const typeTag =
-                          ref.type === 'manual'
-                            ? '用户上传'
-                            : ref.type === 'context'
-                            ? '上下文续图'
-                            : ref.type === 'outpainting_source'
-                            ? '扩图原图'
-                            : '参考图'
-
+                    <div className="image-properties__references">
+                      {referenceImages.map((ref, index) => {
+                        const title = ref.name || `参考图 ${index + 1}`
                         return (
-                          <div
-                            key={ref.url || idx}
-                            style={{
-                              backgroundColor: '#f8fafc',
-                              border: '1px solid #e2e8f0',
-                              borderRadius: 8,
-                              padding: '8px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 9,
-                            }}
+                          <button
+                            type="button"
+                            key={`${ref.url}-${index}`}
+                            className="image-properties__thumbnail"
+                            onClick={() => setPreviewingImg({ url: ref.url, title })}
+                            title={title}
+                            aria-label={`预览参考图 ${index + 1}：${title}`}
                           >
-                            {/* 参考图缩略图 */}
-                            <div
-                              onClick={() => setPreviewingImg({ url: ref.url, title: ref.name || `参考图 ${idx + 1}` })}
-                              title="点击查看原参考图"
-                              style={{
-                                width: 44,
-                                height: 44,
-                                borderRadius: 6,
-                                overflow: 'hidden',
-                                flexShrink: 0,
-                                backgroundColor: '#ffffff',
-                                border: '1px solid #cbd5e1',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              <img
-                                src={ref.url}
-                                alt={ref.name || '参考图'}
-                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                              />
-                            </div>
-
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
-                                <span
-                                  style={{
-                                    fontSize: 9.5,
-                                    fontWeight: 600,
-                                    padding: '1px 4px',
-                                    borderRadius: 3,
-                                    backgroundColor: '#ffffff',
-                                    color: '#334155',
-                                    border: '1px solid #cbd5e1',
-                                  }}
-                                >
-                                  {typeTag}
-                                </span>
-                              </div>
-                              <div
-                                title={ref.name || `参考图 ${idx + 1}`}
-                                style={{
-                                  fontSize: 11,
-                                  fontWeight: 500,
-                                  color: '#0f172a',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                }}
-                              >
-                                {ref.name || `参考图 ${idx + 1}`}
-                              </div>
-                            </div>
-                          </div>
+                            <img src={ref.url} alt={title} />
+                          </button>
                         )
                       })}
                     </div>
                   ) : (
-                    <div
-                      style={{
-                        backgroundColor: '#f8fafc',
-                        border: '1px solid #e2e8f0',
-                        borderRadius: 8,
-                        padding: '10px 12px',
-                        fontSize: 11,
-                        color: '#64748b',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                      }}
-                    >
-                      <span>已启用参考图上下文约束（早期任务未缓存参考图本地副本）</span>
-                      <span style={{ fontSize: 10, color: '#94a3b8' }}>图生图模式</span>
-                    </div>
+                    <p className="image-properties__empty">参考图暂不可预览</p>
                   )}
-                </div>
+                </section>
               )}
 
-              {/* 5. 提示词记录 (原始提示词 vs 最终生成词) */}
-              {isAiGenerated && (resolvedPrompt || originalPrompt) ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                    }}
-                  >
-                    {hasDistinctPrompts ? (
-                      <div
-                        style={{
-                          display: 'inline-flex',
-                          backgroundColor: '#f1f5f9',
-                          borderRadius: 6,
-                          padding: 2,
-                          gap: 2,
-                        }}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => setPromptTab('resolved')}
-                          style={{
-                            border: 'none',
-                            borderRadius: 4,
-                            padding: '3px 8px',
-                            fontSize: 11,
-                            fontWeight: promptTab === 'resolved' ? 600 : 500,
-                            backgroundColor: promptTab === 'resolved' ? '#ffffff' : 'transparent',
-                            color: promptTab === 'resolved' ? '#0f172a' : '#64748b',
-                            boxShadow: promptTab === 'resolved' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          最终生成词 (Resolved)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPromptTab('original')}
-                          style={{
-                            border: 'none',
-                            borderRadius: 4,
-                            padding: '3px 8px',
-                            fontSize: 11,
-                            fontWeight: promptTab === 'original' ? 600 : 500,
-                            backgroundColor: promptTab === 'original' ? '#ffffff' : 'transparent',
-                            color: promptTab === 'original' ? '#0f172a' : '#64748b',
-                            boxShadow: promptTab === 'original' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          原始输入 (Original)
-                        </button>
-                      </div>
-                    ) : (
-                      <span style={{ fontSize: 11.5, fontWeight: 600, color: '#475569' }}>
-                        生成提示词 (Prompt)
-                      </span>
-                    )}
-
-                    <button
-                      onClick={() =>
-                        handleCopy(
-                          'prompt',
-                          hasDistinctPrompts && promptTab === 'original' ? originalPrompt : resolvedPrompt
-                        )
-                      }
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 3,
-                        fontSize: 11,
-                        fontWeight: 500,
-                        padding: '2px 7px',
-                        borderRadius: 4,
-                        border: '1px solid #e2e8f0',
-                        backgroundColor: copiedKey === 'prompt' ? '#f1f5f9' : '#ffffff',
-                        color: copiedKey === 'prompt' ? '#0f172a' : '#475569',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {copiedKey === 'prompt' ? <Check size={10} /> : <Copy size={10} />}
-                      {copiedKey === 'prompt' ? '已复制' : '复制'}
-                    </button>
+              {isAiGenerated && visiblePrompt && (
+                <section className="image-properties__section" aria-label="提示词">
+                  <div className="image-properties__section-heading">
+                    <h3>提示词</h3>
+                    {copyButton('prompt', visiblePrompt)}
                   </div>
+                  <div className="image-properties__prompt" tabIndex={0}>{visiblePrompt}</div>
+                </section>
+              )}
 
-                  <div
-                    style={{
-                      backgroundColor: '#f8fafc',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: 8,
-                      padding: '9px 11px',
-                      fontSize: 11.5,
-                      lineHeight: 1.55,
-                      color: '#1e293b',
-                      maxHeight: 108,
-                      overflowY: 'auto',
-                      wordBreak: 'break-word',
-                      userSelect: 'text',
-                    }}
-                  >
-                    {hasDistinctPrompts && promptTab === 'original' ? originalPrompt : resolvedPrompt}
-                  </div>
-
-                  {/* 提示词扩充追踪 / 思考链折叠 */}
-                  {promptTrace && (
-                    <div style={{ marginTop: 2 }}>
-                      <button
-                        type="button"
-                        onClick={() => setShowTrace((s) => !s)}
-                        style={{
-                          border: 'none',
-                          backgroundColor: 'transparent',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 4,
-                          fontSize: 11,
-                          fontWeight: 500,
-                          color: '#64748b',
-                          cursor: 'pointer',
-                          padding: 0,
-                        }}
-                      >
-                        {showTrace ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                        <span>提示词润色规划追踪 (Trace)</span>
-                      </button>
-
-                      {showTrace && (
-                        <div
-                          style={{
-                            marginTop: 6,
-                            backgroundColor: '#f1f5f9',
-                            border: '1px solid #e2e8f0',
-                            borderRadius: 6,
-                            padding: '8px 10px',
-                            fontSize: 10.5,
-                            fontFamily: 'monospace',
-                            lineHeight: 1.45,
-                            color: '#334155',
-                            maxHeight: 120,
-                            overflowY: 'auto',
-                            whiteSpace: 'pre-wrap',
-                            wordBreak: 'break-all',
-                            userSelect: 'text',
-                          }}
-                        >
-                          {promptTrace}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ) : isAiGenerated && loadingMeta ? (
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: '#94a3b8',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    justifyContent: 'center',
-                    padding: '8px 0',
-                  }}
+              <div className="image-properties__details">
+                <button
+                  type="button"
+                  className="image-properties__details-toggle"
+                  onClick={() => setShowDetails((value) => !value)}
+                  aria-expanded={showDetails}
+                  aria-controls={detailsId}
                 >
-                  <Loader2 size={12} className="animate-spin" /> 查询 AI 生成参数中...
-                </div>
-              ) : null}
+                  {showDetails ? '收起信息' : '更多信息'}
+                  <ChevronDown size={14} style={{ transform: showDetails ? 'rotate(180deg)' : undefined }} />
+                </button>
+                {showDetails && (
+                  <div id={detailsId} className="image-properties__details-content">
+                    <dl className="image-properties__detail-list">
+                      {detailRows.map(({ label, value, copyKey }) => (
+                        <React.Fragment key={label}>
+                          <dt>{label}</dt>
+                          <dd>
+                            <span>{value}</span>
+                            {copyKey && copyButton(copyKey, value)}
+                          </dd>
+                        </React.Fragment>
+                      ))}
+                    </dl>
+                    {hasDistinctPrompts && (
+                      <section className="image-properties__section" aria-label="原始输入">
+                        <div className="image-properties__section-heading">
+                          <h3>原始输入</h3>
+                          {copyButton('original', originalPrompt)}
+                        </div>
+                        <div className="image-properties__prompt" tabIndex={0}>{originalPrompt}</div>
+                      </section>
+                    )}
+                    {promptTrace && (
+                      <section className="image-properties__section" aria-label="提示词记录">
+                        <div className="image-properties__section-heading">
+                          <h3>提示词记录</h3>
+                          {copyButton('trace', promptTrace)}
+                        </div>
+                        <div className="image-properties__prompt" tabIndex={0}>{promptTrace}</div>
+                      </section>
+                    )}
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>
