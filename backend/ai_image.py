@@ -2300,7 +2300,9 @@ def get_smart_route_candidates(
         preferred_order = custom_rules[model_name]
     elif model_name == "gpt-image-2.5" or model_name in _APIMART_GPT_IMAGE_25_MODELS:
         effective_variant = "sunburst" if (variant_name == "sunburst" or model_name == "gpt-image-2.5-sunburst") else "flare"
-        if quality_clean not in ("", "auto"):
+        if res_upper == "1K" and quality_clean in {"low", "medium"}:
+            preferred_order = [PROVIDER_SUB2API, PROVIDER_APIMART]
+        elif quality_clean not in ("", "auto"):
             # Ext 不接受 quality；用户明确选择画质时先尝试不带 quality 的 Ext，
             # 失败后再由普通 APIMart 发送完整 quality 参数。
             preferred_order = [PROVIDER_APIMART]

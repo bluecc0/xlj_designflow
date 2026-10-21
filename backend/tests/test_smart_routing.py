@@ -85,6 +85,37 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                 ["apimart-ext", "apimart"],
             )
 
+    def test_gpt_image_25_low_medium_route(self) -> None:
+        with patch.multiple(
+            ai_image.settings,
+            cliproxy_base_url="http://sub2api:8080", cliproxy_api_key="sk-sub2api",
+            tuzi_base_url="http://tuzi", tuzi_api_key="sk-tuzi",
+            ai_image_api_key="sk-apimart", smart_routing_rules_json="",
+        ):
+            for model, variant in (
+                ("gpt-image-2.5", "flare"),
+                ("gpt-image-2.5", "sunburst"),
+                ("gpt-image-2.5-flare", "flare"),
+                ("gpt-image-2.5-sunburst", "sunburst"),
+            ):
+                for quality in ("low", "medium"):
+                    for resolution in ("1K", "2K", "4K"):
+                        with self.subTest(model=model, variant=variant, quality=quality, resolution=resolution):
+                            expected = ["apimart-ext", "apimart"]
+                            if resolution == "1K":
+                                expected = ["sub2api", *expected]
+                            self.assertEqual(
+                                ai_image.get_smart_route_candidates(
+                                    model, resolution=resolution, variant=variant, quality=quality,
+                                ),
+                                expected,
+                            )
+            with patch.object(ai_image.settings, "cliproxy_api_key", ""):
+                self.assertEqual(
+                    ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", quality="low"),
+                    ["apimart-ext", "apimart"],
+                )
+
     def test_gpt_image_25_xhigh_routes_to_apimart(self) -> None:
         with patch.object(ai_image.settings, "ai_image_api_key", "test"), patch.object(ai_image.settings, "smart_routing_rules_json", ""):
             self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.5", resolution="1K", quality="xhigh", filter_frozen=False), ["apimart-ext", "apimart"])
@@ -608,6 +639,48 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                 quality=q,
             )
             self.assertEqual(captured["json"]["quality"], q)
+
+    async def test_smart_route_omits_low_medium_quality_from_sub2api_requests(self) -> None:
+        requests = []
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, url, **kwargs):
+                requests.append((url, kwargs))
+                return httpx.Response(200, json={"data": [{"url": "http://sub2api/img.png"}]})
+
+        with patch.multiple(
+            ai_image.settings,
+            cliproxy_base_url="http://sub2api/v1", cliproxy_api_key="sk-test",
+            ai_image_api_key="sk-apimart", smart_routing_rules_json="",
+        ), patch("backend.ai_image.httpx.AsyncClient", FakeClient), \
+             patch("backend.ai_image._save_cliproxy_response_image", return_value=("/local.png", {})):
+            for variant in ("flare", "sunburst"):
+                for quality in ("low", "medium"):
+                    for with_reference in (False, True):
+                        with self.subTest(variant=variant, quality=quality, with_reference=with_reference):
+                            requests.clear()
+                            result = await ai_image.smart_generate_image_async(
+                                model="gpt-image-2.5", prompt="a prompt",
+                                size="auto", resolution="1K", variant=variant, quality=quality,
+                                images=[(b"reference", "reference.png")] if with_reference else None,
+                            )
+                            self.assertEqual(result["provider"], "sub2api")
+                            self.assertEqual(len(requests), 1)
+                            url, kwargs = requests[0]
+                            endpoint = "edits" if with_reference else "generations"
+                            self.assertEqual(url, f"http://sub2api/v1/images/{endpoint}")
+                            payload = kwargs["data" if with_reference else "json"]
+                            self.assertEqual(payload["model"], f"gpt-image-2.5-{variant}")
+                            self.assertNotIn("quality", payload)
 
     async def test_sub2api_omits_quality_parameter(self) -> None:
         captured = {}
