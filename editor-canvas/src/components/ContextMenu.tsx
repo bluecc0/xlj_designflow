@@ -31,6 +31,7 @@ import {
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
 import type { CanvasImage } from '../types'
+import { getOriginalImageViewerUrl } from '../utils/imageViewer'
 
 export interface ContextMenuState {
   visible: boolean
@@ -219,7 +220,7 @@ export const ContextMenu = memo(function ContextMenu({
             <a
               role="menuitem"
               data-action="view-original"
-              href={singleImage.url}
+              href={getOriginalImageViewerUrl(singleImage.url, singleImage.name)}
               target="_blank"
               rel="noopener noreferrer"
               onClick={onClose}

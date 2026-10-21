@@ -11,6 +11,7 @@ import {
 import type { CanvasImage, ReferenceImageItem } from '../types'
 import { useCanvasStore } from '../store/canvasStore'
 import { fetchImageMetadata, type ImageMetadataResponse } from '../services/aiImageService'
+import { getOriginalImageViewerUrl } from '../utils/imageViewer'
 import './ImagePropertiesModal.css'
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -366,7 +367,7 @@ const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
           {previewingImg ? (
             <div className="image-properties__preview">
               <img src={previewingImg.url} alt={previewingImg.title} />
-              <a href={previewingImg.url} target="_blank" rel="noopener noreferrer" className="image-properties__text-button">
+              <a href={getOriginalImageViewerUrl(previewingImg.url, previewingImg.title)} target="_blank" rel="noopener noreferrer" className="image-properties__text-button">
                 查看原图 <ExternalLink size={12} />
               </a>
             </div>
@@ -387,7 +388,7 @@ const ImagePropertiesModalContent = memo(function ImagePropertiesModalContent({
                     <span>{summary}</span>
                     {loadingMeta && !fileSizeText && <Loader2 size={12} className="animate-spin" aria-label="正在读取图片信息" />}
                   </div>
-                  <a href={image.url} target="_blank" rel="noopener noreferrer" className="image-properties__text-button">
+                  <a href={getOriginalImageViewerUrl(image.url, displayName)} target="_blank" rel="noopener noreferrer" className="image-properties__text-button">
                     查看原图 <ExternalLink size={11} />
                   </a>
                 </div>
