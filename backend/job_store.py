@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import threading
 import time
@@ -203,6 +204,14 @@ def init_db() -> None:
                 created_at       REAL NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS image_copy_links (
+                token_hash TEXT PRIMARY KEY,
+                asset_url TEXT NOT NULL,
+                expires_at REAL NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_image_copy_expiry ON image_copy_links(expires_at)")
         try:
             conn.execute("ALTER TABLE sessions ADD COLUMN password_marker TEXT")
         except sqlite3.OperationalError:
@@ -835,6 +844,33 @@ def get_or_create_user(username: str, password: str | None = None) -> dict:
 
 def _password_marker(password_hash: str) -> str:
     return hashlib.sha256(password_hash.encode()).hexdigest()
+
+
+def create_image_copy_link(asset_url: str, *, ttl_seconds: int = 3600) -> tuple[str, float]:
+    """Persist a single-image capability shared by workers, without storing its bearer token."""
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    expires_at = now + ttl_seconds
+    token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
+    with _connect() as conn:
+        conn.execute("DELETE FROM image_copy_links WHERE expires_at <= ?", (now,))
+        conn.execute(
+            "INSERT INTO image_copy_links (token_hash, asset_url, expires_at) VALUES (?, ?, ?)",
+            (token_hash, asset_url, expires_at),
+        )
+    return token, expires_at
+
+
+def get_image_copy_asset(token: str) -> str | None:
+    if len(token) != 43 or any(not (char.isascii() and (char.isalnum() or char in "_-")) for char in token):
+        return None
+    token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT asset_url FROM image_copy_links WHERE token_hash = ? AND expires_at > ?",
+            (token_hash, time.time()),
+        ).fetchone()
+    return row["asset_url"] if row else None
 
 
 def create_session(user_id: str) -> str:

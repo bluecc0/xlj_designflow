@@ -141,6 +141,8 @@ from .job_store import (
     delete_agent_project,
     delete_ai_chat_session,
     create_session,
+    create_image_copy_link,
+    get_image_copy_asset,
     delete_session,
     get_agent_project,
     get_ai_chat_session,
@@ -543,6 +545,12 @@ _jobs_lock = threading.Lock()
 _psd_jobs: dict[str, dict] = {}
 _psd_jobs_lock = threading.Lock()
 _SESSION_COOKIE = "designflow_session"
+_IMAGE_COPY_FORMATS = {
+    "PNG": ("image/png", "png"), "JPEG": ("image/jpeg", "jpg"),
+    "WEBP": ("image/webp", "webp"), "GIF": ("image/gif", "gif"),
+    "BMP": ("image/bmp", "bmp"), "TIFF": ("image/tiff", "tiff"),
+    "AVIF": ("image/avif", "avif"),
+}
 _AUTH_EXEMPT_PREFIXES = (
     "/auth/session",
     "/auth/login-lite",
@@ -564,6 +572,7 @@ _AUTH_EXEMPT_EXACT_PATHS = {
     "/",
     "/ai-image/client-event",
     "/ai-image/outpainting/config",
+    *(f"/image-copy/original.{extension}" for _, extension in _IMAGE_COPY_FORMATS.values()),
 }
 
 
@@ -723,14 +732,19 @@ def _normalize_public_asset_url(raw_url: str | None) -> str:
     return value
 
 
-def _resolve_public_asset_path(raw_url: str | None, user: dict | None = None) -> Path:
+def _resolve_public_asset_path(
+    raw_url: str | None, user: dict | None = None, *, decoded_path: bool = False,
+) -> Path:
     """只把站内公开资源 URL 解析成本地文件，避免任意路径/外链读取。"""
-    url = _normalize_public_asset_url(raw_url)
-    try:
-        parsed = urlsplit(url)
-        path = parsed.path or url
-    except Exception:
+    url = str(raw_url or "") if decoded_path else _normalize_public_asset_url(raw_url)
+    if decoded_path:
         path = url
+    else:
+        try:
+            parsed = urlsplit(url)
+            path = parsed.path or url
+        except Exception:
+            path = url
     path = str(path or "").strip()
     if not path:
         raise HTTPException(400, "图片地址不能为空")
@@ -2141,6 +2155,74 @@ async def attach_user_context(request: Request, call_next):
 
 
 # ─── 路由 ─────────────────────────────────────────────────────────────────────
+
+
+class ImageCopyLinkRequest(pydantic.BaseModel):
+    src: str = pydantic.Field(min_length=1, max_length=8192)
+
+
+def _image_copy_media_type(path: Path) -> str:
+    from PIL import Image, UnidentifiedImageError
+
+    # Never expose HTML, SVG, database files or arbitrary downloads through a capability.
+    try:
+        with Image.open(path) as image:
+            image_format = _IMAGE_COPY_FORMATS.get(image.format)
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
+        raise HTTPException(400, "仅支持原始图片文件") from exc
+    if not image_format:
+        raise HTTPException(400, "仅支持原始图片文件")
+    return image_format[0]
+
+
+@app.post("/image-copy/link")
+def image_copy_link(body: ImageCopyLinkRequest, request: Request):
+    user = _current_user(request)
+    try:
+        parsed = urlsplit(body.src.strip())
+        if parsed.scheme or parsed.netloc:
+            if (
+                parsed.scheme.lower() not in {"http", "https"}
+                or parsed.username or parsed.password
+                or parsed.netloc.casefold() != request.url.netloc.casefold()
+            ):
+                raise ValueError("external image")
+        path = unquote(parsed.path)
+    except ValueError as exc:
+        raise HTTPException(400, "仅支持站内图片地址") from exc
+    if not path.startswith("/") or path.startswith("//") or "\\" in path or "\x00" in path:
+        raise HTTPException(400, "图片地址无效")
+    candidate = _resolve_public_asset_path(path, user, decoded_path=True)
+    # Check the resolved file so aliases and dot segments cannot bypass outpainting isolation.
+    ai_root = (settings.output_path / "ai-images").resolve()
+    if ai_root in candidate.parents:
+        parts = candidate.relative_to(ai_root).parts
+        if len(parts) >= 2 and any(part.startswith("outpainting_") for part in parts[1:]):
+            _assert_strict_asset_owner(parts[0], user)
+    media_type = _image_copy_media_type(candidate)
+    extension = next(ext for mime, ext in _IMAGE_COPY_FORMATS.values() if mime == media_type)
+    token, expires_at = create_image_copy_link(path)
+    return JSONResponse(
+        {"url": f"/image-copy/original.{extension}?token={token}", "expires_at": expires_at},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.api_route("/image-copy/original.{extension}", methods=["GET", "HEAD"])
+def image_copy_file(extension: str, token: str = ""):
+    path = get_image_copy_asset(token)
+    if not path:
+        raise HTTPException(404, "图片链接无效或已过期，请重新打开原图")
+    # Resolve again so a changed symlink cannot escape the resource directory.
+    candidate = _resolve_public_asset_path(path, decoded_path=True)
+    media_type = _image_copy_media_type(candidate)
+    if (media_type, extension) not in _IMAGE_COPY_FORMATS.values():
+        raise HTTPException(404, "图片链接无效")
+    return FileResponse(
+        candidate, media_type=media_type, filename=candidate.name,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @app.get("/", include_in_schema=False)

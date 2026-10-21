@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
     <title>查看原图</title>
     <style>
       * { box-sizing: border-box; }
@@ -55,32 +56,51 @@
       const status = document.getElementById('status')
       const original = document.getElementById('original')
       const hint = document.getElementById('hint')
-      try {
-        const src = params.get('src')
-        if (!src) throw new Error('missing image')
-        const url = new URL(src, location.href)
-        if (!['http:', 'https:', 'blob:'].includes(url.protocol) &&
-            !(url.protocol === 'data:' && /^data:image\//i.test(src))) {
-          throw new Error('invalid image URL')
+      async function loadImage() {
+        try {
+          const src = params.get('src')
+          if (!src) throw new Error('missing image')
+          const url = new URL(src, location.href)
+          if (!['http:', 'https:', 'blob:'].includes(url.protocol) &&
+              !(url.protocol === 'data:' && /^data:image\//i.test(src))) {
+            throw new Error('invalid image URL')
+          }
+          const name = params.get('name') || '原图'
+          document.title = name
+          image.alt = name
+          image.onload = () => {
+            status.hidden = true
+            image.hidden = false
+            hint.hidden = false
+          }
+          image.onerror = () => {
+            status.textContent = '图片加载失败，请刷新后重试。'
+          }
+          original.href = url.href
+          original.hidden = false
+          let imageUrl = url.href
+          const protectedAsset = /^\/(?:ai-images\/|results\/|output\/|compose\/[^/]+\/image\/?$|export\/grid\/)/.test(url.pathname)
+          if (url.origin === location.origin && protectedAsset) {
+            const response = await fetch('/image-copy/link', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ src: url.pathname + url.search }),
+            })
+            if (!response.ok) throw new Error(response.status === 401 ? '请先登录系统，再刷新查看原图。' : '原图加载失败，请刷新后重试。')
+            const result = await response.json()
+            const copyUrl = new URL(result.url, location.origin)
+            if (copyUrl.origin !== location.origin || !/^\/image-copy\/original\.(png|jpg|webp|gif|bmp|tiff|avif)$/.test(copyUrl.pathname)) throw new Error('原图链接无效。')
+            imageUrl = copyUrl.href
+          }
+          // 复制出的 HTML 使用单图临时链接，WPS 无需浏览器登录状态即可取图。
+          image.src = imageUrl
+        } catch (error) {
+          status.textContent = error.message === 'missing image' || error.message === 'invalid image URL'
+            ? '图片地址无效。' : (error.message || '图片加载失败，请刷新后重试。')
         }
-        const name = params.get('name') || '原图'
-        document.title = name
-        image.alt = name
-        image.onload = () => {
-          status.hidden = true
-          image.hidden = false
-          hint.hidden = false
-        }
-        image.onerror = () => {
-          status.textContent = '图片加载失败，请刷新后重试。'
-        }
-        original.href = url.href
-        original.hidden = false
-        // 直接加载原始文件，保留浏览器原生的“复制图像”和“图片另存为”。
-        image.src = url.href
-      } catch {
-        status.textContent = '图片地址无效。'
       }
+      loadImage()
     </script>
   </body>
 </html>
