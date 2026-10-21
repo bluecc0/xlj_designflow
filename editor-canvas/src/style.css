@@ -410,6 +410,13 @@ button {
   touch-action: none;
 }
 
+.designflow-compare-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 .designflow-compare-img {
   position: absolute;
   inset: 0;
@@ -417,6 +424,28 @@ button {
   height: 100%;
   object-fit: contain;
   pointer-events: none;
+  transform-origin: 0 0;
+}
+
+.designflow-compare-zoom {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(20, 24, 33, 0.72);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+
+.designflow-compare-zoom:hover {
+  background: rgba(20, 24, 33, 0.88);
 }
 
 .designflow-compare-tag {
