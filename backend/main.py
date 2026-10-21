@@ -3420,7 +3420,7 @@ def download_special_zip(job_id: str, names: str = ""):
                 rgb = Image.new("RGB", img.size, (255, 255, 255))
                 rgb.paste(img, mask=img.getchannel("A"))
                 out = io.BytesIO()
-                rgb.save(out, format="JPEG", quality=92, optimize=True)
+                rgb.save(out, format="JPEG", quality=100, subsampling=0, optimize=True)
                 zf.writestr(zip_name, out.getvalue())
 
     buffer.seek(0)
@@ -3526,7 +3526,7 @@ def download_special_full_zip(job_id: str, names: str = "", request: Request = N
                 rgb = Image.new("RGB", img.size, (255, 255, 255))
                 rgb.paste(img, mask=img.getchannel("A"))
                 out = io.BytesIO()
-                rgb.save(out, format="JPEG", quality=92, optimize=True)
+                rgb.save(out, format="JPEG", quality=100, subsampling=0, optimize=True)
                 zf.writestr(zip_name, out.getvalue())
 
     buffer.seek(0)
