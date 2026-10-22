@@ -39,7 +39,7 @@ import {
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 import { loadImagesFromFiles } from './utils/imageLoader'
 import { DEFAULT_OUTPAINTING_LIMITS, getOutpaintingPlan } from './utils/outpainting'
-import { buildSnapshotSavePayload, isStaleSnapshotConflict } from './utils/snapshotSave'
+import { buildSnapshotSavePayload, isStaleSnapshotConflict, requestSnapshot } from './utils/snapshotSave'
 
 const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
 const editorSnapshotUrl = `/editor/snapshot?user_id=${encodeURIComponent(editorUserId)}`
@@ -104,6 +104,7 @@ export function App() {
   const isResolvingConflictRef = useRef(false)
   const conflictRetryTimerRef = useRef<any>(null)
   const saveInFlightRef = useRef(false)
+  const dirtySinceRef = useRef<number | null>(null)
   const autoSaveRetryTimerRef = useRef<any>(null)
   const wheelTimerRef = useRef<any>(null)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved')
@@ -1184,7 +1185,7 @@ export function App() {
 
     const loadSnapshot = async () => {
       try {
-        const response = await fetch(editorSnapshotUrl)
+        const response = await requestSnapshot(editorSnapshotUrl)
         if (!active) return
         if (!response.ok) {
           if (response.status === 401) {
@@ -1192,7 +1193,7 @@ export function App() {
           }
           throw new Error(`快照请求失败 (${response.status})`)
         }
-        const data = await response.json()
+        const data = response.body
         if (!active) return
         if (data.snapshot) {
           const parsed = typeof data.snapshot === 'string' ? JSON.parse(data.snapshot) : data.snapshot
@@ -1226,8 +1227,8 @@ export function App() {
 
     isResolvingConflictRef.current = true
 
-    fetch(editorSnapshotUrl)
-      .then((r) => (r.ok ? r.json() : null))
+    requestSnapshot(editorSnapshotUrl)
+      .then((r) => (r.ok ? r.body : null))
       .then((data) => {
         if (!isConflictRef.current) {
           isResolvingConflictRef.current = false
@@ -1266,7 +1267,7 @@ export function App() {
 
   const startConflictResolution = useCallback(() => {
     isConflictRef.current = true
-    setSaveStatus('error')
+    setSaveStatus('saving')
     if (isResolvingConflictRef.current) return
     clearTimeout(conflictRetryTimerRef.current)
     resolveConflict()
@@ -1275,21 +1276,28 @@ export function App() {
   // 组件卸载时清理独立冲突定时器
   useEffect(() => {
     return () => {
+      isConflictRef.current = false
       clearTimeout(conflictRetryTimerRef.current)
+      clearTimeout(autoSaveRetryTimerRef.current)
+      clearTimeout(wheelTimerRef.current)
     }
   }, [])
 
   // 5. 自动防抖存盘
   useEffect(() => {
-    if (!isDirty || !snapshotHydratedRef.current || !editorUserId) return
+    if (!isDirty) {
+      dirtySinceRef.current = null
+      return
+    }
+    if (!snapshotHydratedRef.current || !editorUserId) return
     if (isConflictRef.current) return // 冲突等待处理中时暂停主动保存
 
+    if (dirtySinceRef.current === null) dirtySinceRef.current = Date.now()
     setSaveStatus('saving')
     setSaveError('')
     const timer = setTimeout(() => {
       if (saveInFlightRef.current) {
-        // 前一个保存请求在途，重新递增序列号排入下一轮调度
-        useCanvasStore.setState((s) => ({ editSequence: (s.editSequence || 0) + 1 }))
+        // Completion updates the revision or schedules a retry; do not manufacture edits.
         return
       }
 
@@ -1300,8 +1308,9 @@ export function App() {
       const doc = getDocument()
 
       saveInFlightRef.current = true
+      dirtySinceRef.current = null
 
-      fetch(editorSnapshotUrl, {
+      requestSnapshot(editorSnapshotUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildSnapshotSavePayload(doc, state.baseDocument, baseRev, saveIntent)),
@@ -1310,29 +1319,31 @@ export function App() {
           if (res.ok) {
             isConflictRef.current = false
             clearTimeout(autoSaveRetryTimerRef.current)
-            return res.json().then((d) => {
-              markSaved(Number(d.revision || baseRev + 1), saveSeq, doc)
-              setSaveStatus(useCanvasStore.getState().isDirty ? 'saving' : 'saved')
-            })
+            const d = res.body
+            if (d?.saved !== true || !Number.isInteger(d.revision) || d.revision <= baseRev) {
+              throw new Error('服务端未确认保存成功')
+            }
+            markSaved(d.revision, saveSeq, doc)
+            setSaveStatus(useCanvasStore.getState().isDirty ? 'saving' : 'saved')
           } else if (res.status === 401) {
             console.warn('[Canvas] 会话未认证或已过期 (401)，保存未执行，保留本地修改')
             setSaveStatus('error')
-            setSaveError('登录已失效，重新登录后继续保存')
+            setSaveError('登录已过期，本地修改尚未保存，请重新登录')
             window.parent.postMessage({ type: 'designflow:auth-required' }, '*')
             clearTimeout(autoSaveRetryTimerRef.current)
           } else if (res.status === 409) {
-            return res.json().catch(() => null).then((body) => {
-              if (isStaleSnapshotConflict(body)) {
-                startConflictResolution()
-              } else {
-                console.warn('[Canvas] 保存被保护性拒绝，保留本地修改:', body)
-                clearTimeout(autoSaveRetryTimerRef.current)
-                setSaveError('保存被安全保护拦截，本地修改尚未保存，请勿刷新或关闭页面')
-                setSaveStatus('error')
-              }
-            })
+            const body = res.body
+            if (isStaleSnapshotConflict(body)) {
+              startConflictResolution()
+            } else {
+              console.warn('[Canvas] 保存被保护性拒绝，保留本地修改:', body)
+              clearTimeout(autoSaveRetryTimerRef.current)
+              setSaveError('保存被安全保护拦截，本地修改尚未保存，请勿刷新或关闭页面')
+              setSaveStatus('error')
+            }
           } else {
             setSaveStatus('error')
+            setSaveError(`服务器暂时无法保存 (${res.status})，本地修改已保留，稍后自动重试`)
             clearTimeout(autoSaveRetryTimerRef.current)
             autoSaveRetryTimerRef.current = setTimeout(() => {
               if (useCanvasStore.getState().isDirty && snapshotHydratedRef.current && !isConflictRef.current) {
@@ -1344,6 +1355,7 @@ export function App() {
         .catch((err) => {
           console.warn('[Canvas] 保存网络失败:', err)
           setSaveStatus('error')
+          setSaveError('保存请求超时或网络异常，本地修改已保留，稍后自动重试')
           clearTimeout(autoSaveRetryTimerRef.current)
           autoSaveRetryTimerRef.current = setTimeout(() => {
             if (useCanvasStore.getState().isDirty && snapshotHydratedRef.current && !isConflictRef.current) {
@@ -1354,21 +1366,27 @@ export function App() {
         .finally(() => {
           saveInFlightRef.current = false
         })
-    }, 800)
+    }, Math.max(0, Math.min(800, 5000 - (Date.now() - dirtySinceRef.current))))
 
     return () => {
       clearTimeout(timer)
-      clearTimeout(autoSaveRetryTimerRef.current)
     }
   }, [isDirty, editSequence, revision, getDocument, markSaved, startConflictResolution])
 
   // 页面卸载或刷新时，如有未保存的修改，发起 keepalive 同步存盘，避免刷新丢数据
   useEffect(() => {
-    const handleBeforeUnload = () => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       const state = useCanvasStore.getState()
       if (!state.isDirty || !snapshotHydratedRef.current || !editorUserId || isConflictRef.current) {
+        if (state.isDirty) {
+          event.preventDefault()
+          event.returnValue = ''
+        }
         return
       }
+      // keepalive has a small browser quota; never treat it as confirmed persistence.
+      event.preventDefault()
+      event.returnValue = ''
       const doc = getDocument()
       const payload = JSON.stringify(buildSnapshotSavePayload(
         doc, state.baseDocument, state.revision, state.lastSaveIntent || 'update',
@@ -1582,7 +1600,14 @@ export function App() {
     >
       {/* 顶部多画板标签栏与存盘指示 */}
       <div style={{ pointerEvents: isPanning ? 'none' : 'auto' }}>
-        <TopBar saveStatus={saveStatus} saveError={saveError} />
+        <TopBar saveStatus={saveStatus} saveError={saveError} onRetrySave={() => {
+          if (isConflictRef.current) {
+            startConflictResolution()
+          } else if (!saveInFlightRef.current && snapshotHydratedRef.current) {
+            clearTimeout(autoSaveRetryTimerRef.current)
+            useCanvasStore.setState((s) => ({ editSequence: s.editSequence + 1 }))
+          }
+        }} />
       </div>
 
       {/* 点阵网格背景 */}

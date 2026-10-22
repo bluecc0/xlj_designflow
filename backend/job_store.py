@@ -1893,7 +1893,7 @@ def _should_reject_editor_snapshot_overwrite(old_json: str | None, new_json: str
         return True
 
     # 2. 初始空画板覆盖保护（加载失败/崩溃时产生的默认单页 0 图快照覆盖原有有效数据）：
-    if (old["shapes"] >= 3 or old["pages"] > 1) and new["shapes"] == 0:
+    if old["shapes"] > 0 and (old["shapes"] >= 3 or old["pages"] > 1) and new["shapes"] == 0:
         return True
 
     # 3. 多页画板丢失/崩溃折叠保护：

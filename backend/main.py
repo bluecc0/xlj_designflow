@@ -6742,7 +6742,8 @@ async def editor_save_snapshot(request: Request):
         deleted_record_ids = None
 
     raw = json.dumps(snapshot, ensure_ascii=False) if not isinstance(snapshot, str) else snapshot
-    ok, rev, reason = save_editor_snapshot(
+    ok, rev, reason = await asyncio.to_thread(
+        save_editor_snapshot,
         user["id"],
         raw,
         base_revision=base_revision,

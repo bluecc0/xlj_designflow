@@ -1,12 +1,14 @@
 import React from 'react'
+import { RotateCw } from 'lucide-react'
 import { PageDropdown } from './PageDropdown'
 
 interface Props {
   saveStatus: 'saved' | 'saving' | 'error'
   saveError?: string
+  onRetrySave?: () => void
 }
 
-export function TopBar({ saveStatus, saveError }: Props) {
+export function TopBar({ saveStatus, saveError, onRetrySave }: Props) {
   return (
     <div
       style={{
@@ -57,6 +59,18 @@ export function TopBar({ saveStatus, saveError }: Props) {
           {saveStatus === 'saving' ? '保存中' : saveStatus === 'error' ? '保存失败' : '已保存'}
         </span>
       </div>
+      {saveStatus === 'error' && onRetrySave && (
+        <button
+          type="button"
+          title="重试保存"
+          aria-label="重试保存"
+          onClick={onRetrySave}
+          style={{ width: 24, height: 24, display: 'grid', placeItems: 'center', padding: 0,
+            border: 0, background: 'transparent', color: '#64748b', cursor: 'pointer' }}
+        >
+          <RotateCw size={13} />
+        </button>
+      )}
     </div>
   )
 }
