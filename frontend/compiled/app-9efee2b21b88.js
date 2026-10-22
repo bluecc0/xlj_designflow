@@ -14266,7 +14266,8 @@ const LiteLoginGate = ({
   onLogin,
   loading,
   error,
-  initialName
+  initialName,
+  reauth
 }) => {
   const [name, setName] = React.useState(initialName || '');
   const [password, setPassword] = React.useState('');
@@ -14348,9 +14349,9 @@ const LiteLoginGate = ({
     className: "lg-brandmeta"
   }, "\u946B\u4E50\u7EAAAI\u89C6\u89C9\u521B\u4F5C\u5E73\u53F0"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
     className: "lg-title"
-  }, "\u6B22\u8FCE\u56DE\u6765"), /*#__PURE__*/React.createElement("div", {
+  }, reauth ? '登录已失效' : '欢迎回来'), /*#__PURE__*/React.createElement("div", {
     className: "lg-sub"
-  }, "\u767B\u5F55\u540E\u8FDB\u5165 AI \u7535\u5546\u8BBE\u8BA1\u5DE5\u4F5C\u53F0\u3002")), /*#__PURE__*/React.createElement("div", {
+  }, reauth ? '重新登录后继续，当前画布会保留。' : '登录后进入 AI 电商设计工作台。')), /*#__PURE__*/React.createElement("div", {
     className: "lg-field"
   }, /*#__PURE__*/React.createElement("input", {
     className: "lg-input",
@@ -14399,9 +14400,55 @@ const LiteLoginGate = ({
     type: "submit",
     className: "lg-btn",
     disabled: !canSubmit
-  }, loading ? '进入中...' : '进入工作台'), /*#__PURE__*/React.createElement("div", {
+  }, loading ? '登录中...' : reauth ? '重新登录' : '进入工作台'), /*#__PURE__*/React.createElement("div", {
     className: "lg-foot"
   }, "AI \u9A71\u52A8\xB7\u5173\u8054\u672C\u5730\u7D20\u6750\u5E93\xB7\u56E2\u961F\u5171\u4EAB")));
+};
+const ConnectionStatus = () => {
+  const monitor = window.DesignflowConnection;
+  const [state, setState] = React.useState(() => monitor ? monitor.getSnapshot() : {
+    status: 'online'
+  });
+  React.useEffect(() => monitor ? monitor.subscribe(setState) : undefined, [monitor]);
+  const messages = {
+    offline: '网络已断开，正在等待重连…',
+    reconnecting: '连接中断，正在重连…',
+    recovering: '连接已恢复，正在恢复任务状态…',
+    restored: '连接已恢复'
+  };
+  const message = messages[state.status];
+  if (!message) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    role: "status",
+    "aria-live": "polite",
+    style: {
+      position: 'fixed',
+      top: 12,
+      left: '50%',
+      transform: 'translateX(-50%)',
+      zIndex: 300,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '9px 14px',
+      borderRadius: 20,
+      background: 'var(--panel, #fff)',
+      color: 'var(--ink, #202127)',
+      border: '1px solid var(--line, #ddd)',
+      boxShadow: '0 4px 18px rgba(0,0,0,.08)',
+      fontSize: 12,
+      whiteSpace: 'nowrap',
+      pointerEvents: 'none'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    "aria-hidden": "true",
+    style: {
+      width: 6,
+      height: 6,
+      borderRadius: '50%',
+      background: state.status === 'restored' ? '#45845a' : '#c18a36'
+    }
+  }), message);
 };
 const FlipStage = ({
   inspirationOpen,
@@ -14549,6 +14596,7 @@ const App = () => {
     }
   });
   const [reauthOpen, setReauthOpen] = React.useState(false);
+  const reauthRequestedRef = React.useRef(false);
   const updateTweaks = partial => {
     const next = {
       ...tweaks,
@@ -14565,6 +14613,7 @@ const App = () => {
   const rememberUser = React.useCallback(user => {
     const username = user && user.username ? String(user.username).trim() : '';
     setCurrentUser(user || null);
+    if (window.DesignflowConnection) window.DesignflowConnection.setUser(user);
     if (!username) return;
     setLastUsername(username);
     try {
@@ -14680,6 +14729,8 @@ const App = () => {
   }, []);
   React.useEffect(() => {
     const handleAuthRequired = () => {
+      if (reauthRequestedRef.current) return;
+      reauthRequestedRef.current = true;
       setAuthLoading(false);
       setAuthError('登录状态已失效，请重新输入用户名和密码。');
       setReauthOpen(true);
@@ -14687,6 +14738,21 @@ const App = () => {
     window.addEventListener('designflow-auth-required', handleAuthRequired);
     return () => window.removeEventListener('designflow-auth-required', handleAuthRequired);
   }, []);
+  React.useEffect(() => {
+    const handleAuthRestored = () => {
+      if (!currentUser) return;
+      reauthRequestedRef.current = false;
+      setReauthOpen(false);
+      setAuthError('');
+      setEditorCommand({
+        key: Date.now() + Math.random(),
+        type: 'auth-restored',
+        user: currentUser
+      });
+    };
+    window.addEventListener('designflow-auth-restored', handleAuthRestored);
+    return () => window.removeEventListener('designflow-auth-restored', handleAuthRestored);
+  }, [currentUser]);
   React.useEffect(() => {
     const onHashChange = () => setCurrentView(getViewFromHash());
     window.addEventListener('hashchange', onHashChange);
@@ -14735,6 +14801,7 @@ const App = () => {
       const user = await window.API.loginLite(username, password);
       const isSameUser = currentUser && String(currentUser.id) === String(user.id);
       rememberUser(user);
+      reauthRequestedRef.current = false;
       setReauthOpen(false);
       if (!isSameUser) {
         setResultTemplate(null);
@@ -14756,6 +14823,8 @@ const App = () => {
       await window.API.logout();
     } catch (e) {}
     setCurrentUser(null);
+    if (window.DesignflowConnection) window.DesignflowConnection.setUser(null);
+    reauthRequestedRef.current = false;
     setReauthOpen(false);
     setResultTemplate(null);
     setEditorCommand(null);
@@ -14782,11 +14851,12 @@ const App = () => {
       flexDirection: 'column',
       overflow: 'hidden'
     }
-  }, (!currentUser || reauthOpen) && /*#__PURE__*/React.createElement(LiteLoginGate, {
+  }, /*#__PURE__*/React.createElement(ConnectionStatus, null), (!currentUser || reauthOpen) && /*#__PURE__*/React.createElement(LiteLoginGate, {
     onLogin: handleLogin,
     loading: authLoading,
     error: authError,
-    initialName: lastUsername || (currentUser ? currentUser.username : '')
+    initialName: lastUsername || (currentUser ? currentUser.username : ''),
+    reauth: reauthOpen && !!currentUser
   }), currentUser && showAdmin && /*#__PURE__*/React.createElement(AdminPage, {
     user: currentUser,
     onBack: () => navigateTo('')

@@ -6,7 +6,7 @@
     var nextInit = Object.assign({ credentials: 'include' }, init || {});
     return fetch(BASE + path, nextInit).then(function(resp) {
       if (!resp.ok) {
-        if (resp.status === 401) {
+        if (resp.status === 401 && !path.startsWith('/auth/') && !window.DesignflowConnection) {
           try {
             window.dispatchEvent(new CustomEvent('designflow-auth-required'));
           } catch (e) {}

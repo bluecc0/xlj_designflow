@@ -1317,13 +1317,9 @@ export function App() {
           } else if (res.status === 401) {
             console.warn('[Canvas] 会话未认证或已过期 (401)，保存未执行，保留本地修改')
             setSaveStatus('error')
+            setSaveError('登录已失效，重新登录后继续保存')
             window.parent.postMessage({ type: 'designflow:auth-required' }, '*')
             clearTimeout(autoSaveRetryTimerRef.current)
-            autoSaveRetryTimerRef.current = setTimeout(() => {
-              if (useCanvasStore.getState().isDirty && snapshotHydratedRef.current && !isConflictRef.current) {
-                useCanvasStore.setState((s) => ({ editSequence: (s.editSequence || 0) + 1 }))
-              }
-            }, 4000)
           } else if (res.status === 409) {
             return res.json().catch(() => null).then((body) => {
               if (isStaleSnapshotConflict(body)) {

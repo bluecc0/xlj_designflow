@@ -10,6 +10,8 @@ import './style.css'
 const CANVAS_BUILD_REVISION = '2026-10-18-outfit-tab-state'
 
 if (typeof window !== 'undefined') {
+  // Share the host's connection and session feedback for every canvas request.
+  try { (window.parent as any).DesignflowConnection?.install(window) } catch {}
   ;(window as any).__canvasStore = useCanvasStore
   ;(window as any).__canvasBuildRevision = CANVAS_BUILD_REVISION
 }
