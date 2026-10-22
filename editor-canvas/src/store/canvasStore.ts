@@ -1708,9 +1708,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     // 1. 基于基线、本地和远端进行 3-Way Merge
     let mergedPages = threeWayMergeList(baseDoc.pages || [], current.pages, serverDoc.pages || [])
     const mergedGroups = threeWayMergeList(baseDoc.groups || [], current.groups || [], serverDoc.groups || [])
-    const mergedFrames = threeWayMergeList(baseDoc.frames || [], current.frames, serverDoc.frames || [])
-    const mergedImages = threeWayMergeList(baseDoc.images || [], current.images, serverDoc.images || [])
-    const mergedTexts = threeWayMergeList(baseDoc.texts || [], current.texts || [], serverDoc.texts || [])
+    // Relationship repair must not mutate objects still held by the live store or history.
+    const mergedFrames = threeWayMergeList(baseDoc.frames || [], current.frames, serverDoc.frames || []).map((f) => ({ ...f }))
+    const mergedImages = threeWayMergeList(baseDoc.images || [], current.images, serverDoc.images || []).map((im) => ({ ...im }))
+    const mergedTexts = threeWayMergeList(baseDoc.texts || [], current.texts || [], serverDoc.texts || []).map((t) => ({ ...t }))
 
     // 修复可能失效的 groupId
     const validGroupIds = new Set(mergedGroups.map((g) => g.id))

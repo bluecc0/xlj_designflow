@@ -1,5 +1,21 @@
 import type { CanvasDocument } from '../types'
 
+// Include response-body reads in the deadline, not only the initial headers.
+export async function requestSnapshot(url: string, init?: RequestInit, timeoutMs = 15000) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal })
+    const body = await response.json().catch((error) => {
+      if (response.ok || controller.signal.aborted) throw error
+      return null
+    })
+    return { ok: response.ok, status: response.status, body }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export function buildSnapshotSavePayload(
   doc: CanvasDocument,
   base: CanvasDocument | null,

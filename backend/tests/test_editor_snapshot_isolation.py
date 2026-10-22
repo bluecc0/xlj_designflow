@@ -23,6 +23,30 @@ def _request(user_id: str = "") -> Request:
 
 
 class EditorSnapshotIsolationTest(unittest.TestCase):
+    def test_snapshot_database_save_does_not_run_on_event_loop_thread(self) -> None:
+        import asyncio
+        import threading
+
+        loop_thread = threading.get_ident()
+        worker_threads = []
+
+        def persist(*args, **kwargs):
+            worker_threads.append(threading.get_ident())
+            return True, 2, None
+
+        async def body():
+            return {"snapshot": '{"version":2,"pages":[{"id":"p1"}],"images":[]}',
+                    "base_revision": 1}
+
+        req = _request("admin")
+        req.scope["headers"] = [(b"content-type", b"application/json")]
+        with (patch.object(main, "_current_user", return_value={"id": "admin"}),
+              patch.object(main, "save_editor_snapshot", side_effect=persist),
+              patch.object(req, "json", side_effect=body)):
+            self.assertEqual(asyncio.run(main.editor_save_snapshot(req)), {"saved": True, "revision": 2})
+        self.assertEqual(len(worker_threads), 1)
+        self.assertNotEqual(worker_threads[0], loop_thread)
+
     def test_rejects_snapshot_request_from_stale_user_context(self) -> None:
         with patch.object(main, "_current_user", return_value={"id": "operator_a"}):
             with self.assertRaises(HTTPException) as raised:
@@ -164,6 +188,25 @@ class EditorSnapshotIsolationTest(unittest.TestCase):
                 self.assertTrue(ok)
                 self.assertEqual(rev2, 2)
 
+    def test_empty_multipage_snapshot_can_be_saved_again(self) -> None:
+        import json
+        from backend import job_store
+
+        doc = {
+            "version": 2, "pages": [{"id": f"p{i}"} for i in range(3)],
+            "images": [], "frames": [], "texts": [],
+        }
+        updated = {**doc, "viewport": {"zoom": 2, "panX": 100, "panY": 50}}
+        self.assertFalse(job_store._should_reject_editor_snapshot_overwrite(
+            json.dumps(doc), json.dumps(updated),
+        ))
+        self.assertTrue(job_store._should_reject_editor_snapshot_overwrite(
+            json.dumps({**doc, "images": [{"id": "img-1"}]}), json.dumps(updated),
+        ))
+        self.assertTrue(job_store._should_reject_editor_snapshot_overwrite(
+            json.dumps(doc), json.dumps({**doc, "pages": doc["pages"][:1]}),
+        ))
+
     def test_wrapped_canvas_deletion_matches_native_ids_without_disabling_protection(self) -> None:
         import json
         import tempfile
@@ -203,6 +246,9 @@ class EditorSnapshotIsolationTest(unittest.TestCase):
                 self.assertEqual(result, (True, 2, None))
                 stored, _ = job_store.load_editor_snapshot("test_user")
                 self.assertEqual(json.loads(stored)["designflowCanvasDocument"]["images"], [])
+                self.assertEqual(job_store.save_editor_snapshot(
+                    "test_user", json.dumps(empty), base_revision=2, intent="update",
+                ), (True, 3, None))
 
     def test_unauthenticated_snapshot_save_is_rejected_without_modifying_db(self) -> None:
         import json
