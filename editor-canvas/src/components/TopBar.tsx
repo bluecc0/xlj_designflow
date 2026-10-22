@@ -3,9 +3,10 @@ import { PageDropdown } from './PageDropdown'
 
 interface Props {
   saveStatus: 'saved' | 'saving' | 'error'
+  saveError?: string
 }
 
-export function TopBar({ saveStatus }: Props) {
+export function TopBar({ saveStatus, saveError }: Props) {
   return (
     <div
       style={{
@@ -41,7 +42,7 @@ export function TopBar({ saveStatus }: Props) {
           gap: 5,
           paddingLeft: 3,
         }}
-        title={saveStatus === 'saving' ? '正在保存到云端…' : saveStatus === 'error' ? '保存遇到异常' : '云端已实时同步'}
+        title={saveStatus === 'saving' ? '正在保存到云端…' : saveStatus === 'error' ? saveError || '保存遇到异常' : '云端已实时同步'}
       >
         <div
           style={{

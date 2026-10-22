@@ -1802,11 +1802,15 @@ def _should_reject_editor_snapshot_overwrite(old_json: str | None, new_json: str
     return False
 
 
-def _editor_snapshot_canvas_record_ids(snapshot_json: str) -> set[str]:
+def _editor_snapshot_canvas_record_ids(snapshot_json: str, *, prefer_canvas: bool = True) -> set[str]:
     try:
         snapshot = json.loads(snapshot_json)
     except Exception:
         return set()
+    if prefer_canvas and isinstance(snapshot, dict):
+        canvas = snapshot.get('designflowCanvasDocument')
+        if isinstance(canvas, dict) and canvas.get('version') == 2:
+            snapshot = canvas
     if isinstance(snapshot, dict) and (
         snapshot.get("version") == 2
         or "pages" in snapshot
@@ -1847,8 +1851,12 @@ def _matches_declared_editor_delete(
     declared = {str(record_id) for record_id in (deleted_record_ids or []) if record_id}
     if not declared:
         return False
-    removed = _editor_snapshot_canvas_record_ids(old_json) - _editor_snapshot_canvas_record_ids(new_json)
-    return bool(removed) and removed == declared
+    # Support native canvas IDs and legacy clients without weakening exact deletion matching.
+    for prefer_canvas in (True, False):
+        removed = _editor_snapshot_canvas_record_ids(old_json, prefer_canvas=prefer_canvas) - _editor_snapshot_canvas_record_ids(new_json, prefer_canvas=prefer_canvas)
+        if removed and removed == declared:
+            return True
+    return False
 
 
 def save_editor_snapshot(
@@ -1899,6 +1907,10 @@ def save_editor_snapshot(
         if new_stats["pages"] == 0:
             return False, old_revision, "invalid_snapshot_structure"
 
+        # Rebase stale clients before checking deletions against the latest document.
+        if base_revision is not None and int(base_revision) != old_revision:
+            return False, old_revision, "stale_revision"
+
         # 2. 大幅缩减只允许删除集合与客户端声明完全一致。单独的 user_delete
         # 标记不足以证明整份快照清空来自用户操作，避免后续异常空白借此绕过保护。
         destructive_overwrite = _should_reject_editor_snapshot_overwrite(old_json, snapshot_json)
@@ -1916,10 +1928,6 @@ def save_editor_snapshot(
 
         # 3. 如果客户端显式提供了 base_revision：必须与当前数据库里的 old_revision 完全一致
         if base_revision is not None:
-            if int(base_revision) != old_revision:
-                # 严格拒绝所有过期的 stale 提交，不给机会溜到后面的覆盖分支！
-                return False, old_revision, "stale_revision"
-
             new_revision = old_revision + 1
             conn.execute(
                 """

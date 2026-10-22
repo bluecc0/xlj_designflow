@@ -164,6 +164,46 @@ class EditorSnapshotIsolationTest(unittest.TestCase):
                 self.assertTrue(ok)
                 self.assertEqual(rev2, 2)
 
+    def test_wrapped_canvas_deletion_matches_native_ids_without_disabling_protection(self) -> None:
+        import json
+        import tempfile
+        from pathlib import Path
+        from backend import job_store
+
+        doc = {
+            "version": 2, "pages": [{"id": f"p{i}", "name": f"P{i}"} for i in range(3)],
+            "activePageId": "p0", "frames": [], "texts": [],
+            "images": [{"id": f"img-{i}", "pageId": "p0", "url": "/a.png"} for i in range(2)],
+        }
+        template = {"document": {"store": {"page:old": {"typeName": "page"}}}}
+        wrapped = job_store._canvas_document_to_tldraw_snapshot(doc, template)
+        empty = {**doc, "images": []}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (patch.object(job_store, "_DB_PATH", Path(temp_dir) / "jobs.db"),
+                  patch.object(job_store.settings, "root_dir", Path(temp_dir))):
+                job_store.init_db()
+                self.assertTrue(job_store.save_editor_snapshot("test_user", json.dumps(wrapped))[0])
+                for intent, ids in [("update", []), ("user_delete", []), ("user_delete", ["img-0"])]:
+                    ok, revision, reason = job_store.save_editor_snapshot(
+                        "test_user", json.dumps(empty), base_revision=1,
+                        intent=intent, deleted_record_ids=ids,
+                    )
+                    self.assertFalse(ok)
+                    self.assertEqual(reason, "uninitialized_overwrite_rejected")
+                    self.assertEqual(revision, 1)
+                result = job_store.save_editor_snapshot(
+                    "test_user", json.dumps(empty), base_revision=0, intent="user_delete",
+                    deleted_record_ids=["img-0", "img-1"],
+                )
+                self.assertEqual(result, (False, 1, "stale_revision"))
+                result = job_store.save_editor_snapshot(
+                    "test_user", json.dumps(empty), base_revision=1, intent="user_delete",
+                    deleted_record_ids=["img-0", "img-1"],
+                )
+                self.assertEqual(result, (True, 2, None))
+                stored, _ = job_store.load_editor_snapshot("test_user")
+                self.assertEqual(json.loads(stored)["designflowCanvasDocument"]["images"], [])
+
     def test_unauthenticated_snapshot_save_is_rejected_without_modifying_db(self) -> None:
         import json
         from backend import job_store

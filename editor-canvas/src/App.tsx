@@ -39,6 +39,7 @@ import {
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 import { loadImagesFromFiles } from './utils/imageLoader'
 import { DEFAULT_OUTPAINTING_LIMITS, getOutpaintingPlan } from './utils/outpainting'
+import { buildSnapshotSavePayload, isStaleSnapshotConflict } from './utils/snapshotSave'
 
 const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
 const editorSnapshotUrl = `/editor/snapshot?user_id=${encodeURIComponent(editorUserId)}`
@@ -106,6 +107,7 @@ export function App() {
   const autoSaveRetryTimerRef = useRef<any>(null)
   const wheelTimerRef = useRef<any>(null)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved')
+  const [saveError, setSaveError] = useState('')
   const [snapshotStatus, setSnapshotStatus] = useState<'loading' | 'ready' | 'error'>('loading')
 
   const claimOperation = useAIOperationStore((s) => s.claimOperation)
@@ -1240,7 +1242,7 @@ export function App() {
               isResolvingConflictRef.current = false
               clearTimeout(conflictRetryTimerRef.current)
               mergeConflictDocument(converted, Number(data.revision || useCanvasStore.getState().revision + 1))
-              setSaveStatus('saving')
+              setSaveStatus(useCanvasStore.getState().isDirty ? 'saving' : 'saved')
               return
             }
           } catch (err) {
@@ -1283,6 +1285,7 @@ export function App() {
     if (isConflictRef.current) return // 冲突等待处理中时暂停主动保存
 
     setSaveStatus('saving')
+    setSaveError('')
     const timer = setTimeout(() => {
       if (saveInFlightRef.current) {
         // 前一个保存请求在途，重新递增序列号排入下一轮调度
@@ -1301,11 +1304,7 @@ export function App() {
       fetch(editorSnapshotUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          snapshot: JSON.stringify(doc),
-          base_revision: baseRev,
-          intent: saveIntent,
-        }),
+        body: JSON.stringify(buildSnapshotSavePayload(doc, state.baseDocument, baseRev, saveIntent)),
       })
         .then((res) => {
           if (res.ok) {
@@ -1313,7 +1312,7 @@ export function App() {
             clearTimeout(autoSaveRetryTimerRef.current)
             return res.json().then((d) => {
               markSaved(Number(d.revision || baseRev + 1), saveSeq, doc)
-              setSaveStatus('saved')
+              setSaveStatus(useCanvasStore.getState().isDirty ? 'saving' : 'saved')
             })
           } else if (res.status === 401) {
             console.warn('[Canvas] 会话未认证或已过期 (401)，保存未执行，保留本地修改')
@@ -1326,8 +1325,16 @@ export function App() {
               }
             }, 4000)
           } else if (res.status === 409) {
-            console.warn('[Canvas] 检测到服务端版本冲突 (409)，启动独立冲突解决控制器')
-            startConflictResolution()
+            return res.json().catch(() => null).then((body) => {
+              if (isStaleSnapshotConflict(body)) {
+                startConflictResolution()
+              } else {
+                console.warn('[Canvas] 保存被保护性拒绝，保留本地修改:', body)
+                clearTimeout(autoSaveRetryTimerRef.current)
+                setSaveError('保存被安全保护拦截，本地修改尚未保存，请勿刷新或关闭页面')
+                setSaveStatus('error')
+              }
+            })
           } else {
             setSaveStatus('error')
             clearTimeout(autoSaveRetryTimerRef.current)
@@ -1367,11 +1374,9 @@ export function App() {
         return
       }
       const doc = getDocument()
-      const payload = JSON.stringify({
-        snapshot: JSON.stringify(doc),
-        base_revision: state.revision,
-        intent: state.lastSaveIntent || 'update',
-      })
+      const payload = JSON.stringify(buildSnapshotSavePayload(
+        doc, state.baseDocument, state.revision, state.lastSaveIntent || 'update',
+      ))
       try {
         fetch(editorSnapshotUrl, {
           method: 'POST',
@@ -1581,7 +1586,7 @@ export function App() {
     >
       {/* 顶部多画板标签栏与存盘指示 */}
       <div style={{ pointerEvents: isPanning ? 'none' : 'auto' }}>
-        <TopBar saveStatus={saveStatus} />
+        <TopBar saveStatus={saveStatus} saveError={saveError} />
       </div>
 
       {/* 点阵网格背景 */}
