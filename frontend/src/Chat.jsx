@@ -5864,8 +5864,20 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
               const frameIds = s.result_frame_ids || [];
               return frameIds.map((_, i) => `/results/${job['id']}/frame_${i}.png`);
             };
-            const urls = buildUrls();
-            const frameNames = (effectiveTemplate.frames && effectiveTemplate.frames.length > 0 ? effectiveTemplate.frames : [effectiveTemplate]).map(f => f.name || f.variant || '画板');
+            const frameNames = s.result_frame_names && s.result_frame_names.length > 0
+              ? s.result_frame_names
+              : (effectiveTemplate.frames && effectiveTemplate.frames.length > 0 ? effectiveTemplate.frames : [effectiveTemplate]).map(f => f.name || f.variant || '画板');
+            const resultImages = Array.isArray(s.result_images) && s.result_images.length > 0
+              ? s.result_images.map(function(image) {
+                  return {
+                    url: image.url,
+                    name: image.name,
+                    meta: { specialComposeSourceUrl: image.url, specialComposeDownloadUrl: image.download_url },
+                    frameIndex: image.frame_index,
+                  };
+                })
+              : buildUrls().map(function(url) { return { url }; });
+            const urls = resultImages.map(function(image) { return image.url; });
             const zipUrl = `${_pollBase}/${job['id']}/download-zip?names=${encodeURIComponent(frameNames.join(','))}`;
             setMessages(msgs => msgs.map((m, idx) => {
               if (idx !== specialMsgIdx) return m;
@@ -5875,12 +5887,16 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
             if (onComposeComplete && urls.length > 0 && effectiveTemplate) {
               const base = structuredClone(effectiveTemplate);
               const baseFrames = base.frames && base.frames.length > 0 ? base.frames : [base];
-              base.frames = urls.map((url, i) => ({ ...(baseFrames[i % baseFrames.length] || baseFrames[0]), resultUrl: url }));
+              base.frames = resultImages.map((image, i) => ({
+                ...(baseFrames[image.frameIndex != null ? image.frameIndex : i] || baseFrames[0]),
+                name: image.name || frameNames[image.frameIndex != null ? image.frameIndex : i] || '画板',
+                resultUrl: image.url,
+              }));
               base._frameNames = frameNames;
               window.lastComposeJobId = job['id'];
               window.lastComposeEndpoint = _pollBase;
               window.lastComposeFrameNames = frameNames;
-              onComposeComplete(null, s.penpot_edit_url, urls, base);
+              onComposeComplete(null, s.penpot_edit_url, resultImages, base);
             }
             done = true;
           } else if (s.status === 'failed') {

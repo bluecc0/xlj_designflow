@@ -70,6 +70,8 @@ export interface CanvasImageMeta {
   referenceImages?: ReferenceImageItem[]
   fileSize?: number
   mimeType?: string
+  specialComposeSourceUrl?: string
+  specialComposeDownloadUrl?: string
   requestMeta?: Record<string, any>
   [key: string]: any
 }

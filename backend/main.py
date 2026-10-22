@@ -129,6 +129,7 @@ from .bfl_outpainting import (
     validate_mode_geometry,
 )
 from .special_compose_full import run_special_full_compose
+from .special_export import SpecialExportSizeError, prepare_special_export_image
 from .compose import get_client, run_compose
 from .config import settings
 from .agent_skill_loader import build_skill_context, list_agent_skills, load_agent_skill
@@ -217,6 +218,7 @@ from .models import (
     SlotInfo,
     SpecialComposeJob,
     SpecialComposeRequest,
+    SpecialResultImage,
     SpecialFullComposeJob,
     SpecialFullComposeRequest,
     TemplateGroup,
@@ -3310,7 +3312,7 @@ def get_special_compose(job_id: str, request: Request):
     if not isinstance(job, SpecialComposeJob):
         raise HTTPException(400, "该任务不是特殊品合成任务")
     _assert_job_owner(job.user_id, user)
-    return job
+    return job.model_copy(update={"result_images": _special_canvas_images(job)})
 
 
 @app.get("/special-compose/{job_id}/images")
@@ -3358,6 +3360,70 @@ def _special_export_filename(frame_name: str, sku: str, variant_label: str, expo
     return f"{safe_name}{variant_label}.{export_format}"
 
 
+def _special_export_image(path: Path, frame_name: str) -> tuple[str, bytes]:
+    try:
+        return prepare_special_export_image(
+            path, force_png=frame_name.casefold() in _SPECIAL_PNG_FRAME_NAMES,
+        )
+    except SpecialExportSizeError as exc:
+        raise HTTPException(422, f"{frame_name}：{exc}") from exc
+
+
+def _special_frame_labels(job, frame_file: str) -> tuple[int, str, str]:
+    match = re.fullmatch(r"frame_(\d+)(?:_v(\d+))?\.png", frame_file)
+    if not match:
+        raise HTTPException(404, "图片不存在")
+    index = int(match.group(1))
+    names = job.result_frame_names
+    frame_name = names[index] if index < len(names) else f"画板{index + 1}"
+    variant_label = f"_版本{match.group(2)}" if match.group(2) else ""
+    return index, frame_name, variant_label
+
+
+def _special_canvas_images(job) -> list[SpecialResultImage]:
+    if job.status != ComposeStatus.done:
+        return []
+    endpoint = "/special-compose-full" if isinstance(job, SpecialFullComposeJob) else "/special-compose"
+    paths = job.result_paths or [f"frame_{i}.png" for i in range(len(job.result_frame_ids))]
+    images = []
+    for raw_path in paths:
+        frame_file = str(raw_path).replace("\\", "/").rsplit("/", 1)[-1]
+        index, frame_name, variant_label = _special_frame_labels(job, frame_file)
+        sku = job.request.sku or job.id[:8]
+        images.append(SpecialResultImage(
+            url=f"/results/{quote(job.id)}/{quote(frame_file)}",
+            name=_special_export_filename(frame_name, sku, variant_label, "png")[:-4],
+            download_url=f"{endpoint}/{quote(job.id)}/download-image/{quote(frame_file)}",
+            frame_index=index,
+        ))
+    return images
+
+
+@app.get("/special-compose/{job_id}/download-image/{frame_file}")
+@app.get("/special-compose-full/{job_id}/download-image/{frame_file}")
+def download_special_image(job_id: str, frame_file: str, request: Request):
+    user = _current_user(request)
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    expected_type = SpecialFullComposeJob if request.url.path.startswith("/special-compose-full/") else SpecialComposeJob
+    if not isinstance(job, expected_type):
+        raise HTTPException(404, "任务不存在")
+    _assert_job_owner(job.user_id, user)
+    if job.status != ComposeStatus.done:
+        raise HTTPException(400, "任务尚未完成")
+    _, frame_name, variant_label = _special_frame_labels(job, frame_file)
+    root = (settings.output_path / "results" / job_id).resolve()
+    path = (root / frame_file).resolve()
+    if root not in path.parents or not path.is_file():
+        raise HTTPException(404, "图片不存在")
+    export_format, image_bytes = _special_export_image(path, frame_name)
+    filename = _special_export_filename(frame_name, job.request.sku or job_id[:8], variant_label, export_format)
+    return Response(
+        content=image_bytes, media_type="image/png" if export_format == "png" else "image/jpeg",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}", "Cache-Control": "no-store"},
+    )
+
+
 @app.get("/special-compose/{job_id}/download-zip")
 def download_special_zip(job_id: str, names: str = ""):
     """
@@ -3366,7 +3432,6 @@ def download_special_zip(job_id: str, names: str = ""):
     names 仅用于兼容尚未保存画板名的旧任务。
     """
     import zipfile, io
-    from PIL import Image
 
     with _jobs_lock:
         job = _jobs.get(job_id)
@@ -3411,17 +3476,9 @@ def download_special_zip(job_id: str, names: str = ""):
             variant_suffix = m.group(2) or ""
             frame_label = name_list[idx] if idx < len(name_list) else f"画板{idx + 1}"
             label_suffix = variant_labels.get(variant_suffix, "")
-            export_format = "png" if frame_label.casefold() in _SPECIAL_PNG_FRAME_NAMES else "jpg"
+            export_format, image_bytes = _special_export_image(p, frame_label)
             zip_name = _special_export_filename(frame_label, sku, label_suffix, export_format)
-            if export_format == "png":
-                zf.write(str(p), zip_name)
-            else:
-                img = Image.open(p).convert("RGBA")
-                rgb = Image.new("RGB", img.size, (255, 255, 255))
-                rgb.paste(img, mask=img.getchannel("A"))
-                out = io.BytesIO()
-                rgb.save(out, format="JPEG", quality=100, subsampling=0, optimize=True)
-                zf.writestr(zip_name, out.getvalue())
+            zf.writestr(zip_name, image_bytes)
 
     buffer.seek(0)
     filename = f"{sku}.zip"
@@ -3475,14 +3532,13 @@ def get_special_full_compose(job_id: str, request: Request):
     if not isinstance(job, SpecialFullComposeJob):
         raise HTTPException(400, "该任务不是特殊品（完整）合成任务")
     _assert_job_owner(job.user_id, user)
-    return job
+    return job.model_copy(update={"result_images": _special_canvas_images(job)})
 
 
 @app.get("/special-compose-full/{job_id}/download-zip")
 def download_special_full_zip(job_id: str, names: str = "", request: Request = None):
     """将特殊品（完整）合成所有图片打包成 zip 下载，命名规则与 /special-compose 一致。"""
     import zipfile, io, re as _re
-    from PIL import Image
 
     user = _current_user(request)
     with _jobs_lock:
@@ -3517,17 +3573,9 @@ def download_special_full_zip(job_id: str, names: str = "", request: Request = N
             variant_suffix = m.group(2) or ""
             frame_label = name_list[idx] if idx < len(name_list) else f"画板{idx + 1}"
             label_suffix = variant_labels.get(variant_suffix, "")
-            export_format = "png" if frame_label.casefold() in _SPECIAL_PNG_FRAME_NAMES else "jpg"
+            export_format, image_bytes = _special_export_image(p, frame_label)
             zip_name = _special_export_filename(frame_label, sku, label_suffix, export_format)
-            if export_format == "png":
-                zf.write(str(p), zip_name)
-            else:
-                img = Image.open(p).convert("RGBA")
-                rgb = Image.new("RGB", img.size, (255, 255, 255))
-                rgb.paste(img, mask=img.getchannel("A"))
-                out = io.BytesIO()
-                rgb.save(out, format="JPEG", quality=100, subsampling=0, optimize=True)
-                zf.writestr(zip_name, out.getvalue())
+            zf.writestr(zip_name, image_bytes)
 
     buffer.seek(0)
     filename = f"{sku}_完整.zip"

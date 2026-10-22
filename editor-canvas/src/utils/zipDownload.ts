@@ -13,7 +13,7 @@ export interface ZipDownloadOptions {
 /**
  * 根据 Blob MIME 类型或 URL 猜测图片文件扩展名
  */
-function guessExtension(blob: Blob, url: string): string {
+function guessExtension(blob: Blob, url: string): string | undefined {
   const mime = blob.type.toLowerCase()
   if (mime.includes('jpeg') || mime.includes('jpg')) return '.jpg'
   if (mime.includes('webp')) return '.webp'
@@ -26,7 +26,7 @@ function guessExtension(blob: Blob, url: string): string {
     return '.' + urlMatch[1].toLowerCase()
   }
 
-  return '.png'
+  return undefined
 }
 
 /**
@@ -114,7 +114,7 @@ export async function downloadImagesAsZip(
     try {
       const blob = await fetchImageBlob(item.url)
       const { base, ext: presetExt } = sanitizeBaseName(item.name || `image_${i + 1}`)
-      const ext = presetExt || guessExtension(blob, item.url)
+      const ext = guessExtension(blob, item.url) || presetExt || '.png'
 
       // 文件名去重处理
       let filename = `${base}${ext}`

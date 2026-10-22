@@ -12,6 +12,7 @@ import {
   type OutpaintingMode,
 } from '../services/aiImageService'
 import { downloadImagesAsZip } from '../utils/zipDownload'
+import { getImageDownloadTarget } from '../utils/imageDownload'
 import type { OutpaintingPlan } from '../utils/outpainting'
 
 interface Props {
@@ -193,9 +194,10 @@ export function ContextualToolbar({
 
   // 1. 下载单张图片
   const handleDownloadSingle = (im: (typeof images)[0]) => {
+    const target = getImageDownloadTarget(im)
     const a = document.createElement('a')
-    a.href = im.url
-    a.download = `${im.name || 'image'}.png`
+    a.href = target.url
+    a.download = target.filename
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -210,7 +212,7 @@ export function ContextualToolbar({
     try {
       await downloadImagesAsZip(
         selectedImages.map((im) => ({
-          url: im.url,
+          url: getImageDownloadTarget(im).url,
           name: im.name || 'image',
         })),
         {
