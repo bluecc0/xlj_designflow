@@ -27,6 +27,7 @@ import httpx
 from PIL import Image, ImageOps
 
 from .config import settings
+from .task_checkpoint import checkpoint, atomic_write, CheckpointError, UpstreamTaskFailed
 
 logger = logging.getLogger(__name__)
 
@@ -304,10 +305,10 @@ def save_user_refs(user_id: str, job_id: str, refs: list[tuple[bytes, str]]) -> 
     ref_dir.mkdir(parents=True, exist_ok=True)
     paths: list[str] = []
     for i, (ref_bytes, ref_name) in enumerate(refs):
-        ext = Path(ref_name).suffix if ref_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")) else ".png"
+        ext = Path(ref_name).suffix.lower() if ref_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")) else ".png"
         safe_name = f"ref_{i:02d}{ext}"
         ref_path = ref_dir / safe_name
-        ref_path.write_bytes(ref_bytes)
+        atomic_write(ref_path, ref_bytes)
         paths.append(str(ref_path))
     return paths
 
@@ -319,7 +320,7 @@ def load_user_refs(user_id: str, job_id: str) -> list[tuple[bytes, str]]:
         return []
     refs: list[tuple[bytes, str]] = []
     for p in sorted(ref_dir.iterdir(), key=lambda path: path.name):
-        if p.is_file():
+        if p.is_file() and re.fullmatch(r"ref_\d+\.(png|jpg|jpeg|webp)", p.name, re.IGNORECASE):
             refs.append((p.read_bytes(), p.name))
     return refs
 
@@ -670,8 +671,10 @@ def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "ai_image
     out_dir = _ensure_user_dated_output_dir(user_id)
     filename = f"{prefix}_{uuid.uuid4().hex}{_extension_from_mime(mime_type)}"
     out_path = out_dir / filename
-    out_path.write_bytes(content)
-    return _ai_image_public_url(out_path)
+    atomic_write(out_path, content)
+    local_url = _ai_image_public_url(out_path)
+    checkpoint("downloaded", local_url=local_url)
+    return local_url
 
 
 def _extract_vertex_image_data_url(payload: Any) -> str | None:
@@ -946,9 +949,10 @@ async def _submit_generation_task(
     if apimart_ext:
         request_headers["X-APIMart-Response-Version"] = "2026-07-27"
         request_headers["Idempotency-Key"] = str(uuid.uuid4())
+    checkpoint("submitting")
     resp = await client.post(endpoint, json=payload, headers=request_headers)
     if not resp.is_success:
-        # 已拿到明确 HTTP 错误码：本请求不会返回图，记失败并允许智能路由切换
+        # 保留 HTTP 状态供调度层判断；408 / 5xx 不能证明上游未受理。
         raise RuntimeError(
             f"提交生图任务失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}"
         )
@@ -1062,7 +1066,7 @@ async def _wait_for_task_result(
             else:
                 # 上游只回 status=failed 无 error 字段时，至少带上原始 payload 片段
                 error_text = f"上游状态={status}，详情={str(data)[:360]}"
-            raise RuntimeError(f"生图任务失败（task_id={task_id}）: {error_text}")
+            raise UpstreamTaskFailed(f"生图任务失败（task_id={task_id}）: {error_text}")
         await asyncio_sleep(poll_interval)
     raise RuntimeError(
         f"生图任务超时（task_id={task_id}），最后状态={last_status or 'unknown'}，进度={last_progress}%"
@@ -1082,6 +1086,7 @@ async def _download_final_image(
     user_id: str,
     task_id: str = "",
 ) -> str:
+    checkpoint("downloading", result_url=image_url)
     proxy_url = settings.ai_image_download_proxy_url
     download_client = client
     owned_client: httpx.AsyncClient | None = None
@@ -1130,8 +1135,10 @@ async def _download_final_image(
     filename = f"{uuid.uuid4().hex}.png"
     out_dir = _ensure_user_dated_output_dir(user_id)
     out_path = out_dir / filename
-    out_path.write_bytes(resp.content)
-    return _ai_image_public_url(out_path)
+    atomic_write(out_path, resp.content)
+    local_url = _ai_image_public_url(out_path)
+    checkpoint("downloaded", local_url=local_url)
+    return local_url
 
 
 async def generate_image(
@@ -1379,6 +1386,45 @@ async def generate_image_with_reference_async(
     }
 
 
+async def resume_image_async(*, provider: str, model: str, user_id: str,
+                             recovery: dict, on_progress=None) -> dict:
+    """Recover an accepted task or its result. This function never sends a POST."""
+    task_id = str(recovery.get("task_id") or "")
+    result_url = str(recovery.get("result_url") or "")
+    detail = {}
+    if provider in {PROVIDER_APIMART, PROVIDER_APIMART_EXT}:
+        base_url, api_key = _model_credentials(_normalize_model_name(model))
+        async with httpx.AsyncClient(**_ai_image_client_kwargs(240)) as client:
+            if not result_url:
+                if not task_id:
+                    raise RuntimeError("原生图任务缺少上游任务号")
+                result_url, _, detail = await _wait_for_task_result(
+                    client, base_url=base_url,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    task_id=task_id, on_progress=on_progress,
+                )
+            local_url = await _download_final_image(
+                client, image_url=result_url, user_id=user_id, task_id=task_id,
+            )
+    elif result_url and provider == PROVIDER_SUB2API:
+        local_url = await _download_cliproxy_image(
+            result_url, user_id=user_id, api_key=settings.cliproxy_api_key,
+        )
+    elif result_url and provider == PROVIDER_TUZI:
+        local_url = await _download_tuzi_image(
+            result_url, user_id=user_id, api_key=settings.tuzi_api_key,
+        )
+    elif result_url and provider == PROVIDER_ADOBE2API:
+        async with httpx.AsyncClient(**_ai_image_client_kwargs(180)) as client:
+            local_url = await _download_final_image(
+                client, image_url=result_url, user_id=user_id, task_id=task_id,
+            )
+    else:
+        raise RuntimeError("该渠道未提供原任务查询接口")
+    return {"url": local_url, "provider": provider, "task_id": task_id,
+            **(detail or {})}
+
+
 # ── Sub2API/CLIProxyAPI 订阅线路 ───────────────────────────────────────────────
 
 PROVIDER_SUB2API = "sub2api"
@@ -1493,8 +1539,10 @@ def _save_base64_image(b64_value: str, *, user_id: str) -> str:
     filename = f"{uuid.uuid4().hex}.png"
     out_dir = _ensure_user_dated_output_dir(user_id)
     out_path = out_dir / filename
-    out_path.write_bytes(image_bytes)
-    return _ai_image_public_url(out_path)
+    atomic_write(out_path, image_bytes)
+    local_url = _ai_image_public_url(out_path)
+    checkpoint("downloaded", local_url=local_url)
+    return local_url
 
 
 async def _download_cliproxy_image(
@@ -1503,6 +1551,7 @@ async def _download_cliproxy_image(
     user_id: str,
     api_key: str,
 ) -> str:
+    checkpoint("downloading", result_url=image_url)
     timeout = httpx.Timeout(300.0, connect=30.0)
     client_kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False}
     if settings.cliproxy_proxy_url:
@@ -1516,8 +1565,10 @@ async def _download_cliproxy_image(
         filename = f"{uuid.uuid4().hex}.png"
         out_dir = _ensure_user_dated_output_dir(user_id)
         out_path = out_dir / filename
-        out_path.write_bytes(resp.content)
-        return _ai_image_public_url(out_path)
+        atomic_write(out_path, resp.content)
+        local_url = _ai_image_public_url(out_path)
+        checkpoint("downloaded", local_url=local_url)
+        return local_url
 
 
 async def _save_cliproxy_response_image(data: dict[str, Any], *, user_id: str, api_key: str) -> tuple[str, dict[str, Any]]:
@@ -1617,6 +1668,7 @@ async def generate_sub2api_async(
                         for idx, (image_bytes, filename) in enumerate(refs)
                     ]
                     endpoint = f"{api_base}/images/edits"
+                    checkpoint("submitting")
                     resp = await client.post(endpoint, data=data, files=files, headers=_cliproxy_headers(api_key))
                 else:
                     payload = {
@@ -1627,6 +1679,7 @@ async def generate_sub2api_async(
                         "output_format": "png",
                     }
                     endpoint = f"{api_base}/images/generations"
+                    checkpoint("submitting")
                     resp = await client.post(endpoint, json=payload, headers=_cliproxy_headers(api_key, json_request=True))
         except httpx.RequestError as exc:
             kind = classify_httpx_transport_error(exc)
@@ -1643,7 +1696,7 @@ async def generate_sub2api_async(
 
     raw_text = resp.text
     if not resp.is_success:
-        # 已拿到明确 HTTP 错误码：本请求不会返回图，记失败并允许智能路由切换
+        # 保留 HTTP 状态供调度层判断；408 / 5xx 不能证明上游未受理。
         raise RuntimeError(
             f"CLIProxyAPI 生图失败：{_api_error_msg(resp.status_code, raw_text[:500])}"
         )
@@ -1685,6 +1738,7 @@ async def generate_sub2api_async(
 # ── Tuzi GPT Image 2.5（仅智能路由 1K） ─────────────────────────────────────────
 
 async def _download_tuzi_image(image_url: str, *, user_id: str, api_key: str) -> str:
+    checkpoint("downloading", result_url=image_url)
     timeout = httpx.Timeout(300.0, connect=30.0)
     client_kwargs: dict[str, Any] = {"timeout": timeout, "trust_env": False, "follow_redirects": True}
     if settings.tuzi_proxy_url:
@@ -1697,8 +1751,10 @@ async def _download_tuzi_image(image_url: str, *, user_id: str, api_key: str) ->
             raise RuntimeError(f"下载 Tuzi 结果图片失败：HTTP {resp.status_code}")
         out_dir = _ensure_user_dated_output_dir(user_id)
         out_path = out_dir / f"{uuid.uuid4().hex}.png"
-        out_path.write_bytes(resp.content)
-        return _ai_image_public_url(out_path)
+        atomic_write(out_path, resp.content)
+        local_url = _ai_image_public_url(out_path)
+        checkpoint("downloaded", local_url=local_url)
+        return local_url
 
 
 async def _save_tuzi_response_image(data: Any, *, user_id: str, api_key: str) -> tuple[str, dict[str, Any]]:
@@ -1781,6 +1837,7 @@ async def generate_tuzi_async(
                     ("image", (filename or f"reference-{idx + 1}.png", content, _mime_from_filename(filename)))
                     for idx, (content, filename) in enumerate(refs)
                 ]
+                checkpoint("submitting")
                 resp = await client.post(endpoint, data=form, files=files, headers=headers)
             else:
                 endpoint = f"{base_url}/images/generations"
@@ -1791,6 +1848,7 @@ async def generate_tuzi_async(
                     "size": mapped_size,
                     "response_format": "url",
                 }
+                checkpoint("submitting")
                 resp = await client.post(endpoint, json=payload, headers={**headers, "Content-Type": "application/json"})
     except httpx.RequestError as exc:
         kind = classify_httpx_transport_error(exc)
@@ -1906,6 +1964,7 @@ async def generate_adobe2api_async(
     timeout = httpx.Timeout(300.0, connect=30.0)
     try:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            checkpoint("submitting")
             resp = await client.post(api_endpoint, json=payload, headers=headers)
     except httpx.RequestError as exc:
         kind = classify_httpx_transport_error(exc)
@@ -1919,7 +1978,7 @@ async def generate_adobe2api_async(
         raise RuntimeError(f"adobe2api 请求失败：{exc}") from exc
 
     if not resp.is_success:
-        # 已拿到明确 HTTP 错误码：本请求不会返回图，记失败并允许智能路由切换
+        # 保留 HTTP 状态供调度层判断；408 / 5xx 不能证明上游未受理。
         raise RuntimeError(
             f"adobe2api 请求失败: HTTP {resp.status_code} - {_extract_error_text(resp)}"
         )
@@ -1999,17 +2058,25 @@ def classify_httpx_transport_error(exc: BaseException) -> str:
     return "other"
 
 
+def submission_may_be_accepted(exc: BaseException | str | None) -> bool:
+    if isinstance(exc, AmbiguousUpstreamError):
+        return True
+    if isinstance(exc, httpx.RequestError):
+        return classify_httpx_transport_error(exc) == "ambiguous"
+    match = re.search(r"\bHTTP\s*(\d{3})\b", str(exc), re.IGNORECASE)
+    return bool(match and (int(match[1]) == 408 or int(match[1]) >= 500))
+
+
 def is_transient_provider_error(exc: BaseException | str | None) -> bool:
     """判断是否可安全切换到下一线路。
 
-    可切换：
-    - 连接阶段失败（请求未发出）
-    - 已拿到明确 HTTP 错误码（含 429 / 5xx 等）：本请求不会返回图
+    可切换：连接阶段失败（请求未发出），或明确拒绝受理的限流响应。
     不可切换：
     - AmbiguousUpstreamError（读超时/断连/成功体无 task_id 等，状态不确定）
+    - 提交阶段 HTTP 408 / 5xx（网关错误不能证明未受理）
     - 业务性 4xx（鉴权、参数、内容安全等）
     """
-    if isinstance(exc, AmbiguousUpstreamError):
+    if submission_may_be_accepted(exc):
         return False
     if isinstance(exc, httpx.RequestError):
         return classify_httpx_transport_error(exc) == "connect"
@@ -2019,12 +2086,11 @@ def is_transient_provider_error(exc: BaseException | str | None) -> bool:
         return False
     low = raw.lower()
 
-    # 明确 HTTP 状态码：只要拿到了响应码，本请求不会再返回图，可切线。
-    # 覆盖 408/409/425/429 与 5xx（含 Cloudflare 520-524）。
+    # 这里只保留明确未受理的暂态拒绝；408 / 5xx 已在上面排除。
     m = re.search(r"\bHTTP\s*(\d{3})\b", raw, re.IGNORECASE)
     if m:
         code = int(m.group(1))
-        if code in _TRANSIENT_TASK_STATUS_CODES or code >= 500:
+        if code in {409, 425, 429}:
             return True
 
     if any(k in low for k in ("rate limit", "too many requests", "请求过于频繁")):
@@ -2441,10 +2507,7 @@ async def smart_generate_image_async(
                 provider_name, uid or "(none)",
             )
             if on_accepted:
-                try:
-                    on_accepted(provider_name, uid)
-                except Exception as cb_exc:
-                    logger.warning("[smart-routing] on_accepted callback failed: %s", cb_exc)
+                on_accepted(provider_name, uid)
         return _inner
 
     for index, (round_no, provider) in enumerate(schedule):
@@ -2460,10 +2523,7 @@ async def smart_generate_image_async(
         provider_on_accepted = _make_on_accepted(provider)
         try:
             if on_attempt:
-                try:
-                    on_attempt(provider)
-                except Exception as cb_exc:
-                    logger.warning("[smart-routing] on_attempt callback failed: %s", cb_exc)
+                on_attempt(provider)
             attempt_count += 1
             canonical_model = _normalize_model_name(model).lower()
             if canonical_model == "gpt-image-2.5":
@@ -2532,6 +2592,15 @@ async def smart_generate_image_async(
 
         except Exception as exc:
             already_accepted = provider in accepted
+            # Once accepted, only polling/downloading the same result is safe.
+            # Ambiguous submissions must also stop; switching providers can charge twice.
+            if already_accepted or isinstance(exc, CheckpointError):
+                if already_accepted:
+                    exc.provider = provider
+                    exc.task_id = accepted.get(provider) or ""
+                raise
+            if submission_may_be_accepted(exc):
+                raise AmbiguousUpstreamError(str(exc), provider=provider) from exc
             err_msg = format_generation_error(exc, stage="smart_route", provider=provider, model=model)
             logger.warning(
                 "[smart-routing] Provider %s failed (round %d): %s",

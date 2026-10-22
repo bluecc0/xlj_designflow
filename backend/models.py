@@ -109,6 +109,8 @@ class ComposeJob(BaseModel):
     error: Optional[str] = None
     progress: list[str] = Field(default_factory=list)
     created_at: Optional[float] = None      # Unix 时间戳
+    recovery: dict = Field(default_factory=dict, exclude=True)
+    recovering: bool = False
 
 
 # ─── 表格解析 ────────────────────────────────────────────────────────────────
@@ -197,6 +199,8 @@ class SpecialComposeJob(BaseModel):
     error: Optional[str] = None
     progress: list[str] = Field(default_factory=list)
     created_at: Optional[float] = None
+    recovery: dict = Field(default_factory=lambda: {"version": 1, "kind": "special", "phase": "queued"}, exclude=True)
+    recovering: bool = False
 
 
 # ─── 特殊品（完整）合成 ──────────────────────────────────────────────────────────
@@ -232,6 +236,8 @@ class SpecialFullComposeJob(BaseModel):
     error: Optional[str] = None
     progress: list[str] = Field(default_factory=list)
     created_at: Optional[float] = None
+    recovery: dict = Field(default_factory=lambda: {"version": 1, "kind": "special-full", "phase": "queued"}, exclude=True)
+    recovering: bool = False
 
 
 # ─── 常用语 (Quick Prompts) ───────────────────────────────────────────────────

@@ -17,8 +17,9 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .ai_image import _ai_image_public_url, _ensure_user_dated_output_dir
+from .ai_image import _ai_image_public_url, _ensure_user_dated_output_dir, AmbiguousUpstreamError
 from .config import settings
+from .task_checkpoint import checkpoint, atomic_write, UpstreamTaskFailed
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,14 @@ _TRANSIENT_HTTP = {408, 425, 429, 500, 502, 503, 504}
 
 
 class BflVtoError(RuntimeError):
+    pass
+
+
+class BflVtoSubmissionUnknown(AmbiguousUpstreamError, BflVtoError):
+    pass
+
+
+class BflVtoTaskFailed(UpstreamTaskFailed, BflVtoError):
     pass
 
 
@@ -79,12 +88,15 @@ async def _request(
     last: Exception | None = None
     for attempt in range(3):
         try:
+            if create:
+                checkpoint("submitting")
             resp = await client.request(method, url, **kwargs)
         except httpx.RequestError as exc:
             if create and not isinstance(exc, _CREATE_SAFE_ERRORS):
                 # 读超时 / 连接中断等：服务端可能已建任务，不能盲目重发
-                raise BflVtoError(
-                    "FLUX 换装提交后未收到确认，任务可能已创建，请稍后在任务记录中核对，避免重复提交"
+                raise BflVtoSubmissionUnknown(
+                    "FLUX 换装提交后未收到确认，任务可能已创建，请稍后在任务记录中核对，避免重复提交",
+                    provider=PROVIDER_BFL,
                 ) from exc
             last = exc
         else:
@@ -116,6 +128,7 @@ async def generate_vto_async(
     seed: Optional[int] = None,
     on_progress: Optional[Callable[[int, str], None]] = None,
     on_accepted: Optional[Callable[[str], None]] = None,
+    resume: dict | None = None,
 ) -> dict[str, Any]:
     """提交一次 VTO 任务并等待完成，返回与其它生图通道一致的 {url, provider, task_id, cost}。"""
     if not settings.bfl_api_key:
@@ -138,11 +151,12 @@ async def generate_vto_async(
         proxy=settings.bfl_proxy_url or None,
         trust_env=False,
     ) as client:
-        submitted = await _request(client, "POST", f"{api_url}{VTO_PATH}", create=True, json=payload, headers=headers)
+        submitted = resume or await _request(client, "POST", f"{api_url}{VTO_PATH}", create=True, json=payload, headers=headers)
         task_id = str(submitted.get("id") or "").strip()
         if not task_id:
             raise BflVtoError("FLUX 换装返回了无效响应")
         polling_url = _trusted_https_url(submitted.get("polling_url"), "轮询地址")
+        checkpoint("accepted", task_id=task_id, polling_url=polling_url)
         if on_accepted:
             on_accepted(task_id)
 
@@ -157,13 +171,14 @@ async def generate_vto_async(
                 break
             if status in _FAILED_STATUSES:
                 logger.warning("bfl vto task=%s status=%s", task_id, status)
-                raise BflVtoError(_failure_message(status))
+                raise BflVtoTaskFailed(_failure_message(status))
             if on_progress:
                 elapsed = time.monotonic() - started
                 on_progress(min(90, 10 + int(elapsed / TIMEOUT_SECONDS * 80)), status or "pending")
         else:
             raise BflVtoError("FLUX 换装超时，请重试")
 
+        checkpoint("downloading", result_url=result_url)
         resp = await client.get(result_url, follow_redirects=True)
         if not resp.is_success:
             raise BflVtoError(_http_error_message(resp.status_code))
@@ -172,7 +187,8 @@ async def generate_vto_async(
             raise BflVtoError("FLUX 换装结果图片无效")
 
     out_path = _ensure_user_dated_output_dir(user_id) / f"vto_{uuid.uuid4().hex}.jpg"
-    out_path.write_bytes(content)
+    atomic_write(out_path, content)
+    checkpoint("downloaded", local_url=_ai_image_public_url(out_path))
     return {
         "url": _ai_image_public_url(out_path),
         "provider": PROVIDER_BFL,

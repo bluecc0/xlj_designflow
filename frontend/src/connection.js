@@ -121,7 +121,7 @@
       if (requestEpoch !== epoch || !data) return;
       if (info.path === '/auth/session' && requestSession === sessionVersion && userId && (!data.user || String(data.user.id) !== userId)) expire();
       if (info.task) {
-        if (!['done', 'failed'].includes(data.status) && ['recovering', 'interrupted'].includes(data.outpainting && data.outpainting.phase)) recoveringJobs.add(info.url);
+        if (!['done', 'failed'].includes(data.status) && (data.recovering || ['recovering', 'interrupted'].includes(data.outpainting && data.outpainting.phase))) recoveringJobs.add(info.url);
         else recoveringJobs.delete(info.url);
         publish();
       }

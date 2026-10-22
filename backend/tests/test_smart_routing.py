@@ -387,8 +387,8 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                     user_id="u",
                 )
 
-    async def test_http_504_before_accepted_does_failover(self) -> None:
-        """拿到明确 HTTP 错误码后，本请求不会返回图，应静默切到下一线路。"""
+    async def test_http_504_before_acceptance_stops_uncertain_submission(self) -> None:
+        """拿到明确 HTTP 错误码后，不能证明未受理，不再提交其他线路。"""
         calls = {"sub": 0, "adobe": 0}
 
         async def mock_sub2api(*args, **kwargs):
@@ -402,16 +402,15 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
              patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
              patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
-            result = await ai_image.smart_generate_image_async(
-                model="gpt-image-2",
-                prompt="test",
-                user_id="u",
-            )
-        self.assertEqual(calls, {"sub": 1, "adobe": 1})
-        self.assertEqual(result.get("provider"), "adobe2api")
-        self.assertTrue(result.get("provider_switched"))
+            with self.assertRaises(ai_image.AmbiguousUpstreamError):
+                result = await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                )
+        self.assertEqual(calls, {"sub": 1, "adobe": 0})
 
-    async def test_sub2api_malformed_200_fails_over_before_acceptance(self) -> None:
+    async def test_sub2api_malformed_200_stops_uncertain_submission(self) -> None:
         adobe_calls = 0
 
         class FakeResponse:
@@ -445,14 +444,13 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
              patch.object(ai_image.httpx, "AsyncClient", FakeClient), \
              patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
              patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
-            result = await ai_image.smart_generate_image_async(
-                model="gpt-image-2",
-                prompt="test",
-                user_id="u",
-            )
-        self.assertEqual(adobe_calls, 1)
-        self.assertEqual(result.get("provider"), "adobe2api")
-        self.assertTrue(result.get("provider_switched"))
+            with self.assertRaises(ai_image.AmbiguousUpstreamError):
+                result = await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                )
+        self.assertEqual(adobe_calls, 0)
 
     async def test_apimart_submit_504_is_hard_failure(self) -> None:
         class FakeResponse:
@@ -478,7 +476,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             )
         self.assertNotIsInstance(ctx.exception, ai_image.AmbiguousUpstreamError)
         self.assertIn("HTTP 504", str(ctx.exception))
-        self.assertTrue(ai_image.is_transient_provider_error(ctx.exception))
+        self.assertFalse(ai_image.is_transient_provider_error(ctx.exception))
 
     async def test_apimart_gpt_image_25_payload_uses_documented_model(self) -> None:
         captured = {}
@@ -724,7 +722,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("quality", captured["json"])
         self.assertEqual(captured["json"]["model"], "gpt-image-2.5-flare")
 
-    async def test_sub2api_http_500_failovers_silently(self) -> None:
+    async def test_sub2api_http_500_does_not_generate_again(self) -> None:
         """POST 后明确 HTTP 500：用户无感切线，不抛 ambiguous。"""
         adobe_calls = 0
 
@@ -762,14 +760,13 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
              patch.object(ai_image.httpx, "AsyncClient", FakeClient), \
              patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
              patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
-            result = await ai_image.smart_generate_image_async(
-                model="gpt-image-2",
-                prompt="test",
-                user_id="u",
-            )
-        self.assertEqual(adobe_calls, 1)
-        self.assertEqual(result.get("provider"), "adobe2api")
-        self.assertTrue(result.get("provider_switched"))
+            with self.assertRaises(ai_image.AmbiguousUpstreamError):
+                result = await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                )
+        self.assertEqual(adobe_calls, 0)
 
     async def test_two_round_cycle_recovers_on_second_pass(self) -> None:
         """线路 1→2→3 全失败后，第二轮回到线路 1 成功，用户无感。"""
@@ -778,16 +775,16 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         async def mock_sub2api(*args, **kwargs):
             calls["sub"] += 1
             if calls["sub"] == 1:
-                raise RuntimeError("CLIProxyAPI 生图失败：HTTP 500")
+                raise RuntimeError("CLIProxyAPI 生图失败：HTTP 429")
             return {"url": "/ok.png", "provider": "sub2api"}
 
         async def mock_adobe(*args, **kwargs):
             calls["adobe"] += 1
-            raise RuntimeError("adobe2api 请求失败: HTTP 503 - unavailable")
+            raise RuntimeError("adobe2api 请求失败: HTTP 429 - unavailable")
 
         async def mock_apimart(*args, **kwargs):
             calls["api"] += 1
-            raise RuntimeError("提交生图任务失败：HTTP 502 - bad gateway")
+            raise RuntimeError("提交生图任务失败：HTTP 429 - bad gateway")
 
         attempts: list[str] = []
         with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
@@ -810,17 +807,18 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.get("provider"), "sub2api")
         self.assertTrue(result.get("provider_switched"))
 
+
     async def test_two_round_all_fail_raises_after_full_cycle(self) -> None:
         """两轮全部暂态失败后才抛错。"""
         calls = {"sub": 0, "adobe": 0}
 
         async def mock_sub2api(*args, **kwargs):
             calls["sub"] += 1
-            raise RuntimeError("CLIProxyAPI 生图失败：HTTP 500")
+            raise RuntimeError("CLIProxyAPI 生图失败：HTTP 429")
 
         async def mock_adobe(*args, **kwargs):
             calls["adobe"] += 1
-            raise RuntimeError("adobe2api 请求失败: HTTP 503 - unavailable")
+            raise RuntimeError("adobe2api 请求失败: HTTP 429 - unavailable")
 
         with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
              patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
@@ -834,6 +832,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, {"sub": 2, "adobe": 2})
         self.assertIn("2 轮", str(ctx.exception))
+
 
     def test_skill_generation_uses_smart_routing(self) -> None:
         chat_source = (
@@ -1076,8 +1075,8 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls["apimart"], 1)
         self.assertEqual(result["provider"], "apimart")
 
-    async def test_already_accepted_skips_same_provider_but_tries_another(self) -> None:
-        """上游已接受后不重复提交同一线路，但继续尝试其他线路。"""
+    async def test_accepted_result_download_failure_does_not_failover(self) -> None:
+        """上游已接受后不重复提交同一线路，也不切换到其他线路。"""
         calls = {"sub": 0, "adobe": 0}
 
         async def mock_sub2api(*args, **kwargs):
@@ -1097,14 +1096,14 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
              patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
              patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
-            result = await ai_image.smart_generate_image_async(
-                model="gpt-image-2",
-                prompt="test",
-                user_id="u",
-            )
+            with self.assertRaises(RuntimeError):
+                result = await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                )
         self.assertEqual(calls["sub"], 1)
-        self.assertEqual(calls["adobe"], 1)
-        self.assertEqual(result["provider"], "adobe2api")
+        self.assertEqual(calls["adobe"], 0)
 
     async def test_pre_accept_progress_callback_still_allows_failover(self) -> None:
         """请求发出前的 starting/submitted 进度不得阻止 failover（修复假阳性）。"""
@@ -1135,8 +1134,8 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["provider"], "adobe2api")
         self.assertTrue(result.get("provider_switched"))
 
-    async def test_apimart_accepted_then_poll_fail_tries_another_provider(self) -> None:
-        """APIMart 拿到 task_id 后轮询失败时，跳过该线路并尝试其他线路。"""
+    async def test_accepted_poll_failure_preserves_original_task(self) -> None:
+        """APIMart 拿到 task_id 后轮询失败时，停止切换渠道，避免重复扣费。"""
         calls = {"apimart": 0, "adobe": 0}
 
         async def mock_apimart(*args, **kwargs):
@@ -1153,14 +1152,14 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(ai_image, "generate_image_async", side_effect=mock_apimart), \
              patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
              patch.object(ai_image, "get_smart_route_candidates", return_value=["apimart", "adobe2api"]):
-            result = await ai_image.smart_generate_image_async(
-                model="gpt-image-2",
-                prompt="test",
-                user_id="u",
-            )
+            with self.assertRaises(RuntimeError):
+                result = await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                )
         self.assertEqual(calls["apimart"], 1)
-        self.assertEqual(calls["adobe"], 1)
-        self.assertEqual(result["provider"], "adobe2api")
+        self.assertEqual(calls["adobe"], 0)
 
     async def test_safety_review_stops_immediately(self) -> None:
         calls = {"sub": 0, "adobe": 0}
@@ -1261,7 +1260,7 @@ class TimeoutClassificationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("状态暂时无法确认", msg)
         self.assertNotIn("换线路", msg)
 
-    async def test_read_timeout_before_acceptance_does_failover(self) -> None:
+    async def test_read_timeout_before_acceptance_does_not_failover(self) -> None:
         calls = {"sub": 0, "adobe": 0}
 
         async def mock_sub2api(*args, **kwargs):
@@ -1278,17 +1277,16 @@ class TimeoutClassificationTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
              patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
              patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
-            result = await ai_image.smart_generate_image_async(
-                model="gpt-image-2",
-                prompt="test",
-                user_id="u",
-            )
+            with self.assertRaises(ai_image.AmbiguousUpstreamError):
+                result = await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                )
         self.assertEqual(calls["sub"], 1)
-        self.assertEqual(calls["adobe"], 1)
-        self.assertEqual(result.get("provider"), "adobe2api")
-        self.assertTrue(result.get("provider_switched"))
+        self.assertEqual(calls["adobe"], 0)
 
-    async def test_pre_accept_disconnects_exhaust_all_routing_rounds(self) -> None:
+    async def test_pre_accept_disconnect_stops_after_first_uncertain_request(self) -> None:
         calls = {"sub": 0, "adobe": 0}
 
         async def mock_sub2api(*args, **kwargs):
@@ -1308,16 +1306,17 @@ class TimeoutClassificationTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
              patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
              patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
-            with self.assertRaises(ai_image.AllProvidersFailedError) as ctx:
+            with self.assertRaises(ai_image.AmbiguousUpstreamError) as ctx:
                 await ai_image.smart_generate_image_async(
                     model="gpt-image-2",
                     prompt="test",
                     user_id="u",
                 )
 
-        self.assertEqual(calls, {"sub": ai_image.SMART_ROUTE_ROUNDS, "adobe": ai_image.SMART_ROUTE_ROUNDS})
-        self.assertEqual(str(ctx.exception), ai_image.public_generation_error())
-        self.assertNotIn("未收到受理确认", str(ctx.exception))
+        self.assertEqual(calls, {"sub": 1, "adobe": 0})
+        self.assertNotEqual(str(ctx.exception), ai_image.public_generation_error())
+        self.assertIn("未收到受理确认", str(ctx.exception))
+
 
     def test_public_error_has_only_two_categories(self) -> None:
         self.assertEqual(
@@ -1376,8 +1375,8 @@ class TimeoutClassificationTest(unittest.IsolatedAsyncioTestCase):
 
 
 
-    async def test_accepted_without_real_task_id_skips_same_provider(self) -> None:
-        """无真实上游 id 时仍标记 accepted，跳过该线路并尝试其他线路。"""
+    async def test_accepted_without_queryable_id_does_not_failover(self) -> None:
+        """无真实上游 id 时仍标记 accepted，停止切换渠道，避免重复扣费。"""
         calls = {"sub": 0, "adobe": 0}
         seen = []
 
@@ -1395,16 +1394,16 @@ class TimeoutClassificationTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
              patch.object(ai_image, "generate_adobe2api_async", side_effect=mock_adobe), \
              patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "adobe2api"]):
-            result = await ai_image.smart_generate_image_async(
-                model="gpt-image-2",
-                prompt="test",
-                user_id="u",
-                on_accepted=lambda provider, tid: seen.append((provider, tid)),
-            )
+            with self.assertRaises(RuntimeError):
+                result = await ai_image.smart_generate_image_async(
+                    model="gpt-image-2",
+                    prompt="test",
+                    user_id="u",
+                    on_accepted=lambda provider, tid: seen.append((provider, tid)),
+                )
         self.assertEqual(calls["sub"], 1)
-        self.assertEqual(calls["adobe"], 1)
+        self.assertEqual(calls["adobe"], 0)
         self.assertEqual(seen, [("sub2api", "")])
-        self.assertEqual(result["provider"], "adobe2api")
 
 if __name__ == "__main__":
     unittest.main()

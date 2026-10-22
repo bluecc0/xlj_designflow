@@ -150,7 +150,7 @@ def init_db() -> None:
             )
         """)
         # 自动迁移：给旧表补两个新列（已存在会报错但无害）
-        for col, typ in [("user_id", "TEXT"), ("penpot_file_id", "TEXT"), ("penpot_edit_url", "TEXT")]:
+        for col, typ in [("user_id", "TEXT"), ("penpot_file_id", "TEXT"), ("penpot_edit_url", "TEXT"), ("recovery_json", "TEXT")]:
             try:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
@@ -176,7 +176,7 @@ def init_db() -> None:
                 updated_at       REAL NOT NULL
             )
         """)
-        for col, typ in [("user_id", "TEXT"), ("result_frame_names_json", "TEXT")]:
+        for col, typ in [("user_id", "TEXT"), ("result_frame_names_json", "TEXT"), ("recovery_json", "TEXT")]:
             try:
                 conn.execute(f"ALTER TABLE special_jobs ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
@@ -536,8 +536,8 @@ def save_job(job: ComposeJob) -> None:
     print(f"[job_store] Saving job {job.id}, status={job.status.value}, db_path={_DB_PATH}")
     with _lock, _connect() as conn:
         conn.execute("""
-            INSERT INTO jobs (id, user_id, status, request_json, result_path, penpot_file_id, penpot_edit_url, error, progress_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO jobs (id, user_id, status, request_json, result_path, penpot_file_id, penpot_edit_url, error, progress_json, created_at, updated_at, recovery_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 user_id         = excluded.user_id,
                 status          = excluded.status,
@@ -546,7 +546,8 @@ def save_job(job: ComposeJob) -> None:
                 penpot_edit_url = excluded.penpot_edit_url,
                 error           = excluded.error,
                 progress_json   = excluded.progress_json,
-                updated_at      = excluded.updated_at
+                updated_at      = excluded.updated_at,
+                recovery_json   = excluded.recovery_json
         """, (
             job.id,
             job.user_id,
@@ -557,8 +558,9 @@ def save_job(job: ComposeJob) -> None:
             job.penpot_edit_url,
             job.error,
             json.dumps(job.progress, ensure_ascii=False),
+            job.created_at or now,
             now,
-            now,
+            json.dumps(job.recovery, ensure_ascii=False),
         ))
         conn.commit()
 
@@ -607,6 +609,7 @@ def _row_to_job(row: sqlite3.Row) -> ComposeJob:
         error=row["error"],
         progress=progress,
         created_at=row["created_at"],
+        recovery=_json_object(row["recovery_json"]) if "recovery_json" in row.keys() else {},
     )
 
 
@@ -641,8 +644,8 @@ def save_special_job(job) -> None:
         conn.execute("""
             INSERT INTO special_jobs
               (id, user_id, status, sku, request_json, result_paths_json, result_frame_ids_json, result_frame_names_json,
-               penpot_file_id, penpot_page_id, penpot_edit_url, error, progress_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               penpot_file_id, penpot_page_id, penpot_edit_url, error, progress_json, created_at, updated_at, recovery_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 user_id              = excluded.user_id,
                 status               = excluded.status,
@@ -654,7 +657,8 @@ def save_special_job(job) -> None:
                 penpot_edit_url     = excluded.penpot_edit_url,
                 error               = excluded.error,
                 progress_json       = excluded.progress_json,
-                updated_at          = excluded.updated_at
+                updated_at          = excluded.updated_at,
+                recovery_json       = excluded.recovery_json
         """, (
             job.id,
             getattr(job, "user_id", None),
@@ -669,8 +673,9 @@ def save_special_job(job) -> None:
             job.penpot_edit_url,
             job.error,
             json.dumps(job.progress, ensure_ascii=False),
+            job.created_at or now,
             now,
-            now,
+            json.dumps(job.recovery, ensure_ascii=False),
         ))
         conn.commit()
 
@@ -690,6 +695,44 @@ def load_special_job(job_id: str) -> dict | None:
         "status": row["status"],
         "result_paths": json.loads(row["result_paths_json"] or "[]"),
     }
+
+
+def load_special_job_model(job_id: str):
+    from .models import SpecialComposeJob, SpecialFullComposeJob
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM special_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        return None
+    recovery = _json_object(row["recovery_json"])
+    cls = SpecialFullComposeJob if recovery.get("kind") == "special-full" else SpecialComposeJob
+    return cls(
+        id=row["id"], user_id=row["user_id"], status=row["status"],
+        request=json.loads(row["request_json"]),
+        result_paths=json.loads(row["result_paths_json"] or "[]"),
+        result_frame_ids=json.loads(row["result_frame_ids_json"] or "[]"),
+        result_frame_names=json.loads(row["result_frame_names_json"] or "[]"),
+        penpot_file_id=row["penpot_file_id"], penpot_page_id=row["penpot_page_id"],
+        penpot_edit_url=row["penpot_edit_url"], error=row["error"],
+        progress=json.loads(row["progress_json"] or "[]"), created_at=row["created_at"],
+        recovery=recovery,
+    )
+
+
+def load_active_compose_jobs() -> list:
+    with _connect() as conn:
+        ordinary = conn.execute("SELECT id FROM jobs WHERE status IN ('pending','running') ORDER BY created_at").fetchall()
+        special = conn.execute("SELECT id FROM special_jobs WHERE status IN ('pending','running') ORDER BY created_at").fetchall()
+    jobs = []
+    for rows, loader in [(ordinary, load_job), (special, load_special_job_model)]:
+        for row in rows:
+            try:
+                job = loader(row["id"])
+            except (ValueError, TypeError):
+                logger.warning("Cannot recover invalid compose record: job=%s", row["id"], exc_info=True)
+                continue
+            if job is not None:
+                jobs.append(job)
+    return jobs
 
 
 def load_special_jobs(limit: int = 50, user_id: Optional[str] = None) -> list[dict]:
@@ -1128,6 +1171,51 @@ def load_active_outpainting_jobs(limit: int = 1000) -> list[dict]:
     return jobs
 
 
+def load_recoverable_image_jobs() -> list[dict]:
+    """Only ordinary generation/try-on workers; other operations have their own lifecycle."""
+    with _connect() as conn:
+        rows = conn.execute("""
+            SELECT id FROM ai_image_jobs
+            WHERE status IN ('pending', 'queued', 'processing', 'running')
+               OR (status = 'done' AND json_valid(request_meta_json)
+                   AND json_extract(request_meta_json, '$.recovery.phase') = 'downloaded')
+               OR (status = 'failed' AND provider IN ('apimart', 'apimart-ext')
+                   AND task_id IS NOT NULL AND task_id != ''
+                   AND (request_meta_json IS NULL OR (json_valid(request_meta_json)
+                        AND json_extract(request_meta_json, '$.recovery') IS NULL)))
+            ORDER BY created_at
+        """).fetchall()
+    jobs = []
+    from .ai_image import SUPPORTED_MODELS
+    image_models = {*SUPPORTED_MODELS.keys(), *SUPPORTED_MODELS.values(), "flux-vto"}
+    for row in rows:
+        job = load_ai_image_job(row["id"])
+        if not job:
+            continue
+        meta = job["request_meta"]
+        if meta.get("operation", "") not in {"", "generate", "outfit-change"}:
+            continue
+        recovery = meta.get("recovery") or {}
+        if not recovery and job["model"] not in image_models:
+            continue
+        if job["status"] == "done" and recovery.get("phase") != "downloaded":
+            continue
+        jobs.append(job)
+    return jobs
+
+
+def save_image_checkpoint(job_id: str, meta: dict, *, provider: str, task_id: str,
+                          error: str | None = None, status: str = "processing") -> None:
+    """Update recovery state without erasing the execution prompt or result metadata."""
+    with _lock, _connect() as conn:
+        conn.execute("""
+            UPDATE ai_image_jobs SET request_meta_json=?, provider=?, task_id=?,
+                status=?, error=?, updated_at=? WHERE id=?
+        """, (json.dumps(meta, ensure_ascii=False), provider, task_id,
+              status, error, time.time(), job_id))
+        conn.commit()
+
+
 def mark_ai_image_job_provider_switched(job_id: str, switched: bool = True) -> None:
     """标记生图 job发生过 provider 兜底切换。独立函数，避免动 save_ai_image_job 签名。"""
     with _lock, _connect() as conn:
@@ -1314,6 +1402,21 @@ def append_ai_chat_message(
 ) -> int:
     now = created_at or time.time()
     with _lock, _connect() as conn:
+        # A restart may occur after writing the result but before marking the job
+        # notified. Replaying finalization must not create a second chat card.
+        if type == "ai_image_result" and (meta or {}).get("job_id"):
+            existing = conn.execute("""
+                SELECT id, meta_json FROM ai_chat_messages WHERE session_id=? AND user_id=?
+                    AND type=? AND json_extract(meta_json, '$.job_id')=? LIMIT 1
+            """, (session_id, user_id, type, meta["job_id"])).fetchone()
+            if existing:
+                # A legacy reload wrote a failed chat card even after acceptance.
+                # Safe recovery updates that card in place when the original task completes.
+                if (meta or {}).get("status") == "done" and _json_object(existing["meta_json"]).get("status") == "failed":
+                    conn.execute("UPDATE ai_chat_messages SET text=?, image_url=?, meta_json=? WHERE id=?",
+                                 (text, image_url, json.dumps(meta, ensure_ascii=False), existing["id"]))
+                    conn.commit()
+                return int(existing["id"])
         cur = conn.execute(
             """
             INSERT INTO ai_chat_messages

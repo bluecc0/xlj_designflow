@@ -64,6 +64,7 @@ from .ai_image import (
     generate_tuzi_async,
     generate_adobe2api_async,
     smart_generate_image_async,
+    resume_image_async,
     generate_inspiration_thumb,
     get_inspiration_thumb_url_if_exists,
     load_user_refs,
@@ -105,6 +106,8 @@ from .agent_mode import (
 )
 from . import outfit_change
 from .bfl_vto import FLUX_VTO_MODEL, PROVIDER_BFL, generate_vto_async
+from .ai_job_recovery import execute_image_job
+from .task_checkpoint import checkpoint, execution_lock
 from .psd_layered import create_layered_psd_from_image
 from .matting_service import matting_service
 from .bfl_outpainting import (
@@ -171,6 +174,8 @@ from .job_store import (
     load_ai_image_jobs,
     load_ai_image_job_by_client_request_id,
     load_active_outpainting_jobs,
+    load_recoverable_image_jobs,
+    load_active_compose_jobs,
     load_ai_image_job_by_image_url,
     load_job,
     count_operation_logs,
@@ -185,6 +190,7 @@ from .job_store import (
     create_daily_database_backup,
     save_special_job,
     load_special_job,
+    load_special_job_model,
     load_special_jobs,
     sync_user_test_status,
     update_agent_project,
@@ -396,6 +402,9 @@ async def lifespan(app: FastAPI):
     )
     app.state.outpainting_tasks = set()
     app.state.outpainting_claims = {}
+    app.state.ai_image_tasks = set()
+    app.state.compose_recovery_tasks = set()
+    app.state.recovery_jobs = set()
     await asyncio.to_thread(_ensure_ui_build)
     if settings.matting_enabled:
         app.state.matting_warmup_task = asyncio.create_task(
@@ -405,6 +414,7 @@ async def lifespan(app: FastAPI):
         asyncio.to_thread(_migrate_inspiration_thumbnails)
     )
     app.state.database_backup_task = asyncio.create_task(_database_backup_loop())
+    app.state.job_recovery_task = asyncio.create_task(_job_recovery_loop())
     app.state.outpainting_recovery_task = None
     if (
         settings.bfl_outpainting_enabled
@@ -412,7 +422,7 @@ async def lifespan(app: FastAPI):
         and not _outpainting_configuration_error()
     ):
         app.state.outpainting_recovery_task = _track_outpainting_task(
-            _recover_outpainting_jobs()
+            _outpainting_recovery_loop()
         )
     app.state.sub2api_monitor_task = None
     if (
@@ -426,6 +436,17 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        app.state.job_recovery_task.cancel()
+        await asyncio.gather(app.state.job_recovery_task, return_exceptions=True)
+        image_tasks = list(app.state.ai_image_tasks)
+        for task in image_tasks:
+            task.cancel()
+        if image_tasks:
+            await asyncio.gather(*image_tasks, return_exceptions=True)
+        # Cancelling a to_thread awaiter cannot stop its thread. The OS locks
+        # remain held inside the workers until they actually finish or exit.
+        for task in list(app.state.compose_recovery_tasks):
+            task.cancel()
         monitor_task = app.state.sub2api_monitor_task
         if monitor_task:
             monitor_task.cancel()
@@ -443,6 +464,79 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Design Tool API", version="0.1.0", lifespan=lifespan)
+
+
+def _track_ai_image_task(coro):
+    tasks = getattr(app.state, "ai_image_tasks", None)
+    if tasks is None:
+        tasks = app.state.ai_image_tasks = set()
+    task = asyncio.create_task(coro)
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+    task.add_done_callback(_log_background_exception)
+    return task
+
+
+def _log_background_exception(task):
+    if not task.cancelled() and task.exception():
+        logger.error("background recovery failed", exc_info=task.exception())
+
+
+async def _recover_background_jobs_once():
+    images, compositions = await asyncio.gather(
+        asyncio.to_thread(load_recoverable_image_jobs),
+        asyncio.to_thread(load_active_compose_jobs),
+    )
+    claims = getattr(app.state, "recovery_jobs", None)
+    if claims is None:
+        claims = app.state.recovery_jobs = set()
+
+    def claimed_task(job_id, coroutine, tasks):
+        claims.add(job_id)
+        task = asyncio.create_task(coroutine)
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+        task.add_done_callback(lambda _: claims.discard(job_id))
+        task.add_done_callback(_log_background_exception)
+
+    image_tasks = getattr(app.state, "ai_image_tasks", None)
+    if image_tasks is None:
+        image_tasks = app.state.ai_image_tasks = set()
+    for job in images:
+        if len(image_tasks) >= 8:
+            break
+        if job["id"] not in claims:
+            claimed_task(job["id"], execute_image_job(_execute_ai_image_background, job["id"]), image_tasks)
+    compose_tasks = getattr(app.state, "compose_recovery_tasks", None)
+    if compose_tasks is None:
+        compose_tasks = app.state.compose_recovery_tasks = set()
+    for job in compositions:
+        if len(compose_tasks) >= 2:
+            break
+        if job.id in claims:
+            continue
+        if not isinstance(job, ComposeJob) and not job.recovery.get("kind"):
+            # Old special/full requests share the same schema. Guessing their
+            # kind can export the wrong assets, so require a new explicit request.
+            job.status = ComposeStatus.failed
+            job.error = "旧任务缺少合成流程信息，无法安全续跑，请重新合成"
+            await asyncio.to_thread(save_special_job, job)
+            continue
+        runner = (_run_and_persist if isinstance(job, ComposeJob) else
+                  run_special_full_compose if isinstance(job, SpecialFullComposeJob) else run_special_compose)
+        job.recovering = True
+        claimed_task(job.id, asyncio.to_thread(runner, job), compose_tasks)
+
+
+async def _job_recovery_loop():
+    # Re-scan while running: an old reload worker may still hold the execution
+    # lock during the first startup scan. It must not be skipped forever.
+    while True:
+        try:
+            await _recover_background_jobs_once()
+        except Exception:
+            logger.exception("background job recovery scan failed")
+        await asyncio.sleep(15)
 
 
 class CacheAwareStaticFiles(StaticFiles):
@@ -1351,7 +1445,25 @@ def _discard_outpainting_source_snapshot(request_meta: dict | None, user_id: str
     )
 
 
-async def _run_outpainting_background(
+async def _run_outpainting_background(*args, **kwargs):
+    job_id = str(args[0] if args else kwargs["job_id"])
+    with execution_lock(f"outpainting:{job_id}") as acquired:
+        if not acquired:
+            return
+        stored = load_ai_image_job(job_id)
+        if stored:
+            if stored["status"] in {"done", "failed"}:
+                return
+            latest = stored.get("request_meta") or {}
+            supplied = args[5] if len(args) > 5 else kwargs.get("request_meta", {})
+            if latest.get("phase") != supplied.get("phase"):
+                # The old worker advanced between scan and lock acquisition.
+                # Re-scan its durable state rather than using a stale submit plan.
+                return
+        await _execute_outpainting_background(*args, **kwargs)
+
+
+async def _execute_outpainting_background(
     job_id: str,
     user: dict,
     prepared: PreparedOutpaintingImage | None,
@@ -1634,7 +1746,7 @@ async def _run_outpainting_background(
                 accepted["provider_task_id"],
                 acceptance_resume_attempts,
             )
-            await _run_outpainting_background(
+            await _execute_outpainting_background(
                 job_id,
                 user,
                 None,
@@ -1704,7 +1816,7 @@ async def _run_outpainting_background(
                 recovery_attempt + 1,
             )
             await asyncio.sleep(recovery_attempt)
-            await _run_outpainting_background(
+            await _execute_outpainting_background(
                 job_id, user, None, geometry, accepted["provider_task_id"],
                 request_meta, created_at, resume_only=True,
                 polling_url=accepted["polling_url"],
@@ -1777,6 +1889,15 @@ async def _run_outpainting_background(
             logger.exception("BFL outpainting failure operation log failed: job=%s", job_id)
 
 
+async def _outpainting_recovery_loop():
+    while True:
+        try:
+            await _recover_outpainting_jobs()
+        except Exception:
+            logger.exception("outpainting recovery scan failed")
+        await asyncio.sleep(15)
+
+
 async def _recover_outpainting_jobs() -> None:
     try:
         jobs = await asyncio.to_thread(load_active_outpainting_jobs)
@@ -1792,87 +1913,90 @@ async def _recover_outpainting_jobs() -> None:
     ] = []
     for stored_job in jobs:
         job_id = str(stored_job.get("id") or "")
-        meta = stored_job.get("request_meta")
-        try:
-            if not job_id or not isinstance(meta, dict):
-                raise OutpaintingValidationError("恢复元数据缺失")
-            provider_task_id = str(
-                stored_job.get("task_id")
-                or meta.get("provider_task_id")
-                or meta.get("provider_task_uuid")
-                or ""
-            ).strip()
-            polling_url = str(meta.get("polling_url") or "").strip()
-            geometry = resolve_geometry_from_meta(
-                meta,
-                max_width=MAX_OUTPUT_SIDE,
-                max_height=MAX_OUTPUT_SIDE,
-                max_pixels=MAX_OUTPUT_PIXELS,
-            )
-            expected_fields = {
-                "expected_width": geometry.expected_width,
-                "expected_height": geometry.expected_height,
-            }
-            if any(
-                isinstance(meta.get(name), bool)
-                or not isinstance(meta.get(name), int)
-                or meta.get(name) != expected
-                for name, expected in expected_fields.items()
-            ):
-                raise OutpaintingValidationError("恢复尺寸不一致")
-            resume_only = not is_pre_submit_phase(meta.get("phase"))
-            prepared = None
-            if resume_only:
-                if not polling_url:
-                    raise OutpaintingValidationError("恢复轮询地址缺失")
-            else:
-                # Queued jobs never reached BFL; rebuild the prepared image and
-                # submit a new provider task. Later phases poll the accepted id.
-                prepared = load_prepared_source_snapshot(
-                    str(meta.get("source_snapshot_url") or ""),
-                    output_root=settings.output_path,
-                    user_id=str(stored_job.get("user_id") or ""),
-                    meta=meta,
-                )
-            recoveries.append(
-                (stored_job, geometry, provider_task_id, dict(meta), prepared, resume_only, polling_url)
-            )
-        except Exception as exc:
-            logger.error(
-                "BFL outpainting recovery metadata rejected: job=%s error=%s",
-                job_id or "-",
-                type(exc).__name__,
-            )
-            if not job_id:
+        with execution_lock(f"outpainting:{job_id}") as available:
+            if not available:
                 continue
-            failed_meta = dict(meta) if isinstance(meta, dict) else {"operation": "outpainting"}
-            failed_meta["phase"] = "failed"
+            meta = stored_job.get("request_meta")
             try:
-                await _save_outpainting_job_with_retries(
-                    job_id=job_id,
-                    user_id=str(stored_job.get("user_id") or ""),
-                    status="failed",
-                    model=BFL_OUTPAINTING_MODEL,
-                    provider="bfl",
-                    prompt=str(stored_job.get("prompt") or "FLUX outpainting"),
-                    original_prompt=str(stored_job.get("original_prompt") or "FLUX outpainting"),
-                    resolved_prompt=str(stored_job.get("resolved_prompt") or "FLUX outpainting"),
-                    size=str(stored_job.get("size") or ""),
-                    resolution=str(stored_job.get("resolution") or ""),
-                    has_reference=True,
-                    reference_count=1,
-                    request_meta=failed_meta,
-                    task_id=str(stored_job.get("task_id") or ""),
-                    error="扩图任务恢复信息无效，请重新扩图",
-                    progress=100,
-                    created_at=float(stored_job.get("created_at") or time.time()),
+                if not job_id or not isinstance(meta, dict):
+                    raise OutpaintingValidationError("恢复元数据缺失")
+                provider_task_id = str(
+                    stored_job.get("task_id")
+                    or meta.get("provider_task_id")
+                    or meta.get("provider_task_uuid")
+                    or ""
+                ).strip()
+                polling_url = str(meta.get("polling_url") or "").strip()
+                geometry = resolve_geometry_from_meta(
+                    meta,
+                    max_width=MAX_OUTPUT_SIDE,
+                    max_height=MAX_OUTPUT_SIDE,
+                    max_pixels=MAX_OUTPUT_PIXELS,
                 )
-                _discard_outpainting_source_snapshot(
-                    meta if isinstance(meta, dict) else None,
-                    str(stored_job.get("user_id") or ""),
+                expected_fields = {
+                    "expected_width": geometry.expected_width,
+                    "expected_height": geometry.expected_height,
+                }
+                if any(
+                    isinstance(meta.get(name), bool)
+                    or not isinstance(meta.get(name), int)
+                    or meta.get(name) != expected
+                    for name, expected in expected_fields.items()
+                ):
+                    raise OutpaintingValidationError("恢复尺寸不一致")
+                resume_only = not is_pre_submit_phase(meta.get("phase"))
+                prepared = None
+                if resume_only:
+                    if not polling_url:
+                        raise OutpaintingValidationError("恢复轮询地址缺失")
+                else:
+                    # Queued jobs never reached BFL; rebuild the prepared image and
+                    # submit a new provider task. Later phases poll the accepted id.
+                    prepared = load_prepared_source_snapshot(
+                        str(meta.get("source_snapshot_url") or ""),
+                        output_root=settings.output_path,
+                        user_id=str(stored_job.get("user_id") or ""),
+                        meta=meta,
+                    )
+                recoveries.append(
+                    (stored_job, geometry, provider_task_id, dict(meta), prepared, resume_only, polling_url)
                 )
-            except Exception:
-                logger.exception("BFL outpainting invalid recovery persistence failed: job=%s", job_id)
+            except Exception as exc:
+                logger.error(
+                    "BFL outpainting recovery metadata rejected: job=%s error=%s",
+                    job_id or "-",
+                    type(exc).__name__,
+                )
+                if not job_id:
+                    continue
+                failed_meta = dict(meta) if isinstance(meta, dict) else {"operation": "outpainting"}
+                failed_meta["phase"] = "failed"
+                try:
+                    await _save_outpainting_job_with_retries(
+                        job_id=job_id,
+                        user_id=str(stored_job.get("user_id") or ""),
+                        status="failed",
+                        model=BFL_OUTPAINTING_MODEL,
+                        provider="bfl",
+                        prompt=str(stored_job.get("prompt") or "FLUX outpainting"),
+                        original_prompt=str(stored_job.get("original_prompt") or "FLUX outpainting"),
+                        resolved_prompt=str(stored_job.get("resolved_prompt") or "FLUX outpainting"),
+                        size=str(stored_job.get("size") or ""),
+                        resolution=str(stored_job.get("resolution") or ""),
+                        has_reference=True,
+                        reference_count=1,
+                        request_meta=failed_meta,
+                        task_id=str(stored_job.get("task_id") or ""),
+                        error="扩图任务恢复信息无效，请重新扩图",
+                        progress=100,
+                        created_at=float(stored_job.get("created_at") or time.time()),
+                    )
+                    _discard_outpainting_source_snapshot(
+                        meta if isinstance(meta, dict) else None,
+                        str(stored_job.get("user_id") or ""),
+                    )
+                except Exception:
+                    logger.exception("BFL outpainting invalid recovery persistence failed: job=%s", job_id)
 
     concurrency = max(1, int(settings.bfl_outpainting_max_concurrency or 2))
     for offset in range(0, len(recoveries), concurrency):
@@ -3024,9 +3148,8 @@ def create_compose(
 
 
 def _run_and_persist(job: ComposeJob) -> None:
-    """执行合成，每次状态变更后写库"""
+    """The worker persists state while holding its execution lock."""
     run_compose(job)
-    save_job(job)  # 保存最终状态（done / failed）
 
 
 @app.get("/compose/{job_id}", response_model=ComposeJob)
@@ -3035,12 +3158,11 @@ def get_compose(job_id: str, request: Request):
     user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
-    if not job:
-        job = load_job(job_id)
+    job = load_job(job_id) or job
     if not job:
         raise HTTPException(404, f"任务不存在: {job_id}")
     _assert_job_owner(job.user_id, user)
-    return job
+    return job.model_copy(update={"recovering": bool(job.recovery.get("resuming")) and job.status not in {ComposeStatus.done, ComposeStatus.failed}})
 
 
 @app.get("/compose", response_model=list[ComposeJob])
@@ -3269,6 +3391,7 @@ def create_special_compose(
     job = SpecialComposeJob(id=job_id, user_id=user["id"], request=request, created_at=time.time())
     with _jobs_lock:
         _jobs[job_id] = job  # type: ignore[assignment]
+    save_special_job(job)
     background_tasks.add_task(run_special_compose, job)
     log_operation(
         user_id=user["id"], username=user["username"],
@@ -3307,12 +3430,13 @@ def get_special_compose(job_id: str, request: Request):
     user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
+    job = load_special_job_model(job_id) or job
     if not job:
         raise HTTPException(404, f"任务不存在: {job_id}")
     if not isinstance(job, SpecialComposeJob):
         raise HTTPException(400, "该任务不是特殊品合成任务")
     _assert_job_owner(job.user_id, user)
-    return job.model_copy(update={"result_images": _special_canvas_images(job)})
+    return job.model_copy(update={"result_images": _special_canvas_images(job), "recovering": bool(job.recovery.get("resuming")) and job.status not in {ComposeStatus.done, ComposeStatus.failed}})
 
 
 @app.get("/special-compose/{job_id}/images")
@@ -3321,6 +3445,7 @@ def download_special_images(job_id: str, request: Request):
     user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
+    job = load_special_job_model(job_id) or job
     if not job or not isinstance(job, SpecialComposeJob):
         raise HTTPException(404, f"任务不存在: {job_id}")
     _assert_job_owner(job.user_id, user)
@@ -3405,6 +3530,7 @@ def download_special_image(job_id: str, frame_file: str, request: Request):
     user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
+    job = load_special_job_model(job_id) or job
     expected_type = SpecialFullComposeJob if request.url.path.startswith("/special-compose-full/") else SpecialComposeJob
     if not isinstance(job, expected_type):
         raise HTTPException(404, "任务不存在")
@@ -3435,6 +3561,7 @@ def download_special_zip(job_id: str, names: str = ""):
 
     with _jobs_lock:
         job = _jobs.get(job_id)
+    job = load_special_job_model(job_id) or job
     if not job or not isinstance(job, SpecialComposeJob):
         raise HTTPException(404, f"任务不存在: {job_id}")
     if job.status != ComposeStatus.done:
@@ -3517,6 +3644,7 @@ def create_special_full_compose(
     job = SpecialFullComposeJob(id=job_id, user_id=user["id"], request=request, created_at=time.time())
     with _jobs_lock:
         _jobs[job_id] = job  # type: ignore[assignment]
+    save_special_job(job)
     background_tasks.add_task(run_special_full_compose, job)
     return job
 
@@ -3527,12 +3655,13 @@ def get_special_full_compose(job_id: str, request: Request):
     user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
+    job = load_special_job_model(job_id) or job
     if not job:
         raise HTTPException(404, f"任务不存在: {job_id}")
     if not isinstance(job, SpecialFullComposeJob):
         raise HTTPException(400, "该任务不是特殊品（完整）合成任务")
     _assert_job_owner(job.user_id, user)
-    return job.model_copy(update={"result_images": _special_canvas_images(job)})
+    return job.model_copy(update={"result_images": _special_canvas_images(job), "recovering": bool(job.recovery.get("resuming")) and job.status not in {ComposeStatus.done, ComposeStatus.failed}})
 
 
 @app.get("/special-compose-full/{job_id}/download-zip")
@@ -3543,6 +3672,7 @@ def download_special_full_zip(job_id: str, names: str = "", request: Request = N
     user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
+    job = load_special_job_model(job_id) or job
     if not job or not isinstance(job, SpecialFullComposeJob):
         raise HTTPException(404, f"任务不存在: {job_id}")
     _assert_job_owner(job.user_id, user)
@@ -4950,7 +5080,11 @@ def delete_history_ai_chat(request: Request, session_id: str):
     return {"deleted": session_id}
 
 
-async def _run_ai_image_background(
+async def _run_ai_image_background(**kwargs):
+    await execute_image_job(_execute_ai_image_background, kwargs["job_id"], initial=kwargs)
+
+
+async def _execute_ai_image_background(
     job_id: str,
     user_id: str,
     username: str,
@@ -4973,12 +5107,14 @@ async def _run_ai_image_background(
     batch_count: int = 1,
     variant: str = "flare",
     quality: str = "auto",
+    resume: dict | None = None,
 ):
     """后台异步生图：轮询进度 → 更新 DB → 下载结果 → 写聊天记录"""
     stage = "init"
     upstream_task_id = ""
     active_provider = provider
     result = None
+    reference_count = int((request_meta or {}).get("reference_count", len(refs)))
 
     def on_progress(pct: int, api_status: str):
         try:
@@ -4995,7 +5131,7 @@ async def _run_ai_image_background(
                 provider=active_provider or provider, resolution=resolution,
                 original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
                 prompt_trace=prompt_trace,
-                progress=pct, has_reference=has_reference, reference_count=len(refs),
+                progress=pct, has_reference=has_reference, reference_count=reference_count,
                 request_meta=request_meta, created_at=created_at,
                 task_id=upstream_task_id or None,
             )
@@ -5009,6 +5145,7 @@ async def _run_ai_image_background(
             active_provider = accepted_provider
         if upstream_id:
             upstream_task_id = str(upstream_id)
+        checkpoint("accepted", task_id=upstream_task_id, provider=active_provider)
         try:
             save_ai_image_job(
                 job_id=job_id, user_id=user_id, status="processing",
@@ -5016,7 +5153,7 @@ async def _run_ai_image_background(
                 provider=active_provider or provider, resolution=resolution,
                 original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
                 prompt_trace=prompt_trace,
-                progress=10, has_reference=has_reference, reference_count=len(refs),
+                progress=10, has_reference=has_reference, reference_count=reference_count,
                 request_meta=request_meta, created_at=created_at,
                 task_id=upstream_task_id or None,
             )
@@ -5024,9 +5161,11 @@ async def _run_ai_image_background(
             pass
 
     def on_attempt(attempt_provider: str) -> None:
-        """每次发起 POST 前记录真实渠道；accepted 只负责补充上游任务号。"""
-        nonlocal active_provider
+        """记录当前准备使用的渠道；真正发送付费 POST 时由适配器保存 submitting。"""
+        nonlocal active_provider, upstream_task_id
         active_provider = attempt_provider or active_provider
+        upstream_task_id = ""
+        checkpoint("preparing", provider=active_provider)
         try:
             save_ai_image_job(
                 job_id=job_id, user_id=user_id, status="processing",
@@ -5034,7 +5173,7 @@ async def _run_ai_image_background(
                 provider=active_provider or provider, resolution=resolution,
                 original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
                 prompt_trace=prompt_trace,
-                progress=0, has_reference=has_reference, reference_count=len(refs),
+                progress=0, has_reference=has_reference, reference_count=reference_count,
                 request_meta=request_meta, created_at=created_at,
                 task_id=upstream_task_id or None,
             )
@@ -5043,7 +5182,27 @@ async def _run_ai_image_background(
 
     try:
         stage = "generate"
-        if provider == PROVIDER_AUTO or not provider:
+        if resume:
+            active_provider = str(resume.get("provider") or provider)
+            upstream_task_id = str(resume.get("task_id") or "")
+            if resume.get("local_url"):
+                local_path = _resolve_public_asset_path(str(resume["local_url"]))
+                if not local_path or not local_path.is_file():
+                    raise RuntimeError("已生成的原图文件不存在")
+                result = {"url": resume["local_url"], "provider": active_provider,
+                          "task_id": upstream_task_id}
+            elif active_provider == PROVIDER_BFL:
+                result = await generate_vto_async(
+                    prompt=prompt, person=b"", garment=b"", user_id=user_id,
+                    on_progress=on_progress,
+                    resume={"id": upstream_task_id, "polling_url": resume["polling_url"]},
+                )
+            else:
+                result = await resume_image_async(
+                    provider=active_provider, model=model, user_id=user_id,
+                    recovery=resume, on_progress=on_progress,
+                )
+        elif provider == PROVIDER_AUTO or not provider:
             result = await asyncio.wait_for(
                 smart_generate_image_async(
                     model=model, prompt=prompt,
@@ -5055,6 +5214,7 @@ async def _run_ai_image_background(
                 timeout=max(60, int(settings.ai_image_smart_route_timeout_seconds or 360)),
             )
         elif provider == PROVIDER_BFL:
+            on_attempt(provider)
             if len(refs) < 2:
                 raise RuntimeError("FLUX 换装缺少人物图或服装图")
             result = await generate_vto_async(
@@ -5062,6 +5222,7 @@ async def _run_ai_image_background(
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_BFL, tid),
             )
         elif provider == PROVIDER_SUB2API:
+            on_attempt(provider)
             result = await generate_sub2api_async(
                 model=model, prompt=prompt,
                 images=refs if refs else None,
@@ -5070,6 +5231,7 @@ async def _run_ai_image_background(
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_SUB2API, tid),
             )
         elif provider == PROVIDER_TUZI:
+            on_attempt(provider)
             result = await generate_tuzi_async(
                 model=model, prompt=prompt, images=refs if refs else None,
                 size=size, resolution=resolution, user_id=user_id,
@@ -5077,6 +5239,7 @@ async def _run_ai_image_background(
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_TUZI, tid),
             )
         elif provider == PROVIDER_ADOBE2API:
+            on_attempt(provider)
             result = await generate_adobe2api_async(
                 model=model, prompt=prompt,
                 images=refs,
@@ -5084,6 +5247,7 @@ async def _run_ai_image_background(
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_ADOBE2API, tid),
             )
         elif refs:
+            on_attempt(provider)
             result = await generate_image_with_reference_async(
                 model=model, prompt=prompt, images=refs,
                 size=size, resolution=resolution, user_id=user_id,
@@ -5091,6 +5255,7 @@ async def _run_ai_image_background(
                 on_progress=on_progress, on_accepted=lambda tid: on_accepted(PROVIDER_APIMART, tid),
             )
         else:
+            on_attempt(provider)
             result = await generate_image_async(
                 model=model, prompt=prompt,
                 size=size, resolution=resolution, user_id=user_id,
@@ -5100,6 +5265,7 @@ async def _run_ai_image_background(
         actual_provider = str(result.get("provider") or provider)
         provider_switched = bool(result.get("provider_switched"))
         upstream_task_id = str(result.get("task_id") or "")
+        checkpoint("downloaded", local_url=result.get("url"), task_id=upstream_task_id)
         stage = "persist"
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="done",
@@ -5108,7 +5274,7 @@ async def _run_ai_image_background(
             original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
             prompt_trace=prompt_trace,
             image_url=result.get("url"), task_id=upstream_task_id or None,
-            progress=100, has_reference=has_reference, reference_count=len(refs),
+            progress=100, has_reference=has_reference, reference_count=reference_count,
             request_meta=request_meta, created_at=created_at,
         )
         if provider_switched:
@@ -5159,7 +5325,7 @@ async def _run_ai_image_background(
                     "size": size, "resolution": resolution,
                     "status": "done",
                     "hasReference": has_reference,
-                    "refCount": len(refs),
+                    "refCount": reference_count,
                     "refPreviews": ref_previews or [],
                     "previewUrl": preview_url,
                     "batchId": batch_id,
@@ -5170,66 +5336,10 @@ async def _run_ai_image_background(
             )
         except Exception:
             logger.exception("failed to append success chat message: job_id=%s", job_id)
+            raise
         # 注意：参考图目录需保留供重试/复用任务读取，不在此处删除
+        checkpoint("done", resuming=False, message=None)
     except asyncio.CancelledError:
-        # Uvicorn reload / server shutdown can cancel in-flight background tasks.
-        # Without explicitly persisting this, the UI keeps polling a permanent
-        # "processing" job that will never be resumed.
-        cancel_provider = active_provider or provider
-        diagnostic_error = format_generation_error(
-            "生图任务被服务重载或关闭中断，请重新提交",
-            stage=stage or "cancelled",
-            provider=cancel_provider,
-            model=model,
-            job_id=job_id,
-            task_id=upstream_task_id,
-        )
-        error_msg = public_generation_error()
-        logger.warning(
-            "ai_image background task cancelled: job_id=%s stage=%s provider=%s error=%s",
-            job_id, stage, cancel_provider, diagnostic_error[:200],
-        )
-        save_ai_image_job(
-            job_id=job_id, user_id=user_id, status="failed",
-            model=model, prompt=prompt, size=size,
-            provider=cancel_provider, resolution=resolution,
-            original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
-            prompt_trace=prompt_trace,
-            has_reference=has_reference, error=error_msg, task_id=upstream_task_id or None,
-            reference_count=len(refs), request_meta=request_meta,
-            progress=100, created_at=created_at,
-        )
-        log_operation(
-            user_id=user_id, username=username,
-            action="ai_image",
-            detail=f"job={job_id[:8]} model={model} size={size} result=cancelled stage={stage}",
-            payload=json.dumps({
-                "job_id": job_id, "model": model, "size": size, "result": "cancelled",
-                "variant": variant, "quality": quality,
-                "error": error_msg, "stage": stage, "provider": cancel_provider,
-                "upstream_task_id": upstream_task_id,
-            }, ensure_ascii=False),
-        )
-        append_ai_chat_message(
-            session_id=session_id, user_id=user_id,
-            role="ai", type="ai_image_result",
-            text=prompt, image_url=None,
-            meta={
-                "job_id": job_id,
-                "model": model, "prompt": prompt,
-                "variant": variant,
-                "provider": cancel_provider,
-                "status": "failed", "error": error_msg,
-                "hasReference": has_reference,
-                "refCount": len(refs),
-                "taskId": upstream_task_id,
-                "stage": stage,
-                "batchId": batch_id,
-                "batchIndex": batch_index,
-                "batchCount": batch_count,
-            },
-            created_at=time.time(),
-        )
         raise
     except Exception as e:
         stage = str(getattr(e, "stage", "") or stage or "generate")
@@ -5257,59 +5367,15 @@ async def _run_ai_image_background(
                     original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
                     prompt_trace=prompt_trace, image_url=result.get("url"),
                     task_id=str(result.get("task_id") or upstream_task_id) or None,
-                    progress=100, has_reference=has_reference, reference_count=len(refs),
+                    progress=100, has_reference=has_reference, reference_count=reference_count,
                     request_meta=request_meta, created_at=created_at,
                 )
             except Exception:
                 logger.exception("failed to recover generated image job: job_id=%s", job_id)
             return
-        error_msg = public_generation_error(e)
-        logger.exception(
-            "ai_image background task failed: job_id=%s stage=%s provider=%s model=%s error=%s",
-            job_id, stage, fail_provider, model, diagnostic_error[:200],
-        )
-        save_ai_image_job(
-            job_id=job_id, user_id=user_id, status="failed",
-            model=model, prompt=prompt, size=size,
-            provider=fail_provider, resolution=resolution,
-            original_prompt=original_prompt, resolved_prompt=resolved_prompt or prompt,
-            prompt_trace=prompt_trace,
-            has_reference=has_reference, error=error_msg, task_id=upstream_task_id or None,
-            reference_count=len(refs), request_meta=request_meta,
-            progress=100, created_at=created_at,
-        )
-        log_operation(
-            user_id=user_id, username=username,
-            action="ai_image",
-            detail=f"job={job_id[:8]} model={model} size={size} result=failed stage={stage} error={error_msg[:80]}",
-            payload=json.dumps({
-                "job_id": job_id, "model": model, "size": size, "result": "failed",
-                "error": error_msg[:500], "stage": stage, "provider": fail_provider,
-                "diagnostic_error": diagnostic_error[:1000],
-                "upstream_task_id": upstream_task_id,
-            }, ensure_ascii=False),
-        )
-        append_ai_chat_message(
-            session_id=session_id, user_id=user_id,
-            role="ai", type="ai_image_result",
-            text=prompt, image_url=None,
-            meta={
-                "job_id": job_id,
-                "model": model, "prompt": prompt,
-                "variant": variant,
-                "provider": fail_provider,
-                "status": "failed", "error": error_msg,
-                "hasReference": has_reference,
-                "refCount": len(refs),
-                "taskId": upstream_task_id,
-                "stage": stage,
-                "batchId": batch_id,
-                "batchIndex": batch_index,
-                "batchCount": batch_count,
-            },
-            created_at=time.time(),
-        )
-
+        # The durable worker decides whether to resume the original task or fail.
+        # Never convert a polling/download interruption into a fresh generation.
+        raise
 
 @app.get("/ai-image/outpainting/config")
 def ai_image_outpainting_config():
@@ -6009,7 +6075,7 @@ def ai_image_status(request: Request, job_id: str):
     # Smart-routed generation errors use a generic two-round message. Operation-specific
     # workers (layer_extract, outpainting, matting, upscale, vectorize) already persist
     # bounded public errors and must not be rewritten here.
-    if job.get("status") == "failed" and operation in {"", "generate"}:
+    if job.get("status") == "failed" and operation in {"", "generate"} and not request_meta.get("recovery"):
         public_error = public_generation_error(error_text)
         should_update_error = str(error_text).strip() != public_error
         error_text = public_error
@@ -6050,10 +6116,12 @@ def ai_image_status(request: Request, job_id: str):
         "providerSwitched": bool(job.get("provider_switched")),
         "layer_extract": layer_extract,
         "outpainting": outpainting,
+        "recovering": bool((request_meta.get("recovery") or {}).get("resuming")) and job["status"] not in {"done", "failed"},
         "message": (
-            f"正在恢复原扩图任务（第 {request_meta['recovery_attempt']}/3 次尝试）"
+            (request_meta.get("recovery") or {}).get("message") or
+            (f"正在恢复原扩图任务（第 {request_meta['recovery_attempt']}/3 次尝试）"
             if operation == "outpainting" and job.get("status") == "processing"
-            and int(request_meta.get("recovery_attempt") or 1) > 1 else None
+            and int(request_meta.get("recovery_attempt") or 1) > 1 else None)
         ),
         "cost": outpainting.get("cost") if outpainting else None,
     }
@@ -6184,6 +6252,8 @@ async def ai_image_retry(request: Request):
         request_meta={
             "chat_session_id": session_id,
             "retry_from": job_id,
+            "recovery": {"version": 1, "phase": "queued"},
+            "execution_prompt": effective_prompt,
             "reference_storage_job_id": reference_storage_job_id,
             "variant": variant,
             "quality": quality,
@@ -6209,7 +6279,7 @@ async def ai_image_retry(request: Request):
         payload=json.dumps({"job_id": new_job_id, "model": model, "size": size, "provider": retry_provider, "retry_from": job_id}, ensure_ascii=False),
     )
     # 重试消息不重新写入聊天记录（不重复显示 prompt），后台任务完成/失败时会自动追加
-    asyncio.create_task(
+    _track_ai_image_task(
         _run_ai_image_background(
             job_id=new_job_id, user_id=user["id"], username=user["username"],
             session_id=session_id,
@@ -6224,6 +6294,8 @@ async def ai_image_retry(request: Request):
             request_meta={
                 "chat_session_id": session_id,
                 "retry_from": job_id,
+                "recovery": {"version": 1, "phase": "queued"},
+                "execution_prompt": effective_prompt,
                 "reference_storage_job_id": reference_storage_job_id,
                 "variant": variant,
                 "quality": quality,
@@ -7090,7 +7162,8 @@ async def ai_image_endpoint(
                             stored_reference_urls.append("")
                     saved_reference_storage_id = reference_storage_id
                 except Exception:
-                    logger.warning("Failed to save user refs for %s", reference_storage_id)
+                    logger.exception("Failed to save user refs for %s", reference_storage_id)
+                    raise
 
             reference_images = []
             for i, (_content, name) in enumerate(all_refs_batch[:actual_manual_count]):
@@ -7109,6 +7182,8 @@ async def ai_image_endpoint(
                 })
             request_meta = {
                 "client_request_id": client_req,
+                "recovery": {"version": 1, "phase": "queued"},
+                "execution_prompt": enriched_prompt,
                 "chat_session_id": session_id,
                 "skill": active_skill_name,
                 "variant": variant,
@@ -7140,7 +7215,7 @@ async def ai_image_endpoint(
                 provider=resolved_provider,
                 resolution=resolution,
                 original_prompt=original_prompt,
-                resolved_prompt=original_prompt,
+                resolved_prompt=enriched_prompt,
                 prompt_trace=json.dumps(prompt_trace_payload, ensure_ascii=False) if prompt_trace_payload else prompt_trace_text,
                 has_reference=has_reference,
                 reference_count=len(all_refs_batch),
@@ -7157,7 +7232,7 @@ async def ai_image_endpoint(
                     "provider": resolved_provider, "batch_count": batch_count, "skill": active_skill_name,
                 }, ensure_ascii=False),
             )
-            asyncio.create_task(
+            _track_ai_image_task(
                 _run_ai_image_background(
                     job_id=jid, user_id=user["id"], username=user["username"],
                     session_id=session_id,
@@ -7451,6 +7526,7 @@ async def ai_image_outfit_change(
             stored_urls.append(_ai_image_public_url(Path(ref_path)))
     except Exception:
         logger.warning("outfit: failed to save refs for %s", reference_storage_id, exc_info=True)
+        raise HTTPException(503, "参考图暂时无法保存，请稍后重试")
 
     reference_images = [{
         "type": "manual",
@@ -7481,6 +7557,8 @@ async def ai_image_outfit_change(
         job_ids.append(jid)
         request_meta = {
             "operation": "outfit-change",
+            "recovery": {"version": 1, "phase": "queued"},
+            "execution_prompt": prompt,
             "client_request_id": client_req,
             "chat_session_id": session_id,
             "variant": "flare",
@@ -7519,7 +7597,7 @@ async def ai_image_outfit_change(
                 "skus": skus, "refs": len(refs), "batch_count": batch_count,
             }, ensure_ascii=False),
         )
-        asyncio.create_task(
+        _track_ai_image_task(
             _run_ai_image_background(
                 job_id=jid, user_id=user["id"], username=user["username"],
                 session_id=session_id,

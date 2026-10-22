@@ -5840,9 +5840,14 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
 
         // 轮询 + 实时更新日志
         let done = false;
-        for (let i = 0; i < 120 && !done; i++) {
+        const specialPollStartedAt = Date.now();
+        let specialPollDeadline = specialPollStartedAt + 180000;
+        while (Date.now() < specialPollDeadline && !done) {
           await new Promise(r => setTimeout(r, 1500));
           const s = await fetch(`${_pollBase}/${job.id}`).then(r => r.json());
+          if (s.recovering) {
+            specialPollDeadline = Math.min(specialPollStartedAt + 3600000, Math.max(specialPollDeadline, Date.now() + 180000));
+          }
           setMessages(msgs => msgs.map((m, idx) => {
             if (idx !== specialMsgIdx) return m;
             const finishing = s.status === 'done' || s.status === 'failed';

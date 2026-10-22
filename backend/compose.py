@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .config import settings
+from .job_store import save_job
+from .compose_recovery import copy_edit_url, compose_execution, compose_error
+from .task_checkpoint import atomic_write
 from .models import ComposeJob, ComposeRequest, ComposeStatus
 from .penpot_client import PenpotClient, PenpotError
 from .slot_schema import schema as slot_schema
@@ -43,6 +46,7 @@ def get_client() -> PenpotClient:
 # ─── 合成主函数 ───────────────────────────────────────────────────────────────
 
 
+@compose_execution
 def run_compose(job: ComposeJob) -> None:
     """
     同步执行合成任务，就地更新 job.status / job.result_path / job.error。
@@ -58,52 +62,62 @@ def run_compose(job: ComposeJob) -> None:
 def _run_compose_inner(job: ComposeJob) -> None:
     """实际执行体，在信号量保护内运行"""
     job.status = ComposeStatus.running
-    client = get_client()
     req = job.request
 
     try:
+        client = get_client()
         # ── Step 1: 复制模板，得到本次合成的独立副本 ─────────────────────────
         import datetime
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M")
         copy_name = f"合成-{ts}-{job.id[:8]}"
-        _log(job, f"复制模板文件 → {copy_name}")
-        dup = client.duplicate_file(req.file_id, copy_name)
-        work_file_id = dup.get("id") or dup.get("~:id") or req.file_id
+        if job.penpot_file_id:
+            work_file_id = job.penpot_file_id
+            edit_url = copy_edit_url(job, client)
+            _log(job, "正在恢复任务，复用已有模板副本…")
+        else:
+            _log(job, f"复制模板文件 → {copy_name}")
+            dup = client.duplicate_file(req.file_id, copy_name)
+            work_file_id = dup.get("id") or dup.get("~:id")
+            if not work_file_id:
+                raise PenpotError("复制模板未返回副本编号")
+            job.penpot_file_id = work_file_id
+            job.recovery["phase"] = "preparing"
+            save_job(job)
 
-        # 拼接 penpot 编辑链接，team-id 按优先级逐步尝试
-        project_id = dup.get("projectId") or dup.get("project-id", "")
-        team_id = dup.get("teamId") or dup.get("team-id", "")
-        if not team_id:
-            try:
-                # 方法1：从副本文件数据直接取
-                dup_file_data = client.get_file(work_file_id)
-                team_id = dup_file_data.get("teamId") or dup_file_data.get("team-id", "")
-            except Exception:
-                pass
-        if not team_id and project_id:
-            try:
-                # 方法2：通过 project 查 team
-                proj = client._rpc("get-project", {"id": project_id})
-                team_id = proj.get("teamId") or proj.get("team-id", "")
-            except Exception:
-                pass
-        if not team_id:
-            try:
-                # 方法3：从原模板文件取 team-id（副本和原模板同属一个 project/team）
-                orig_data = client.get_file(req.file_id)
-                orig_proj_id = orig_data.get("projectId") or orig_data.get("project-id", "")
-                if orig_proj_id:
-                    proj = client._rpc("get-project", {"id": orig_proj_id})
+            # 拼接 penpot 编辑链接，team-id 按优先级逐步尝试
+            project_id = dup.get("projectId") or dup.get("project-id", "")
+            team_id = dup.get("teamId") or dup.get("team-id", "")
+            if not team_id:
+                try:
+                    # 方法1：从副本文件数据直接取
+                    dup_file_data = client.get_file(work_file_id)
+                    team_id = dup_file_data.get("teamId") or dup_file_data.get("team-id", "")
+                except Exception:
+                    pass
+            if not team_id and project_id:
+                try:
+                    # 方法2：通过 project 查 team
+                    proj = client._rpc("get-project", {"id": project_id})
                     team_id = proj.get("teamId") or proj.get("team-id", "")
-            except Exception:
-                pass
-        edit_url = (
-            f"{settings.penpot_base_url}/#/workspace"
-            f"?team-id={team_id}&file-id={work_file_id}&page-id={req.page_id}"
-        )
-        job.penpot_file_id = work_file_id
-        job.penpot_edit_url = edit_url
-        _log(job, f"副本就绪: {work_file_id[:8]}…  编辑链接已记录")
+                except Exception:
+                    pass
+            if not team_id:
+                try:
+                    # 方法3：从原模板文件取 team-id（副本和原模板同属一个 project/team）
+                    orig_data = client.get_file(req.file_id)
+                    orig_proj_id = orig_data.get("projectId") or orig_data.get("project-id", "")
+                    if orig_proj_id:
+                        proj = client._rpc("get-project", {"id": orig_proj_id})
+                        team_id = proj.get("teamId") or proj.get("team-id", "")
+                except Exception:
+                    pass
+            edit_url = (
+                f"{settings.penpot_base_url}/#/workspace"
+                f"?team-id={team_id}&file-id={work_file_id}&page-id={req.page_id}"
+            )
+            job.penpot_file_id = work_file_id
+            job.penpot_edit_url = edit_url
+            _log(job, f"副本就绪: {work_file_id[:8]}…  编辑链接已记录")
 
         # ── Step 2: 读取副本的图层结构 ────────────────────────────────────────
         _log(job, "读取模板图层结构...")
@@ -203,18 +217,19 @@ def _run_compose_inner(job: ComposeJob) -> None:
 
         # ── Step 6: 保存结果 ──────────────────────────────────────────────────
         out_path = settings.output_path / f"{job.id}.png"
-        out_path.write_bytes(png_bytes)
+        atomic_write(out_path, png_bytes)
 
         job.result_path = str(out_path)
+        job.recovery["phase"] = "done"
         job.status = ComposeStatus.done
         _log(job, f"完成！输出: {out_path} ({len(png_bytes)//1024} KB)")
         _log(job, f"Penpot 编辑链接: {edit_url}")
 
     except Exception as exc:
-        job.status = ComposeStatus.failed
-        job.error = str(exc)
-        _log(job, f"失败: {exc}")
+        compose_error(job, exc, _log)
+
 
 
 def _log(job: ComposeJob, msg: str) -> None:
     job.progress.append(msg)
+    save_job(job)

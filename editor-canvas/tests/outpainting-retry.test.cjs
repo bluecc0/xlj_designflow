@@ -58,6 +58,7 @@ function harness(handler, { imageFailures = 0, abortSubmissions = false, abortPo
     calls, messages, imageUrls, delays,
     posts: () => calls.filter(call => call.method === 'POST'),
     polls: () => calls.filter(call => !call.method),
+    poll: (timeoutSeconds) => context.exports.pollJob('job-original', timeoutSeconds),
     run: (mode = 'fast') => context.exports.runOutpainting(
       '/source.png', 512, 512, { top: 64, right: 96, bottom: 0, left: 0 },
       (message) => messages.push(message), mode,
@@ -221,6 +222,23 @@ test('后台恢复原任务时持续轮询，展示恢复次数并保留任务�
   assert.equal(h.posts().length, 1)
   assert.ok(h.polls().every(call => call.url === '/ai-image/job-original'))
   assert.ok(h.messages.some(message => message.includes('恢复原扩图任务（第 3/3')))
+})
+
+test('恢复期间延长原任务的查询等待，不因原先的前端计时中断', async () => {
+  let polls = 0
+  const h = harness(() => ++polls < 6
+    ? response({ status: 'processing', recovering: true, message: '正在恢复任务…' }) : done())
+  const result = await h.poll(2)
+  assert.equal(result.image_url, '/original-result.png')
+  assert.equal(h.posts().length, 0)
+  assert.equal(h.polls().length, 6)
+})
+
+test('恢复等待保留总时限，始终只查询原任务', async () => {
+  const h = harness(() => response({ status: 'processing', recovering: true }))
+  await assert.rejects(h.poll(2), /任务超时/)
+  assert.equal(h.posts().length, 0)
+  assert.equal(h.polls().length, 3600)
 })
 
 test('结果图读取失败仅重试加载原结果，不重复提交或轮询', async () => {

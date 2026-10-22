@@ -48,7 +48,9 @@ export async function pollJob(
   requestTimeoutMs?: number
 ): Promise<any> {
   const start = Date.now()
-  while (Date.now() - start < timeoutSeconds * 1000) {
+  let deadline = start + timeoutSeconds * 1000
+  const recoveryDeadline = start + 60 * 60 * 1000
+  while (Date.now() < deadline) {
     await new Promise((res) => setTimeout(res, 1000))
     const controller = requestTimeoutMs ? new AbortController() : undefined
     const timer = controller ? setTimeout(() => controller.abort(), requestTimeoutMs) : undefined
@@ -73,6 +75,9 @@ export async function pollJob(
     }
     if (data.status === 'failed') {
       throw new AiImageJobError(data.error || '任务处理失败', data.outpainting?.retry_action || 'none')
+    }
+    if (data.recovering || ['recovering', 'interrupted'].includes(data.outpainting?.phase)) {
+      deadline = Math.min(recoveryDeadline, Math.max(deadline, Date.now() + timeoutSeconds * 1000))
     }
     if (onProgress && data.message) {
       onProgress(data.message, data.progress)

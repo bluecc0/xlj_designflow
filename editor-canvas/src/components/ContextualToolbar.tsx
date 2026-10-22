@@ -453,11 +453,8 @@ export function ContextualToolbar({
                     gap: 4,
                     fontSize: 11,
                     fontWeight: 600,
-                    padding: '3px 7px',
-                    borderRadius: 5,
-                    backgroundColor: outpaintError ? '#fef2f2' : '#f8fafc',
+                    padding: '3px 4px',
                     color: outpaintError ? '#dc2626' : '#334155',
-                    border: `1px solid ${outpaintError ? '#fecaca' : '#e2e8f0'}`,
                     whiteSpace: 'nowrap',
                   }}
                   title={

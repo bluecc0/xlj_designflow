@@ -15,9 +15,7 @@
 from __future__ import annotations
 
 import datetime
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +25,7 @@ from .penpot_client import PenpotClient, PenpotError
 from .penpot_browser_refresh import refresh_penpot_workspace
 from .product_library import ProductLibrary
 from .job_store import save_special_job
+from .compose_recovery import copy_edit_url, compose_execution, compose_error, export_special
 
 # 复用主流程的客户端单例和串行信号量
 from .compose import get_client, _compose_sem
@@ -79,6 +78,7 @@ def _find_variant_group_ids(file_data: dict, page_id: str) -> dict[str, list[tup
 
 # ─── 合成主函数 ───────────────────────────────────────────────────────────────
 
+@compose_execution
 def run_special_full_compose(job: SpecialFullComposeJob) -> None:
     """
     同步执行特殊品（完整）合成任务，就地更新 job 状态。
@@ -92,11 +92,15 @@ def run_special_full_compose(job: SpecialFullComposeJob) -> None:
 def _run_inner(job: SpecialFullComposeJob) -> None:
     job.status = ComposeStatus.running
     save_special_job(job)
-    client = get_client()
     req = job.request
     library = ProductLibrary(settings.product_library_path)
 
     try:
+        client = get_client()
+        if job.recovery.get("export_plan"):
+            _log(job, "正在恢复任务，继续导出剩余画板…")
+            export_special(job, client, _log)
+            return
         # ── Step 0: 展开字段 ──────────────────────────────────────────────────
         raw_time = req.fields.get("time", "")
         time_expanded = expand_time_fields(raw_time)
@@ -119,25 +123,36 @@ def _run_inner(job: SpecialFullComposeJob) -> None:
 
         # ── Step 1: 复制模板文件 ──────────────────────────────────────────────
         copy_name = f"{req.sku}_特殊品" if req.sku else f"特殊品-{job.id[:8]}"
-        _log(job, f"复制模板文件 → {copy_name}")
-        dup = client.duplicate_file(req.file_id, copy_name)
-        work_file_id = dup.get("id") or dup.get("~:id") or req.file_id
+        if job.penpot_file_id:
+            work_file_id = job.penpot_file_id
+            edit_url = copy_edit_url(job, client)
+            _log(job, "正在恢复任务，复用已有模板副本…")
+        else:
+            _log(job, f"复制模板文件 → {copy_name}")
+            dup = client.duplicate_file(req.file_id, copy_name)
+            work_file_id = dup.get("id") or dup.get("~:id")
+            if not work_file_id:
+                raise PenpotError("复制模板未返回副本编号")
+            job.penpot_file_id = work_file_id
+            job.penpot_page_id = req.page_id
+            job.recovery["phase"] = "preparing"
+            save_special_job(job)
 
-        project_id = dup.get("projectId") or dup.get("project-id", "")
-        team_id = dup.get("teamId") or dup.get("team-id", "")
-        if not team_id and project_id:
-            try:
-                proj = client._rpc("get-project", {"id": project_id})
-                team_id = proj.get("teamId") or proj.get("team-id", "")
-            except Exception:
-                pass
-        edit_url = (
-            f"{settings.penpot_base_url}/#/workspace"
-            f"?team-id={team_id}&file-id={work_file_id}&page-id={req.page_id}"
-        )
-        job.penpot_file_id = work_file_id
-        job.penpot_edit_url = edit_url
-        _log(job, f"副本就绪: {work_file_id[:8]}…")
+            project_id = dup.get("projectId") or dup.get("project-id", "")
+            team_id = dup.get("teamId") or dup.get("team-id", "")
+            if not team_id and project_id:
+                try:
+                    proj = client._rpc("get-project", {"id": project_id})
+                    team_id = proj.get("teamId") or proj.get("team-id", "")
+                except Exception:
+                    pass
+            edit_url = (
+                f"{settings.penpot_base_url}/#/workspace"
+                f"?team-id={team_id}&file-id={work_file_id}&page-id={req.page_id}"
+            )
+            job.penpot_file_id = work_file_id
+            job.penpot_edit_url = edit_url
+            _log(job, f"副本就绪: {work_file_id[:8]}…")
 
         # ── Step 2: 读取副本图层结构 ──────────────────────────────────────────
         _log(job, "读取模板图层结构…")
@@ -354,94 +369,12 @@ def _run_inner(job: SpecialFullComposeJob) -> None:
         all_variant_ids = list({(lid, pid) for ids in export_versions.values() for lid, pid in ids})
         _log(job, f"变体模式: {'是' if has_variants else '否'} ({list(export_versions.keys())})")
 
-        _path_buf: dict[str, str] = {}
-        _buf_lock = threading.Lock()
-
-        def _export_one_nowait(i: int, frame_id: str, suffix: str) -> None:
-            frame = frame_index[frame_id]
-            fname = f"frame_{i}{suffix}.png"
-            out_path = results_dir / fname
-            label = suffix.strip("_") if suffix else ""
-            _log(job, f"  导出: {frame['name']}{' [' + label + ']' if label else ''}…")
-            try:
-                png_bytes = client.export_frame(
-                    file_id=work_file_id,
-                    page_id=req.page_id,
-                    frame_id=frame_id,
-                    scale=1.0,
-                    name=frame.get("name", "export"),
-                    wait_secs=0,
-                    background=False,
-                )
-                out_path.write_bytes(png_bytes)
-                with _buf_lock:
-                    _path_buf[fname] = str(out_path)
-                _log(job, f"  ✓ {frame['name']} ({len(png_bytes)//1024} KB)")
-            except Exception as e:
-                _log(job, f"  ✗ {frame['name']} 导出失败: {e}")
-
-        def _export_batch(tasks: list[tuple[int, str, str]], wait_secs: float) -> None:
-            if not tasks:
-                return
-            if wait_secs > 0:
-                _log(job, f"  等待 {wait_secs}s（Penpot 写入广播）…")
-                time.sleep(wait_secs)
-            n = len(tasks)
-            _log(job, f"  并行导出 {n} 个画板…")
-            with ThreadPoolExecutor(max_workers=n) as pool:
-                futs = [pool.submit(_export_one_nowait, i, fid, sfx) for i, fid, sfx in tasks]
-                for fut in as_completed(futs):
-                    exc = fut.exception()
-                    if exc:
-                        _log(job, f"  [并行导出异常] {exc}")
-
-        if not has_variants:
-            _log(job, "并行导出全部画板…")
-            tasks = [(i, fid, "") for i, fid in enumerate(valid_frame_ids)]
-            _export_batch(tasks, wait_secs=3.0)
-        else:
-            non_variant_tasks = [
-                (i, fid, "") for i, fid in enumerate(valid_frame_ids)
-                if fid not in variant_frame_ids
-            ]
-            if non_variant_tasks:
-                _log(job, "并行导出非变体画板…")
-                _export_batch(non_variant_tasks, wait_secs=3.0)
-
-            for vi, (vkey, v_ids) in enumerate(sorted(export_versions.items())):
-                vis_changes = []
-                v_id_set = set(v_ids)
-                for lid, pid in all_variant_ids:
-                    if (lid, pid) in v_id_set:
-                        vis_changes.append(client.show_layer(lid, pid))
-                    else:
-                        vis_changes.append(client.hide_layer(lid, pid))
-                client.update_file(work_file_id, vis_changes)
-                suffix = f"_v{vi + 1}"
-                _log(job, f"并行导出变体版本 {vkey} → {suffix}…")
-                variant_tasks = [
-                    (i, fid, suffix) for i, fid in enumerate(valid_frame_ids)
-                    if fid in variant_frame_ids
-                ]
-                _export_batch(variant_tasks, wait_secs=2.0)
-
-        job.result_paths = [
-            v for _, v in sorted(_path_buf.items(), key=lambda x: (
-                int(__import__('re').search(r'frame_(\d+)', x[0]).group(1)),
-                x[0],
-            ))
-        ]
-
-        job.status = ComposeStatus.done
-        save_special_job(job)
-        n_out = len(job.result_paths)
-        _log(job, f"合成完成！副本 {work_file_id[:8]}…，共导出 {n_out} 张图")
+        export_special(job, client, _log, frame_index=frame_index,
+                       export_versions=export_versions, variant_frame_ids=variant_frame_ids)
 
     except Exception as exc:
-        job.status = ComposeStatus.failed
-        job.error = str(exc)
-        save_special_job(job)
-        _log(job, f"失败: {exc}")
+        compose_error(job, exc, _log)
+
 
 
 def _log(job: SpecialFullComposeJob, msg: str) -> None:

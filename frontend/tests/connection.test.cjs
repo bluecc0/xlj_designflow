@@ -185,6 +185,18 @@ test('backend recovery is displayed until the original task leaves its recovery 
   assert.equal(h.monitor.getSnapshot().status, 'online')
 })
 
+test('generation and composition recovery keep the feedback visible until completion', async () => {
+  for (const path of ['/ai-image/job', '/special-compose/job', '/special-compose-full/job', '/compose/job']) {
+    let completed = false
+    const h = harness(() => json({ status: completed ? 'done' : 'processing', recovering: !completed }))
+    await h.root.fetch(path)
+    assert.equal(h.monitor.getSnapshot().status, 'recovering')
+    completed = true
+    await h.root.fetch(path)
+    assert.equal(h.monitor.getSnapshot().status, 'online')
+  }
+})
+
 test('offline events give immediate feedback and a successful session check confirms reconnection', async () => {
   const h = harness(() => session())
   h.root.navigator.onLine = false
