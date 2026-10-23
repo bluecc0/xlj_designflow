@@ -400,6 +400,9 @@
     --accent-ink: oklch(0.38 0.18 275);
     --warn: oklch(0.72 0.15 70);
     --ok: oklch(0.65 0.15 155);
+    --danger: oklch(0.58 0.19 25);
+    --danger-soft: oklch(0.97 0.02 25);
+    --danger-line: oklch(0.88 0.06 25);
     --radius: 10px;
     --radius-sm: 6px;
     --radius-lg: 14px;
@@ -421,6 +424,13 @@
   ::-webkit-scrollbar-thumb:hover { background: oklch(0.80 0.008 260); border: 3px solid transparent; background-clip: padding-box; }
   .inspiration-tab-scroll { scrollbar-width: none; -ms-overflow-style: none; }
   .inspiration-tab-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .df-spinner { width: 12px; height: 12px; border-radius: 99px; border: 1.5px solid var(--line); border-top-color: var(--accent); animation: spin 0.8s linear infinite; display: inline-block; flex-shrink: 0; }
+
+  /* 对话栏宽度拖拽手柄 */
+  .df-chat-resizer { transition: background 120ms; }
+  .df-chat-resizer:hover { background: linear-gradient(90deg, transparent 2px, var(--accent) 2px, var(--accent) 4px, transparent 4px); }
 
   /* 3D 翻转舞台机制（参考 panel-flip-reference.html） */
   .designflow-stage-wrap {
@@ -491,12 +501,11 @@
 <script>
 // 运行时配置（可被 Penpot 插件覆盖）
 window.API_BASE = window.API_BASE || '';
-window.TWEAKS = window.TWEAKS || { chatState: 'returned', canvasState: 'candidates', theme: 'light' };
 </script>
 
 <script src="src/connection.js"></script>
 <script src="src/api.js"></script>
-<script src="compiled/app-fcc5093eae1f.js" data-designflow-bundle="true"></script>
+<script src="compiled/app-5e05f3fd58ef.js" data-designflow-bundle="true"></script>
 
 </body>
 </html>

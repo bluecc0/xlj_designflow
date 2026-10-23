@@ -139,15 +139,15 @@ const InspirationPanel = ({ open = true, onClose, onUsePrompt }) => {
   const closeDetail = React.useCallback(function() { setDetailPost(null); }, []);
 
   // 下架自己的
-  const handleUnpublish = React.useCallback(function(post) {
-    if (!window.confirm('下架这条灵感？')) return;
+  const handleUnpublish = React.useCallback(async function(post) {
+    if (!(await window.dfConfirm({ title: '下架这条灵感？', message: '下架后其他人将看不到这张图。', confirmText: '下架', danger: true }))) return;
     window.API.unpublishInspiration(post.id)
       .then(function() {
         setPosts(function(prev) { return prev.filter(function(p) { return p.id !== post.id; }); });
         if (detailPost && detailPost.id === post.id) closeDetail();
       })
       .catch(function(e) {
-        window.alert('下架失败：' + (e.message || '未知错误'));
+        window.dfToast('下架失败：' + (e.message || '未知错误'), { tone: 'danger' });
       });
   }, [detailPost, closeDetail]);
 
@@ -174,7 +174,7 @@ const InspirationPanel = ({ open = true, onClose, onUsePrompt }) => {
       if (detailPost && detailPost.id === post.id) {
         setDetailPost(Object.assign({}, detailPost, { favorited: !next }));
       }
-      window.alert((next ? '收藏' : '取消收藏') + '失败：' + (e.message || '未知错误'));
+      window.dfToast((next ? '收藏' : '取消收藏') + '失败：' + (e.message || '未知错误'), { tone: 'danger' });
     });
   }, [detailPost, tab]);
 

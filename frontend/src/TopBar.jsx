@@ -3,7 +3,7 @@
 const STATUS_COLORS = {
   loading: 'var(--warn)',
   ok: 'var(--ok)',
-  err: 'oklch(0.6 0.18 25)',
+  err: 'var(--danger)',
 };
 
 const StatusIcon = ({ title, fetchUrl, okKey, icon: Icon, renderDetail, placement = 'bottom' }) => {
@@ -245,6 +245,76 @@ const InspirationCurveIcon = () => {
   );
 };
 
+const UserMenu = ({ user, onSwitchUser, onNavigate }) => {
+  const [open, setOpen] = React.useState(false);
+  const wrapRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
+  }, [open]);
+  const name = user.display_name || user.username || '';
+  const itemStyle = {
+    width: '100%', height: 32, padding: '0 10px', borderRadius: 7, display: 'flex', alignItems: 'center', gap: 8,
+    fontSize: 12, color: 'var(--ink-2)', textAlign: 'left',
+  };
+  const hover = (e, on) => { e.currentTarget.style.background = on ? 'var(--panel-2)' : 'transparent'; };
+  const logout = async () => {
+    setOpen(false);
+    const ok = await window.dfConfirm({ title: '退出登录？', message: '退出后需要重新输入用户名和密码。', confirmText: '退出登录' });
+    if (ok) onSwitchUser();
+  };
+  return (
+    <div ref={wrapRef} style={{ position: 'relative', marginLeft: 6 }}>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="账号"
+        style={{
+          height: 30, padding: '0 8px 0 3px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 7,
+          background: open ? 'var(--panel-2)' : 'transparent', border: '1px solid ' + (open ? 'var(--line)' : 'var(--line-2)'),
+        }}
+      >
+        <span style={{
+          width: 22, height: 22, borderRadius: 6, display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600,
+          background: 'var(--accent-soft)', color: 'var(--accent-ink)',
+        }}>{name.slice(0, 1).toUpperCase()}</span>
+        <span style={{ fontSize: 12, color: 'var(--ink)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+        <I.chevronDown size={11} style={{ color: 'var(--ink-3)' }}/>
+      </button>
+      {open && (
+        <div role="menu" style={{
+          position: 'absolute', top: 'calc(100% + 6px)', right: 0, minWidth: 180, padding: 6, zIndex: 60,
+          borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line)', boxShadow: '0 10px 24px rgba(0,0,0,0.12)',
+        }}>
+          <div style={{ padding: '6px 10px 8px', borderBottom: '1px solid var(--line-2)', marginBottom: 4 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>{name}</div>
+            <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>{user.role === 'admin' ? '管理员' : '成员'}{user.display_name ? ' · ' + user.username : ''}</div>
+          </div>
+          {user.role === 'admin' && onNavigate && (
+            <button type="button" role="menuitem" style={itemStyle} onMouseEnter={e => hover(e, true)} onMouseLeave={e => hover(e, false)}
+              onClick={() => { setOpen(false); onNavigate('#/admin'); }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              </svg>
+              管理后台
+            </button>
+          )}
+          <button type="button" role="menuitem" style={itemStyle} onMouseEnter={e => hover(e, true)} onMouseLeave={e => hover(e, false)} onClick={logout}>
+            <I.user size={13}/>
+            退出登录 / 切换账号
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration, inspirationOpen }) => {
   const isAgentPage = typeof window !== 'undefined' && /\/ui\/agent\.html(?:$|\?)/.test(window.location.href);
 
@@ -405,44 +475,7 @@ window.renderAiProviderDetail = renderAiProviderDetail;
             </button>
           </div>
         )}
-        {user && user.role === 'admin' && onNavigate && (
-          <button
-            onClick={() => onNavigate('#/admin')}
-            title="管理后台"
-            style={{
-              height: 28, padding: '0 10px', borderRadius: 7,
-              background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-              color: 'var(--ink-2)', fontSize: 11.5, cursor: 'pointer',
-              display: 'inline-flex', alignItems: 'center', gap: 5,
-              flexShrink: 0,
-            }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-            </svg>
-            <span>管理</span>
-          </button>
-        )}
-        {user && React.createElement('div', {
-          style: {
-            display: 'flex', alignItems: 'center', gap: 8,
-            marginLeft: 6, padding: '4px 8px', borderRadius: 6,
-            background: 'var(--panel-2)', border: '1px solid var(--line-2)',
-          }
-        },
-          React.createElement(I.user, { size: 12, style: { color: 'var(--ink-3)' } }),
-          React.createElement('span', { style: { fontSize: 11.5, color: 'var(--ink)' } }, user.username),
-          React.createElement('button', {
-            onClick: onSwitchUser,
-            title: '切换身份',
-            style: {
-              width: 22, height: 22, borderRadius: 5,
-              background: 'var(--panel)', border: '1px solid var(--line)',
-              color: 'var(--ink-3)', display: 'grid', placeItems: 'center',
-              cursor: 'pointer',
-            }
-          }, React.createElement(I.refresh, { size: 11 }))
-        )}
+        {user && <UserMenu user={user} onSwitchUser={onSwitchUser} onNavigate={onNavigate}/>}
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-﻿// AI chat column. Three states: empty / generating / returned.
+﻿// AI chat column: message list (ChatReturned) + composer.
 // Rich message types: text, option chips, file cards, action buttons, thinking trace, image results.
 
 // ---------- Sub-components ----------
@@ -32,9 +32,7 @@ function alertAiImageError(raw, extras) {
   if (extras.phaseLabel) lines.push('环节：' + extras.phaseLabel);
   if (extras.clientRequestId) lines.push('编号：' + extras.clientRequestId);
   if (extras.jobId) lines.push('任务：' + extras.jobId);
-  try {
-    window.alert(lines.join('\n'));
-  } catch (_e) {}
+  window.dfToast(lines.join('\n'), { tone: 'danger' });
 }
 
 function describeAiImageFailPhase(phase) {
@@ -543,29 +541,6 @@ var CopyButton2 = function(props) {
   }, React.createElement(copied ? I.check : I.copy, { size: 10 }), copyFailed ? '复制失败' : (copied ? ('已复制 ' + (props.label || '')) : ('复制 ' + (props.label || 'JSON'))));
 };
 
-const FileCard = ({ name, size, type }) => (
-  <div style={{
-    display: 'flex', alignItems: 'center', gap: 10,
-    padding: '8px 12px', borderRadius: 8,
-    background: 'var(--panel)', border: '1px solid var(--line-2)',
-    fontSize: 12, minWidth: 200,
-  }}>
-    <div style={{
-      width: 32, height: 40, borderRadius: 4,
-      background: `repeating-linear-gradient(135deg, oklch(0.95 0.02 40) 0 4px, oklch(0.92 0.03 40) 4px 8px)`,
-      border: '1px solid var(--line-2)',
-      display: 'grid', placeItems: 'center',
-      color: 'oklch(0.5 0.05 40)',
-    }}>
-      <I.image size={14}/>
-    </div>
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
-      <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{type} · {size}</div>
-    </div>
-  </div>
-);
-
 const InlineRefStrip = ({ items, compact }) => {
   if (!Array.isArray(items) || items.length === 0) return null;
   return (
@@ -588,124 +563,6 @@ const InlineRefStrip = ({ items, compact }) => {
     </div>
   );
 };
-
-const ThinkingTrace = ({ steps, done }) => {
-  const [expanded, setExpanded] = React.useState(false);
-  return (
-    <div style={{
-      borderRadius: 10, border: '1px solid var(--line-2)',
-      background: 'var(--panel-2)',
-      overflow: 'hidden',
-      width: '100%',
-    }}>
-      <button onClick={() => setExpanded(e => !e)} style={{
-        width: '100%', textAlign: 'left',
-        padding: '8px 11px',
-        display: 'flex', alignItems: 'center', gap: 8,
-      }}>
-        <I.chevronRight size={11} style={{ transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 120ms' }}/>
-        <span style={{ fontSize: 11.5, fontWeight: 500 }}>{done ? 'Reasoned for 4 steps' : 'Thinking…'}</span>
-        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{done ? '2.1s' : ''}</span>
-        {!done && <span style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--accent)', animation: 'pulse 1.2s ease-in-out infinite' }}/>}
-      </button>
-      {expanded && (
-        <div style={{ padding: '2px 11px 10px 28px', borderTop: '1px solid var(--line-2)' }}>
-          {steps.map((s, i) => (
-            <div key={i} style={{ fontSize: 11.5, color: 'var(--ink-2)', padding: '5px 0', display: 'flex', gap: 8 }}>
-              <span className="mono" style={{ color: 'var(--ink-3)', minWidth: 14 }}>{i + 1}</span>
-              <span>{s}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-const OptionChips = ({ title, options, multi }) => {
-  const [picked, setPicked] = React.useState(multi ? [options[0]] : options[0]);
-  const isPicked = (o) => multi ? picked.includes(o) : picked === o;
-  const toggle = (o) => {
-    if (multi) setPicked(p => p.includes(o) ? p.filter(x => x !== o) : [...p, o]);
-    else setPicked(o);
-  };
-  return (
-    <div style={{
-      borderRadius: 10, padding: 12, width: '100%',
-      background: 'var(--panel)', border: '1px solid var(--line-2)',
-    }}>
-      <div style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--ink)', marginBottom: 8 }}>{title}</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-        {options.map(o => (
-          <button key={o} onClick={() => toggle(o)} style={{
-            fontSize: 11.5, padding: '4px 10px', borderRadius: 99,
-            background: isPicked(o) ? 'var(--ink)' : 'var(--panel-2)',
-            color: isPicked(o) ? 'white' : 'var(--ink-2)',
-            border: '1px solid',
-            borderColor: isPicked(o) ? 'var(--ink)' : 'var(--line-2)',
-            transition: 'all 100ms',
-          }}>{o}</button>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-const ColorPalette = ({ palettes }) => {
-  const [picked, setPicked] = React.useState(0);
-  return (
-    <div style={{
-      borderRadius: 10, padding: 12, width: '100%',
-      background: 'var(--panel)', border: '1px solid var(--line-2)',
-    }}>
-      <div style={{ fontSize: 11.5, fontWeight: 500, marginBottom: 8 }}>Pick a palette</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {palettes.map((p, i) => (
-          <button key={i} onClick={() => setPicked(i)} style={{
-            display: 'flex', alignItems: 'center', gap: 10,
-            padding: 6, borderRadius: 7,
-            background: picked === i ? 'var(--accent-soft)' : 'transparent',
-            border: picked === i ? '1px solid var(--accent)' : '1px solid transparent',
-            textAlign: 'left',
-          }}>
-            <div style={{ display: 'flex', borderRadius: 5, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.05)' }}>
-              {p.colors.map(c => (
-                <div key={c} style={{ width: 18, height: 22, background: c }}/>
-              ))}
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 11.5, fontWeight: 500 }}>{p.name}</div>
-              <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>{p.tag}</div>
-            </div>
-            {picked === i && <I.check size={13} stroke={2.2} style={{ color: 'var(--accent)' }}/>}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-const ActionRow = ({ primary, secondary }) => (
-  <div style={{ display: 'flex', gap: 6, width: '100%' }}>
-    <button style={{
-      flex: 1, fontSize: 12, fontWeight: 500,
-      padding: '9px 12px', borderRadius: 8,
-      background: 'var(--accent)', color: 'white',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-      boxShadow: '0 1px 0 rgba(255,255,255,0.2) inset, 0 2px 8px oklch(0.55 0.22 275 / 0.25)',
-    }}>
-      <I.zap size={13} fill="white" stroke={0}/>
-      {primary}
-    </button>
-    {secondary && (
-      <button style={{
-        fontSize: 12, padding: '9px 12px', borderRadius: 8,
-        background: 'var(--panel)', color: 'var(--ink-2)',
-        border: '1px solid var(--line)',
-      }}>{secondary}</button>
-    )}
-  </div>
-);
 
 const actionBtnPrimaryStyle = {
   fontSize: 11.5,
@@ -732,33 +589,6 @@ const actionBtnSecondaryStyle = {
   gap: 5,
   border: '1px solid var(--line)',
 };
-
-const AnalyzedSubject = () => (
-  <div style={{
-    borderRadius: 10, padding: 12, width: '100%',
-    background: 'var(--panel)', border: '1px solid var(--line-2)',
-  }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-      <I.eye size={12} style={{ color: 'var(--accent-ink)' }}/>
-      <span style={{ fontSize: 11.5, fontWeight: 500 }}>I identified</span>
-    </div>
-    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 10px', fontSize: 11.5 }}>
-      {[
-        ['Object', 'Ceramic vase, matte glaze'],
-        ['Palette', 'Warm beige, clay, ivory'],
-        ['Lighting', 'Soft side-light, studio'],
-        ['Mood', 'Quiet, editorial, Japandi'],
-      ].map(([k, v]) => (
-        <React.Fragment key={k}>
-          <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', alignSelf: 'center' }}>{k}</span>
-          <span style={{ color: 'var(--ink)' }}>{v}</span>
-        </React.Fragment>
-      ))}
-    </div>
-  </div>
-);
-
-// ---------- BriefCard（Agent 模式 CONFIRM 阶段的创意方案卡片）----------
 
 const BriefCard = ({ brief, contract, completeness }) => {
   if (!brief && !contract) return null;
@@ -968,11 +798,10 @@ const getThinkingPreview = (message) => {
 // ---------- LogBox（实时滚动日志）----------
 
 const LogBox = ({ logs, running }) => {
-  const bottomRef = React.useRef(null);
+  const listRef = React.useRef(null);
   React.useEffect(() => {
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
+    // 只滚动日志框自身，不带动外层对话列表
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [logs && logs.length]);
 
   return (
@@ -981,7 +810,7 @@ const LogBox = ({ logs, running }) => {
         <span style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 500 }}>进度日志</span>
         {running && <div style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--accent)', animation: 'pulse 1.2s ease-in-out infinite' }}/>}
       </div>
-      <div style={{ maxHeight: 140, overflowY: 'auto', padding: '6px 0' }}>
+      <div ref={listRef} style={{ maxHeight: 140, overflowY: 'auto', padding: '6px 0' }}>
         {logs.map((log, i) => {
           const isError = log.includes('失败') || log.includes('Error') || log.includes('error');
           const isOk = log.includes('完成') || log.includes('就绪') || log.includes('保存');
@@ -1000,7 +829,6 @@ const LogBox = ({ logs, running }) => {
             </div>
           );
         })}
-        <div ref={bottomRef}/>
       </div>
     </div>
   );
@@ -1008,60 +836,52 @@ const LogBox = ({ logs, running }) => {
 
 // ---------- States ----------
 
+// 每条欢迎语配一组示例：点击后填入输入框，并切到示例对应的模式（mode 同 Composer 的 selectedMode）
 const GREETINGS = [
-  { title: '今天想设计点什么？', sub: '上传产品图、参考图、品牌素材，或者直接输入描述。' },
-  { title: '想要生成一张海报吗？', sub: '使用 Gpt-image 2 模型，直接描述你想要的画面。' },
-  { title: '需要编辑图像？', sub: '使用 Nano Banana Pro，上传图片后描述修改需求。' },
-  { title: '来合成特殊品吧', sub: '选中左侧特殊品模板，输入货号和文案即可一键合成。' },
-  { title: '忘了怎么用？', sub: '试试直接在对话框提问，我会帮你找到答案。' },
+  {
+    title: '今天想设计点什么？', sub: '上传产品图、参考图、品牌素材，或者直接输入描述。',
+    examples: [
+      { icon: 'image', mode: 'gpt-image-2.5', text: '电商主图：白色跑鞋放在浅灰台面上，柔和侧光，干净留白' },
+      { icon: 'palette', mode: 'gpt-image-2.5', text: '夏季促销海报：运动 T 恤平铺，主标题「清凉一夏」，蓝白配色' },
+      { icon: 'wand', mode: 'nano-banana-pro', text: '保留参考图里的产品，背景换成雨天城市街景，光线自然' },
+    ],
+  },
+  {
+    title: '想要生成一张海报吗？', sub: '使用 GPT Image 2.5，直接描述你想要的画面。',
+    examples: [
+      { icon: 'palette', mode: 'gpt-image-2.5', text: '夏季促销海报：运动 T 恤平铺，主标题「清凉一夏」，蓝白配色' },
+      { icon: 'image', mode: 'gpt-image-2.5', text: '新品发布海报：篮球鞋悬浮在深色背景中，主标题「破风而来」，金属质感光效' },
+      { icon: 'type', mode: 'gpt-image-2.5', text: '大促主会场海报：橙红渐变背景，产品居中，大字「全场 5 折起」' },
+    ],
+  },
+  {
+    title: '需要编辑图像？', sub: '使用 Nano Banana Pro，上传图片后描述修改需求。',
+    hint: '先用回形针上传参考图，再试试这样写',
+    examples: [
+      { icon: 'wand', mode: 'nano-banana-pro', text: '保留参考图里的产品，背景换成雨天城市街景，光线自然' },
+      { icon: 'image', mode: 'nano-banana-pro', text: '把白底换成木质桌面和绿植，产品的形状和颜色保持不变' },
+      { icon: 'edit', mode: 'nano-banana-pro', text: '去掉图片里的文字和水印，其余内容保持不变' },
+    ],
+  },
+  {
+    title: '来合成特殊品吧', sub: '选中左侧特殊品模板，输入货号和文案即可一键合成。',
+    hint: '点击会自动选中特殊品模板，按格式改成你的货号和文案',
+    examples: [
+      { icon: 'layers', mode: 'special', text: 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' },
+    ],
+  },
+  {
+    title: '忘了怎么用？', sub: '试试直接在对话框提问，我会帮你找到答案。',
+    hint: '点击会切到「默认」问答模式',
+    examples: [
+      { icon: 'layers', mode: '', text: '特殊品合成需要准备哪些信息？' },
+      { icon: 'sparkles', mode: '', text: 'GPT Image 2.5 和 Nano Banana Pro 分别适合做什么？' },
+      { icon: 'image', mode: '', text: '一次可以上传几张参考图？有大小限制吗？' },
+    ],
+  },
 ];
 
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
-
-const ChatEmpty = ({ greetingKey }) => {
-  const prompts = [
-    { icon: <I.image size={13}/>,    text: '上传产品图，描述想要的风格' },
-    { icon: <I.palette size={13}/>,  text: '生成4张哑光色调的变体图' },
-    { icon: <I.copy size={13}/>,     text: '复制当前模板的文案' },
-    { icon: <I.dims size={13}/>,     text: '调整尺寸为9:16适配Instagram' },
-  ];
-  const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
-  return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px' }}>
-      <div style={{
-        padding: '20px 4px 16px', display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center',
-      }}>
-        <div style={{
-          width: 40, height: 40, borderRadius: 11,
-          background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
-          color: 'white', display: 'grid', placeItems: 'center',
-        }}>
-          <I.sparkles size={18} stroke={1.8}/>
-        </div>
-        <div className="serif" style={{ fontSize: 19, letterSpacing: '-0.01em' }}>{greeting.title}</div>
-        <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
-          {greeting.sub}
-        </div>
-      </div>
-
-      <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '12px 4px 6px' }}>试试</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {prompts.map((p, i) => (
-          <button key={i} style={{
-            display: 'flex', alignItems: 'center', gap: 10,
-            padding: '10px 12px', borderRadius: 8,
-            background: 'var(--panel)', border: '1px solid var(--line-2)',
-            fontSize: 12, color: 'var(--ink-2)', textAlign: 'left',
-          }}>
-            <span style={{ color: 'var(--ink-3)' }}>{p.icon}</span>
-            <span style={{ flex: 1 }}>{p.text}</span>
-            <I.arrowRight size={12} style={{ color: 'var(--ink-3)' }}/>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-};
 
 const AgentWelcome = () => {
   // Agent 模式专属欢迎页（不随机轮播）—— 简约版
@@ -1086,39 +906,6 @@ const AgentWelcome = () => {
   );
 };
 
-const ChatGenerating = ({ user }) => (
-  <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
-    <Bubble who="user" user={user}>
-      <TextBubble who="user">Make 4 studio shots of this vase for a homepage hero, warm and editorial. Add "New in" copy.</TextBubble>
-      <FileCard name="vase-ref-01.jpg" size="2.4 MB" type="JPG"/>
-    </Bubble>
-
-    <Bubble who="ai" meta="Loom · generating" user={user}>
-      <ThinkingTrace done={false} steps={[
-        'Parsing reference image — detecting subject and lighting',
-        'Matching Japandi aesthetic from brand kit',
-        'Sampling 4 layout variants at 4:5',
-      ]}/>
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 10,
-        padding: '10px 12px', borderRadius: 10, width: '100%',
-        background: 'var(--panel)', border: '1px solid var(--line-2)',
-      }}>
-        <div style={{ position: 'relative', width: 24, height: 24 }}>
-          <div style={{ position: 'absolute', inset: 0, borderRadius: 99, border: '2px solid var(--line-2)' }}/>
-          <div style={{ position: 'absolute', inset: 0, borderRadius: 99, border: '2px solid var(--accent)', borderRightColor: 'transparent', borderBottomColor: 'transparent', animation: 'spin 0.8s linear infinite' }}/>
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 12, fontWeight: 500 }}>Generating 4 options</div>
-          <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>~18s remaining</div>
-        </div>
-        <button style={{ fontSize: 11, color: 'var(--ink-3)', padding: '4px 8px', borderRadius: 5, border: '1px solid var(--line)' }}>Stop</button>
-      </div>
-    </Bubble>
-    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-  </div>
-);
-
 const ChatSessionBar = ({ messages, historyControl }) => {
   const userMsgs = messages.filter(m => m.who === 'user').length;
   const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
@@ -1142,18 +929,59 @@ const ChatSessionBar = ({ messages, historyControl }) => {
   );
 };
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greetingKey, onQuickReply, agentEnabled, onPublishInspiration, onUnpublishInspiration }) => {
-  const bottomRef = React.useRef(null);
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greetingKey, onQuickReply, agentEnabled, onPublishInspiration, onUnpublishInspiration, onRetry, onEditResend, onPickExample }) => {
+  const scrollRef = React.useRef(null);
+  const contentRef = React.useRef(null);
+  const stickRef = React.useRef(true);
+  const prevLenRef = React.useRef(messages.length);
+  const [hasUnseen, setHasUnseen] = React.useState(false);
   const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
 
+  const scrollToBottom = React.useCallback((smooth) => {
+    const el = scrollRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+  }, []);
+
+  // 仅当用户本来就停在底部附近时才跟随新内容；往上翻阅时不打扰，改为提示「有新消息」
   React.useEffect(() => {
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = messages.length;
+    const last = messages[messages.length - 1];
+    if (messages.length < prevLen || (messages.length > prevLen && last && last.who === 'user')) {
+      stickRef.current = true;
     }
-  }, [messages]);
+    if (stickRef.current) {
+      setHasUnseen(false);
+      scrollToBottom(messages.length > prevLen);
+    } else if (messages.length > prevLen) {
+      setHasUnseen(true);
+    }
+  }, [messages, scrollToBottom]);
+
+  // 图片加载、日志展开等会改变高度但不改 messages，用 ResizeObserver 跟随
+  React.useEffect(() => {
+    if (!contentRef.current || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => { if (stickRef.current) scrollToBottom(false); });
+    ro.observe(contentRef.current);
+    return () => ro.disconnect();
+  }, [scrollToBottom]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickRef.current = nearBottom;
+    if (nearBottom) setHasUnseen(false);
+  };
+
+  const openImage = (src, full, title) => {
+    window.dfOpenLightbox({ src: src || full, downloadUrl: full, title: title });
+  };
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+    <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column' }}>
+    <div ref={contentRef} style={{ flex: '1 0 auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
       {messages.length === 0 ? (
         // Agent 模式用专属欢迎页，否则随机轮播
         agentEnabled ? <AgentWelcome /> : (
@@ -1169,6 +997,31 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
             <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
               {greeting.sub}
             </div>
+            {onPickExample && greeting.examples && (
+              <div style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+                <div style={{ fontSize: 11, color: 'var(--ink-3)', padding: '0 2px' }}>{greeting.hint || '试试这样写（点击填入输入框）'}</div>
+                {greeting.examples.map((ex) => {
+                  const Icon = I[ex.icon] || I.sparkles;
+                  return (
+                    <button
+                      key={ex.text}
+                      type="button"
+                      onClick={() => onPickExample(ex)}
+                      style={{
+                        display: 'flex', alignItems: 'flex-start', gap: 9, padding: '9px 11px', borderRadius: 10,
+                        background: 'var(--panel)', border: '1px solid var(--line-2)', textAlign: 'left',
+                        fontSize: 12, lineHeight: 1.5, color: 'var(--ink-2)', transition: 'border-color 120ms, background 120ms',
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--line)'; e.currentTarget.style.background = 'var(--panel-2)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--line-2)'; e.currentTarget.style.background = 'var(--panel)'; }}
+                    >
+                      <span style={{ color: 'var(--ink-3)', marginTop: 2, flexShrink: 0 }}><Icon size={13}/></span>
+                      <span style={{ flex: 1 }}>{ex.text}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )
       ) : (
@@ -1203,7 +1056,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   m.status === 'done' ? (batchImages && batchOkCount < batchImages.length ? '生图完成（' + batchOkCount + '/' + batchImages.length + ' 成功）' : '生图完成')
                   : m.status === 'failed' ? '生图失败'
                   : m.status === 'skill-planning' ? '正在执行 Skill：$' + m.activeSkill + '…'
-                  : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 Image 2.5…'
+                  : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 GPT Image 2.5…'
                   : m.status === 'queued' ? '正在提交到「' + (m.model || 'AI') + '」…'
                   : m.activeSkill && !m.promptTrace && (m.progress || 0) < 20 ? '正在解读需求并整理生图 Prompt…'
                   : (m.progress || 0) < 20 ? '「' + (m.model || 'AI') + '」正在处理…'
@@ -1272,8 +1125,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   React.createElement('img', {
                     src: displayImageUrl || fullImageUrl,
                     alt: m.prompt,
-                    style: { width: '100%', borderRadius: 10, display: 'block', border: '1px solid var(--line-2)', cursor: 'pointer' },
-                    onClick: () => window.open(fullImageUrl, '_blank'),
+                    style: { width: '100%', borderRadius: 10, display: 'block', border: '1px solid var(--line-2)', cursor: 'zoom-in' },
+                    onClick: () => openImage(displayImageUrl, fullImageUrl, m.prompt),
                   }),
                   React.createElement('div', { style: { marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
                     React.createElement('a', {
@@ -1305,8 +1158,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                       React.createElement('img', {
                         src: imShown || imFull,
                         alt: (m.prompt || '') + ' #' + (bi + 1),
-                        style: { width: '100%', borderRadius: 8, display: 'block', border: '1px solid var(--line-2)', cursor: 'pointer' },
-                        onClick: function() { window.open(imFull, '_blank'); },
+                        style: { width: '100%', borderRadius: 8, display: 'block', border: '1px solid var(--line-2)', cursor: 'zoom-in' },
+                        onClick: function() { openImage(imShown, imFull, m.prompt); },
                       }),
                       React.createElement('div', { style: { display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' } },
                         React.createElement('a', {
@@ -1358,7 +1211,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   React.createElement('span', null, '匹配度 ', React.createElement('span', { style: { color: m.vlm.intentMatch >= 80 ? 'var(--ok)' : (m.vlm.intentMatch >= 50 ? 'var(--warn)' : '#dc2626'), fontWeight: 500 } }, m.vlm.intentMatch))
                 ),
                 m.vlm.userFacingSummary && React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', lineHeight: 1.5 } }, m.vlm.userFacingSummary),
-                m.vlm.problemElements && m.vlm.problemElements.length > 0 && React.createElement('div', { style: { fontSize: 10.5, color: '#dc2626', marginTop: 4, lineHeight: 1.5 } }, '问题: ' + m.vlm.problemElements.join('; ')),
+                m.vlm.problemElements && m.vlm.problemElements.length > 0 && React.createElement('div', { style: { fontSize: 10.5, color: 'var(--danger)', marginTop: 4, lineHeight: 1.5 } }, '问题: ' + m.vlm.problemElements.join('; ')),
                 m.vlm.nextStepSuggestion && React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ok)', marginTop: 4, lineHeight: 1.5 } }, '建议: ' + m.vlm.nextStepSuggestion)
               ),
               m.status === 'failed' && !batchImages && React.createElement('div', {
@@ -1369,6 +1222,21 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 }
               },
                 formatAiImageError(m.error, m.jobId || m.job_id)
+              ),
+              m.status === 'failed' && (onRetry || onEditResend) && React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                onRetry && m.retryArgs && React.createElement('button', {
+                  type: 'button',
+                  disabled: isGenerating,
+                  onClick: function() { onRetry(m); },
+                  title: isGenerating ? '当前还有任务在生成，完成后再重试' : '用相同的描述、参考图和参数重新生成',
+                  style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--ink)', color: 'white', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: isGenerating ? 'default' : 'pointer', opacity: isGenerating ? 0.5 : 1 },
+                }, React.createElement(I.refresh, { size: 10 }), '重试'),
+                onEditResend && (m.retryArgs || m.prompt) && React.createElement('button', {
+                  type: 'button',
+                  onClick: function() { onEditResend(m); },
+                  title: '把这次的描述放回输入框，修改后再发送',
+                  style: { fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ink-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' },
+                }, React.createElement(I.edit, { size: 10 }), '编辑后重发')
               ),
             );
           })() : m.type === 'parse-result' ? (() => {
@@ -1766,7 +1634,19 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
         ))
       )}
       <style>{`@keyframes pulse { 0%,100% { opacity:0.3; } 50% { opacity:1; } }`}</style>
-      <div ref={bottomRef}/>
+    </div>
+    </div>
+    {hasUnseen && (
+      <button
+        type="button"
+        onClick={() => { stickRef.current = true; setHasUnseen(false); scrollToBottom(true); }}
+        style={{
+          position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 2,
+          height: 28, padding: '0 12px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', gap: 5,
+          background: 'var(--ink)', color: 'white', fontSize: 11.5, boxShadow: '0 4px 14px rgba(20,22,40,0.18)',
+        }}
+      >↓ 有新消息</button>
+    )}
     </div>
   );
 };
@@ -2110,13 +1990,18 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
   }, [prototypePanel, skillMenuOpen]);
 
   // 外部触发：从灵感页“生成同款”传过来，自动选择生图模式并填入 prompt
+  // seedPrompt 可以是字符串，或 { text, mode }（mode 缺省为 gpt-image-2.5，'' 表示默认问答）
   React.useEffect(() => {
     if (!seedPrompt) return;
-    setSelectedMode('gpt-image-2.5');
+    const seed = typeof seedPrompt === 'object' ? seedPrompt : { text: seedPrompt };
+    const mode = typeof seed.mode === 'string' ? seed.mode : 'gpt-image-2.5';
+    setSelectedMode(mode);
+    if (mode === 'special_full') setSpecialRouteMode('full');
+    else if (mode === 'special') setSpecialRouteMode('auto');
     setSelectedSkill('');
     setSelectedWorkflow('chat');
     setPrototypePanel('');
-    setText(String(seedPrompt));
+    setText(String(seed.text || ''));
     setTimeout(() => {
       const el = taRef.current;
       if (!el) return;
@@ -2269,12 +2154,12 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
     const executionMessage = skillInvocation.skill ? skillInvocation.prompt : message;
     if (!executionMessage || isLoading) return;
     if (refImages.some(function(item) { return item && item.pending; })) {
-      window.alert('参考图还在加载，请稍候再发送');
+      window.dfToast('参考图还在加载，请稍候再发送');
       return;
     }
     const oversizedRefs = listOversizedReferences(refImages);
     if (oversizedRefs.length) {
-      window.alert(formatOversizedReferenceAlert(oversizedRefs));
+      window.dfToast(formatOversizedReferenceAlert(oversizedRefs), { tone: 'warn', duration: 6000 });
       return;
     }
     const imagesToSend = [...refImages];
@@ -3999,14 +3884,14 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
                 <img
                   src={img.previewUrl}
                   alt={`参考图${idx + 1}`}
-                  style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6, border: referenceFileSize(img) > MAX_REFERENCE_IMAGE_BYTES ? '1px solid #d14343' : '1px solid var(--line)' }}
+                  style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6, border: referenceFileSize(img) > MAX_REFERENCE_IMAGE_BYTES ? '1px solid var(--danger)' : '1px solid var(--line)' }}
                 />
                 {referenceFileSize(img) > MAX_REFERENCE_IMAGE_BYTES && (
                   <span style={{
                     position: 'absolute', top: 2, left: 2,
                     padding: '1px 3px', borderRadius: 3,
-                    background: 'rgba(209, 67, 67, 0.92)', color: 'white',
-                    fontSize: 8, fontWeight: 700, lineHeight: 1, pointerEvents: 'none',
+                    background: 'var(--danger)', color: 'white',
+                    fontSize: 9, fontWeight: 700, lineHeight: 1, pointerEvents: 'none',
                   }}>5MB</span>
                 )}
                 <button
@@ -4206,7 +4091,7 @@ const mapAgentProjectMessages = function(project, images) {
   }));
 };
 
-const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection, quickEditRequest }) => {
+const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection, quickEditRequest }) => {
   const [messages, setMessages] = React.useState([]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
   const [agentMessages, setAgentMessages] = React.useState([]);
@@ -4223,6 +4108,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
   const [historySessions, setHistorySessions] = React.useState([]);
   const [hoveredHistoryId, setHoveredHistoryId] = React.useState('');
   const [publishDialog, setPublishDialog] = React.useState(null);
+  const [localSeed, setLocalSeed] = React.useState(null);
   const historyWrapRef = React.useRef(null);
   const creatingAgentProjectRef = React.useRef(null);
 
@@ -4372,13 +4258,13 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
       setHistoryOpen(false);
     } catch (e) {
       console.error('restore agent project failed:', e);
-      window.alert((e && e.message) ? e.message : '恢复 Agent 对话失败');
+      window.dfToast((e && e.message) ? e.message : '恢复 Agent 对话失败', { tone: 'danger' });
     }
   }, [loadAgentProject]);
 
   const deleteAiChatHistory = React.useCallback(async (sessionId) => {
     if (!sessionId) return;
-    if (!window.confirm('删除这条历史对话？')) return;
+    if (!(await window.dfConfirm({ title: '删除这条历史对话？', message: '删除后无法恢复。', confirmText: '删除', danger: true }))) return;
     try {
       await window.API.deleteAiChat(sessionId);
       setHistorySessions(function(prev) {
@@ -4391,13 +4277,13 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
       }
     } catch (e) {
       console.error('delete ai chat history failed:', e);
-      window.alert((e && e.message) ? e.message : '删除失败，请稍后重试');
+      window.dfToast((e && e.message) ? e.message : '删除失败，请稍后重试', { tone: 'danger' });
     }
   }, [currentAiChatId]);
 
   const deleteAgentProjectHistory = React.useCallback(async (projectId) => {
     if (!projectId) return;
-    if (!window.confirm('删除这条 Agent 对话？')) return;
+    if (!(await window.dfConfirm({ title: '删除这条 Agent 对话？', message: '删除后无法恢复。', confirmText: '删除', danger: true }))) return;
     try {
       await window.API.deleteAgentProject(projectId);
       setHistorySessions(function(prev) {
@@ -4413,7 +4299,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
       }
     } catch (e) {
       console.error('delete agent project failed:', e);
-      window.alert((e && e.message) ? e.message : '删除失败，请稍后重试');
+      window.dfToast((e && e.message) ? e.message : '删除失败，请稍后重试', { tone: 'danger' });
     }
   }, [agentProjectId, onComposeComplete]);
 
@@ -4563,7 +4449,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
       ? { job_id: msg.jobId }
       : (msg.imageUrl ? { image_url: msg.imageUrl } : null);
     if (!payload) {
-      window.alert('这条消息无法发布（缺少 job_id 和 image_url）');
+      window.dfToast('这条消息无法发布（缺少 job_id 和 image_url）', { tone: 'warn' });
       return;
     }
     payload.category = dialog.category || 'share_card';
@@ -4584,13 +4470,13 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
     } catch (e) {
       setMessages(function(msgs) { return patchMessageOrImage(msgs, msg, { inspirationPublishing: false }); });
       setPublishDialog(function(prev) { return prev ? Object.assign({}, prev, { submitting: false }) : prev; });
-      window.alert('发布失败：' + (e.message || '未知错误'));
+      window.dfToast('发布失败：' + (e.message || '未知错误'), { tone: 'danger' });
     }
   }, [publishDialog]);
 
   const handleUnpublishInspiration = React.useCallback(async (msg) => {
     if (!msg || !msg.inspirationPostId) return;
-    if (!window.confirm('下架这条灵感？')) return;
+    if (!(await window.dfConfirm({ title: '下架这条灵感？', message: '下架后其他人将看不到这张图。', confirmText: '下架', danger: true }))) return;
     const postId = msg.inspirationPostId;
     setMessages(function(msgs) { return patchMessageOrImage(msgs, msg, { inspirationPublishing: true }); });
     try {
@@ -4600,7 +4486,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
       });
     } catch (e) {
       setMessages(function(msgs) { return patchMessageOrImage(msgs, msg, { inspirationPublishing: false }); });
-      window.alert('下架失败：' + (e.message || '未知错误'));
+      window.dfToast('下架失败：' + (e.message || '未知错误'), { tone: 'danger' });
     }
   }, []);
 
@@ -4659,7 +4545,8 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
         error: prepErr,
         finalElapsed: 0, startedAt: failedAt,
         activeSkill: activeSkill,
-        meta: 'Loom', hasReference: refImages.length > 0, refCount: refImages.length, refPreviews: [],
+        meta: 'AI', hasReference: refImages.length > 0, refCount: refImages.length, refPreviews: [],
+        retryArgs: [model, prompt, displayText, refImages, aiOptions],
       }]);
       setIsLoading(false);
       return;
@@ -4674,10 +4561,11 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
       model, provider, prompt, size: lastSize, resolution: lastResolution, variant: variant, quality: quality,
       status: activeSkill ? 'skill-planning' : 'running', startedAt: baseAt, progress: 0,
       activeSkill: activeSkill,
-      meta: batchCount > 1 ? 'Loom · ×' + batchCount : 'Loom',
+      meta: batchCount > 1 ? 'AI · ×' + batchCount : 'AI',
       hasReference: refImages.length > 0, refCount: refImages.length, refPreviews: [],
       batchCount: batchCount,
       images: batchCount > 1 ? [] : undefined,
+      retryArgs: [model, prompt, displayText, refImages, aiOptions],
     }]);
 
     if (activeSkill && !plannedPrompt && window.API && window.API.streamSkillPlan) {
@@ -5315,7 +5203,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
     refImages = await materializeReferenceImages(refImages);
     const oversizedRefs = listOversizedReferences(refImages);
     if (oversizedRefs.length) {
-      window.alert(formatOversizedReferenceAlert(oversizedRefs));
+      window.dfToast(formatOversizedReferenceAlert(oversizedRefs), { tone: 'warn', duration: 6000 });
       return;
     }
 
@@ -5814,7 +5702,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
         return [...msgs, {
           who: 'ai', type: 'generating',
           logs: specialRouteLogs.concat([`已选择${_cmdLabel}流程，正在启动合成…`]),
-          status: 'running', meta: `Loom · ${_cmdLabel}`,
+          status: 'running', meta: `AI · ${_cmdLabel}`,
           startedAt: Date.now(),
         }];
       });
@@ -5935,7 +5823,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
         { skill: activeSkill }
       );
       setMessages(msgs => msgs.map((m, i) =>
-        i === thinkingIdx ? { who: 'ai', text: reply || '...', meta: 'Loom' } : m
+        i === thinkingIdx ? { who: 'ai', text: reply || '...', meta: 'AI' } : m
       ));
     } catch (e) {
       setMessages(msgs => msgs.map((m, i) =>
@@ -5949,6 +5837,34 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
   const handleQuickReply = React.useCallback(function(value) {
     handleSend(value, [], {});
   }, [handleSend]);
+
+  // ── 生图失败：重试 / 编辑后重发 ──────────────────────────────────────────
+  const handleRetryAiImage = React.useCallback(function(msg) {
+    if (!msg || !msg.retryArgs || isLoading) return;
+    runAiImageGeneration.apply(null, msg.retryArgs);
+  }, [isLoading, runAiImageGeneration]);
+  const handleEditResend = React.useCallback(function(msg) {
+    const args = msg && msg.retryArgs;
+    const text = (args && (args[2] || args[1])) || (msg && msg.prompt) || '';
+    const model = (args && args[0]) || (msg && msg.model) || '';
+    if (text) setLocalSeed({ text: String(text), mode: model === 'nano-banana-pro' ? 'nano-banana-pro' : 'gpt-image-2.5' });
+  }, []);
+  const handlePickExample = React.useCallback(function(example) {
+    if (!example) return;
+    if (example.mode === 'special' || example.mode === 'special_full') {
+      const templates = Array.isArray(window.TEMPLATES) ? window.TEMPLATES : [];
+      if (!templates.some(function(t) { return t.is_special || t.is_special_full; })) {
+        window.dfToast('还没有可用的特殊品模板，请先在 Penpot 模板库里添加', { tone: 'warn' });
+        return;
+      }
+      if (onRequestSpecialTemplate) onRequestSpecialTemplate(example.mode === 'special_full' ? 'full' : 'special');
+    }
+    setLocalSeed({ text: example.text, mode: example.mode });
+  }, [onRequestSpecialTemplate]);
+  const handleComposerSeedConsumed = React.useCallback(function() {
+    setLocalSeed(null);
+    if (onSeedConsumed) onSeedConsumed();
+  }, [onSeedConsumed]);
 
   // ── 画布快捷编辑生图请求监听 ──────────────────────────────────────────────
   const lastQuickEditKeyRef = React.useRef(null);
@@ -6330,7 +6246,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
             </span>
           )}
           <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>
-            {isLoading ? 'working…' : messages.length === 0 ? 'ready' : messages.length + ' messages'}
+            {isLoading ? '处理中…' : messages.length === 0 ? '就绪' : messages.length + ' 条记录'}
           </span>
         </div>
         <div style={{ flex: 1 }}/>
@@ -6476,10 +6392,7 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
         </div>
       )}
 
-      {state === 'empty' && messages.length === 0 && <ChatEmpty greetingKey={greetingResetKey}/>}
-      {state === 'empty' && messages.length > 0 && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
-      {state === 'generating' && <ChatGenerating user={user}/>}
-      {state === 'returned' && <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration}/>}
+      <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration} onRetry={handleRetryAiImage} onEditResend={handleEditResend} onPickExample={handlePickExample}/>
 
       <Composer
         onSend={handleSend}
@@ -6492,8 +6405,8 @@ const Chat = ({ state, template, onComposeComplete, user, onRequestSpecialTempla
         onToggleAgent={toggleAgentMode}
         resetKey={composerResetKey}
         onRequestSpecialTemplate={onRequestSpecialTemplate}
-        seedPrompt={seedPrompt}
-        onSeedConsumed={onSeedConsumed}
+        seedPrompt={localSeed || seedPrompt}
+        onSeedConsumed={handleComposerSeedConsumed}
         canvasReferenceSelection={canvasReferenceSelection}
       />
     </div>

@@ -630,32 +630,39 @@ function AdminUserManagement({ currentUser, users, onReload, showTestUsers, onTo
   var updateRole = function(item) {
     if (busy || item.id === currentUser.id) return;
     var role = item.role === 'admin' ? 'user' : 'admin';
-    if (!window.confirm('将「' + adminUserLabel(item) + '」调整为' + (role === 'admin' ? '管理员' : '普通用户') + '？')) return;
-    setBusy(true); setError('');
-    window.API.updateAdminUser(item.id, { role: role })
-      .then(onReload)
-      .catch(function(err) { setError(err.message || '更新失败'); })
-      .finally(function() { setBusy(false); });
+    window.dfConfirm({ title: '调整账号角色', message: '将「' + adminUserLabel(item) + '」调整为' + (role === 'admin' ? '管理员' : '普通用户') + '？' }).then(function(ok) {
+      if (!ok) return;
+      setBusy(true); setError('');
+      window.API.updateAdminUser(item.id, { role: role })
+        .then(onReload)
+        .catch(function(err) { setError(err.message || '更新失败'); })
+        .finally(function() { setBusy(false); });
+    });
   };
 
   var toggleTestStatus = function(item) {
     if (busy) return;
     var nextState = !item.is_test;
-    if (!window.confirm('将「' + adminUserLabel(item) + '」' + (nextState ? '标记为测试账号（将不计入后台统计与任务列表）' : '恢复为正常账号（将计入后台统计与任务列表）') + '？')) return;
-    setBusy(true); setError('');
-    window.API.updateAdminUser(item.id, { is_test: nextState })
-      .then(onReload)
-      .catch(function(err) { setError(err.message || '测试标记更新失败'); })
-      .finally(function() { setBusy(false); });
+    window.dfConfirm({ title: nextState ? '标记为测试账号' : '恢复为正常账号', message: '将「' + adminUserLabel(item) + '」' + (nextState ? '标记为测试账号（将不计入后台统计与任务列表）' : '恢复为正常账号（将计入后台统计与任务列表）') + '？' }).then(function(ok) {
+      if (!ok) return;
+      setBusy(true); setError('');
+      window.API.updateAdminUser(item.id, { is_test: nextState })
+        .then(onReload)
+        .catch(function(err) { setError(err.message || '测试标记更新失败'); })
+        .finally(function() { setBusy(false); });
+    });
   };
 
   var resetPassword = function(item) {
-    if (busy || !window.confirm('重置「' + adminUserLabel(item) + '」的密码？')) return;
-    setBusy(true); setError('');
-    window.API.resetAdminUserPassword(item.id)
-      .then(function() { window.alert('密码已重置。该用户下次登录时会设置新密码。'); })
-      .catch(function(err) { setError(err.message || '重置失败'); })
-      .finally(function() { setBusy(false); });
+    if (busy) return;
+    window.dfConfirm({ title: '重置密码', message: '重置「' + adminUserLabel(item) + '」的密码？该用户下次登录时需要设置新密码。', confirmText: '重置', danger: true }).then(function(ok) {
+      if (!ok) return;
+      setBusy(true); setError('');
+      window.API.resetAdminUserPassword(item.id)
+        .then(function() { window.dfToast('密码已重置。该用户下次登录时会设置新密码。', { tone: 'ok' }); })
+        .catch(function(err) { setError(err.message || '重置失败'); })
+        .finally(function() { setBusy(false); });
+    });
   };
 
   var updateDisplayName = function(item) {
@@ -671,12 +678,14 @@ function AdminUserManagement({ currentUser, users, onReload, showTestUsers, onTo
 
   var deleteUser = function(item) {
     if (busy || item.id === currentUser.id) return;
-    if (!window.confirm('删除用户「' + adminUserLabel(item) + '」？该操作不会删除其历史任务。')) return;
-    setBusy(true); setError('');
-    window.API.deleteAdminUser(item.id)
-      .then(onReload)
-      .catch(function(err) { setError(err.message || '删除失败'); })
-      .finally(function() { setBusy(false); });
+    window.dfConfirm({ title: '删除用户', message: '删除用户「' + adminUserLabel(item) + '」？该操作不会删除其历史任务。', confirmText: '删除', danger: true }).then(function(ok) {
+      if (!ok) return;
+      setBusy(true); setError('');
+      window.API.deleteAdminUser(item.id)
+        .then(onReload)
+        .catch(function(err) { setError(err.message || '删除失败'); })
+        .finally(function() { setBusy(false); });
+    });
   };
 
   return (
