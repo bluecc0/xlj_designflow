@@ -24,34 +24,6 @@ function formatAiImageError(raw, jobId, extras) {
   return msg || '生成失败，请稍后重试。';
 }
 
-// 出错直接弹窗，只显示错误本身
-function alertAiImageError(raw, extras) {
-  extras = extras || {};
-  var msg = formatAiImageError(raw, extras.jobId, extras);
-  var lines = ['生图失败', msg];
-  if (extras.phaseLabel) lines.push('环节：' + extras.phaseLabel);
-  if (extras.clientRequestId) lines.push('编号：' + extras.clientRequestId);
-  if (extras.jobId) lines.push('任务：' + extras.jobId);
-  window.dfToast(lines.join('\n'), { tone: 'danger' });
-}
-
-function describeAiImageFailPhase(phase) {
-  var map = {
-    prepare: '提交前准备（素材/参考图）',
-    network: '网络连接',
-    timeout: '等待超时',
-    submit: '提交任务',
-    http: '服务响应',
-    parse: '服务响应异常',
-    poll: '查询进度',
-    generate: '图片生成',
-    download: '下载结果',
-    poll_or_job: '生成或查询进度',
-  };
-  var key = String(phase || '').trim();
-  return map[key] || (key ? key : '');
-}
-
 // 更新消息补丁：目标带 batchImageIndex 时落到批量卡对应那张图上，否则落到消息本身
 function patchMessageOrImage(msgs, target, patch) {
   return msgs.map(function(m) {
@@ -902,29 +874,6 @@ const AgentWelcome = () => {
           描述你的需求，Agent 会先和你确认方向，再开始生成。
         </div>
       </div>
-    </div>
-  );
-};
-
-const ChatSessionBar = ({ messages, historyControl }) => {
-  const userMsgs = messages.filter(m => m.who === 'user').length;
-  const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
-
-  return (
-    <div style={{
-      flexShrink: 0,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6,
-      padding: '14px 16px 10px',
-      background: 'var(--panel)',
-      position: 'relative',
-      zIndex: 1,
-    }}>
-      <span className="mono" style={{ color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 11 }}>对话</span>
-      <div style={{ flex: 1 }}/>
-      <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 11 }}>{turnCount}</span>
-      {historyControl}
     </div>
   );
 };
@@ -4107,6 +4056,8 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
   const [historyLoading, setHistoryLoading] = React.useState(false);
   const [historySessions, setHistorySessions] = React.useState([]);
   const [hoveredHistoryId, setHoveredHistoryId] = React.useState('');
+  // 删除需在同一行点两次：第一次进入确认态，第二次执行
+  const [confirmDeleteId, setConfirmDeleteId] = React.useState('');
   const [publishDialog, setPublishDialog] = React.useState(null);
   const [localSeed, setLocalSeed] = React.useState(null);
   const historyWrapRef = React.useRef(null);
@@ -4264,7 +4215,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
 
   const deleteAiChatHistory = React.useCallback(async (sessionId) => {
     if (!sessionId) return;
-    if (!(await window.dfConfirm({ title: '删除这条历史对话？', message: '删除后无法恢复。', confirmText: '删除', danger: true }))) return;
     try {
       await window.API.deleteAiChat(sessionId);
       setHistorySessions(function(prev) {
@@ -4283,7 +4233,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
 
   const deleteAgentProjectHistory = React.useCallback(async (projectId) => {
     if (!projectId) return;
-    if (!(await window.dfConfirm({ title: '删除这条 Agent 对话？', message: '删除后无法恢复。', confirmText: '删除', danger: true }))) return;
     try {
       await window.API.deleteAgentProject(projectId);
       setHistorySessions(function(prev) {
@@ -4532,10 +4481,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         error: (e && e.message) || String(e || ''),
         reachedServer: false,
       });
-      alertAiImageError(prepErr, {
-        phaseLabel: describeAiImageFailPhase('prepare'),
-        clientRequestId: prepClientId,
-      });
       setMessages(msgs => [...msgs, {
         who: 'ai', type: 'ai-image-generating',
         model, provider, prompt, size: lastSize, resolution: lastResolution, variant: variant, quality: quality,
@@ -4690,10 +4635,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
                 reachedServer: true,
                 error: 'response missing job_id',
               });
-              alertAiImageError(noJobErr, {
-                phaseLabel: describeAiImageFailPhase('submit'),
-                clientRequestId: clientRequestId,
-              });
               setMessages(msgs => msgs.map(m =>
                 m.type === 'ai-image-generating' && m.startedAt === slotAt
                   ? Object.assign({}, m, {
@@ -4743,11 +4684,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
                 httpStatus: extra && extra.httpStatus,
                 error: String(errorText || '').slice(0, 400),
                 reachedServer: true,
-              });
-              alertAiImageError(errText, {
-                phaseLabel: describeAiImageFailPhase(phase),
-                clientRequestId: clientRequestId,
-                jobId: jobId,
               });
               setMessages(msgs => msgs.map(m =>
                 m.type === 'ai-image-generating' && m.startedAt === slotAt
@@ -4870,10 +4806,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
               error: String((err && err.message) || '').slice(0, 500),
               refCount: finalRefImages.length,
             });
-            alertAiImageError(submitErr, {
-              phaseLabel: describeAiImageFailPhase(failPhase),
-              clientRequestId: clientRequestId,
-            });
             setMessages(msgs => msgs.map(m =>
               m.type === 'ai-image-generating' && m.startedAt === slotAt
                 ? Object.assign({}, m, {
@@ -4950,10 +4882,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
                 provider: provider,
                 reachedServer: true,
                 error: 'response missing job_ids',
-              });
-              alertAiImageError(noJobErr, {
-                phaseLabel: describeAiImageFailPhase('submit'),
-                clientRequestId: clientRequestId,
               });
               setMessages(msgs => msgs.map(m =>
                 m.type === 'ai-image-generating' && m.startedAt === slotAt
@@ -5083,10 +5011,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
                   error: String(firstErr || '').slice(0, 400),
                   reachedServer: true,
                 });
-                alertAiImageError(summary, {
-                  phaseLabel: describeAiImageFailPhase('generate'),
-                  clientRequestId: clientRequestId,
-                });
               }
               loadAiChatHistory();
               if (okOrdered.length && onComposeComplete) {
@@ -5166,10 +5090,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
               error: String((err && err.message) || '').slice(0, 500),
               refCount: finalRefImages.length,
               batchCount: batchCount,
-            });
-            alertAiImageError(submitErr, {
-              phaseLabel: describeAiImageFailPhase(failPhase),
-              clientRequestId: clientRequestId,
             });
             setMessages(msgs => msgs.map(m =>
               m.type === 'ai-image-generating' && m.startedAt === slotAt
@@ -6084,6 +6004,8 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
           cursor: 'pointer',
           fontSize: 11,
         }}
+        onMouseEnter={(e) => { if (!historyOpen) { e.currentTarget.style.background = 'var(--panel-2)'; e.currentTarget.style.color = 'var(--ink)'; } }}
+        onMouseLeave={(e) => { if (!historyOpen) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; } }}
       >
         <I.file size={11}/>
         <span>历史</span>
@@ -6127,7 +6049,10 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
               <div
                 key={session.id}
                 onMouseEnter={() => setHoveredHistoryId(session.id)}
-                onMouseLeave={() => setHoveredHistoryId(function(prev) { return prev === session.id ? '' : prev; })}
+                onMouseLeave={() => {
+                  setHoveredHistoryId(function(prev) { return prev === session.id ? '' : prev; });
+                  setConfirmDeleteId(function(prev) { return prev === session.id ? '' : prev; });
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -6135,33 +6060,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
                   padding: '2px 0',
                 }}
               >
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (agentEnabled) deleteAgentProjectHistory(session.id);
-                    else deleteAiChatHistory(session.id);
-                  }}
-                  title="删除"
-                  style={{
-                    width: 18,
-                    height: 18,
-                    flexShrink: 0,
-                    display: 'grid',
-                    placeItems: 'center',
-                    borderRadius: 6,
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--ink-3)',
-                    cursor: 'pointer',
-                    padding: 0,
-                    opacity: hoveredHistoryId === session.id ? 1 : 0,
-                    pointerEvents: hoveredHistoryId === session.id ? 'auto' : 'none',
-                    transition: 'opacity 120ms ease',
-                  }}
-                >
-                  <I.close size={10}/>
-                </button>
                 <button
                   onClick={() => {
                     if (agentEnabled) restoreAgentProjectSession(session.id);
@@ -6188,6 +6086,36 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
                     </div>
                   )}
                 </button>
+                {(hoveredHistoryId === session.id || confirmDeleteId === session.id) && (
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (confirmDeleteId !== session.id) { setConfirmDeleteId(session.id); return; }
+                      setConfirmDeleteId('');
+                      if (agentEnabled) deleteAgentProjectHistory(session.id);
+                      else deleteAiChatHistory(session.id);
+                    }}
+                    title={confirmDeleteId === session.id ? '再点一次删除' : '删除'}
+                    aria-label={confirmDeleteId === session.id ? '确认删除' : '删除'}
+                    style={{
+                      height: 22,
+                      minWidth: 22,
+                      flexShrink: 0,
+                      display: 'grid',
+                      placeItems: 'center',
+                      borderRadius: 6,
+                      padding: confirmDeleteId === session.id ? '0 7px' : 0,
+                      background: confirmDeleteId === session.id ? 'var(--danger)' : 'transparent',
+                      border: 'none',
+                      color: confirmDeleteId === session.id ? 'white' : 'var(--ink-3)',
+                      fontSize: 11,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {confirmDeleteId === session.id ? '删除' : <I.trash size={11}/>}
+                  </button>
+                )}
               </div>
             );
           })}
@@ -6207,7 +6135,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       <div style={{
         height: 44, flexShrink: 0,
         display: 'flex', alignItems: 'center',
-        padding: '0 14px', gap: 8,
+        padding: '0 10px 0 14px', gap: 6,
         borderBottom: '1px solid var(--line)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -6216,37 +6144,13 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
             background: isLoading ? 'var(--accent)' : 'var(--ok)',
             animation: isLoading ? 'pulse 1.2s ease-in-out infinite' : 'none',
           }}/>
-          <button
-            onClick={startNewAiChat}
-            title={isLoading ? '生成中暂不可新建对话' : (agentEnabled ? '开启新的 Agent 对话' : '开启新对话')}
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              letterSpacing: '-0.01em',
-              color: 'var(--ink)',
-              background: 'transparent',
-              border: 'none',
-              padding: 0,
-              cursor: isLoading ? 'not-allowed' : 'pointer',
-            }}
-          >
+          <span title={isLoading ? '处理中' : undefined} style={{
+            fontSize: 13,
+            fontWeight: 600,
+            letterSpacing: '-0.01em',
+            color: 'var(--ink)',
+          }}>
             {agentEnabled ? 'Agent助手' : 'Ai助手'}
-          </button>
-          {agentEnabled && (
-            <span style={{
-              fontSize: 11,
-              color: 'var(--accent-ink)',
-              background: 'var(--accent-soft)',
-              border: '1px solid transparent',
-              borderRadius: 999,
-              padding: '2px 6px',
-              lineHeight: 1,
-            }}>
-              Agent
-            </span>
-          )}
-          <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
-            {isLoading ? '处理中…' : messages.length === 0 ? '就绪' : messages.length + ' 条记录'}
           </span>
         </div>
         <div style={{ flex: 1 }}/>
@@ -6295,9 +6199,34 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
             Agent
           </button>
         </div>
+        {historyControl}
+        <button
+          type="button"
+          onClick={startNewAiChat}
+          disabled={isLoading}
+          title={isLoading ? '生成中暂不可新建对话' : (agentEnabled ? '开启新的 Agent 对话' : '开启新对话')}
+          style={{
+            height: 24,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '0 7px',
+            borderRadius: 7,
+            background: 'transparent',
+            border: '1px solid transparent',
+            color: 'var(--ink-3)',
+            fontSize: 11,
+            cursor: isLoading ? 'not-allowed' : 'pointer',
+            opacity: isLoading ? 0.5 : 1,
+            flexShrink: 0,
+          }}
+          onMouseEnter={(e) => { if (!isLoading) { e.currentTarget.style.background = 'var(--panel-2)'; e.currentTarget.style.color = 'var(--ink)'; } }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; }}
+        >
+          <I.plus size={11}/>
+          <span>新对话</span>
+        </button>
       </div>
-
-      <ChatSessionBar messages={messages} historyControl={historyControl}/>
 
       {publishDialog && (
         <div style={{
