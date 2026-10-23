@@ -1230,13 +1230,16 @@ def load_recoverable_image_jobs() -> list[dict]:
 
 def save_image_checkpoint(job_id: str, meta: dict, *, provider: str, task_id: str,
                           error: str | None = None, status: str = "processing") -> None:
-    """Update recovery state without erasing the execution prompt or result metadata."""
+    """Update recovery state; success requires an already persisted image URL."""
     with _lock, _connect() as conn:
-        conn.execute("""
+        result = conn.execute("""
             UPDATE ai_image_jobs SET request_meta_json=?, provider=?, task_id=?,
                 status=?, error=?, updated_at=? WHERE id=?
+                AND (? != 'done' OR LENGTH(TRIM(COALESCE(image_url, ''))) > 0)
         """, (json.dumps(meta, ensure_ascii=False), provider, task_id,
-              status, error, time.time(), job_id))
+              status, error, time.time(), job_id, status))
+        if status == "done" and result.rowcount != 1:
+            raise ValueError("成功结果尚未保存图片地址，不能将任务标记为成功")
         conn.commit()
 
 

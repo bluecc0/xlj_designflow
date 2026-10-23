@@ -91,6 +91,7 @@ async def execute_image_job(worker, job_id: str, *, initial: dict | None = None)
             recovery.pop("retry_after", None)
             if next_phase == "done":
                 recovery.pop("finalization_error", None)
+                recovery.pop("result_persistence_error", None)
             persist(status="done" if next_phase == "done" else None)
 
         kwargs = dict(
@@ -136,8 +137,28 @@ async def execute_image_job(worker, job_id: str, *, initial: dict | None = None)
         except Exception as exc:
             logger.exception("image recovery worker failed: job=%s phase=%s", job_id, recovery.get("phase"))
             if recovery.get("local_url"):
-                # Image success and notification delivery have separate budgets.
-                # Never change a completed image to failed or poll/generate it again.
+                # A local file is not proof that the result was committed. Read
+                # the current row: the initial snapshot predates the worker.
+                saved = load_ai_image_job(job_id)
+                result_saved = bool(saved and saved["status"] == "done" and
+                                    str(saved.get("image_url") or "").strip())
+                if not result_saved:
+                    attempts = int(recovery.get("result_persistence_attempts") or 0) + 1
+                    recovery.update(result_persistence_attempts=attempts,
+                                    result_persistence_error=str(exc)[:400])
+                    if attempts < 3:
+                        recovery.update(phase="downloaded", resuming=True,
+                                        message="图片已生成，正在恢复保存结果…",
+                                        retry_after=time.time() + 15 * attempts)
+                        persist(status="processing")
+                    else:
+                        recovery.update(resuming=False)
+                        recovery.pop("retry_after", None)
+                        fail("图片已生成，但结果连续 3 次保存失败；原图已保留，请联系管理员恢复，不要重复生成",
+                             "result_persistence_failed")
+                    return
+                # Only committed image success can survive notification failure.
+                # This budget is separate from result persistence retries.
                 attempts = int(recovery.get("finalization_attempts") or 0) + 1
                 recovery.update(finalization_attempts=attempts, finalization_error=str(exc)[:400])
                 if attempts < 3:

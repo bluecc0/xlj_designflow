@@ -264,6 +264,132 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.job()["request_meta"]["recovery"]["phase"], "finalization_failed")
         self.assertEqual(job_store.load_recoverable_image_jobs(), [])
 
+    async def test_result_save_exhaustion_never_reports_success_without_image(self):
+        self.seed()
+        save_job = main.save_ai_image_job
+        def reject_result(**kwargs):
+            if kwargs["status"] == "done":
+                raise sqlite3.OperationalError("result write unavailable")
+            save_job(**kwargs)
+        with patch.object(main, "generate_image_async", AsyncMock(return_value={"url": "/result.png", "task_id": "paid-task"})) as post, \
+             patch.object(main, "resume_image_async", AsyncMock()) as poll, \
+             patch.object(main, "save_ai_image_job", side_effect=reject_result), \
+             patch.object(main, "append_ai_chat_message") as notify:
+            for attempt, expected in enumerate(["processing", "processing", "failed"], 1):
+                await self.execute()
+                job = self.job()
+                recovery = job["request_meta"]["recovery"]
+                self.assertEqual(job["status"], expected)
+                self.assertFalse(job["image_url"])
+                self.assertEqual(recovery["local_url"], "/result.png")
+                self.assertEqual(recovery["result_persistence_attempts"], attempt)
+                self.assertNotIn("finalization_attempts", recovery)
+                request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+                with patch.object(main, "_current_user", return_value={"id": "owner", "role": "user"}):
+                    response = main.ai_image_status(request, "image-job")
+                self.assertEqual(response["status"], expected)
+                self.assertIsNone(response["image_url"])
+                if attempt < 3:
+                    self.assertGreater(recovery["retry_after"], ai_job_recovery.time.time())
+                    await self.execute()
+                    self.assertEqual(self.job()["request_meta"]["recovery"]["result_persistence_attempts"], attempt)
+                    self.retry_now()
+            await self.execute()
+            self.assertEqual(post.await_count, 1)
+            poll.assert_not_called()
+            notify.assert_not_called()
+        self.assertEqual(self.job()["request_meta"]["recovery"]["phase"], "result_persistence_failed")
+        self.assertIn("原图已保留", self.job()["error"])
+        self.assertEqual(self.image.read_bytes(), png())
+        self.assertEqual(job_store.load_recoverable_image_jobs(), [])
+
+    async def test_result_save_recovers_from_local_file_without_new_generation(self):
+        self.seed()
+        save_job = main.save_ai_image_job
+        def reject_result(**kwargs):
+            if kwargs["status"] == "done":
+                raise sqlite3.OperationalError("result write unavailable")
+            save_job(**kwargs)
+        with patch.object(main, "generate_image_async", AsyncMock(return_value={"url": "/result.png"})) as post, \
+             patch.object(main, "resume_image_async", AsyncMock()) as poll:
+            with patch.object(main, "save_ai_image_job", side_effect=reject_result):
+                await self.execute()
+            self.assertEqual(self.job()["status"], "processing")
+            self.retry_now()
+            await self.execute()
+            await self.execute()
+            self.assertEqual(post.await_count, 1)
+            poll.assert_not_called()
+        self.assertEqual(self.job()["status"], "done")
+        self.assertEqual(self.job()["image_url"], "/result.png")
+        self.assertEqual(self.job()["progress"], 100)
+        self.assertEqual(self.job()["request_meta"]["recovery"]["phase"], "done")
+        with job_store._connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM ai_chat_messages").fetchone()[0], 1)
+
+    async def test_notification_budget_starts_only_after_result_is_saved(self):
+        self.seed()
+        save_job = main.save_ai_image_job
+        def reject_result(**kwargs):
+            if kwargs["status"] == "done":
+                raise sqlite3.OperationalError("result write unavailable")
+            save_job(**kwargs)
+        with patch.object(main, "generate_image_async", AsyncMock(return_value={"url": "/result.png"})) as post, \
+             patch.object(main, "resume_image_async", AsyncMock()) as poll:
+            with patch.object(main, "save_ai_image_job", side_effect=reject_result):
+                for _ in range(2):
+                    await self.execute()
+                    self.retry_now()
+            with patch.object(main, "append_ai_chat_message", side_effect=sqlite3.OperationalError("chat unavailable")) as notify:
+                for attempt in range(1, 4):
+                    await self.execute()
+                    job = self.job()
+                    recovery = job["request_meta"]["recovery"]
+                    self.assertEqual(job["status"], "done")
+                    self.assertEqual(job["image_url"], "/result.png")
+                    self.assertEqual(recovery["result_persistence_attempts"], 2)
+                    self.assertEqual(recovery["finalization_attempts"], attempt)
+                    if attempt < 3:
+                        recovery["retry_after"] = 0
+                        job_store.save_image_checkpoint("image-job", job["request_meta"], provider="apimart", task_id="", status="done")
+                await self.execute()
+                self.assertEqual(notify.call_count, 3)
+            self.assertEqual(post.await_count, 1)
+            poll.assert_not_called()
+        self.assertEqual(self.job()["request_meta"]["recovery"]["phase"], "finalization_failed")
+        self.assertEqual(job_store.load_recoverable_image_jobs(), [])
+
+    async def test_success_rescue_write_is_recognized_from_current_database_row(self):
+        self.seed()
+        save_job = main.save_ai_image_job
+        rejected = False
+        def reject_once(**kwargs):
+            nonlocal rejected
+            if kwargs["status"] == "done" and not rejected:
+                rejected = True
+                raise sqlite3.OperationalError("first result write failed")
+            save_job(**kwargs)
+        with patch.object(main, "generate_image_async", AsyncMock(return_value={"url": "/result.png"})) as post, \
+             patch.object(main, "save_ai_image_job", side_effect=reject_once):
+            await self.execute()
+            job = self.job()
+            self.assertEqual(job["status"], "done")
+            self.assertEqual(job["image_url"], "/result.png")
+            self.assertEqual(job["request_meta"]["recovery"]["finalization_attempts"], 1)
+            self.assertNotIn("result_persistence_attempts", job["request_meta"]["recovery"])
+            job["request_meta"]["recovery"]["retry_after"] = 0
+            job_store.save_image_checkpoint("image-job", job["request_meta"], provider="apimart", task_id="", status="done")
+            await self.execute()
+            self.assertEqual(post.await_count, 1)
+        self.assertEqual(self.job()["request_meta"]["recovery"]["phase"], "done")
+
+    def test_success_checkpoint_requires_persisted_image_url(self):
+        self.seed(phase="downloaded", local_url="/result.png")
+        with self.assertRaisesRegex(ValueError, "图片地址"):
+            job_store.save_image_checkpoint("image-job", self.job()["request_meta"], provider="apimart", task_id="", status="done")
+        self.assertEqual(self.job()["status"], "processing")
+        self.assertFalse(self.job()["image_url"])
+
     async def test_success_notification_recovers_once_without_repeating_generation(self):
         self.seed()
         with patch.object(main, "generate_image_async", AsyncMock(return_value={"url": "/result.png"})) as post:
