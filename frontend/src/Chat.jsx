@@ -812,8 +812,8 @@ const GREETINGS = [
   { title: '今天想设计点什么？', sub: '上传产品图、参考图、品牌素材，或者直接输入描述。' },
   { title: '想要生成一张海报吗？', sub: '使用 GPT Image 2.5，直接描述你想要的画面。' },
   { title: '需要编辑图像？', sub: '使用 Nano Banana Pro，上传图片后描述修改需求。' },
-  { title: '来合成特殊品吧', sub: '选中左侧特殊品模板，输入货号和文案即可一键合成。' },
-  { title: '忘了怎么用？', sub: '试试直接在对话框提问，我会帮你找到答案。' },
+  { title: '来合成特殊品吧', sub: '在功能里选择「特殊品」，输入货号和文案即可一键合成。' },
+  { title: '忘了怎么用？', sub: '在功能里选择「问答」，直接提问就能找到答案。' },
 ];
 
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
@@ -2517,7 +2517,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
   const canSend = Boolean(text.trim() || files.length) && !isLoading;
   const getTaskDefinitions = React.useCallback(function() {
     return [
-      { id: 'chat', label: '默认', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat', mode: '' },
+      { id: 'chat', label: '问答', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat', mode: '' },
       { id: 'gpt-image', label: 'GPT Image 2.5', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', workflow: 'chat', mode: 'gpt-image-2.5' },
       { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', workflow: 'chat', mode: 'nano-banana-pro' },
       { id: 'distribute', label: '智能铺货', desc: '上传表格，自动解析为铺货 JSON', iconKey: 'grid', workflow: 'distribute', mode: '' },
@@ -2540,7 +2540,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
             ? '智能铺货'
           : selectedWorkflow === 'download'
             ? '花瓣下载'
-            : '默认';
+            : '问答';
   const activeTaskIconKey = activeMode === 'ai-image'
     ? 'image'
     : activeMode === 'special' || activeMode === 'special_full'

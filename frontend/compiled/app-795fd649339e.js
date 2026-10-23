@@ -3575,10 +3575,10 @@ const GREETINGS = [{
   sub: '使用 Nano Banana Pro，上传图片后描述修改需求。'
 }, {
   title: '来合成特殊品吧',
-  sub: '选中左侧特殊品模板，输入货号和文案即可一键合成。'
+  sub: '在功能里选择「特殊品」，输入货号和文案即可一键合成。'
 }, {
   title: '忘了怎么用？',
-  sub: '试试直接在对话框提问，我会帮你找到答案。'
+  sub: '在功能里选择「问答」，直接提问就能找到答案。'
 }];
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 const AgentWelcome = () => {
@@ -6119,7 +6119,7 @@ const Composer = ({
   const getTaskDefinitions = React.useCallback(function () {
     return [{
       id: 'chat',
-      label: '默认',
+      label: '问答',
       desc: '询问流程、模板、素材规则',
       iconKey: 'sparkles',
       workflow: 'chat',
@@ -6166,7 +6166,7 @@ const Composer = ({
   const getTaskIcon = React.useCallback(function (iconKey) {
     return I[iconKey] || I.sparkles;
   }, []);
-  const activeTaskLabel = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : 'GPT Image 2.5' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '默认';
+  const activeTaskLabel = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : 'GPT Image 2.5' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '问答';
   const activeTaskIconKey = activeMode === 'ai-image' ? 'image' : activeMode === 'special' || activeMode === 'special_full' ? 'layers' : selectedWorkflow === 'compose' || selectedWorkflow === 'distribute' ? 'grid' : selectedWorkflow === 'download' ? 'download' : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
   const activeTaskIconSrc = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
