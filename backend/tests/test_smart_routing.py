@@ -1161,6 +1161,47 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls["apimart"], 1)
         self.assertEqual(calls["adobe"], 0)
 
+    async def test_accepted_terminal_failure_continues_routes_and_second_round(self):
+        calls = []
+        async def generate(**kwargs):
+            calls.append(bool(kwargs.get("apimart_ext")))
+            kwargs["on_accepted"](f"paid-task-{len(calls)}")
+            if len(calls) < 3:
+                # HTTP in an explicit terminal failure is not submission ambiguity.
+                raise ai_image.UpstreamTaskFailed("upstream failed: HTTP 500")
+            return {"url": "/result.png", "task_id": "paid-task-3"}
+        with patch.object(ai_image, "get_smart_route_candidates", return_value=["apimart", "apimart-ext"]), \
+             patch.object(ai_image, "generate_image_async", side_effect=generate):
+            result = await ai_image.smart_generate_image_async(model="gpt-image-2.5", prompt="p", user_id="u")
+        self.assertEqual(calls, [False, True, False])
+        self.assertEqual(result["task_id"], "paid-task-3")
+        self.assertTrue(result["provider_switched"])
+
+    async def test_accepted_terminal_failures_exhaust_exactly_two_rounds(self):
+        calls = []
+        async def generate(**kwargs):
+            calls.append(bool(kwargs.get("apimart_ext")))
+            kwargs["on_accepted"](f"paid-task-{len(calls)}")
+            raise ai_image.UpstreamTaskFailed("upstream render failed")
+        with patch.object(ai_image, "get_smart_route_candidates", return_value=["apimart", "apimart-ext"]), \
+             patch.object(ai_image, "generate_image_async", side_effect=generate):
+            with self.assertRaises(ai_image.AllProvidersFailedError) as ctx:
+                await ai_image.smart_generate_image_async(model="gpt-image-2.5", prompt="p", user_id="u")
+        self.assertEqual(calls, [False, True, False, True])
+        self.assertEqual(len(ctx.exception.provider_errors), 4)
+
+    async def test_accepted_terminal_safety_failure_stops_routes_immediately(self):
+        calls = []
+        async def generate(**kwargs):
+            calls.append(bool(kwargs.get("apimart_ext")))
+            kwargs["on_accepted"]("blocked-task")
+            raise ai_image.UpstreamTaskFailed("content_policy_violation")
+        with patch.object(ai_image, "get_smart_route_candidates", return_value=["apimart", "apimart-ext"]), \
+             patch.object(ai_image, "generate_image_async", side_effect=generate):
+            with self.assertRaises(ai_image.SafetyReviewError):
+                await ai_image.smart_generate_image_async(model="gpt-image-2.5", prompt="p", user_id="u")
+        self.assertEqual(calls, [False])
+
     async def test_safety_review_stops_immediately(self) -> None:
         calls = {"sub": 0, "adobe": 0}
 

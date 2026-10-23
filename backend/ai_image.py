@@ -2470,7 +2470,7 @@ async def smart_generate_image_async(
     全部失败才把错误抛给用户。
 
     前端只有两个失败出口：明确的上游安全审核拦截，或全部线路完成两轮后仍失败。
-    是否已提交上游由各 provider 的 on_accepted 明确信号决定；已接受的同一线路不重复提交。
+    已受理且状态不确定时恢复原任务；明确终态失败才允许继续两轮线路尝试。
     """
     candidates = get_smart_route_candidates(
         model,
@@ -2592,14 +2592,15 @@ async def smart_generate_image_async(
 
         except Exception as exc:
             already_accepted = provider in accepted
-            # Once accepted, only polling/downloading the same result is safe.
-            # Ambiguous submissions must also stop; switching providers can charge twice.
-            if already_accepted or isinstance(exc, CheckpointError):
+            # A confirmed terminal failure can proceed through the schedule.
+            # Unknown acceptance and interrupted polling/download must stop.
+            terminal_failure = isinstance(exc, UpstreamTaskFailed)
+            if isinstance(exc, CheckpointError) or (already_accepted and not terminal_failure):
                 if already_accepted:
                     exc.provider = provider
                     exc.task_id = accepted.get(provider) or ""
                 raise
-            if submission_may_be_accepted(exc):
+            if not terminal_failure and submission_may_be_accepted(exc):
                 raise AmbiguousUpstreamError(str(exc), provider=provider) from exc
             err_msg = format_generation_error(exc, stage="smart_route", provider=provider, model=model)
             logger.warning(
@@ -2620,6 +2621,10 @@ async def smart_generate_image_async(
                 safety_error.provider = provider  # type: ignore[attr-defined]
                 safety_error.task_id = str(accepted.get(provider) or "")  # type: ignore[attr-defined]
                 raise safety_error from exc
+
+            if terminal_failure:
+                # The failed task has ended; this route may be tried next round.
+                accepted.pop(provider, None)
 
             logger.info(
                 "[smart-routing] Provider %s failed%s; continue schedule (%d/%d)",

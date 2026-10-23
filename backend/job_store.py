@@ -697,14 +697,32 @@ def load_special_job(job_id: str) -> dict | None:
     }
 
 
-def load_special_job_model(job_id: str):
+def load_special_job_model(job_id: str, *, legacy_kind: str | None = None):
+    """Read legacy results using saved evidence, or the requested result endpoint.
+
+    The endpoint hint is only a read compatibility aid. It must not populate
+    recovery.kind, which authorizes execution of a particular compose flow.
+    """
     from .models import SpecialComposeJob, SpecialFullComposeJob
     with _connect() as conn:
         row = conn.execute("SELECT * FROM special_jobs WHERE id=?", (job_id,)).fetchone()
     if not row:
         return None
     recovery = _json_object(row["recovery_json"])
-    cls = SpecialFullComposeJob if recovery.get("kind") == "special-full" else SpecialComposeJob
+    progress = json.loads(row["progress_json"] or "[]")
+    kind = recovery.get("kind")
+    if not kind:
+        for message in progress:
+            if str(message).startswith("等待合成队列（特殊品完整）"):
+                kind = "special-full"
+                break
+            if str(message).startswith("等待合成队列（特殊品）"):
+                kind = "special"
+                break
+    kind = kind or legacy_kind
+    if kind not in {"special", "special-full"}:
+        raise ValueError("历史任务缺少特殊品流程类型")
+    cls = SpecialFullComposeJob if kind == "special-full" else SpecialComposeJob
     return cls(
         id=row["id"], user_id=row["user_id"], status=row["status"],
         request=json.loads(row["request_json"]),
@@ -713,7 +731,7 @@ def load_special_job_model(job_id: str):
         result_frame_names=json.loads(row["result_frame_names_json"] or "[]"),
         penpot_file_id=row["penpot_file_id"], penpot_page_id=row["penpot_page_id"],
         penpot_edit_url=row["penpot_edit_url"], error=row["error"],
-        progress=json.loads(row["progress_json"] or "[]"), created_at=row["created_at"],
+        progress=progress, created_at=row["created_at"],
         recovery=recovery,
     )
 
@@ -723,7 +741,13 @@ def load_active_compose_jobs() -> list:
         ordinary = conn.execute("SELECT id FROM jobs WHERE status IN ('pending','running') ORDER BY created_at").fetchall()
         special = conn.execute("SELECT id FROM special_jobs WHERE status IN ('pending','running') ORDER BY created_at").fetchall()
     jobs = []
-    for rows, loader in [(ordinary, load_job), (special, load_special_job_model)]:
+    # Untyped legacy jobs are loaded only so the scanner can mark them as
+    # non-resumable. The read hint never supplies recovery.kind.
+    loaders = [
+        (ordinary, load_job),
+        (special, lambda job_id: load_special_job_model(job_id, legacy_kind="special")),
+    ]
+    for rows, loader in loaders:
         for row in rows:
             try:
                 job = loader(row["id"])

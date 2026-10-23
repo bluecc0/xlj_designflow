@@ -3430,7 +3430,7 @@ def get_special_compose(job_id: str, request: Request):
     user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
-    job = load_special_job_model(job_id) or job
+    job = load_special_job_model(job_id, legacy_kind="special") or job
     if not job:
         raise HTTPException(404, f"任务不存在: {job_id}")
     if not isinstance(job, SpecialComposeJob):
@@ -3445,7 +3445,7 @@ def download_special_images(job_id: str, request: Request):
     user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
-    job = load_special_job_model(job_id) or job
+    job = load_special_job_model(job_id, legacy_kind="special") or job
     if not job or not isinstance(job, SpecialComposeJob):
         raise HTTPException(404, f"任务不存在: {job_id}")
     _assert_job_owner(job.user_id, user)
@@ -3530,8 +3530,9 @@ def download_special_image(job_id: str, frame_file: str, request: Request):
     user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
-    job = load_special_job_model(job_id) or job
     expected_type = SpecialFullComposeJob if request.url.path.startswith("/special-compose-full/") else SpecialComposeJob
+    legacy_kind = "special-full" if expected_type is SpecialFullComposeJob else "special"
+    job = load_special_job_model(job_id, legacy_kind=legacy_kind) or job
     if not isinstance(job, expected_type):
         raise HTTPException(404, "任务不存在")
     _assert_job_owner(job.user_id, user)
@@ -3561,7 +3562,7 @@ def download_special_zip(job_id: str, names: str = ""):
 
     with _jobs_lock:
         job = _jobs.get(job_id)
-    job = load_special_job_model(job_id) or job
+    job = load_special_job_model(job_id, legacy_kind="special") or job
     if not job or not isinstance(job, SpecialComposeJob):
         raise HTTPException(404, f"任务不存在: {job_id}")
     if job.status != ComposeStatus.done:
@@ -3655,7 +3656,7 @@ def get_special_full_compose(job_id: str, request: Request):
     user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
-    job = load_special_job_model(job_id) or job
+    job = load_special_job_model(job_id, legacy_kind="special-full") or job
     if not job:
         raise HTTPException(404, f"任务不存在: {job_id}")
     if not isinstance(job, SpecialFullComposeJob):
@@ -3672,7 +3673,7 @@ def download_special_full_zip(job_id: str, names: str = "", request: Request = N
     user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
-    job = load_special_job_model(job_id) or job
+    job = load_special_job_model(job_id, legacy_kind="special-full") or job
     if not job or not isinstance(job, SpecialFullComposeJob):
         raise HTTPException(404, f"任务不存在: {job_id}")
     _assert_job_owner(job.user_id, user)
@@ -5372,7 +5373,9 @@ async def _execute_ai_image_background(
                 )
             except Exception:
                 logger.exception("failed to recover generated image job: job_id=%s", job_id)
-            return
+            # Let the durable worker bound finalization retries while keeping
+            # the generated image successful and reusing its local result.
+            raise
         # The durable worker decides whether to resume the original task or fail.
         # Never convert a polling/download interruption into a fresh generation.
         raise

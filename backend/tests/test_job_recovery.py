@@ -235,6 +235,69 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(messages[0]["meta_json"])["batchId"], "batch")
         self.assertEqual(self.job()["request_meta"]["recovery"]["phase"], "done")
 
+    async def test_success_notification_failure_has_bounded_backoff_and_keeps_image(self):
+        self.seed()
+        with patch.object(main, "generate_image_async", AsyncMock(return_value={"url": "/result.png", "task_id": "paid-task"})) as post, \
+             patch.object(main, "resume_image_async", AsyncMock()) as poll, \
+             patch.object(main, "append_ai_chat_message", side_effect=sqlite3.OperationalError("chat unavailable")) as notify:
+            for attempt in range(1, 4):
+                await self.execute()
+                job = self.job()
+                recovery = job["request_meta"]["recovery"]
+                self.assertEqual(job["status"], "done")
+                self.assertEqual(job["image_url"], "/result.png")
+                self.assertEqual(job["progress"], 100)
+                self.assertEqual(recovery["finalization_attempts"], attempt)
+                if attempt < 3:
+                    self.assertEqual(recovery["phase"], "downloaded")
+                    self.assertGreater(recovery["retry_after"], ai_job_recovery.time.time())
+                    # A scanner pass during backoff must not retry the notification.
+                    await self.execute()
+                    self.assertEqual(notify.call_count, attempt)
+                    job_store.save_image_checkpoint("image-job", {
+                        **job["request_meta"], "recovery": {**recovery, "retry_after": 0},
+                    }, provider="apimart", task_id="paid-task", status="done")
+            await self.execute()
+            self.assertEqual(notify.call_count, 3)
+            self.assertEqual(post.await_count, 1)
+            poll.assert_not_called()
+        self.assertEqual(self.job()["request_meta"]["recovery"]["phase"], "finalization_failed")
+        self.assertEqual(job_store.load_recoverable_image_jobs(), [])
+
+    async def test_success_notification_recovers_once_without_repeating_generation(self):
+        self.seed()
+        with patch.object(main, "generate_image_async", AsyncMock(return_value={"url": "/result.png"})) as post:
+            with patch.object(main, "append_ai_chat_message", side_effect=sqlite3.OperationalError("chat unavailable")):
+                await self.execute()
+            job = self.job()
+            meta = job["request_meta"]
+            meta["recovery"]["retry_after"] = 0
+            job_store.save_image_checkpoint("image-job", meta, provider="apimart", task_id="", status="done")
+            with patch.object(main, "resume_image_async", AsyncMock()) as poll:
+                await self.execute()
+                await self.execute()
+            poll.assert_not_called()
+            self.assertEqual(post.await_count, 1)
+        self.assertEqual(self.job()["status"], "done")
+        self.assertEqual(self.job()["request_meta"]["recovery"]["phase"], "done")
+        with job_store._connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM ai_chat_messages").fetchone()[0], 1)
+
+    async def test_all_terminal_route_failures_do_not_enter_original_task_recovery(self):
+        self.seed(provider="auto")
+        async def generate(**kwargs):
+            kwargs["on_accepted"]("failed-task")
+            raise UpstreamTaskFailed("upstream rendering failed")
+        with patch.object(ai_image, "get_smart_route_candidates", return_value=["apimart", "apimart-ext"]), \
+             patch.object(ai_image, "generate_image_async", AsyncMock(side_effect=generate)) as post, \
+             patch.object(main, "resume_image_async", AsyncMock()) as poll:
+            await self.execute()
+            await self.execute()
+        self.assertEqual(post.await_count, 4)
+        poll.assert_not_called()
+        self.assertEqual(self.job()["status"], "failed")
+        self.assertEqual(job_store.load_recoverable_image_jobs(), [])
+
     async def test_recovery_scan_ignores_other_operations_and_terminal_jobs(self):
         for index, operation in enumerate(["outpainting", "matting", "upscale", "vectorize", "layer_extract"]):
             job_store.save_ai_image_job(job_id=f"other-{index}", user_id="owner", status="processing",
@@ -367,6 +430,28 @@ class SpecialRecoveryTest(unittest.TestCase):
             self.assertEqual(loaded.created_at, 123456)
             self.assertNotIn("recovery", loaded.model_dump())
 
+    def test_legacy_kind_uses_saved_progress_before_endpoint_hint(self):
+        for full, marker in [(False, "等待合成队列（特殊品）…"), (True, "等待合成队列（特殊品完整）…")]:
+            job = self.special(full)
+            job.recovery = {}
+            job.progress = [marker]
+            job_store.save_special_job(job)
+            opposite = "special" if full else "special-full"
+            loaded = job_store.load_special_job_model(job.id, legacy_kind=opposite)
+            self.assertIs(type(loaded), type(job))
+            self.assertNotIn("kind", loaded.recovery)
+
+    def test_legacy_without_kind_requires_read_hint_and_does_not_persist_it(self):
+        job = self.special(True)
+        job.recovery = {}
+        job_store.save_special_job(job)
+        with self.assertRaises(ValueError):
+            job_store.load_special_job_model(job.id)
+        loaded = job_store.load_special_job_model(job.id, legacy_kind="special-full")
+        self.assertIsInstance(loaded, SpecialFullComposeJob)
+        self.assertEqual(loaded.recovery, {})
+        self.assertEqual(job_store.load_active_compose_jobs()[0].recovery, {})
+
     def test_partial_variant_export_resumes_without_copy_or_refill(self):
         for full in [False, True]:
             with self.subTest(full=full):
@@ -448,6 +533,82 @@ class SpecialRecoveryTest(unittest.TestCase):
         client.duplicate_file.assert_not_called()
         self.assertEqual(client.export_frame.call_count, 1)
         self.assertEqual(job_store.load_job(job.id).status, ComposeStatus.done)
+
+
+class LegacySpecialResultTest(unittest.IsolatedAsyncioTestCase):
+    setUp = RecoveryTest.setUp
+    special = SpecialRecoveryTest.special
+
+    async def test_legacy_status_and_download_endpoints_survive_restart(self):
+        for full in [False, True]:
+            for has_progress in [False, True]:
+                with self.subTest(full=full, has_progress=has_progress):
+                    job = self.special(full)
+                    job.recovery = {}
+                    job.status = ComposeStatus.done
+                    if has_progress:
+                        job.progress = ["等待合成队列（特殊品完整）…" if full else "等待合成队列（特殊品）…"]
+                    path = self.root / "results" / job.id / "frame_0.png"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(png())
+                    job.result_paths = [str(path)]
+                    job_store.save_special_job(job)
+                    endpoint = "special-compose-full" if full else "special-compose"
+                    with patch.object(main, "_jobs", {}), \
+                         patch.object(main, "_get_session_user", return_value={"id": "owner", "role": "user"}):
+                        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as client:
+                            response = await client.get(f"/{endpoint}/{job.id}")
+                            self.assertEqual(response.status_code, 200, response.text)
+                            image = response.json()["result_images"][0]
+                            self.assertTrue(image["download_url"].startswith(f"/{endpoint}/"))
+                            response = await client.get(image["download_url"])
+                            self.assertEqual(response.status_code, 200, response.text if response.is_error else "")
+                            self.assertEqual(response.content, png())
+                            response = await client.get(f"/{endpoint}/{job.id}/download-zip")
+                            self.assertEqual(response.status_code, 200, response.text if response.is_error else "")
+                            if not full:
+                                response = await client.get(f"/{endpoint}/{job.id}/images")
+                                self.assertEqual(response.status_code, 200)
+                    # Read compatibility must never turn into execution metadata.
+                    with job_store._connect() as connection:
+                        self.assertEqual(json.loads(connection.execute("SELECT recovery_json FROM special_jobs WHERE id=?", (job.id,)).fetchone()[0]), {})
+
+    async def test_known_type_and_legacy_owner_checks_cannot_be_bypassed(self):
+        job = self.special(True)
+        job.recovery = {}
+        job.progress = ["等待合成队列（特殊品完整）…"]
+        job.status = ComposeStatus.done
+        job_store.save_special_job(job)
+        with patch.object(main, "_jobs", {}), \
+             patch.object(main, "_get_session_user", return_value={"id": "owner", "role": "user"}):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as client:
+                response = await client.get(f"/special-compose/{job.id}")
+                self.assertEqual(response.status_code, 400)
+        for recovery in [{}, {"kind": "special-full"}]:
+            job.recovery = recovery
+            job.progress = []
+            job_store.save_special_job(job)
+            with patch.object(main, "_jobs", {}), \
+                 patch.object(main, "_get_session_user", return_value={"id": "other", "role": "user"}):
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as client:
+                    for suffix in ["", "/download-zip", "/download-image/frame_0.png"]:
+                        response = await client.get(f"/special-compose-full/{job.id}{suffix}")
+                        self.assertEqual(response.status_code, 403, response.text)
+
+    async def test_legacy_read_hint_does_not_enable_automatic_full_execution(self):
+        job = self.special(True)
+        job.recovery = {}
+        job_store.save_special_job(job)
+        main.app.state.ai_image_tasks = set()
+        main.app.state.compose_recovery_tasks = set()
+        main.app.state.recovery_jobs = set()
+        with patch.object(main, "run_special_full_compose") as full, patch.object(main, "run_special_compose") as plain:
+            await main._recover_background_jobs_once()
+        full.assert_not_called()
+        plain.assert_not_called()
+        loaded = job_store.load_special_job_model(job.id, legacy_kind="special-full")
+        self.assertEqual(loaded.status, ComposeStatus.failed)
+        self.assertIn("无法安全续跑", loaded.error)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ import time
 import httpx
 
 from .ai_image import (
-    SafetyReviewError, load_user_refs, public_generation_error,
+    AllProvidersFailedError, SafetyReviewError, load_user_refs, public_generation_error,
     submission_may_be_accepted,
 )
 from .job_store import load_ai_image_job, save_image_checkpoint, append_ai_chat_message
@@ -50,7 +50,9 @@ async def execute_image_job(worker, job_id: str, *, initial: dict | None = None)
         phase = recovery.get("phase")
         is_resume = phase not in {"queued", "preparing"}
 
-        def persist(error=None, status="processing"):
+        def persist(error=None, status=None):
+            if status is None:
+                status = "done" if job["status"] == "done" and job.get("image_url") else "processing"
             save_image_checkpoint(job_id, meta, provider=provider,
                                   task_id=str(recovery.get("task_id") or ""),
                                   error=error, status=status)
@@ -87,7 +89,9 @@ async def execute_image_job(worker, job_id: str, *, initial: dict | None = None)
                 recovery["phase"] = next_phase
             recovery.update(values)
             recovery.pop("retry_after", None)
-            persist(status="done" if next_phase == "done" else "processing")
+            if next_phase == "done":
+                recovery.pop("finalization_error", None)
+            persist(status="done" if next_phase == "done" else None)
 
         kwargs = dict(
             job_id=job_id, user_id=job["user_id"],
@@ -131,15 +135,30 @@ async def execute_image_job(worker, job_id: str, *, initial: dict | None = None)
             raise
         except Exception as exc:
             logger.exception("image recovery worker failed: job=%s phase=%s", job_id, recovery.get("phase"))
+            if recovery.get("local_url"):
+                # Image success and notification delivery have separate budgets.
+                # Never change a completed image to failed or poll/generate it again.
+                attempts = int(recovery.get("finalization_attempts") or 0) + 1
+                recovery.update(finalization_attempts=attempts, finalization_error=str(exc)[:400])
+                if attempts < 3:
+                    recovery.update(phase="downloaded", resuming=True,
+                                    message="图片已生成，正在补写结果记录…",
+                                    retry_after=time.time() + 15 * attempts)
+                else:
+                    recovery.update(phase="finalization_failed", resuming=False,
+                                    message="图片已生成，结果记录补写失败，已停止自动重试")
+                    recovery.pop("retry_after", None)
+                persist(status="done")
+                return
             resumable = bool(
-                recovery.get("local_url") or recovery.get("result_url")
+                recovery.get("result_url")
                 or (provider in {"apimart", "apimart-ext"} and recovery.get("task_id"))
                 or (provider == "bfl" and recovery.get("polling_url") and recovery.get("task_id"))
             )
             before_submit = recovery.get("phase") in {"queued", "preparing"} and (
                 submission_may_be_accepted(exc) or isinstance(exc, (httpx.RequestError, asyncio.TimeoutError))
             )
-            if (resumable or before_submit) and not isinstance(exc, (UpstreamTaskFailed, SafetyReviewError)):
+            if (resumable or before_submit) and not isinstance(exc, (UpstreamTaskFailed, SafetyReviewError, AllProvidersFailedError)):
                 attempts = int(recovery.get("attempts") or 0) + 1
                 recovery["attempts"] = attempts
                 if attempts < 3:
