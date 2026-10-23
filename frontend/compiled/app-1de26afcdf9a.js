@@ -3564,82 +3564,21 @@ const LogBox = ({
 
 // ---------- States ----------
 
-// 每条欢迎语配一组示例：点击后填入输入框，并切到示例对应的模式（mode 同 Composer 的 selectedMode）
 const GREETINGS = [{
   title: '今天想设计点什么？',
-  sub: '上传产品图、参考图、品牌素材，或者直接输入描述。',
-  examples: [{
-    icon: 'image',
-    mode: 'gpt-image-2.5',
-    text: '电商主图：白色跑鞋放在浅灰台面上，柔和侧光，干净留白'
-  }, {
-    icon: 'palette',
-    mode: 'gpt-image-2.5',
-    text: '夏季促销海报：运动 T 恤平铺，主标题「清凉一夏」，蓝白配色'
-  }, {
-    icon: 'wand',
-    mode: 'nano-banana-pro',
-    text: '保留参考图里的产品，背景换成雨天城市街景，光线自然'
-  }]
+  sub: '上传产品图、参考图、品牌素材，或者直接输入描述。'
 }, {
   title: '想要生成一张海报吗？',
-  sub: '使用 GPT Image 2.5，直接描述你想要的画面。',
-  examples: [{
-    icon: 'palette',
-    mode: 'gpt-image-2.5',
-    text: '夏季促销海报：运动 T 恤平铺，主标题「清凉一夏」，蓝白配色'
-  }, {
-    icon: 'image',
-    mode: 'gpt-image-2.5',
-    text: '新品发布海报：篮球鞋悬浮在深色背景中，主标题「破风而来」，金属质感光效'
-  }, {
-    icon: 'type',
-    mode: 'gpt-image-2.5',
-    text: '大促主会场海报：橙红渐变背景，产品居中，大字「全场 5 折起」'
-  }]
+  sub: '使用 GPT Image 2.5，直接描述你想要的画面。'
 }, {
   title: '需要编辑图像？',
-  sub: '使用 Nano Banana Pro，上传图片后描述修改需求。',
-  hint: '先用回形针上传参考图，再试试这样写',
-  examples: [{
-    icon: 'wand',
-    mode: 'nano-banana-pro',
-    text: '保留参考图里的产品，背景换成雨天城市街景，光线自然'
-  }, {
-    icon: 'image',
-    mode: 'nano-banana-pro',
-    text: '把白底换成木质桌面和绿植，产品的形状和颜色保持不变'
-  }, {
-    icon: 'edit',
-    mode: 'nano-banana-pro',
-    text: '去掉图片里的文字和水印，其余内容保持不变'
-  }]
+  sub: '使用 Nano Banana Pro，上传图片后描述修改需求。'
 }, {
   title: '来合成特殊品吧',
-  sub: '选中左侧特殊品模板，输入货号和文案即可一键合成。',
-  hint: '点击会自动选中特殊品模板，按格式改成你的货号和文案',
-  examples: [{
-    icon: 'layers',
-    mode: 'special',
-    text: 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售'
-  }]
+  sub: '选中左侧特殊品模板，输入货号和文案即可一键合成。'
 }, {
   title: '忘了怎么用？',
-  sub: '试试直接在对话框提问，我会帮你找到答案。',
-  hint: '点击会切到「默认」问答模式',
-  examples: [{
-    icon: 'layers',
-    mode: '',
-    text: '特殊品合成需要准备哪些信息？'
-  }, {
-    icon: 'sparkles',
-    mode: '',
-    text: 'GPT Image 2.5 和 Nano Banana Pro 分别适合做什么？'
-  }, {
-    icon: 'image',
-    mode: '',
-    text: '一次可以上传几张参考图？有大小限制吗？'
-  }]
+  sub: '试试直接在对话框提问，我会帮你找到答案。'
 }];
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 const AgentWelcome = () => {
@@ -3704,7 +3643,8 @@ const ChatReturned = ({
   onUnpublishInspiration,
   onRetry,
   onEditResend,
-  onPickExample
+  agentSkills,
+  onPickSkill
 }) => {
   const scrollRef = React.useRef(null);
   const contentRef = React.useRef(null);
@@ -3823,7 +3763,7 @@ const ChatReturned = ({
       maxWidth: 240,
       lineHeight: 1.5
     }
-  }, greeting.sub), onPickExample && greeting.examples && /*#__PURE__*/React.createElement("div", {
+  }, greeting.sub), onPickSkill && agentSkills && agentSkills.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       width: '100%',
       maxWidth: 300,
@@ -3838,48 +3778,55 @@ const ChatReturned = ({
       color: 'var(--ink-3)',
       padding: '0 2px'
     }
-  }, greeting.hint || '试试这样写（点击填入输入框）'), greeting.examples.map(ex => {
-    const Icon = I[ex.icon] || I.sparkles;
-    return /*#__PURE__*/React.createElement("button", {
-      key: ex.text,
-      type: "button",
-      onClick: () => onPickExample(ex),
-      style: {
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 9,
-        padding: '9px 11px',
-        borderRadius: 10,
-        background: 'var(--panel)',
-        border: '1px solid var(--line-2)',
-        textAlign: 'left',
-        fontSize: 12,
-        lineHeight: 1.5,
-        color: 'var(--ink-2)',
-        transition: 'border-color 120ms, background 120ms'
-      },
-      onMouseEnter: e => {
-        e.currentTarget.style.borderColor = 'var(--line)';
-        e.currentTarget.style.background = 'var(--panel-2)';
-      },
-      onMouseLeave: e => {
-        e.currentTarget.style.borderColor = 'var(--line-2)';
-        e.currentTarget.style.background = 'var(--panel)';
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: 'var(--ink-3)',
-        marginTop: 2,
-        flexShrink: 0
-      }
-    }, /*#__PURE__*/React.createElement(Icon, {
-      size: 13
-    })), /*#__PURE__*/React.createElement("span", {
-      style: {
-        flex: 1
-      }
-    }, ex.text));
-  }))) : messages.map((m, i) => /*#__PURE__*/React.createElement(Bubble, {
+  }, "\u6280\u80FD"), agentSkills.map(skill => /*#__PURE__*/React.createElement("button", {
+    key: skill.name,
+    type: "button",
+    onClick: () => onPickSkill(skill),
+    title: skill.summary || skill.title || skill.name,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      padding: '9px 11px',
+      borderRadius: 10,
+      background: 'var(--panel)',
+      border: '1px solid var(--line-2)',
+      textAlign: 'left',
+      fontSize: 12,
+      lineHeight: 1.5,
+      color: 'var(--ink)',
+      transition: 'border-color 120ms, background 120ms'
+    },
+    onMouseEnter: e => {
+      e.currentTarget.style.borderColor = 'var(--line)';
+      e.currentTarget.style.background = 'var(--panel-2)';
+    },
+    onMouseLeave: e => {
+      e.currentTarget.style.borderColor = 'var(--line-2)';
+      e.currentTarget.style.background = 'var(--panel)';
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--ink-3)',
+      display: 'inline-flex',
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement(I.wand, {
+    size: 13
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 600,
+      flexShrink: 0
+    }
+  }, skill.title || skill.name), skill.summary && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--ink-3)',
+      minWidth: 0,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, skill.summary))))) : messages.map((m, i) => /*#__PURE__*/React.createElement(Bubble, {
     key: i,
     who: m.who,
     meta: m.meta,
@@ -5199,6 +5146,7 @@ const CHAT_INSPIRATION_CATEGORIES = [{
 // ---------- Composer ----------
 
 const DEFAULT_COMPOSER_MODE = 'gpt-image-2.5';
+const NO_SKILLS = [];
 const Composer = ({
   onSend,
   onParseTable,
@@ -5212,8 +5160,10 @@ const Composer = ({
   onRequestSpecialTemplate,
   seedPrompt,
   onSeedConsumed,
-  canvasReferenceSelection
+  canvasReferenceSelection,
+  agentSkills: agentSkillsProp
 }) => {
+  const agentSkills = agentSkillsProp || NO_SKILLS;
   const [text, setText] = React.useState('');
   const [selectedMode, setSelectedMode] = React.useState(DEFAULT_COMPOSER_MODE);
   const [files, setFiles] = React.useState([]);
@@ -5236,7 +5186,6 @@ const Composer = ({
   const [quickPromptEditing, setQuickPromptEditing] = React.useState(null);
   const [quickPromptSaving, setQuickPromptSaving] = React.useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = React.useState('chat');
-  const [agentSkills, setAgentSkills] = React.useState([]);
   const [selectedSkill, setSelectedSkill] = React.useState('');
   const [skillMenuDismissed, setSkillMenuDismissed] = React.useState(false);
   const taRef = React.useRef(null);
@@ -5310,8 +5259,7 @@ const Composer = ({
     }).slice(0, 8);
   }, [agentSkills, skillSearch]);
   const skillCardDescription = React.useCallback(function (skill) {
-    if (skill && skill.name === 'text-art-design') return '创意中文字体设计';
-    return String(skill && skill.description || '').trim();
+    return String(skill && skill.summary || '').trim();
   }, []);
   const truncateSkillText = React.useCallback(function (value, maxLength) {
     const chars = Array.from(String(value || '').trim());
@@ -5338,21 +5286,6 @@ const Composer = ({
     }, 0);
   }, [parseSkillInvocation]);
   const [taskDefsKey, setTaskDefsKey] = React.useState(0);
-  React.useEffect(() => {
-    let alive = true;
-    if (!window.API || !window.API.listAgentSkills) return function () {
-      alive = false;
-    };
-    window.API.listAgentSkills().then(function (skills) {
-      if (!alive) return;
-      setAgentSkills(Array.isArray(skills) ? skills : []);
-    }).catch(function (err) {
-      console.warn('Load agent skills failed:', err);
-    });
-    return function () {
-      alive = false;
-    };
-  }, []);
   const displayValue = text;
   React.useEffect(() => {
     if (!resetKey) return;
@@ -5496,18 +5429,26 @@ const Composer = ({
     const seed = typeof seedPrompt === 'object' ? seedPrompt : {
       text: seedPrompt
     };
-    const mode = typeof seed.mode === 'string' ? seed.mode : 'gpt-image-2.5';
-    setSelectedMode(mode);
-    if (mode === 'special_full') setSpecialRouteMode('full');else if (mode === 'special') setSpecialRouteMode('auto');
-    setSelectedSkill('');
+    if (seed.skill) {
+      // 选技能只挂上技能并聚焦输入框，不改当前模式
+      setSelectedSkill(seed.skill);
+      setSkillMenuDismissed(true);
+    } else {
+      const mode = typeof seed.mode === 'string' ? seed.mode : 'gpt-image-2.5';
+      setSelectedMode(mode);
+      if (mode === 'special_full') setSpecialRouteMode('full');else if (mode === 'special') setSpecialRouteMode('auto');
+      setSelectedSkill('');
+    }
     setSelectedWorkflow('chat');
     setPrototypePanel('');
-    setText(String(seed.text || ''));
+    // 只挂技能时保留输入框里已有的文字，光标放到末尾
+    if (!seed.skill || seed.text) setText(String(seed.text || ''));
     setTimeout(() => {
       const el = taRef.current;
       if (!el) return;
       el.focus();
-      el.setSelectionRange(0, 0);
+      const pos = seed.skill ? el.value.length : 0;
+      el.setSelectionRange(pos, pos);
     }, 0);
     if (onSeedConsumed) onSeedConsumed();
   }, [seedPrompt, onSeedConsumed]);
@@ -6241,7 +6182,7 @@ const Composer = ({
     sunburst: '优质'
   }[aiVariant] || aiVariant) + qualityTag : '') : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 ' + (specialRouteMode === 'auto' ? '自动' : specialRouteMode === 'full' ? '完整' : '普通') : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
   const isSub2ApiRoute = activeMode === 'ai-image' && (aiProvider === 'sub2api' || aiProvider === 'auto' && (activeAiModel === 'gpt-image-2.5' || activeAiModel === 'gpt-image-2') && (aiQuality === '1K' || !aiQuality) && !(activeAiModel === 'gpt-image-2.5' && (aiQualityTier === 'max' || aiQualityTier === 'xhigh')));
-  const selectedSettingBits = [activeSkillInfo ? '$' + activeSkillInfo.name : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? '⚡ 智能' : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
+  const selectedSettingBits = [activeSkillInfo ? '$' + (activeSkillInfo.title || activeSkillInfo.name) : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? '⚡ 智能' : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
   const composerPlaceholder = agentEnabled ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）' : activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(text.trim() || selectedMode || modeParamLabel || refImages.length > 0 || files.length > 0 || activeSkillInfo || skillMenuOpen || !agentEnabled && prototypePanel);
   const minComposerHeight = statusBarVisible ? STATUS_COMPOSER_HEIGHT : COLLAPSED_COMPOSER_HEIGHT;
@@ -6352,7 +6293,7 @@ const Composer = ({
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap'
         }
-      }, truncateSkillText(skill.name, 24)), cardDescription ? React.createElement('span', {
+      }, truncateSkillText(skill.title || skill.name, 24)), cardDescription ? React.createElement('span', {
         style: {
           fontSize: 11,
           color: 'var(--ink-3)',
@@ -7439,12 +7380,59 @@ const Composer = ({
     }
   }, selectedSettingBits.map(function (bit, idx) {
     const isSkillBit = typeof bit === 'string' && bit.startsWith('$');
+    if (isSkillBit) {
+      return /*#__PURE__*/React.createElement("span", {
+        key: idx,
+        style: {
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          fontSize: 12,
+          fontWeight: 600,
+          color: 'var(--accent)',
+          whiteSpace: 'nowrap',
+          flexShrink: 0
+        }
+      }, /*#__PURE__*/React.createElement(I.wand, {
+        size: 12
+      }), bit.slice(1), /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: () => {
+          setSelectedSkill('');
+          setSkillMenuDismissed(true);
+          setText(function (prev) {
+            return parseSkillInvocation(prev).prompt;
+          });
+        },
+        title: "\u53D6\u6D88\u6280\u80FD",
+        "aria-label": "\u53D6\u6D88\u6280\u80FD",
+        style: {
+          width: 16,
+          height: 16,
+          display: 'grid',
+          placeItems: 'center',
+          borderRadius: 4,
+          color: 'var(--ink-3)',
+          cursor: 'pointer'
+        },
+        onMouseEnter: e => {
+          e.currentTarget.style.background = 'var(--panel-2)';
+          e.currentTarget.style.color = 'var(--ink)';
+        },
+        onMouseLeave: e => {
+          e.currentTarget.style.background = 'transparent';
+          e.currentTarget.style.color = 'var(--ink-3)';
+        }
+      }, /*#__PURE__*/React.createElement(I.close, {
+        size: 10
+      })));
+    }
     return /*#__PURE__*/React.createElement("span", {
       key: idx,
       style: {
         fontSize: 12,
-        fontWeight: isSkillBit ? 750 : idx === 0 ? 600 : 400,
-        color: isSkillBit ? 'var(--accent)' : idx === 0 ? 'var(--ink)' : 'var(--ink-3)',
+        fontWeight: idx === 0 ? 600 : 400,
+        color: idx === 0 ? 'var(--ink)' : 'var(--ink-3)',
         whiteSpace: 'nowrap',
         flexShrink: 0
       }
@@ -7739,7 +7727,13 @@ const Composer = ({
     title: refImages.length > 0 ? `已附加 ${refImages.length} 张参考图` : agentEnabled ? '附加参考图给 Agent' : '附加图片或文件'
   }, /*#__PURE__*/React.createElement(I.paperclip, {
     size: 14
-  })), /*#__PURE__*/React.createElement("div", {
+  })), !agentEnabled && agentSkills.length > 0 && prototypeToolButton('skills', '技能', React.createElement(I.wand, {
+    size: 14
+  }), null, {
+    width: 34,
+    minWidth: 34,
+    height: 34
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1
     }
@@ -7862,6 +7856,7 @@ const Chat = ({
   const [confirmDeleteId, setConfirmDeleteId] = React.useState('');
   const [publishDialog, setPublishDialog] = React.useState(null);
   const [localSeed, setLocalSeed] = React.useState(null);
+  const [agentSkills, setAgentSkills] = React.useState([]);
   const historyWrapRef = React.useRef(null);
   const [modeMenuOpen, setModeMenuOpen] = React.useState(false);
   const modeMenuRef = React.useRef(null);
@@ -9853,25 +9848,30 @@ const Chat = ({
       mode: model === 'nano-banana-pro' ? 'nano-banana-pro' : 'gpt-image-2.5'
     });
   }, []);
-  const handlePickExample = React.useCallback(function (example) {
-    if (!example) return;
-    if (example.mode === 'special' || example.mode === 'special_full') {
-      const templates = Array.isArray(window.TEMPLATES) ? window.TEMPLATES : [];
-      if (!templates.some(function (t) {
-        return t.is_special || t.is_special_full;
-      })) {
-        window.dfToast('还没有可用的特殊品模板，请先在 Penpot 模板库里添加', {
-          tone: 'warn'
-        });
-        return;
-      }
-      if (onRequestSpecialTemplate) onRequestSpecialTemplate(example.mode === 'special_full' ? 'full' : 'special');
-    }
+  const handlePickSkill = React.useCallback(function (skill) {
+    if (!skill || !skill.name) return;
     setLocalSeed({
-      text: example.text,
-      mode: example.mode
+      text: '',
+      skill: skill.name
     });
-  }, [onRequestSpecialTemplate]);
+  }, []);
+
+  // 技能列表同时供欢迎页和输入框使用
+  React.useEffect(() => {
+    let alive = true;
+    if (!window.API || !window.API.listAgentSkills) return function () {
+      alive = false;
+    };
+    window.API.listAgentSkills().then(function (skills) {
+      if (!alive) return;
+      setAgentSkills(Array.isArray(skills) ? skills : []);
+    }).catch(function (err) {
+      console.warn('Load agent skills failed:', err);
+    });
+    return function () {
+      alive = false;
+    };
+  }, []);
   const handleComposerSeedConsumed = React.useCallback(function () {
     setLocalSeed(null);
     if (onSeedConsumed) onSeedConsumed();
@@ -10614,7 +10614,8 @@ const Chat = ({
     onUnpublishInspiration: handleUnpublishInspiration,
     onRetry: handleRetryAiImage,
     onEditResend: handleEditResend,
-    onPickExample: handlePickExample
+    agentSkills: agentSkills,
+    onPickSkill: handlePickSkill
   }), /*#__PURE__*/React.createElement(Composer, {
     onSend: handleSend,
     onParseTable: handleParseTable,
@@ -10628,7 +10629,8 @@ const Chat = ({
     onRequestSpecialTemplate: onRequestSpecialTemplate,
     seedPrompt: localSeed || seedPrompt,
     onSeedConsumed: handleComposerSeedConsumed,
-    canvasReferenceSelection: canvasReferenceSelection
+    canvasReferenceSelection: canvasReferenceSelection,
+    agentSkills: agentSkills
   }));
 };
 window.Chat = Chat;
