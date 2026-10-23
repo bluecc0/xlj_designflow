@@ -50,7 +50,7 @@ const LiteLoginGate = ({ onLogin, loading, error, initialName, reauth }) => {
         .lg-sub { font-size: 13px; color: var(--ink-3); line-height: 1.6; margin-top: 6px; }
         .lg-field { position: relative; }
         .lg-input { width: 100%; box-sizing: border-box; height: 44px; border-radius: 10px; border: 1px solid var(--line);
-          background: var(--panel-2); color: var(--ink); padding: 0 14px; font-size: 14px; font-family: inherit; outline: none;
+          background: var(--panel-2); color: var(--ink); padding: 0 14px; font-size: 13px; font-family: inherit; outline: none;
           transition: border-color .15s, box-shadow .15s, background .15s; }
         .lg-input.has-eye { padding-right: 44px; }
         .lg-input::placeholder { color: var(--ink-3); }
@@ -59,14 +59,14 @@ const LiteLoginGate = ({ onLogin, loading, error, initialName, reauth }) => {
         .lg-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border-radius: 8px;
           display: grid; place-items: center; color: var(--ink-3); background: transparent; border: 0; cursor: pointer; }
         .lg-eye:hover { color: var(--ink); background: var(--line-2); }
-        .lg-btn { height: 44px; border-radius: 10px; border: 0; color: #fff; font-size: 14px; font-weight: 600; font-family: inherit; letter-spacing: .02em;
+        .lg-btn { height: 44px; border-radius: 10px; border: 0; color: #fff; font-size: 13px; font-weight: 600; font-family: inherit; letter-spacing: .02em;
           background: var(--ink); cursor: pointer; margin-top: 2px; transition: transform .12s, box-shadow .15s, background .15s; }
         .lg-btn:hover:not(:disabled) { background: oklch(0.26 0.02 260); transform: translateY(-1px); box-shadow: 0 8px 18px rgba(20,22,40,.2); }
         .lg-btn:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
         .lg-btn:disabled { background: var(--line); color: rgba(255,255,255,.95); cursor: default; }
-        .lg-err { font-size: 12.5px; color: oklch(0.5 0.17 45); background: oklch(0.97 0.03 70); border: 1px solid oklch(0.9 0.06 70);
+        .lg-err { font-size: 12px; color: oklch(0.5 0.17 45); background: oklch(0.97 0.03 70); border: 1px solid oklch(0.9 0.06 70);
           padding: 8px 12px; border-radius: 8px; }
-        .lg-foot { text-align: center; font-size: 11.5px; color: var(--ink-3); letter-spacing: .02em; padding-top: 4px; }
+        .lg-foot { text-align: center; font-size: 12px; color: var(--ink-3); letter-spacing: .02em; padding-top: 4px; }
       `}</style>
       <form className="lg-card" onSubmit={(e) => { e.preventDefault(); submit(); }}>
         <div className="lg-brand">

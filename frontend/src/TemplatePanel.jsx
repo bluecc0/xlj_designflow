@@ -54,9 +54,9 @@ const TemplateCard = function(_ref) {
     },
       React.createElement(LazyThumb, { t: t }),
       React.createElement('div', { style: { padding: '6px 2px 2px', display: 'flex', alignItems: 'center', gap: 5 } },
-        React.createElement('div', { style: { fontSize: 11.5, fontWeight: 500, color: 'var(--ink)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
-        t.frames && t.frames.length > 1 && React.createElement('span', { className: 'mono', style: { fontSize: 10, color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 5px', borderRadius: 4, letterSpacing: '0.02em' } }, t.frames.length + '板'),
-        t.pro && React.createElement('span', { className: 'mono', style: { fontSize: 10, color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 5px', borderRadius: 4, letterSpacing: '0.02em' } }, 'PRO')
+        React.createElement('div', { style: { fontSize: 12, fontWeight: 500, color: 'var(--ink)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
+        t.frames && t.frames.length > 1 && React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 5px', borderRadius: 4, letterSpacing: '0.02em' } }, t.frames.length + '板'),
+        t.pro && React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 5px', borderRadius: 4, letterSpacing: '0.02em' } }, 'PRO')
       ),
       active && React.createElement('div', {
         style: {
@@ -86,7 +86,7 @@ var ElapsedTimer = function(props) {
   var label = m > 0 ? m + 'm ' + String(s).padStart(2, '0') + 's' : s + 's';
   return React.createElement('span', {
     className: 'mono',
-    style: { fontSize: 10, color: 'var(--accent)', fontVariantNumeric: 'tabular-nums' },
+    style: { fontSize: 11, color: 'var(--accent)', fontVariantNumeric: 'tabular-nums' },
   }, label);
 };
 
@@ -199,7 +199,7 @@ var TemplatePanel = function(_ref2) {
             }
           }, t.label, t.soon && React.createElement('span', {
             className: 'mono',
-            style: { fontSize: 10, padding: '1px 5px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line)', color: 'var(--ink-3)' }
+            style: { fontSize: 11, padding: '1px 5px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line)', color: 'var(--ink-3)' }
           }, '即将上线'));
         })
       ),
@@ -240,7 +240,7 @@ var TemplatePanel = function(_ref2) {
         ),
         !loading && loadErr && React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--danger)', fontSize: 12, padding: 16, textAlign: 'center' } },
           React.createElement('div', null, '加载失败'),
-          React.createElement('div', { style: { color: 'var(--ink-3)', fontSize: 10 } }, String(loadErr))
+          React.createElement('div', { style: { color: 'var(--ink-3)', fontSize: 11 } }, String(loadErr))
         ),
         !loading && !loadErr && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 14px 56px' } },
           filteredSections.map(function(section) {
@@ -294,7 +294,7 @@ var TemplatePanel = function(_ref2) {
                   className: 'mono',
                   style: {
                     color: 'var(--ink-3)',
-                    fontSize: 10,
+                    fontSize: 11,
                     fontWeight: 600,
                     lineHeight: 1,
                   }
@@ -402,11 +402,11 @@ var TemplatePanel = function(_ref2) {
                     React.createElement('span', { style: { flex: 1, fontSize: 12, fontWeight: 500, color: 'var(--ink)' } }, titleText),
                     job.status !== 'done' && job.status !== 'failed' && job.created_at
                       ? React.createElement(ElapsedTimer, { createdAt: job.created_at })
-                      : React.createElement('span', { style: { fontSize: 10, color: 'var(--ink-3)' } }, timeStr)
+                      : React.createElement('span', { style: { fontSize: 11, color: 'var(--ink-3)' } }, timeStr)
                   ),
                   subtitle && React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', paddingLeft: 14 } }, subtitle),
                   isAiImage && job.prompt && React.createElement('div', { style: {
-                    fontSize: 10.5,
+                    fontSize: 11,
                     color: 'var(--ink-3)',
                     paddingLeft: 14,
                     marginTop: 4,

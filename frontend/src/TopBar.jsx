@@ -403,7 +403,7 @@ const renderAiProviderDetail = function(data) {
         {hasBalance ? ` · 余额 $${fmtBalance(apimart.remain_balance)}` : ''}
       </div>
       {(apimart.message || adobe.message || sub2api.message) && (
-        <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>
+        <div style={{ fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.45 }}>
           {String(apimart.message || adobe.message || sub2api.message).slice(0, 120)}
         </div>
       )}
@@ -455,7 +455,7 @@ window.renderAiProviderDetail = renderAiProviderDetail;
               gap: 6,
               color: 'var(--ink-2)',
               textDecoration: 'none',
-              fontSize: 11.5,
+              fontSize: 12,
               flexShrink: 0,
             }}
           >

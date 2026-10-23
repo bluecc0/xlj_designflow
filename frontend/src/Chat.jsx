@@ -339,7 +339,7 @@ const Avatar = ({ who, user }) => {
     <div style={{
       width: 24, height: 24, borderRadius: 7, flexShrink: 0,
       background: 'oklch(0.82 0.07 200)', color: 'oklch(0.3 0.05 200)',
-      fontSize: 10, fontWeight: 600,
+      fontSize: 11, fontWeight: 600,
       display: 'grid', placeItems: 'center',
       overflow: 'hidden',
     }}>
@@ -364,7 +364,7 @@ const Bubble = ({ who, children, meta, user }) => (
   }}>
     <Avatar who={who} user={user}/>
     <div style={{ maxWidth: 'calc(100% - 38px)', display: 'flex', flexDirection: 'column', gap: 6, alignItems: who === 'user' ? 'flex-end' : 'flex-start' }}>
-      {meta && <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{meta}</div>}
+      {meta && <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{meta}</div>}
       {children}
     </div>
   </div>
@@ -375,7 +375,7 @@ const renderMarkdown = (text) => {
   if (!text) return '';
   let html = text;
   // 行内代码（优先，避免被后续规则干扰）
-  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--panel-2);padding:1px 5px;border-radius:4px;font-size:11.5px;font-family:monospace;">$1</code>');
+  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--panel-2);padding:1px 5px;border-radius:4px;font-size: 12px;font-family:monospace;">$1</code>');
   // 粗体
   html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
   // 斜体
@@ -383,9 +383,9 @@ const renderMarkdown = (text) => {
   // 链接
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent);">$1</a>');
   // 标题
-  html = html.replace(/^### (.+)$/gm, '<h3 style="font-size:13px;font-weight:600;margin:4px 0 2px;">$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2 style="font-size:14px;font-weight:600;margin:6px 0 2px;">$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1 style="font-size:15px;font-weight:600;margin:6px 0 2px;">$1</h1>');
+  html = html.replace(/^### (.+)$/gm, '<h3 style="font-size: 13px;font-weight:600;margin:4px 0 2px;">$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2 style="font-size: 13px;font-weight:600;margin:6px 0 2px;">$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1 style="font-size: 15px;font-weight:600;margin:6px 0 2px;">$1</h1>');
   // 无序列表
   html = html.replace(/^- (.+)$/gm, '<li style="margin-left:16px;">$1</li>');
   // 有序列表
@@ -409,7 +409,7 @@ const TextBubble = ({ who, children, markdown }) => {
   };
   return (
     <div style={{
-      fontSize: 12.5, lineHeight: 1.55,
+      fontSize: 12, lineHeight: 1.55,
       padding: '9px 12px', borderRadius: 10,
       background: who === 'user' ? 'var(--ink)' : 'var(--panel)',
       color: who === 'user' ? 'white' : 'var(--ink)',
@@ -491,7 +491,7 @@ const CopyableTextBubble = ({ who, text, markdown }) => {
             pointerEvents: hovered || copied ? 'auto' : 'none',
             boxShadow: 'none',
             transition: 'opacity 120ms ease, transform 120ms ease, color 120ms ease',
-            fontSize: 10.5,
+            fontSize: 11,
             lineHeight: 1,
           }}
         >
@@ -565,7 +565,7 @@ const InlineRefStrip = ({ items, compact }) => {
 };
 
 const actionBtnPrimaryStyle = {
-  fontSize: 11.5,
+  fontSize: 12,
   padding: '6px 12px',
   borderRadius: 6,
   background: 'var(--ink)',
@@ -578,7 +578,7 @@ const actionBtnPrimaryStyle = {
 };
 
 const actionBtnSecondaryStyle = {
-  fontSize: 11.5,
+  fontSize: 12,
   padding: '6px 12px',
   borderRadius: 6,
   background: 'var(--panel)',
@@ -650,19 +650,19 @@ const BriefCard = ({ brief, contract, completeness }) => {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <I.sparkles size={12} style={{ color: 'var(--accent)' }}/>
-          <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ink)' }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>
             创意方案 Brief
           </span>
           {isConfirmed && (
             <span style={{
-              fontSize: 10, padding: '1px 6px', borderRadius: 99,
+              fontSize: 11, padding: '1px 6px', borderRadius: 99,
               background: 'var(--accent)', color: '#fff', fontWeight: 500,
             }}>已确认</span>
           )}
         </div>
         {score !== null && (
           <span className="mono" style={{
-            fontSize: 10, color: 'var(--ink-3)',
+            fontSize: 11, color: 'var(--ink-3)',
             padding: '2px 6px', borderRadius: 4, background: 'var(--panel-2)',
           }}>
             完整度 {score}/100
@@ -671,12 +671,12 @@ const BriefCard = ({ brief, contract, completeness }) => {
       </div>
       <div style={{
         display: 'grid', gridTemplateColumns: 'auto 1fr',
-        gap: '6px 12px', fontSize: 11.5,
+        gap: '6px 12px', fontSize: 12,
       }}>
         {rows.map(([k, v]) => (
           <React.Fragment key={k}>
             <span className="mono" style={{
-              color: 'var(--ink-3)', fontSize: 10,
+              color: 'var(--ink-3)', fontSize: 11,
               textTransform: 'uppercase', letterSpacing: '0.05em',
               alignSelf: 'flex-start', paddingTop: 2, whiteSpace: 'nowrap',
             }}>{k}</span>
@@ -711,7 +711,7 @@ const ThinkingBlock = ({ text }) => {
       </div>
       {open && (
         <div style={{
-          padding: '10px 12px', fontSize: 11.5, lineHeight: 1.6,
+          padding: '10px 12px', fontSize: 12, lineHeight: 1.6,
           color: 'var(--ink-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
           maxHeight: 200, overflowY: 'auto',
         }}>
@@ -754,14 +754,14 @@ const PromptTraceBlock = ({ title, text }) => {
       </div>
       {open && (
         <div ref={bodyRef} style={{
-          padding: '10px 12px', fontSize: 11.5, lineHeight: 1.6,
+          padding: '10px 12px', fontSize: 12, lineHeight: 1.6,
           color: 'var(--ink-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
           maxHeight: 240, overflowY: 'auto',
         }}>
           {parsed ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {steps.length > 0 ? <div>
-                <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginBottom: 4 }}>解读步骤</div>
+                <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>解读步骤</div>
                 {steps.map(function(step, idx) {
                   return <div key={idx} style={{ display: 'flex', gap: 7, padding: '2px 0' }}>
                     <span className="mono" style={{ color: 'var(--ink-3)', minWidth: 14 }}>{idx + 1}</span>
@@ -770,17 +770,17 @@ const PromptTraceBlock = ({ title, text }) => {
                 })}
               </div> : null}
               {rules.length > 0 ? <div>
-                <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginBottom: 4 }}>采用规则</div>
+                <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>采用规则</div>
                 {rules.map(function(rule, idx) {
                   return <div key={idx} style={{ padding: '2px 0' }}>- {rule}</div>;
                 })}
               </div> : null}
               <div>
-                <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginBottom: 4 }}>最终传递给生图</div>
+                <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>最终传递给生图</div>
                 <div>{finalPrompt}</div>
               </div>
               {negativePrompt ? <div>
-                <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginBottom: 4 }}>避免</div>
+                <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>避免</div>
                 <div>{negativePrompt}</div>
               </div> : null}
             </div>
@@ -819,7 +819,7 @@ const LogBox = ({ logs, running }) => {
           return (
             <div key={i} style={{
               padding: '3px 12px',
-              fontSize: 11.5,
+              fontSize: 12,
               fontFamily: 'JetBrains Mono, monospace',
               color: isError ? 'var(--warn)' : isOk ? 'var(--ok)' : 'var(--ink-2)',
               display: 'flex', gap: 8, alignItems: 'baseline',
@@ -921,9 +921,9 @@ const ChatSessionBar = ({ messages, historyControl }) => {
       position: 'relative',
       zIndex: 1,
     }}>
-      <span className="mono" style={{ color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 10 }}>对话</span>
+      <span className="mono" style={{ color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 11 }}>对话</span>
       <div style={{ flex: 1 }}/>
-      <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10 }}>{turnCount}</span>
+      <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 11 }}>{turnCount}</span>
       {historyControl}
     </div>
   );
@@ -1064,7 +1064,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   : '处理完成，正在下载…'
                 ),
                 m.finalElapsed != null
-                  ? React.createElement('span', { className: 'mono', style: { fontSize: 10, color: 'var(--ink-3)' } }, fmtSecs(m.finalElapsed))
+                  ? React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)' } }, fmtSecs(m.finalElapsed))
                   : m.startedAt && m.status !== 'done' && m.status !== 'failed'
                     ? React.createElement(ChatTimer, { startedAt: m.startedAt })
                     : null
@@ -1095,28 +1095,28 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
               },
                 React.createElement('div', {
                   className: 'mono',
-                  style: { fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }
+                  style: { fontSize: 11, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }
                 }, '执行标准'),
-                React.createElement('div', { style: { fontSize: 11.2, color: 'var(--ink-2)', lineHeight: 1.45 } },
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', lineHeight: 1.45 } },
                   String(promptInstruction).slice(0, 360),
                   String(promptInstruction).length > 360 ? '...' : ''
                 ),
-                promptReasoning ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.4 } },
+                promptReasoning ? React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.4 } },
                   '说明：', String(promptReasoning).slice(0, 180), String(promptReasoning).length > 180 ? '...' : ''
                 ) : null,
-                promptConstraints && Array.isArray(promptConstraints.mustInclude) && promptConstraints.mustInclude.length > 0 ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-2)', lineHeight: 1.4 } },
+                promptConstraints && Array.isArray(promptConstraints.mustInclude) && promptConstraints.mustInclude.length > 0 ? React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', lineHeight: 1.4 } },
                   '必须包含：', promptConstraints.mustInclude.join('； ')
                 ) : null,
-                promptConstraints && Array.isArray(promptConstraints.preserve) && promptConstraints.preserve.length > 0 ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-2)', lineHeight: 1.4 } },
+                promptConstraints && Array.isArray(promptConstraints.preserve) && promptConstraints.preserve.length > 0 ? React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', lineHeight: 1.4 } },
                   '保留：', promptConstraints.preserve.join('； ')
                 ) : null,
-                ((promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0) || promptNegative) ? React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.4 } },
+                ((promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0) || promptNegative) ? React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.4 } },
                   '避免：',
                   promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0
                     ? promptConstraints.avoid.join('； ')
                     : (String(promptNegative).slice(0, 220) + (String(promptNegative).length > 220 ? '...' : ''))
                 ) : null,
-                promptParams ? React.createElement('div', { className: 'mono', style: { fontSize: 10, color: 'var(--ink-3)' } },
+                promptParams ? React.createElement('div', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)' } },
                   'ratio=', promptParams.aspectRatio || promptParams.size || 'auto', ' · size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认'
                 ) : null
               ),
@@ -1164,29 +1164,29 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                       React.createElement('div', { style: { display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' } },
                         React.createElement('a', {
                           href: imFull, download: true,
-                          style: { fontSize: 10, padding: '3px 8px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 },
+                          style: { fontSize: 11, padding: '3px 8px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 },
                         }, React.createElement(I.download, { size: 9 }), '下载'),
                         im.inspirationPostId
                           ? React.createElement('button', {
                               onClick: function() { onUnpublishInspiration(Object.assign({}, m, { jobId: im.jobId, imageUrl: imFull, inspirationPostId: im.inspirationPostId, batchImageIndex: bi })); },
-                              style: { fontSize: 10, padding: '3px 8px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ok)', border: '1px solid var(--ok)', display: 'inline-flex', alignItems: 'center', gap: 3, cursor: 'pointer' },
+                              style: { fontSize: 11, padding: '3px 8px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ok)', border: '1px solid var(--ok)', display: 'inline-flex', alignItems: 'center', gap: 3, cursor: 'pointer' },
                             }, React.createElement(I.check, { size: 9 }), '已发布')
                           : React.createElement('button', {
                               onClick: function() { onPublishInspiration(Object.assign({}, m, { jobId: im.jobId, imageUrl: imFull, previewUrl: im.previewUrl || imFull, inspirationPostId: null, batchImageIndex: bi })); },
-                              style: { fontSize: 10, padding: '3px 8px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ink-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', gap: 3, cursor: 'pointer' },
+                              style: { fontSize: 11, padding: '3px 8px', borderRadius: 5, background: 'var(--panel)', color: 'var(--ink-2)', border: '1px solid var(--line)', display: 'inline-flex', alignItems: 'center', gap: 3, cursor: 'pointer' },
                             }, React.createElement(I.sparkles, { size: 9 }), '发布')
                       )
                     );
                   }
                   if (im.status === 'failed') {
                     return React.createElement('div', { key: im.jobId || bi, style: { minHeight: 110, borderRadius: 8, border: '1px solid var(--warn)', background: 'var(--panel)', padding: '8px 9px', display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center' } },
-                      React.createElement('div', { style: { fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.4, wordBreak: 'break-word' } },
+                      React.createElement('div', { style: { fontSize: 11, color: 'var(--warn)', lineHeight: 1.4, wordBreak: 'break-word' } },
                         '第 ' + (bi + 1) + ' 张失败：' + formatAiImageError(im.error, im.jobId))
                     );
                   }
                   return React.createElement('div', { key: im.jobId || bi, style: { minHeight: 110, borderRadius: 8, border: '1px dashed var(--line-2)', background: 'var(--panel)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6 } },
                     React.createElement('div', { style: { width: 14, height: 14, borderRadius: 99, border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', animation: 'spin 0.8s linear infinite' } }),
-                    React.createElement('div', { className: 'mono', style: { fontSize: 10, color: 'var(--ink-3)' } }, (im.progress || 0) + '%')
+                    React.createElement('div', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)' } }, (im.progress || 0) + '%')
                   );
                 })
               ),
@@ -1211,8 +1211,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   React.createElement('span', null, '匹配度 ', React.createElement('span', { style: { color: m.vlm.intentMatch >= 80 ? 'var(--ok)' : (m.vlm.intentMatch >= 50 ? 'var(--warn)' : '#dc2626'), fontWeight: 500 } }, m.vlm.intentMatch))
                 ),
                 m.vlm.userFacingSummary && React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', lineHeight: 1.5 } }, m.vlm.userFacingSummary),
-                m.vlm.problemElements && m.vlm.problemElements.length > 0 && React.createElement('div', { style: { fontSize: 10.5, color: 'var(--danger)', marginTop: 4, lineHeight: 1.5 } }, '问题: ' + m.vlm.problemElements.join('; ')),
-                m.vlm.nextStepSuggestion && React.createElement('div', { style: { fontSize: 10.5, color: 'var(--ok)', marginTop: 4, lineHeight: 1.5 } }, '建议: ' + m.vlm.nextStepSuggestion)
+                m.vlm.problemElements && m.vlm.problemElements.length > 0 && React.createElement('div', { style: { fontSize: 11, color: 'var(--danger)', marginTop: 4, lineHeight: 1.5 } }, '问题: ' + m.vlm.problemElements.join('; ')),
+                m.vlm.nextStepSuggestion && React.createElement('div', { style: { fontSize: 11, color: 'var(--ok)', marginTop: 4, lineHeight: 1.5 } }, '建议: ' + m.vlm.nextStepSuggestion)
               ),
               m.status === 'failed' && !batchImages && React.createElement('div', {
                 style: {
@@ -1254,8 +1254,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                           <I.file size={11}/>
                         </div>
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 11.5, fontWeight: 600 }}>{m.data.products.length} 个产品</div>
-                          <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)' }}>CSV · {m.data.suggested_template_type}</div>
+                          <div style={{ fontSize: 12, fontWeight: 600 }}>{m.data.products.length} 个产品</div>
+                          <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>CSV · {m.data.suggested_template_type}</div>
                         </div>
                       </div>
                       {m.fields && m.fields.length > 0 && (
@@ -1271,7 +1271,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                                 return (
                                   <Cell key={f} top={j > 0}>
                                     {f === 'image' ? (
-                                      val ? <span style={{ color: 'var(--ok)', fontSize: 10 }}>已匹配</span> : <span style={{ color: 'var(--ink-3)', fontSize: 10 }}>未匹配</span>
+                                      val ? <span style={{ color: 'var(--ok)', fontSize: 11 }}>已匹配</span> : <span style={{ color: 'var(--ink-3)', fontSize: 11 }}>未匹配</span>
                                     ) : (
                                       <span style={{ fontWeight: f === 'name' ? 500 : 400 }}>{val || '—'}</span>
                                     )}
@@ -1279,7 +1279,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                                 );
                               })}
                               <Cell top={j > 0} right>
-                                <span style={{ color: p.image_path ? 'var(--ok)' : 'var(--warn)', fontSize: 10 }}>
+                                <span style={{ color: p.image_path ? 'var(--ok)' : 'var(--warn)', fontSize: 11 }}>
                                   {p.image_path ? '✓' : '—'}
                                 </span>
                               </Cell>
@@ -1326,8 +1326,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     flexShrink: 0,
                   }}/>
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 12.5, color: 'var(--ink)', fontWeight: 600 }}>{m.modeLabel || '智能铺货'}</div>
-                    <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 2 }}>
+                    <div style={{ fontSize: 12, color: 'var(--ink)', fontWeight: 600 }}>{m.modeLabel || '智能铺货'}</div>
+                    <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>
                       {m.fileName ? ('已接收 ' + m.fileName + '，正在解析 sheet 和替换字段…') : '正在解析 sheet 和替换字段…'}
                     </div>
                   </div>
@@ -1360,7 +1360,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
                   React.createElement(TextBubble, { who: 'ai' }, '已解析 ' + (data.source ? data.source.fileName : '') + '，' + summaryText + '。' + (m.copied ? '已自动复制第 1 个 JSON' : 'JSON 已生成')),
                   data.warnings && data.warnings.length > 0 ? React.createElement('div', {
-                    style: { padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }
+                    style: { padding: '10px 12px', borderRadius: 8, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 12, color: 'var(--warn)', lineHeight: 1.5 }
                   }, data.warnings.map(function(w, wi) { return React.createElement('div', { key: wi }, '⚠ ' + w); })) : null,
                   React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
                     (data.jobs || []).map(function(job, ji) {
@@ -1408,8 +1408,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                             React.createElement(I.file, { size: 11 })
                           ),
                           React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-                            React.createElement('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, title),
-                            React.createElement('div', { className: 'mono', style: { fontSize: 9.5, color: 'var(--ink-3)', lineHeight: 1.45 } }, jobSummaryText)
+                            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, title),
+                            React.createElement('div', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.45 } }, jobSummaryText)
                           )
                         ),
                         React.createElement('div', { style: { padding: '8px 12px', display: 'flex', gap: 6 } },
@@ -1417,7 +1417,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                         ),
                         React.createElement('pre', {
                           style: {
-                            margin: 0, padding: '10px 12px', fontSize: 10,
+                            margin: 0, padding: '10px 12px', fontSize: 11,
                             color: 'var(--ink-2)', overflow: 'auto', maxHeight: 180,
                             borderTop: '1px solid var(--line-2)',
                             whiteSpace: 'pre-wrap', wordBreak: 'break-all',
@@ -1484,7 +1484,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
               }}>
                 <I.file size={14} style={{ color: 'var(--accent)', flexShrink: 0 }}/>
                 <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{m.text || '文件'}</span>
-                <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 10, marginLeft: 'auto' }}>
+                <span className="mono" style={{ color: 'var(--ink-3)', fontSize: 11, marginLeft: 'auto' }}>
                   已上传
                 </span>
               </div>
@@ -1525,7 +1525,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   gap: 4,
                 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>{m.filename || '下载文件'}</div>
-                  <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>
+                  <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
                     {m.format ? (m.format + ' · ') : ''}{m.sizeText || ''}
                   </div>
                 </div>
@@ -1596,7 +1596,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     flexDirection: 'column',
                     gap: 7,
                   }}>
-                    <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                       参考图 {m.refPreviews.length} 张
                     </div>
                     <InlineRefStrip items={m.refPreviews} compact/>
@@ -1613,13 +1613,13 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     flexDirection: 'column',
                     gap: 6,
                   }}>
-                    <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                       参考图 {m.refMeta.length} 张
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {m.refMeta.map(function(file, idx) {
                         return (
-                          <div key={idx} style={{ fontSize: 11.5, color: 'var(--ink-2)', display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <div key={idx} style={{ fontSize: 12, color: 'var(--ink-2)', display: 'flex', gap: 8, alignItems: 'center' }}>
                             <I.image size={12}/>
                             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name || ('参考图 ' + (idx + 1))}</span>
                           </div>
@@ -1643,7 +1643,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
         style={{
           position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 2,
           height: 28, padding: '0 12px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', gap: 5,
-          background: 'var(--ink)', color: 'white', fontSize: 11.5, boxShadow: '0 4px 14px rgba(20,22,40,0.18)',
+          background: 'var(--ink)', color: 'white', fontSize: 12, boxShadow: '0 4px 14px rgba(20,22,40,0.18)',
         }}
       >↓ 有新消息</button>
     )}
@@ -2817,7 +2817,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       color: active ? 'var(--panel)' : 'var(--ink-2)',
       borderRadius: 999,
       padding: '6px 8px',
-      fontSize: 10.5,
+      fontSize: 11,
       fontWeight: 600,
       display: 'inline-flex',
       alignItems: 'center',
@@ -2875,7 +2875,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
     return React.createElement('div', {
       className: 'mono',
       style: {
-        fontSize: 9.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         textTransform: 'uppercase',
         letterSpacing: '0.08em',
@@ -2889,8 +2889,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       const tasks = getTaskDefinitions();
       return protoPanelShell(React.createElement(React.Fragment, null,
         React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 } },
-          React.createElement('div', { style: { fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--ink)' } }, '选择功能'),
-          React.createElement('div', { className: 'mono', style: { fontSize: 10, color: 'var(--ink-3)' } }, 'live')
+          React.createElement('div', { style: { fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--ink)' } }, '选择功能'),
+          React.createElement('div', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)' } }, 'live')
         ),
         React.createElement('div', { style: { marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 } },
           tasks.map(function(item) {
@@ -2981,7 +2981,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
         }, text);
       };
       return protoPanelShell(React.createElement(React.Fragment, null,
-        !isImageParams && React.createElement('div', { style: { fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--ink)' } }, paramsTitle),
+        !isImageParams && React.createElement('div', { style: { fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--ink)' } }, paramsTitle),
         isImageParams && React.createElement(React.Fragment, null,
           imageFieldLabel('尺寸'),
           React.createElement('div', {
@@ -3012,7 +3012,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
                   color: active ? 'var(--accent-ink)' : 'var(--ink-2)',
                   boxShadow: 'none',
                   cursor: 'pointer',
-                  fontSize: 11.5,
+                  fontSize: 12,
                   fontWeight: active ? 650 : 500,
                   letterSpacing: '-0.01em',
                   minWidth: 0,
@@ -3226,7 +3226,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
                   style: {
                     flex: 1,
                     textAlign: 'center',
-                    fontSize: 12.5,
+                    fontSize: 12,
                     fontWeight: 650,
                     color: 'var(--ink)',
                     letterSpacing: '-0.01em',
@@ -3298,7 +3298,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
                 }
               },
                 React.createElement('span', { style: { fontSize: 12, fontWeight: 700, lineHeight: 1.1 } }, item.label),
-                React.createElement('span', { style: { fontSize: 10.5, lineHeight: 1.2, color: active ? 'rgba(255,255,255,0.68)' : 'var(--ink-3)', fontWeight: 500 } }, item.desc)
+                React.createElement('span', { style: { fontSize: 11, lineHeight: 1.2, color: active ? 'rgba(255,255,255,0.68)' : 'var(--ink-3)', fontWeight: 500 } }, item.desc)
               );
             })
           )
@@ -3400,7 +3400,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
                 borderRadius: 8,
                 border: '1px solid var(--line)',
                 background: 'var(--panel-2)',
-                fontSize: 12.5,
+                fontSize: 12,
                 color: 'var(--ink)',
                 outline: 'none',
                 boxSizing: 'border-box',
@@ -3450,10 +3450,10 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingBottom: 8, borderBottom: '1px solid var(--line)' } },
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
             React.createElement(I.bookmark, { size: 14, style: { color: 'var(--ink)' } }),
-            React.createElement('span', { style: { fontSize: 13.5, fontWeight: 700, color: 'var(--ink)' } }, '常用语'),
+            React.createElement('span', { style: { fontSize: 13, fontWeight: 700, color: 'var(--ink)' } }, '常用语'),
             React.createElement('span', {
               style: {
-                fontSize: 10.5,
+                fontSize: 11,
                 fontWeight: 600,
                 padding: '1px 6px',
                 borderRadius: 999,
@@ -3499,7 +3499,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
               borderRadius: 8,
               border: '1px solid var(--line)',
               background: 'var(--panel-2)',
-              fontSize: 11.5,
+              fontSize: 12,
               color: 'var(--ink)',
               outline: 'none',
               boxSizing: 'border-box',
@@ -3891,7 +3891,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
                     position: 'absolute', top: 2, left: 2,
                     padding: '1px 3px', borderRadius: 3,
                     background: 'var(--danger)', color: 'white',
-                    fontSize: 9, fontWeight: 700, lineHeight: 1, pointerEvents: 'none',
+                    fontSize: 11, fontWeight: 700, lineHeight: 1, pointerEvents: 'none',
                   }}>5MB</span>
                 )}
                 <button
@@ -3902,7 +3902,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
                     position: 'absolute', bottom: 2, left: 2,
                     padding: '1px 3px', borderRadius: 4,
                     background: 'rgba(20, 22, 40, 0.72)', color: 'white',
-                    fontSize: 9, fontWeight: 600, lineHeight: 1, cursor: 'pointer',
+                    fontSize: 11, fontWeight: 600, lineHeight: 1, cursor: 'pointer',
                     backdropFilter: 'blur(4px)', border: 'none',
                   }}
                 >@{idx + 1}</button>
@@ -3920,7 +3920,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
                 ><I.close size={9} stroke={2.4}/></button>
               </div>
             ))}
-            <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{refImages.length}/{MAX_REFERENCE_IMAGES}</span>
+            <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{refImages.length}/{MAX_REFERENCE_IMAGES}</span>
           </div>
         )}
 
@@ -3942,7 +3942,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
                 }}>
                   <I.file size={13}/>
                   <span style={{ fontSize: 12, fontWeight: 600, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
-                  <span style={{ fontSize: 10.5, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{item.kind === 'smart-distribute' ? '待铺货' : item.size}</span>
+                  <span style={{ fontSize: 11, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{item.kind === 'smart-distribute' ? '待铺货' : item.size}</span>
                   <button
                     type="button"
                     onClick={function() { setFiles(function(prev) { return prev.filter(function(_, i) { return i !== idx; }); }); }}
@@ -6082,7 +6082,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
           border: '1px solid ' + (historyOpen ? 'var(--line)' : 'transparent'),
           color: historyOpen ? 'var(--ink)' : 'var(--ink-3)',
           cursor: 'pointer',
-          fontSize: 10.5,
+          fontSize: 11,
         }}
       >
         <I.file size={11}/>
@@ -6106,7 +6106,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         }}>
           <div className="mono" style={{
             padding: '6px 8px 7px',
-            fontSize: 9.5,
+            fontSize: 11,
             color: 'var(--ink-3)',
             textTransform: 'uppercase',
             letterSpacing: '0.06em',
@@ -6176,14 +6176,14 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
                     background: activeId === session.id ? 'var(--panel-2)' : 'transparent',
                     border: '1px solid ' + (activeId === session.id ? 'var(--line-2)' : 'transparent'),
                     color: activeId === session.id ? 'var(--ink)' : 'var(--ink-2)',
-                    fontSize: 11.5,
+                    fontSize: 12,
                     cursor: 'pointer',
                   }}
                   title={title}
                 >
                   <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
                   {metaLine && (
-                    <div className="mono" style={{ fontSize: 9.5, color: 'var(--ink-3)', marginTop: 3 }}>
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 3 }}>
                       {metaLine}
                     </div>
                   )}
@@ -6234,7 +6234,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
           </button>
           {agentEnabled && (
             <span style={{
-              fontSize: 10.5,
+              fontSize: 11,
               color: 'var(--accent-ink)',
               background: 'var(--accent-soft)',
               border: '1px solid transparent',
@@ -6245,7 +6245,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
               Agent
             </span>
           )}
-          <span className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>
+          <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
             {isLoading ? '处理中…' : messages.length === 0 ? '就绪' : messages.length + ' 条记录'}
           </span>
         </div>
@@ -6325,7 +6325,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
                 <I.sparkles size={14}/>
               </div>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)' }}>发布到灵感</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>发布到灵感</div>
                 <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>选择分类，标签可选，方便后续检索。</div>
               </div>
             </div>

@@ -301,7 +301,7 @@ const Stripe = ({
       position: 'absolute',
       left: 8,
       top: 8,
-      fontSize: 9,
+      fontSize: 11,
       letterSpacing: '0.02em',
       color: `oklch(0.45 0.05 ${hue})`,
       textTransform: 'uppercase'
@@ -311,7 +311,7 @@ const Stripe = ({
       position: 'absolute',
       right: 8,
       bottom: 8,
-      fontSize: 10,
+      fontSize: 11,
       color: `oklch(0.35 0.05 ${hue})`,
       background: 'rgba(255,255,255,0.85)',
       backdropFilter: 'blur(4px)',
@@ -340,7 +340,7 @@ const Swatch = ({
 }), /*#__PURE__*/React.createElement("div", {
   className: "mono",
   style: {
-    fontSize: 9,
+    fontSize: 11,
     color: 'var(--ink-3)',
     overflow: 'hidden',
     textOverflow: 'ellipsis'
@@ -560,13 +560,13 @@ const ConfirmDialog = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 14,
+      fontSize: 13,
       fontWeight: 600,
       color: 'var(--ink)'
     }
   }, confirm.title || '请确认'), confirm.message && /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12.5,
+      fontSize: 12,
       color: 'var(--ink-2)',
       lineHeight: 1.6,
       whiteSpace: 'pre-line'
@@ -773,7 +773,7 @@ const OverlayHost = ({
         color: 'var(--ink)',
         border: '1px solid ' + (t.tone === 'danger' ? 'var(--danger-line)' : 'var(--line)'),
         boxShadow: '0 6px 22px rgba(0,0,0,0.10)',
-        fontSize: 12.5,
+        fontSize: 12,
         lineHeight: 1.5,
         animation: 'dfToastIn 160ms ease-out'
       }
@@ -1338,7 +1338,7 @@ const TopBar = ({
       }
     }, parts.length ? parts.join(' · ') : '智能路由', hasBalance ? ` · 余额 $${fmtBalance(apimart.remain_balance)}` : ''), (apimart.message || adobe.message || sub2api.message) && /*#__PURE__*/React.createElement("div", {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         lineHeight: 1.45
       }
@@ -1425,7 +1425,7 @@ const TopBar = ({
       gap: 6,
       color: 'var(--ink-2)',
       textDecoration: 'none',
-      fontSize: 11.5,
+      fontSize: 12,
       flexShrink: 0
     }
   }, /*#__PURE__*/React.createElement(I.sparkles, {
@@ -1554,7 +1554,7 @@ const TemplateCard = function (_ref) {
     }
   }, React.createElement('div', {
     style: {
-      fontSize: 11.5,
+      fontSize: 12,
       fontWeight: 500,
       color: 'var(--ink)',
       flex: 1,
@@ -1565,7 +1565,7 @@ const TemplateCard = function (_ref) {
   }, t.name), t.frames && t.frames.length > 1 && React.createElement('span', {
     className: 'mono',
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--accent-ink)',
       background: 'var(--accent-soft)',
       padding: '1px 5px',
@@ -1575,7 +1575,7 @@ const TemplateCard = function (_ref) {
   }, t.frames.length + '板'), t.pro && React.createElement('span', {
     className: 'mono',
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--accent-ink)',
       background: 'var(--accent-soft)',
       padding: '1px 5px',
@@ -1622,7 +1622,7 @@ var ElapsedTimer = function (props) {
   return React.createElement('span', {
     className: 'mono',
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--accent)',
       fontVariantNumeric: 'tabular-nums'
     }
@@ -1806,7 +1806,7 @@ var TemplatePanel = function (_ref2) {
     }, t.label, t.soon && React.createElement('span', {
       className: 'mono',
       style: {
-        fontSize: 10,
+        fontSize: 11,
         padding: '1px 5px',
         borderRadius: 4,
         background: 'var(--panel-2)',
@@ -1920,7 +1920,7 @@ var TemplatePanel = function (_ref2) {
   }, React.createElement('div', null, '加载失败'), React.createElement('div', {
     style: {
       color: 'var(--ink-3)',
-      fontSize: 10
+      fontSize: 11
     }
   }, String(loadErr))), !loading && !loadErr && React.createElement('div', {
     style: {
@@ -1997,7 +1997,7 @@ var TemplatePanel = function (_ref2) {
       className: 'mono',
       style: {
         color: 'var(--ink-3)',
-        fontSize: 10,
+        fontSize: 11,
         fontWeight: 600,
         lineHeight: 1
       }
@@ -2220,7 +2220,7 @@ var TemplatePanel = function (_ref2) {
       createdAt: job.created_at
     }) : React.createElement('span', {
       style: {
-        fontSize: 10,
+        fontSize: 11,
         color: 'var(--ink-3)'
       }
     }, timeStr)), subtitle && React.createElement('div', {
@@ -2231,7 +2231,7 @@ var TemplatePanel = function (_ref2) {
       }
     }, subtitle), isAiImage && job.prompt && React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         paddingLeft: 14,
         marginTop: 4,
@@ -2887,7 +2887,7 @@ const Avatar = ({
       flexShrink: 0,
       background: 'oklch(0.82 0.07 200)',
       color: 'oklch(0.3 0.05 200)',
-      fontSize: 10,
+      fontSize: 11,
       fontWeight: 600,
       display: 'grid',
       placeItems: 'center',
@@ -2930,7 +2930,7 @@ const Bubble = ({
 }, meta && /*#__PURE__*/React.createElement("div", {
   className: "mono",
   style: {
-    fontSize: 9.5,
+    fontSize: 11,
     color: 'var(--ink-3)',
     textTransform: 'uppercase',
     letterSpacing: '0.06em'
@@ -2942,7 +2942,7 @@ const renderMarkdown = text => {
   if (!text) return '';
   let html = text;
   // 行内代码（优先，避免被后续规则干扰）
-  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--panel-2);padding:1px 5px;border-radius:4px;font-size:11.5px;font-family:monospace;">$1</code>');
+  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--panel-2);padding:1px 5px;border-radius:4px;font-size: 12px;font-family:monospace;">$1</code>');
   // 粗体
   html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
   // 斜体
@@ -2950,9 +2950,9 @@ const renderMarkdown = text => {
   // 链接
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent);">$1</a>');
   // 标题
-  html = html.replace(/^### (.+)$/gm, '<h3 style="font-size:13px;font-weight:600;margin:4px 0 2px;">$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2 style="font-size:14px;font-weight:600;margin:6px 0 2px;">$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1 style="font-size:15px;font-weight:600;margin:6px 0 2px;">$1</h1>');
+  html = html.replace(/^### (.+)$/gm, '<h3 style="font-size: 13px;font-weight:600;margin:4px 0 2px;">$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2 style="font-size: 13px;font-weight:600;margin:6px 0 2px;">$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1 style="font-size: 15px;font-weight:600;margin:6px 0 2px;">$1</h1>');
   // 无序列表
   html = html.replace(/^- (.+)$/gm, '<li style="margin-left:16px;">$1</li>');
   // 有序列表
@@ -2980,7 +2980,7 @@ const TextBubble = ({
   };
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12.5,
+      fontSize: 12,
       lineHeight: 1.55,
       padding: '9px 12px',
       borderRadius: 10,
@@ -3068,7 +3068,7 @@ const CopyableTextBubble = ({
       pointerEvents: hovered || copied ? 'auto' : 'none',
       boxShadow: 'none',
       transition: 'opacity 120ms ease, transform 120ms ease, color 120ms ease',
-      fontSize: 10.5,
+      fontSize: 11,
       lineHeight: 1
     }
   }, copied ? /*#__PURE__*/React.createElement(I.check, {
@@ -3154,7 +3154,7 @@ const InlineRefStrip = ({
   })));
 };
 const actionBtnPrimaryStyle = {
-  fontSize: 11.5,
+  fontSize: 12,
   padding: '6px 12px',
   borderRadius: 6,
   background: 'var(--ink)',
@@ -3166,7 +3166,7 @@ const actionBtnPrimaryStyle = {
   border: '1px solid var(--ink)'
 };
 const actionBtnSecondaryStyle = {
-  fontSize: 11.5,
+  fontSize: 12,
   padding: '6px 12px',
   borderRadius: 6,
   background: 'var(--panel)',
@@ -3258,13 +3258,13 @@ const BriefCard = ({
     }
   }), /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: 11.5,
+      fontSize: 12,
       fontWeight: 600,
       color: 'var(--ink)'
     }
   }, "\u521B\u610F\u65B9\u6848 Brief"), isConfirmed && /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       padding: '1px 6px',
       borderRadius: 99,
       background: 'var(--accent)',
@@ -3274,7 +3274,7 @@ const BriefCard = ({
   }, "\u5DF2\u786E\u8BA4")), score !== null && /*#__PURE__*/React.createElement("span", {
     className: "mono",
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)',
       padding: '2px 6px',
       borderRadius: 4,
@@ -3285,7 +3285,7 @@ const BriefCard = ({
       display: 'grid',
       gridTemplateColumns: 'auto 1fr',
       gap: '6px 12px',
-      fontSize: 11.5
+      fontSize: 12
     }
   }, rows.map(([k, v]) => /*#__PURE__*/React.createElement(React.Fragment, {
     key: k
@@ -3293,7 +3293,7 @@ const BriefCard = ({
     className: "mono",
     style: {
       color: 'var(--ink-3)',
-      fontSize: 10,
+      fontSize: 11,
       textTransform: 'uppercase',
       letterSpacing: '0.05em',
       alignSelf: 'flex-start',
@@ -3360,7 +3360,7 @@ const ThinkingBlock = ({
   }, "\u601D\u8003\u8FC7\u7A0B")), open && /*#__PURE__*/React.createElement("div", {
     style: {
       padding: '10px 12px',
-      fontSize: 11.5,
+      fontSize: 12,
       lineHeight: 1.6,
       color: 'var(--ink-2)',
       whiteSpace: 'pre-wrap',
@@ -3438,7 +3438,7 @@ const PromptTraceBlock = ({
     ref: bodyRef,
     style: {
       padding: '10px 12px',
-      fontSize: 11.5,
+      fontSize: 12,
       lineHeight: 1.6,
       color: 'var(--ink-2)',
       whiteSpace: 'pre-wrap',
@@ -3455,7 +3455,7 @@ const PromptTraceBlock = ({
   }, steps.length > 0 ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       marginBottom: 4
     }
@@ -3477,7 +3477,7 @@ const PromptTraceBlock = ({
   })) : null, rules.length > 0 ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       marginBottom: 4
     }
@@ -3491,14 +3491,14 @@ const PromptTraceBlock = ({
   })) : null, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       marginBottom: 4
     }
   }, "\u6700\u7EC8\u4F20\u9012\u7ED9\u751F\u56FE"), /*#__PURE__*/React.createElement("div", null, finalPrompt)), negativePrompt ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       marginBottom: 4
     }
@@ -3564,7 +3564,7 @@ const LogBox = ({
       key: i,
       style: {
         padding: '3px 12px',
-        fontSize: 11.5,
+        fontSize: 12,
         fontFamily: 'JetBrains Mono, monospace',
         color: isError ? 'var(--warn)' : isOk ? 'var(--ok)' : 'var(--ink-2)',
         display: 'flex',
@@ -3732,7 +3732,7 @@ const ChatSessionBar = ({
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.08em',
-      fontSize: 10
+      fontSize: 11
     }
   }, "\u5BF9\u8BDD"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -3742,7 +3742,7 @@ const ChatSessionBar = ({
     className: "mono",
     style: {
       color: 'var(--ink-3)',
-      fontSize: 10
+      fontSize: 11
     }
   }, turnCount), historyControl);
 };
@@ -4008,7 +4008,7 @@ const ChatReturned = ({
     }, m.status === 'done' ? batchImages && batchOkCount < batchImages.length ? '生图完成（' + batchOkCount + '/' + batchImages.length + ' 成功）' : '生图完成' : m.status === 'failed' ? '生图失败' : m.status === 'skill-planning' ? '正在执行 Skill：$' + m.activeSkill + '…' : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 GPT Image 2.5…' : m.status === 'queued' ? '正在提交到「' + (m.model || 'AI') + '」…' : m.activeSkill && !m.promptTrace && (m.progress || 0) < 20 ? '正在解读需求并整理生图 Prompt…' : (m.progress || 0) < 20 ? '「' + (m.model || 'AI') + '」正在处理…' : (m.progress || 0) < 90 ? '「' + (m.model || 'AI') + '」生成中 ' + (m.progress || 0) + '%' : '处理完成，正在下载…'), m.finalElapsed != null ? React.createElement('span', {
       className: 'mono',
       style: {
-        fontSize: 10,
+        fontSize: 11,
         color: 'var(--ink-3)'
       }
     }, fmtSecs(m.finalElapsed)) : m.startedAt && m.status !== 'done' && m.status !== 'failed' ? React.createElement(ChatTimer, {
@@ -4046,45 +4046,45 @@ const ChatReturned = ({
     }, React.createElement('div', {
       className: 'mono',
       style: {
-        fontSize: 9.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         textTransform: 'uppercase',
         letterSpacing: '0.06em'
       }
     }, '执行标准'), React.createElement('div', {
       style: {
-        fontSize: 11.2,
+        fontSize: 11,
         color: 'var(--ink-2)',
         lineHeight: 1.45
       }
     }, String(promptInstruction).slice(0, 360), String(promptInstruction).length > 360 ? '...' : ''), promptReasoning ? React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         lineHeight: 1.4
       }
     }, '说明：', String(promptReasoning).slice(0, 180), String(promptReasoning).length > 180 ? '...' : '') : null, promptConstraints && Array.isArray(promptConstraints.mustInclude) && promptConstraints.mustInclude.length > 0 ? React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-2)',
         lineHeight: 1.4
       }
     }, '必须包含：', promptConstraints.mustInclude.join('； ')) : null, promptConstraints && Array.isArray(promptConstraints.preserve) && promptConstraints.preserve.length > 0 ? React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-2)',
         lineHeight: 1.4
       }
     }, '保留：', promptConstraints.preserve.join('； ')) : null, promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0 || promptNegative ? React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         lineHeight: 1.4
       }
     }, '避免：', promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0 ? promptConstraints.avoid.join('； ') : String(promptNegative).slice(0, 220) + (String(promptNegative).length > 220 ? '...' : '')) : null, promptParams ? React.createElement('div', {
       className: 'mono',
       style: {
-        fontSize: 10,
+        fontSize: 11,
         color: 'var(--ink-3)'
       }
     }, 'ratio=', promptParams.aspectRatio || promptParams.size || 'auto', ' · size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认') : null), m.status === 'done' && fullImageUrl && !batchImages && function () {
@@ -4204,7 +4204,7 @@ const ChatReturned = ({
           href: imFull,
           download: true,
           style: {
-            fontSize: 10,
+            fontSize: 11,
             padding: '3px 8px',
             borderRadius: 5,
             background: 'var(--ink)',
@@ -4226,7 +4226,7 @@ const ChatReturned = ({
             }));
           },
           style: {
-            fontSize: 10,
+            fontSize: 11,
             padding: '3px 8px',
             borderRadius: 5,
             background: 'var(--panel)',
@@ -4250,7 +4250,7 @@ const ChatReturned = ({
             }));
           },
           style: {
-            fontSize: 10,
+            fontSize: 11,
             padding: '3px 8px',
             borderRadius: 5,
             background: 'var(--panel)',
@@ -4281,7 +4281,7 @@ const ChatReturned = ({
           }
         }, React.createElement('div', {
           style: {
-            fontSize: 10.5,
+            fontSize: 11,
             color: 'var(--warn)',
             lineHeight: 1.4,
             wordBreak: 'break-word'
@@ -4313,7 +4313,7 @@ const ChatReturned = ({
       }), React.createElement('div', {
         className: 'mono',
         style: {
-          fontSize: 10,
+          fontSize: 11,
           color: 'var(--ink-3)'
         }
       }, (im.progress || 0) + '%'));
@@ -4395,14 +4395,14 @@ const ChatReturned = ({
       }
     }, m.vlm.userFacingSummary), m.vlm.problemElements && m.vlm.problemElements.length > 0 && React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--danger)',
         marginTop: 4,
         lineHeight: 1.5
       }
     }, '问题: ' + m.vlm.problemElements.join('; ')), m.vlm.nextStepSuggestion && React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ok)',
         marginTop: 4,
         lineHeight: 1.5
@@ -4510,13 +4510,13 @@ const ChatReturned = ({
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
-        fontSize: 11.5,
+        fontSize: 12,
         fontWeight: 600
       }
     }, m.data.products.length, " \u4E2A\u4EA7\u54C1"), /*#__PURE__*/React.createElement("div", {
       className: "mono",
       style: {
-        fontSize: 9.5,
+        fontSize: 11,
         color: 'var(--ink-3)'
       }
     }, "CSV \xB7 ", m.data.suggested_template_type))), m.fields && m.fields.length > 0 && /*#__PURE__*/React.createElement("div", {
@@ -4539,12 +4539,12 @@ const ChatReturned = ({
       }, f === 'image' ? val ? /*#__PURE__*/React.createElement("span", {
         style: {
           color: 'var(--ok)',
-          fontSize: 10
+          fontSize: 11
         }
       }, "\u5DF2\u5339\u914D") : /*#__PURE__*/React.createElement("span", {
         style: {
           color: 'var(--ink-3)',
-          fontSize: 10
+          fontSize: 11
         }
       }, "\u672A\u5339\u914D") : /*#__PURE__*/React.createElement("span", {
         style: {
@@ -4557,7 +4557,7 @@ const ChatReturned = ({
     }, /*#__PURE__*/React.createElement("span", {
       style: {
         color: p.image_path ? 'var(--ok)' : 'var(--warn)',
-        fontSize: 10
+        fontSize: 11
       }
     }, p.image_path ? '✓' : '—'))))), matchedCount > 0 && !isGenerating && /*#__PURE__*/React.createElement("div", {
       style: {
@@ -4605,13 +4605,13 @@ const ChatReturned = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12.5,
+      fontSize: 12,
       color: 'var(--ink)',
       fontWeight: 600
     }
   }, m.modeLabel || '智能铺货'), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       marginTop: 2
     }
@@ -4653,7 +4653,7 @@ const ChatReturned = ({
         borderRadius: 8,
         background: 'var(--panel)',
         border: '1px solid var(--warn)',
-        fontSize: 11.5,
+        fontSize: 12,
         color: 'var(--warn)',
         lineHeight: 1.5
       }
@@ -4742,7 +4742,7 @@ const ChatReturned = ({
         }
       }, React.createElement('div', {
         style: {
-          fontSize: 11.5,
+          fontSize: 12,
           fontWeight: 600,
           color: 'var(--ink)',
           whiteSpace: 'nowrap',
@@ -4752,7 +4752,7 @@ const ChatReturned = ({
       }, title), React.createElement('div', {
         className: 'mono',
         style: {
-          fontSize: 9.5,
+          fontSize: 11,
           color: 'var(--ink-3)',
           lineHeight: 1.45
         }
@@ -4768,7 +4768,7 @@ const ChatReturned = ({
         style: {
           margin: 0,
           padding: '10px 12px',
-          fontSize: 10,
+          fontSize: 11,
           color: 'var(--ink-2)',
           overflow: 'auto',
           maxHeight: 180,
@@ -4917,7 +4917,7 @@ const ChatReturned = ({
     className: "mono",
     style: {
       color: 'var(--ink-3)',
-      fontSize: 10,
+      fontSize: 11,
       marginLeft: 'auto'
     }
   }, "\u5DF2\u4E0A\u4F20")) : m.type === 'proxy-download-choice' ? /*#__PURE__*/React.createElement("div", {
@@ -4998,7 +4998,7 @@ const ChatReturned = ({
   }, m.filename || '下载文件'), /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)'
     }
   }, m.format ? m.format + ' · ' : '', m.sizeText || '')), m.downloadUrl && /*#__PURE__*/React.createElement("div", {
@@ -5095,7 +5095,7 @@ const ChatReturned = ({
   }, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.06em'
@@ -5117,7 +5117,7 @@ const ChatReturned = ({
   }, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.06em'
@@ -5132,7 +5132,7 @@ const ChatReturned = ({
     return /*#__PURE__*/React.createElement("div", {
       key: idx,
       style: {
-        fontSize: 11.5,
+        fontSize: 12,
         color: 'var(--ink-2)',
         display: 'flex',
         gap: 8,
@@ -5168,7 +5168,7 @@ const ChatReturned = ({
       gap: 5,
       background: 'var(--ink)',
       color: 'white',
-      fontSize: 11.5,
+      fontSize: 12,
       boxShadow: '0 4px 14px rgba(20,22,40,0.18)'
     }
   }, "\u2193 \u6709\u65B0\u6D88\u606F"));
@@ -6433,7 +6433,7 @@ const Composer = ({
       color: active ? 'var(--panel)' : 'var(--ink-2)',
       borderRadius: 999,
       padding: '6px 8px',
-      fontSize: 10.5,
+      fontSize: 11,
       fontWeight: 600,
       display: 'inline-flex',
       alignItems: 'center',
@@ -6491,7 +6491,7 @@ const Composer = ({
     return React.createElement('div', {
       className: 'mono',
       style: {
-        fontSize: 9.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         textTransform: 'uppercase',
         letterSpacing: '0.08em',
@@ -6512,7 +6512,7 @@ const Composer = ({
         }
       }, React.createElement('div', {
         style: {
-          fontSize: 16,
+          fontSize: 15,
           fontWeight: 700,
           letterSpacing: '-0.01em',
           color: 'var(--ink)'
@@ -6520,7 +6520,7 @@ const Composer = ({
       }, '选择功能'), React.createElement('div', {
         className: 'mono',
         style: {
-          fontSize: 10,
+          fontSize: 11,
           color: 'var(--ink-3)'
         }
       }, 'live')), React.createElement('div', {
@@ -6637,7 +6637,7 @@ const Composer = ({
       };
       return protoPanelShell(React.createElement(React.Fragment, null, !isImageParams && React.createElement('div', {
         style: {
-          fontSize: 16,
+          fontSize: 15,
           fontWeight: 700,
           letterSpacing: '-0.01em',
           color: 'var(--ink)'
@@ -6671,7 +6671,7 @@ const Composer = ({
             color: active ? 'var(--accent-ink)' : 'var(--ink-2)',
             boxShadow: 'none',
             cursor: 'pointer',
-            fontSize: 11.5,
+            fontSize: 12,
             fontWeight: active ? 650 : 500,
             letterSpacing: '-0.01em',
             minWidth: 0
@@ -6859,7 +6859,7 @@ const Composer = ({
         style: {
           flex: 1,
           textAlign: 'center',
-          fontSize: 12.5,
+          fontSize: 12,
           fontWeight: 650,
           color: 'var(--ink)',
           letterSpacing: '-0.01em'
@@ -6940,7 +6940,7 @@ const Composer = ({
           }
         }, item.label), React.createElement('span', {
           style: {
-            fontSize: 10.5,
+            fontSize: 11,
             lineHeight: 1.2,
             color: active ? 'rgba(255,255,255,0.68)' : 'var(--ink-3)',
             fontWeight: 500
@@ -7081,7 +7081,7 @@ const Composer = ({
             borderRadius: 8,
             border: '1px solid var(--line)',
             background: 'var(--panel-2)',
-            fontSize: 12.5,
+            fontSize: 12,
             color: 'var(--ink)',
             outline: 'none',
             boxSizing: 'border-box',
@@ -7152,13 +7152,13 @@ const Composer = ({
         }
       }), React.createElement('span', {
         style: {
-          fontSize: 13.5,
+          fontSize: 13,
           fontWeight: 700,
           color: 'var(--ink)'
         }
       }, '常用语'), React.createElement('span', {
         style: {
-          fontSize: 10.5,
+          fontSize: 11,
           fontWeight: 600,
           padding: '1px 6px',
           borderRadius: 999,
@@ -7208,7 +7208,7 @@ const Composer = ({
           borderRadius: 8,
           border: '1px solid var(--line)',
           background: 'var(--panel-2)',
-          fontSize: 11.5,
+          fontSize: 12,
           color: 'var(--ink)',
           outline: 'none',
           boxSizing: 'border-box'
@@ -7629,7 +7629,7 @@ const Composer = ({
       borderRadius: 3,
       background: 'var(--danger)',
       color: 'white',
-      fontSize: 9,
+      fontSize: 11,
       fontWeight: 700,
       lineHeight: 1,
       pointerEvents: 'none'
@@ -7646,7 +7646,7 @@ const Composer = ({
       borderRadius: 4,
       background: 'rgba(20, 22, 40, 0.72)',
       color: 'white',
-      fontSize: 9,
+      fontSize: 11,
       fontWeight: 600,
       lineHeight: 1,
       cursor: 'pointer',
@@ -7677,7 +7677,7 @@ const Composer = ({
     stroke: 2.4
   })))), /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)'
     }
   }, refImages.length, "/", MAX_REFERENCE_IMAGES)), files.length > 0 && /*#__PURE__*/React.createElement("div", {
@@ -7715,7 +7715,7 @@ const Composer = ({
       }
     }, item.name), /*#__PURE__*/React.createElement("span", {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         whiteSpace: 'nowrap'
       }
@@ -10204,7 +10204,7 @@ const Chat = ({
       border: '1px solid ' + (historyOpen ? 'var(--line)' : 'transparent'),
       color: historyOpen ? 'var(--ink)' : 'var(--ink-3)',
       cursor: 'pointer',
-      fontSize: 10.5
+      fontSize: 11
     }
   }, /*#__PURE__*/React.createElement(I.file, {
     size: 11
@@ -10227,7 +10227,7 @@ const Chat = ({
     className: "mono",
     style: {
       padding: '6px 8px 7px',
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.06em'
@@ -10298,7 +10298,7 @@ const Chat = ({
         background: activeId === session.id ? 'var(--panel-2)' : 'transparent',
         border: '1px solid ' + (activeId === session.id ? 'var(--line-2)' : 'transparent'),
         color: activeId === session.id ? 'var(--ink)' : 'var(--ink-2)',
-        fontSize: 11.5,
+        fontSize: 12,
         cursor: 'pointer'
       },
       title: title
@@ -10311,7 +10311,7 @@ const Chat = ({
     }, title), metaLine && /*#__PURE__*/React.createElement("div", {
       className: "mono",
       style: {
-        fontSize: 9.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         marginTop: 3
       }
@@ -10365,7 +10365,7 @@ const Chat = ({
     }
   }, agentEnabled ? 'Agent助手' : 'Ai助手'), agentEnabled && /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: 10.5,
+      fontSize: 11,
       color: 'var(--accent-ink)',
       background: 'var(--accent-soft)',
       border: '1px solid transparent',
@@ -10376,7 +10376,7 @@ const Chat = ({
   }, "Agent"), /*#__PURE__*/React.createElement("span", {
     className: "mono",
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)'
     }
   }, isLoading ? '处理中…' : messages.length === 0 ? '就绪' : messages.length + ' 条记录')), /*#__PURE__*/React.createElement("div", {
@@ -10471,7 +10471,7 @@ const Chat = ({
     size: 14
   })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 14,
+      fontSize: 13,
       fontWeight: 700,
       color: 'var(--ink)'
     }
@@ -10700,9 +10700,9 @@ const ADMIN_CSS = `
   }
   .df-admin-brand { padding: 4px 10px 22px; }
   .df-admin-brandmark { width: 30px; height: 30px; margin-bottom: 12px; }
-  .df-admin-brandname { font-size: 16px; font-weight: 700; letter-spacing: -.025em; }
-  .df-admin-brandmeta { margin-top: 3px; font-size: 10px; color: #8e938a; letter-spacing: .14em; text-transform: uppercase; }
-  .df-admin-navlabel { padding: 0 10px 7px; color: #777c73; font-size: 9px; letter-spacing: .16em; text-transform: uppercase; }
+  .df-admin-brandname { font-size: 15px; font-weight: 700; letter-spacing: -.025em; }
+  .df-admin-brandmeta { margin-top: 3px; font-size: 11px; color: #8e938a; letter-spacing: .14em; text-transform: uppercase; }
+  .df-admin-navlabel { padding: 0 10px 7px; color: #777c73; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; }
   .df-admin-nav { display: flex; flex-direction: column; gap: 3px; }
   .df-admin-navbutton {
     width: 100%; height: 38px; display: flex; align-items: center; gap: 10px;
@@ -10722,11 +10722,11 @@ const ADMIN_CSS = `
     width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
     color: #151714; background: #d7ff60; font-size: 11px; font-weight: 700;
   }
-  .df-admin-username { min-width: 0; font-size: 11.5px; color: #f5f5f2; overflow: hidden; text-overflow: ellipsis; }
-  .df-admin-role { margin-top: 1px; color: #7f847b; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+  .df-admin-username { min-width: 0; font-size: 12px; color: #f5f5f2; overflow: hidden; text-overflow: ellipsis; }
+  .df-admin-role { margin-top: 1px; color: #7f847b; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
   .df-admin-back {
     width: 100%; height: 32px; border: 1px solid #343733; border-radius: 7px;
-    color: #aeb3aa; background: transparent; cursor: pointer; font-size: 10.5px;
+    color: #aeb3aa; background: transparent; cursor: pointer; font-size: 11px;
   }
   .df-admin-back:hover { color: #fff; border-color: #555a52; }
   .df-admin-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -10736,7 +10736,7 @@ const ADMIN_CSS = `
     backdrop-filter: blur(12px);
   }
   .df-admin-title { font-size: 18px; font-weight: 680; letter-spacing: -.03em; }
-  .df-admin-subtitle { margin-top: 2px; color: var(--admin-muted); font-size: 10.5px; }
+  .df-admin-subtitle { margin-top: 2px; color: var(--admin-muted); font-size: 11px; }
   .df-admin-headtools { margin-left: auto; display: flex; align-items: center; gap: 8px; }
   .df-admin-control {
     height: 32px; padding: 0 10px; border: 1px solid var(--admin-line);
@@ -10744,13 +10744,13 @@ const ADMIN_CSS = `
   }
   button.df-admin-control { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
   button.df-admin-control:hover { border-color: var(--admin-line-strong); background: #fafaf8; }
-  .df-admin-updated { color: var(--admin-faint); font-size: 9.5px; }
+  .df-admin-updated { color: var(--admin-faint); font-size: 11px; }
   .df-admin-scroll { flex: 1; min-height: 0; overflow: auto; padding: 22px 26px 42px; }
   .df-admin-content { width: min(1460px, 100%); margin: 0 auto; }
   .df-admin-alert {
     display: flex; align-items: center; gap: 10px; min-height: 42px; margin-bottom: 14px;
     padding: 8px 12px; border-radius: 8px; color: #814515;
-    background: var(--admin-amber-soft); border: 1px solid #f0d7b4; font-size: 11.5px;
+    background: var(--admin-amber-soft); border: 1px solid #f0d7b4; font-size: 12px;
   }
   .df-admin-alertdot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #dc8529; }
   .df-admin-alertclose {
@@ -10763,10 +10763,10 @@ const ADMIN_CSS = `
     min-height: 126px; padding: 17px 18px; border: 1px solid var(--admin-line);
     border-radius: 10px; background: var(--admin-surface);
   }
-  .df-admin-metrichead { display: flex; align-items: center; justify-content: space-between; color: var(--admin-muted); font-size: 10.5px; }
+  .df-admin-metrichead { display: flex; align-items: center; justify-content: space-between; color: var(--admin-muted); font-size: 11px; }
   .df-admin-metricdot { width: 7px; height: 7px; border-radius: 50%; background: var(--metric-color, #9b9f98); }
-  .df-admin-metricvalue { margin-top: 18px; font-size: 33px; font-weight: 680; line-height: 1; letter-spacing: -.055em; font-variant-numeric: tabular-nums; }
-  .df-admin-metricfoot { margin-top: 10px; color: var(--admin-faint); font-size: 9.5px; }
+  .df-admin-metricvalue { margin-top: 18px; font-size: 24px; font-weight: 680; line-height: 1; letter-spacing: -.055em; font-variant-numeric: tabular-nums; }
+  .df-admin-metricfoot { margin-top: 10px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-metricfoot strong { color: var(--admin-muted); font-weight: 550; }
   .df-admin-health {
     margin-top: 10px; padding: 16px 18px 17px; border: 1px solid var(--admin-line);
@@ -10782,7 +10782,7 @@ const ADMIN_CSS = `
   .df-admin-healthmark.is-degraded { background: var(--admin-red); box-shadow: 0 0 0 3px var(--admin-red-soft); }
   .df-admin-healthmark.is-unknown { background: #b9bdb6; box-shadow: 0 0 0 3px #f0f1ed; }
   .df-admin-healthname { font-size: 12px; font-weight: 650; }
-  .df-admin-healthmeta { color: var(--admin-faint); font-size: 9.5px; }
+  .df-admin-healthmeta { color: var(--admin-faint); font-size: 11px; }
   .df-admin-healthrate { margin-left: auto; color: var(--admin-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
   .df-admin-healthrail {
     display: grid; grid-template-columns: repeat(72, minmax(2px, 1fr)); gap: 3px;
@@ -10792,7 +10792,7 @@ const ADMIN_CSS = `
   .df-admin-healthbar.is-healthy { background: #55bc91; }
   .df-admin-healthbar.is-warning { background: #e7ad42; }
   .df-admin-healthbar.is-degraded { background: #df6b59; }
-  .df-admin-healthfoot { display: flex; align-items: center; gap: 12px; margin-top: 9px; color: var(--admin-faint); font-size: 8.5px; }
+  .df-admin-healthfoot { display: flex; align-items: center; gap: 12px; margin-top: 9px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-healthfoot span { display: inline-flex; align-items: center; gap: 4px; }
   .df-admin-healthfoot i { width: 5px; height: 5px; border-radius: 50%; background: #dfe2dc; }
   .df-admin-healthfoot .is-healthy i { background: #55bc91; }
@@ -10805,8 +10805,8 @@ const ADMIN_CSS = `
   }
   .df-admin-cardhead { min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--admin-line); }
   .df-admin-cardtitle { font-size: 12px; font-weight: 630; }
-  .df-admin-cardmeta { color: var(--admin-faint); font-size: 9.5px; }
-  .df-admin-cardaction { margin-left: auto; color: var(--admin-muted); border: 0; background: none; cursor: pointer; font-size: 10px; }
+  .df-admin-cardmeta { color: var(--admin-faint); font-size: 11px; }
+  .df-admin-cardaction { margin-left: auto; color: var(--admin-muted); border: 0; background: none; cursor: pointer; font-size: 11px; }
   .df-admin-chart { height: 218px; display: flex; align-items: stretch; gap: 8px; padding: 22px 18px 12px; }
   .df-admin-baritem { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; gap: 6px; }
   .df-admin-bartrack { height: 158px; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; border-radius: 4px 4px 2px 2px; background: #f0f1ed; }
@@ -10815,7 +10815,7 @@ const ADMIN_CSS = `
   .df-admin-bar.is-agent { background: #5f6fe8; }
   .df-admin-bar.is-compose { background: #55bc91; }
   .df-admin-bar.is-special { background: #e7ad42; }
-  .df-admin-barlabel { color: var(--admin-faint); text-align: center; font-size: 8.5px; white-space: nowrap; }
+  .df-admin-barlabel { color: var(--admin-faint); text-align: center; font-size: 11px; white-space: nowrap; }
   .df-admin-legend { display: inline-flex; align-items: center; gap: 9px; }
   .df-admin-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   .df-admin-legend i { width: 5px; height: 5px; border-radius: 50%; background: #2563eb; }
@@ -10841,16 +10841,16 @@ const ADMIN_CSS = `
   .df-admin-scroll-y::-webkit-scrollbar-thumb:hover { background: #b8bcb2; }
   .df-admin-rankrow { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 45px; border-bottom: 1px solid #eff0ec; }
   .df-admin-rankrow:last-child { border-bottom: 0; }
-  .df-admin-rankno { color: var(--admin-faint); font: 9.5px "JetBrains Mono", monospace; }
-  .df-admin-rankname { overflow: hidden; font-size: 10.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-  .df-admin-rankmeta { margin-top: 2px; color: var(--admin-faint); font-size: 8.5px; }
+  .df-admin-rankno { color: var(--admin-faint); font: 11px "JetBrains Mono", monospace; }
+  .df-admin-rankname { overflow: hidden; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .df-admin-rankmeta { margin-top: 2px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-rankvalue { font-size: 15px; font-weight: 680; font-variant-numeric: tabular-nums; }
-  .df-admin-rankunit { margin-left: 3px; color: var(--admin-faint); font-size: 8px; font-weight: 400; }
+  .df-admin-rankunit { margin-left: 3px; color: var(--admin-faint); font-size: 11px; font-weight: 400; }
   .df-admin-tablewrap { overflow: auto; }
-  .df-admin-table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+  .df-admin-table { width: 100%; border-collapse: collapse; font-size: 11px; }
   .df-admin-table th {
     height: 38px; padding: 0 12px; color: var(--admin-muted); background: #fafaf8;
-    border-bottom: 1px solid var(--admin-line); text-align: left; font-size: 9.5px; font-weight: 550; white-space: nowrap;
+    border-bottom: 1px solid var(--admin-line); text-align: left; font-size: 11px; font-weight: 550; white-space: nowrap;
   }
   .df-admin-table td { height: 45px; padding: 7px 12px; border-bottom: 1px solid #eff0ec; vertical-align: middle; }
   .df-admin-table tbody tr:last-child td { border-bottom: 0; }
@@ -10858,7 +10858,7 @@ const ADMIN_CSS = `
   .df-admin-table tbody tr.is-clickable:hover { background: #fafaf8; }
   .df-admin-status {
     display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 7px;
-    border-radius: 99px; color: #666c63; background: #f1f2ef; white-space: nowrap; font-size: 9.5px;
+    border-radius: 99px; color: #666c63; background: #f1f2ef; white-space: nowrap; font-size: 11px;
   }
   .df-admin-status::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #9ba097; }
   .df-admin-status.is-success { color: #157a4e; background: var(--admin-green-soft); }
@@ -10868,7 +10868,7 @@ const ADMIN_CSS = `
   .df-admin-status.is-active { color: #976018; background: var(--admin-amber-soft); }
   .df-admin-status.is-active::before { background: var(--admin-amber); animation: adminPulse 1.4s infinite; }
   @keyframes adminPulse { 50% { opacity: .35; } }
-  .df-admin-mono { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; font-size: 9.5px; }
+  .df-admin-mono { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; font-size: 11px; }
   .df-admin-muted { color: var(--admin-muted); }
   .df-admin-faint { color: var(--admin-faint); }
   .df-admin-ellipsis { max-width: 330px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -10877,19 +10877,19 @@ const ADMIN_CSS = `
   .df-admin-search { position: relative; min-width: 220px; flex: 1; max-width: 400px; }
   .df-admin-search svg { position: absolute; left: 10px; top: 9px; color: var(--admin-faint); pointer-events: none; }
   .df-admin-search input { width: 100%; padding-left: 31px; }
-  .df-admin-pageinfo { margin-left: auto; color: var(--admin-faint); font-size: 9.5px; }
+  .df-admin-pageinfo { margin-left: auto; color: var(--admin-faint); font-size: 11px; }
   .df-admin-pagebutton { width: 32px; padding: 0; justify-content: center; }
   .df-admin-servicegrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
   .df-admin-service { min-height: 146px; padding: 16px; border: 1px solid var(--admin-line); border-radius: 10px; background: #fff; }
   .df-admin-servicetop { display: flex; align-items: flex-start; gap: 10px; }
   .df-admin-serviceicon { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; color: #555b53; background: #f1f2ee; }
-  .df-admin-servicename { font-size: 11.5px; font-weight: 620; }
-  .df-admin-servicedesc { margin-top: 3px; color: var(--admin-faint); font-size: 9px; }
+  .df-admin-servicename { font-size: 12px; font-weight: 620; }
+  .df-admin-servicedesc { margin-top: 3px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-servicestate { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: #a7aba4; }
   .df-admin-servicestate.is-up { background: var(--admin-green); box-shadow: 0 0 0 4px var(--admin-green-soft); }
   .df-admin-servicestate.is-down { background: var(--admin-red); box-shadow: 0 0 0 4px var(--admin-red-soft); }
   .df-admin-servicestate.is-warn { background: var(--admin-amber); box-shadow: 0 0 0 4px var(--admin-amber-soft); }
-  .df-admin-servicebody { margin-top: 18px; color: var(--admin-muted); font-size: 9.5px; line-height: 1.65; word-break: break-all; }
+  .df-admin-servicebody { margin-top: 18px; color: var(--admin-muted); font-size: 11px; line-height: 1.65; word-break: break-all; }
   .df-admin-probelist { max-height: 410px; overflow: auto; padding: 0 16px; }
   .df-admin-probe {
     min-height: 54px; display: grid; grid-template-columns: 10px minmax(120px, 1fr) 110px 82px 38px;
@@ -10900,8 +10900,8 @@ const ADMIN_CSS = `
   .df-admin-probedot.is-done { background: var(--admin-green); box-shadow: 0 0 0 3px var(--admin-green-soft); }
   .df-admin-probedot.is-failed { background: var(--admin-red); box-shadow: 0 0 0 3px var(--admin-red-soft); }
   .df-admin-probedot.is-running { background: var(--admin-amber); box-shadow: 0 0 0 3px var(--admin-amber-soft); }
-  .df-admin-probetime { font-size: 10.5px; font-weight: 610; font-variant-numeric: tabular-nums; }
-  .df-admin-probemeta { color: var(--admin-faint); font-size: 9px; font-variant-numeric: tabular-nums; }
+  .df-admin-probetime { font-size: 11px; font-weight: 610; font-variant-numeric: tabular-nums; }
+  .df-admin-probemeta { color: var(--admin-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
   .df-admin-probethumb {
     width: 36px; height: 36px; display: block; overflow: hidden;
     border: 1px solid var(--admin-line); border-radius: 6px; background: #eff0ec;
@@ -10909,20 +10909,20 @@ const ADMIN_CSS = `
   .df-admin-probethumb img { width: 100%; height: 100%; display: block; object-fit: cover; }
   .df-admin-probenoimage { width: 36px; height: 36px; border-radius: 6px; background: #f1f2ee; }
   .df-admin-probeerror {
-    margin-top: 3px; overflow: hidden; color: #a73535; font-size: 8.5px;
+    margin-top: 3px; overflow: hidden; color: #a73535; font-size: 11px;
     text-overflow: ellipsis; white-space: nowrap;
   }
   .df-admin-form {
     display: grid; grid-template-columns: 1fr 1fr 1fr 110px auto auto; gap: 8px; align-items: center;
     padding: 14px; border-bottom: 1px solid var(--admin-line); background: #fafaf8;
   }
-  .df-admin-useridentity strong { display: block; font-size: 10.5px; }
-  .df-admin-useridentity span { display: block; margin-top: 3px; color: var(--admin-faint); font: 8.5px "JetBrains Mono", monospace; }
+  .df-admin-useridentity strong { display: block; font-size: 11px; }
+  .df-admin-useridentity span { display: block; margin-top: 3px; color: var(--admin-faint); font: 11px "JetBrains Mono", monospace; }
   .df-admin-primary { color: #fff; background: #1c1e1b; border-color: #1c1e1b; cursor: pointer; }
   .df-admin-primary:hover { color: #fff; background: #2a2d29; }
-  .df-admin-linkbutton { border: 0; background: none; color: #4f5ee8; cursor: pointer; font-size: 9.5px; }
+  .df-admin-linkbutton { border: 0; background: none; color: #4f5ee8; cursor: pointer; font-size: 11px; }
   .df-admin-dangerbutton { color: var(--admin-red); }
-  .df-admin-error { padding: 10px 12px; margin-bottom: 10px; border-radius: 7px; color: #a73535; background: var(--admin-red-soft); font-size: 10.5px; }
+  .df-admin-error { padding: 10px 12px; margin-bottom: 10px; border-radius: 7px; color: #a73535; background: var(--admin-red-soft); font-size: 11px; }
   .df-admin-drawerbackdrop { position: fixed; inset: 0; z-index: 90; background: rgba(18,20,17,.16); }
   .df-admin-drawer {
     position: fixed; z-index: 91; top: 0; right: 0; bottom: 0; width: min(620px, 94vw);
@@ -10931,24 +10931,24 @@ const ADMIN_CSS = `
   .df-admin-drawerhead { display: flex; align-items: center; gap: 10px; padding-bottom: 17px; border-bottom: 1px solid var(--admin-line); }
   .df-admin-drawertitle { font-size: 15px; font-weight: 680; }
   .df-admin-drawerclose { margin-left: auto; width: 30px; padding: 0; justify-content: center; }
-  .df-admin-detailgrid { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 17px 0; font-size: 10.5px; border-bottom: 1px solid var(--admin-line); }
+  .df-admin-detailgrid { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 17px 0; font-size: 11px; border-bottom: 1px solid var(--admin-line); }
   .df-admin-detailgrid dt { color: var(--admin-faint); }
   .df-admin-detailgrid dd { margin: 0; color: var(--admin-ink); word-break: break-word; }
   .df-admin-detailsection { padding: 17px 0; border-bottom: 1px solid var(--admin-line); }
   .df-admin-detailsection:last-child { border-bottom: 0; }
-  .df-admin-detailtitle { margin-bottom: 10px; color: var(--admin-muted); font-size: 9px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; }
+  .df-admin-detailtitle { margin-bottom: 10px; color: var(--admin-muted); font-size: 11px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; }
   .df-admin-detailcards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
   .df-admin-detailcard { min-width: 0; padding: 10px; border: 1px solid var(--admin-line); border-radius: 8px; background: #fafaf8; }
-  .df-admin-detailcard span { display: block; color: var(--admin-faint); font-size: 8.5px; }
-  .df-admin-detailcard strong { display: block; margin-top: 5px; overflow: hidden; color: var(--admin-ink); font-size: 10.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .df-admin-detailcard span { display: block; color: var(--admin-faint); font-size: 11px; }
+  .df-admin-detailcard strong { display: block; margin-top: 5px; overflow: hidden; color: var(--admin-ink); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
   .df-admin-prompt { margin-top: 8px; padding: 11px 12px; border: 1px solid var(--admin-line); border-radius: 8px; background: #fafaf8; }
   .df-admin-prompt:first-of-type { margin-top: 0; }
-  .df-admin-promptlabel { margin-bottom: 6px; color: var(--admin-faint); font-size: 8.5px; }
+  .df-admin-promptlabel { margin-bottom: 6px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-prompttext { color: var(--admin-ink); font-size: 11px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
   .df-admin-resultimage { display: block; width: 100%; max-height: 320px; object-fit: contain; border: 1px solid var(--admin-line); border-radius: 8px; background: #f5f5f2; }
   .df-admin-detailactions { display: flex; gap: 7px; margin-top: 9px; }
-  .df-admin-raw summary { margin-top: 12px; color: var(--admin-muted); cursor: pointer; font-size: 10px; }
-  .df-admin-code { margin-top: 14px; padding: 12px; border-radius: 8px; color: #d8ddd4; background: #20231f; font: 9.5px/1.6 "JetBrains Mono", monospace; white-space: pre-wrap; word-break: break-all; }
+  .df-admin-raw summary { margin-top: 12px; color: var(--admin-muted); cursor: pointer; font-size: 11px; }
+  .df-admin-code { margin-top: 14px; padding: 12px; border-radius: 8px; color: #d8ddd4; background: #20231f; font: 11px/1.6 "JetBrains Mono", monospace; white-space: pre-wrap; word-break: break-all; }
   @media (max-width: 1050px) {
     .df-admin { grid-template-columns: 74px minmax(0, 1fr); }
     .df-admin-brandname, .df-admin-brandmeta, .df-admin-navlabel, .df-admin-navbutton span, .df-admin-userline > div:last-child, .df-admin-back span { display: none; }
@@ -10988,7 +10988,7 @@ const ADMIN_CSS = `
   }
   @media (max-width: 520px) {
     .df-admin-metrics { grid-template-columns: 1fr; }
-    .df-admin-title { font-size: 16px; }
+    .df-admin-title { font-size: 15px; }
     .df-admin-subtitle { display: none; }
     .df-admin-headtools { margin-left: 0; }
     .df-admin-healthtop {
@@ -11430,7 +11430,7 @@ function AdminUserManagement({
       display: 'flex',
       alignItems: 'center',
       gap: '5px',
-      fontSize: '11px',
+      fontSize: 11,
       color: 'var(--admin-muted)',
       cursor: 'pointer'
     }
@@ -11489,7 +11489,7 @@ function AdminUserManagement({
       display: 'flex',
       alignItems: 'center',
       gap: '5px',
-      fontSize: '11px',
+      fontSize: 11,
       color: 'var(--admin-muted)',
       cursor: 'pointer',
       whiteSpace: 'nowrap'
@@ -11523,7 +11523,7 @@ function AdminUserManagement({
         background: '#fef3c7',
         padding: '1px 5px',
         borderRadius: '3px',
-        fontSize: '10px',
+        fontSize: 11,
         fontWeight: 600
       }
     }, "\u6D4B\u8BD5") : null), /*#__PURE__*/React.createElement("td", null, item.total_jobs || 0), /*#__PURE__*/React.createElement("td", null, item.total_ai_images || 0), /*#__PURE__*/React.createElement("td", {
@@ -12310,7 +12310,7 @@ function AdminPage({
       style: {
         padding: 16,
         color: 'var(--admin-muted)',
-        fontSize: 10.5,
+        fontSize: 11,
         lineHeight: 1.8
       }
     }, "\u57FA\u7840\u670D\u52A1\u4F1A\u5728\u5237\u65B0\u65F6\u6267\u884C\u5B9E\u65F6\u63A2\u6D4B\u3002\u8BA2\u9605\u751F\u56FE\u7EBF\u8DEF\u5728\u6BCF\u65E5 09:00 \u81F3 21:00 \u6BCF\u5C0F\u65F6\u63D0\u4EA4\u4E00\u6B21\u771F\u5B9E\u751F\u56FE\u4EFB\u52A1\uFF0C \u53EA\u6709\u6210\u529F\u751F\u6210\u5E76\u53D6\u56DE\u56FE\u7247\u624D\u4F1A\u6807\u8BB0\u4E3A\u53EF\u7528\uFF1B\u63A2\u6D4B\u7ED3\u679C\u4E0D\u4F1A\u8BA1\u5165\u7528\u6237\u4EFB\u52A1\u4E0E\u4E1A\u52A1\u7EDF\u8BA1\u3002")));
@@ -12815,7 +12815,7 @@ const InspirationPanel = ({
         borderBottom: '2px solid ' + (active ? 'var(--ink)' : 'transparent'),
         background: 'transparent',
         color: active ? 'var(--ink)' : 'var(--ink-2)',
-        fontSize: 11.5,
+        fontSize: 12,
         fontWeight: active ? 600 : 400,
         cursor: 'pointer',
         whiteSpace: 'nowrap',
@@ -12847,7 +12847,7 @@ const InspirationPanel = ({
       border: 'none',
       outline: 'none',
       background: 'transparent',
-      fontSize: 11.5,
+      fontSize: 12,
       color: 'var(--ink)'
     },
     onChange: function (e) {
@@ -13212,7 +13212,7 @@ const InspirationDetail = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.06em',
@@ -13237,7 +13237,7 @@ const InspirationDetail = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.06em',
@@ -13270,7 +13270,7 @@ const InspirationDetail = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.06em'
@@ -13286,7 +13286,7 @@ const InspirationDetail = ({
       background: 'var(--panel)',
       color: 'var(--ink-2)',
       border: '1px solid var(--line)',
-      fontSize: 10.5,
+      fontSize: 11,
       display: 'inline-flex',
       alignItems: 'center',
       gap: 4,
@@ -13331,7 +13331,7 @@ const InspirationDetail = ({
       key: i,
       className: 'mono',
       style: {
-        fontSize: 10,
+        fontSize: 11,
         padding: '3px 8px',
         borderRadius: 4,
         background: 'var(--panel-2)',
@@ -13350,7 +13350,7 @@ const InspirationDetail = ({
     return React.createElement('span', {
       key: tag,
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-2)',
         padding: '3px 8px',
         borderRadius: 999,
@@ -13418,7 +13418,7 @@ const InspirationDetail = ({
     }
   }, "\u4E0B\u67B6")), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       lineHeight: 1.4
     }
@@ -13596,7 +13596,7 @@ const WhatsNewModal = ({
     stroke: 1.8
   }))), React.createElement('div', {
     style: {
-      fontSize: 20,
+      fontSize: 18,
       fontWeight: 700,
       letterSpacing: '-0.02em',
       color: 'var(--ink)',
@@ -13605,7 +13605,7 @@ const WhatsNewModal = ({
     }
   }, release.title || 'XLJ Studio 更新了'), versionLabel ? React.createElement('div', {
     style: {
-      fontSize: 12.5,
+      fontSize: 12,
       color: 'var(--ink-3)',
       letterSpacing: '-0.01em',
       marginBottom: 18
@@ -13635,7 +13635,7 @@ const WhatsNewModal = ({
       }
     }, React.createElement('div', {
       style: {
-        fontSize: 13.5,
+        fontSize: 13,
         fontWeight: 650,
         color: 'var(--ink)',
         letterSpacing: '-0.01em',
@@ -13644,7 +13644,7 @@ const WhatsNewModal = ({
       }
     }, item.title || ''), item.desc ? React.createElement('div', {
       style: {
-        fontSize: 12.5,
+        fontSize: 12,
         color: 'var(--ink-2)',
         lineHeight: 1.55,
         letterSpacing: '-0.005em'
@@ -13670,7 +13670,7 @@ const WhatsNewModal = ({
       border: '1px solid var(--line)',
       background: 'var(--panel)',
       color: 'var(--ink-2)',
-      fontSize: 12.5,
+      fontSize: 12,
       fontWeight: 550,
       cursor: 'pointer',
       letterSpacing: '-0.01em'
@@ -13685,7 +13685,7 @@ const WhatsNewModal = ({
       border: '1px solid var(--ink)',
       background: 'var(--ink)',
       color: 'var(--panel)',
-      fontSize: 12.5,
+      fontSize: 12,
       fontWeight: 650,
       cursor: 'pointer',
       letterSpacing: '-0.01em'
@@ -13769,7 +13769,7 @@ const LiteLoginGate = ({
         .lg-sub { font-size: 13px; color: var(--ink-3); line-height: 1.6; margin-top: 6px; }
         .lg-field { position: relative; }
         .lg-input { width: 100%; box-sizing: border-box; height: 44px; border-radius: 10px; border: 1px solid var(--line);
-          background: var(--panel-2); color: var(--ink); padding: 0 14px; font-size: 14px; font-family: inherit; outline: none;
+          background: var(--panel-2); color: var(--ink); padding: 0 14px; font-size: 13px; font-family: inherit; outline: none;
           transition: border-color .15s, box-shadow .15s, background .15s; }
         .lg-input.has-eye { padding-right: 44px; }
         .lg-input::placeholder { color: var(--ink-3); }
@@ -13778,14 +13778,14 @@ const LiteLoginGate = ({
         .lg-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border-radius: 8px;
           display: grid; place-items: center; color: var(--ink-3); background: transparent; border: 0; cursor: pointer; }
         .lg-eye:hover { color: var(--ink); background: var(--line-2); }
-        .lg-btn { height: 44px; border-radius: 10px; border: 0; color: #fff; font-size: 14px; font-weight: 600; font-family: inherit; letter-spacing: .02em;
+        .lg-btn { height: 44px; border-radius: 10px; border: 0; color: #fff; font-size: 13px; font-weight: 600; font-family: inherit; letter-spacing: .02em;
           background: var(--ink); cursor: pointer; margin-top: 2px; transition: transform .12s, box-shadow .15s, background .15s; }
         .lg-btn:hover:not(:disabled) { background: oklch(0.26 0.02 260); transform: translateY(-1px); box-shadow: 0 8px 18px rgba(20,22,40,.2); }
         .lg-btn:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
         .lg-btn:disabled { background: var(--line); color: rgba(255,255,255,.95); cursor: default; }
-        .lg-err { font-size: 12.5px; color: oklch(0.5 0.17 45); background: oklch(0.97 0.03 70); border: 1px solid oklch(0.9 0.06 70);
+        .lg-err { font-size: 12px; color: oklch(0.5 0.17 45); background: oklch(0.97 0.03 70); border: 1px solid oklch(0.9 0.06 70);
           padding: 8px 12px; border-radius: 8px; }
-        .lg-foot { text-align: center; font-size: 11.5px; color: var(--ink-3); letter-spacing: .02em; padding-top: 4px; }
+        .lg-foot { text-align: center; font-size: 12px; color: var(--ink-3); letter-spacing: .02em; padding-top: 4px; }
       `), /*#__PURE__*/React.createElement("form", {
     className: "lg-card",
     onSubmit: e => {

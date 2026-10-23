@@ -78,8 +78,8 @@ const ConfirmDialog = ({ confirm }) => {
         background: 'var(--panel)', border: '1px solid var(--line-2)',
         boxShadow: '0 18px 50px rgba(15,23,42,0.18)', display: 'flex', flexDirection: 'column', gap: 10,
       }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>{confirm.title || '请确认'}</div>
-        {confirm.message && <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6, whiteSpace: 'pre-line' }}>{confirm.message}</div>}
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>{confirm.title || '请确认'}</div>
+        {confirm.message && <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.6, whiteSpace: 'pre-line' }}>{confirm.message}</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
           <button type="button" onClick={function() { close(false); }} style={overlayBtn(false)}>{confirm.cancelText || '取消'}</button>
           <button type="button" ref={okRef} onClick={function() { close(true); }} style={overlayBtn(true, confirm.danger)}>{confirm.confirmText || '确定'}</button>
@@ -147,7 +147,7 @@ const OverlayHost = ({ onInsertToCanvas, onUseAsReference }) => {
                 pointerEvents: 'auto', display: 'flex', alignItems: 'flex-start', gap: 8, maxWidth: 'min(460px, calc(100vw - 32px))',
                 padding: '9px 10px 9px 14px', borderRadius: 12, background: 'var(--panel)', color: 'var(--ink)',
                 border: '1px solid ' + (t.tone === 'danger' ? 'var(--danger-line)' : 'var(--line)'),
-                boxShadow: '0 6px 22px rgba(0,0,0,0.10)', fontSize: 12.5, lineHeight: 1.5,
+                boxShadow: '0 6px 22px rgba(0,0,0,0.10)', fontSize: 12, lineHeight: 1.5,
                 animation: 'dfToastIn 160ms ease-out',
               }}>
                 <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, marginTop: 7, flexShrink: 0, background: (TOAST_TONES[t.tone] || TOAST_TONES.info).dot }}/>
