@@ -258,6 +258,17 @@ const I = {
   edit: p => /*#__PURE__*/React.createElement(Icon, _extends({
     d: "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z"
   }, p)),
+  route: p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("circle", {
+    cx: "6",
+    cy: "19",
+    r: "2"
+  }), /*#__PURE__*/React.createElement("circle", {
+    cx: "18",
+    cy: "5",
+    r: "2"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M12 19h4.5a3.5 3.5 0 0 0 0-7h-8a3.5 3.5 0 0 1 0-7H12"
+  })),
   trash: p => /*#__PURE__*/React.createElement(Icon, _extends({
     d: "M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
   }, p)),
@@ -7852,6 +7863,8 @@ const Chat = ({
   const [publishDialog, setPublishDialog] = React.useState(null);
   const [localSeed, setLocalSeed] = React.useState(null);
   const historyWrapRef = React.useRef(null);
+  const [modeMenuOpen, setModeMenuOpen] = React.useState(false);
+  const modeMenuRef = React.useRef(null);
   const creatingAgentProjectRef = React.useRef(null);
 
   // Extract required fields from template slots (e.g., "slot/product_1/name" -> "name")
@@ -8115,6 +8128,21 @@ const Chat = ({
       document.removeEventListener('mousedown', handlePointerDown);
     };
   }, [historyOpen]);
+  React.useEffect(function () {
+    if (!modeMenuOpen) return;
+    const onDown = function (event) {
+      if (modeMenuRef.current && !modeMenuRef.current.contains(event.target)) setModeMenuOpen(false);
+    };
+    const onKey = function (event) {
+      if (event.key === 'Escape') setModeMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return function () {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [modeMenuOpen]);
   const materializeReferenceImages = React.useCallback(async function (refImages) {
     var refs = Array.isArray(refImages) ? refImages : [];
     return Promise.all(refs.map(async function (item, idx) {
@@ -10087,13 +10115,14 @@ const Chat = ({
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: openHistory,
-    title: agentEnabled ? 'Agent 对话历史' : '历史对话',
+    title: agentEnabled ? 'Agent 历史对话' : '历史对话',
+    "aria-label": "\u5386\u53F2\u5BF9\u8BDD",
     style: {
-      height: 24,
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 5,
-      padding: '0 7px',
+      height: 28,
+      width: 24,
+      display: 'inline-grid',
+      placeItems: 'center',
+      padding: 0,
       borderRadius: 7,
       background: historyOpen ? 'var(--panel-2)' : 'transparent',
       border: '1px solid ' + (historyOpen ? 'var(--line)' : 'transparent'),
@@ -10114,8 +10143,8 @@ const Chat = ({
       }
     }
   }, /*#__PURE__*/React.createElement(I.file, {
-    size: 11
-  }), /*#__PURE__*/React.createElement("span", null, "\u5386\u53F2")), historyOpen && /*#__PURE__*/React.createElement("div", {
+    size: 14
+  })), historyOpen && /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'absolute',
       top: 30,
@@ -10248,90 +10277,149 @@ const Chat = ({
       flexShrink: 0,
       display: 'flex',
       alignItems: 'center',
-      padding: '0 10px 0 14px',
-      gap: 6,
+      padding: '0 10px 0 12px',
+      gap: 2,
       borderBottom: '1px solid var(--line)'
     }
   }, /*#__PURE__*/React.createElement("div", {
+    ref: modeMenuRef,
     style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 7
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      width: 7,
-      height: 7,
-      borderRadius: 99,
-      background: isLoading ? 'var(--accent)' : 'var(--ok)',
-      animation: isLoading ? 'pulse 1.2s ease-in-out infinite' : 'none'
-    }
-  }), /*#__PURE__*/React.createElement("span", {
-    title: isLoading ? '处理中' : undefined,
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
-      letterSpacing: '-0.01em',
-      color: 'var(--ink)'
-    }
-  }, agentEnabled ? 'Agent助手' : 'Ai助手')), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 2,
-      padding: 2,
-      borderRadius: 8,
-      background: 'var(--panel-2)'
+      position: 'relative'
     }
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
-    onClick: () => {
-      if (agentEnabled) toggleAgentMode();
-    },
+    onClick: () => setModeMenuOpen(v => !v),
+    "aria-haspopup": "menu",
+    "aria-expanded": modeMenuOpen,
+    title: "\u5207\u6362\u6A21\u5F0F",
     style: {
-      height: 26,
-      padding: '0 10px',
-      borderRadius: 6,
-      border: 'none',
-      background: agentEnabled ? 'transparent' : 'var(--panel)',
-      color: agentEnabled ? 'var(--ink-3)' : 'var(--ink)',
-      fontSize: 12,
-      fontWeight: agentEnabled ? 500 : 700,
-      cursor: agentEnabled ? 'pointer' : 'default',
-      boxShadow: agentEnabled ? 'none' : '0 0 0 1px var(--line)'
-    }
-  }, "Chat"), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    onClick: () => {
-      if (!agentEnabled) toggleAgentMode();
-    },
-    style: {
-      height: 26,
-      padding: '0 10px',
-      borderRadius: 6,
-      border: 'none',
-      background: agentEnabled ? 'var(--panel)' : 'transparent',
-      color: agentEnabled ? 'var(--ink)' : 'var(--ink-3)',
-      fontSize: 12,
-      fontWeight: agentEnabled ? 700 : 500,
-      cursor: agentEnabled ? 'default' : 'pointer',
-      boxShadow: agentEnabled ? '0 0 0 1px var(--line)' : 'none'
-    }
-  }, "Agent")), historyControl, /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    onClick: startNewAiChat,
-    disabled: isLoading,
-    title: isLoading ? '生成中暂不可新建对话' : agentEnabled ? '开启新的 Agent 对话' : '开启新对话',
-    style: {
-      height: 24,
+      height: 28,
       display: 'inline-flex',
       alignItems: 'center',
       gap: 4,
-      padding: '0 7px',
+      padding: '0 6px 0 8px',
+      marginLeft: -6,
+      borderRadius: 7,
+      background: modeMenuOpen ? 'var(--panel-2)' : 'transparent',
+      border: 'none',
+      color: 'var(--ink)',
+      fontSize: 13,
+      fontWeight: 600,
+      letterSpacing: '-0.01em',
+      cursor: 'pointer'
+    },
+    onMouseEnter: e => {
+      if (!modeMenuOpen) e.currentTarget.style.background = 'var(--panel-2)';
+    },
+    onMouseLeave: e => {
+      if (!modeMenuOpen) e.currentTarget.style.background = 'transparent';
+    }
+  }, agentEnabled ? /*#__PURE__*/React.createElement(I.route, {
+    size: 14,
+    style: {
+      color: 'var(--ink-2)',
+      marginRight: 2
+    }
+  }) : /*#__PURE__*/React.createElement(I.sparkles, {
+    size: 14,
+    style: {
+      color: 'var(--ink-2)',
+      marginRight: 2
+    }
+  }), agentEnabled ? 'Agent' : 'AI助手', /*#__PURE__*/React.createElement(I.chevronDown, {
+    size: 12,
+    style: {
+      color: 'var(--ink-3)',
+      transform: modeMenuOpen ? 'rotate(180deg)' : 'none'
+    }
+  })), modeMenuOpen && /*#__PURE__*/React.createElement("div", {
+    role: "menu",
+    style: {
+      position: 'absolute',
+      top: 32,
+      left: -6,
+      width: 160,
+      borderRadius: 10,
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      boxShadow: '0 10px 24px rgba(15, 23, 42, 0.08)',
+      zIndex: 30,
+      padding: 4
+    }
+  }, [{
+    key: 'chat',
+    label: 'AI助手',
+    icon: I.sparkles,
+    on: !agentEnabled
+  }, {
+    key: 'agent',
+    label: 'Agent',
+    icon: I.route,
+    on: agentEnabled
+  }].map(function (opt) {
+    const OptIcon = opt.icon;
+    return /*#__PURE__*/React.createElement("button", {
+      key: opt.key,
+      type: "button",
+      role: "menuitemradio",
+      "aria-checked": opt.on,
+      onClick: () => {
+        setModeMenuOpen(false);
+        if (!opt.on) toggleAgentMode();
+      },
+      style: {
+        width: '100%',
+        height: 32,
+        padding: '0 8px',
+        borderRadius: 7,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        background: opt.on ? 'var(--panel-2)' : 'transparent',
+        border: 'none',
+        color: opt.on ? 'var(--ink)' : 'var(--ink-2)',
+        fontSize: 12,
+        fontWeight: opt.on ? 600 : 400,
+        cursor: 'pointer',
+        textAlign: 'left'
+      },
+      onMouseEnter: e => {
+        if (!opt.on) e.currentTarget.style.background = 'var(--panel-2)';
+      },
+      onMouseLeave: e => {
+        if (!opt.on) e.currentTarget.style.background = 'transparent';
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement(OptIcon, {
+      size: 14,
+      style: {
+        color: 'var(--ink-2)'
+      }
+    }), opt.label), opt.on && /*#__PURE__*/React.createElement(I.check, {
+      size: 12
+    }));
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }), historyControl, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: startNewAiChat,
+    disabled: isLoading,
+    title: isLoading ? '生成中暂不可新建对话' : agentEnabled ? '新建 Agent 对话' : '新对话',
+    "aria-label": "\u65B0\u5BF9\u8BDD",
+    style: {
+      marginLeft: -2,
+      height: 28,
+      width: 24,
+      display: 'inline-grid',
+      placeItems: 'center',
+      padding: 0,
       borderRadius: 7,
       background: 'transparent',
       border: '1px solid transparent',
@@ -10352,8 +10440,9 @@ const Chat = ({
       e.currentTarget.style.color = 'var(--ink-3)';
     }
   }, /*#__PURE__*/React.createElement(I.plus, {
-    size: 11
-  }), /*#__PURE__*/React.createElement("span", null, "\u65B0\u5BF9\u8BDD"))), publishDialog && /*#__PURE__*/React.createElement("div", {
+    size: 18,
+    stroke: 1.2
+  }))), publishDialog && /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'fixed',
       inset: 0,

@@ -4061,6 +4061,8 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
   const [publishDialog, setPublishDialog] = React.useState(null);
   const [localSeed, setLocalSeed] = React.useState(null);
   const historyWrapRef = React.useRef(null);
+  const [modeMenuOpen, setModeMenuOpen] = React.useState(false);
+  const modeMenuRef = React.useRef(null);
   const creatingAgentProjectRef = React.useRef(null);
 
   // Extract required fields from template slots (e.g., "slot/product_1/name" -> "name")
@@ -4300,6 +4302,20 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       document.removeEventListener('mousedown', handlePointerDown);
     };
   }, [historyOpen]);
+
+  React.useEffect(function() {
+    if (!modeMenuOpen) return;
+    const onDown = function(event) {
+      if (modeMenuRef.current && !modeMenuRef.current.contains(event.target)) setModeMenuOpen(false);
+    };
+    const onKey = function(event) { if (event.key === 'Escape') setModeMenuOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return function() {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [modeMenuOpen]);
 
   const materializeReferenceImages = React.useCallback(async function(refImages) {
     var refs = Array.isArray(refImages) ? refImages : [];
@@ -5990,13 +6006,14 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     <div ref={historyWrapRef} style={{ position: 'relative', flexShrink: 0 }}>
       <button
         onClick={openHistory}
-        title={agentEnabled ? 'Agent 对话历史' : '历史对话'}
+        title={agentEnabled ? 'Agent 历史对话' : '历史对话'}
+        aria-label="历史对话"
         style={{
-          height: 24,
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 5,
-          padding: '0 7px',
+          height: 28,
+          width: 24,
+          display: 'inline-grid',
+          placeItems: 'center',
+          padding: 0,
           borderRadius: 7,
           background: historyOpen ? 'var(--panel-2)' : 'transparent',
           border: '1px solid ' + (historyOpen ? 'var(--line)' : 'transparent'),
@@ -6007,8 +6024,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         onMouseEnter={(e) => { if (!historyOpen) { e.currentTarget.style.background = 'var(--panel-2)'; e.currentTarget.style.color = 'var(--ink)'; } }}
         onMouseLeave={(e) => { if (!historyOpen) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; } }}
       >
-        <I.file size={11}/>
-        <span>历史</span>
+        <I.file size={14}/>
       </button>
 
       {historyOpen && (
@@ -6135,82 +6151,111 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       <div style={{
         height: 44, flexShrink: 0,
         display: 'flex', alignItems: 'center',
-        padding: '0 10px 0 14px', gap: 6,
+        padding: '0 10px 0 12px', gap: 2,
         borderBottom: '1px solid var(--line)',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          <span style={{
-            width: 7, height: 7, borderRadius: 99,
-            background: isLoading ? 'var(--accent)' : 'var(--ok)',
-            animation: isLoading ? 'pulse 1.2s ease-in-out infinite' : 'none',
-          }}/>
-          <span title={isLoading ? '处理中' : undefined} style={{
-            fontSize: 13,
-            fontWeight: 600,
-            letterSpacing: '-0.01em',
-            color: 'var(--ink)',
-          }}>
-            {agentEnabled ? 'Agent助手' : 'Ai助手'}
-          </span>
+        <div ref={modeMenuRef} style={{ position: 'relative' }}>
+          <button
+            type="button"
+            onClick={() => setModeMenuOpen(v => !v)}
+            aria-haspopup="menu"
+            aria-expanded={modeMenuOpen}
+            title="切换模式"
+            style={{
+              height: 28,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '0 6px 0 8px',
+              marginLeft: -6,
+              borderRadius: 7,
+              background: modeMenuOpen ? 'var(--panel-2)' : 'transparent',
+              border: 'none',
+              color: 'var(--ink)',
+              fontSize: 13,
+              fontWeight: 600,
+              letterSpacing: '-0.01em',
+              cursor: 'pointer',
+            }}
+            onMouseEnter={(e) => { if (!modeMenuOpen) e.currentTarget.style.background = 'var(--panel-2)'; }}
+            onMouseLeave={(e) => { if (!modeMenuOpen) e.currentTarget.style.background = 'transparent'; }}
+          >
+            {agentEnabled
+              ? <I.route size={14} style={{ color: 'var(--ink-2)', marginRight: 2 }}/>
+              : <I.sparkles size={14} style={{ color: 'var(--ink-2)', marginRight: 2 }}/>}
+            {agentEnabled ? 'Agent' : 'AI助手'}
+            <I.chevronDown size={12} style={{ color: 'var(--ink-3)', transform: modeMenuOpen ? 'rotate(180deg)' : 'none' }}/>
+          </button>
+          {modeMenuOpen && (
+            <div role="menu" style={{
+              position: 'absolute',
+              top: 32,
+              left: -6,
+              width: 160,
+              borderRadius: 10,
+              background: 'var(--panel)',
+              border: '1px solid var(--line)',
+              boxShadow: '0 10px 24px rgba(15, 23, 42, 0.08)',
+              zIndex: 30,
+              padding: 4,
+            }}>
+              {[{ key: 'chat', label: 'AI助手', icon: I.sparkles, on: !agentEnabled }, { key: 'agent', label: 'Agent', icon: I.route, on: agentEnabled }].map(function(opt) {
+                const OptIcon = opt.icon;
+                return (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={opt.on}
+                    onClick={() => {
+                      setModeMenuOpen(false);
+                      if (!opt.on) toggleAgentMode();
+                    }}
+                    style={{
+                      width: '100%',
+                      height: 32,
+                      padding: '0 8px',
+                      borderRadius: 7,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      background: opt.on ? 'var(--panel-2)' : 'transparent',
+                      border: 'none',
+                      color: opt.on ? 'var(--ink)' : 'var(--ink-2)',
+                      fontSize: 12,
+                      fontWeight: opt.on ? 600 : 400,
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                    onMouseEnter={(e) => { if (!opt.on) e.currentTarget.style.background = 'var(--panel-2)'; }}
+                    onMouseLeave={(e) => { if (!opt.on) e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      <OptIcon size={14} style={{ color: 'var(--ink-2)' }}/>
+                      {opt.label}
+                    </span>
+                    {opt.on && <I.check size={12}/>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
         <div style={{ flex: 1 }}/>
-        <div style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 2,
-          padding: 2,
-          borderRadius: 8,
-          background: 'var(--panel-2)',
-        }}>
-          <button
-            type="button"
-            onClick={() => { if (agentEnabled) toggleAgentMode(); }}
-            style={{
-              height: 26,
-              padding: '0 10px',
-              borderRadius: 6,
-              border: 'none',
-              background: agentEnabled ? 'transparent' : 'var(--panel)',
-              color: agentEnabled ? 'var(--ink-3)' : 'var(--ink)',
-              fontSize: 12,
-              fontWeight: agentEnabled ? 500 : 700,
-              cursor: agentEnabled ? 'pointer' : 'default',
-              boxShadow: agentEnabled ? 'none' : '0 0 0 1px var(--line)',
-            }}
-          >
-            Chat
-          </button>
-          <button
-            type="button"
-            onClick={() => { if (!agentEnabled) toggleAgentMode(); }}
-            style={{
-              height: 26,
-              padding: '0 10px',
-              borderRadius: 6,
-              border: 'none',
-              background: agentEnabled ? 'var(--panel)' : 'transparent',
-              color: agentEnabled ? 'var(--ink)' : 'var(--ink-3)',
-              fontSize: 12,
-              fontWeight: agentEnabled ? 700 : 500,
-              cursor: agentEnabled ? 'default' : 'pointer',
-              boxShadow: agentEnabled ? '0 0 0 1px var(--line)' : 'none',
-            }}
-          >
-            Agent
-          </button>
-        </div>
         {historyControl}
         <button
           type="button"
           onClick={startNewAiChat}
           disabled={isLoading}
-          title={isLoading ? '生成中暂不可新建对话' : (agentEnabled ? '开启新的 Agent 对话' : '开启新对话')}
+          title={isLoading ? '生成中暂不可新建对话' : (agentEnabled ? '新建 Agent 对话' : '新对话')}
+          aria-label="新对话"
           style={{
-            height: 24,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            padding: '0 7px',
+            marginLeft: -2,
+            height: 28,
+            width: 24,
+            display: 'inline-grid',
+            placeItems: 'center',
+            padding: 0,
             borderRadius: 7,
             background: 'transparent',
             border: '1px solid transparent',
@@ -6223,8 +6268,8 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
           onMouseEnter={(e) => { if (!isLoading) { e.currentTarget.style.background = 'var(--panel-2)'; e.currentTarget.style.color = 'var(--ink)'; } }}
           onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; }}
         >
-          <I.plus size={11}/>
-          <span>新对话</span>
+          {/* 光学对齐：+ 号笔画不围合，需比文件图标大一号才显得等大；同时降低描边保持线宽一致 */}
+          <I.plus size={18} stroke={1.2}/>
         </button>
       </div>
 
