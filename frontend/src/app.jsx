@@ -1,6 +1,12 @@
-// App root - wires panels + tweaks + host communication
+// App root - wires panels + overlays + host communication
 
 const LAST_USERNAME_KEY = 'designflow_last_username';
+const CHAT_WIDTH_KEY = 'designflow_chat_width';
+const TEMPLATE_HINT_KEY = 'designflow_template_hint_shown';
+const CHAT_WIDTH_MIN = 320;
+const CHAT_WIDTH_MAX = 600;
+
+const isTypingTarget = (el) => !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
 
 const LiteLoginGate = ({ onLogin, loading, error, initialName, reauth }) => {
   const [name, setName] = React.useState(initialName || '');
@@ -44,7 +50,7 @@ const LiteLoginGate = ({ onLogin, loading, error, initialName, reauth }) => {
         .lg-sub { font-size: 13px; color: var(--ink-3); line-height: 1.6; margin-top: 6px; }
         .lg-field { position: relative; }
         .lg-input { width: 100%; box-sizing: border-box; height: 44px; border-radius: 10px; border: 1px solid var(--line);
-          background: var(--panel-2); color: var(--ink); padding: 0 14px; font-size: 14px; font-family: inherit; outline: none;
+          background: var(--panel-2); color: var(--ink); padding: 0 14px; font-size: 13px; font-family: inherit; outline: none;
           transition: border-color .15s, box-shadow .15s, background .15s; }
         .lg-input.has-eye { padding-right: 44px; }
         .lg-input::placeholder { color: var(--ink-3); }
@@ -53,14 +59,14 @@ const LiteLoginGate = ({ onLogin, loading, error, initialName, reauth }) => {
         .lg-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border-radius: 8px;
           display: grid; place-items: center; color: var(--ink-3); background: transparent; border: 0; cursor: pointer; }
         .lg-eye:hover { color: var(--ink); background: var(--line-2); }
-        .lg-btn { height: 44px; border-radius: 10px; border: 0; color: #fff; font-size: 14px; font-weight: 600; font-family: inherit; letter-spacing: .02em;
+        .lg-btn { height: 44px; border-radius: 10px; border: 0; color: #fff; font-size: 13px; font-weight: 600; font-family: inherit; letter-spacing: .02em;
           background: var(--ink); cursor: pointer; margin-top: 2px; transition: transform .12s, box-shadow .15s, background .15s; }
         .lg-btn:hover:not(:disabled) { background: oklch(0.26 0.02 260); transform: translateY(-1px); box-shadow: 0 8px 18px rgba(20,22,40,.2); }
         .lg-btn:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
         .lg-btn:disabled { background: var(--line); color: rgba(255,255,255,.95); cursor: default; }
-        .lg-err { font-size: 12.5px; color: oklch(0.5 0.17 45); background: oklch(0.97 0.03 70); border: 1px solid oklch(0.9 0.06 70);
+        .lg-err { font-size: 12px; color: oklch(0.5 0.17 45); background: oklch(0.97 0.03 70); border: 1px solid oklch(0.9 0.06 70);
           padding: 8px 12px; border-radius: 8px; }
-        .lg-foot { text-align: center; font-size: 11.5px; color: var(--ink-3); letter-spacing: .02em; padding-top: 4px; }
+        .lg-foot { text-align: center; font-size: 12px; color: var(--ink-3); letter-spacing: .02em; padding-top: 4px; }
       `}</style>
       <form className="lg-card" onSubmit={(e) => { e.preventDefault(); submit(); }}>
         <div className="lg-brand">
@@ -198,9 +204,6 @@ const FlipStage = ({ inspirationOpen, childrenA, childrenB }) => {
 };
 
 const App = () => {
-  const DEFAULT_TWEAKS = { chatState: 'returned', canvasState: 'candidates', theme: 'light' };
-  const [tweaks, setTweaks] = React.useState(window.TWEAKS || DEFAULT_TWEAKS);
-  const [tweaksVisible, setTweaksVisible] = React.useState(false);
   const [activeTemplate, setActiveTemplate] = React.useState(TEMPLATES[0]);
   const [resultTemplate, setResultTemplate] = React.useState(null);
   const [editorCommand, setEditorCommand] = React.useState(null);
@@ -215,6 +218,14 @@ const App = () => {
   const [templatePanelCollapsed, setTemplatePanelCollapsed] = React.useState(true);
   const [templateRevealHovered, setTemplateRevealHovered] = React.useState(false);
   const [whatsNewRelease, setWhatsNewRelease] = React.useState(null);
+  const [chatWidth, setChatWidth] = React.useState(() => {
+    try {
+      const saved = parseInt(localStorage.getItem(CHAT_WIDTH_KEY), 10);
+      if (saved >= CHAT_WIDTH_MIN && saved <= CHAT_WIDTH_MAX) return saved;
+    } catch (e) {}
+    return 360;
+  });
+  const [chatResizing, setChatResizing] = React.useState(false);
   const isFirstTemplateMountRef = React.useRef(true);
 
   const handleUseInspirationPrompt = React.useCallback(function(post) {
@@ -237,6 +248,21 @@ const App = () => {
     setCanvasReferenceSelection({
       key: Date.now() + Math.random(),
       images: images.slice(0, 9),
+    });
+  }, []);
+  const handleLightboxReference = React.useCallback(function(url, title) {
+    setInspirationOpen(false);
+    handleUseCanvasReferences([{ src: url, name: (title ? String(title).slice(0, 24) : 'reference') + '.png' }]);
+  }, [handleUseCanvasReferences]);
+  const handleLightboxInsert = React.useCallback(function(url, title) {
+    setInspirationOpen(false);
+    setEditorCommand({
+      key: Date.now() + Math.random(),
+      type: 'insert-images',
+      mode: 'image',
+      urls: [url],
+      images: [{ url: url }],
+      name: title ? String(title).slice(0, 24) : '图片',
     });
   }, []);
   const [quickEditRequest, setQuickEditRequest] = React.useState(null);
@@ -284,14 +310,6 @@ const App = () => {
   });
   const [reauthOpen, setReauthOpen] = React.useState(false);
   const reauthRequestedRef = React.useRef(false);
-
-  const updateTweaks = (partial) => {
-    const next = { ...tweaks, ...partial };
-    setTweaks(next);
-    try {
-      window.parent.postMessage({ type: '__edit_mode_set_keys', edits: partial }, '*');
-    } catch (e) {}
-  };
 
   const rememberUser = React.useCallback((user) => {
     const username = user && user.username ? String(user.username).trim() : '';
@@ -392,16 +410,11 @@ const App = () => {
     const handler = (e) => {
       const d = e.data;
       if (!d || typeof d !== 'object') return;
-      if (d.type === '__activate_edit_mode') setTweaksVisible(true);
-      if (d.type === '__deactivate_edit_mode') setTweaksVisible(false);
       if (d.type === 'designflow:auth-required') {
         window.dispatchEvent(new CustomEvent('designflow-auth-required'));
       }
     };
     window.addEventListener('message', handler);
-    try {
-      window.parent.postMessage({ type: '__edit_mode_available' }, '*');
-    } catch (e) {}
     return () => window.removeEventListener('message', handler);
   }, []);
 
@@ -510,6 +523,47 @@ const App = () => {
     setAuthError('');
   }, []);
 
+  // 模板栏快捷键 [（焦点在画布 iframe 内时由画布接管键盘，不触发）
+  React.useEffect(() => {
+    if (!currentUser) return;
+    const onKey = (e) => {
+      if (e.key !== '[' || e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(document.activeElement)) return;
+      e.preventDefault();
+      setTemplatePanelCollapsed(v => !v);
+    };
+    window.addEventListener('keydown', onKey);
+    let hintTimer = 0;
+    try {
+      if (!localStorage.getItem(TEMPLATE_HINT_KEY)) {
+        hintTimer = setTimeout(() => {
+          window.dfToast('模板栏默认收起：鼠标移到画布左边缘，或按 [ 键展开');
+          try { localStorage.setItem(TEMPLATE_HINT_KEY, '1'); } catch (e) {}
+        }, 1500);
+      }
+    } catch (e) {}
+    return () => { window.removeEventListener('keydown', onKey); clearTimeout(hintTimer); };
+  }, [currentUser]);
+
+  const startChatResize = React.useCallback((e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = chatWidth;
+    let latest = startWidth;
+    setChatResizing(true);
+    const onMove = (ev) => {
+      latest = Math.max(CHAT_WIDTH_MIN, Math.min(CHAT_WIDTH_MAX, startWidth + (startX - ev.clientX)));
+      setChatWidth(latest);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      setChatResizing(false);
+      try { localStorage.setItem(CHAT_WIDTH_KEY, String(latest)); } catch (err) {}
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [chatWidth]);
+
   const selectTemplate = React.useCallback((t) => {
     if (!t) return;
     setActiveTemplate(t);
@@ -533,6 +587,10 @@ const App = () => {
       overflow: 'hidden',
     }}>
       <ConnectionStatus />
+      <OverlayHost
+        onInsertToCanvas={currentUser && !showAdmin ? handleLightboxInsert : null}
+        onUseAsReference={currentUser && !showAdmin ? handleLightboxReference : null}
+      />
       {(!currentUser || reauthOpen) && (
         <LiteLoginGate
           onLogin={handleLogin}
@@ -552,10 +610,12 @@ const App = () => {
             flex: 1,
             position: 'relative',
             display: 'grid',
-            gridTemplateColumns: templatePanelCollapsed ? '0px minmax(0, 1fr) 360px' : '260px minmax(0, 1fr) 360px',
+            gridTemplateColumns: (templatePanelCollapsed ? '0px' : '260px') + ' minmax(0, 1fr) ' + chatWidth + 'px',
             gridTemplateRows: 'minmax(0, 1fr)',
             minHeight: 0,
-            transition: 'grid-template-columns 180ms ease',
+            transition: chatResizing ? 'none' : 'grid-template-columns 180ms ease',
+            cursor: chatResizing ? 'col-resize' : undefined,
+            userSelect: chatResizing ? 'none' : undefined,
           }}>
             <TemplatePanel
               key={'templates:' + currentUser.id}
@@ -578,7 +638,8 @@ const App = () => {
               }}
             >
               <button
-                title={templatePanelCollapsed ? '展开模板栏' : '收起模板栏'}
+                title={(templatePanelCollapsed ? '展开模板栏' : '收起模板栏') + '（[）'}
+                aria-label={templatePanelCollapsed ? '展开模板栏' : '收起模板栏'}
                 onClick={function() { setTemplatePanelCollapsed(function(v) { return !v; }); }}
                 style={{
                   position: 'absolute',
@@ -628,9 +689,22 @@ const App = () => {
                 />
               }
             />
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="拖动调整对话栏宽度"
+              title="拖动调整对话栏宽度，双击恢复默认"
+              onMouseDown={startChatResize}
+              onDoubleClick={() => {
+                setChatWidth(360);
+                try { localStorage.removeItem(CHAT_WIDTH_KEY); } catch (e) {}
+              }}
+              className="df-chat-resizer"
+              style={{ position: 'absolute', top: 0, bottom: 0, right: chatWidth - 3, width: 6, zIndex: 31, cursor: 'col-resize' }}
+            />
+            {chatResizing && <div style={{ position: 'absolute', inset: 0, zIndex: 32, cursor: 'col-resize' }}/>}
             <Chat
               key={'chat:' + currentUser.id}
-              state={tweaks.chatState}
               template={activeTemplate}
               onComposeComplete={function(jobId, penpotEditUrl, directImageUrls, resultTpl) {
                 handleComposeComplete(jobId, penpotEditUrl, directImageUrls, resultTpl, currentUser.id);
@@ -643,12 +717,6 @@ const App = () => {
               quickEditRequest={quickEditRequest}
             />
           </div>
-          <Tweaks
-            visible={tweaksVisible}
-            tweaks={tweaks}
-            onChange={updateTweaks}
-            onClose={() => setTweaksVisible(false)}
-          />
         </>
       )}
       {currentUser && whatsNewRelease && window.WhatsNewModal && React.createElement(window.WhatsNewModal, {

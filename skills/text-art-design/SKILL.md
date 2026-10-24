@@ -1,5 +1,7 @@
 ---
 name: text-art-design
+title: 中文艺术字
+summary: 标题字、海报字与字效设计
 description: Use this skill when directly generating, improving, or critiquing Chinese artistic lettering images, Chinese title logos, poster typography, event title art, game title lettering, brand wordmarks, packaging title text, or stylized Chinese text with image models such as gpt-image2. Use it for short Chinese visual requests, vague themes, explicit styles such as handwritten, ink, cyberpunk, cute, metallic, glass, paper-cut, retro, luxury, uploaded reference images whose lettering style should be analyzed and transferred, requests for reusable prompts, or user feedback about failed generated Chinese text.
 ---
 

@@ -145,7 +145,7 @@ const WhatsNewModal = ({ release, onClose }) => {
         ),
         React.createElement('div', {
           style: {
-            fontSize: 20,
+            fontSize: 18,
             fontWeight: 700,
             letterSpacing: '-0.02em',
             color: 'var(--ink)',
@@ -155,7 +155,7 @@ const WhatsNewModal = ({ release, onClose }) => {
         }, release.title || 'XLJ Studio 更新了'),
         versionLabel ? React.createElement('div', {
           style: {
-            fontSize: 12.5,
+            fontSize: 12,
             color: 'var(--ink-3)',
             letterSpacing: '-0.01em',
             marginBottom: 18,
@@ -182,7 +182,7 @@ const WhatsNewModal = ({ release, onClose }) => {
               React.createElement('div', { style: { minWidth: 0, flex: 1, paddingTop: 1 } },
                 React.createElement('div', {
                   style: {
-                    fontSize: 13.5,
+                    fontSize: 13,
                     fontWeight: 650,
                     color: 'var(--ink)',
                     letterSpacing: '-0.01em',
@@ -192,7 +192,7 @@ const WhatsNewModal = ({ release, onClose }) => {
                 }, item.title || ''),
                 item.desc ? React.createElement('div', {
                   style: {
-                    fontSize: 12.5,
+                    fontSize: 12,
                     color: 'var(--ink-2)',
                     lineHeight: 1.55,
                     letterSpacing: '-0.005em',
@@ -224,7 +224,7 @@ const WhatsNewModal = ({ release, onClose }) => {
             border: '1px solid var(--line)',
             background: 'var(--panel)',
             color: 'var(--ink-2)',
-            fontSize: 12.5,
+            fontSize: 12,
             fontWeight: 550,
             cursor: 'pointer',
             letterSpacing: '-0.01em',
@@ -240,7 +240,7 @@ const WhatsNewModal = ({ release, onClose }) => {
             border: '1px solid var(--ink)',
             background: 'var(--ink)',
             color: 'var(--panel)',
-            fontSize: 12.5,
+            fontSize: 12,
             fontWeight: 650,
             cursor: 'pointer',
             letterSpacing: '-0.01em',

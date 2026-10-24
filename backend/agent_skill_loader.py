@@ -156,6 +156,7 @@ def list_agent_skills(raw_paths: str | None, root_dir: Path) -> list[dict[str, A
             "name": skill.name,
             "title": skill.title,
             "description": skill.description,
+            "summary": str(skill.metadata.get("summary") or "").strip(),
             "type": skill.type,
             "tags": skill.metadata.get("tags") if isinstance(skill.metadata.get("tags"), list) else [],
             "references": skill.references,
