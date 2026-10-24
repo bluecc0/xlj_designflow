@@ -627,6 +627,13 @@ const Lightbox = ({
     };
   }, []);
   const fullUrl = box.downloadUrl || box.src;
+  // 先用传入的缩略图占位，原图加载完成后替换；原图失败则保留缩略图
+  const hasPreview = !!box.src && box.src !== fullUrl;
+  const [fullState, setFullState] = React.useState('loading');
+  React.useEffect(function () {
+    setFullState('loading');
+  }, [fullUrl]);
+  const showFull = fullState === 'loaded' || !hasPreview;
   const run = function (fn) {
     return function () {
       close();
@@ -687,6 +694,24 @@ const Lightbox = ({
   }, /*#__PURE__*/React.createElement(I.close, {
     size: 14
   })), /*#__PURE__*/React.createElement("img", {
+    src: fullUrl,
+    alt: box.title || '预览',
+    onLoad: function () {
+      setFullState('loaded');
+    },
+    onError: function () {
+      setFullState('failed');
+    },
+    style: {
+      display: showFull ? 'block' : 'none',
+      maxWidth: '100%',
+      maxHeight: 'calc(100vh - 140px)',
+      objectFit: 'contain',
+      borderRadius: 8,
+      boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+      background: 'white'
+    }
+  }), !showFull && /*#__PURE__*/React.createElement("img", {
     src: box.src,
     alt: box.title || '预览',
     style: {
@@ -697,7 +722,12 @@ const Lightbox = ({
       boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
       background: 'white'
     }
-  }), box.title && /*#__PURE__*/React.createElement("div", {
+  }), hasPreview && fullState !== 'loaded' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'rgba(255,255,255,0.72)'
+    }
+  }, fullState === 'failed' ? '原图加载失败，当前显示的是缩略图' : '正在加载原图…'), box.title && /*#__PURE__*/React.createElement("div", {
     style: {
       maxWidth: 640,
       fontSize: 12,
@@ -3692,6 +3722,19 @@ const ChatReturned = ({
     stickRef.current = nearBottom;
     if (nearBottom) setHasUnseen(false);
   };
+
+  // 重试规则：单张且已有任务编号的卡片可随时按原任务重试；
+  // 没有任务编号或批量的卡片只能重新提交，仅当它是最后一张生图卡（上下文未变）时允许
+  let lastAiCardIdx = -1;
+  messages.forEach((msg, idx) => {
+    if (msg.type === 'ai-image-generating') lastAiCardIdx = idx;
+  });
+  const canRetryCard = (msg, idx) => {
+    if (!msg.retryArgs) return false;
+    const isBatch = Array.isArray(msg.images) && msg.images.length > 0;
+    if (msg.jobId && !isBatch) return true;
+    return idx === lastAiCardIdx;
+  };
   const openImage = (src, full, title) => {
     window.dfOpenLightbox({
       src: src || full,
@@ -4316,7 +4359,7 @@ const ChatReturned = ({
         gap: 6,
         flexWrap: 'wrap'
       }
-    }, onRetry && m.retryArgs && React.createElement('button', {
+    }, onRetry && canRetryCard(m, i) && React.createElement('button', {
       type: 'button',
       disabled: isGenerating,
       onClick: function () {
@@ -8424,7 +8467,9 @@ const Chat = ({
       images: batchCount > 1 ? [] : undefined,
       retryArgs: [model, prompt, displayText, refImages, aiOptions]
     }]);
-    if (activeSkill && !plannedPrompt && window.API && window.API.streamSkillPlan) {
+
+    // 按原任务重试时，后端会复用原任务的最终提示词，不再重新跑 Skill 规划
+    if (activeSkill && !plannedPrompt && !aiOptions.retryFromJobId && window.API && window.API.streamSkillPlan) {
       const primarySlotAt = slots[0];
       var streamedTrace = '';
       var plannerRefImages = (Array.isArray(finalRefImages) ? finalRefImages : []).slice(0, 3).map(function (r) {
@@ -8515,11 +8560,13 @@ const Chat = ({
           provider: provider,
           refCount: finalRefImages.length
         });
-        postAiImageForm(apiBase, fd, {
+
+        // 已有任务编号的失败重试走 /ai-image/retry，复用原任务的完整提示词和参考图集合
+        (aiOptions.retryFromJobId ? window.API.retryAiImage(aiOptions.retryFromJobId, currentAiChatId) : postAiImageForm(apiBase, fd, {
           clientRequestId: clientRequestId,
           maxAttempts: 2,
           timeoutMs: 120000
-        }).then(function (data) {
+        })).then(function (data) {
           if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
           const jobId = data.job_id;
           if (!jobId) {
@@ -9837,7 +9884,15 @@ const Chat = ({
   // ── 生图失败：重试 / 编辑后重发 ──────────────────────────────────────────
   const handleRetryAiImage = React.useCallback(function (msg) {
     if (!msg || !msg.retryArgs || isLoading) return;
-    runAiImageGeneration.apply(null, msg.retryArgs);
+    const args = msg.retryArgs.slice();
+    const isBatch = Array.isArray(msg.images) && msg.images.length > 0;
+    if (msg.jobId && !isBatch) {
+      args[4] = Object.assign({}, args[4], {
+        retryFromJobId: msg.jobId,
+        batchCount: 1
+      });
+    }
+    runAiImageGeneration.apply(null, args);
   }, [isLoading, runAiImageGeneration]);
   const handleEditResend = React.useCallback(function (msg) {
     const args = msg && msg.retryArgs;

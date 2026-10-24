@@ -886,6 +886,17 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
     if (nearBottom) setHasUnseen(false);
   };
 
+  // 重试规则：单张且已有任务编号的卡片可随时按原任务重试；
+  // 没有任务编号或批量的卡片只能重新提交，仅当它是最后一张生图卡（上下文未变）时允许
+  let lastAiCardIdx = -1;
+  messages.forEach((msg, idx) => { if (msg.type === 'ai-image-generating') lastAiCardIdx = idx; });
+  const canRetryCard = (msg, idx) => {
+    if (!msg.retryArgs) return false;
+    const isBatch = Array.isArray(msg.images) && msg.images.length > 0;
+    if (msg.jobId && !isBatch) return true;
+    return idx === lastAiCardIdx;
+  };
+
   const openImage = (src, full, title) => {
     window.dfOpenLightbox({ src: src || full, downloadUrl: full, title: title });
   };
@@ -1135,7 +1146,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 formatAiImageError(m.error, m.jobId || m.job_id)
               ),
               m.status === 'failed' && (onRetry || onEditResend) && React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
-                onRetry && m.retryArgs && React.createElement('button', {
+                onRetry && canRetryCard(m, i) && React.createElement('button', {
                   type: 'button',
                   disabled: isGenerating,
                   onClick: function() { onRetry(m); },
@@ -4519,7 +4530,8 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       retryArgs: [model, prompt, displayText, refImages, aiOptions],
     }]);
 
-    if (activeSkill && !plannedPrompt && window.API && window.API.streamSkillPlan) {
+    // 按原任务重试时，后端会复用原任务的最终提示词，不再重新跑 Skill 规划
+    if (activeSkill && !plannedPrompt && !aiOptions.retryFromJobId && window.API && window.API.streamSkillPlan) {
       const primarySlotAt = slots[0];
       var streamedTrace = '';
       var plannerRefImages = (Array.isArray(finalRefImages) ? finalRefImages : []).slice(0, 3).map(function(r) { return r && r.file; }).filter(Boolean);
@@ -4625,7 +4637,10 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
           refCount: finalRefImages.length,
         });
 
-        postAiImageForm(apiBase, fd, { clientRequestId: clientRequestId, maxAttempts: 2, timeoutMs: 120000 })
+        // 已有任务编号的失败重试走 /ai-image/retry，复用原任务的完整提示词和参考图集合
+        (aiOptions.retryFromJobId
+          ? window.API.retryAiImage(aiOptions.retryFromJobId, currentAiChatId)
+          : postAiImageForm(apiBase, fd, { clientRequestId: clientRequestId, maxAttempts: 2, timeoutMs: 120000 }))
           .then(function(data) {
             if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
             const jobId = data.job_id;
@@ -5767,7 +5782,12 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
   // ── 生图失败：重试 / 编辑后重发 ──────────────────────────────────────────
   const handleRetryAiImage = React.useCallback(function(msg) {
     if (!msg || !msg.retryArgs || isLoading) return;
-    runAiImageGeneration.apply(null, msg.retryArgs);
+    const args = msg.retryArgs.slice();
+    const isBatch = Array.isArray(msg.images) && msg.images.length > 0;
+    if (msg.jobId && !isBatch) {
+      args[4] = Object.assign({}, args[4], { retryFromJobId: msg.jobId, batchCount: 1 });
+    }
+    runAiImageGeneration.apply(null, args);
   }, [isLoading, runAiImageGeneration]);
   const handleEditResend = React.useCallback(function(msg) {
     const args = msg && msg.retryArgs;

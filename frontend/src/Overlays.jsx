@@ -97,6 +97,11 @@ const Lightbox = ({ box, onInsertToCanvas, onUseAsReference }) => {
     return function() { window.removeEventListener('keydown', onKey); };
   }, []);
   const fullUrl = box.downloadUrl || box.src;
+  // 先用传入的缩略图占位，原图加载完成后替换；原图失败则保留缩略图
+  const hasPreview = !!box.src && box.src !== fullUrl;
+  const [fullState, setFullState] = React.useState('loading');
+  React.useEffect(function() { setFullState('loading'); }, [fullUrl]);
+  const showFull = fullState === 'loaded' || !hasPreview;
   const run = function(fn) { return function() { close(); fn(); }; };
   const actions = [];
   if (onInsertToCanvas) actions.push({ label: '放入画布', icon: I.layers, onClick: function() { onInsertToCanvas(fullUrl, box.title); } });
@@ -111,10 +116,25 @@ const Lightbox = ({ box, onInsertToCanvas, onUseAsReference }) => {
         position: 'absolute', top: 16, right: 16, width: 34, height: 34, borderRadius: 10,
         background: 'rgba(255,255,255,0.12)', color: 'white', display: 'grid', placeItems: 'center',
       }}><I.close size={14}/></button>
-      <img src={box.src} alt={box.title || '预览'} style={{
-        maxWidth: '100%', maxHeight: 'calc(100vh - 140px)', objectFit: 'contain', borderRadius: 8,
-        boxShadow: '0 20px 60px rgba(0,0,0,0.4)', background: 'white',
-      }}/>
+      <img src={fullUrl} alt={box.title || '预览'}
+        onLoad={function() { setFullState('loaded'); }}
+        onError={function() { setFullState('failed'); }}
+        style={{
+          display: showFull ? 'block' : 'none',
+          maxWidth: '100%', maxHeight: 'calc(100vh - 140px)', objectFit: 'contain', borderRadius: 8,
+          boxShadow: '0 20px 60px rgba(0,0,0,0.4)', background: 'white',
+        }}/>
+      {!showFull && (
+        <img src={box.src} alt={box.title || '预览'} style={{
+          maxWidth: '100%', maxHeight: 'calc(100vh - 140px)', objectFit: 'contain', borderRadius: 8,
+          boxShadow: '0 20px 60px rgba(0,0,0,0.4)', background: 'white',
+        }}/>
+      )}
+      {hasPreview && fullState !== 'loaded' && (
+        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.72)' }}>
+          {fullState === 'failed' ? '原图加载失败，当前显示的是缩略图' : '正在加载原图…'}
+        </div>
+      )}
       {box.title && <div style={{ maxWidth: 640, fontSize: 12, color: 'rgba(255,255,255,0.72)', textAlign: 'center', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{box.title}</div>}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
         <a href={fullUrl} download style={overlayBtn(true)}><I.download size={12}/>下载</a>
