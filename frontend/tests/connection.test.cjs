@@ -240,3 +240,54 @@ test('cookie renewal in another tab closes the expired-session state', async () 
   assert.equal(h.monitor.getSnapshot().authExpired, false)
   assert.deepEqual(h.events, ['expired', 'restored'])
 })
+
+test('repeated dependency failures do not report a backend outage when session checks succeed', async () => {
+  const h = harness(call => call.path === '/auth/session'
+    ? session() : json({ detail: 'Penpot unavailable' }, 503))
+  const states = []
+  h.monitor.subscribe(state => states.push(state.status))
+  for (let i = 0; i < 4; i++) {
+    assert.equal((await h.root.fetch('/templates')).status, 503)
+    await h.advance(2000)
+    assert.equal(h.monitor.getSnapshot().status, 'online')
+  }
+  assert.deepEqual(states, [])
+  assert.equal(h.calls.filter(call => call.path === '/templates').length, 4)
+  assert.equal(h.calls.filter(call => call.path === '/auth/session').length, 4)
+})
+
+test('gateway errors report reconnection only when the session endpoint is also unavailable', async () => {
+  for (const status of [502, 503, 504]) {
+    let available = false
+    const h = harness(call => call.path === '/auth/session' && available
+      ? session() : json({}, status))
+    assert.equal((await h.root.fetch('/ai-image', { method: 'POST' })).status, status)
+    await flush()
+    assert.equal(h.monitor.getSnapshot().status, 'reconnecting')
+    available = true
+    await h.advance(2000)
+    assert.equal(h.monitor.getSnapshot().status, 'restored')
+    await h.advance(2000)
+    assert.equal(h.monitor.getSnapshot().status, 'online')
+    assert.equal(h.calls.filter(call => call.method === 'POST').length, 1)
+  }
+})
+
+test('a timed-out heartbeat reports an outage and clears it after a successful probe', async () => {
+  let available = false
+  const h = harness(call => {
+    if (available) return session()
+    return new Promise((resolve, reject) => {
+      call.init.signal.addEventListener('abort', () => reject(new DOMException('timeout', 'AbortError')), { once: true })
+    })
+  })
+  const pending = h.monitor.check()
+  await h.advance(5000)
+  await pending
+  assert.equal(h.monitor.getSnapshot().status, 'reconnecting')
+  available = true
+  await h.advance(2000)
+  assert.equal(h.monitor.getSnapshot().status, 'restored')
+  await h.advance(2000)
+  assert.equal(h.monitor.getSnapshot().status, 'online')
+})

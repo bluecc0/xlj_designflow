@@ -2494,12 +2494,14 @@ async def _probe_adobe2api(client: httpx.AsyncClient) -> dict:
 
 @app.get("/health")
 async def health():
-    return _local_health_payload()
+    # UNC filesystem checks can block for seconds when the library is offline.
+    # Keep them off the event loop so session heartbeats and task polls can run.
+    return await asyncio.to_thread(_local_health_payload)
 
 
 @app.get("/health/deep")
 async def health_deep():
-    local_health = _local_health_payload()
+    local_health = await asyncio.to_thread(_local_health_payload)
     # Penpot is a local/LAN dependency and must never be sent through the
     # optional AI API proxy. Keep a separate client so a proxy failure cannot
     # make a working Penpot instance appear offline in the service dashboard.
