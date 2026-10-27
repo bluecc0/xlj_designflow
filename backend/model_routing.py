@@ -93,9 +93,15 @@ def _chunk_text(chunk: dict) -> str:
     return str(message.get("content") or "")
 
 
-def _check_content(data: dict, validate: Callable[[str], bool] | None) -> None:
+def _check_response_error(data: dict) -> None:
     if not isinstance(data, dict) or data.get("error"):
         raise ModelRoutingError("模型返回错误响应")
+    if any(choice.get("finish_reason") == "error" for choice in (data.get("choices") or [])):
+        raise ModelRoutingError("模型响应异常终止")
+
+
+def _check_content(data: dict, validate: Callable[[str], bool] | None) -> None:
+    _check_response_error(data)
     content = _chunk_text(data)
     if not content.strip() or (validate and not validate(content)):
         raise ModelRoutingError("模型返回空内容或无效结果")
@@ -129,8 +135,7 @@ async def routed_chat_completion(
                         finished = True
                         break
                     chunk = json.loads(raw)
-                    if chunk.get("error"):
-                        raise ModelRoutingError("模型流返回错误")
+                    _check_response_error(chunk)
                     parts.append(_chunk_text(chunk))
                     finished = finished or any(c.get("finish_reason") for c in chunk.get("choices", []))
                 if not finished:
@@ -179,11 +184,8 @@ async def routed_chat_stream(
                             finished = True
                             break
                         chunk = json.loads(raw)
-                        if not isinstance(chunk, dict) or chunk.get("error"):
-                            raise ModelRoutingError("模型流返回错误")
+                        _check_response_error(chunk)
                         choices = chunk.get("choices") or []
-                        if any(c.get("finish_reason") == "error" for c in choices):
-                            raise ModelRoutingError("模型流异常终止")
                         finished = finished or any(c.get("finish_reason") for c in choices)
                         content = _chunk_text(chunk)
                         if content:

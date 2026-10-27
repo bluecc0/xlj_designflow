@@ -148,6 +148,53 @@ class ModelRoutingTest(unittest.IsolatedAsyncioTestCase):
             response = await model_routing.routed_chat_completion("vlm", {"messages": []})
         self.assertEqual(response.json()["choices"][0]["message"]["content"], "ok")
 
+    def error_completion(self, response_format):
+        message_key = "message" if response_format == "json" else "delta"
+        chunk = {"choices": [{message_key: {"content": "incomplete answer"}, "finish_reason": "error"}]}
+        if response_format == "json":
+            return httpx.Response(200, json=chunk)
+        chunks = [chunk]
+        if response_format == "sse-tail":
+            chunks = [
+                {"choices": [{"delta": {"content": "incomplete answer"}}]},
+                {"choices": [{"delta": {}, "finish_reason": "error"}]},
+            ]
+        events = ["data: " + json.dumps(item) for item in chunks] + ["data: [DONE]"]
+        return httpx.Response(200, text="\n\n".join(events) + "\n\n")
+
+    async def test_nonstream_error_finish_reason_switches_to_apimart(self):
+        for purpose in ("chat_llm", "vlm"):
+            for response_format in ("json", "sse", "sse-tail"):
+                with self.subTest(purpose=purpose, response_format=response_format):
+                    self.requests.clear()
+                    failure = self.error_completion(response_format)
+                    with self.transport(lambda r: failure if r.url.host == "sub.test" else completion("complete answer")):
+                        response = await model_routing.routed_chat_completion(purpose, {"messages": []})
+                    self.assertEqual([r.url.host for r in self.requests], ["sub.test", "api.test"])
+                    self.assertEqual(response.extensions["model_route"]["provider"], "apimart")
+                    self.assertEqual(response.json()["choices"][0]["message"]["content"], "complete answer")
+
+    async def test_nonstream_both_error_finish_reasons_raise(self):
+        for response_format in ("json", "sse", "sse-tail"):
+            with self.subTest(response_format=response_format):
+                self.requests.clear()
+                with self.transport(lambda _: self.error_completion(response_format)), self.assertRaises(model_routing.ModelRoutingError):
+                    await model_routing.routed_chat_completion("chat_llm", {"messages": []})
+                self.assertEqual([r.url.host for r in self.requests], ["sub.test", "api.test"])
+
+    async def test_stream_error_finish_reason_discards_failed_content(self):
+        with self.transport(lambda r: self.error_completion("sse-tail") if r.url.host == "sub.test" else sse("complete answer")):
+            visible = []
+            resets = 0
+            async for chunk in model_routing.routed_chat_stream("agent_llm", {"messages": []}):
+                if chunk.get("_route_reset"):
+                    visible.clear()
+                    resets += 1
+                else:
+                    visible.append(chunk["choices"][0]["delta"].get("content", ""))
+        self.assertEqual("".join(visible), "complete answer")
+        self.assertEqual(resets, 1)
+
     async def test_chat_endpoint_uses_new_fallback(self):
         with self.transport(lambda r: httpx.Response(503) if r.url.host == "sub.test" else completion("回答")):
             result = await main.chat_endpoint(main.ChatRequest(messages=[{"role": "user", "content": "你好"}]))
