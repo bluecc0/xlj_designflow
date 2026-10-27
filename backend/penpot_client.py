@@ -715,8 +715,7 @@ class PenpotClient:
         策略：
         1. 有 raw_content 时：直接在模板原始结构上替换文字字符串，其余所有属性
            （text-align / font / color / line-height 等）原封不动保留，不重建。
-           再把 from_transit 解码过的纯字符串关键字（"center"）还原为 Transit keyword
-           对象（kw("center")），以便 to_transit 正确序列化为 "~:center"。
+           文本 content 内的对齐和方向使用普通字符串，不使用 Transit keyword。
         2. 无 raw_content 时：用参数手动构建 content（兜底路径）。
         3. 两种路径均通过 mod-obj 操作清除 position-data 并重设 grow-type /
            vertical-align，确保 Penpot 以新内容重新排版。
@@ -724,11 +723,7 @@ class PenpotClient:
         if raw_content is not None:
             # 直接复用模板 content：只换文字，完整保留 text-align / font 等
             new_content = self._replace_text_in_content(raw_content, text)
-            # _replace_text_in_content 已把 key 转为 kebab-case；
-            # 但 from_transit 把 keyword 值解码为普通字符串（"center"），
-            # 必须转回 Keyword 对象，否则 to_transit 会发送普通字符串，
-            # Penpot 服务端将其当作非法值并静默忽略，导致 text-align 丢失。
-            new_content = self._fix_keyword_values(new_content)
+            new_content = self._normalize_text_enum_values(new_content)
         else:
             # 无模板内容时，按参数从零构建（兜底）
             font_id = font_family
@@ -748,8 +743,8 @@ class PenpotClient:
                 "text-transform": "none",
                 "letter-spacing": "0",
                 "line-height": "1",
-                "text-direction": kw("ltr"),
-                "text-align": kw(text_align),
+                "text-direction": "ltr",
+                "text-align": text_align,
                 "fills": [fill],
             }
             paragraph = {
@@ -765,8 +760,8 @@ class PenpotClient:
                 "text-transform": "none",
                 "letter-spacing": "0",
                 "line-height": "1",
-                "text-direction": kw("ltr"),
-                "text-align": kw(text_align),
+                "text-direction": "ltr",
+                "text-align": text_align,
                 "fills": [fill],
                 "children": [text_run],
             }
@@ -879,8 +874,7 @@ class PenpotClient:
             if children:
                 run = children[0]
                 run["text"] = new_text
-                # text-run 的 text-align 必须和 paragraph 一致
-                # Penpot 渲染时 run 级优先级更高，run 是 left 则即使 paragraph 是 center 也显示居左
+                # 替换后的单一 run 与段落对齐保持一致。
                 para_align = paragraph.get("text-align")
                 if para_align:
                     run["text-align"] = para_align
@@ -889,27 +883,22 @@ class PenpotClient:
             pass
         return content
 
-    # Transit 协议中必须序列化为 keyword（~:xxx）的字段
-    _TRANSIT_KEYWORD_FIELDS = {"text-align", "text-direction"}
+    # 文本属性是字符串；图层级 grow-type / vertical-align 仍使用 keyword。
+    _TEXT_STRING_ENUM_FIELDS = {"text-align", "text-direction"}
 
-    def _fix_keyword_values(self, node: Any) -> Any:
+    def _normalize_text_enum_values(self, node: Any) -> Any:
         """
-        递归遍历 content 树，把已知的 Transit keyword 字段的值从普通字符串
-        转回 Keyword 对象，确保 to_transit 能正确序列化为 "~:center" 等形式。
-
-        背景：get-file 响应经 from_transit 解码后，keyword 值（如 "~:center"）
-        变为普通字符串 "center"。若直接将其写回 update-file，to_transit 会把
-        "center" 序列化为普通 JSON 字符串，Penpot 服务端静默丢弃，导致
-        text-align 等属性丢失。
+        规范化文本枚举为字符串，同时兼容旧代码写入的 keyword。
+        Penpot 的文本布局不接受 keyword 类型的 text-align / text-direction。
         """
         if isinstance(node, dict):
             result: dict = {}
             for k, v in node.items():
-                if k in self._TRANSIT_KEYWORD_FIELDS and isinstance(v, str) and v:
-                    # 兼容 "center" 和 "~:center" 两种来源
-                    result[k] = kw(v[2:] if v.startswith("~:") else v)
+                if k in self._TEXT_STRING_ENUM_FIELDS and isinstance(v, (str, Keyword)):
+                    value = v.name if isinstance(v, Keyword) else v
+                    result[k] = value[2:] if value.startswith("~:") else value
                 elif k == "children" and isinstance(v, list):
-                    result[k] = [self._fix_keyword_values(c) for c in v]
+                    result[k] = [self._normalize_text_enum_values(c) for c in v]
                 else:
                     result[k] = v
             return result

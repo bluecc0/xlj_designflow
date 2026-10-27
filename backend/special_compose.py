@@ -174,18 +174,18 @@ def expand_time_fields(raw_time: str) -> dict[str, str]:
 
     if month_day_m:
         m, d = month_day_m.group(1), month_day_m.group(2)
-        date_part = f"{m}/{d}"
+        date_part = f"{int(m):02d}/{int(d):02d}"
         remainder = raw[month_day_m.end():]
     elif slash_day_m:
         m, d = slash_day_m.group(1), slash_day_m.group(2)
-        date_part = f"{m}/{d}"
+        date_part = f"{int(m):02d}/{int(d):02d}"
         remainder = raw[slash_day_m.end():]
     else:
         # 无法识别日期，尝试只提取时间部分
         # 格式如 "28日 10点" → time_month=28日，提取后半段
         day_only_m = re.match(r"(\d{1,2}日)\s*", raw)
         if day_only_m:
-            date_part = day_only_m.group(1)
+            date_part = f"{int(day_only_m.group(1)[:-1]):02d}日"
             remainder = raw[day_only_m.end():]
 
     result["time_month"] = date_part
@@ -227,10 +227,10 @@ def expand_time_fields(raw_time: str) -> dict[str, str]:
     # time_c：保留中文日期格式，但把"N点"转为"N:00"
     # 例："4月29日 10点发售" → "4月29日 10:00发售"
     if month_day_m:
-        cn_date = f"{month_day_m.group(1)}月{month_day_m.group(2)}日"
+        cn_date = f"{int(month_day_m.group(1)):02d}月{int(month_day_m.group(2)):02d}日"
         result["time_c"] = f"{cn_date} {hour_formatted}".strip() if hour_formatted else cn_date
     elif slash_day_m:
-        cn_date = f"{slash_day_m.group(1)}月{slash_day_m.group(2)}日"
+        cn_date = f"{int(slash_day_m.group(1)):02d}月{int(slash_day_m.group(2)):02d}日"
         result["time_c"] = f"{cn_date} {hour_formatted}".strip() if hour_formatted else cn_date
     else:
         result["time_c"] = f"{date_part} {hour_formatted}".strip() if date_part or hour_formatted else raw
@@ -256,9 +256,9 @@ def expand_time_fields(raw_time: str) -> dict[str, str]:
 
     cn_date_pure = ""
     if month_day_m:
-        cn_date_pure = f"{month_day_m.group(1)}月{month_day_m.group(2)}日"
+        cn_date_pure = cn_date
     elif slash_day_m:
-        cn_date_pure = f"{slash_day_m.group(1)}月{slash_day_m.group(2)}日"
+        cn_date_pure = cn_date
     elif date_part:
         cn_date_pure = date_part
 

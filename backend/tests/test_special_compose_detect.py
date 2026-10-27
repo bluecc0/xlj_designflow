@@ -80,43 +80,61 @@ class SpecialComposeDetectTest(unittest.TestCase):
     def test_time_4_expansion(self) -> None:
         from backend.special_compose import expand_time_fields
         res = expand_time_fields("9月19日10点发售")
-        self.assertEqual(res["time_4"], "9/19 火爆发售")
-        self.assertEqual(res["time_month"], "9/19")
+        self.assertEqual(res["time_4"], "09/19 火爆发售")
+        self.assertEqual(res["time_month"], "09/19")
         self.assertEqual(res["time_hour_c"], "10点发售")
         self.assertEqual(res["time_hour"], "10:00发售")
-        self.assertEqual(res["time_cn"], "9月19日 10:00")
+        self.assertEqual(res["time_cn"], "09月19日 10:00")
 
         res2 = expand_time_fields("9月19日 10点发售")
-        self.assertEqual(res2["time_4"], "9/19 火爆发售")
+        self.assertEqual(res2["time_4"], "09/19 火爆发售")
         self.assertEqual(res2["time_hour_c"], "10点发售")
-        self.assertEqual(res2["time_cn"], "9月19日 10:00")
+        self.assertEqual(res2["time_cn"], "09月19日 10:00")
 
-        res3 = expand_time_fields("9/19 10:00发售")
-        self.assertEqual(res3["time_4"], "9/19 火爆发售")
+        res3 = expand_time_fields("09/19 10:00发售")
+        self.assertEqual(res3["time_4"], "09/19 火爆发售")
         self.assertEqual(res3["time_hour_c"], "10点发售")
-        self.assertEqual(res3["time_cn"], "9月19日 10:00")
+        self.assertEqual(res3["time_cn"], "09月19日 10:00")
 
         res4 = expand_time_fields("9月19日 10点")
         self.assertEqual(res4["time_hour_c"], "10点发售")
-        self.assertEqual(res4["time_cn"], "9月19日 10:00")
+        self.assertEqual(res4["time_cn"], "09月19日 10:00")
 
         res5 = expand_time_fields("9月19日")
-        self.assertEqual(res5["time_4"], "9/19 火爆发售")
+        self.assertEqual(res5["time_4"], "09/19 火爆发售")
         self.assertEqual(res5["time_hour_c"], "")
-        self.assertEqual(res5["time_cn"], "9月19日")
+        self.assertEqual(res5["time_cn"], "09月19日")
 
         res6 = expand_time_fields("")
         self.assertEqual(res6["time_4"], "")
         self.assertEqual(res6["time_hour_c"], "")
         self.assertEqual(res6["time_cn"], "")
 
+    def test_date_components_are_zero_padded(self) -> None:
+        from backend.special_compose import expand_time_fields
+        for raw in ("7月8日", "07月08日", "7/8", "07/08"):
+            with self.subTest(raw=raw):
+                result = expand_time_fields(raw)
+                self.assertEqual(result["time"], "07/08")
+                self.assertEqual(result["time_month"], "07/08")
+                self.assertEqual(result["time_c"], "07月08日")
+                self.assertEqual(result["time_cn"], "07月08日")
+                self.assertEqual(result["time_4"], "07/08 火爆发售")
+        result = expand_time_fields("7月8日9点发售")
+        self.assertEqual(result["time"], "07/08 09:00发售")
+        self.assertEqual(result["time_c"], "07月08日 09:00发售")
+        self.assertEqual(result["time_cn"], "07月08日 09:00")
+        self.assertEqual(expand_time_fields("8日")["time_cn"], "08日")
+        self.assertEqual(expand_time_fields("12月28日")["time_cn"], "12月28日")
+        self.assertEqual(expand_time_fields("待定")["time"], "待定")
+
     def test_time_cn_various_formats(self) -> None:
         from backend.special_compose import expand_time_fields
         # 测试用户示例：8月15日10点发售 / 8月15日 10:00
-        self.assertEqual(expand_time_fields("8月15日10点发售")["time_cn"], "8月15日 10:00")
-        self.assertEqual(expand_time_fields("8月15日 10:00发售")["time_cn"], "8月15日 10:00")
-        self.assertEqual(expand_time_fields("8/15 10:30")["time_cn"], "8月15日 10:30")
-        self.assertEqual(expand_time_fields("8/15")["time_cn"], "8月15日")
+        self.assertEqual(expand_time_fields("8月15日10点发售")["time_cn"], "08月15日 10:00")
+        self.assertEqual(expand_time_fields("8月15日 10:00发售")["time_cn"], "08月15日 10:00")
+        self.assertEqual(expand_time_fields("8/15 10:30")["time_cn"], "08月15日 10:30")
+        self.assertEqual(expand_time_fields("8/15")["time_cn"], "08月15日")
 
 
 if __name__ == "__main__":
