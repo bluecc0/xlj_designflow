@@ -5249,7 +5249,7 @@ const Composer = ({
   const STATUS_COMPOSER_HEIGHT = 208;
   const MAX_COMPOSER_HEIGHT = 500;
   const minComposerHeightRef = React.useRef(COLLAPSED_COMPOSER_HEIGHT);
-  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'nano-banana-pro' ? 'ai-image' : selectedMode === 'special' || selectedMode === 'special_full' ? selectedMode : selectedMode === 'download' ? 'download' : selectedWorkflow;
+  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' ? 'ai-image' : selectedMode === 'special' || selectedMode === 'special_full' ? selectedMode : selectedMode === 'download' ? 'download' : selectedWorkflow;
   const normalizeBatchCount = React.useCallback(function (value) {
     const digits = String(value || '').replace(/\D+/g, '');
     if (!digits) return 1;
@@ -5537,7 +5537,7 @@ const Composer = ({
     label: '白底x2'
   }];
   const AI_QUALITIES = ['1K', '2K', '4K'];
-  // 统一的尺寸选项，两个模型共用（取交集：二者均支持的比例）
+  // 生图模型共用的比例和分辨率选项。
   const AI_OPTIONS = {
     auto: {
       label: 'auto',
@@ -5630,7 +5630,7 @@ const Composer = ({
       }
     }
   };
-  const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' ? 'gpt-image-2.5' : selectedMode === 'nano-banana-pro' ? 'nano-banana-pro' : '';
+  const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' ? selectedMode : selectedMode === 'nano-banana-pro' ? 'nano-banana-pro' : '';
   const activeMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' ? 'ai-image' : selectedMode === 'special_full' || selectedMode === 'special' ? selectedMode : selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
@@ -5737,7 +5737,7 @@ const Composer = ({
       size: aiImageSize,
       resolution: aiQuality,
       variant: aiVariant,
-      quality: aiQualityTier,
+      quality: activeAiModel === 'gpt-image-2' ? 'auto' : aiQualityTier,
       provider: aiProvider,
       workflow: selectedWorkflowMode,
       model: activeAiModel,
@@ -6163,22 +6163,26 @@ const Composer = ({
     return [{
       id: 'chat',
       label: '问答',
-      desc: '询问流程、模板、素材规则',
       iconKey: 'sparkles',
       workflow: 'chat',
       mode: ''
     }, {
       id: 'gpt-image',
       label: 'GPT Image 2.5',
-      desc: '文生图，中文语义和文字更强',
       iconKey: 'image',
       iconSrc: 'src/icon/openai.png',
       workflow: 'chat',
       mode: 'gpt-image-2.5'
     }, {
+      id: 'gpt-image-2',
+      label: 'GPT Image 2',
+      iconKey: 'image',
+      iconSrc: 'src/icon/openai.png',
+      workflow: 'chat',
+      mode: 'gpt-image-2'
+    }, {
       id: 'nano-banana',
       label: 'Nano Banana Pro',
-      desc: '图生图/改图，参考图一致性更强',
       iconKey: 'image',
       iconSrc: 'src/icon/gemini-color.png',
       workflow: 'chat',
@@ -6186,30 +6190,21 @@ const Composer = ({
     }, {
       id: 'distribute',
       label: '智能铺货',
-      desc: '上传表格，自动解析为铺货 JSON',
       iconKey: 'grid',
       workflow: 'distribute',
       mode: ''
     }, {
       id: 'special',
       label: '特殊品',
-      desc: '使用特殊品模板合成结果',
       iconKey: 'layers',
       workflow: 'chat',
       mode: template && template.is_special_full ? 'special_full' : 'special'
-    }, {
-      id: 'download',
-      label: '花瓣下载',
-      desc: '输入花瓣 ID，自动识别可下载格式',
-      iconKey: 'download',
-      workflow: 'chat',
-      mode: 'download'
     }];
   }, [template && template.is_special_full]);
   const getTaskIcon = React.useCallback(function (iconKey) {
     return I[iconKey] || I.sparkles;
   }, []);
-  const activeTaskLabel = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : 'GPT Image 2.5' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '问答';
+  const activeTaskLabel = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.5' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '问答';
   const activeTaskIconKey = activeMode === 'ai-image' ? 'image' : activeMode === 'special' || activeMode === 'special_full' ? 'layers' : selectedWorkflow === 'compose' || selectedWorkflow === 'distribute' ? 'grid' : selectedWorkflow === 'download' ? 'download' : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
   const activeTaskIconSrc = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
@@ -6474,9 +6469,9 @@ const Composer = ({
             width: '100%',
             display: 'flex',
             alignItems: 'center',
-            gap: 11,
-            padding: '10px 11px',
-            borderRadius: 13,
+            gap: 9,
+            padding: '8px 11px',
+            borderRadius: 10,
             background: active ? 'var(--panel-2)' : 'transparent',
             border: '1px solid ' + (active ? 'var(--line)' : 'transparent'),
             textAlign: 'left',
@@ -6487,16 +6482,18 @@ const Composer = ({
           src: item.iconSrc,
           alt: item.label,
           style: {
-            width: 30,
-            height: 30,
+            width: 22,
+            height: 22,
+            flexShrink: 0,
             borderRadius: 999,
-            objectFit: 'cover',
+            objectFit: 'contain',
             opacity: isAvailable ? 1 : 0.5
           }
         }) : React.createElement('div', {
           style: {
-            width: 30,
-            height: 30,
+            width: 22,
+            height: 22,
+            flexShrink: 0,
             borderRadius: 999,
             background: active ? 'var(--ink)' : 'var(--panel-2)',
             color: active ? 'var(--panel)' : 'var(--ink-3)',
@@ -6504,7 +6501,7 @@ const Composer = ({
             placeItems: 'center'
           }
         }, React.createElement(IconComp, {
-          size: 14
+          size: 12
         })), React.createElement('div', {
           style: {
             flex: 1,
@@ -6516,14 +6513,8 @@ const Composer = ({
             fontWeight: 700,
             color: 'var(--ink)'
           }
-        }, item.label), React.createElement('div', {
-          style: {
-            fontSize: 11,
-            color: 'var(--ink-3)',
-            marginTop: 2
-          }
-        }, item.desc)));
-      }))), 344);
+        }, item.label)));
+      }))), 240);
     }
     if (prototypePanel === 'params') {
       const sizeItems = [['auto', '自动'], ['1:1', '1:1'], ['3:2', '3:2'], ['2:3', '2:3'], ['4:3', '4:3'], ['3:4', '3:4'], ['5:4', '5:4'], ['16:9', '16:9'], ['9:16', '9:16']];
@@ -6571,7 +6562,7 @@ const Composer = ({
           letterSpacing: '-0.01em',
           color: 'var(--ink)'
         }
-      }, paramsTitle), isImageParams && React.createElement(React.Fragment, null, imageFieldLabel('尺寸'), React.createElement('div', {
+      }, paramsTitle), isImageParams && React.createElement(React.Fragment, null, imageFieldLabel(activeAiModel === 'gpt-image-2' ? '比例' : '尺寸'), React.createElement('div', {
         style: {
           display: 'grid',
           gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
@@ -6718,7 +6709,7 @@ const Composer = ({
           gap: 16,
           alignItems: 'start'
         }
-      }, React.createElement('div', null, imageFieldLabel('清晰度'), React.createElement('div', {
+      }, React.createElement('div', null, imageFieldLabel(activeAiModel === 'gpt-image-2' ? '分辨率' : '清晰度'), React.createElement('div', {
         style: {
           display: 'flex',
           width: '100%',
@@ -7770,13 +7761,7 @@ const Composer = ({
     title: refImages.length > 0 ? `已附加 ${refImages.length} 张参考图` : agentEnabled ? '附加参考图给 Agent' : '附加图片或文件'
   }, /*#__PURE__*/React.createElement(I.paperclip, {
     size: 14
-  })), !agentEnabled && agentSkills.length > 0 && prototypeToolButton('skills', '技能', React.createElement(I.wand, {
-    size: 14
-  }), null, {
-    width: 34,
-    minWidth: 34,
-    height: 34
-  }), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1
     }
@@ -8226,6 +8211,7 @@ const Chat = ({
     const value = String(model || '').trim().toLowerCase();
     if (!value) return '';
     if (value.includes('nano') || value.includes('banana') || value.includes('gemini')) return 'nano-banana-pro';
+    if (/^gpt[\s_-]*image[\s_-]*2$/.test(value)) return 'gpt-image-2';
     if (value.includes('gpt') || value.includes('image')) return 'gpt-image-2.5';
     return value;
   }, []);
@@ -8477,6 +8463,13 @@ const Chat = ({
       }).filter(Boolean);
       try {
         await window.API.streamSkillPlan(activeSkill, finalPrompt, plannerRefImages, {
+          onEvent: function (eventName) {
+            if (eventName !== 'reset') return;
+            streamedTrace = '';
+            setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === primarySlotAt ? Object.assign({}, m, {
+              promptTrace: ''
+            }) : m));
+          },
           onDelta: function (payload) {
             var delta = String(payload && payload.text || '');
             if (!delta) return;
@@ -9192,6 +9185,20 @@ const Chat = ({
         projectId = await ensureAgentProject();
         await window.API.streamAgentChat(projectId, executionText, {
           onEvent: function (eventName, payload) {
+            if (eventName === 'agent_reset') {
+              thinkingText = '';
+              thinkingStatus = '正在重新组织回复...';
+              setMessages(function (msgs) {
+                return msgs.map(function (m, i) {
+                  return i === assistantIdx ? Object.assign({}, m, {
+                    text: '',
+                    thinking: '',
+                    thinkingStatus: thinkingStatus
+                  }) : m;
+                });
+              });
+              return;
+            }
             if (eventName === 'agent_thinking') {
               var thinkingPatch = applyThinkingEvent(payload || {});
               setMessages(function (msgs) {
@@ -9900,9 +9907,9 @@ const Chat = ({
     const model = args && args[0] || msg && msg.model || '';
     if (text) setLocalSeed({
       text: String(text),
-      mode: model === 'nano-banana-pro' ? 'nano-banana-pro' : 'gpt-image-2.5'
+      mode: normalizeAiImageModel(model) || 'gpt-image-2.5'
     });
-  }, []);
+  }, [normalizeAiImageModel]);
   const handlePickSkill = React.useCallback(function (skill) {
     if (!skill || !skill.name) return;
     setLocalSeed({

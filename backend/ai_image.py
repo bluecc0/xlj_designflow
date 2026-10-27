@@ -2381,9 +2381,9 @@ def get_smart_route_candidates(
             preferred_order = [PROVIDER_APIMART]
     elif model_name == "gpt-image-2":
         if res_upper in ("2K", "4K"):
-            preferred_order = [PROVIDER_APIMART, PROVIDER_ADOBE2API]
+            preferred_order = [PROVIDER_APIMART]
         else:  # 1K 或 auto 默认为 1K
-            preferred_order = [PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_ADOBE2API]
+            preferred_order = [PROVIDER_SUB2API, PROVIDER_APIMART]
     elif "banana" in model_name or "gemini" in model_name:
         preferred_order = [PROVIDER_APIMART, PROVIDER_ADOBE2API]
     else:

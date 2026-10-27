@@ -65,7 +65,7 @@ class Settings:
     sub2api_monitor_timeout_seconds: int = int(os.getenv("SUB2API_MONITOR_TIMEOUT_SECONDS", "600"))
     sub2api_monitor_retention_days: int = int(os.getenv("SUB2API_MONITOR_RETENTION_DAYS", "30"))
 
-    # 默认对话 LLM：优先使用订阅 OpenAI-compatible line，SiliconFlow Qwen 作为兜底
+    # 对话、Agent、Skill 和 VLM 统一使用订阅线路优先、APIMart 兜底。
     chat_llm_model: str = os.getenv("CHAT_LLM_MODEL", "") or "gpt-6-luna"
     chat_llm_base_url: str = os.getenv("CHAT_LLM_BASE_URL", "") or cliproxy_base_url
     chat_llm_api_key: str = os.getenv("CHAT_LLM_API_KEY", "") or cliproxy_api_key
@@ -81,6 +81,9 @@ class Settings:
     ai_image_base_url: str = os.getenv("AI_IMAGE_BASE_URL", "https://api.apimart.ai")
     ai_image_api_key: str = os.getenv("AI_IMAGE_API_KEY", "")
     ai_image_api_proxy_url: str = os.getenv("AI_IMAGE_API_PROXY_URL", "").strip()
+    # 留空时沿用各业务当前的模型名；可配置 APIMart 对应的兼容模型。
+    apimart_llm_model: str = os.getenv("APIMART_LLM_MODEL", "").strip()
+    apimart_vlm_model: str = os.getenv("APIMART_VLM_MODEL", "").strip()
     ai_image_gpt_25_model: str = os.getenv("AI_IMAGE_GPT_25_MODEL", "gpt-image-2.5-flare")
     ai_image_gpt_25_quality: str = os.getenv("AI_IMAGE_GPT_25_QUALITY", "medium")
     ai_image_job_timeout_seconds: int = int(os.getenv("AI_IMAGE_JOB_TIMEOUT_SECONDS", "600"))

@@ -1681,7 +1681,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
   const STATUS_COMPOSER_HEIGHT = 208;
   const MAX_COMPOSER_HEIGHT = 500;
   const minComposerHeightRef = React.useRef(COLLAPSED_COMPOSER_HEIGHT);
-  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'nano-banana-pro'
+  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro'
     ? 'ai-image'
     : selectedMode === 'special' || selectedMode === 'special_full'
       ? selectedMode
@@ -1966,7 +1966,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
   ];
 
   const AI_QUALITIES = ['1K', '2K', '4K'];
-  // 统一的尺寸选项，两个模型共用（取交集：二者均支持的比例）
+  // 生图模型共用的比例和分辨率选项。
   const AI_OPTIONS = {
     auto:  { label: 'auto', qualities: ['1K', '2K', '4K'], preview: 'auto', px: { '1K': 'auto', '2K': 'auto', '4K': 'auto' } },
     '1:1': { label: '1:1', qualities: ['1K', '2K', '4K'], preview: '1024×1024', px: { '1K': '1024×1024', '2K': '2048×2048', '4K': '2880×2880' } },
@@ -1980,7 +1980,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
   };
 
   const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2'
-    ? 'gpt-image-2.5'
+    ? selectedMode
     : selectedMode === 'nano-banana-pro'
       ? 'nano-banana-pro'
       : '';
@@ -2088,7 +2088,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       size: aiImageSize,
       resolution: aiQuality,
       variant: aiVariant,
-      quality: aiQualityTier,
+      quality: activeAiModel === 'gpt-image-2' ? 'auto' : aiQualityTier,
       provider: aiProvider,
       workflow: selectedWorkflowMode,
       model: activeAiModel,
@@ -2528,19 +2528,19 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
   const canSend = Boolean(text.trim() || files.length) && !isLoading;
   const getTaskDefinitions = React.useCallback(function() {
     return [
-      { id: 'chat', label: '问答', desc: '询问流程、模板、素材规则', iconKey: 'sparkles', workflow: 'chat', mode: '' },
-      { id: 'gpt-image', label: 'GPT Image 2.5', desc: '文生图，中文语义和文字更强', iconKey: 'image', iconSrc: 'src/icon/openai.png', workflow: 'chat', mode: 'gpt-image-2.5' },
-      { id: 'nano-banana', label: 'Nano Banana Pro', desc: '图生图/改图，参考图一致性更强', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', workflow: 'chat', mode: 'nano-banana-pro' },
-      { id: 'distribute', label: '智能铺货', desc: '上传表格，自动解析为铺货 JSON', iconKey: 'grid', workflow: 'distribute', mode: '' },
-      { id: 'special', label: '特殊品', desc: '使用特殊品模板合成结果', iconKey: 'layers', workflow: 'chat', mode: template && template.is_special_full ? 'special_full' : 'special' },
-      { id: 'download', label: '花瓣下载', desc: '输入花瓣 ID，自动识别可下载格式', iconKey: 'download', workflow: 'chat', mode: 'download' },
+      { id: 'chat', label: '问答', iconKey: 'sparkles', workflow: 'chat', mode: '' },
+      { id: 'gpt-image', label: 'GPT Image 2.5', iconKey: 'image', iconSrc: 'src/icon/openai.png', workflow: 'chat', mode: 'gpt-image-2.5' },
+      { id: 'gpt-image-2', label: 'GPT Image 2', iconKey: 'image', iconSrc: 'src/icon/openai.png', workflow: 'chat', mode: 'gpt-image-2' },
+      { id: 'nano-banana', label: 'Nano Banana Pro', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', workflow: 'chat', mode: 'nano-banana-pro' },
+      { id: 'distribute', label: '智能铺货', iconKey: 'grid', workflow: 'distribute', mode: '' },
+      { id: 'special', label: '特殊品', iconKey: 'layers', workflow: 'chat', mode: template && template.is_special_full ? 'special_full' : 'special' },
     ];
   }, [template && template.is_special_full]);
   const getTaskIcon = React.useCallback(function(iconKey) {
     return I[iconKey] || I.sparkles;
   }, []);
   const activeTaskLabel = activeMode === 'ai-image'
-    ? (activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : 'GPT Image 2.5')
+    ? (activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.5')
     : activeMode === 'special_full'
       ? '完整特殊品'
       : activeMode === 'special'
@@ -2827,9 +2827,9 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
                 width: '100%',
                 display: 'flex',
                 alignItems: 'center',
-                gap: 11,
-                padding: '10px 11px',
-                borderRadius: 13,
+                gap: 9,
+                padding: '8px 11px',
+                borderRadius: 10,
                 background: active ? 'var(--panel-2)' : 'transparent',
                 border: '1px solid ' + (active ? 'var(--line)' : 'transparent'),
                 textAlign: 'left',
@@ -2838,26 +2838,26 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
               }
             },
               item.iconSrc
-                ? React.createElement('img', { src: item.iconSrc, alt: item.label, style: { width: 30, height: 30, borderRadius: 999, objectFit: 'cover', opacity: isAvailable ? 1 : 0.5 } })
+                ? React.createElement('img', { src: item.iconSrc, alt: item.label, style: { width: 22, height: 22, flexShrink: 0, borderRadius: 999, objectFit: 'contain', opacity: isAvailable ? 1 : 0.5 } })
                 : React.createElement('div', {
                     style: {
-                      width: 30,
-                      height: 30,
+                      width: 22,
+                      height: 22,
+                      flexShrink: 0,
                       borderRadius: 999,
                       background: active ? 'var(--ink)' : 'var(--panel-2)',
                       color: active ? 'var(--panel)' : 'var(--ink-3)',
                       display: 'grid',
                       placeItems: 'center',
                     }
-                  }, React.createElement(IconComp, { size: 14 })),
+                  }, React.createElement(IconComp, { size: 12 })),
               React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-                React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: 'var(--ink)' } }, item.label),
-                React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-3)', marginTop: 2 } }, item.desc)
+                React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: 'var(--ink)' } }, item.label)
               )
             );
           })
         )
-      ), 344);
+      ), 240);
     }
     if (prototypePanel === 'params') {
       const sizeItems = [
@@ -2902,7 +2902,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       return protoPanelShell(React.createElement(React.Fragment, null,
         !isImageParams && React.createElement('div', { style: { fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--ink)' } }, paramsTitle),
         isImageParams && React.createElement(React.Fragment, null,
-          imageFieldLabel('尺寸'),
+          imageFieldLabel(activeAiModel === 'gpt-image-2' ? '比例' : '尺寸'),
           React.createElement('div', {
             style: {
               display: 'grid',
@@ -3068,7 +3068,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
             }
           },
             React.createElement('div', null,
-              imageFieldLabel('清晰度'),
+              imageFieldLabel(activeAiModel === 'gpt-image-2' ? '分辨率' : '清晰度'),
               React.createElement('div', {
                 style: {
                   display: 'flex',
@@ -3948,11 +3948,6 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
           >
             <I.paperclip size={14}/>
           </button>
-          {!agentEnabled && agentSkills.length > 0 && prototypeToolButton('skills', '技能', React.createElement(I.wand, { size: 14 }), null, {
-            width: 34,
-            minWidth: 34,
-            height: 34,
-          })}
           <div style={{ flex: 1 }}/>
           {prototypeToolButton('quick_prompts', '常用语', React.createElement(I.bookmark, { size: 14 }), null, {
             width: 34,
@@ -4360,6 +4355,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     const value = String(model || '').trim().toLowerCase();
     if (!value) return '';
     if (value.includes('nano') || value.includes('banana') || value.includes('gemini')) return 'nano-banana-pro';
+    if (/^gpt[\s_-]*image[\s_-]*2$/.test(value)) return 'gpt-image-2';
     if (value.includes('gpt') || value.includes('image')) return 'gpt-image-2.5';
     return value;
   }, []);
@@ -4537,6 +4533,15 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       var plannerRefImages = (Array.isArray(finalRefImages) ? finalRefImages : []).slice(0, 3).map(function(r) { return r && r.file; }).filter(Boolean);
       try {
         await window.API.streamSkillPlan(activeSkill, finalPrompt, plannerRefImages, {
+          onEvent: function(eventName) {
+            if (eventName !== 'reset') return;
+            streamedTrace = '';
+            setMessages(msgs => msgs.map(m =>
+              m.type === 'ai-image-generating' && m.startedAt === primarySlotAt
+                ? Object.assign({}, m, { promptTrace: '' })
+                : m
+            ));
+          },
           onDelta: function(payload) {
             var delta = String((payload && payload.text) || '');
             if (!delta) return;
@@ -5226,6 +5231,18 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         projectId = await ensureAgentProject();
         await window.API.streamAgentChat(projectId, executionText, {
           onEvent: function(eventName, payload) {
+            if (eventName === 'agent_reset') {
+              thinkingText = '';
+              thinkingStatus = '正在重新组织回复...';
+              setMessages(function(msgs) {
+                return msgs.map(function(m, i) {
+                  return i === assistantIdx
+                    ? Object.assign({}, m, { text: '', thinking: '', thinkingStatus: thinkingStatus })
+                    : m;
+                });
+              });
+              return;
+            }
             if (eventName === 'agent_thinking') {
               var thinkingPatch = applyThinkingEvent(payload || {});
               setMessages(function(msgs) {
@@ -5793,8 +5810,8 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     const args = msg && msg.retryArgs;
     const text = (args && (args[2] || args[1])) || (msg && msg.prompt) || '';
     const model = (args && args[0]) || (msg && msg.model) || '';
-    if (text) setLocalSeed({ text: String(text), mode: model === 'nano-banana-pro' ? 'nano-banana-pro' : 'gpt-image-2.5' });
-  }, []);
+    if (text) setLocalSeed({ text: String(text), mode: normalizeAiImageModel(model) || 'gpt-image-2.5' });
+  }, [normalizeAiImageModel]);
   const handlePickSkill = React.useCallback(function(skill) {
     if (!skill || !skill.name) return;
     setLocalSeed({ text: '', skill: skill.name });
