@@ -11529,6 +11529,11 @@ const ADMIN_CSS = `
   .df-admin-promptlabel { margin-bottom: 6px; color: var(--admin-faint); font-size: 8.5px; }
   .df-admin-prompttext { color: var(--admin-ink); font-size: 11px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
   .df-admin-resultimage { display: block; width: 100%; max-height: 320px; object-fit: contain; border: 1px solid var(--admin-line); border-radius: 8px; background: #f5f5f2; }
+  .df-admin-references { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 12px; }
+  .df-admin-reference { min-width: 0; color: inherit; text-decoration: none; }
+  .df-admin-referencepreview { display: flex; align-items: center; justify-content: center; height: 128px; background: #f5f5f2; border-radius: 6px; overflow: hidden; font-size: 12px; color: var(--admin-muted); }
+  .df-admin-referencepreview img { display: block; width: 100%; height: 100%; object-fit: contain; }
+  .df-admin-referencename { margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
   .df-admin-detailactions { display: flex; gap: 7px; margin-top: 9px; }
   .df-admin-raw summary { margin-top: 12px; color: var(--admin-muted); cursor: pointer; font-size: 10px; }
   .df-admin-code { margin-top: 14px; padding: 12px; border-radius: 8px; color: #d8ddd4; background: #20231f; font: 9.5px/1.6 "JetBrains Mono", monospace; white-space: pre-wrap; word-break: break-all; }
@@ -12119,6 +12124,33 @@ function AdminUserManagement({
     }, "\u5220\u9664")));
   }))))));
 }
+function AdminReferenceImage({
+  image,
+  index
+}) {
+  var [failed, setFailed] = React.useState(false);
+  var label = image.label || '参考图 ' + (index + 1);
+  return /*#__PURE__*/React.createElement("a", {
+    className: "df-admin-reference",
+    href: image.url,
+    target: "_blank",
+    rel: "noreferrer",
+    title: label + (image.name ? ' · ' + image.name : '') + '（查看原图）'
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-referencepreview"
+  }, failed ? /*#__PURE__*/React.createElement("span", null, "\u56FE\u7247\u6682\u4E0D\u53EF\u7528") : /*#__PURE__*/React.createElement("img", {
+    src: image.url,
+    alt: label,
+    loading: "lazy",
+    onError: function () {
+      setFailed(true);
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-referencename"
+  }, label), image.name ? /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-referencename df-admin-faint"
+  }, image.name) : null);
+}
 function AdminTaskDrawer({
   task,
   detail,
@@ -12139,7 +12171,7 @@ function AdminTaskDrawer({
     return adminHasContent(entry[1]);
   });
   var referenceNames = Array.isArray(request.reference_names) ? request.reference_names : [];
-  var referencePreviews = Array.isArray(request.reference_previews) ? request.reference_previews : [];
+  var referenceImages = Array.isArray(request.reference_images) ? request.reference_images : [];
   var resultUrl = result.image_url || data.image_url || '';
   var canPreviewResult = adminCanPreviewImage(resultUrl);
   var penpotUrl = data.penpot_edit_url || result.penpot_edit_url || '';
@@ -12209,7 +12241,7 @@ function AdminTaskDrawer({
     className: "df-admin-raw"
   }, /*#__PURE__*/React.createElement("summary", null, "\u67E5\u770B Prompt \u89C4\u5212\u8FC7\u7A0B"), /*#__PURE__*/React.createElement("div", {
     className: "df-admin-code"
-  }, adminJsonText(prompts.trace))) : null) : null, data.has_reference || referenceNames.length || referencePreviews.length ? /*#__PURE__*/React.createElement("section", {
+  }, adminJsonText(prompts.trace))) : null) : null, data.has_reference || referenceNames.length || referenceImages.length ? /*#__PURE__*/React.createElement("section", {
     className: "df-admin-detailsection"
   }, /*#__PURE__*/React.createElement("div", {
     className: "df-admin-detailtitle"
@@ -12218,14 +12250,17 @@ function AdminTaskDrawer({
     style: {
       paddingTop: 0
     }
-  }, /*#__PURE__*/React.createElement("dt", null, "\u624B\u52A8\u9644\u52A0"), /*#__PURE__*/React.createElement("dd", null, request.manual_reference_count == null ? '历史数据未记录' : request.manual_reference_count + ' 张'), /*#__PURE__*/React.createElement("dt", null, "\u4E0A\u4E0B\u6587\u7EE7\u627F"), /*#__PURE__*/React.createElement("dd", null, request.context_reference_count == null ? '历史数据未记录' : request.context_reference_count + ' 张'), /*#__PURE__*/React.createElement("dt", null, "\u6587\u4EF6"), /*#__PURE__*/React.createElement("dd", null, referenceNames.length ? referenceNames.join('、') : '历史数据未记录')), referencePreviews.map(function (url, index) {
-    return /*#__PURE__*/React.createElement("img", {
-      className: "df-admin-resultimage",
-      src: url,
-      alt: '参考图 ' + (index + 1),
-      key: url + index
+  }, /*#__PURE__*/React.createElement("dt", null, "\u624B\u52A8\u9644\u52A0"), /*#__PURE__*/React.createElement("dd", null, request.manual_reference_count == null ? '历史数据未记录' : request.manual_reference_count + ' 张'), /*#__PURE__*/React.createElement("dt", null, "\u4E0A\u4E0B\u6587\u7EE7\u627F"), /*#__PURE__*/React.createElement("dd", null, request.context_reference_count == null ? '历史数据未记录' : request.context_reference_count + ' 张'), /*#__PURE__*/React.createElement("dt", null, "\u6587\u4EF6"), /*#__PURE__*/React.createElement("dd", null, referenceNames.length ? referenceNames.join('、') : '历史数据未记录')), referenceImages.length ? /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-references"
+  }, referenceImages.map(function (image, index) {
+    return /*#__PURE__*/React.createElement(AdminReferenceImage, {
+      image: image,
+      index: index,
+      key: data.id + image.url
     });
-  })) : null, /*#__PURE__*/React.createElement("section", {
+  })) : /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-faint"
+  }, "\u6B64\u5386\u53F2\u4EFB\u52A1\u672A\u4FDD\u7559\u53EF\u67E5\u770B\u7684\u53C2\u8003\u56FE")) : null, /*#__PURE__*/React.createElement("section", {
     className: "df-admin-detailsection"
   }, /*#__PURE__*/React.createElement("div", {
     className: "df-admin-detailtitle"

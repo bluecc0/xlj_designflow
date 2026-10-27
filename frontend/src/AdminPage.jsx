@@ -326,6 +326,11 @@ const ADMIN_CSS = `
   .df-admin-promptlabel { margin-bottom: 6px; color: var(--admin-faint); font-size: 8.5px; }
   .df-admin-prompttext { color: var(--admin-ink); font-size: 11px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
   .df-admin-resultimage { display: block; width: 100%; max-height: 320px; object-fit: contain; border: 1px solid var(--admin-line); border-radius: 8px; background: #f5f5f2; }
+  .df-admin-references { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 12px; }
+  .df-admin-reference { min-width: 0; color: inherit; text-decoration: none; }
+  .df-admin-referencepreview { display: flex; align-items: center; justify-content: center; height: 128px; background: #f5f5f2; border-radius: 6px; overflow: hidden; font-size: 12px; color: var(--admin-muted); }
+  .df-admin-referencepreview img { display: block; width: 100%; height: 100%; object-fit: contain; }
+  .df-admin-referencename { margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
   .df-admin-detailactions { display: flex; gap: 7px; margin-top: 9px; }
   .df-admin-raw summary { margin-top: 12px; color: var(--admin-muted); cursor: pointer; font-size: 10px; }
   .df-admin-code { margin-top: 14px; padding: 12px; border-radius: 8px; color: #d8ddd4; background: #20231f; font: 9.5px/1.6 "JetBrains Mono", monospace; white-space: pre-wrap; word-break: break-all; }
@@ -751,6 +756,20 @@ function AdminUserManagement({ currentUser, users, onReload, showTestUsers, onTo
   );
 }
 
+function AdminReferenceImage({ image, index }) {
+  var [failed, setFailed] = React.useState(false);
+  var label = image.label || ('参考图 ' + (index + 1));
+  return (
+    <a className="df-admin-reference" href={image.url} target="_blank" rel="noreferrer" title={label + (image.name ? ' · ' + image.name : '') + '（查看原图）'}>
+      <div className="df-admin-referencepreview">
+        {failed ? <span>图片暂不可用</span> : <img src={image.url} alt={label} loading="lazy" onError={function() { setFailed(true); }} />}
+      </div>
+      <div className="df-admin-referencename">{label}</div>
+      {image.name ? <div className="df-admin-referencename df-admin-faint">{image.name}</div> : null}
+    </a>
+  );
+}
+
 function AdminTaskDrawer({ task, detail, loading, error, onClose }) {
   if (!task) return null;
   var data = detail || task;
@@ -769,7 +788,7 @@ function AdminTaskDrawer({ task, detail, loading, error, onClose }) {
     return adminHasContent(entry[1]);
   });
   var referenceNames = Array.isArray(request.reference_names) ? request.reference_names : [];
-  var referencePreviews = Array.isArray(request.reference_previews) ? request.reference_previews : [];
+  var referenceImages = Array.isArray(request.reference_images) ? request.reference_images : [];
   var resultUrl = result.image_url || data.image_url || '';
   var canPreviewResult = adminCanPreviewImage(resultUrl);
   var penpotUrl = data.penpot_edit_url || result.penpot_edit_url || '';
@@ -819,7 +838,7 @@ function AdminTaskDrawer({ task, detail, loading, error, onClose }) {
                 ) : null}
               </section>
             ) : null}
-            {(data.has_reference || referenceNames.length || referencePreviews.length) ? (
+            {(data.has_reference || referenceNames.length || referenceImages.length) ? (
               <section className="df-admin-detailsection">
                 <div className="df-admin-detailtitle">参考图信息</div>
                 <dl className="df-admin-detailgrid" style={{ paddingTop: 0 }}>
@@ -827,7 +846,11 @@ function AdminTaskDrawer({ task, detail, loading, error, onClose }) {
                   <dt>上下文继承</dt><dd>{request.context_reference_count == null ? '历史数据未记录' : request.context_reference_count + ' 张'}</dd>
                   <dt>文件</dt><dd>{referenceNames.length ? referenceNames.join('、') : '历史数据未记录'}</dd>
                 </dl>
-                {referencePreviews.map(function(url, index) { return <img className="df-admin-resultimage" src={url} alt={'参考图 ' + (index + 1)} key={url + index} />; })}
+                {referenceImages.length ? (
+                  <div className="df-admin-references">
+                    {referenceImages.map(function(image, index) { return <AdminReferenceImage image={image} index={index} key={data.id + image.url} />; })}
+                  </div>
+                ) : <div className="df-admin-faint">此历史任务未保留可查看的参考图</div>}
               </section>
             ) : null}
             <section className="df-admin-detailsection">

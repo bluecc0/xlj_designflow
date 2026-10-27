@@ -7985,6 +7985,75 @@ def admin_tasks(
     }
 
 
+def _admin_reference_images(detail: dict) -> list[dict]:
+    """优先展示持久化原图，兼容只有参考图目录或预览地址的历史任务。"""
+    meta = detail.get("request") or {}
+    images: list[dict] = []
+    seen: set[str] = set()
+
+    def append(image):
+        if not isinstance(image, dict):
+            return
+        url = image.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return
+        url = url.strip()
+        # 原图链接只允许站内地址或 HTTP(S)，避免将历史脏数据作为可点击链接。
+        if "\\" in url or any(ord(char) < 32 for char in url):
+            return
+        if not (url.startswith("/") and not url.startswith("//")) and not re.match(r"^https?://", url, re.I):
+            return
+        if url not in seen:
+            seen.add(url)
+            images.append({**image, "url": url})
+
+    stored = meta.get("reference_images")
+    for image in stored if isinstance(stored, list) else []:
+        append(image)
+
+    names = meta.get("reference_names")
+    names = names if isinstance(names, list) else []
+    if (
+        (not images or (not any(image.get("type") != "context" for image in images)
+                        and meta.get("manual_reference_count") != 0))
+        and (detail.get("has_reference") or names)
+    ):
+        # 批量任务与重试任务可能共用目录，不能仅使用当前任务 ID。
+        storage_id = str(meta.get("reference_storage_job_id") or detail.get("id") or "")
+        owner = _safe_asset_owner_id(str(detail.get("user_id") or ""))
+        if detail.get("user_id") and storage_id and re.fullmatch(r"[\w-]+", storage_id):
+            root = (settings.output_path / "ai-images").resolve()
+            ref_dir = (root / owner / "refs" / storage_id).resolve()
+            try:
+                if root in ref_dir.parents and ref_dir.is_dir():
+                    files = sorted(p for p in ref_dir.iterdir() if p.is_file()
+                                   and ref_dir in p.resolve().parents
+                                   and re.fullmatch(r"ref_\d+\.(png|jpe?g|webp)", p.name, re.I))
+                    for index, path in enumerate(files):
+                        manual_count = meta.get("manual_reference_count")
+                        is_context = isinstance(manual_count, int) and index >= manual_count
+                        append({
+                            "type": "context" if is_context else "manual",
+                            "name": names[index] if index < len(names) else path.name,
+                            "url": "/ai-images/" + quote(path.relative_to(root).as_posix()),
+                            "label": "上下文关联图" if is_context else f"用户参考图 {index + 1}",
+                        })
+            except OSError:
+                logger.warning("Unable to read reference images for admin task %s", detail.get("id"))
+
+    previews = meta.get("reference_previews")
+    if not images:
+        for index, url in enumerate(previews if isinstance(previews, list) else []):
+            append({"url": url, "type": "preview", "name": names[index] if index < len(names) else "",
+                    "label": f"参考图 {index + 1}"})
+    if meta.get("operation") == "outpainting":
+        append({"url": meta.get("source_snapshot_url") or meta.get("source_image_url"),
+                "type": "outpainting_source", "label": "扩图原图"})
+    append({"url": meta.get("context_reference_url") or meta.get("context_image_url"),
+            "type": "context", "label": "上下文关联图"})
+    return images
+
+
 @app.get("/admin/tasks/{task_type}/{task_id}")
 def admin_task_detail(request: Request, task_type: str, task_id: str):
     """任务完整持久化快照（仅管理员，只读）。"""
@@ -7997,6 +8066,8 @@ def admin_task_detail(request: Request, task_type: str, task_id: str):
     detail = load_admin_task_detail(task_type, task_id)
     if not detail:
         raise HTTPException(404, "任务不存在")
+    if task_type == "ai_image":
+        detail["request"]["reference_images"] = _admin_reference_images(detail)
     return {"task": detail}
 
 

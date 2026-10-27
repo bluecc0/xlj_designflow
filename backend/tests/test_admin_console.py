@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from fastapi import HTTPException
 
 from backend import job_store, main
 
@@ -491,6 +494,84 @@ class AdminConsoleStoreTest(unittest.TestCase):
         self.assertEqual(result["user"]["id"], "route_test_user")
         save_users.assert_called_once()
         sync_test_status.assert_called_once_with("route_test_user", True)
+
+
+class AdminReferenceImagesTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.output = Path(self.temp.name)
+        patcher = patch.object(main.settings, "output_path", self.output)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def detail(self, meta):
+        return {"id": "retry-job", "user_id": "designer", "has_reference": True, "request": meta}
+
+    def test_admin_endpoint_exposes_originals_and_context_without_duplicates(self):
+        refs = [{"url": "/ai-images/designer/refs/batch/ref_00.png", "name": "商品.png", "type": "manual"},
+                {"url": "/ai-images/designer/previous.png", "type": "context"}]
+        detail = self.detail({"reference_images": refs, "context_reference_url": refs[1]["url"],
+                              "reference_previews": ["/thumbnail.png"]})
+        with (
+            patch.object(main, "_current_user", return_value={"id": "admin", "role": "admin"}),
+            patch.object(main, "load_admin_task_detail", return_value=detail),
+        ):
+            result = main.admin_task_detail(object(), "ai_image", "retry-job")
+        self.assertEqual(result["task"]["request"]["reference_images"], refs)
+        # Returned data remains serializable in the HTTP response.
+        json.dumps(result)
+
+    def test_legacy_batch_and_retry_use_shared_reference_directory(self):
+        ref_dir = self.output / "ai-images/designer/refs/shared-batch"
+        ref_dir.mkdir(parents=True)
+        for name in ("ref_01.jpg", "ref_00.png", "unrelated.png"):
+            (ref_dir / name).write_bytes(b"test")
+        refs = main._admin_reference_images(self.detail({
+            "reference_storage_job_id": "shared-batch", "manual_reference_count": 1,
+            "reference_names": ["上衣.png", "previous.jpg"],
+        }))
+        self.assertEqual([r["name"] for r in refs], ["上衣.png", "previous.jpg"])
+        self.assertEqual([r["type"] for r in refs], ["manual", "context"])
+        self.assertEqual(refs[0]["url"], "/ai-images/designer/refs/shared-batch/ref_00.png")
+        self.assertNotIn(str(self.output), json.dumps(refs))
+
+    def test_legacy_job_id_preview_and_missing_files(self):
+        ref_dir = self.output / "ai-images/designer/refs/retry-job"
+        ref_dir.mkdir(parents=True)
+        (ref_dir / "ref_00.webp").write_bytes(b"test")
+        self.assertEqual(main._admin_reference_images(self.detail({}))[0]["url"],
+                         "/ai-images/designer/refs/retry-job/ref_00.webp")
+        detail = self.detail({"reference_storage_job_id": "missing",
+                              "reference_previews": ["data:image/png;base64,AAAA", "javascript:alert(1)",
+                                                     "/legacy.png", "/legacy.png"]})
+        self.assertEqual([r["url"] for r in main._admin_reference_images(detail)], ["/legacy.png"])
+        detail["request"]["reference_previews"] = []
+        self.assertEqual(main._admin_reference_images(detail), [])
+        detail["request"].update(reference_previews=["/manual.png"], context_reference_url="/context.png")
+        self.assertEqual([r["url"] for r in main._admin_reference_images(detail)],
+                         ["/manual.png", "/context.png"])
+        refs = main._admin_reference_images(self.detail({"manual_reference_count": 0}))
+        self.assertEqual(refs[0]["type"], "context")
+
+    def test_outpainting_source_and_invalid_storage_directory(self):
+        ref_dir = self.output / "ai-images/designer/refs/shared-batch"
+        ref_dir.mkdir(parents=True)
+        (ref_dir / "ref_00.png").write_bytes(b"test")
+        detail = self.detail({"reference_storage_job_id": "../refs/shared-batch"})
+        self.assertEqual(main._admin_reference_images(detail), [])
+        detail["request"].update(operation="outpainting", source_snapshot_url="/source.png")
+        self.assertEqual(main._admin_reference_images(detail)[0]["type"], "outpainting_source")
+
+    def test_non_admin_cannot_read_task_references(self):
+        with (
+            patch.object(main, "_current_user", return_value={"id": "designer", "role": "user"}),
+            patch.object(main, "load_admin_task_detail") as loader,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            main.admin_task_detail(object(), "ai_image", "retry-job")
+        self.assertEqual(raised.exception.status_code, 403)
+        loader.assert_not_called()
 
 
 if __name__ == "__main__":
