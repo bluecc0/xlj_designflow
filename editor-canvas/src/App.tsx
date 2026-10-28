@@ -1007,6 +1007,9 @@ export function App() {
         // 触控板捏合或 Ctrl+滚轮：平滑指数缩放
         const factor = Math.exp(-e.deltaY * 0.01)
         zoomAt({ x: e.clientX, y: e.clientY }, factor)
+      } else if (e.shiftKey) {
+        // 兼容浏览器已将 Shift+滚轮转换成 deltaX 的情况。
+        panBy(-(e.deltaX || e.deltaY), 0)
       } else {
         // 双指滑动平移或鼠标常规滚轮
         panBy(-e.deltaX, -e.deltaY)
