@@ -6514,29 +6514,30 @@ const Composer = ({
             cursor: isAvailable ? 'pointer' : 'not-allowed',
             opacity: isAvailable ? 1 : 0.4
           }
-        }, item.iconSrc ? React.createElement('img', {
-          src: item.iconSrc,
-          alt: item.label,
+        },
+        // 品牌图标与系统图标统一放进 22px 圆形底；Gemini 四角星面积小，光学上放大 1px
+        React.createElement('div', {
           style: {
             width: 22,
             height: 22,
             flexShrink: 0,
             borderRadius: 999,
-            objectFit: 'contain',
+            background: 'var(--panel-2)',
+            color: 'var(--ink-3)',
+            display: 'grid',
+            placeItems: 'center',
             opacity: isAvailable ? 1 : 0.5
           }
-        }) : React.createElement('div', {
+        }, item.iconSrc ? React.createElement('img', {
+          src: item.iconSrc,
+          alt: '',
           style: {
-            width: 22,
-            height: 22,
-            flexShrink: 0,
-            borderRadius: 999,
-            background: active ? 'var(--ink)' : 'var(--panel-2)',
-            color: active ? 'var(--panel)' : 'var(--ink-3)',
-            display: 'grid',
-            placeItems: 'center'
+            width: item.iconSrc.indexOf('gemini') >= 0 ? 15 : 14,
+            height: item.iconSrc.indexOf('gemini') >= 0 ? 15 : 14,
+            objectFit: 'contain',
+            display: 'block'
           }
-        }, React.createElement(IconComp, {
+        }) : React.createElement(IconComp, {
           size: 12
         })), React.createElement('div', {
           style: {
