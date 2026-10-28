@@ -81,6 +81,7 @@ _HTTP_ERRORS: dict[int, str] = {
 
 SUPPORTED_MODELS: dict[str, str] = {
     "nano-banana-pro": "gemini-3-pro-image-preview",
+    "nano-banana-2.1": "gemini-nano-banana-2.1",
     "gpt-image-2": "gpt-image-2",
     "gpt-image-2.5": "gpt-image-2.5",
     "gpt-image-2.5-flare": "gpt-image-2.5-flare",
@@ -425,6 +426,8 @@ _normalize_model_name = normalize_model_name
 
 
 _APIMART_GPT_IMAGE_25_MODELS = {"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
+_APIMART_NANO_BANANA_21_MODEL = "gemini-nano-banana-2.1"
+_NANO_BANANA_21_EXTRA_RATIOS = {"4:5", "1:4", "4:1", "1:8", "8:1", "21:9"}
 
 
 def _apimart_model_name(model: str, variant: str = "") -> str:
@@ -915,12 +918,27 @@ async def _submit_generation_task(
 ) -> str:
     model_name = _apimart_model_name(model, variant)
     ratio, resolution = _normalize_size(size, resolution)
+    is_nano_banana_21 = model_name in {_APIMART_NANO_BANANA_21_MODEL, f"{_APIMART_NANO_BANANA_21_MODEL}-ext"}
+    if is_nano_banana_21 and size.strip() in _NANO_BANANA_21_EXTRA_RATIOS:
+        ratio = size.strip()
     # APIMart 文档要求 GPT Image 2/2.5 的 resolution 使用小写。
     if model_name == "gpt-image-2" or model_name in _APIMART_GPT_IMAGE_25_MODELS:
         resolution = resolution.lower()
     final_prompt = normalize_reference_prompt(prompt) if reference_urls else prompt
-    if apimart_ext:
+    if is_nano_banana_21:
         payload: dict[str, Any] = {
+            "model": f"{_APIMART_NANO_BANANA_21_MODEL}-ext" if apimart_ext else model_name,
+            "prompt": final_prompt,
+            "size": ratio,
+            "resolution": resolution.upper(),
+            # 并发由本地拆分任务实现，Ext 每个上游任务只允许一张成品图。
+            "n": 1,
+        }
+        if payload["model"].endswith("-ext"):
+            # 由本地路由处理回退，保留真实线路、任务号和计费诊断。
+            payload["official_fallback"] = False
+    elif apimart_ext:
+        payload = {
             "model": "gpt-image-2.5-ext",
             "version": (variant or "flare").strip().lower() if (variant or "").strip().lower() in {"flare", "sunburst"} else "flare",
             "prompt": final_prompt,
@@ -946,7 +964,7 @@ async def _submit_generation_task(
         payload["image_urls"] = reference_urls
     endpoint = f"{base_url}/v1/images/generations"
     request_headers = dict(headers)
-    if apimart_ext:
+    if apimart_ext and not is_nano_banana_21:
         request_headers["X-APIMart-Response-Version"] = "2026-07-27"
         request_headers["Idempotency-Key"] = str(uuid.uuid4())
     checkpoint("submitting")
@@ -2151,7 +2169,7 @@ PROVIDER_MODEL_CAPABILITIES: dict[str, set[str] | None] = {
     PROVIDER_SUB2API: {"gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"},
     PROVIDER_TUZI: {"gpt-image-2.5", "gpt-image-2.5-flare"},
     PROVIDER_ADOBE2API: {"gemini-3-pro-image-preview", "gpt-image-2"},
-    PROVIDER_APIMART_EXT: {"gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"},
+    PROVIDER_APIMART_EXT: {"gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", _APIMART_NANO_BANANA_21_MODEL},
     PROVIDER_APIMART: None,  # APIMart 适配通用架构，全支持
 }
 
@@ -2384,6 +2402,8 @@ def get_smart_route_candidates(
             preferred_order = [PROVIDER_APIMART]
         else:  # 1K 或 auto 默认为 1K
             preferred_order = [PROVIDER_SUB2API, PROVIDER_APIMART]
+    elif model_name == _APIMART_NANO_BANANA_21_MODEL:
+        preferred_order = [PROVIDER_APIMART_EXT, PROVIDER_APIMART]
     elif "banana" in model_name or "gemini" in model_name:
         preferred_order = [PROVIDER_APIMART, PROVIDER_ADOBE2API]
     else:

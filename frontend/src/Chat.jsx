@@ -1681,7 +1681,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
   const STATUS_COMPOSER_HEIGHT = 208;
   const MAX_COMPOSER_HEIGHT = 500;
   const minComposerHeightRef = React.useRef(COLLAPSED_COMPOSER_HEIGHT);
-  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro'
+  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1'
     ? 'ai-image'
     : selectedMode === 'special' || selectedMode === 'special_full'
       ? selectedMode
@@ -1981,17 +1981,21 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
 
   const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2'
     ? selectedMode
-    : selectedMode === 'nano-banana-pro'
-      ? 'nano-banana-pro'
+    : selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1'
+      ? selectedMode
       : '';
-  const activeMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro'
+  const activeMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1'
     ? 'ai-image'
     : selectedMode === 'special_full' || selectedMode === 'special'
       ? selectedMode
       : selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
-  const aiOptionMap = AI_OPTIONS;
+  const nanoBanana21Options = Object.assign({}, AI_OPTIONS);
+  ['4:5', '1:4', '4:1', '1:8', '8:1', '21:9'].forEach(function(ratio) {
+    nanoBanana21Options[ratio] = { label: ratio, qualities: AI_QUALITIES };
+  });
+  const aiOptionMap = activeAiModel === 'nano-banana-2.1' ? nanoBanana21Options : AI_OPTIONS;
   const AI_RATIOS = Object.keys(aiOptionMap);
   const currentAiRatioMeta = aiOptionMap[aiRatio] || aiOptionMap[AI_RATIOS[0]];
   const _rawQualities = currentAiRatioMeta ? currentAiRatioMeta.qualities : AI_QUALITIES;
@@ -2001,12 +2005,12 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
 
   React.useEffect(() => {
     if (activeAiModel) {
-      if (!AI_OPTIONS[aiRatio]) {
+      if (!aiOptionMap[aiRatio]) {
         setAiRatio('auto');
         return;
       }
-      if (!AI_OPTIONS[aiRatio].qualities.includes(aiQuality)) {
-        setAiQuality(AI_OPTIONS[aiRatio].qualities[0]);
+      if (!aiOptionMap[aiRatio].qualities.includes(aiQuality)) {
+        setAiQuality(aiOptionMap[aiRatio].qualities[0]);
       }
       // 渠道选择已移除，统一走智能路由
       if (aiProvider !== 'auto') {
@@ -2532,6 +2536,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       { id: 'gpt-image', label: 'GPT Image 2.5', iconKey: 'image', iconSrc: 'src/icon/openai.png', workflow: 'chat', mode: 'gpt-image-2.5' },
       { id: 'gpt-image-2', label: 'GPT Image 2', iconKey: 'image', iconSrc: 'src/icon/openai.png', workflow: 'chat', mode: 'gpt-image-2' },
       { id: 'nano-banana', label: 'Nano Banana Pro', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', workflow: 'chat', mode: 'nano-banana-pro' },
+      { id: 'nano-banana-2.1', label: 'Nano Banana 2.1', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', workflow: 'chat', mode: 'nano-banana-2.1' },
       { id: 'distribute', label: '智能铺货', iconKey: 'grid', workflow: 'distribute', mode: '' },
       { id: 'special', label: '特殊品', iconKey: 'layers', workflow: 'chat', mode: template && template.is_special_full ? 'special_full' : 'special' },
     ];
@@ -2540,7 +2545,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
     return I[iconKey] || I.sparkles;
   }, []);
   const activeTaskLabel = activeMode === 'ai-image'
-    ? (activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.5')
+    ? (activeAiModel === 'nano-banana-2.1' ? 'Nano Banana 2.1' : activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.5')
     : activeMode === 'special_full'
       ? '完整特殊品'
       : activeMode === 'special'
@@ -2563,7 +2568,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
           : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
   const activeTaskIconSrc = activeMode === 'ai-image'
-    ? (activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
+    ? (activeAiModel.indexOf('nano-banana') === 0 ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
     : null;
   const qualityMap = { auto: '自动', medium: '中等', xhigh: '高', max: '最高' };
   const qualityTag = (activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto') ? (' · ' + (qualityMap[aiQualityTier] || aiQualityTier)) : '';
@@ -2599,7 +2604,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
   const composerPlaceholder = agentEnabled
     ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）'
     : activeMode === 'ai-image'
-      ? (activeAiModel === 'nano-banana-pro'
+      ? (activeAiModel.indexOf('nano-banana') === 0
         ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景'
         : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感')
       : activeMode === 'special_full'
@@ -2860,17 +2865,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       ), 240);
     }
     if (prototypePanel === 'params') {
-      const sizeItems = [
-        ['auto', '自动'],
-        ['1:1', '1:1'],
-        ['3:2', '3:2'],
-        ['2:3', '2:3'],
-        ['4:3', '4:3'],
-        ['3:4', '3:4'],
-        ['5:4', '5:4'],
-        ['16:9', '16:9'],
-        ['9:16', '9:16'],
-      ];
+      const sizeItems = AI_RATIOS.map(function(ratio) { return [ratio, ratio === 'auto' ? '自动' : ratio]; });
       const ratioIconSize = function(key) {
         const base = 10;
         if (key === 'auto') return { w: base, h: base };
@@ -2902,7 +2897,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       return protoPanelShell(React.createElement(React.Fragment, null,
         !isImageParams && React.createElement('div', { style: { fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--ink)' } }, paramsTitle),
         isImageParams && React.createElement(React.Fragment, null,
-          imageFieldLabel(activeAiModel === 'gpt-image-2' ? '比例' : '尺寸'),
+          imageFieldLabel(activeAiModel === 'gpt-image-2' || activeAiModel === 'nano-banana-2.1' ? '比例' : '尺寸'),
           React.createElement('div', {
             style: {
               display: 'grid',
@@ -3068,7 +3063,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
             }
           },
             React.createElement('div', null,
-              imageFieldLabel(activeAiModel === 'gpt-image-2' ? '分辨率' : '清晰度'),
+              imageFieldLabel(activeAiModel === 'gpt-image-2' || activeAiModel === 'nano-banana-2.1' ? '分辨率' : '清晰度'),
               React.createElement('div', {
                 style: {
                   display: 'flex',
@@ -4354,6 +4349,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
   const normalizeAiImageModel = React.useCallback(function(model) {
     const value = String(model || '').trim().toLowerCase();
     if (!value) return '';
+    if (value === 'nano-banana-2.1' || value === 'gemini-nano-banana-2.1' || value === 'gemini-nano-banana-2.1-ext') return 'nano-banana-2.1';
     if (value.includes('nano') || value.includes('banana') || value.includes('gemini')) return 'nano-banana-pro';
     if (/^gpt[\s_-]*image[\s_-]*2$/.test(value)) return 'gpt-image-2';
     if (value.includes('gpt') || value.includes('image')) return 'gpt-image-2.5';
@@ -5572,7 +5568,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
 
     // ── AI 生图指令匹配 ────────────────────────────────────────────────────────
     // 用户通过 UI 功能面板选择模型，输入框仅作为图片描述。
-    const targetAiModel = aiOptions.model || (aiOptions.mode === 'nano-banana-pro' ? 'nano-banana-pro' : (aiOptions.workflow === 'ai-image' ? 'gpt-image-2.5' : ''));
+    const targetAiModel = aiOptions.model || ((aiOptions.mode === 'nano-banana-pro' || aiOptions.mode === 'nano-banana-2.1') ? aiOptions.mode : (aiOptions.workflow === 'ai-image' ? 'gpt-image-2.5' : ''));
     const isAiImageMode = Boolean(targetAiModel) || aiOptions.workflow === 'ai-image';
 
     // 继承上一张图修改、沿用需求重新生成还是全新需求，由后端 VLM 判断。

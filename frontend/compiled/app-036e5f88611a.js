@@ -1499,7 +1499,10 @@ function formatAiModelName(model) {
     'gpt-image-2': 'GPT Image 2',
     'gpt-image-2.5': 'GPT Image 2.5',
     'nano-banana-pro': 'Nano Banana Pro',
-    'gemini-3-pro-image-preview': 'Nano Banana Pro'
+    'gemini-3-pro-image-preview': 'Nano Banana Pro',
+    'nano-banana-2.1': 'Nano Banana 2.1',
+    'gemini-nano-banana-2.1': 'Nano Banana 2.1',
+    'gemini-nano-banana-2.1-ext': 'Nano Banana 2.1'
   };
   return map[model] || model;
 }
@@ -5249,7 +5252,7 @@ const Composer = ({
   const STATUS_COMPOSER_HEIGHT = 208;
   const MAX_COMPOSER_HEIGHT = 500;
   const minComposerHeightRef = React.useRef(COLLAPSED_COMPOSER_HEIGHT);
-  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' ? 'ai-image' : selectedMode === 'special' || selectedMode === 'special_full' ? selectedMode : selectedMode === 'download' ? 'download' : selectedWorkflow;
+  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' ? 'ai-image' : selectedMode === 'special' || selectedMode === 'special_full' ? selectedMode : selectedMode === 'download' ? 'download' : selectedWorkflow;
   const normalizeBatchCount = React.useCallback(function (value) {
     const digits = String(value || '').replace(/\D+/g, '');
     if (!digits) return 1;
@@ -5630,11 +5633,18 @@ const Composer = ({
       }
     }
   };
-  const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' ? selectedMode : selectedMode === 'nano-banana-pro' ? 'nano-banana-pro' : '';
-  const activeMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' ? 'ai-image' : selectedMode === 'special_full' || selectedMode === 'special' ? selectedMode : selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
+  const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' ? selectedMode : selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' ? selectedMode : '';
+  const activeMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' ? 'ai-image' : selectedMode === 'special_full' || selectedMode === 'special' ? selectedMode : selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
-  const aiOptionMap = AI_OPTIONS;
+  const nanoBanana21Options = Object.assign({}, AI_OPTIONS);
+  ['4:5', '1:4', '4:1', '1:8', '8:1', '21:9'].forEach(function (ratio) {
+    nanoBanana21Options[ratio] = {
+      label: ratio,
+      qualities: AI_QUALITIES
+    };
+  });
+  const aiOptionMap = activeAiModel === 'nano-banana-2.1' ? nanoBanana21Options : AI_OPTIONS;
   const AI_RATIOS = Object.keys(aiOptionMap);
   const currentAiRatioMeta = aiOptionMap[aiRatio] || aiOptionMap[AI_RATIOS[0]];
   const _rawQualities = currentAiRatioMeta ? currentAiRatioMeta.qualities : AI_QUALITIES;
@@ -5643,12 +5653,12 @@ const Composer = ({
   const aiImageSize = aiRatio;
   React.useEffect(() => {
     if (activeAiModel) {
-      if (!AI_OPTIONS[aiRatio]) {
+      if (!aiOptionMap[aiRatio]) {
         setAiRatio('auto');
         return;
       }
-      if (!AI_OPTIONS[aiRatio].qualities.includes(aiQuality)) {
-        setAiQuality(AI_OPTIONS[aiRatio].qualities[0]);
+      if (!aiOptionMap[aiRatio].qualities.includes(aiQuality)) {
+        setAiQuality(aiOptionMap[aiRatio].qualities[0]);
       }
       // 渠道选择已移除，统一走智能路由
       if (aiProvider !== 'auto') {
@@ -6188,6 +6198,13 @@ const Composer = ({
       workflow: 'chat',
       mode: 'nano-banana-pro'
     }, {
+      id: 'nano-banana-2.1',
+      label: 'Nano Banana 2.1',
+      iconKey: 'image',
+      iconSrc: 'src/icon/gemini-color.png',
+      workflow: 'chat',
+      mode: 'nano-banana-2.1'
+    }, {
       id: 'distribute',
       label: '智能铺货',
       iconKey: 'grid',
@@ -6204,10 +6221,10 @@ const Composer = ({
   const getTaskIcon = React.useCallback(function (iconKey) {
     return I[iconKey] || I.sparkles;
   }, []);
-  const activeTaskLabel = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.5' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '问答';
+  const activeTaskLabel = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-2.1' ? 'Nano Banana 2.1' : activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.5' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '问答';
   const activeTaskIconKey = activeMode === 'ai-image' ? 'image' : activeMode === 'special' || activeMode === 'special_full' ? 'layers' : selectedWorkflow === 'compose' || selectedWorkflow === 'distribute' ? 'grid' : selectedWorkflow === 'download' ? 'download' : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
-  const activeTaskIconSrc = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
+  const activeTaskIconSrc = activeMode === 'ai-image' ? activeAiModel.indexOf('nano-banana') === 0 ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
   const qualityMap = {
     auto: '自动',
     medium: '中等',
@@ -6221,7 +6238,7 @@ const Composer = ({
   }[aiVariant] || aiVariant) + qualityTag : '') : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 ' + (specialRouteMode === 'auto' ? '自动' : specialRouteMode === 'full' ? '完整' : '普通') : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
   const isSub2ApiRoute = activeMode === 'ai-image' && (aiProvider === 'sub2api' || aiProvider === 'auto' && (activeAiModel === 'gpt-image-2.5' || activeAiModel === 'gpt-image-2') && (aiQuality === '1K' || !aiQuality) && !(activeAiModel === 'gpt-image-2.5' && (aiQualityTier === 'max' || aiQualityTier === 'xhigh')));
   const selectedSettingBits = [activeSkillInfo ? '$' + (activeSkillInfo.title || activeSkillInfo.name) : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? '⚡ 智能' : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
-  const composerPlaceholder = agentEnabled ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）' : activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
+  const composerPlaceholder = agentEnabled ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）' : activeMode === 'ai-image' ? activeAiModel.indexOf('nano-banana') === 0 ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(text.trim() || selectedMode || modeParamLabel || refImages.length > 0 || files.length > 0 || activeSkillInfo || skillMenuOpen || !agentEnabled && prototypePanel);
   const minComposerHeight = statusBarVisible ? STATUS_COMPOSER_HEIGHT : COLLAPSED_COMPOSER_HEIGHT;
   minComposerHeightRef.current = minComposerHeight;
@@ -6517,7 +6534,9 @@ const Composer = ({
       }))), 240);
     }
     if (prototypePanel === 'params') {
-      const sizeItems = [['auto', '自动'], ['1:1', '1:1'], ['3:2', '3:2'], ['2:3', '2:3'], ['4:3', '4:3'], ['3:4', '3:4'], ['5:4', '5:4'], ['16:9', '16:9'], ['9:16', '9:16']];
+      const sizeItems = AI_RATIOS.map(function (ratio) {
+        return [ratio, ratio === 'auto' ? '自动' : ratio];
+      });
       const ratioIconSize = function (key) {
         const base = 10;
         if (key === 'auto') return {
@@ -6562,7 +6581,7 @@ const Composer = ({
           letterSpacing: '-0.01em',
           color: 'var(--ink)'
         }
-      }, paramsTitle), isImageParams && React.createElement(React.Fragment, null, imageFieldLabel(activeAiModel === 'gpt-image-2' ? '比例' : '尺寸'), React.createElement('div', {
+      }, paramsTitle), isImageParams && React.createElement(React.Fragment, null, imageFieldLabel(activeAiModel === 'gpt-image-2' || activeAiModel === 'nano-banana-2.1' ? '比例' : '尺寸'), React.createElement('div', {
         style: {
           display: 'grid',
           gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
@@ -6709,7 +6728,7 @@ const Composer = ({
           gap: 16,
           alignItems: 'start'
         }
-      }, React.createElement('div', null, imageFieldLabel(activeAiModel === 'gpt-image-2' ? '分辨率' : '清晰度'), React.createElement('div', {
+      }, React.createElement('div', null, imageFieldLabel(activeAiModel === 'gpt-image-2' || activeAiModel === 'nano-banana-2.1' ? '分辨率' : '清晰度'), React.createElement('div', {
         style: {
           display: 'flex',
           width: '100%',
@@ -8210,6 +8229,7 @@ const Chat = ({
   const normalizeAiImageModel = React.useCallback(function (model) {
     const value = String(model || '').trim().toLowerCase();
     if (!value) return '';
+    if (value === 'nano-banana-2.1' || value === 'gemini-nano-banana-2.1' || value === 'gemini-nano-banana-2.1-ext') return 'nano-banana-2.1';
     if (value.includes('nano') || value.includes('banana') || value.includes('gemini')) return 'nano-banana-pro';
     if (/^gpt[\s_-]*image[\s_-]*2$/.test(value)) return 'gpt-image-2';
     if (value.includes('gpt') || value.includes('image')) return 'gpt-image-2.5';
@@ -9597,7 +9617,7 @@ const Chat = ({
 
     // ── AI 生图指令匹配 ────────────────────────────────────────────────────────
     // 用户通过 UI 功能面板选择模型，输入框仅作为图片描述。
-    const targetAiModel = aiOptions.model || (aiOptions.mode === 'nano-banana-pro' ? 'nano-banana-pro' : aiOptions.workflow === 'ai-image' ? 'gpt-image-2.5' : '');
+    const targetAiModel = aiOptions.model || (aiOptions.mode === 'nano-banana-pro' || aiOptions.mode === 'nano-banana-2.1' ? aiOptions.mode : aiOptions.workflow === 'ai-image' ? 'gpt-image-2.5' : '');
     const isAiImageMode = Boolean(targetAiModel) || aiOptions.workflow === 'ai-image';
 
     // 继承上一张图修改、沿用需求重新生成还是全新需求，由后端 VLM 判断。

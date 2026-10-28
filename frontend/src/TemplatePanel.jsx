@@ -5,6 +5,9 @@
     'gpt-image-2.5': 'GPT Image 2.5',
     'nano-banana-pro': 'Nano Banana Pro',
     'gemini-3-pro-image-preview': 'Nano Banana Pro',
+    'nano-banana-2.1': 'Nano Banana 2.1',
+    'gemini-nano-banana-2.1': 'Nano Banana 2.1',
+    'gemini-nano-banana-2.1-ext': 'Nano Banana 2.1',
   };
   return map[model] || model;
 }
