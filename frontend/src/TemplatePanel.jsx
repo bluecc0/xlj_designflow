@@ -8,6 +8,10 @@
     'nano-banana-2.1': 'Nano Banana 2.1',
     'gemini-nano-banana-2.1': 'Nano Banana 2.1',
     'gemini-nano-banana-2.1-ext': 'Nano Banana 2.1',
+    'seedream-5-0-pro': 'Seedream 5.0 Pro',
+    'seedream-5-0-flash': 'Seedream 5.0 Flash',
+    'seedream-5.0-pro': 'Seedream 5.0 Pro',
+    'seedream-5.0-flash': 'Seedream 5.0 Flash',
   };
   return map[model] || model;
 }

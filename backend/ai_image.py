@@ -82,6 +82,10 @@ _HTTP_ERRORS: dict[int, str] = {
 SUPPORTED_MODELS: dict[str, str] = {
     "nano-banana-pro": "gemini-3-pro-image-preview",
     "nano-banana-2.1": "gemini-nano-banana-2.1",
+    "seedream-5.0-pro": "seedream-5-0-pro",
+    "seedream-5.0-flash": "seedream-5-0-flash",
+    "seedream-5-0-pro": "seedream-5-0-pro",
+    "seedream-5-0-flash": "seedream-5-0-flash",
     "gpt-image-2": "gpt-image-2",
     "gpt-image-2.5": "gpt-image-2.5",
     "gpt-image-2.5-flare": "gpt-image-2.5-flare",
@@ -428,6 +432,30 @@ _normalize_model_name = normalize_model_name
 _APIMART_GPT_IMAGE_25_MODELS = {"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
 _APIMART_NANO_BANANA_21_MODEL = "gemini-nano-banana-2.1"
 _NANO_BANANA_21_EXTRA_RATIOS = {"4:5", "1:4", "4:1", "1:8", "8:1", "21:9"}
+_SEEDREAM_5_MODELS = {"seedream-5-0-pro", "seedream-5-0-flash"}
+_SEEDREAM_5_RATIOS = {"auto", "1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "2:1", "1:2", "21:9"}
+_SEEDREAM_5_RESOLUTIONS = {"1K", "1.5K", "2K"}
+
+
+def _normalize_seedream_size(size: str, resolution: str) -> tuple[str, str]:
+    """Seedream 使用独立尺寸契约，避免 1.5K 和宽幅比例被通用映射覆盖。"""
+    clean = (size or "auto").strip()
+    res = (resolution or "1K").strip().upper()
+    if clean.upper() in _SEEDREAM_5_RESOLUTIONS:
+        return "auto", clean.upper()
+    pixels = re.fullmatch(r"(\d+)[xX×](\d+)", clean)
+    if pixels and f"{pixels[1]}:{pixels[2]}" not in _SEEDREAM_5_RATIOS:
+        width, height = int(pixels[1]), int(pixels[2])
+        if height <= 0 or not (921600 <= width * height <= 4624220 and 1 / 16 <= width / height <= 16):
+            raise ValueError("Seedream 5.0 图片尺寸超出允许范围")
+        # 精确像素优先于 resolution，上游不再使用该档位。
+        return f"{width}x{height}", "1K"
+    clean = clean.replace("x", ":")
+    if clean not in _SEEDREAM_5_RATIOS:
+        raise ValueError("Seedream 5.0 不支持该比例")
+    if res not in _SEEDREAM_5_RESOLUTIONS:
+        raise ValueError("Seedream 5.0 仅支持 1K、1.5K、2K 分辨率")
+    return clean, res
 
 
 def _apimart_model_name(model: str, variant: str = "") -> str:
@@ -917,7 +945,8 @@ async def _submit_generation_task(
     apimart_ext: bool = False,
 ) -> str:
     model_name = _apimart_model_name(model, variant)
-    ratio, resolution = _normalize_size(size, resolution)
+    is_seedream_5 = model_name in _SEEDREAM_5_MODELS
+    ratio, resolution = _normalize_seedream_size(size, resolution) if is_seedream_5 else _normalize_size(size, resolution)
     is_nano_banana_21 = model_name in {_APIMART_NANO_BANANA_21_MODEL, f"{_APIMART_NANO_BANANA_21_MODEL}-ext"}
     if is_nano_banana_21 and size.strip() in _NANO_BANANA_21_EXTRA_RATIOS:
         ratio = size.strip()
@@ -925,8 +954,21 @@ async def _submit_generation_task(
     if model_name == "gpt-image-2" or model_name in _APIMART_GPT_IMAGE_25_MODELS:
         resolution = resolution.lower()
     final_prompt = normalize_reference_prompt(prompt) if reference_urls else prompt
-    if is_nano_banana_21:
+    if is_seedream_5:
+        if apimart_ext:
+            raise ValueError("Seedream 5.0 仅支持 APIMart 普通线路")
+        if len(reference_urls or []) > 10:
+            raise ValueError("Seedream 5.0 最多支持 10 张参考图")
         payload: dict[str, Any] = {
+            "model": model_name,
+            "prompt": final_prompt,
+            "size": ratio,
+            "resolution": resolution,
+            "n": 1,
+            "output_format": "png",
+        }
+    elif is_nano_banana_21:
+        payload = {
             "model": f"{_APIMART_NANO_BANANA_21_MODEL}-ext" if apimart_ext else model_name,
             "prompt": final_prompt,
             "size": ratio,
@@ -2404,6 +2446,8 @@ def get_smart_route_candidates(
             preferred_order = [PROVIDER_SUB2API, PROVIDER_APIMART]
     elif model_name == _APIMART_NANO_BANANA_21_MODEL:
         preferred_order = [PROVIDER_APIMART_EXT, PROVIDER_APIMART]
+    elif model_name in _SEEDREAM_5_MODELS:
+        preferred_order = [PROVIDER_APIMART]
     elif "banana" in model_name or "gemini" in model_name:
         preferred_order = [PROVIDER_APIMART, PROVIDER_ADOBE2API]
     else:

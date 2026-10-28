@@ -1502,7 +1502,11 @@ function formatAiModelName(model) {
     'gemini-3-pro-image-preview': 'Nano Banana Pro',
     'nano-banana-2.1': 'Nano Banana 2.1',
     'gemini-nano-banana-2.1': 'Nano Banana 2.1',
-    'gemini-nano-banana-2.1-ext': 'Nano Banana 2.1'
+    'gemini-nano-banana-2.1-ext': 'Nano Banana 2.1',
+    'seedream-5-0-pro': 'Seedream 5.0 Pro',
+    'seedream-5-0-flash': 'Seedream 5.0 Flash',
+    'seedream-5.0-pro': 'Seedream 5.0 Pro',
+    'seedream-5.0-flash': 'Seedream 5.0 Flash'
   };
   return map[model] || model;
 }
@@ -5252,7 +5256,8 @@ const Composer = ({
   const STATUS_COMPOSER_HEIGHT = 208;
   const MAX_COMPOSER_HEIGHT = 500;
   const minComposerHeightRef = React.useRef(COLLAPSED_COMPOSER_HEIGHT);
-  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' ? 'ai-image' : selectedMode === 'special' || selectedMode === 'special_full' ? selectedMode : selectedMode === 'download' ? 'download' : selectedWorkflow;
+  const isSeedreamMode = selectedMode === 'seedream-5-0-flash' || selectedMode === 'seedream-5-0-pro';
+  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' || isSeedreamMode ? 'ai-image' : selectedMode === 'special' || selectedMode === 'special_full' ? selectedMode : selectedMode === 'download' ? 'download' : selectedWorkflow;
   const normalizeBatchCount = React.useCallback(function (value) {
     const digits = String(value || '').replace(/\D+/g, '');
     if (!digits) return 1;
@@ -5633,8 +5638,8 @@ const Composer = ({
       }
     }
   };
-  const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' ? selectedMode : selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' ? selectedMode : '';
-  const activeMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' ? 'ai-image' : selectedMode === 'special_full' || selectedMode === 'special' ? selectedMode : selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
+  const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' ? selectedMode : selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' || isSeedreamMode ? selectedMode : '';
+  const activeMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' || isSeedreamMode ? 'ai-image' : selectedMode === 'special_full' || selectedMode === 'special' ? selectedMode : selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
   const nanoBanana21Options = Object.assign({}, AI_OPTIONS);
@@ -5644,7 +5649,14 @@ const Composer = ({
       qualities: AI_QUALITIES
     };
   });
-  const aiOptionMap = activeAiModel === 'nano-banana-2.1' ? nanoBanana21Options : AI_OPTIONS;
+  const seedreamOptions = {};
+  ['auto', '1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '2:1', '1:2', '21:9'].forEach(function (ratio) {
+    seedreamOptions[ratio] = {
+      label: ratio,
+      qualities: ['1K', '1.5K', '2K']
+    };
+  });
+  const aiOptionMap = isSeedreamMode ? seedreamOptions : activeAiModel === 'nano-banana-2.1' ? nanoBanana21Options : AI_OPTIONS;
   const AI_RATIOS = Object.keys(aiOptionMap);
   const currentAiRatioMeta = aiOptionMap[aiRatio] || aiOptionMap[AI_RATIOS[0]];
   const _rawQualities = currentAiRatioMeta ? currentAiRatioMeta.qualities : AI_QUALITIES;
@@ -5747,7 +5759,7 @@ const Composer = ({
       size: aiImageSize,
       resolution: aiQuality,
       variant: aiVariant,
-      quality: activeAiModel === 'gpt-image-2' ? 'auto' : aiQualityTier,
+      quality: activeAiModel === 'gpt-image-2' || isSeedreamMode ? 'auto' : aiQualityTier,
       provider: aiProvider,
       workflow: selectedWorkflowMode,
       model: activeAiModel,
@@ -6205,6 +6217,12 @@ const Composer = ({
       workflow: 'chat',
       mode: 'nano-banana-2.1'
     }, {
+      id: 'seedream-5.0',
+      label: 'Seedream 5.0',
+      iconKey: 'image',
+      workflow: 'chat',
+      mode: isSeedreamMode ? selectedMode : 'seedream-5-0-flash'
+    }, {
       id: 'distribute',
       label: '智能铺货',
       iconKey: 'grid',
@@ -6217,14 +6235,14 @@ const Composer = ({
       workflow: 'chat',
       mode: template && template.is_special_full ? 'special_full' : 'special'
     }];
-  }, [template && template.is_special_full]);
+  }, [template && template.is_special_full, isSeedreamMode, selectedMode]);
   const getTaskIcon = React.useCallback(function (iconKey) {
     return I[iconKey] || I.sparkles;
   }, []);
-  const activeTaskLabel = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-2.1' ? 'Nano Banana 2.1' : activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.5' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '问答';
+  const activeTaskLabel = activeMode === 'ai-image' ? isSeedreamMode ? 'Seedream 5.0' : activeAiModel === 'nano-banana-2.1' ? 'Nano Banana 2.1' : activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.5' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '问答';
   const activeTaskIconKey = activeMode === 'ai-image' ? 'image' : activeMode === 'special' || activeMode === 'special_full' ? 'layers' : selectedWorkflow === 'compose' || selectedWorkflow === 'distribute' ? 'grid' : selectedWorkflow === 'download' ? 'download' : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
-  const activeTaskIconSrc = activeMode === 'ai-image' ? activeAiModel.indexOf('nano-banana') === 0 ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
+  const activeTaskIconSrc = activeMode === 'ai-image' ? isSeedreamMode ? null : activeAiModel.indexOf('nano-banana') === 0 ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
   const qualityMap = {
     auto: '自动',
     medium: '中等',
@@ -6232,7 +6250,7 @@ const Composer = ({
     max: '最高'
   };
   const qualityTag = activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto' ? ' · ' + (qualityMap[aiQualityTier] || aiQualityTier) : '';
-  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + (activeAiModel === 'gpt-image-2.5' ? ' · ' + ({
+  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + (isSeedreamMode ? ' · ' + (activeAiModel === 'seedream-5-0-pro' ? 'Pro' : 'Flash') : activeAiModel === 'gpt-image-2.5' ? ' · ' + ({
     flare: '快速',
     sunburst: '优质'
   }[aiVariant] || aiVariant) + qualityTag : '') : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 ' + (specialRouteMode === 'auto' ? '自动' : specialRouteMode === 'full' ? '完整' : '普通') : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
@@ -6581,7 +6599,7 @@ const Composer = ({
           letterSpacing: '-0.01em',
           color: 'var(--ink)'
         }
-      }, paramsTitle), isImageParams && React.createElement(React.Fragment, null, imageFieldLabel(activeAiModel === 'gpt-image-2' || activeAiModel === 'nano-banana-2.1' ? '比例' : '尺寸'), React.createElement('div', {
+      }, paramsTitle), isImageParams && React.createElement(React.Fragment, null, imageFieldLabel(activeAiModel === 'gpt-image-2' || activeAiModel === 'nano-banana-2.1' || isSeedreamMode ? '比例' : '尺寸'), React.createElement('div', {
         style: {
           display: 'grid',
           gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
@@ -6643,10 +6661,10 @@ const Composer = ({
             whiteSpace: 'nowrap'
           }
         }, item[1]));
-      })), activeAiModel === 'gpt-image-2.5' && React.createElement('div', {
+      })), (activeAiModel === 'gpt-image-2.5' || isSeedreamMode) && React.createElement('div', {
         style: {
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          gridTemplateColumns: isSeedreamMode ? '1fr' : '1fr 1fr',
           gap: 16,
           alignItems: 'start',
           marginTop: 12
@@ -6661,13 +6679,13 @@ const Composer = ({
           overflow: 'hidden',
           background: 'var(--panel)'
         }
-      }, [['flare', '快速'], ['sunburst', '优质']].map(function (item, idx) {
-        const active = aiVariant === item[0];
+      }, (isSeedreamMode ? [['seedream-5-0-flash', 'Flash'], ['seedream-5-0-pro', 'Pro']] : [['flare', '快速'], ['sunburst', '优质']]).map(function (item, idx) {
+        const active = (isSeedreamMode ? activeAiModel : aiVariant) === item[0];
         return React.createElement('button', {
           key: item[0],
           type: 'button',
           onClick: function () {
-            setAiVariant(item[0]);
+            if (isSeedreamMode) setSelectedMode(item[0]);else setAiVariant(item[0]);
           },
           style: {
             flex: 1,
@@ -6683,7 +6701,7 @@ const Composer = ({
             letterSpacing: '-0.01em'
           }
         }, item[1]);
-      }))), React.createElement('div', null, imageFieldLabel('质量'), React.createElement('div', {
+      }))), !isSeedreamMode && React.createElement('div', null, imageFieldLabel('质量'), React.createElement('div', {
         style: {
           display: 'flex',
           width: '100%',
@@ -6728,7 +6746,7 @@ const Composer = ({
           gap: 16,
           alignItems: 'start'
         }
-      }, React.createElement('div', null, imageFieldLabel(activeAiModel === 'gpt-image-2' || activeAiModel === 'nano-banana-2.1' ? '分辨率' : '清晰度'), React.createElement('div', {
+      }, React.createElement('div', null, imageFieldLabel(activeAiModel === 'gpt-image-2' || activeAiModel === 'nano-banana-2.1' || isSeedreamMode ? '分辨率' : '清晰度'), React.createElement('div', {
         style: {
           display: 'flex',
           width: '100%',
@@ -6738,7 +6756,7 @@ const Composer = ({
           overflow: 'hidden',
           background: 'var(--panel)'
         }
-      }, ['1K', '2K', '4K'].map(function (q, idx) {
+      }, allowedAiQualities.map(function (q, idx) {
         const disabled = !allowedAiQualities.includes(q);
         const active = aiQuality === q;
         return React.createElement('button', {
@@ -8229,6 +8247,7 @@ const Chat = ({
   const normalizeAiImageModel = React.useCallback(function (model) {
     const value = String(model || '').trim().toLowerCase();
     if (!value) return '';
+    if (/^seedream-5[.-]0-(pro|flash)$/.test(value)) return value.replace('5.0', '5-0');
     if (value === 'nano-banana-2.1' || value === 'gemini-nano-banana-2.1' || value === 'gemini-nano-banana-2.1-ext') return 'nano-banana-2.1';
     if (value.includes('nano') || value.includes('banana') || value.includes('gemini')) return 'nano-banana-pro';
     if (/^gpt[\s_-]*image[\s_-]*2$/.test(value)) return 'gpt-image-2';
