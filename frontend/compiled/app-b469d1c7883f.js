@@ -6220,6 +6220,7 @@ const Composer = ({
       id: 'seedream-5.0',
       label: 'Seedream 5.0',
       iconKey: 'image',
+      iconSrc: 'src/icon/doubao.svg',
       workflow: 'chat',
       mode: isSeedreamMode ? selectedMode : 'seedream-5-0-flash'
     }, {
@@ -6242,7 +6243,7 @@ const Composer = ({
   const activeTaskLabel = activeMode === 'ai-image' ? isSeedreamMode ? 'Seedream 5.0' : activeAiModel === 'nano-banana-2.1' ? 'Nano Banana 2.1' : activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.5' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '问答';
   const activeTaskIconKey = activeMode === 'ai-image' ? 'image' : activeMode === 'special' || activeMode === 'special_full' ? 'layers' : selectedWorkflow === 'compose' || selectedWorkflow === 'distribute' ? 'grid' : selectedWorkflow === 'download' ? 'download' : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
-  const activeTaskIconSrc = activeMode === 'ai-image' ? isSeedreamMode ? null : activeAiModel.indexOf('nano-banana') === 0 ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
+  const activeTaskIconSrc = activeMode === 'ai-image' ? isSeedreamMode ? 'src/icon/doubao.svg' : activeAiModel.indexOf('nano-banana') === 0 ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
   const qualityMap = {
     auto: '自动',
     medium: '中等',

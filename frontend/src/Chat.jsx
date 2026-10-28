@@ -2542,7 +2542,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       { id: 'gpt-image-2', label: 'GPT Image 2', iconKey: 'image', iconSrc: 'src/icon/openai.png', workflow: 'chat', mode: 'gpt-image-2' },
       { id: 'nano-banana', label: 'Nano Banana Pro', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', workflow: 'chat', mode: 'nano-banana-pro' },
       { id: 'nano-banana-2.1', label: 'Nano Banana 2.1', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', workflow: 'chat', mode: 'nano-banana-2.1' },
-      { id: 'seedream-5.0', label: 'Seedream 5.0', iconKey: 'image', workflow: 'chat', mode: isSeedreamMode ? selectedMode : 'seedream-5-0-flash' },
+      { id: 'seedream-5.0', label: 'Seedream 5.0', iconKey: 'image', iconSrc: 'src/icon/doubao.svg', workflow: 'chat', mode: isSeedreamMode ? selectedMode : 'seedream-5-0-flash' },
       { id: 'distribute', label: '智能铺货', iconKey: 'grid', workflow: 'distribute', mode: '' },
       { id: 'special', label: '特殊品', iconKey: 'layers', workflow: 'chat', mode: template && template.is_special_full ? 'special_full' : 'special' },
     ];
@@ -2574,7 +2574,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
           : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
   const activeTaskIconSrc = activeMode === 'ai-image'
-    ? (isSeedreamMode ? null : activeAiModel.indexOf('nano-banana') === 0 ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
+    ? (isSeedreamMode ? 'src/icon/doubao.svg' : activeAiModel.indexOf('nano-banana') === 0 ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
     : null;
   const qualityMap = { auto: '自动', medium: '中等', xhigh: '高', max: '最高' };
   const qualityTag = (activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto') ? (' · ' + (qualityMap[aiQualityTier] || aiQualityTier)) : '';
