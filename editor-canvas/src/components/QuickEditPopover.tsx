@@ -23,7 +23,7 @@ export const QuickEditPopover = memo(function QuickEditPopover({
   const [prompt, setPrompt] = useState('')
   const popoverRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const prevMarkerCountRef = useRef(markers.length)
+  const prevMarkersRef = useRef(markers)
 
   const zoom = useViewportStore((s) => s.zoom)
   const panX = useViewportStore((s) => s.panX)
@@ -37,16 +37,30 @@ export const QuickEditPopover = memo(function QuickEditPopover({
     return () => clearTimeout(timer)
   }, [image.id])
 
-  // 当在图片上新添加标记时：自动在主输入框中引入 <标记N> 标签并激活聚焦
+  // 标记增删同步到输入框；只移除对应标签，保留用户输入的修改描述。
   useEffect(() => {
-    if (markers.length > prevMarkerCountRef.current) {
-      const latestMarker = markers[markers.length - 1]
-      const tag = `<标记${latestMarker.number}>`
+    const previousMarkers = prevMarkersRef.current
+    prevMarkersRef.current = markers
+    const currentIds = new Set(markers.map((marker) => marker.id))
+    const previousIds = new Set(previousMarkers.map((marker) => marker.id))
+    const removedTags = new Set(previousMarkers
+      .filter((marker) => !currentIds.has(marker.id))
+      .map((marker) => `<标记${marker.number}>`))
+    const addedMarkers = markers.filter((marker) => !previousIds.has(marker.id))
+
+    if (removedTags.size || addedMarkers.length) {
       setPrompt((prev) => {
-        if (prev.includes(tag)) return prev
-        const trimmed = prev.trimEnd()
-        return trimmed ? `${trimmed} ${tag}` : tag
+        let next = prev.replace(/<标记\d+>/g, (tag) => removedTags.has(tag) ? '' : tag)
+        for (const marker of addedMarkers) {
+          const tag = `<标记${marker.number}>`
+          if (next.includes(tag)) continue
+          const trimmed = next.trimEnd()
+          next = trimmed ? `${trimmed} ${tag}` : tag
+        }
+        return next
       })
+    }
+    if (addedMarkers.length) {
       setTimeout(() => {
         if (inputRef.current) {
           inputRef.current.focus()
@@ -55,7 +69,6 @@ export const QuickEditPopover = memo(function QuickEditPopover({
         }
       }, 30)
     }
-    prevMarkerCountRef.current = markers.length
   }, [markers])
 
   // 点击外部与全局 Esc 监听（排除标记区域与自身）
