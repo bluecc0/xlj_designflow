@@ -6485,10 +6485,10 @@ const Composer = ({
         }
       }, 'live')), React.createElement('div', {
         style: {
-          marginTop: 12,
+          marginTop: 10,
           display: 'flex',
           flexDirection: 'column',
-          gap: 6
+          gap: 2
         }
       }, tasks.map(function (item) {
         const isAvailable = item.available !== false;
@@ -6506,8 +6506,8 @@ const Composer = ({
             display: 'flex',
             alignItems: 'center',
             gap: 9,
-            padding: '8px 11px',
-            borderRadius: 10,
+            padding: '6px 10px',
+            borderRadius: 8,
             background: active ? 'var(--panel-2)' : 'transparent',
             border: '1px solid ' + (active ? 'var(--line)' : 'transparent'),
             textAlign: 'left',

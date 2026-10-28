@@ -2822,7 +2822,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
           React.createElement('div', { style: { fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--ink)' } }, '选择功能'),
           React.createElement('div', { className: 'mono', style: { fontSize: 11, color: 'var(--ink-3)' } }, 'live')
         ),
-        React.createElement('div', { style: { marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 } },
+        React.createElement('div', { style: { marginTop: 10, display: 'flex', flexDirection: 'column', gap: 2 } },
           tasks.map(function(item) {
             const isAvailable = item.available !== false;
             const active = item.mode
@@ -2839,8 +2839,8 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
                 display: 'flex',
                 alignItems: 'center',
                 gap: 9,
-                padding: '8px 11px',
-                borderRadius: 10,
+                padding: '6px 10px',
+                borderRadius: 8,
                 background: active ? 'var(--panel-2)' : 'transparent',
                 border: '1px solid ' + (active ? 'var(--line)' : 'transparent'),
                 textAlign: 'left',
