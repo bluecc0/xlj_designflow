@@ -18,12 +18,11 @@ BABEL_STANDALONE = os.path.join(BASE, "vendor", "babel.min.js")
 BABEL_FILES = [
     "src/Icons.jsx",
     "src/Utils.jsx",
+    "src/Overlays.jsx",
     "src/TopBar.jsx",
     "src/TemplatePanel.jsx",
     "src/Canvas.jsx",
-    "src/ChatExtras.jsx",
     "src/Chat.jsx",
-    "src/Tweaks.jsx",
     "src/AdminPage.jsx",
     "src/InspirationPanel.jsx",
     "src/WhatsNewModal.jsx",

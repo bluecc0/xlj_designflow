@@ -39,16 +39,60 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
              patch.object(ai_image.settings, "ai_image_api_key", "sk-apimart"):
 
             gpt_1k_candidates = ai_image.get_smart_route_candidates("gpt-image-2", resolution="1K")
-            self.assertEqual(gpt_1k_candidates, ["sub2api", "apimart", "adobe2api"])
+            self.assertEqual(gpt_1k_candidates, ["sub2api", "apimart"])
 
             gpt_2k_candidates = ai_image.get_smart_route_candidates("gpt-image-2", resolution="2K")
-            self.assertEqual(gpt_2k_candidates, ["apimart", "adobe2api"])
+            self.assertEqual(gpt_2k_candidates, ["apimart"])
 
             gpt_4k_candidates = ai_image.get_smart_route_candidates("gpt-image-2", resolution="4K")
-            self.assertEqual(gpt_4k_candidates, ["apimart", "adobe2api"])
+            self.assertEqual(gpt_4k_candidates, ["apimart"])
 
             banana_candidates = ai_image.get_smart_route_candidates("nano-banana-pro")
             self.assertEqual(banana_candidates, ["apimart", "adobe2api"])
+
+    async def test_gpt_image_2_resolution_dispatch_and_reference_failover(self) -> None:
+        with patch.multiple(
+            ai_image.settings,
+            cliproxy_base_url="http://sub2api:8080", cliproxy_api_key="sk-sub2api",
+            adobe2api_base_url="http://adobe:6001", adobe2api_api_key="sk-adobe",
+            ai_image_api_key="sk-apimart", smart_routing_rules_json="",
+        ):
+            for resolution in ("1K", "2K", "4K"):
+                for images in (None, [(b"reference-image", "image/png")]):
+                    with self.subTest(resolution=resolution, reference=bool(images)):
+                        ai_image.reset_provider_freeze()
+                        attempts = []
+                        with patch.object(
+                            ai_image, "generate_sub2api_async",
+                            side_effect=httpx.ConnectError("connection refused before submission"),
+                        ) as sub2api, patch.object(
+                            ai_image, "generate_image_async", return_value={"url": "/result.png"},
+                        ) as text_generate, patch.object(
+                            ai_image, "generate_image_with_reference_async", return_value={"url": "/result.png"},
+                        ) as reference_generate, patch.object(
+                            ai_image, "generate_adobe2api_async",
+                        ) as adobe:
+                            result = await ai_image.smart_generate_image_async(
+                                model="gpt-image-2", prompt="test", resolution=resolution,
+                                size="16:9", images=images, user_id="test_user",
+                                on_attempt=attempts.append,
+                            )
+                            self.assertEqual(result["provider"], "apimart")
+                            self.assertEqual(
+                                attempts, ["sub2api", "apimart"] if resolution == "1K" else ["apimart"],
+                            )
+                            self.assertEqual(sub2api.await_count, 1 if resolution == "1K" else 0)
+                            adobe.assert_not_awaited()
+                            generator = reference_generate if images else text_generate
+                            unused_generator = text_generate if images else reference_generate
+                            generator.assert_awaited_once()
+                            unused_generator.assert_not_awaited()
+                            self.assertEqual(generator.call_args.kwargs["model"], "gpt-image-2")
+                            self.assertEqual(generator.call_args.kwargs["resolution"], resolution)
+                            self.assertEqual(generator.call_args.kwargs["size"], "16:9")
+                            self.assertFalse(generator.call_args.kwargs["apimart_ext"])
+                            if images:
+                                self.assertEqual(generator.call_args.kwargs["images"], images)
 
     def test_gpt_image_25_default_flare_route(self) -> None:
         with patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api:8080"), \
@@ -319,7 +363,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
 
             # 正常情况下：Sub2API 第一顺位
             candidates = ai_image.get_smart_route_candidates("gpt-image-2", resolution="1K", now=base_time)
-            self.assertEqual(candidates, ["sub2api", "apimart", "adobe2api"])
+            self.assertEqual(candidates, ["sub2api", "apimart"])
 
             # 连续失败 2 次，冻结 sub2api
             ai_image.record_provider_failure("sub2api", model="gpt-image-2", now=base_time)
@@ -327,11 +371,11 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
 
             # 第三次任务：sub2api 被过滤，直接使用 apimart 作为第一顺位
             candidates_frozen = ai_image.get_smart_route_candidates("gpt-image-2", resolution="1K", now=base_time + 2)
-            self.assertEqual(candidates_frozen, ["apimart", "adobe2api"])
+            self.assertEqual(candidates_frozen, ["apimart"])
 
             # 30 分钟后（1800s）：sub2api 自动解冻并恢复到第一顺位
             candidates_restored = ai_image.get_smart_route_candidates("gpt-image-2", resolution="1K", now=base_time + 1802)
-            self.assertEqual(candidates_restored, ["sub2api", "apimart", "adobe2api"])
+            self.assertEqual(candidates_restored, ["sub2api", "apimart"])
 
     def test_provider_success_resets_failure_count(self) -> None:
         base_time = 1000.0

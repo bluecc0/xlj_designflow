@@ -1,11 +1,17 @@
-﻿const CATS = ['All', 'Social', 'E-commerce', 'Brand', 'Print', 'Web', 'Packaging'];
-
-function formatAiModelName(model) {
+﻿function formatAiModelName(model) {
   if (!model) return 'AI 生图';
   var map = {
-    'gpt-image-2': 'Gpt image 2',
-    'gpt-image-2.5': 'Gpt image 2.5',
-    'gemini-3-pro-image-preview': 'Nano Banano pro',
+    'gpt-image-2': 'GPT Image 2',
+    'gpt-image-2.5': 'GPT Image 2.5',
+    'nano-banana-pro': 'Nano Banana Pro',
+    'gemini-3-pro-image-preview': 'Nano Banana Pro',
+    'nano-banana-2.1': 'Nano Banana 2.1',
+    'gemini-nano-banana-2.1': 'Nano Banana 2.1',
+    'gemini-nano-banana-2.1-ext': 'Nano Banana 2.1',
+    'seedream-5-0-pro': 'Seedream 5.0 Pro',
+    'seedream-5-0-flash': 'Seedream 5.0 Flash',
+    'seedream-5.0-pro': 'Seedream 5.0 Pro',
+    'seedream-5.0-flash': 'Seedream 5.0 Flash',
   };
   return map[model] || model;
 }
@@ -55,9 +61,9 @@ const TemplateCard = function(_ref) {
     },
       React.createElement(LazyThumb, { t: t }),
       React.createElement('div', { style: { padding: '6px 2px 2px', display: 'flex', alignItems: 'center', gap: 5 } },
-        React.createElement('div', { style: { fontSize: 11.5, fontWeight: 500, color: 'var(--ink)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
-        t.frames && t.frames.length > 1 && React.createElement('span', { className: 'mono', style: { fontSize: 8, color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 4px', borderRadius: 3, letterSpacing: '0.04em' } }, t.frames.length + '板'),
-        t.pro && React.createElement('span', { className: 'mono', style: { fontSize: 8, color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 4px', borderRadius: 3, letterSpacing: '0.04em' } }, 'PRO')
+        React.createElement('div', { style: { fontSize: 12, fontWeight: 500, color: 'var(--ink)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
+        t.frames && t.frames.length > 1 && React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 5px', borderRadius: 4, letterSpacing: '0.02em' } }, t.frames.length + '板'),
+        t.pro && React.createElement('span', { className: 'mono', style: { fontSize: 11, color: 'var(--accent-ink)', background: 'var(--accent-soft)', padding: '1px 5px', borderRadius: 4, letterSpacing: '0.02em' } }, 'PRO')
       ),
       active && React.createElement('div', {
         style: {
@@ -87,7 +93,7 @@ var ElapsedTimer = function(props) {
   var label = m > 0 ? m + 'm ' + String(s).padStart(2, '0') + 's' : s + 's';
   return React.createElement('span', {
     className: 'mono',
-    style: { fontSize: 10, color: 'var(--accent)', fontVariantNumeric: 'tabular-nums' },
+    style: { fontSize: 11, color: 'var(--accent)', fontVariantNumeric: 'tabular-nums' },
   }, label);
 };
 
@@ -200,8 +206,8 @@ var TemplatePanel = function(_ref2) {
             }
           }, t.label, t.soon && React.createElement('span', {
             className: 'mono',
-            style: { fontSize: 8, padding: '1px 4px', borderRadius: 3, background: 'var(--panel-2)', border: '1px solid var(--line)', color: 'var(--ink-3)', letterSpacing: '0.03em' }
-          }, 'soon'));
+            style: { fontSize: 11, padding: '1px 5px', borderRadius: 4, background: 'var(--panel-2)', border: '1px solid var(--line)', color: 'var(--ink-3)' }
+          }, '即将上线'));
         })
       ),
       tab === 'templates' && React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
@@ -236,12 +242,12 @@ var TemplatePanel = function(_ref2) {
           )
         ),
         loading && React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)', fontSize: 12 } },
-          React.createElement('span', { style: { animation: 'spin 1s linear infinite', display: 'inline-block' } }, '⟳'),
+          React.createElement('span', { className: 'df-spinner' }),
           '加载模板…'
         ),
-        !loading && loadErr && React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#e53', fontSize: 11, padding: 16, textAlign: 'center' } },
+        !loading && loadErr && React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--danger)', fontSize: 12, padding: 16, textAlign: 'center' } },
           React.createElement('div', null, '加载失败'),
-          React.createElement('div', { style: { color: 'var(--ink-3)', fontSize: 10 } }, String(loadErr))
+          React.createElement('div', { style: { color: 'var(--ink-3)', fontSize: 11 } }, String(loadErr))
         ),
         !loading && !loadErr && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 14px 56px' } },
           filteredSections.map(function(section) {
@@ -295,7 +301,7 @@ var TemplatePanel = function(_ref2) {
                   className: 'mono',
                   style: {
                     color: 'var(--ink-3)',
-                    fontSize: 10,
+                    fontSize: 11,
                     fontWeight: 600,
                     lineHeight: 1,
                   }
@@ -318,7 +324,7 @@ var TemplatePanel = function(_ref2) {
       ),
       tab === 'history' && React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' } },
         historyLoading && React.createElement('div', { style: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)', fontSize: 12 } },
-          React.createElement('span', { style: { animation: 'spin 1s linear infinite', display: 'inline-block' } }, '⟳'),
+          React.createElement('span', { className: 'df-spinner' }),
           '加载中…'
         ),
         !historyLoading && historyJobs.length === 0 && React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--ink-3)' } },
@@ -329,7 +335,7 @@ var TemplatePanel = function(_ref2) {
           historyJobs.map(function(job, idx) {
             var isSpecial = job._type === 'special';
             var isAiImage = job._type === 'ai-image';
-            var statusColor = job.status === 'done' ? 'var(--ok)' : job.status === 'failed' ? '#e53' : 'var(--accent)';
+            var statusColor = job.status === 'done' ? 'var(--ok)' : job.status === 'failed' ? 'var(--danger)' : 'var(--accent)';
             var timeStr = job.created_at ? new Date(job.created_at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
             // 缩略图：特殊品取第一帧 url，普通合成取 getImageUrl
             var thumbUrl = null;
@@ -364,12 +370,23 @@ var TemplatePanel = function(_ref2) {
                 cursor: 'pointer'
               },
               onClick: function() {
-                console.log('[History] Clicked job:', job.id, 'penpot:', job.penpot_edit_url);
-                if (isAiImage && job.status === 'done' && thumbUrl) {
-                  window.open(thumbUrl, '_blank');
-                } else if (job.status === 'done' && job.penpot_edit_url) {
-                  window.open(job.penpot_edit_url, '_blank');
+                if (job.status === 'failed') {
+                  window.dfToast('这条任务生成失败' + (job.error ? '：' + String(job.error).slice(0, 120) : ''), { tone: 'danger' });
+                  return;
                 }
+                if (job.status !== 'done') {
+                  window.dfToast('任务还在生成中，完成后可预览');
+                  return;
+                }
+                if (!thumbUrl) {
+                  if (job.penpot_edit_url) window.open(job.penpot_edit_url, '_blank');
+                  return;
+                }
+                window.dfOpenLightbox({
+                  src: thumbUrl,
+                  title: isAiImage ? job.prompt : titleText,
+                  actions: job.penpot_edit_url ? [{ label: '在 Penpot 中编辑', icon: I.edit, onClick: function() { window.open(job.penpot_edit_url, '_blank'); } }] : [],
+                });
               }
             },
               React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: thumbUrl ? 8 : 0 } },
@@ -383,7 +400,7 @@ var TemplatePanel = function(_ref2) {
                     job.status !== 'done' && job.status !== 'failed'
                       ? React.createElement('span', { style: {
                           width: 10, height: 10, borderRadius: 99, flexShrink: 0, boxSizing: 'border-box',
-                          border: '1.5px solid oklch(0.85 0.04 275)',
+                          border: '1.5px solid var(--line)',
                           borderTopColor: 'var(--accent)',
                           animation: 'spin 0.75s linear infinite',
                           display: 'inline-block',
@@ -392,11 +409,11 @@ var TemplatePanel = function(_ref2) {
                     React.createElement('span', { style: { flex: 1, fontSize: 12, fontWeight: 500, color: 'var(--ink)' } }, titleText),
                     job.status !== 'done' && job.status !== 'failed' && job.created_at
                       ? React.createElement(ElapsedTimer, { createdAt: job.created_at })
-                      : React.createElement('span', { style: { fontSize: 10, color: 'var(--ink-3)' } }, timeStr)
+                      : React.createElement('span', { style: { fontSize: 11, color: 'var(--ink-3)' } }, timeStr)
                   ),
                   subtitle && React.createElement('div', { style: { fontSize: 11, color: 'var(--ink-2)', paddingLeft: 14 } }, subtitle),
                   isAiImage && job.prompt && React.createElement('div', { style: {
-                    fontSize: 10.5,
+                    fontSize: 11,
                     color: 'var(--ink-3)',
                     paddingLeft: 14,
                     marginTop: 4,

@@ -139,15 +139,15 @@ const InspirationPanel = ({ open = true, onClose, onUsePrompt }) => {
   const closeDetail = React.useCallback(function() { setDetailPost(null); }, []);
 
   // 下架自己的
-  const handleUnpublish = React.useCallback(function(post) {
-    if (!window.confirm('下架这条灵感？')) return;
+  const handleUnpublish = React.useCallback(async function(post) {
+    if (!(await window.dfConfirm({ title: '下架这条灵感？', message: '下架后其他人将看不到这张图。', confirmText: '下架', danger: true }))) return;
     window.API.unpublishInspiration(post.id)
       .then(function() {
         setPosts(function(prev) { return prev.filter(function(p) { return p.id !== post.id; }); });
         if (detailPost && detailPost.id === post.id) closeDetail();
       })
       .catch(function(e) {
-        window.alert('下架失败：' + (e.message || '未知错误'));
+        window.dfToast('下架失败：' + (e.message || '未知错误'), { tone: 'danger' });
       });
   }, [detailPost, closeDetail]);
 
@@ -174,7 +174,7 @@ const InspirationPanel = ({ open = true, onClose, onUsePrompt }) => {
       if (detailPost && detailPost.id === post.id) {
         setDetailPost(Object.assign({}, detailPost, { favorited: !next }));
       }
-      window.alert((next ? '收藏' : '取消收藏') + '失败：' + (e.message || '未知错误'));
+      window.dfToast((next ? '收藏' : '取消收藏') + '失败：' + (e.message || '未知错误'), { tone: 'danger' });
     });
   }, [detailPost, tab]);
 
@@ -221,7 +221,7 @@ const InspirationPanel = ({ open = true, onClose, onUsePrompt }) => {
                 borderBottom: '2px solid ' + (active ? 'var(--ink)' : 'transparent'),
                 background: 'transparent',
                 color: active ? 'var(--ink)' : 'var(--ink-2)',
-                fontSize: 11.5, fontWeight: active ? 600 : 400,
+                fontSize: 12, fontWeight: active ? 600 : 400,
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
                 transform: 'translateY(1px)',
@@ -242,7 +242,7 @@ const InspirationPanel = ({ open = true, onClose, onUsePrompt }) => {
             placeholder="搜索 prompt / 标签…"
             style={{
               flex: 1, border: 'none', outline: 'none',
-              background: 'transparent', fontSize: 11.5, color: 'var(--ink)',
+              background: 'transparent', fontSize: 12, color: 'var(--ink)',
             }}
             onChange={function(e) { setSearch(e.target.value); }}
           />
@@ -498,7 +498,7 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnp
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 14px 14px' }}>
           {activePost.original_prompt && activePost.original_prompt !== activePost.prompt ? (
             <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 10, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }} className="mono">原始输入</div>
+              <div style={{ fontSize: 11, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }} className="mono">原始输入</div>
               <div style={{
                 fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.55,
                 padding: '8px 10px', borderRadius: 6,
@@ -508,7 +508,7 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnp
             </div>
           ) : null}
           <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 10, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }} className="mono">生成 Prompt</div>
+            <div style={{ fontSize: 11, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }} className="mono">生成 Prompt</div>
 	            <div style={{
 	              fontSize: 12, color: 'var(--ink)', lineHeight: 1.55,
 	              padding: '8px 10px', borderRadius: 6,
@@ -521,14 +521,14 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnp
 	              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
 	              gap: 8, marginBottom: 4,
 	            }}>
-	              <div style={{ fontSize: 10, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }} className="mono">VLM 反推 Prompt</div>
+	              <div style={{ fontSize: 11, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }} className="mono">VLM 反推 Prompt</div>
 	              <button
 	                onClick={handleDescribe}
 	                disabled={describing}
 	                style={{
 	                  height: 22, padding: '0 8px', borderRadius: 999,
 	                  background: 'var(--panel)', color: 'var(--ink-2)',
-	                  border: '1px solid var(--line)', fontSize: 10.5,
+	                  border: '1px solid var(--line)', fontSize: 11,
 	                  display: 'inline-flex', alignItems: 'center', gap: 4,
 	                  cursor: describing ? 'default' : 'pointer',
 	                  opacity: describing ? 0.65 : 1,
@@ -563,7 +563,7 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnp
                 key: i,
                 className: 'mono',
                 style: {
-                  fontSize: 10, padding: '3px 8px', borderRadius: 4,
+                  fontSize: 11, padding: '3px 8px', borderRadius: 4,
                   background: 'var(--panel-2)', border: '1px solid var(--line-2)',
                   color: 'var(--ink-2)',
                 }
@@ -573,7 +573,7 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnp
 	          {Array.isArray(activePost.tags) && activePost.tags.length > 0 ? (
 	            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 12 }}>
 	              {activePost.tags.map(function(tag) {
-	                return React.createElement('span', { key: tag, style: { fontSize: 10.5, color: 'var(--ink-2)', padding: '3px 8px', borderRadius: 999, background: 'var(--panel-2)', border: '1px solid var(--line-2)' } }, '#' + tag);
+	                return React.createElement('span', { key: tag, style: { fontSize: 11, color: 'var(--ink-2)', padding: '3px 8px', borderRadius: 999, background: 'var(--panel-2)', border: '1px solid var(--line-2)' } }, '#' + tag);
 	              })}
 	            </div>
 	          ) : null}
@@ -619,7 +619,7 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnp
 	            </button>
 	          )}
           </div>
-          <div style={{ fontSize: 10.5, color: 'var(--ink-3)', lineHeight: 1.4 }}>
+          <div style={{ fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.4 }}>
             当前优先使用 VLM 反推 Prompt；没有反推结果时使用生成时的完整 Prompt，再兜底原始输入。
           </div>
         </div>

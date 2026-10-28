@@ -114,7 +114,9 @@
   async function observe(response, info, requestEpoch, requestSession) {
     if (requestEpoch !== epoch) return;
     if (response.status === 401 && requestSession === sessionVersion && !info.path.startsWith('/auth/')) expire();
-    if ([502, 503, 504].includes(response.status)) { unavailable(); return; }
+    // A dependency (for example Penpot) can fail while the backend is reachable.
+    // Confirm availability through the session endpoint before reporting an outage.
+    if ([502, 503, 504].includes(response.status)) { void check(); return; }
     if (!response.ok) return;
     if (info.task || info.path === '/auth/session') {
       const data = await response.clone().json().catch(function() { return null; });

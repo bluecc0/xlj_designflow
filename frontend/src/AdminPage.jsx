@@ -80,9 +80,9 @@ const ADMIN_CSS = `
   }
   .df-admin-brand { padding: 4px 10px 22px; }
   .df-admin-brandmark { width: 30px; height: 30px; margin-bottom: 12px; }
-  .df-admin-brandname { font-size: 16px; font-weight: 700; letter-spacing: -.025em; }
-  .df-admin-brandmeta { margin-top: 3px; font-size: 10px; color: #8e938a; letter-spacing: .14em; text-transform: uppercase; }
-  .df-admin-navlabel { padding: 0 10px 7px; color: #777c73; font-size: 9px; letter-spacing: .16em; text-transform: uppercase; }
+  .df-admin-brandname { font-size: 15px; font-weight: 700; letter-spacing: -.025em; }
+  .df-admin-brandmeta { margin-top: 3px; font-size: 11px; color: #8e938a; letter-spacing: .14em; text-transform: uppercase; }
+  .df-admin-navlabel { padding: 0 10px 7px; color: #777c73; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; }
   .df-admin-nav { display: flex; flex-direction: column; gap: 3px; }
   .df-admin-navbutton {
     width: 100%; height: 38px; display: flex; align-items: center; gap: 10px;
@@ -102,11 +102,11 @@ const ADMIN_CSS = `
     width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
     color: #151714; background: #d7ff60; font-size: 11px; font-weight: 700;
   }
-  .df-admin-username { min-width: 0; font-size: 11.5px; color: #f5f5f2; overflow: hidden; text-overflow: ellipsis; }
-  .df-admin-role { margin-top: 1px; color: #7f847b; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+  .df-admin-username { min-width: 0; font-size: 12px; color: #f5f5f2; overflow: hidden; text-overflow: ellipsis; }
+  .df-admin-role { margin-top: 1px; color: #7f847b; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
   .df-admin-back {
     width: 100%; height: 32px; border: 1px solid #343733; border-radius: 7px;
-    color: #aeb3aa; background: transparent; cursor: pointer; font-size: 10.5px;
+    color: #aeb3aa; background: transparent; cursor: pointer; font-size: 11px;
   }
   .df-admin-back:hover { color: #fff; border-color: #555a52; }
   .df-admin-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -116,7 +116,7 @@ const ADMIN_CSS = `
     backdrop-filter: blur(12px);
   }
   .df-admin-title { font-size: 18px; font-weight: 680; letter-spacing: -.03em; }
-  .df-admin-subtitle { margin-top: 2px; color: var(--admin-muted); font-size: 10.5px; }
+  .df-admin-subtitle { margin-top: 2px; color: var(--admin-muted); font-size: 11px; }
   .df-admin-headtools { margin-left: auto; display: flex; align-items: center; gap: 8px; }
   .df-admin-control {
     height: 32px; padding: 0 10px; border: 1px solid var(--admin-line);
@@ -124,13 +124,13 @@ const ADMIN_CSS = `
   }
   button.df-admin-control { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
   button.df-admin-control:hover { border-color: var(--admin-line-strong); background: #fafaf8; }
-  .df-admin-updated { color: var(--admin-faint); font-size: 9.5px; }
+  .df-admin-updated { color: var(--admin-faint); font-size: 11px; }
   .df-admin-scroll { flex: 1; min-height: 0; overflow: auto; padding: 22px 26px 42px; }
   .df-admin-content { width: min(1460px, 100%); margin: 0 auto; }
   .df-admin-alert {
     display: flex; align-items: center; gap: 10px; min-height: 42px; margin-bottom: 14px;
     padding: 8px 12px; border-radius: 8px; color: #814515;
-    background: var(--admin-amber-soft); border: 1px solid #f0d7b4; font-size: 11.5px;
+    background: var(--admin-amber-soft); border: 1px solid #f0d7b4; font-size: 12px;
   }
   .df-admin-alertdot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #dc8529; }
   .df-admin-alertclose {
@@ -143,10 +143,10 @@ const ADMIN_CSS = `
     min-height: 126px; padding: 17px 18px; border: 1px solid var(--admin-line);
     border-radius: 10px; background: var(--admin-surface);
   }
-  .df-admin-metrichead { display: flex; align-items: center; justify-content: space-between; color: var(--admin-muted); font-size: 10.5px; }
+  .df-admin-metrichead { display: flex; align-items: center; justify-content: space-between; color: var(--admin-muted); font-size: 11px; }
   .df-admin-metricdot { width: 7px; height: 7px; border-radius: 50%; background: var(--metric-color, #9b9f98); }
-  .df-admin-metricvalue { margin-top: 18px; font-size: 33px; font-weight: 680; line-height: 1; letter-spacing: -.055em; font-variant-numeric: tabular-nums; }
-  .df-admin-metricfoot { margin-top: 10px; color: var(--admin-faint); font-size: 9.5px; }
+  .df-admin-metricvalue { margin-top: 18px; font-size: 24px; font-weight: 680; line-height: 1; letter-spacing: -.055em; font-variant-numeric: tabular-nums; }
+  .df-admin-metricfoot { margin-top: 10px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-metricfoot strong { color: var(--admin-muted); font-weight: 550; }
   .df-admin-health {
     margin-top: 10px; padding: 16px 18px 17px; border: 1px solid var(--admin-line);
@@ -162,7 +162,7 @@ const ADMIN_CSS = `
   .df-admin-healthmark.is-degraded { background: var(--admin-red); box-shadow: 0 0 0 3px var(--admin-red-soft); }
   .df-admin-healthmark.is-unknown { background: #b9bdb6; box-shadow: 0 0 0 3px #f0f1ed; }
   .df-admin-healthname { font-size: 12px; font-weight: 650; }
-  .df-admin-healthmeta { color: var(--admin-faint); font-size: 9.5px; }
+  .df-admin-healthmeta { color: var(--admin-faint); font-size: 11px; }
   .df-admin-healthrate { margin-left: auto; color: var(--admin-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
   .df-admin-healthrail {
     display: grid; grid-template-columns: repeat(72, minmax(2px, 1fr)); gap: 3px;
@@ -172,7 +172,7 @@ const ADMIN_CSS = `
   .df-admin-healthbar.is-healthy { background: #55bc91; }
   .df-admin-healthbar.is-warning { background: #e7ad42; }
   .df-admin-healthbar.is-degraded { background: #df6b59; }
-  .df-admin-healthfoot { display: flex; align-items: center; gap: 12px; margin-top: 9px; color: var(--admin-faint); font-size: 8.5px; }
+  .df-admin-healthfoot { display: flex; align-items: center; gap: 12px; margin-top: 9px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-healthfoot span { display: inline-flex; align-items: center; gap: 4px; }
   .df-admin-healthfoot i { width: 5px; height: 5px; border-radius: 50%; background: #dfe2dc; }
   .df-admin-healthfoot .is-healthy i { background: #55bc91; }
@@ -185,8 +185,8 @@ const ADMIN_CSS = `
   }
   .df-admin-cardhead { min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--admin-line); }
   .df-admin-cardtitle { font-size: 12px; font-weight: 630; }
-  .df-admin-cardmeta { color: var(--admin-faint); font-size: 9.5px; }
-  .df-admin-cardaction { margin-left: auto; color: var(--admin-muted); border: 0; background: none; cursor: pointer; font-size: 10px; }
+  .df-admin-cardmeta { color: var(--admin-faint); font-size: 11px; }
+  .df-admin-cardaction { margin-left: auto; color: var(--admin-muted); border: 0; background: none; cursor: pointer; font-size: 11px; }
   .df-admin-chart { height: 218px; display: flex; align-items: stretch; gap: 8px; padding: 22px 18px 12px; }
   .df-admin-baritem { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; gap: 6px; }
   .df-admin-bartrack { height: 158px; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; border-radius: 4px 4px 2px 2px; background: #f0f1ed; }
@@ -195,7 +195,7 @@ const ADMIN_CSS = `
   .df-admin-bar.is-agent { background: #5f6fe8; }
   .df-admin-bar.is-compose { background: #55bc91; }
   .df-admin-bar.is-special { background: #e7ad42; }
-  .df-admin-barlabel { color: var(--admin-faint); text-align: center; font-size: 8.5px; white-space: nowrap; }
+  .df-admin-barlabel { color: var(--admin-faint); text-align: center; font-size: 11px; white-space: nowrap; }
   .df-admin-legend { display: inline-flex; align-items: center; gap: 9px; }
   .df-admin-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   .df-admin-legend i { width: 5px; height: 5px; border-radius: 50%; background: #2563eb; }
@@ -221,16 +221,16 @@ const ADMIN_CSS = `
   .df-admin-scroll-y::-webkit-scrollbar-thumb:hover { background: #b8bcb2; }
   .df-admin-rankrow { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 45px; border-bottom: 1px solid #eff0ec; }
   .df-admin-rankrow:last-child { border-bottom: 0; }
-  .df-admin-rankno { color: var(--admin-faint); font: 9.5px "JetBrains Mono", monospace; }
-  .df-admin-rankname { overflow: hidden; font-size: 10.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-  .df-admin-rankmeta { margin-top: 2px; color: var(--admin-faint); font-size: 8.5px; }
+  .df-admin-rankno { color: var(--admin-faint); font: 11px "JetBrains Mono", monospace; }
+  .df-admin-rankname { overflow: hidden; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .df-admin-rankmeta { margin-top: 2px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-rankvalue { font-size: 15px; font-weight: 680; font-variant-numeric: tabular-nums; }
-  .df-admin-rankunit { margin-left: 3px; color: var(--admin-faint); font-size: 8px; font-weight: 400; }
+  .df-admin-rankunit { margin-left: 3px; color: var(--admin-faint); font-size: 11px; font-weight: 400; }
   .df-admin-tablewrap { overflow: auto; }
-  .df-admin-table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+  .df-admin-table { width: 100%; border-collapse: collapse; font-size: 11px; }
   .df-admin-table th {
     height: 38px; padding: 0 12px; color: var(--admin-muted); background: #fafaf8;
-    border-bottom: 1px solid var(--admin-line); text-align: left; font-size: 9.5px; font-weight: 550; white-space: nowrap;
+    border-bottom: 1px solid var(--admin-line); text-align: left; font-size: 11px; font-weight: 550; white-space: nowrap;
   }
   .df-admin-table td { height: 45px; padding: 7px 12px; border-bottom: 1px solid #eff0ec; vertical-align: middle; }
   .df-admin-table tbody tr:last-child td { border-bottom: 0; }
@@ -238,7 +238,7 @@ const ADMIN_CSS = `
   .df-admin-table tbody tr.is-clickable:hover { background: #fafaf8; }
   .df-admin-status {
     display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 7px;
-    border-radius: 99px; color: #666c63; background: #f1f2ef; white-space: nowrap; font-size: 9.5px;
+    border-radius: 99px; color: #666c63; background: #f1f2ef; white-space: nowrap; font-size: 11px;
   }
   .df-admin-status::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #9ba097; }
   .df-admin-status.is-success { color: #157a4e; background: var(--admin-green-soft); }
@@ -248,7 +248,7 @@ const ADMIN_CSS = `
   .df-admin-status.is-active { color: #976018; background: var(--admin-amber-soft); }
   .df-admin-status.is-active::before { background: var(--admin-amber); animation: adminPulse 1.4s infinite; }
   @keyframes adminPulse { 50% { opacity: .35; } }
-  .df-admin-mono { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; font-size: 9.5px; }
+  .df-admin-mono { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; font-size: 11px; }
   .df-admin-muted { color: var(--admin-muted); }
   .df-admin-faint { color: var(--admin-faint); }
   .df-admin-ellipsis { max-width: 330px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -257,19 +257,19 @@ const ADMIN_CSS = `
   .df-admin-search { position: relative; min-width: 220px; flex: 1; max-width: 400px; }
   .df-admin-search svg { position: absolute; left: 10px; top: 9px; color: var(--admin-faint); pointer-events: none; }
   .df-admin-search input { width: 100%; padding-left: 31px; }
-  .df-admin-pageinfo { margin-left: auto; color: var(--admin-faint); font-size: 9.5px; }
+  .df-admin-pageinfo { margin-left: auto; color: var(--admin-faint); font-size: 11px; }
   .df-admin-pagebutton { width: 32px; padding: 0; justify-content: center; }
   .df-admin-servicegrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
   .df-admin-service { min-height: 146px; padding: 16px; border: 1px solid var(--admin-line); border-radius: 10px; background: #fff; }
   .df-admin-servicetop { display: flex; align-items: flex-start; gap: 10px; }
   .df-admin-serviceicon { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; color: #555b53; background: #f1f2ee; }
-  .df-admin-servicename { font-size: 11.5px; font-weight: 620; }
-  .df-admin-servicedesc { margin-top: 3px; color: var(--admin-faint); font-size: 9px; }
+  .df-admin-servicename { font-size: 12px; font-weight: 620; }
+  .df-admin-servicedesc { margin-top: 3px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-servicestate { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: #a7aba4; }
   .df-admin-servicestate.is-up { background: var(--admin-green); box-shadow: 0 0 0 4px var(--admin-green-soft); }
   .df-admin-servicestate.is-down { background: var(--admin-red); box-shadow: 0 0 0 4px var(--admin-red-soft); }
   .df-admin-servicestate.is-warn { background: var(--admin-amber); box-shadow: 0 0 0 4px var(--admin-amber-soft); }
-  .df-admin-servicebody { margin-top: 18px; color: var(--admin-muted); font-size: 9.5px; line-height: 1.65; word-break: break-all; }
+  .df-admin-servicebody { margin-top: 18px; color: var(--admin-muted); font-size: 11px; line-height: 1.65; word-break: break-all; }
   .df-admin-probelist { max-height: 410px; overflow: auto; padding: 0 16px; }
   .df-admin-probe {
     min-height: 54px; display: grid; grid-template-columns: 10px minmax(120px, 1fr) 110px 82px 38px;
@@ -280,8 +280,8 @@ const ADMIN_CSS = `
   .df-admin-probedot.is-done { background: var(--admin-green); box-shadow: 0 0 0 3px var(--admin-green-soft); }
   .df-admin-probedot.is-failed { background: var(--admin-red); box-shadow: 0 0 0 3px var(--admin-red-soft); }
   .df-admin-probedot.is-running { background: var(--admin-amber); box-shadow: 0 0 0 3px var(--admin-amber-soft); }
-  .df-admin-probetime { font-size: 10.5px; font-weight: 610; font-variant-numeric: tabular-nums; }
-  .df-admin-probemeta { color: var(--admin-faint); font-size: 9px; font-variant-numeric: tabular-nums; }
+  .df-admin-probetime { font-size: 11px; font-weight: 610; font-variant-numeric: tabular-nums; }
+  .df-admin-probemeta { color: var(--admin-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
   .df-admin-probethumb {
     width: 36px; height: 36px; display: block; overflow: hidden;
     border: 1px solid var(--admin-line); border-radius: 6px; background: #eff0ec;
@@ -289,20 +289,20 @@ const ADMIN_CSS = `
   .df-admin-probethumb img { width: 100%; height: 100%; display: block; object-fit: cover; }
   .df-admin-probenoimage { width: 36px; height: 36px; border-radius: 6px; background: #f1f2ee; }
   .df-admin-probeerror {
-    margin-top: 3px; overflow: hidden; color: #a73535; font-size: 8.5px;
+    margin-top: 3px; overflow: hidden; color: #a73535; font-size: 11px;
     text-overflow: ellipsis; white-space: nowrap;
   }
   .df-admin-form {
     display: grid; grid-template-columns: 1fr 1fr 1fr 110px auto auto; gap: 8px; align-items: center;
     padding: 14px; border-bottom: 1px solid var(--admin-line); background: #fafaf8;
   }
-  .df-admin-useridentity strong { display: block; font-size: 10.5px; }
-  .df-admin-useridentity span { display: block; margin-top: 3px; color: var(--admin-faint); font: 8.5px "JetBrains Mono", monospace; }
+  .df-admin-useridentity strong { display: block; font-size: 11px; }
+  .df-admin-useridentity span { display: block; margin-top: 3px; color: var(--admin-faint); font: 11px "JetBrains Mono", monospace; }
   .df-admin-primary { color: #fff; background: #1c1e1b; border-color: #1c1e1b; cursor: pointer; }
   .df-admin-primary:hover { color: #fff; background: #2a2d29; }
-  .df-admin-linkbutton { border: 0; background: none; color: #4f5ee8; cursor: pointer; font-size: 9.5px; }
+  .df-admin-linkbutton { border: 0; background: none; color: #4f5ee8; cursor: pointer; font-size: 11px; }
   .df-admin-dangerbutton { color: var(--admin-red); }
-  .df-admin-error { padding: 10px 12px; margin-bottom: 10px; border-radius: 7px; color: #a73535; background: var(--admin-red-soft); font-size: 10.5px; }
+  .df-admin-error { padding: 10px 12px; margin-bottom: 10px; border-radius: 7px; color: #a73535; background: var(--admin-red-soft); font-size: 11px; }
   .df-admin-drawerbackdrop { position: fixed; inset: 0; z-index: 90; background: rgba(18,20,17,.16); }
   .df-admin-drawer {
     position: fixed; z-index: 91; top: 0; right: 0; bottom: 0; width: min(620px, 94vw);
@@ -311,19 +311,19 @@ const ADMIN_CSS = `
   .df-admin-drawerhead { display: flex; align-items: center; gap: 10px; padding-bottom: 17px; border-bottom: 1px solid var(--admin-line); }
   .df-admin-drawertitle { font-size: 15px; font-weight: 680; }
   .df-admin-drawerclose { margin-left: auto; width: 30px; padding: 0; justify-content: center; }
-  .df-admin-detailgrid { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 17px 0; font-size: 10.5px; border-bottom: 1px solid var(--admin-line); }
+  .df-admin-detailgrid { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 17px 0; font-size: 11px; border-bottom: 1px solid var(--admin-line); }
   .df-admin-detailgrid dt { color: var(--admin-faint); }
   .df-admin-detailgrid dd { margin: 0; color: var(--admin-ink); word-break: break-word; }
   .df-admin-detailsection { padding: 17px 0; border-bottom: 1px solid var(--admin-line); }
   .df-admin-detailsection:last-child { border-bottom: 0; }
-  .df-admin-detailtitle { margin-bottom: 10px; color: var(--admin-muted); font-size: 9px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; }
+  .df-admin-detailtitle { margin-bottom: 10px; color: var(--admin-muted); font-size: 11px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; }
   .df-admin-detailcards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
   .df-admin-detailcard { min-width: 0; padding: 10px; border: 1px solid var(--admin-line); border-radius: 8px; background: #fafaf8; }
-  .df-admin-detailcard span { display: block; color: var(--admin-faint); font-size: 8.5px; }
-  .df-admin-detailcard strong { display: block; margin-top: 5px; overflow: hidden; color: var(--admin-ink); font-size: 10.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .df-admin-detailcard span { display: block; color: var(--admin-faint); font-size: 11px; }
+  .df-admin-detailcard strong { display: block; margin-top: 5px; overflow: hidden; color: var(--admin-ink); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
   .df-admin-prompt { margin-top: 8px; padding: 11px 12px; border: 1px solid var(--admin-line); border-radius: 8px; background: #fafaf8; }
   .df-admin-prompt:first-of-type { margin-top: 0; }
-  .df-admin-promptlabel { margin-bottom: 6px; color: var(--admin-faint); font-size: 8.5px; }
+  .df-admin-promptlabel { margin-bottom: 6px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-prompttext { color: var(--admin-ink); font-size: 11px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
   .df-admin-resultimage { display: block; width: 100%; max-height: 320px; object-fit: contain; border: 1px solid var(--admin-line); border-radius: 8px; background: #f5f5f2; }
   .df-admin-references { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 12px; }
@@ -332,8 +332,8 @@ const ADMIN_CSS = `
   .df-admin-referencepreview img { display: block; width: 100%; height: 100%; object-fit: contain; }
   .df-admin-referencename { margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
   .df-admin-detailactions { display: flex; gap: 7px; margin-top: 9px; }
-  .df-admin-raw summary { margin-top: 12px; color: var(--admin-muted); cursor: pointer; font-size: 10px; }
-  .df-admin-code { margin-top: 14px; padding: 12px; border-radius: 8px; color: #d8ddd4; background: #20231f; font: 9.5px/1.6 "JetBrains Mono", monospace; white-space: pre-wrap; word-break: break-all; }
+  .df-admin-raw summary { margin-top: 12px; color: var(--admin-muted); cursor: pointer; font-size: 11px; }
+  .df-admin-code { margin-top: 14px; padding: 12px; border-radius: 8px; color: #d8ddd4; background: #20231f; font: 11px/1.6 "JetBrains Mono", monospace; white-space: pre-wrap; word-break: break-all; }
   @media (max-width: 1050px) {
     .df-admin { grid-template-columns: 74px minmax(0, 1fr); }
     .df-admin-brandname, .df-admin-brandmeta, .df-admin-navlabel, .df-admin-navbutton span, .df-admin-userline > div:last-child, .df-admin-back span { display: none; }
@@ -373,7 +373,7 @@ const ADMIN_CSS = `
   }
   @media (max-width: 520px) {
     .df-admin-metrics { grid-template-columns: 1fr; }
-    .df-admin-title { font-size: 16px; }
+    .df-admin-title { font-size: 15px; }
     .df-admin-subtitle { display: none; }
     .df-admin-headtools { margin-left: 0; }
     .df-admin-healthtop {
@@ -635,32 +635,39 @@ function AdminUserManagement({ currentUser, users, onReload, showTestUsers, onTo
   var updateRole = function(item) {
     if (busy || item.id === currentUser.id) return;
     var role = item.role === 'admin' ? 'user' : 'admin';
-    if (!window.confirm('将「' + adminUserLabel(item) + '」调整为' + (role === 'admin' ? '管理员' : '普通用户') + '？')) return;
-    setBusy(true); setError('');
-    window.API.updateAdminUser(item.id, { role: role })
-      .then(onReload)
-      .catch(function(err) { setError(err.message || '更新失败'); })
-      .finally(function() { setBusy(false); });
+    window.dfConfirm({ title: '调整账号角色', message: '将「' + adminUserLabel(item) + '」调整为' + (role === 'admin' ? '管理员' : '普通用户') + '？' }).then(function(ok) {
+      if (!ok) return;
+      setBusy(true); setError('');
+      window.API.updateAdminUser(item.id, { role: role })
+        .then(onReload)
+        .catch(function(err) { setError(err.message || '更新失败'); })
+        .finally(function() { setBusy(false); });
+    });
   };
 
   var toggleTestStatus = function(item) {
     if (busy) return;
     var nextState = !item.is_test;
-    if (!window.confirm('将「' + adminUserLabel(item) + '」' + (nextState ? '标记为测试账号（将不计入后台统计与任务列表）' : '恢复为正常账号（将计入后台统计与任务列表）') + '？')) return;
-    setBusy(true); setError('');
-    window.API.updateAdminUser(item.id, { is_test: nextState })
-      .then(onReload)
-      .catch(function(err) { setError(err.message || '测试标记更新失败'); })
-      .finally(function() { setBusy(false); });
+    window.dfConfirm({ title: nextState ? '标记为测试账号' : '恢复为正常账号', message: '将「' + adminUserLabel(item) + '」' + (nextState ? '标记为测试账号（将不计入后台统计与任务列表）' : '恢复为正常账号（将计入后台统计与任务列表）') + '？' }).then(function(ok) {
+      if (!ok) return;
+      setBusy(true); setError('');
+      window.API.updateAdminUser(item.id, { is_test: nextState })
+        .then(onReload)
+        .catch(function(err) { setError(err.message || '测试标记更新失败'); })
+        .finally(function() { setBusy(false); });
+    });
   };
 
   var resetPassword = function(item) {
-    if (busy || !window.confirm('重置「' + adminUserLabel(item) + '」的密码？')) return;
-    setBusy(true); setError('');
-    window.API.resetAdminUserPassword(item.id)
-      .then(function() { window.alert('密码已重置。该用户下次登录时会设置新密码。'); })
-      .catch(function(err) { setError(err.message || '重置失败'); })
-      .finally(function() { setBusy(false); });
+    if (busy) return;
+    window.dfConfirm({ title: '重置密码', message: '重置「' + adminUserLabel(item) + '」的密码？该用户下次登录时需要设置新密码。', confirmText: '重置', danger: true }).then(function(ok) {
+      if (!ok) return;
+      setBusy(true); setError('');
+      window.API.resetAdminUserPassword(item.id)
+        .then(function() { window.dfToast('密码已重置。该用户下次登录时会设置新密码。', { tone: 'ok' }); })
+        .catch(function(err) { setError(err.message || '重置失败'); })
+        .finally(function() { setBusy(false); });
+    });
   };
 
   var updateDisplayName = function(item) {
@@ -676,12 +683,14 @@ function AdminUserManagement({ currentUser, users, onReload, showTestUsers, onTo
 
   var deleteUser = function(item) {
     if (busy || item.id === currentUser.id) return;
-    if (!window.confirm('删除用户「' + adminUserLabel(item) + '」？该操作不会删除其历史任务。')) return;
-    setBusy(true); setError('');
-    window.API.deleteAdminUser(item.id)
-      .then(onReload)
-      .catch(function(err) { setError(err.message || '删除失败'); })
-      .finally(function() { setBusy(false); });
+    window.dfConfirm({ title: '删除用户', message: '删除用户「' + adminUserLabel(item) + '」？该操作不会删除其历史任务。', confirmText: '删除', danger: true }).then(function(ok) {
+      if (!ok) return;
+      setBusy(true); setError('');
+      window.API.deleteAdminUser(item.id)
+        .then(onReload)
+        .catch(function(err) { setError(err.message || '删除失败'); })
+        .finally(function() { setBusy(false); });
+    });
   };
 
   return (
@@ -691,7 +700,7 @@ function AdminUserManagement({ currentUser, users, onReload, showTestUsers, onTo
         <div className="df-admin-cardhead">
           <span className="df-admin-cardtitle">账号与权限</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--admin-muted)', cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: 11, color: 'var(--admin-muted)', cursor: 'pointer' }}>
               <input type="checkbox" checked={!!showTestUsers} onChange={function(e) { if (onToggleShowTest) onToggleShowTest(e.target.checked); }} />
               显示测试账号
             </label>
@@ -710,7 +719,7 @@ function AdminUserManagement({ currentUser, users, onReload, showTestUsers, onTo
             <option value="user">普通用户</option>
             <option value="admin">管理员</option>
           </select>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--admin-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: 11, color: 'var(--admin-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
             <input type="checkbox" checked={form.isTest} onChange={function(e) { setForm(Object.assign({}, form, { isTest: e.target.checked })); }} />
             测试账号（不入统计）
           </label>
@@ -731,7 +740,7 @@ function AdminUserManagement({ currentUser, users, onReload, showTestUsers, onTo
                     <td>
                       {item.role === 'admin' ? '管理员' : '普通用户'}
                       {item.is_test ? (
-                        <span style={{ marginLeft: '6px', color: '#d97706', background: '#fef3c7', padding: '1px 5px', borderRadius: '3px', fontSize: '10px', fontWeight: 600 }}>测试</span>
+                        <span style={{ marginLeft: '6px', color: '#d97706', background: '#fef3c7', padding: '1px 5px', borderRadius: '3px', fontSize: 11, fontWeight: 600 }}>测试</span>
                       ) : null}
                     </td>
                     <td>{item.total_jobs || 0}</td>
@@ -1260,7 +1269,7 @@ function AdminPage({ user, onBack }) {
         </section>
         <div className="df-admin-card df-admin-section">
           <div className="df-admin-cardhead"><span className="df-admin-cardtitle">运行说明</span></div>
-          <div style={{ padding: 16, color: 'var(--admin-muted)', fontSize: 10.5, lineHeight: 1.8 }}>
+          <div style={{ padding: 16, color: 'var(--admin-muted)', fontSize: 11, lineHeight: 1.8 }}>
             基础服务会在刷新时执行实时探测。订阅生图线路在每日 09:00 至 21:00 每小时提交一次真实生图任务，
             只有成功生成并取回图片才会标记为可用；探测结果不会计入用户任务与业务统计。
           </div>

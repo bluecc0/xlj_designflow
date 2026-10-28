@@ -258,6 +258,17 @@ const I = {
   edit: p => /*#__PURE__*/React.createElement(Icon, _extends({
     d: "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z"
   }, p)),
+  route: p => /*#__PURE__*/React.createElement(Icon, p, /*#__PURE__*/React.createElement("circle", {
+    cx: "6",
+    cy: "19",
+    r: "2"
+  }), /*#__PURE__*/React.createElement("circle", {
+    cx: "18",
+    cy: "5",
+    r: "2"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M12 19h4.5a3.5 3.5 0 0 0 0-7h-8a3.5 3.5 0 0 1 0-7H12"
+  })),
   trash: p => /*#__PURE__*/React.createElement(Icon, _extends({
     d: "M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
   }, p)),
@@ -301,7 +312,7 @@ const Stripe = ({
       position: 'absolute',
       left: 8,
       top: 8,
-      fontSize: 9,
+      fontSize: 11,
       letterSpacing: '0.02em',
       color: `oklch(0.45 0.05 ${hue})`,
       textTransform: 'uppercase'
@@ -311,7 +322,7 @@ const Stripe = ({
       position: 'absolute',
       right: 8,
       bottom: 8,
-      fontSize: 10,
+      fontSize: 11,
       color: `oklch(0.35 0.05 ${hue})`,
       background: 'rgba(255,255,255,0.85)',
       backdropFilter: 'blur(4px)',
@@ -340,7 +351,7 @@ const Swatch = ({
 }), /*#__PURE__*/React.createElement("div", {
   className: "mono",
   style: {
-    fontSize: 9,
+    fontSize: 11,
     color: 'var(--ink-3)',
     overflow: 'hidden',
     textOverflow: 'ellipsis'
@@ -417,13 +428,447 @@ window.Swatch = Swatch;
 window.deriveTemplateMeta = deriveTemplateMeta;
 window.aggregateTemplates = aggregateTemplates;
 
+// src/Overlays.jsx
+// Global feedback overlays: toast, confirm dialog, image lightbox.
+// Usage: window.dfToast(msg, { tone }), await window.dfConfirm({ title, message, danger }),
+//        window.dfOpenLightbox({ src, downloadUrl, title, actions })
+
+var overlayState = {
+  toasts: [],
+  confirm: null,
+  lightbox: null
+};
+var overlayListeners = [];
+var toastSeq = 0;
+function setOverlayState(patch) {
+  overlayState = Object.assign({}, overlayState, patch);
+  overlayListeners.forEach(function (fn) {
+    fn(overlayState);
+  });
+}
+function dismissToast(id) {
+  setOverlayState({
+    toasts: overlayState.toasts.filter(function (t) {
+      return t.id !== id;
+    })
+  });
+}
+window.dfToast = function (message, opts) {
+  opts = opts || {};
+  var tone = opts.tone || 'info';
+  var id = ++toastSeq;
+  var duration = opts.duration || (tone === 'danger' ? 6000 : 3200);
+  setOverlayState({
+    toasts: overlayState.toasts.concat([{
+      id: id,
+      message: String(message || ''),
+      tone: tone
+    }]).slice(-4)
+  });
+  setTimeout(function () {
+    dismissToast(id);
+  }, duration);
+};
+window.dfConfirm = function (opts) {
+  opts = typeof opts === 'string' ? {
+    message: opts
+  } : opts || {};
+  if (overlayState.confirm) overlayState.confirm.resolve(false);
+  return new Promise(function (resolve) {
+    setOverlayState({
+      confirm: Object.assign({}, opts, {
+        resolve: resolve
+      })
+    });
+  });
+};
+window.dfOpenLightbox = function (opts) {
+  if (!opts || !opts.src) return;
+  setOverlayState({
+    lightbox: opts
+  });
+};
+const TOAST_TONES = {
+  info: {
+    dot: 'var(--ink-3)'
+  },
+  ok: {
+    dot: 'var(--ok)'
+  },
+  warn: {
+    dot: 'var(--warn)'
+  },
+  danger: {
+    dot: 'var(--danger)'
+  }
+};
+const overlayBtn = function (primary, danger) {
+  return {
+    height: 32,
+    padding: '0 14px',
+    borderRadius: 8,
+    fontSize: 12,
+    fontWeight: primary ? 600 : 400,
+    border: '1px solid ' + (primary ? danger ? 'var(--danger)' : 'var(--ink)' : 'var(--line)'),
+    background: primary ? danger ? 'var(--danger)' : 'var(--ink)' : 'var(--panel)',
+    color: primary ? 'white' : 'var(--ink-2)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    cursor: 'pointer',
+    textDecoration: 'none'
+  };
+};
+const ConfirmDialog = ({
+  confirm
+}) => {
+  const okRef = React.useRef(null);
+  const close = React.useCallback(function (result) {
+    confirm.resolve(result);
+    setOverlayState({
+      confirm: null
+    });
+  }, [confirm]);
+  React.useEffect(function () {
+    if (okRef.current) okRef.current.focus();
+    const onKey = function (e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return function () {
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [close]);
+  return /*#__PURE__*/React.createElement("div", {
+    onMouseDown: function (e) {
+      if (e.target === e.currentTarget) close(false);
+    },
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 400,
+      background: 'rgba(15,23,42,0.24)',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    role: "alertdialog",
+    "aria-modal": "true",
+    style: {
+      width: 360,
+      maxWidth: 'calc(100vw - 32px)',
+      borderRadius: 14,
+      padding: 18,
+      background: 'var(--panel)',
+      border: '1px solid var(--line-2)',
+      boxShadow: '0 18px 50px rgba(15,23,42,0.18)',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      color: 'var(--ink)'
+    }
+  }, confirm.title || '请确认'), confirm.message && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--ink-2)',
+      lineHeight: 1.6,
+      whiteSpace: 'pre-line'
+    }
+  }, confirm.message), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'flex-end',
+      gap: 8,
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: function () {
+      close(false);
+    },
+    style: overlayBtn(false)
+  }, confirm.cancelText || '取消'), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    ref: okRef,
+    onClick: function () {
+      close(true);
+    },
+    style: overlayBtn(true, confirm.danger)
+  }, confirm.confirmText || '确定'))));
+};
+const Lightbox = ({
+  box,
+  onInsertToCanvas,
+  onUseAsReference
+}) => {
+  const close = function () {
+    setOverlayState({
+      lightbox: null
+    });
+  };
+  React.useEffect(function () {
+    const onKey = function (e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return function () {
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
+  const fullUrl = box.downloadUrl || box.src;
+  // 先用传入的缩略图占位，原图加载完成后替换；原图失败则保留缩略图
+  const hasPreview = !!box.src && box.src !== fullUrl;
+  const [fullState, setFullState] = React.useState('loading');
+  React.useEffect(function () {
+    setFullState('loading');
+  }, [fullUrl]);
+  const showFull = fullState === 'loaded' || !hasPreview;
+  const run = function (fn) {
+    return function () {
+      close();
+      fn();
+    };
+  };
+  const actions = [];
+  if (onInsertToCanvas) actions.push({
+    label: '放入画布',
+    icon: I.layers,
+    onClick: function () {
+      onInsertToCanvas(fullUrl, box.title);
+    }
+  });
+  if (onUseAsReference) actions.push({
+    label: '作为参考图',
+    icon: I.image,
+    onClick: function () {
+      onUseAsReference(fullUrl, box.title);
+    }
+  });
+  (box.actions || []).forEach(function (a) {
+    actions.push(a);
+  });
+  return /*#__PURE__*/React.createElement("div", {
+    onMouseDown: function (e) {
+      if (e.target === e.currentTarget) close();
+    },
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 350,
+      background: 'rgba(10,12,20,0.78)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 14,
+      padding: 24
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: close,
+    "aria-label": "\u5173\u95ED\u9884\u89C8",
+    title: "\u5173\u95ED\uFF08Esc\uFF09",
+    style: {
+      position: 'absolute',
+      top: 16,
+      right: 16,
+      width: 34,
+      height: 34,
+      borderRadius: 10,
+      background: 'rgba(255,255,255,0.12)',
+      color: 'white',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement(I.close, {
+    size: 14
+  })), /*#__PURE__*/React.createElement("img", {
+    src: fullUrl,
+    alt: box.title || '预览',
+    onLoad: function () {
+      setFullState('loaded');
+    },
+    onError: function () {
+      setFullState('failed');
+    },
+    style: {
+      display: showFull ? 'block' : 'none',
+      maxWidth: '100%',
+      maxHeight: 'calc(100vh - 140px)',
+      objectFit: 'contain',
+      borderRadius: 8,
+      boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+      background: 'white'
+    }
+  }), !showFull && /*#__PURE__*/React.createElement("img", {
+    src: box.src,
+    alt: box.title || '预览',
+    style: {
+      maxWidth: '100%',
+      maxHeight: 'calc(100vh - 140px)',
+      objectFit: 'contain',
+      borderRadius: 8,
+      boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+      background: 'white'
+    }
+  }), hasPreview && fullState !== 'loaded' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'rgba(255,255,255,0.72)'
+    }
+  }, fullState === 'failed' ? '原图加载失败，当前显示的是缩略图' : '正在加载原图…'), box.title && /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: 640,
+      fontSize: 12,
+      color: 'rgba(255,255,255,0.72)',
+      textAlign: 'center',
+      lineHeight: 1.5,
+      display: '-webkit-box',
+      WebkitLineClamp: 2,
+      WebkitBoxOrient: 'vertical',
+      overflow: 'hidden'
+    }
+  }, box.title), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap',
+      justifyContent: 'center'
+    }
+  }, /*#__PURE__*/React.createElement("a", {
+    href: fullUrl,
+    download: true,
+    style: overlayBtn(true)
+  }, /*#__PURE__*/React.createElement(I.download, {
+    size: 12
+  }), "\u4E0B\u8F7D"), actions.map(function (a) {
+    const Icon = a.icon;
+    return /*#__PURE__*/React.createElement("button", {
+      key: a.label,
+      type: "button",
+      onClick: run(a.onClick),
+      style: overlayBtn(false)
+    }, Icon && /*#__PURE__*/React.createElement(Icon, {
+      size: 12
+    }), a.label);
+  }), /*#__PURE__*/React.createElement("a", {
+    href: fullUrl,
+    target: "_blank",
+    rel: "noopener",
+    style: overlayBtn(false)
+  }, /*#__PURE__*/React.createElement(I.externalLink, {
+    size: 12
+  }), "\u65B0\u6807\u7B7E\u6253\u5F00")));
+};
+const OverlayHost = ({
+  onInsertToCanvas,
+  onUseAsReference
+}) => {
+  const [state, setState] = React.useState(overlayState);
+  React.useEffect(function () {
+    overlayListeners.push(setState);
+    return function () {
+      overlayListeners = overlayListeners.filter(function (fn) {
+        return fn !== setState;
+      });
+    };
+  }, []);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, state.toasts.length > 0 && /*#__PURE__*/React.createElement("div", {
+    role: "status",
+    "aria-live": "polite",
+    style: {
+      position: 'fixed',
+      top: 58,
+      left: '50%',
+      transform: 'translateX(-50%)',
+      zIndex: 420,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: 8,
+      pointerEvents: 'none'
+    }
+  }, state.toasts.map(function (t) {
+    return /*#__PURE__*/React.createElement("div", {
+      key: t.id,
+      style: {
+        pointerEvents: 'auto',
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 8,
+        maxWidth: 'min(460px, calc(100vw - 32px))',
+        padding: '9px 10px 9px 14px',
+        borderRadius: 12,
+        background: 'var(--panel)',
+        color: 'var(--ink)',
+        border: '1px solid ' + (t.tone === 'danger' ? 'var(--danger-line)' : 'var(--line)'),
+        boxShadow: '0 6px 22px rgba(0,0,0,0.10)',
+        fontSize: 12,
+        lineHeight: 1.5,
+        animation: 'dfToastIn 160ms ease-out'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      "aria-hidden": "true",
+      style: {
+        width: 6,
+        height: 6,
+        borderRadius: 99,
+        marginTop: 7,
+        flexShrink: 0,
+        background: (TOAST_TONES[t.tone] || TOAST_TONES.info).dot
+      }
+    }), /*#__PURE__*/React.createElement("span", {
+      style: {
+        flex: 1,
+        whiteSpace: 'pre-line',
+        wordBreak: 'break-word'
+      }
+    }, t.message), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      "aria-label": "\u5173\u95ED\u63D0\u793A",
+      onClick: function () {
+        dismissToast(t.id);
+      },
+      style: {
+        width: 20,
+        height: 20,
+        borderRadius: 6,
+        color: 'var(--ink-3)',
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0
+      }
+    }, /*#__PURE__*/React.createElement(I.close, {
+      size: 10
+    })));
+  })), state.confirm && /*#__PURE__*/React.createElement(ConfirmDialog, {
+    confirm: state.confirm
+  }), state.lightbox && /*#__PURE__*/React.createElement(Lightbox, {
+    box: state.lightbox,
+    onInsertToCanvas: onInsertToCanvas,
+    onUseAsReference: onUseAsReference
+  }), /*#__PURE__*/React.createElement("style", null, `@keyframes dfToastIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }`));
+};
+window.OverlayHost = OverlayHost;
+
 // src/TopBar.jsx
 // Polls /health every 30s and renders compact status icons.
 
 const STATUS_COLORS = {
   loading: 'var(--warn)',
   ok: 'var(--ok)',
-  err: 'oklch(0.6 0.18 25)'
+  err: 'var(--danger)'
 };
 const StatusIcon = ({
   title,
@@ -682,6 +1127,165 @@ const InspirationCurveIcon = () => {
     });
   }))));
 };
+const UserMenu = ({
+  user,
+  onSwitchUser,
+  onNavigate
+}) => {
+  const [open, setOpen] = React.useState(false);
+  const wrapRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const onDown = e => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = e => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  const name = user.display_name || user.username || '';
+  const itemStyle = {
+    width: '100%',
+    height: 32,
+    padding: '0 10px',
+    borderRadius: 7,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    fontSize: 12,
+    color: 'var(--ink-2)',
+    textAlign: 'left'
+  };
+  const hover = (e, on) => {
+    e.currentTarget.style.background = on ? 'var(--panel-2)' : 'transparent';
+  };
+  const logout = async () => {
+    setOpen(false);
+    const ok = await window.dfConfirm({
+      title: '退出登录？',
+      message: '退出后需要重新输入用户名和密码。',
+      confirmText: '退出登录'
+    });
+    if (ok) onSwitchUser();
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    ref: wrapRef,
+    style: {
+      position: 'relative',
+      marginLeft: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setOpen(v => !v),
+    "aria-haspopup": "menu",
+    "aria-expanded": open,
+    title: "\u8D26\u53F7",
+    style: {
+      height: 30,
+      padding: '0 8px 0 3px',
+      borderRadius: 8,
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 7,
+      background: open ? 'var(--panel-2)' : 'transparent',
+      border: '1px solid ' + (open ? 'var(--line)' : 'var(--line-2)')
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 22,
+      height: 22,
+      borderRadius: 6,
+      display: 'grid',
+      placeItems: 'center',
+      fontSize: 11,
+      fontWeight: 600,
+      background: 'var(--accent-soft)',
+      color: 'var(--accent-ink)'
+    }
+  }, name.slice(0, 1).toUpperCase()), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--ink)',
+      maxWidth: 120,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, name), /*#__PURE__*/React.createElement(I.chevronDown, {
+    size: 11,
+    style: {
+      color: 'var(--ink-3)'
+    }
+  })), open && /*#__PURE__*/React.createElement("div", {
+    role: "menu",
+    style: {
+      position: 'absolute',
+      top: 'calc(100% + 6px)',
+      right: 0,
+      minWidth: 180,
+      padding: 6,
+      zIndex: 60,
+      borderRadius: 10,
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      boxShadow: '0 10px 24px rgba(0,0,0,0.12)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '6px 10px 8px',
+      borderBottom: '1px solid var(--line-2)',
+      marginBottom: 4
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: 'var(--ink)'
+    }
+  }, name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-3)',
+      marginTop: 2
+    }
+  }, user.role === 'admin' ? '管理员' : '成员', user.display_name ? ' · ' + user.username : '')), user.role === 'admin' && onNavigate && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    role: "menuitem",
+    style: itemStyle,
+    onMouseEnter: e => hover(e, true),
+    onMouseLeave: e => hover(e, false),
+    onClick: () => {
+      setOpen(false);
+      onNavigate('#/admin');
+    }
+  }, /*#__PURE__*/React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
+  })), "\u7BA1\u7406\u540E\u53F0"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    role: "menuitem",
+    style: itemStyle,
+    onMouseEnter: e => hover(e, true),
+    onMouseLeave: e => hover(e, false),
+    onClick: logout
+  }, /*#__PURE__*/React.createElement(I.user, {
+    size: 13
+  }), "\u9000\u51FA\u767B\u5F55 / \u5207\u6362\u8D26\u53F7")));
+};
 const TopBar = ({
   user,
   onSwitchUser,
@@ -775,7 +1379,7 @@ const TopBar = ({
       }
     }, parts.length ? parts.join(' · ') : '智能路由', hasBalance ? ` · 余额 $${fmtBalance(apimart.remain_balance)}` : ''), (apimart.message || adobe.message || sub2api.message) && /*#__PURE__*/React.createElement("div", {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         lineHeight: 1.45
       }
@@ -862,7 +1466,7 @@ const TopBar = ({
       gap: 6,
       color: 'var(--ink-2)',
       textDecoration: 'none',
-      fontSize: 11.5,
+      fontSize: 12,
       flexShrink: 0
     }
   }, /*#__PURE__*/React.createElement(I.sparkles, {
@@ -879,84 +1483,30 @@ const TopBar = ({
     className: "inspiration-flow__inner"
   }, /*#__PURE__*/React.createElement(InspirationCurveIcon, null), /*#__PURE__*/React.createElement("span", {
     className: "inspiration-flow__text"
-  }, "\u7075\u611F"))), user && user.role === 'admin' && onNavigate && /*#__PURE__*/React.createElement("button", {
-    onClick: () => onNavigate('#/admin'),
-    title: "\u7BA1\u7406\u540E\u53F0",
-    style: {
-      height: 28,
-      padding: '0 10px',
-      borderRadius: 7,
-      background: 'var(--panel-2)',
-      border: '1px solid var(--line-2)',
-      color: 'var(--ink-2)',
-      fontSize: 11.5,
-      cursor: 'pointer',
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 5,
-      flexShrink: 0
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: "12",
-    height: "12",
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: "2",
-    strokeLinecap: "round",
-    strokeLinejoin: "round"
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
-  })), /*#__PURE__*/React.createElement("span", null, "\u7BA1\u7406")), user && React.createElement('div', {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8,
-      marginLeft: 6,
-      padding: '4px 8px',
-      borderRadius: 6,
-      background: 'var(--panel-2)',
-      border: '1px solid var(--line-2)'
-    }
-  }, React.createElement(I.user, {
-    size: 12,
-    style: {
-      color: 'var(--ink-3)'
-    }
-  }), React.createElement('span', {
-    style: {
-      fontSize: 11.5,
-      color: 'var(--ink)'
-    }
-  }, user.username), React.createElement('button', {
-    onClick: onSwitchUser,
-    title: '切换身份',
-    style: {
-      width: 22,
-      height: 22,
-      borderRadius: 5,
-      background: 'var(--panel)',
-      border: '1px solid var(--line)',
-      color: 'var(--ink-3)',
-      display: 'grid',
-      placeItems: 'center',
-      cursor: 'pointer'
-    }
-  }, React.createElement(I.refresh, {
-    size: 11
-  })))));
+  }, "\u7075\u611F"))), user && /*#__PURE__*/React.createElement(UserMenu, {
+    user: user,
+    onSwitchUser: onSwitchUser,
+    onNavigate: onNavigate
+  })));
 };
 window.TopBar = TopBar;
 window.StatusIcon = StatusIcon;
 
 // src/TemplatePanel.jsx
-const CATS = ['All', 'Social', 'E-commerce', 'Brand', 'Print', 'Web', 'Packaging'];
 function formatAiModelName(model) {
   if (!model) return 'AI 生图';
   var map = {
-    'gpt-image-2': 'Gpt image 2',
-    'gpt-image-2.5': 'Gpt image 2.5',
-    'gemini-3-pro-image-preview': 'Nano Banano pro'
+    'gpt-image-2': 'GPT Image 2',
+    'gpt-image-2.5': 'GPT Image 2.5',
+    'nano-banana-pro': 'Nano Banana Pro',
+    'gemini-3-pro-image-preview': 'Nano Banana Pro',
+    'nano-banana-2.1': 'Nano Banana 2.1',
+    'gemini-nano-banana-2.1': 'Nano Banana 2.1',
+    'gemini-nano-banana-2.1-ext': 'Nano Banana 2.1',
+    'seedream-5-0-pro': 'Seedream 5.0 Pro',
+    'seedream-5-0-flash': 'Seedream 5.0 Flash',
+    'seedream-5.0-pro': 'Seedream 5.0 Pro',
+    'seedream-5.0-flash': 'Seedream 5.0 Flash'
   };
   return map[model] || model;
 }
@@ -1052,7 +1602,7 @@ const TemplateCard = function (_ref) {
     }
   }, React.createElement('div', {
     style: {
-      fontSize: 11.5,
+      fontSize: 12,
       fontWeight: 500,
       color: 'var(--ink)',
       flex: 1,
@@ -1063,22 +1613,22 @@ const TemplateCard = function (_ref) {
   }, t.name), t.frames && t.frames.length > 1 && React.createElement('span', {
     className: 'mono',
     style: {
-      fontSize: 8,
+      fontSize: 11,
       color: 'var(--accent-ink)',
       background: 'var(--accent-soft)',
-      padding: '1px 4px',
-      borderRadius: 3,
-      letterSpacing: '0.04em'
+      padding: '1px 5px',
+      borderRadius: 4,
+      letterSpacing: '0.02em'
     }
   }, t.frames.length + '板'), t.pro && React.createElement('span', {
     className: 'mono',
     style: {
-      fontSize: 8,
+      fontSize: 11,
       color: 'var(--accent-ink)',
       background: 'var(--accent-soft)',
-      padding: '1px 4px',
-      borderRadius: 3,
-      letterSpacing: '0.04em'
+      padding: '1px 5px',
+      borderRadius: 4,
+      letterSpacing: '0.02em'
     }
   }, 'PRO')), active && React.createElement('div', {
     style: {
@@ -1120,7 +1670,7 @@ var ElapsedTimer = function (props) {
   return React.createElement('span', {
     className: 'mono',
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--accent)',
       fontVariantNumeric: 'tabular-nums'
     }
@@ -1304,15 +1854,14 @@ var TemplatePanel = function (_ref2) {
     }, t.label, t.soon && React.createElement('span', {
       className: 'mono',
       style: {
-        fontSize: 8,
-        padding: '1px 4px',
-        borderRadius: 3,
+        fontSize: 11,
+        padding: '1px 5px',
+        borderRadius: 4,
         background: 'var(--panel-2)',
         border: '1px solid var(--line)',
-        color: 'var(--ink-3)',
-        letterSpacing: '0.03em'
+        color: 'var(--ink-3)'
       }
-    }, 'soon'));
+    }, '即将上线'));
   })), tab === 'templates' && React.createElement('div', {
     style: {
       flex: 1,
@@ -1401,11 +1950,8 @@ var TemplatePanel = function (_ref2) {
       fontSize: 12
     }
   }, React.createElement('span', {
-    style: {
-      animation: 'spin 1s linear infinite',
-      display: 'inline-block'
-    }
-  }, '⟳'), '加载模板…'), !loading && loadErr && React.createElement('div', {
+    className: 'df-spinner'
+  }), '加载模板…'), !loading && loadErr && React.createElement('div', {
     style: {
       flex: 1,
       minHeight: 0,
@@ -1414,15 +1960,15 @@ var TemplatePanel = function (_ref2) {
       alignItems: 'center',
       justifyContent: 'center',
       gap: 8,
-      color: '#e53',
-      fontSize: 11,
+      color: 'var(--danger)',
+      fontSize: 12,
       padding: 16,
       textAlign: 'center'
     }
   }, React.createElement('div', null, '加载失败'), React.createElement('div', {
     style: {
       color: 'var(--ink-3)',
-      fontSize: 10
+      fontSize: 11
     }
   }, String(loadErr))), !loading && !loadErr && React.createElement('div', {
     style: {
@@ -1499,7 +2045,7 @@ var TemplatePanel = function (_ref2) {
       className: 'mono',
       style: {
         color: 'var(--ink-3)',
-        fontSize: 10,
+        fontSize: 11,
         fontWeight: 600,
         lineHeight: 1
       }
@@ -1567,11 +2113,8 @@ var TemplatePanel = function (_ref2) {
       fontSize: 12
     }
   }, React.createElement('span', {
-    style: {
-      animation: 'spin 1s linear infinite',
-      display: 'inline-block'
-    }
-  }, '⟳'), '加载中…'), !historyLoading && historyJobs.length === 0 && React.createElement('div', {
+    className: 'df-spinner'
+  }), '加载中…'), !historyLoading && historyJobs.length === 0 && React.createElement('div', {
     style: {
       flex: 1,
       display: 'flex',
@@ -1600,7 +2143,7 @@ var TemplatePanel = function (_ref2) {
   }, historyJobs.map(function (job, idx) {
     var isSpecial = job._type === 'special';
     var isAiImage = job._type === 'ai-image';
-    var statusColor = job.status === 'done' ? 'var(--ok)' : job.status === 'failed' ? '#e53' : 'var(--accent)';
+    var statusColor = job.status === 'done' ? 'var(--ok)' : job.status === 'failed' ? 'var(--danger)' : 'var(--accent)';
     var timeStr = job.created_at ? new Date(job.created_at * 1000).toLocaleString('zh-CN', {
       month: '2-digit',
       day: '2-digit',
@@ -1636,12 +2179,31 @@ var TemplatePanel = function (_ref2) {
         cursor: 'pointer'
       },
       onClick: function () {
-        console.log('[History] Clicked job:', job.id, 'penpot:', job.penpot_edit_url);
-        if (isAiImage && job.status === 'done' && thumbUrl) {
-          window.open(thumbUrl, '_blank');
-        } else if (job.status === 'done' && job.penpot_edit_url) {
-          window.open(job.penpot_edit_url, '_blank');
+        if (job.status === 'failed') {
+          window.dfToast('这条任务生成失败' + (job.error ? '：' + String(job.error).slice(0, 120) : ''), {
+            tone: 'danger'
+          });
+          return;
         }
+        if (job.status !== 'done') {
+          window.dfToast('任务还在生成中，完成后可预览');
+          return;
+        }
+        if (!thumbUrl) {
+          if (job.penpot_edit_url) window.open(job.penpot_edit_url, '_blank');
+          return;
+        }
+        window.dfOpenLightbox({
+          src: thumbUrl,
+          title: isAiImage ? job.prompt : titleText,
+          actions: job.penpot_edit_url ? [{
+            label: '在 Penpot 中编辑',
+            icon: I.edit,
+            onClick: function () {
+              window.open(job.penpot_edit_url, '_blank');
+            }
+          }] : []
+        });
       }
     }, React.createElement('div', {
       style: {
@@ -1682,7 +2244,7 @@ var TemplatePanel = function (_ref2) {
         borderRadius: 99,
         flexShrink: 0,
         boxSizing: 'border-box',
-        border: '1.5px solid oklch(0.85 0.04 275)',
+        border: '1.5px solid var(--line)',
         borderTopColor: 'var(--accent)',
         animation: 'spin 0.75s linear infinite',
         display: 'inline-block'
@@ -1706,7 +2268,7 @@ var TemplatePanel = function (_ref2) {
       createdAt: job.created_at
     }) : React.createElement('span', {
       style: {
-        fontSize: 10,
+        fontSize: 11,
         color: 'var(--ink-3)'
       }
     }, timeStr)), subtitle && React.createElement('div', {
@@ -1717,7 +2279,7 @@ var TemplatePanel = function (_ref2) {
       }
     }, subtitle), isAiImage && job.prompt && React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         paddingLeft: 14,
         marginTop: 4,
@@ -1790,7 +2352,7 @@ window.TemplatePanel = TemplatePanel;
 window.TEMPLATES = TEMPLATES;
 
 // src/Canvas.jsx
-// Main canvas — now simplified to just show the selected template preview.
+// Main canvas — hosts the editor-canvas iframe and relays commands to it.
 
 const Canvas = ({
   template,
@@ -2016,768 +2578,10 @@ const Canvas = ({
     }
   }));
 };
-const canvasActionPrimaryStyle = {
-  fontSize: 12,
-  padding: '6px 14px',
-  borderRadius: 6,
-  background: 'var(--ink)',
-  color: 'white',
-  border: '1px solid var(--ink)',
-  cursor: 'pointer'
-};
-const canvasActionSecondaryStyle = {
-  fontSize: 12,
-  padding: '6px 14px',
-  borderRadius: 6,
-  background: 'var(--panel)',
-  color: 'var(--ink)',
-  border: '1px solid var(--line)',
-  cursor: 'pointer'
-};
-
-// 结果展示：用 TemplatePreview 相同的 FrameThumb 布局渲染（结果看起来和模板预览完全一致）
-const ResultPreview = ({
-  t
-}) => {
-  const stageRef = React.useRef(null);
-  const [box, setBox] = React.useState({
-    w: 560,
-    h: 480
-  });
-  React.useEffect(() => {
-    if (!stageRef.current) return;
-    const ro = new ResizeObserver(entries => {
-      for (const e of entries) {
-        const {
-          width,
-          height
-        } = e.contentRect;
-        setBox({
-          w: Math.max(200, width - 80),
-          h: Math.max(200, height - 120)
-        });
-      }
-    });
-    ro.observe(stageRef.current);
-    return () => ro.disconnect();
-  }, []);
-
-  // 多画板：frames 数组；单画板：frames 为空，用 t 本身
-  const frames = t.frames && t.frames.length > 0 ? t.frames : [t];
-  const isMulti = frames.length > 1;
-  const perMaxW = isMulti ? Math.floor((box.w - (frames.length - 1) * 24) / frames.length) : box.w;
-  const perMaxH = isMulti ? box.h - 60 : box.h - 40;
-  const cat = t.cat;
-  return /*#__PURE__*/React.createElement("div", {
-    ref: stageRef,
-    style: {
-      position: 'absolute',
-      inset: 0,
-      overflow: isMulti ? 'auto' : 'hidden',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: 24
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      gap: 14
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'row',
-      gap: 24,
-      alignItems: 'flex-end',
-      flexWrap: 'wrap',
-      justifyContent: 'center'
-    }
-  }, frames.map((frame, i) => {
-    const variantLabel = frame.variant || (isMulti ? frame.name : '');
-    // 用 resultUrl 替代 thumbnail
-    const resultUrl = frame.resultUrl;
-    return React.createElement(FrameThumb, {
-      key: frame.id,
-      frame: Object.assign({}, frame, {
-        ratio: frame.ratio || (frame.width && frame.height ? frame.width + '/' + frame.height : t.ratio || '1/1'),
-        file_id: frame.file_id || t.file_id
-      }),
-      maxW: perMaxW,
-      maxH: perMaxH,
-      label: variantLabel,
-      hd: false,
-      resultUrl // 传给 FrameThumb：直接用结果 URL
-    });
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 8,
-      padding: '8px 12px',
-      background: 'rgba(255,255,255,0.95)',
-      borderRadius: 8,
-      boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-      flexWrap: 'wrap',
-      justifyContent: 'center'
-    }
-  }, window.lastComposeJobId && /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      const names = (t._frameNames || frames.map(f => f.name || f.variant || '')).join(',');
-      const ep = window.lastComposeEndpoint || '/special-compose';
-      window.open(`${ep}/${window.lastComposeJobId}/download-zip?names=${encodeURIComponent(names)}`, '_blank');
-    },
-    style: canvasActionPrimaryStyle
-  }, "\u6253\u5305\u4E0B\u8F7D"), window.resultPenpotUrl && /*#__PURE__*/React.createElement("button", {
-    onClick: () => window.open(window.resultPenpotUrl, '_blank'),
-    style: canvasActionSecondaryStyle
-  }, "\u5728Penpot\u4E2D\u7F16\u8F91"))));
-};
-
-// Translate ratio to pixel dimensions that fit nicely in the canvas area
-const ratioToSize = (ratio, maxW, maxH) => {
-  maxW = maxW || 560;
-  maxH = maxH || 480;
-  const [a, b] = ratio.split('/').map(Number);
-  let w = maxW,
-    h = b / a * maxW;
-  if (h > maxH) {
-    h = maxH;
-    w = a / b * maxH;
-  }
-  return [Math.round(w), Math.round(h)];
-};
-
-// 从 API base url 推导 Penpot view URL
-const getPenpotViewUrl = (fileId, pageId, frameId) => {
-  // Penpot view-only 路由：/#/view/file-id/page-id?frame-id=xxx
-  const base = window.API && window.API.BASE || window.location.origin;
-  // Penpot 默认跑在 9001，API 跑在 8000，尝试从 hostname 拼出 penpot 地址
-  let penpotOrigin;
-  try {
-    const u = new URL(base);
-    penpotOrigin = u.protocol + '//' + u.hostname + ':9001';
-  } catch (e) {
-    penpotOrigin = window.location.protocol + '//' + window.location.hostname + ':9001';
-  }
-  return `${penpotOrigin}/#/view/${fileId}/${pageId}?frame-id=${frameId}&section=interactions&index=0`;
-};
-
-// 单个画板的预览卡片（主画布用 iframe 高清预览，缩略图模式用 img）
-// resultUrl 存在时直接用该 URL（已缓存的结果图），不再调 API
-const FrameThumb = ({
-  frame,
-  maxW,
-  maxH,
-  label,
-  hd = false,
-  resultUrl = null
-}) => {
-  const ratio = frame.ratio || (frame.width && frame.height ? frame.width + '/' + frame.height : '1/1');
-  const [w, h] = ratioToSize(ratio, maxW, maxH);
-
-  // hd 模式：嵌入 Penpot view iframe
-  const [iframeReady, setIframeReady] = React.useState(false);
-  const viewUrl = hd ? getPenpotViewUrl(frame.file_id, frame.page_id, frame.id) : null;
-
-  // 非 hd：resultUrl 直接用；否则调 API 取缩略图
-  const [src, setSrc] = React.useState(null);
-  const [failed, setFailed] = React.useState(false);
-  React.useEffect(() => {
-    if (hd) return;
-    setSrc(null);
-    setFailed(false);
-    if (resultUrl) {
-      setSrc(resultUrl);
-    } else {
-      setSrc(window.API.getTemplateThumbnailUrl(frame.id, frame.page_id, frame.file_id));
-    }
-  }, [frame.id, frame.page_id, frame.file_id, hd, resultUrl]);
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      gap: 8
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: 'relative',
-      width: w,
-      height: h,
-      background: 'white',
-      borderRadius: 6,
-      boxShadow: '0 30px 60px rgba(20,22,40,0.10), 0 4px 14px rgba(20,22,40,0.06), 0 0 0 1px var(--line)',
-      overflow: 'hidden'
-    }
-  }, hd ? /*#__PURE__*/React.createElement(React.Fragment, null, !iframeReady && /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: 'absolute',
-      inset: 0,
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 8,
-      color: 'var(--ink-3)',
-      fontSize: 11
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 20,
-      height: 20,
-      borderRadius: 99,
-      border: '2px solid var(--line)',
-      borderTopColor: 'var(--accent)',
-      animation: 'spin 0.8s linear infinite'
-    }
-  }), /*#__PURE__*/React.createElement("span", null, "\u52A0\u8F7D\u9884\u89C8\u2026")), /*#__PURE__*/React.createElement("iframe", {
-    src: viewUrl,
-    style: {
-      width: '100%',
-      height: '100%',
-      border: 'none',
-      display: iframeReady ? 'block' : 'none'
-    },
-    onLoad: () => setIframeReady(true),
-    title: label || frame.name,
-    sandbox: "allow-scripts allow-same-origin"
-  })) : src && !failed ? React.createElement('img', {
-    src,
-    alt: label,
-    style: {
-      width: '100%',
-      height: '100%',
-      objectFit: 'contain',
-      background: 'white'
-    },
-    onError: () => setFailed(true)
-  }) : React.createElement(Stripe, {
-    ratio: w + '/' + h,
-    tone: 'neutral',
-    seed: frame.id,
-    label: label,
-    tag: ratio.replace('/', ':')
-  }), !hd && /*#__PURE__*/React.createElement(Handles, null)), label && /*#__PURE__*/React.createElement("div", {
-    className: "mono",
-    style: {
-      fontSize: 10,
-      color: 'var(--ink-3)',
-      textTransform: 'uppercase',
-      letterSpacing: '0.06em'
-    }
-  }, label));
-};
-const TemplatePreview = ({
-  t
-}) => {
-  const stageRef = React.useRef(null);
-  const [box, setBox] = React.useState({
-    w: 560,
-    h: 480
-  });
-  React.useEffect(() => {
-    if (!stageRef.current) return;
-    const ro = new ResizeObserver(entries => {
-      for (const e of entries) {
-        const {
-          width,
-          height
-        } = e.contentRect;
-        setBox({
-          w: Math.max(200, width - 80),
-          h: Math.max(200, height - 120)
-        });
-      }
-    });
-    ro.observe(stageRef.current);
-    return () => ro.disconnect();
-  }, []);
-
-  // 多画板：frames 数组；单画板：frames 为空，用 t 本身
-  const frames = t.frames && t.frames.length > 0 ? t.frames : [t];
-  const isMulti = frames.length > 1;
-
-  // 每个画板的最大尺寸：多画板时按数量缩小
-  const perMaxW = isMulti ? Math.floor((box.w - (frames.length - 1) * 24) / frames.length) : box.w;
-  const perMaxH = isMulti ? box.h - 60 : box.h - 40;
-  const cat = t.cat;
-  return /*#__PURE__*/React.createElement("div", {
-    ref: stageRef,
-    style: {
-      position: 'absolute',
-      inset: 0,
-      overflow: isMulti ? 'auto' : 'hidden',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: 24
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      gap: 14
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'row',
-      gap: 24,
-      alignItems: 'flex-end',
-      flexWrap: 'wrap',
-      justifyContent: 'center'
-    }
-  }, frames.map((frame, i) => {
-    const variantLabel = frame.variant || (isMulti ? frame.name : '');
-    return React.createElement(FrameThumb, {
-      key: frame.id,
-      frame: Object.assign({}, frame, {
-        ratio: frame.ratio || (frame.width && frame.height ? frame.width + '/' + frame.height : t.ratio || '1/1'),
-        file_id: frame.file_id || t.file_id
-      }),
-      maxW: perMaxW,
-      maxH: perMaxH,
-      label: variantLabel,
-      hd: false
-    });
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      padding: '6px 12px',
-      borderRadius: 99,
-      background: 'var(--panel)',
-      border: '1px solid var(--line)',
-      boxShadow: 'var(--shadow-1)',
-      fontSize: 11,
-      flexWrap: 'wrap',
-      justifyContent: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      color: 'var(--ink-3)'
-    }
-  }, cat), /*#__PURE__*/React.createElement("span", {
-    style: {
-      width: 3,
-      height: 3,
-      borderRadius: 99,
-      background: 'var(--line)'
-    }
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      color: 'var(--ink-2)'
-    }
-  }, (t.ratio || '').replace('/', ':')), isMulti && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      width: 3,
-      height: 3,
-      borderRadius: 99,
-      background: 'var(--line)'
-    }
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      color: 'var(--ink-2)'
-    }
-  }, frames.length, " \u4E2A\u753B\u677F")), /*#__PURE__*/React.createElement("span", {
-    style: {
-      width: 3,
-      height: 3,
-      borderRadius: 99,
-      background: 'var(--line)'
-    }
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      color: 'var(--ink-2)'
-    }
-  }, Math.round(t.width), " \xD7 ", Math.round(t.height), " px"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      width: 3,
-      height: 3,
-      borderRadius: 99,
-      background: 'var(--line)'
-    }
-  }), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: 'var(--ink-2)'
-    }
-  }, "Ready for chat input"))));
-};
-const Handles = () => {
-  const corners = [{
-    top: -4,
-    left: -4
-  }, {
-    top: -4,
-    right: -4
-  }, {
-    bottom: -4,
-    left: -4
-  }, {
-    bottom: -4,
-    right: -4
-  }];
-  return /*#__PURE__*/React.createElement(React.Fragment, null, corners.map((c, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    style: {
-      position: 'absolute',
-      ...c,
-      width: 8,
-      height: 8,
-      background: 'white',
-      border: '1.5px solid var(--accent)',
-      borderRadius: 2
-    }
-  })));
-};
-const EmptyCanvas = () => /*#__PURE__*/React.createElement("div", {
-  style: {
-    textAlign: 'center',
-    color: 'var(--ink-3)',
-    fontSize: 13
-  }
-});
 window.Canvas = Canvas;
 
-// src/ChatExtras.jsx
-// Parse table, AI message list — additions to the chat surface.
-
-// ---------- Parse table (structured analysis output) ----------
-
-const ParseTable = ({
-  title,
-  subtitle,
-  rows,
-  source
-}) => {
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: '100%',
-      borderRadius: 10,
-      background: 'var(--panel)',
-      border: '1px solid var(--line-2)',
-      overflow: 'hidden'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: '9px 12px',
-      borderBottom: '1px solid var(--line-2)',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 20,
-      height: 20,
-      borderRadius: 5,
-      background: 'var(--accent-soft)',
-      color: 'var(--accent-ink)',
-      display: 'grid',
-      placeItems: 'center'
-    }
-  }, /*#__PURE__*/React.createElement(I.file, {
-    size: 11
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 0
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11.5,
-      fontWeight: 600
-    }
-  }, title), subtitle && /*#__PURE__*/React.createElement("div", {
-    className: "mono",
-    style: {
-      fontSize: 9.5,
-      color: 'var(--ink-3)'
-    }
-  }, subtitle)), source && /*#__PURE__*/React.createElement("div", {
-    className: "mono",
-    style: {
-      fontSize: 9.5,
-      color: 'var(--ink-3)',
-      padding: '2px 6px',
-      borderRadius: 4,
-      background: 'var(--panel-2)',
-      border: '1px solid var(--line-2)'
-    }
-  }, source)), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: '92px 1fr 54px',
-      fontSize: 11
-    }
-  }, /*#__PURE__*/React.createElement(HeadCell, null, "Field"), /*#__PURE__*/React.createElement(HeadCell, null, "Value"), /*#__PURE__*/React.createElement(HeadCell, {
-    right: true
-  }, "Conf."), rows.map((r, i) => /*#__PURE__*/React.createElement(React.Fragment, {
-    key: i
-  }, /*#__PURE__*/React.createElement(Cell, {
-    top: i > 0
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      color: 'var(--ink-3)',
-      fontSize: 10,
-      textTransform: 'uppercase',
-      letterSpacing: '0.04em'
-    }
-  }, r.field)), /*#__PURE__*/React.createElement(Cell, {
-    top: i > 0
-  }, r.editable ? /*#__PURE__*/React.createElement("span", {
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 5,
-      padding: '2px 6px',
-      borderRadius: 4,
-      background: 'var(--panel-2)',
-      border: '1px dashed var(--line)',
-      fontSize: 11,
-      color: 'var(--ink)'
-    }
-  }, r.value, /*#__PURE__*/React.createElement(I.type, {
-    size: 9,
-    style: {
-      color: 'var(--ink-3)'
-    }
-  })) : /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: 'var(--ink)'
-    }
-  }, r.value), r.note && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 10,
-      color: 'var(--ink-3)',
-      marginTop: 2
-    }
-  }, r.note)), /*#__PURE__*/React.createElement(Cell, {
-    top: i > 0,
-    right: true
-  }, /*#__PURE__*/React.createElement(ConfBadge, {
-    conf: r.conf
-  }))))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: '8px 12px',
-      borderTop: '1px solid var(--line-2)',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6,
-      background: 'var(--panel-2)'
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      fontSize: 10,
-      color: 'var(--ink-3)'
-    }
-  }, rows.length, " fields parsed"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }), /*#__PURE__*/React.createElement("button", {
-    style: ghostBtn
-  }, "Edit"), /*#__PURE__*/React.createElement("button", {
-    style: {
-      ...ghostBtn,
-      background: 'var(--ink)',
-      color: 'white',
-      border: 'none'
-    }
-  }, "Apply to design")));
-};
-const HeadCell = ({
-  children,
-  right
-}) => /*#__PURE__*/React.createElement("div", {
-  style: {
-    padding: '6px 12px',
-    fontSize: 9.5,
-    color: 'var(--ink-3)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.06em',
-    fontFamily: 'JetBrains Mono, monospace',
-    borderBottom: '1px solid var(--line-2)',
-    background: 'var(--panel-2)',
-    textAlign: right ? 'right' : 'left'
-  }
-}, children);
-const Cell = ({
-  children,
-  right,
-  top
-}) => /*#__PURE__*/React.createElement("div", {
-  style: {
-    padding: '8px 12px',
-    borderTop: top ? '1px solid var(--line-2)' : 'none',
-    textAlign: right ? 'right' : 'left',
-    minWidth: 0
-  }
-}, children);
-const ConfBadge = ({
-  conf
-}) => {
-  const map = {
-    high: {
-      l: 'High',
-      c: 'var(--ok)',
-      bg: 'oklch(0.95 0.04 155)'
-    },
-    med: {
-      l: 'Med',
-      c: 'var(--warn)',
-      bg: 'oklch(0.96 0.04 70)'
-    },
-    low: {
-      l: 'Low',
-      c: 'oklch(0.55 0.15 25)',
-      bg: 'oklch(0.95 0.04 25)'
-    }
-  }[conf] || {
-    l: '–',
-    c: 'var(--ink-3)',
-    bg: 'var(--panel-2)'
-  };
-  return /*#__PURE__*/React.createElement("span", {
-    style: {
-      display: 'inline-block',
-      fontSize: 9.5,
-      fontWeight: 500,
-      padding: '1px 6px',
-      borderRadius: 99,
-      color: map.c,
-      background: map.bg
-    }
-  }, map.l);
-};
-const ghostBtn = {
-  fontSize: 11,
-  padding: '4px 9px',
-  borderRadius: 5,
-  border: '1px solid var(--line)',
-  background: 'var(--panel)',
-  color: 'var(--ink-2)'
-};
-
-// ---------- AI structured message list ----------
-
-const MessageList = ({
-  title,
-  items
-}) => /*#__PURE__*/React.createElement("div", {
-  style: {
-    width: '100%',
-    borderRadius: 10,
-    background: 'var(--panel)',
-    border: '1px solid var(--line-2)',
-    overflow: 'hidden'
-  }
-}, /*#__PURE__*/React.createElement("div", {
-  style: {
-    padding: '9px 12px',
-    borderBottom: '1px solid var(--line-2)',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 7
-  }
-}, /*#__PURE__*/React.createElement(I.layers, {
-  size: 12,
-  style: {
-    color: 'var(--ink-2)'
-  }
-}), /*#__PURE__*/React.createElement("span", {
-  style: {
-    fontSize: 11.5,
-    fontWeight: 600
-  }
-}, title), /*#__PURE__*/React.createElement("div", {
-  style: {
-    flex: 1
-  }
-}), /*#__PURE__*/React.createElement("span", {
-  className: "mono",
-  style: {
-    fontSize: 9.5,
-    color: 'var(--ink-3)'
-  }
-}, items.length, " items")), /*#__PURE__*/React.createElement("div", null, items.map((it, i) => /*#__PURE__*/React.createElement("div", {
-  key: i,
-  style: {
-    padding: '9px 12px',
-    borderTop: i > 0 ? '1px solid var(--line-2)' : 'none',
-    display: 'flex',
-    gap: 10,
-    alignItems: 'flex-start'
-  }
-}, /*#__PURE__*/React.createElement("div", {
-  style: {
-    width: 18,
-    height: 18,
-    borderRadius: 5,
-    flexShrink: 0,
-    background: it.kind === 'warn' ? 'oklch(0.96 0.04 70)' : it.kind === 'ok' ? 'oklch(0.95 0.04 155)' : 'var(--accent-soft)',
-    color: it.kind === 'warn' ? 'var(--warn)' : it.kind === 'ok' ? 'var(--ok)' : 'var(--accent-ink)',
-    display: 'grid',
-    placeItems: 'center'
-  }
-}, it.kind === 'warn' ? /*#__PURE__*/React.createElement(I.bolt, {
-  size: 10
-}) : it.kind === 'ok' ? /*#__PURE__*/React.createElement(I.check, {
-  size: 11,
-  stroke: 2.4
-}) : /*#__PURE__*/React.createElement(I.dot, {
-  size: 10
-})), /*#__PURE__*/React.createElement("div", {
-  style: {
-    flex: 1,
-    minWidth: 0
-  }
-}, /*#__PURE__*/React.createElement("div", {
-  style: {
-    fontSize: 11.5,
-    fontWeight: 500,
-    color: 'var(--ink)'
-  }
-}, it.title), it.body && /*#__PURE__*/React.createElement("div", {
-  style: {
-    fontSize: 11,
-    color: 'var(--ink-2)',
-    marginTop: 2,
-    lineHeight: 1.45
-  }
-}, it.body), it.action && /*#__PURE__*/React.createElement("button", {
-  style: {
-    marginTop: 6,
-    fontSize: 10.5,
-    padding: '3px 8px',
-    borderRadius: 5,
-    border: '1px solid var(--line)',
-    color: 'var(--ink-2)',
-    background: 'var(--panel-2)'
-  }
-}, it.action)), /*#__PURE__*/React.createElement("span", {
-  className: "mono",
-  style: {
-    fontSize: 9.5,
-    color: 'var(--ink-3)',
-    flexShrink: 0
-  }
-}, String(i + 1).padStart(2, '0'))))));
-window.ParseTable = ParseTable;
-window.MessageList = MessageList;
-
 // src/Chat.jsx
-// AI chat column. Three states: empty / generating / returned.
+// AI chat column: message list (ChatReturned) + composer.
 // Rich message types: text, option chips, file cards, action buttons, thinking trace, image results.
 
 // ---------- Sub-components ----------
@@ -2791,35 +2595,6 @@ function formatAiImageError(raw, jobId, extras) {
   // 去掉开发向尾巴
   msg = msg.replace(/请查后端日志[^\s。]*/g, '').replace(/请打开控制台[^\s。]*/g, '').replace(/并用 client 号对照后端日志[。]?/g, '').replace(/请复制反馈信息发给管理员[。]?/g, '').replace(/点下方「复制反馈信息」[^\s。]*/g, '').replace(/若多次失败，请复制反馈信息发给管理员[。]?/g, '').replace(/若反复出现，请复制反馈信息发给管理员[。]?/g, '').replace(/\s{2,}/g, ' ').replace(/[；;]\s*[。.]?\s*$/g, '。').trim();
   return msg || '生成失败，请稍后重试。';
-}
-
-// 出错直接弹窗，只显示错误本身
-function alertAiImageError(raw, extras) {
-  extras = extras || {};
-  var msg = formatAiImageError(raw, extras.jobId, extras);
-  var lines = ['生图失败', msg];
-  if (extras.phaseLabel) lines.push('环节：' + extras.phaseLabel);
-  if (extras.clientRequestId) lines.push('编号：' + extras.clientRequestId);
-  if (extras.jobId) lines.push('任务：' + extras.jobId);
-  try {
-    window.alert(lines.join('\n'));
-  } catch (_e) {}
-}
-function describeAiImageFailPhase(phase) {
-  var map = {
-    prepare: '提交前准备（素材/参考图）',
-    network: '网络连接',
-    timeout: '等待超时',
-    submit: '提交任务',
-    http: '服务响应',
-    parse: '服务响应异常',
-    poll: '查询进度',
-    generate: '图片生成',
-    download: '下载结果',
-    poll_or_job: '生成或查询进度'
-  };
-  var key = String(phase || '').trim();
-  return map[key] || (key ? key : '');
 }
 
 // 更新消息补丁：目标带 batchImageIndex 时落到批量卡对应那张图上，否则落到消息本身
@@ -3131,7 +2906,7 @@ const Avatar = ({
       flexShrink: 0,
       background: 'oklch(0.82 0.07 200)',
       color: 'oklch(0.3 0.05 200)',
-      fontSize: 10,
+      fontSize: 11,
       fontWeight: 600,
       display: 'grid',
       placeItems: 'center',
@@ -3174,7 +2949,7 @@ const Bubble = ({
 }, meta && /*#__PURE__*/React.createElement("div", {
   className: "mono",
   style: {
-    fontSize: 9.5,
+    fontSize: 11,
     color: 'var(--ink-3)',
     textTransform: 'uppercase',
     letterSpacing: '0.06em'
@@ -3186,7 +2961,7 @@ const renderMarkdown = text => {
   if (!text) return '';
   let html = text;
   // 行内代码（优先，避免被后续规则干扰）
-  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--panel-2);padding:1px 5px;border-radius:4px;font-size:11.5px;font-family:monospace;">$1</code>');
+  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--panel-2);padding:1px 5px;border-radius:4px;font-size: 12px;font-family:monospace;">$1</code>');
   // 粗体
   html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
   // 斜体
@@ -3194,9 +2969,9 @@ const renderMarkdown = text => {
   // 链接
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent);">$1</a>');
   // 标题
-  html = html.replace(/^### (.+)$/gm, '<h3 style="font-size:13px;font-weight:600;margin:4px 0 2px;">$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2 style="font-size:14px;font-weight:600;margin:6px 0 2px;">$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1 style="font-size:15px;font-weight:600;margin:6px 0 2px;">$1</h1>');
+  html = html.replace(/^### (.+)$/gm, '<h3 style="font-size: 13px;font-weight:600;margin:4px 0 2px;">$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2 style="font-size: 13px;font-weight:600;margin:6px 0 2px;">$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1 style="font-size: 15px;font-weight:600;margin:6px 0 2px;">$1</h1>');
   // 无序列表
   html = html.replace(/^- (.+)$/gm, '<li style="margin-left:16px;">$1</li>');
   // 有序列表
@@ -3224,7 +2999,7 @@ const TextBubble = ({
   };
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12.5,
+      fontSize: 12,
       lineHeight: 1.55,
       padding: '9px 12px',
       borderRadius: 10,
@@ -3312,7 +3087,7 @@ const CopyableTextBubble = ({
       pointerEvents: hovered || copied ? 'auto' : 'none',
       boxShadow: 'none',
       transition: 'opacity 120ms ease, transform 120ms ease, color 120ms ease',
-      fontSize: 10.5,
+      fontSize: 11,
       lineHeight: 1
     }
   }, copied ? /*#__PURE__*/React.createElement(I.check, {
@@ -3372,54 +3147,6 @@ var CopyButton2 = function (props) {
     size: 10
   }), copyFailed ? '复制失败' : copied ? '已复制 ' + (props.label || '') : '复制 ' + (props.label || 'JSON'));
 };
-const FileCard = ({
-  name,
-  size,
-  type
-}) => /*#__PURE__*/React.createElement("div", {
-  style: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    padding: '8px 12px',
-    borderRadius: 8,
-    background: 'var(--panel)',
-    border: '1px solid var(--line-2)',
-    fontSize: 12,
-    minWidth: 200
-  }
-}, /*#__PURE__*/React.createElement("div", {
-  style: {
-    width: 32,
-    height: 40,
-    borderRadius: 4,
-    background: `repeating-linear-gradient(135deg, oklch(0.95 0.02 40) 0 4px, oklch(0.92 0.03 40) 4px 8px)`,
-    border: '1px solid var(--line-2)',
-    display: 'grid',
-    placeItems: 'center',
-    color: 'oklch(0.5 0.05 40)'
-  }
-}, /*#__PURE__*/React.createElement(I.image, {
-  size: 14
-})), /*#__PURE__*/React.createElement("div", {
-  style: {
-    flex: 1,
-    minWidth: 0
-  }
-}, /*#__PURE__*/React.createElement("div", {
-  style: {
-    fontWeight: 500,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap'
-  }
-}, name), /*#__PURE__*/React.createElement("div", {
-  className: "mono",
-  style: {
-    fontSize: 10,
-    color: 'var(--ink-3)'
-  }
-}, type, " \xB7 ", size)));
 const InlineRefStrip = ({
   items,
   compact
@@ -3445,237 +3172,8 @@ const InlineRefStrip = ({
     }
   })));
 };
-const ThinkingTrace = ({
-  steps,
-  done
-}) => {
-  const [expanded, setExpanded] = React.useState(false);
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      borderRadius: 10,
-      border: '1px solid var(--line-2)',
-      background: 'var(--panel-2)',
-      overflow: 'hidden',
-      width: '100%'
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setExpanded(e => !e),
-    style: {
-      width: '100%',
-      textAlign: 'left',
-      padding: '8px 11px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8
-    }
-  }, /*#__PURE__*/React.createElement(I.chevronRight, {
-    size: 11,
-    style: {
-      transform: expanded ? 'rotate(90deg)' : 'none',
-      transition: 'transform 120ms'
-    }
-  }), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11.5,
-      fontWeight: 500
-    }
-  }, done ? 'Reasoned for 4 steps' : 'Thinking…'), /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      fontSize: 10,
-      color: 'var(--ink-3)'
-    }
-  }, done ? '2.1s' : ''), !done && /*#__PURE__*/React.createElement("span", {
-    style: {
-      width: 6,
-      height: 6,
-      borderRadius: 99,
-      background: 'var(--accent)',
-      animation: 'pulse 1.2s ease-in-out infinite'
-    }
-  })), expanded && /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: '2px 11px 10px 28px',
-      borderTop: '1px solid var(--line-2)'
-    }
-  }, steps.map((s, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    style: {
-      fontSize: 11.5,
-      color: 'var(--ink-2)',
-      padding: '5px 0',
-      display: 'flex',
-      gap: 8
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      color: 'var(--ink-3)',
-      minWidth: 14
-    }
-  }, i + 1), /*#__PURE__*/React.createElement("span", null, s)))));
-};
-const OptionChips = ({
-  title,
-  options,
-  multi
-}) => {
-  const [picked, setPicked] = React.useState(multi ? [options[0]] : options[0]);
-  const isPicked = o => multi ? picked.includes(o) : picked === o;
-  const toggle = o => {
-    if (multi) setPicked(p => p.includes(o) ? p.filter(x => x !== o) : [...p, o]);else setPicked(o);
-  };
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      borderRadius: 10,
-      padding: 12,
-      width: '100%',
-      background: 'var(--panel)',
-      border: '1px solid var(--line-2)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11.5,
-      fontWeight: 500,
-      color: 'var(--ink)',
-      marginBottom: 8
-    }
-  }, title), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: 5
-    }
-  }, options.map(o => /*#__PURE__*/React.createElement("button", {
-    key: o,
-    onClick: () => toggle(o),
-    style: {
-      fontSize: 11.5,
-      padding: '4px 10px',
-      borderRadius: 99,
-      background: isPicked(o) ? 'var(--ink)' : 'var(--panel-2)',
-      color: isPicked(o) ? 'white' : 'var(--ink-2)',
-      border: '1px solid',
-      borderColor: isPicked(o) ? 'var(--ink)' : 'var(--line-2)',
-      transition: 'all 100ms'
-    }
-  }, o))));
-};
-const ColorPalette = ({
-  palettes
-}) => {
-  const [picked, setPicked] = React.useState(0);
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      borderRadius: 10,
-      padding: 12,
-      width: '100%',
-      background: 'var(--panel)',
-      border: '1px solid var(--line-2)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11.5,
-      fontWeight: 500,
-      marginBottom: 8
-    }
-  }, "Pick a palette"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 6
-    }
-  }, palettes.map((p, i) => /*#__PURE__*/React.createElement("button", {
-    key: i,
-    onClick: () => setPicked(i),
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      padding: 6,
-      borderRadius: 7,
-      background: picked === i ? 'var(--accent-soft)' : 'transparent',
-      border: picked === i ? '1px solid var(--accent)' : '1px solid transparent',
-      textAlign: 'left'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      borderRadius: 5,
-      overflow: 'hidden',
-      border: '1px solid rgba(0,0,0,0.05)'
-    }
-  }, p.colors.map(c => /*#__PURE__*/React.createElement("div", {
-    key: c,
-    style: {
-      width: 18,
-      height: 22,
-      background: c
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 0
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11.5,
-      fontWeight: 500
-    }
-  }, p.name), /*#__PURE__*/React.createElement("div", {
-    className: "mono",
-    style: {
-      fontSize: 9.5,
-      color: 'var(--ink-3)'
-    }
-  }, p.tag)), picked === i && /*#__PURE__*/React.createElement(I.check, {
-    size: 13,
-    stroke: 2.2,
-    style: {
-      color: 'var(--accent)'
-    }
-  })))));
-};
-const ActionRow = ({
-  primary,
-  secondary
-}) => /*#__PURE__*/React.createElement("div", {
-  style: {
-    display: 'flex',
-    gap: 6,
-    width: '100%'
-  }
-}, /*#__PURE__*/React.createElement("button", {
-  style: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: 500,
-    padding: '9px 12px',
-    borderRadius: 8,
-    background: 'var(--accent)',
-    color: 'white',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    boxShadow: '0 1px 0 rgba(255,255,255,0.2) inset, 0 2px 8px oklch(0.55 0.22 275 / 0.25)'
-  }
-}, /*#__PURE__*/React.createElement(I.zap, {
-  size: 13,
-  fill: "white",
-  stroke: 0
-}), primary), secondary && /*#__PURE__*/React.createElement("button", {
-  style: {
-    fontSize: 12,
-    padding: '9px 12px',
-    borderRadius: 8,
-    background: 'var(--panel)',
-    color: 'var(--ink-2)',
-    border: '1px solid var(--line)'
-  }
-}, secondary));
 const actionBtnPrimaryStyle = {
-  fontSize: 11.5,
+  fontSize: 12,
   padding: '6px 12px',
   borderRadius: 6,
   background: 'var(--ink)',
@@ -3687,7 +3185,7 @@ const actionBtnPrimaryStyle = {
   border: '1px solid var(--ink)'
 };
 const actionBtnSecondaryStyle = {
-  fontSize: 11.5,
+  fontSize: 12,
   padding: '6px 12px',
   borderRadius: 6,
   background: 'var(--panel)',
@@ -3698,57 +3196,6 @@ const actionBtnSecondaryStyle = {
   gap: 5,
   border: '1px solid var(--line)'
 };
-const AnalyzedSubject = () => /*#__PURE__*/React.createElement("div", {
-  style: {
-    borderRadius: 10,
-    padding: 12,
-    width: '100%',
-    background: 'var(--panel)',
-    border: '1px solid var(--line-2)'
-  }
-}, /*#__PURE__*/React.createElement("div", {
-  style: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 10
-  }
-}, /*#__PURE__*/React.createElement(I.eye, {
-  size: 12,
-  style: {
-    color: 'var(--accent-ink)'
-  }
-}), /*#__PURE__*/React.createElement("span", {
-  style: {
-    fontSize: 11.5,
-    fontWeight: 500
-  }
-}, "I identified")), /*#__PURE__*/React.createElement("div", {
-  style: {
-    display: 'grid',
-    gridTemplateColumns: 'auto 1fr',
-    gap: '4px 10px',
-    fontSize: 11.5
-  }
-}, [['Object', 'Ceramic vase, matte glaze'], ['Palette', 'Warm beige, clay, ivory'], ['Lighting', 'Soft side-light, studio'], ['Mood', 'Quiet, editorial, Japandi']].map(([k, v]) => /*#__PURE__*/React.createElement(React.Fragment, {
-  key: k
-}, /*#__PURE__*/React.createElement("span", {
-  className: "mono",
-  style: {
-    color: 'var(--ink-3)',
-    fontSize: 10,
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    alignSelf: 'center'
-  }
-}, k), /*#__PURE__*/React.createElement("span", {
-  style: {
-    color: 'var(--ink)'
-  }
-}, v)))));
-
-// ---------- BriefCard（Agent 模式 CONFIRM 阶段的创意方案卡片）----------
-
 const BriefCard = ({
   brief,
   contract,
@@ -3830,13 +3277,13 @@ const BriefCard = ({
     }
   }), /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: 11.5,
+      fontSize: 12,
       fontWeight: 600,
       color: 'var(--ink)'
     }
   }, "\u521B\u610F\u65B9\u6848 Brief"), isConfirmed && /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       padding: '1px 6px',
       borderRadius: 99,
       background: 'var(--accent)',
@@ -3846,7 +3293,7 @@ const BriefCard = ({
   }, "\u5DF2\u786E\u8BA4")), score !== null && /*#__PURE__*/React.createElement("span", {
     className: "mono",
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)',
       padding: '2px 6px',
       borderRadius: 4,
@@ -3857,7 +3304,7 @@ const BriefCard = ({
       display: 'grid',
       gridTemplateColumns: 'auto 1fr',
       gap: '6px 12px',
-      fontSize: 11.5
+      fontSize: 12
     }
   }, rows.map(([k, v]) => /*#__PURE__*/React.createElement(React.Fragment, {
     key: k
@@ -3865,7 +3312,7 @@ const BriefCard = ({
     className: "mono",
     style: {
       color: 'var(--ink-3)',
-      fontSize: 10,
+      fontSize: 11,
       textTransform: 'uppercase',
       letterSpacing: '0.05em',
       alignSelf: 'flex-start',
@@ -3932,7 +3379,7 @@ const ThinkingBlock = ({
   }, "\u601D\u8003\u8FC7\u7A0B")), open && /*#__PURE__*/React.createElement("div", {
     style: {
       padding: '10px 12px',
-      fontSize: 11.5,
+      fontSize: 12,
       lineHeight: 1.6,
       color: 'var(--ink-2)',
       whiteSpace: 'pre-wrap',
@@ -4010,7 +3457,7 @@ const PromptTraceBlock = ({
     ref: bodyRef,
     style: {
       padding: '10px 12px',
-      fontSize: 11.5,
+      fontSize: 12,
       lineHeight: 1.6,
       color: 'var(--ink-2)',
       whiteSpace: 'pre-wrap',
@@ -4027,7 +3474,7 @@ const PromptTraceBlock = ({
   }, steps.length > 0 ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       marginBottom: 4
     }
@@ -4049,7 +3496,7 @@ const PromptTraceBlock = ({
   })) : null, rules.length > 0 ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       marginBottom: 4
     }
@@ -4063,14 +3510,14 @@ const PromptTraceBlock = ({
   })) : null, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       marginBottom: 4
     }
   }, "\u6700\u7EC8\u4F20\u9012\u7ED9\u751F\u56FE"), /*#__PURE__*/React.createElement("div", null, finalPrompt)), negativePrompt ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       marginBottom: 4
     }
@@ -4086,13 +3533,10 @@ const LogBox = ({
   logs,
   running
 }) => {
-  const bottomRef = React.useRef(null);
+  const listRef = React.useRef(null);
   React.useEffect(() => {
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({
-        behavior: 'smooth'
-      });
-    }
+    // 只滚动日志框自身，不带动外层对话列表
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [logs && logs.length]);
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -4124,6 +3568,7 @@ const LogBox = ({
       animation: 'pulse 1.2s ease-in-out infinite'
     }
   })), /*#__PURE__*/React.createElement("div", {
+    ref: listRef,
     style: {
       maxHeight: 140,
       overflowY: 'auto',
@@ -4138,7 +3583,7 @@ const LogBox = ({
       key: i,
       style: {
         padding: '3px 12px',
-        fontSize: 11.5,
+        fontSize: 12,
         fontFamily: 'JetBrains Mono, monospace',
         color: isError ? 'var(--warn)' : isOk ? 'var(--ok)' : 'var(--ink-2)',
         display: 'flex',
@@ -4151,8 +3596,6 @@ const LogBox = ({
         flexShrink: 0
       }
     }, "\u203A"), /*#__PURE__*/React.createElement("span", null, display));
-  }), /*#__PURE__*/React.createElement("div", {
-    ref: bottomRef
   })));
 };
 
@@ -4163,128 +3606,18 @@ const GREETINGS = [{
   sub: '上传产品图、参考图、品牌素材，或者直接输入描述。'
 }, {
   title: '想要生成一张海报吗？',
-  sub: '使用 Gpt-image 2 模型，直接描述你想要的画面。'
+  sub: '使用 GPT Image 2.5，直接描述你想要的画面。'
 }, {
   title: '需要编辑图像？',
   sub: '使用 Nano Banana Pro，上传图片后描述修改需求。'
 }, {
   title: '来合成特殊品吧',
-  sub: '选中左侧特殊品模板，输入货号和文案即可一键合成。'
+  sub: '在功能里选择「特殊品」，输入货号和文案即可一键合成。'
 }, {
   title: '忘了怎么用？',
-  sub: '试试直接在对话框提问，我会帮你找到答案。'
+  sub: '在功能里选择「问答」，直接提问就能找到答案。'
 }];
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
-const ChatEmpty = ({
-  greetingKey
-}) => {
-  const prompts = [{
-    icon: /*#__PURE__*/React.createElement(I.image, {
-      size: 13
-    }),
-    text: '上传产品图，描述想要的风格'
-  }, {
-    icon: /*#__PURE__*/React.createElement(I.palette, {
-      size: 13
-    }),
-    text: '生成4张哑光色调的变体图'
-  }, {
-    icon: /*#__PURE__*/React.createElement(I.copy, {
-      size: 13
-    }),
-    text: '复制当前模板的文案'
-  }, {
-    icon: /*#__PURE__*/React.createElement(I.dims, {
-      size: 13
-    }),
-    text: '调整尺寸为9:16适配Instagram'
-  }];
-  const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      overflowY: 'auto',
-      padding: '20px 16px'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: '20px 4px 16px',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 10,
-      alignItems: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 40,
-      height: 40,
-      borderRadius: 11,
-      background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
-      color: 'white',
-      display: 'grid',
-      placeItems: 'center'
-    }
-  }, /*#__PURE__*/React.createElement(I.sparkles, {
-    size: 18,
-    stroke: 1.8
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "serif",
-    style: {
-      fontSize: 19,
-      letterSpacing: '-0.01em'
-    }
-  }, greeting.title), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: 'var(--ink-3)',
-      textAlign: 'center',
-      maxWidth: 240,
-      lineHeight: 1.5
-    }
-  }, greeting.sub)), /*#__PURE__*/React.createElement("div", {
-    className: "mono",
-    style: {
-      fontSize: 9.5,
-      color: 'var(--ink-3)',
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-      padding: '12px 4px 6px'
-    }
-  }, "\u8BD5\u8BD5"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 4
-    }
-  }, prompts.map((p, i) => /*#__PURE__*/React.createElement("button", {
-    key: i,
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      padding: '10px 12px',
-      borderRadius: 8,
-      background: 'var(--panel)',
-      border: '1px solid var(--line-2)',
-      fontSize: 12,
-      color: 'var(--ink-2)',
-      textAlign: 'left'
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: 'var(--ink-3)'
-    }
-  }, p.icon), /*#__PURE__*/React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }, p.text), /*#__PURE__*/React.createElement(I.arrowRight, {
-    size: 12,
-    style: {
-      color: 'var(--ink-3)'
-    }
-  })))));
-};
 const AgentWelcome = () => {
   // Agent 模式专属欢迎页（不随机轮播）—— 简约版
   return /*#__PURE__*/React.createElement("div", {
@@ -4334,128 +3667,6 @@ const AgentWelcome = () => {
     }
   }, "\u63CF\u8FF0\u4F60\u7684\u9700\u6C42\uFF0CAgent \u4F1A\u5148\u548C\u4F60\u786E\u8BA4\u65B9\u5411\uFF0C\u518D\u5F00\u59CB\u751F\u6210\u3002")));
 };
-const ChatGenerating = ({
-  user
-}) => /*#__PURE__*/React.createElement("div", {
-  style: {
-    flex: 1,
-    overflowY: 'auto',
-    padding: 16,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 14
-  }
-}, /*#__PURE__*/React.createElement(Bubble, {
-  who: "user",
-  user: user
-}, /*#__PURE__*/React.createElement(TextBubble, {
-  who: "user"
-}, "Make 4 studio shots of this vase for a homepage hero, warm and editorial. Add \"New in\" copy."), /*#__PURE__*/React.createElement(FileCard, {
-  name: "vase-ref-01.jpg",
-  size: "2.4 MB",
-  type: "JPG"
-})), /*#__PURE__*/React.createElement(Bubble, {
-  who: "ai",
-  meta: "Loom \xB7 generating",
-  user: user
-}, /*#__PURE__*/React.createElement(ThinkingTrace, {
-  done: false,
-  steps: ['Parsing reference image — detecting subject and lighting', 'Matching Japandi aesthetic from brand kit', 'Sampling 4 layout variants at 4:5']
-}), /*#__PURE__*/React.createElement("div", {
-  style: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    padding: '10px 12px',
-    borderRadius: 10,
-    width: '100%',
-    background: 'var(--panel)',
-    border: '1px solid var(--line-2)'
-  }
-}, /*#__PURE__*/React.createElement("div", {
-  style: {
-    position: 'relative',
-    width: 24,
-    height: 24
-  }
-}, /*#__PURE__*/React.createElement("div", {
-  style: {
-    position: 'absolute',
-    inset: 0,
-    borderRadius: 99,
-    border: '2px solid var(--line-2)'
-  }
-}), /*#__PURE__*/React.createElement("div", {
-  style: {
-    position: 'absolute',
-    inset: 0,
-    borderRadius: 99,
-    border: '2px solid var(--accent)',
-    borderRightColor: 'transparent',
-    borderBottomColor: 'transparent',
-    animation: 'spin 0.8s linear infinite'
-  }
-})), /*#__PURE__*/React.createElement("div", {
-  style: {
-    flex: 1
-  }
-}, /*#__PURE__*/React.createElement("div", {
-  style: {
-    fontSize: 12,
-    fontWeight: 500
-  }
-}, "Generating 4 options"), /*#__PURE__*/React.createElement("div", {
-  className: "mono",
-  style: {
-    fontSize: 10,
-    color: 'var(--ink-3)'
-  }
-}, "~18s remaining")), /*#__PURE__*/React.createElement("button", {
-  style: {
-    fontSize: 11,
-    color: 'var(--ink-3)',
-    padding: '4px 8px',
-    borderRadius: 5,
-    border: '1px solid var(--line)'
-  }
-}, "Stop"))), /*#__PURE__*/React.createElement("style", null, `@keyframes spin { to { transform: rotate(360deg); } }`));
-const ChatSessionBar = ({
-  messages,
-  historyControl
-}) => {
-  const userMsgs = messages.filter(m => m.who === 'user').length;
-  const turnCount = messages.length > 0 ? userMsgs + ' 条消息' : '暂无消息';
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      flexShrink: 0,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6,
-      padding: '14px 16px 10px',
-      background: 'var(--panel)',
-      position: 'relative',
-      zIndex: 1
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      color: 'var(--ink-3)',
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-      fontSize: 10
-    }
-  }, "\u5BF9\u8BDD"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      color: 'var(--ink-3)',
-      fontSize: 10
-    }
-  }, turnCount), historyControl);
-};
 const ChatReturned = ({
   messages,
   template,
@@ -4466,22 +3677,100 @@ const ChatReturned = ({
   onQuickReply,
   agentEnabled,
   onPublishInspiration,
-  onUnpublishInspiration
+  onUnpublishInspiration,
+  onRetry,
+  onEditResend,
+  agentSkills,
+  onPickSkill
 }) => {
-  const bottomRef = React.useRef(null);
+  const scrollRef = React.useRef(null);
+  const contentRef = React.useRef(null);
+  const stickRef = React.useRef(true);
+  const prevLenRef = React.useRef(messages.length);
+  const [hasUnseen, setHasUnseen] = React.useState(false);
   const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
+  const scrollToBottom = React.useCallback(smooth => {
+    const el = scrollRef.current;
+    if (el) el.scrollTo({
+      top: el.scrollHeight,
+      behavior: smooth ? 'smooth' : 'auto'
+    });
+  }, []);
+
+  // 仅当用户本来就停在底部附近时才跟随新内容；往上翻阅时不打扰，改为提示「有新消息」
   React.useEffect(() => {
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({
-        behavior: 'smooth'
-      });
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = messages.length;
+    const last = messages[messages.length - 1];
+    if (messages.length < prevLen || messages.length > prevLen && last && last.who === 'user') {
+      stickRef.current = true;
     }
-  }, [messages]);
+    if (stickRef.current) {
+      setHasUnseen(false);
+      scrollToBottom(messages.length > prevLen);
+    } else if (messages.length > prevLen) {
+      setHasUnseen(true);
+    }
+  }, [messages, scrollToBottom]);
+
+  // 图片加载、日志展开等会改变高度但不改 messages，用 ResizeObserver 跟随
+  React.useEffect(() => {
+    if (!contentRef.current || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (stickRef.current) scrollToBottom(false);
+    });
+    ro.observe(contentRef.current);
+    return () => ro.disconnect();
+  }, [scrollToBottom]);
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickRef.current = nearBottom;
+    if (nearBottom) setHasUnseen(false);
+  };
+
+  // 重试规则：单张且已有任务编号的卡片可随时按原任务重试；
+  // 没有任务编号或批量的卡片只能重新提交，仅当它是最后一张生图卡（上下文未变）时允许
+  let lastAiCardIdx = -1;
+  messages.forEach((msg, idx) => {
+    if (msg.type === 'ai-image-generating') lastAiCardIdx = idx;
+  });
+  const canRetryCard = (msg, idx) => {
+    if (!msg.retryArgs) return false;
+    const isBatch = Array.isArray(msg.images) && msg.images.length > 0;
+    if (msg.jobId && !isBatch) return true;
+    return idx === lastAiCardIdx;
+  };
+  const openImage = (src, full, title) => {
+    window.dfOpenLightbox({
+      src: src || full,
+      downloadUrl: full,
+      title: title
+    });
+  };
   return /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minHeight: 0,
+      position: 'relative',
+      display: 'flex',
+      flexDirection: 'column'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    ref: scrollRef,
+    onScroll: handleScroll,
     style: {
       flex: 1,
       overflowY: 'auto',
       padding: 16,
+      display: 'flex',
+      flexDirection: 'column'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    ref: contentRef,
+    style: {
+      flex: '1 0 auto',
       display: 'flex',
       flexDirection: 'column',
       gap: 14
@@ -4524,7 +3813,70 @@ const ChatReturned = ({
       maxWidth: 240,
       lineHeight: 1.5
     }
-  }, greeting.sub)) : messages.map((m, i) => /*#__PURE__*/React.createElement(Bubble, {
+  }, greeting.sub), onPickSkill && agentSkills && agentSkills.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: '100%',
+      maxWidth: 300,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6,
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-3)',
+      padding: '0 2px'
+    }
+  }, "\u6280\u80FD"), agentSkills.map(skill => /*#__PURE__*/React.createElement("button", {
+    key: skill.name,
+    type: "button",
+    onClick: () => onPickSkill(skill),
+    title: skill.summary || skill.title || skill.name,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      padding: '9px 11px',
+      borderRadius: 10,
+      background: 'var(--panel)',
+      border: '1px solid var(--line-2)',
+      textAlign: 'left',
+      fontSize: 12,
+      lineHeight: 1.5,
+      color: 'var(--ink)',
+      transition: 'border-color 120ms, background 120ms'
+    },
+    onMouseEnter: e => {
+      e.currentTarget.style.borderColor = 'var(--line)';
+      e.currentTarget.style.background = 'var(--panel-2)';
+    },
+    onMouseLeave: e => {
+      e.currentTarget.style.borderColor = 'var(--line-2)';
+      e.currentTarget.style.background = 'var(--panel)';
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--ink-3)',
+      display: 'inline-flex',
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement(I.wand, {
+    size: 13
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 600,
+      flexShrink: 0
+    }
+  }, skill.title || skill.name), skill.summary && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--ink-3)',
+      minWidth: 0,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, skill.summary))))) : messages.map((m, i) => /*#__PURE__*/React.createElement(Bubble, {
     key: i,
     who: m.who,
     meta: m.meta,
@@ -4595,10 +3947,10 @@ const ChatReturned = ({
         fontWeight: 500,
         color: 'var(--ink)'
       }
-    }, m.status === 'done' ? batchImages && batchOkCount < batchImages.length ? '生图完成（' + batchOkCount + '/' + batchImages.length + ' 成功）' : '生图完成' : m.status === 'failed' ? '生图失败' : m.status === 'skill-planning' ? '正在执行 Skill：$' + m.activeSkill + '…' : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 Image 2.5…' : m.status === 'queued' ? '正在提交到「' + (m.model || 'AI') + '」…' : m.activeSkill && !m.promptTrace && (m.progress || 0) < 20 ? '正在解读需求并整理生图 Prompt…' : (m.progress || 0) < 20 ? '「' + (m.model || 'AI') + '」正在处理…' : (m.progress || 0) < 90 ? '「' + (m.model || 'AI') + '」生成中 ' + (m.progress || 0) + '%' : '处理完成，正在下载…'), m.finalElapsed != null ? React.createElement('span', {
+    }, m.status === 'done' ? batchImages && batchOkCount < batchImages.length ? '生图完成（' + batchOkCount + '/' + batchImages.length + ' 成功）' : '生图完成' : m.status === 'failed' ? '生图失败' : m.status === 'skill-planning' ? '正在执行 Skill：$' + m.activeSkill + '…' : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 GPT Image 2.5…' : m.status === 'queued' ? '正在提交到「' + (m.model || 'AI') + '」…' : m.activeSkill && !m.promptTrace && (m.progress || 0) < 20 ? '正在解读需求并整理生图 Prompt…' : (m.progress || 0) < 20 ? '「' + (m.model || 'AI') + '」正在处理…' : (m.progress || 0) < 90 ? '「' + (m.model || 'AI') + '」生成中 ' + (m.progress || 0) + '%' : '处理完成，正在下载…'), m.finalElapsed != null ? React.createElement('span', {
       className: 'mono',
       style: {
-        fontSize: 10,
+        fontSize: 11,
         color: 'var(--ink-3)'
       }
     }, fmtSecs(m.finalElapsed)) : m.startedAt && m.status !== 'done' && m.status !== 'failed' ? React.createElement(ChatTimer, {
@@ -4636,45 +3988,45 @@ const ChatReturned = ({
     }, React.createElement('div', {
       className: 'mono',
       style: {
-        fontSize: 9.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         textTransform: 'uppercase',
         letterSpacing: '0.06em'
       }
     }, '执行标准'), React.createElement('div', {
       style: {
-        fontSize: 11.2,
+        fontSize: 11,
         color: 'var(--ink-2)',
         lineHeight: 1.45
       }
     }, String(promptInstruction).slice(0, 360), String(promptInstruction).length > 360 ? '...' : ''), promptReasoning ? React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         lineHeight: 1.4
       }
     }, '说明：', String(promptReasoning).slice(0, 180), String(promptReasoning).length > 180 ? '...' : '') : null, promptConstraints && Array.isArray(promptConstraints.mustInclude) && promptConstraints.mustInclude.length > 0 ? React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-2)',
         lineHeight: 1.4
       }
     }, '必须包含：', promptConstraints.mustInclude.join('； ')) : null, promptConstraints && Array.isArray(promptConstraints.preserve) && promptConstraints.preserve.length > 0 ? React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-2)',
         lineHeight: 1.4
       }
     }, '保留：', promptConstraints.preserve.join('； ')) : null, promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0 || promptNegative ? React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         lineHeight: 1.4
       }
     }, '避免：', promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0 ? promptConstraints.avoid.join('； ') : String(promptNegative).slice(0, 220) + (String(promptNegative).length > 220 ? '...' : '')) : null, promptParams ? React.createElement('div', {
       className: 'mono',
       style: {
-        fontSize: 10,
+        fontSize: 11,
         color: 'var(--ink-3)'
       }
     }, 'ratio=', promptParams.aspectRatio || promptParams.size || 'auto', ' · size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认') : null), m.status === 'done' && fullImageUrl && !batchImages && function () {
@@ -4686,9 +4038,9 @@ const ChatReturned = ({
           borderRadius: 10,
           display: 'block',
           border: '1px solid var(--line-2)',
-          cursor: 'pointer'
+          cursor: 'zoom-in'
         },
-        onClick: () => window.open(fullImageUrl, '_blank')
+        onClick: () => openImage(displayImageUrl, fullImageUrl, m.prompt)
       }), React.createElement('div', {
         style: {
           marginTop: 6,
@@ -4778,10 +4130,10 @@ const ChatReturned = ({
             borderRadius: 8,
             display: 'block',
             border: '1px solid var(--line-2)',
-            cursor: 'pointer'
+            cursor: 'zoom-in'
           },
           onClick: function () {
-            window.open(imFull, '_blank');
+            openImage(imShown, imFull, m.prompt);
           }
         }), React.createElement('div', {
           style: {
@@ -4794,7 +4146,7 @@ const ChatReturned = ({
           href: imFull,
           download: true,
           style: {
-            fontSize: 10,
+            fontSize: 11,
             padding: '3px 8px',
             borderRadius: 5,
             background: 'var(--ink)',
@@ -4816,7 +4168,7 @@ const ChatReturned = ({
             }));
           },
           style: {
-            fontSize: 10,
+            fontSize: 11,
             padding: '3px 8px',
             borderRadius: 5,
             background: 'var(--panel)',
@@ -4840,7 +4192,7 @@ const ChatReturned = ({
             }));
           },
           style: {
-            fontSize: 10,
+            fontSize: 11,
             padding: '3px 8px',
             borderRadius: 5,
             background: 'var(--panel)',
@@ -4871,7 +4223,7 @@ const ChatReturned = ({
           }
         }, React.createElement('div', {
           style: {
-            fontSize: 10.5,
+            fontSize: 11,
             color: 'var(--warn)',
             lineHeight: 1.4,
             wordBreak: 'break-word'
@@ -4903,7 +4255,7 @@ const ChatReturned = ({
       }), React.createElement('div', {
         className: 'mono',
         style: {
-          fontSize: 10,
+          fontSize: 11,
           color: 'var(--ink-3)'
         }
       }, (im.progress || 0) + '%'));
@@ -4985,14 +4337,14 @@ const ChatReturned = ({
       }
     }, m.vlm.userFacingSummary), m.vlm.problemElements && m.vlm.problemElements.length > 0 && React.createElement('div', {
       style: {
-        fontSize: 10.5,
-        color: '#dc2626',
+        fontSize: 11,
+        color: 'var(--danger)',
         marginTop: 4,
         lineHeight: 1.5
       }
     }, '问题: ' + m.vlm.problemElements.join('; ')), m.vlm.nextStepSuggestion && React.createElement('div', {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ok)',
         marginTop: 4,
         lineHeight: 1.5
@@ -5008,7 +4360,54 @@ const ChatReturned = ({
         lineHeight: 1.45,
         wordBreak: 'break-word'
       }
-    }, formatAiImageError(m.error, m.jobId || m.job_id)));
+    }, formatAiImageError(m.error, m.jobId || m.job_id)), m.status === 'failed' && (onRetry || onEditResend) && React.createElement('div', {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexWrap: 'wrap'
+      }
+    }, onRetry && canRetryCard(m, i) && React.createElement('button', {
+      type: 'button',
+      disabled: isGenerating,
+      onClick: function () {
+        onRetry(m);
+      },
+      title: isGenerating ? '当前还有任务在生成，完成后再重试' : '用相同的描述、参考图和参数重新生成',
+      style: {
+        fontSize: 11,
+        padding: '4px 10px',
+        borderRadius: 5,
+        background: 'var(--ink)',
+        color: 'white',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        cursor: isGenerating ? 'default' : 'pointer',
+        opacity: isGenerating ? 0.5 : 1
+      }
+    }, React.createElement(I.refresh, {
+      size: 10
+    }), '重试'), onEditResend && (m.retryArgs || m.prompt) && React.createElement('button', {
+      type: 'button',
+      onClick: function () {
+        onEditResend(m);
+      },
+      title: '把这次的描述放回输入框，修改后再发送',
+      style: {
+        fontSize: 11,
+        padding: '4px 10px',
+        borderRadius: 5,
+        background: 'var(--panel)',
+        color: 'var(--ink-2)',
+        border: '1px solid var(--line)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        cursor: 'pointer'
+      }
+    }, React.createElement(I.edit, {
+      size: 10
+    }), '编辑后重发')));
   })() : m.type === 'parse-result' ? (() => {
     const matchedCount = m.data.products.filter(p => p.image_path).length;
     return /*#__PURE__*/React.createElement("div", {
@@ -5053,13 +4452,13 @@ const ChatReturned = ({
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
-        fontSize: 11.5,
+        fontSize: 12,
         fontWeight: 600
       }
     }, m.data.products.length, " \u4E2A\u4EA7\u54C1"), /*#__PURE__*/React.createElement("div", {
       className: "mono",
       style: {
-        fontSize: 9.5,
+        fontSize: 11,
         color: 'var(--ink-3)'
       }
     }, "CSV \xB7 ", m.data.suggested_template_type))), m.fields && m.fields.length > 0 && /*#__PURE__*/React.createElement("div", {
@@ -5082,12 +4481,12 @@ const ChatReturned = ({
       }, f === 'image' ? val ? /*#__PURE__*/React.createElement("span", {
         style: {
           color: 'var(--ok)',
-          fontSize: 10
+          fontSize: 11
         }
       }, "\u5DF2\u5339\u914D") : /*#__PURE__*/React.createElement("span", {
         style: {
           color: 'var(--ink-3)',
-          fontSize: 10
+          fontSize: 11
         }
       }, "\u672A\u5339\u914D") : /*#__PURE__*/React.createElement("span", {
         style: {
@@ -5100,7 +4499,7 @@ const ChatReturned = ({
     }, /*#__PURE__*/React.createElement("span", {
       style: {
         color: p.image_path ? 'var(--ok)' : 'var(--warn)',
-        fontSize: 10
+        fontSize: 11
       }
     }, p.image_path ? '✓' : '—'))))), matchedCount > 0 && !isGenerating && /*#__PURE__*/React.createElement("div", {
       style: {
@@ -5148,13 +4547,13 @@ const ChatReturned = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12.5,
+      fontSize: 12,
       color: 'var(--ink)',
       fontWeight: 600
     }
   }, m.modeLabel || '智能铺货'), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       marginTop: 2
     }
@@ -5196,7 +4595,7 @@ const ChatReturned = ({
         borderRadius: 8,
         background: 'var(--panel)',
         border: '1px solid var(--warn)',
-        fontSize: 11.5,
+        fontSize: 12,
         color: 'var(--warn)',
         lineHeight: 1.5
       }
@@ -5285,7 +4684,7 @@ const ChatReturned = ({
         }
       }, React.createElement('div', {
         style: {
-          fontSize: 11.5,
+          fontSize: 12,
           fontWeight: 600,
           color: 'var(--ink)',
           whiteSpace: 'nowrap',
@@ -5295,7 +4694,7 @@ const ChatReturned = ({
       }, title), React.createElement('div', {
         className: 'mono',
         style: {
-          fontSize: 9.5,
+          fontSize: 11,
           color: 'var(--ink-3)',
           lineHeight: 1.45
         }
@@ -5311,7 +4710,7 @@ const ChatReturned = ({
         style: {
           margin: 0,
           padding: '10px 12px',
-          fontSize: 10,
+          fontSize: 11,
           color: 'var(--ink-2)',
           overflow: 'auto',
           maxHeight: 180,
@@ -5460,7 +4859,7 @@ const ChatReturned = ({
     className: "mono",
     style: {
       color: 'var(--ink-3)',
-      fontSize: 10,
+      fontSize: 11,
       marginLeft: 'auto'
     }
   }, "\u5DF2\u4E0A\u4F20")) : m.type === 'proxy-download-choice' ? /*#__PURE__*/React.createElement("div", {
@@ -5541,7 +4940,7 @@ const ChatReturned = ({
   }, m.filename || '下载文件'), /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)'
     }
   }, m.format ? m.format + ' · ' : '', m.sizeText || '')), m.downloadUrl && /*#__PURE__*/React.createElement("div", {
@@ -5638,7 +5037,7 @@ const ChatReturned = ({
   }, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.06em'
@@ -5660,7 +5059,7 @@ const ChatReturned = ({
   }, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.06em'
@@ -5675,7 +5074,7 @@ const ChatReturned = ({
     return /*#__PURE__*/React.createElement("div", {
       key: idx,
       style: {
-        fontSize: 11.5,
+        fontSize: 12,
         color: 'var(--ink-2)',
         display: 'flex',
         gap: 8,
@@ -5690,9 +5089,31 @@ const ChatReturned = ({
         whiteSpace: 'nowrap'
       }
     }, file.name || '参考图 ' + (idx + 1)));
-  }))) : null))), /*#__PURE__*/React.createElement("style", null, `@keyframes pulse { 0%,100% { opacity:0.3; } 50% { opacity:1; } }`), /*#__PURE__*/React.createElement("div", {
-    ref: bottomRef
-  }));
+  }))) : null))), /*#__PURE__*/React.createElement("style", null, `@keyframes pulse { 0%,100% { opacity:0.3; } 50% { opacity:1; } }`))), hasUnseen && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      stickRef.current = true;
+      setHasUnseen(false);
+      scrollToBottom(true);
+    },
+    style: {
+      position: 'absolute',
+      bottom: 10,
+      left: '50%',
+      transform: 'translateX(-50%)',
+      zIndex: 2,
+      height: 28,
+      padding: '0 12px',
+      borderRadius: 99,
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      background: 'var(--ink)',
+      color: 'white',
+      fontSize: 12,
+      boxShadow: '0 4px 14px rgba(20,22,40,0.18)'
+    }
+  }, "\u2193 \u6709\u65B0\u6D88\u606F"));
 };
 const normalizeReferenceUrl = function (rawUrl) {
   const value = String(rawUrl || '').trim();
@@ -5775,6 +5196,7 @@ const CHAT_INSPIRATION_CATEGORIES = [{
 // ---------- Composer ----------
 
 const DEFAULT_COMPOSER_MODE = 'gpt-image-2.5';
+const NO_SKILLS = [];
 const Composer = ({
   onSend,
   onParseTable,
@@ -5788,8 +5210,10 @@ const Composer = ({
   onRequestSpecialTemplate,
   seedPrompt,
   onSeedConsumed,
-  canvasReferenceSelection
+  canvasReferenceSelection,
+  agentSkills: agentSkillsProp
 }) => {
+  const agentSkills = agentSkillsProp || NO_SKILLS;
   const [text, setText] = React.useState('');
   const [selectedMode, setSelectedMode] = React.useState(DEFAULT_COMPOSER_MODE);
   const [files, setFiles] = React.useState([]);
@@ -5812,7 +5236,6 @@ const Composer = ({
   const [quickPromptEditing, setQuickPromptEditing] = React.useState(null);
   const [quickPromptSaving, setQuickPromptSaving] = React.useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = React.useState('chat');
-  const [agentSkills, setAgentSkills] = React.useState([]);
   const [selectedSkill, setSelectedSkill] = React.useState('');
   const [skillMenuDismissed, setSkillMenuDismissed] = React.useState(false);
   const taRef = React.useRef(null);
@@ -5833,7 +5256,8 @@ const Composer = ({
   const STATUS_COMPOSER_HEIGHT = 208;
   const MAX_COMPOSER_HEIGHT = 500;
   const minComposerHeightRef = React.useRef(COLLAPSED_COMPOSER_HEIGHT);
-  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'nano-banana-pro' ? 'ai-image' : selectedMode === 'special' || selectedMode === 'special_full' ? selectedMode : selectedMode === 'download' ? 'download' : selectedWorkflow;
+  const isSeedreamMode = selectedMode === 'seedream-5-0-flash' || selectedMode === 'seedream-5-0-pro';
+  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' || isSeedreamMode ? 'ai-image' : selectedMode === 'special' || selectedMode === 'special_full' ? selectedMode : selectedMode === 'download' ? 'download' : selectedWorkflow;
   const normalizeBatchCount = React.useCallback(function (value) {
     const digits = String(value || '').replace(/\D+/g, '');
     if (!digits) return 1;
@@ -5886,8 +5310,7 @@ const Composer = ({
     }).slice(0, 8);
   }, [agentSkills, skillSearch]);
   const skillCardDescription = React.useCallback(function (skill) {
-    if (skill && skill.name === 'text-art-design') return '创意中文字体设计';
-    return String(skill && skill.description || '').trim();
+    return String(skill && skill.summary || '').trim();
   }, []);
   const truncateSkillText = React.useCallback(function (value, maxLength) {
     const chars = Array.from(String(value || '').trim());
@@ -5914,21 +5337,6 @@ const Composer = ({
     }, 0);
   }, [parseSkillInvocation]);
   const [taskDefsKey, setTaskDefsKey] = React.useState(0);
-  React.useEffect(() => {
-    let alive = true;
-    if (!window.API || !window.API.listAgentSkills) return function () {
-      alive = false;
-    };
-    window.API.listAgentSkills().then(function (skills) {
-      if (!alive) return;
-      setAgentSkills(Array.isArray(skills) ? skills : []);
-    }).catch(function (err) {
-      console.warn('Load agent skills failed:', err);
-    });
-    return function () {
-      alive = false;
-    };
-  }, []);
   const displayValue = text;
   React.useEffect(() => {
     if (!resetKey) return;
@@ -6066,18 +5474,32 @@ const Composer = ({
   }, [prototypePanel, skillMenuOpen]);
 
   // 外部触发：从灵感页“生成同款”传过来，自动选择生图模式并填入 prompt
+  // seedPrompt 可以是字符串，或 { text, mode }（mode 缺省为 gpt-image-2.5，'' 表示默认问答）
   React.useEffect(() => {
     if (!seedPrompt) return;
-    setSelectedMode('gpt-image-2.5');
-    setSelectedSkill('');
+    const seed = typeof seedPrompt === 'object' ? seedPrompt : {
+      text: seedPrompt
+    };
+    if (seed.skill) {
+      // 选技能只挂上技能并聚焦输入框，不改当前模式
+      setSelectedSkill(seed.skill);
+      setSkillMenuDismissed(true);
+    } else {
+      const mode = typeof seed.mode === 'string' ? seed.mode : 'gpt-image-2.5';
+      setSelectedMode(mode);
+      if (mode === 'special_full') setSpecialRouteMode('full');else if (mode === 'special') setSpecialRouteMode('auto');
+      setSelectedSkill('');
+    }
     setSelectedWorkflow('chat');
     setPrototypePanel('');
-    setText(String(seedPrompt));
+    // 只挂技能时保留输入框里已有的文字，光标放到末尾
+    if (!seed.skill || seed.text) setText(String(seed.text || ''));
     setTimeout(() => {
       const el = taRef.current;
       if (!el) return;
       el.focus();
-      el.setSelectionRange(0, 0);
+      const pos = seed.skill ? el.value.length : 0;
+      el.setSelectionRange(pos, pos);
     }, 0);
     if (onSeedConsumed) onSeedConsumed();
   }, [seedPrompt, onSeedConsumed]);
@@ -6123,7 +5545,7 @@ const Composer = ({
     label: '白底x2'
   }];
   const AI_QUALITIES = ['1K', '2K', '4K'];
-  // 统一的尺寸选项，两个模型共用（取交集：二者均支持的比例）
+  // 生图模型共用的比例和分辨率选项。
   const AI_OPTIONS = {
     auto: {
       label: 'auto',
@@ -6216,11 +5638,25 @@ const Composer = ({
       }
     }
   };
-  const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' ? 'gpt-image-2.5' : selectedMode === 'nano-banana-pro' ? 'nano-banana-pro' : '';
-  const activeMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' ? 'ai-image' : selectedMode === 'special_full' || selectedMode === 'special' ? selectedMode : selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
+  const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' ? selectedMode : selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' || isSeedreamMode ? selectedMode : '';
+  const activeMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' || isSeedreamMode ? 'ai-image' : selectedMode === 'special_full' || selectedMode === 'special' ? selectedMode : selectedWorkflow === 'distribute' ? 'distribute' : selectedWorkflow === 'compose' ? 'compose' : 'chat';
   const isSpecialTemplate = Boolean(template && (template.is_special || template.is_special_full));
   const isImageTypeLocked = activeMode === 'ai-image' || activeMode === 'special' || activeMode === 'special_full' || isSpecialTemplate;
-  const aiOptionMap = AI_OPTIONS;
+  const nanoBanana21Options = Object.assign({}, AI_OPTIONS);
+  ['4:5', '1:4', '4:1', '1:8', '8:1', '21:9'].forEach(function (ratio) {
+    nanoBanana21Options[ratio] = {
+      label: ratio,
+      qualities: AI_QUALITIES
+    };
+  });
+  const seedreamOptions = {};
+  ['auto', '1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '2:1', '1:2', '21:9'].forEach(function (ratio) {
+    seedreamOptions[ratio] = {
+      label: ratio,
+      qualities: ['1K', '1.5K', '2K']
+    };
+  });
+  const aiOptionMap = isSeedreamMode ? seedreamOptions : activeAiModel === 'nano-banana-2.1' ? nanoBanana21Options : AI_OPTIONS;
   const AI_RATIOS = Object.keys(aiOptionMap);
   const currentAiRatioMeta = aiOptionMap[aiRatio] || aiOptionMap[AI_RATIOS[0]];
   const _rawQualities = currentAiRatioMeta ? currentAiRatioMeta.qualities : AI_QUALITIES;
@@ -6229,12 +5665,12 @@ const Composer = ({
   const aiImageSize = aiRatio;
   React.useEffect(() => {
     if (activeAiModel) {
-      if (!AI_OPTIONS[aiRatio]) {
+      if (!aiOptionMap[aiRatio]) {
         setAiRatio('auto');
         return;
       }
-      if (!AI_OPTIONS[aiRatio].qualities.includes(aiQuality)) {
-        setAiQuality(AI_OPTIONS[aiRatio].qualities[0]);
+      if (!aiOptionMap[aiRatio].qualities.includes(aiQuality)) {
+        setAiQuality(aiOptionMap[aiRatio].qualities[0]);
       }
       // 渠道选择已移除，统一走智能路由
       if (aiProvider !== 'auto') {
@@ -6305,12 +5741,15 @@ const Composer = ({
     if (refImages.some(function (item) {
       return item && item.pending;
     })) {
-      window.alert('参考图还在加载，请稍候再发送');
+      window.dfToast('参考图还在加载，请稍候再发送');
       return;
     }
     const oversizedRefs = listOversizedReferences(refImages);
     if (oversizedRefs.length) {
-      window.alert(formatOversizedReferenceAlert(oversizedRefs));
+      window.dfToast(formatOversizedReferenceAlert(oversizedRefs), {
+        tone: 'warn',
+        duration: 6000
+      });
       return;
     }
     const imagesToSend = [...refImages];
@@ -6320,7 +5759,7 @@ const Composer = ({
       size: aiImageSize,
       resolution: aiQuality,
       variant: aiVariant,
-      quality: aiQualityTier,
+      quality: activeAiModel === 'gpt-image-2' || isSeedreamMode ? 'auto' : aiQualityTier,
       provider: aiProvider,
       workflow: selectedWorkflowMode,
       model: activeAiModel,
@@ -6745,57 +6184,66 @@ const Composer = ({
   const getTaskDefinitions = React.useCallback(function () {
     return [{
       id: 'chat',
-      label: '默认',
-      desc: '询问流程、模板、素材规则',
+      label: '问答',
       iconKey: 'sparkles',
       workflow: 'chat',
       mode: ''
     }, {
       id: 'gpt-image',
       label: 'GPT Image 2.5',
-      desc: '文生图，中文语义和文字更强',
       iconKey: 'image',
       iconSrc: 'src/icon/openai.png',
       workflow: 'chat',
       mode: 'gpt-image-2.5'
     }, {
+      id: 'gpt-image-2',
+      label: 'GPT Image 2',
+      iconKey: 'image',
+      iconSrc: 'src/icon/openai.png',
+      workflow: 'chat',
+      mode: 'gpt-image-2'
+    }, {
       id: 'nano-banana',
       label: 'Nano Banana Pro',
-      desc: '图生图/改图，参考图一致性更强',
       iconKey: 'image',
       iconSrc: 'src/icon/gemini-color.png',
       workflow: 'chat',
       mode: 'nano-banana-pro'
     }, {
+      id: 'nano-banana-2.1',
+      label: 'Nano Banana 2.1',
+      iconKey: 'image',
+      iconSrc: 'src/icon/gemini-color.png',
+      workflow: 'chat',
+      mode: 'nano-banana-2.1'
+    }, {
+      id: 'seedream-5.0',
+      label: 'Seedream 5.0',
+      iconKey: 'image',
+      iconSrc: 'src/icon/doubao.svg',
+      workflow: 'chat',
+      mode: isSeedreamMode ? selectedMode : 'seedream-5-0-flash'
+    }, {
       id: 'distribute',
       label: '智能铺货',
-      desc: '上传表格，自动解析为铺货 JSON',
       iconKey: 'grid',
       workflow: 'distribute',
       mode: ''
     }, {
       id: 'special',
       label: '特殊品',
-      desc: '使用特殊品模板合成结果',
       iconKey: 'layers',
       workflow: 'chat',
       mode: template && template.is_special_full ? 'special_full' : 'special'
-    }, {
-      id: 'download',
-      label: '花瓣下载',
-      desc: '输入花瓣 ID，自动识别可下载格式',
-      iconKey: 'download',
-      workflow: 'chat',
-      mode: 'download'
     }];
-  }, [template && template.is_special_full]);
+  }, [template && template.is_special_full, isSeedreamMode, selectedMode]);
   const getTaskIcon = React.useCallback(function (iconKey) {
     return I[iconKey] || I.sparkles;
   }, []);
-  const activeTaskLabel = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : 'GPT Image 2.5' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '默认';
+  const activeTaskLabel = activeMode === 'ai-image' ? isSeedreamMode ? 'Seedream 5.0' : activeAiModel === 'nano-banana-2.1' ? 'Nano Banana 2.1' : activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.5' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '问答';
   const activeTaskIconKey = activeMode === 'ai-image' ? 'image' : activeMode === 'special' || activeMode === 'special_full' ? 'layers' : selectedWorkflow === 'compose' || selectedWorkflow === 'distribute' ? 'grid' : selectedWorkflow === 'download' ? 'download' : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
-  const activeTaskIconSrc = activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
+  const activeTaskIconSrc = activeMode === 'ai-image' ? isSeedreamMode ? 'src/icon/doubao.svg' : activeAiModel.indexOf('nano-banana') === 0 ? 'src/icon/gemini-color.png' : 'src/icon/openai.png' : null;
   const qualityMap = {
     auto: '自动',
     medium: '中等',
@@ -6803,13 +6251,13 @@ const Composer = ({
     max: '最高'
   };
   const qualityTag = activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto' ? ' · ' + (qualityMap[aiQualityTier] || aiQualityTier) : '';
-  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + (activeAiModel === 'gpt-image-2.5' ? ' · ' + ({
+  const modeParamLabel = activeMode === 'ai-image' ? aiRatio + ' · ' + aiQuality + (isSeedreamMode ? ' · ' + (activeAiModel === 'seedream-5-0-pro' ? 'Pro' : 'Flash') : activeAiModel === 'gpt-image-2.5' ? ' · ' + ({
     flare: '快速',
     sunburst: '优质'
   }[aiVariant] || aiVariant) + qualityTag : '') : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 ' + (specialRouteMode === 'auto' ? '自动' : specialRouteMode === 'full' ? '完整' : '普通') : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
   const isSub2ApiRoute = activeMode === 'ai-image' && (aiProvider === 'sub2api' || aiProvider === 'auto' && (activeAiModel === 'gpt-image-2.5' || activeAiModel === 'gpt-image-2') && (aiQuality === '1K' || !aiQuality) && !(activeAiModel === 'gpt-image-2.5' && (aiQualityTier === 'max' || aiQualityTier === 'xhigh')));
-  const selectedSettingBits = [activeSkillInfo ? '$' + activeSkillInfo.name : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? '⚡ 智能' : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
-  const composerPlaceholder = agentEnabled ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）' : activeMode === 'ai-image' ? activeAiModel === 'nano-banana-pro' ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
+  const selectedSettingBits = [activeSkillInfo ? '$' + (activeSkillInfo.title || activeSkillInfo.name) : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? '⚡ 智能' : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
+  const composerPlaceholder = agentEnabled ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）' : activeMode === 'ai-image' ? activeAiModel.indexOf('nano-banana') === 0 ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(text.trim() || selectedMode || modeParamLabel || refImages.length > 0 || files.length > 0 || activeSkillInfo || skillMenuOpen || !agentEnabled && prototypePanel);
   const minComposerHeight = statusBarVisible ? STATUS_COMPOSER_HEIGHT : COLLAPSED_COMPOSER_HEIGHT;
   minComposerHeightRef.current = minComposerHeight;
@@ -6919,7 +6367,7 @@ const Composer = ({
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap'
         }
-      }, truncateSkillText(skill.name, 24)), cardDescription ? React.createElement('span', {
+      }, truncateSkillText(skill.title || skill.name, 24)), cardDescription ? React.createElement('span', {
         style: {
           fontSize: 11,
           color: 'var(--ink-3)',
@@ -6945,7 +6393,7 @@ const Composer = ({
       color: active ? 'var(--panel)' : 'var(--ink-2)',
       borderRadius: 999,
       padding: '6px 8px',
-      fontSize: 10.5,
+      fontSize: 11,
       fontWeight: 600,
       display: 'inline-flex',
       alignItems: 'center',
@@ -7003,7 +6451,7 @@ const Composer = ({
     return React.createElement('div', {
       className: 'mono',
       style: {
-        fontSize: 9.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         textTransform: 'uppercase',
         letterSpacing: '0.08em',
@@ -7024,7 +6472,7 @@ const Composer = ({
         }
       }, React.createElement('div', {
         style: {
-          fontSize: 16,
+          fontSize: 15,
           fontWeight: 700,
           letterSpacing: '-0.01em',
           color: 'var(--ink)'
@@ -7032,15 +6480,15 @@ const Composer = ({
       }, '选择功能'), React.createElement('div', {
         className: 'mono',
         style: {
-          fontSize: 10,
+          fontSize: 11,
           color: 'var(--ink-3)'
         }
       }, 'live')), React.createElement('div', {
         style: {
-          marginTop: 12,
+          marginTop: 10,
           display: 'flex',
           flexDirection: 'column',
-          gap: 6
+          gap: 2
         }
       }, tasks.map(function (item) {
         const isAvailable = item.available !== false;
@@ -7057,37 +6505,40 @@ const Composer = ({
             width: '100%',
             display: 'flex',
             alignItems: 'center',
-            gap: 11,
-            padding: '10px 11px',
-            borderRadius: 13,
+            gap: 9,
+            padding: '6px 10px',
+            borderRadius: 8,
             background: active ? 'var(--panel-2)' : 'transparent',
             border: '1px solid ' + (active ? 'var(--line)' : 'transparent'),
             textAlign: 'left',
             cursor: isAvailable ? 'pointer' : 'not-allowed',
             opacity: isAvailable ? 1 : 0.4
           }
-        }, item.iconSrc ? React.createElement('img', {
-          src: item.iconSrc,
-          alt: item.label,
+        },
+        // 品牌图标与系统图标统一放进 22px 圆形底；Gemini 四角星面积小，光学上放大 1px
+        React.createElement('div', {
           style: {
-            width: 30,
-            height: 30,
+            width: 22,
+            height: 22,
+            flexShrink: 0,
             borderRadius: 999,
-            objectFit: 'cover',
+            background: 'var(--panel-2)',
+            color: 'var(--ink-3)',
+            display: 'grid',
+            placeItems: 'center',
             opacity: isAvailable ? 1 : 0.5
           }
-        }) : React.createElement('div', {
+        }, item.iconSrc ? React.createElement('img', {
+          src: item.iconSrc,
+          alt: '',
           style: {
-            width: 30,
-            height: 30,
-            borderRadius: 999,
-            background: active ? 'var(--ink)' : 'var(--panel-2)',
-            color: active ? 'var(--panel)' : 'var(--ink-3)',
-            display: 'grid',
-            placeItems: 'center'
+            width: item.iconSrc.indexOf('gemini') >= 0 ? 15 : 14,
+            height: item.iconSrc.indexOf('gemini') >= 0 ? 15 : 14,
+            objectFit: 'contain',
+            display: 'block'
           }
-        }, React.createElement(IconComp, {
-          size: 14
+        }) : React.createElement(IconComp, {
+          size: 12
         })), React.createElement('div', {
           style: {
             flex: 1,
@@ -7099,17 +6550,13 @@ const Composer = ({
             fontWeight: 700,
             color: 'var(--ink)'
           }
-        }, item.label), React.createElement('div', {
-          style: {
-            fontSize: 11,
-            color: 'var(--ink-3)',
-            marginTop: 2
-          }
-        }, item.desc)));
-      }))), 344);
+        }, item.label)));
+      }))), 240);
     }
     if (prototypePanel === 'params') {
-      const sizeItems = [['auto', '自动'], ['1:1', '1:1'], ['3:2', '3:2'], ['2:3', '2:3'], ['4:3', '4:3'], ['3:4', '3:4'], ['5:4', '5:4'], ['16:9', '16:9'], ['9:16', '9:16']];
+      const sizeItems = AI_RATIOS.map(function (ratio) {
+        return [ratio, ratio === 'auto' ? '自动' : ratio];
+      });
       const ratioIconSize = function (key) {
         const base = 10;
         if (key === 'auto') return {
@@ -7149,12 +6596,12 @@ const Composer = ({
       };
       return protoPanelShell(React.createElement(React.Fragment, null, !isImageParams && React.createElement('div', {
         style: {
-          fontSize: 16,
+          fontSize: 15,
           fontWeight: 700,
           letterSpacing: '-0.01em',
           color: 'var(--ink)'
         }
-      }, paramsTitle), isImageParams && React.createElement(React.Fragment, null, imageFieldLabel('尺寸'), React.createElement('div', {
+      }, paramsTitle), isImageParams && React.createElement(React.Fragment, null, imageFieldLabel(activeAiModel === 'gpt-image-2' || activeAiModel === 'nano-banana-2.1' || isSeedreamMode ? '比例' : '尺寸'), React.createElement('div', {
         style: {
           display: 'grid',
           gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
@@ -7183,7 +6630,7 @@ const Composer = ({
             color: active ? 'var(--accent-ink)' : 'var(--ink-2)',
             boxShadow: 'none',
             cursor: 'pointer',
-            fontSize: 11.5,
+            fontSize: 12,
             fontWeight: active ? 650 : 500,
             letterSpacing: '-0.01em',
             minWidth: 0
@@ -7216,10 +6663,10 @@ const Composer = ({
             whiteSpace: 'nowrap'
           }
         }, item[1]));
-      })), activeAiModel === 'gpt-image-2.5' && React.createElement('div', {
+      })), (activeAiModel === 'gpt-image-2.5' || isSeedreamMode) && React.createElement('div', {
         style: {
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          gridTemplateColumns: isSeedreamMode ? '1fr' : '1fr 1fr',
           gap: 16,
           alignItems: 'start',
           marginTop: 12
@@ -7234,13 +6681,13 @@ const Composer = ({
           overflow: 'hidden',
           background: 'var(--panel)'
         }
-      }, [['flare', '快速'], ['sunburst', '优质']].map(function (item, idx) {
-        const active = aiVariant === item[0];
+      }, (isSeedreamMode ? [['seedream-5-0-flash', 'Flash'], ['seedream-5-0-pro', 'Pro']] : [['flare', '快速'], ['sunburst', '优质']]).map(function (item, idx) {
+        const active = (isSeedreamMode ? activeAiModel : aiVariant) === item[0];
         return React.createElement('button', {
           key: item[0],
           type: 'button',
           onClick: function () {
-            setAiVariant(item[0]);
+            if (isSeedreamMode) setSelectedMode(item[0]);else setAiVariant(item[0]);
           },
           style: {
             flex: 1,
@@ -7256,7 +6703,7 @@ const Composer = ({
             letterSpacing: '-0.01em'
           }
         }, item[1]);
-      }))), React.createElement('div', null, imageFieldLabel('质量'), React.createElement('div', {
+      }))), !isSeedreamMode && React.createElement('div', null, imageFieldLabel('质量'), React.createElement('div', {
         style: {
           display: 'flex',
           width: '100%',
@@ -7301,7 +6748,7 @@ const Composer = ({
           gap: 16,
           alignItems: 'start'
         }
-      }, React.createElement('div', null, imageFieldLabel('清晰度'), React.createElement('div', {
+      }, React.createElement('div', null, imageFieldLabel(activeAiModel === 'gpt-image-2' || activeAiModel === 'nano-banana-2.1' || isSeedreamMode ? '分辨率' : '清晰度'), React.createElement('div', {
         style: {
           display: 'flex',
           width: '100%',
@@ -7311,7 +6758,7 @@ const Composer = ({
           overflow: 'hidden',
           background: 'var(--panel)'
         }
-      }, ['1K', '2K', '4K'].map(function (q, idx) {
+      }, allowedAiQualities.map(function (q, idx) {
         const disabled = !allowedAiQualities.includes(q);
         const active = aiQuality === q;
         return React.createElement('button', {
@@ -7371,7 +6818,7 @@ const Composer = ({
         style: {
           flex: 1,
           textAlign: 'center',
-          fontSize: 12.5,
+          fontSize: 12,
           fontWeight: 650,
           color: 'var(--ink)',
           letterSpacing: '-0.01em'
@@ -7452,7 +6899,7 @@ const Composer = ({
           }
         }, item.label), React.createElement('span', {
           style: {
-            fontSize: 10.5,
+            fontSize: 11,
             lineHeight: 1.2,
             color: active ? 'rgba(255,255,255,0.68)' : 'var(--ink-3)',
             fontWeight: 500
@@ -7593,7 +7040,7 @@ const Composer = ({
             borderRadius: 8,
             border: '1px solid var(--line)',
             background: 'var(--panel-2)',
-            fontSize: 12.5,
+            fontSize: 12,
             color: 'var(--ink)',
             outline: 'none',
             boxSizing: 'border-box',
@@ -7664,13 +7111,13 @@ const Composer = ({
         }
       }), React.createElement('span', {
         style: {
-          fontSize: 13.5,
+          fontSize: 13,
           fontWeight: 700,
           color: 'var(--ink)'
         }
       }, '常用语'), React.createElement('span', {
         style: {
-          fontSize: 10.5,
+          fontSize: 11,
           fontWeight: 600,
           padding: '1px 6px',
           borderRadius: 999,
@@ -7720,7 +7167,7 @@ const Composer = ({
           borderRadius: 8,
           border: '1px solid var(--line)',
           background: 'var(--panel-2)',
-          fontSize: 11.5,
+          fontSize: 12,
           color: 'var(--ink)',
           outline: 'none',
           boxSizing: 'border-box'
@@ -8006,12 +7453,59 @@ const Composer = ({
     }
   }, selectedSettingBits.map(function (bit, idx) {
     const isSkillBit = typeof bit === 'string' && bit.startsWith('$');
+    if (isSkillBit) {
+      return /*#__PURE__*/React.createElement("span", {
+        key: idx,
+        style: {
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          fontSize: 12,
+          fontWeight: 600,
+          color: 'var(--accent)',
+          whiteSpace: 'nowrap',
+          flexShrink: 0
+        }
+      }, /*#__PURE__*/React.createElement(I.wand, {
+        size: 12
+      }), bit.slice(1), /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: () => {
+          setSelectedSkill('');
+          setSkillMenuDismissed(true);
+          setText(function (prev) {
+            return parseSkillInvocation(prev).prompt;
+          });
+        },
+        title: "\u53D6\u6D88\u6280\u80FD",
+        "aria-label": "\u53D6\u6D88\u6280\u80FD",
+        style: {
+          width: 16,
+          height: 16,
+          display: 'grid',
+          placeItems: 'center',
+          borderRadius: 4,
+          color: 'var(--ink-3)',
+          cursor: 'pointer'
+        },
+        onMouseEnter: e => {
+          e.currentTarget.style.background = 'var(--panel-2)';
+          e.currentTarget.style.color = 'var(--ink)';
+        },
+        onMouseLeave: e => {
+          e.currentTarget.style.background = 'transparent';
+          e.currentTarget.style.color = 'var(--ink-3)';
+        }
+      }, /*#__PURE__*/React.createElement(I.close, {
+        size: 10
+      })));
+    }
     return /*#__PURE__*/React.createElement("span", {
       key: idx,
       style: {
         fontSize: 12,
-        fontWeight: isSkillBit ? 750 : idx === 0 ? 600 : 400,
-        color: isSkillBit ? 'var(--accent)' : idx === 0 ? 'var(--ink)' : 'var(--ink-3)',
+        fontWeight: idx === 0 ? 600 : 400,
+        color: idx === 0 ? 'var(--ink)' : 'var(--ink-3)',
         whiteSpace: 'nowrap',
         flexShrink: 0
       }
@@ -8130,7 +7624,7 @@ const Composer = ({
       height: 44,
       objectFit: 'cover',
       borderRadius: 6,
-      border: referenceFileSize(img) > MAX_REFERENCE_IMAGE_BYTES ? '1px solid #d14343' : '1px solid var(--line)'
+      border: referenceFileSize(img) > MAX_REFERENCE_IMAGE_BYTES ? '1px solid var(--danger)' : '1px solid var(--line)'
     }
   }), referenceFileSize(img) > MAX_REFERENCE_IMAGE_BYTES && /*#__PURE__*/React.createElement("span", {
     style: {
@@ -8139,9 +7633,9 @@ const Composer = ({
       left: 2,
       padding: '1px 3px',
       borderRadius: 3,
-      background: 'rgba(209, 67, 67, 0.92)',
+      background: 'var(--danger)',
       color: 'white',
-      fontSize: 8,
+      fontSize: 11,
       fontWeight: 700,
       lineHeight: 1,
       pointerEvents: 'none'
@@ -8158,7 +7652,7 @@ const Composer = ({
       borderRadius: 4,
       background: 'rgba(20, 22, 40, 0.72)',
       color: 'white',
-      fontSize: 9,
+      fontSize: 11,
       fontWeight: 600,
       lineHeight: 1,
       cursor: 'pointer',
@@ -8189,7 +7683,7 @@ const Composer = ({
     stroke: 2.4
   })))), /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)'
     }
   }, refImages.length, "/", MAX_REFERENCE_IMAGES)), files.length > 0 && /*#__PURE__*/React.createElement("div", {
@@ -8227,7 +7721,7 @@ const Composer = ({
       }
     }, item.name), /*#__PURE__*/React.createElement("span", {
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         whiteSpace: 'nowrap'
       }
@@ -8401,7 +7895,6 @@ const mapAgentProjectMessages = function (project, images) {
   }));
 };
 const Chat = ({
-  state,
   template,
   onComposeComplete,
   user,
@@ -8426,8 +7919,14 @@ const Chat = ({
   const [historyLoading, setHistoryLoading] = React.useState(false);
   const [historySessions, setHistorySessions] = React.useState([]);
   const [hoveredHistoryId, setHoveredHistoryId] = React.useState('');
+  // 删除需在同一行点两次：第一次进入确认态，第二次执行
+  const [confirmDeleteId, setConfirmDeleteId] = React.useState('');
   const [publishDialog, setPublishDialog] = React.useState(null);
+  const [localSeed, setLocalSeed] = React.useState(null);
+  const [agentSkills, setAgentSkills] = React.useState([]);
   const historyWrapRef = React.useRef(null);
+  const [modeMenuOpen, setModeMenuOpen] = React.useState(false);
+  const modeMenuRef = React.useRef(null);
   const creatingAgentProjectRef = React.useRef(null);
 
   // Extract required fields from template slots (e.g., "slot/product_1/name" -> "name")
@@ -8576,12 +8075,13 @@ const Chat = ({
       setHistoryOpen(false);
     } catch (e) {
       console.error('restore agent project failed:', e);
-      window.alert(e && e.message ? e.message : '恢复 Agent 对话失败');
+      window.dfToast(e && e.message ? e.message : '恢复 Agent 对话失败', {
+        tone: 'danger'
+      });
     }
   }, [loadAgentProject]);
   const deleteAiChatHistory = React.useCallback(async sessionId => {
     if (!sessionId) return;
-    if (!window.confirm('删除这条历史对话？')) return;
     try {
       await window.API.deleteAiChat(sessionId);
       setHistorySessions(function (prev) {
@@ -8598,12 +8098,13 @@ const Chat = ({
       }
     } catch (e) {
       console.error('delete ai chat history failed:', e);
-      window.alert(e && e.message ? e.message : '删除失败，请稍后重试');
+      window.dfToast(e && e.message ? e.message : '删除失败，请稍后重试', {
+        tone: 'danger'
+      });
     }
   }, [currentAiChatId]);
   const deleteAgentProjectHistory = React.useCallback(async projectId => {
     if (!projectId) return;
-    if (!window.confirm('删除这条 Agent 对话？')) return;
     try {
       await window.API.deleteAgentProject(projectId);
       setHistorySessions(function (prev) {
@@ -8623,7 +8124,9 @@ const Chat = ({
       }
     } catch (e) {
       console.error('delete agent project failed:', e);
-      window.alert(e && e.message ? e.message : '删除失败，请稍后重试');
+      window.dfToast(e && e.message ? e.message : '删除失败，请稍后重试', {
+        tone: 'danger'
+      });
     }
   }, [agentProjectId, onComposeComplete]);
   const startNewAiChat = React.useCallback(() => {
@@ -8687,6 +8190,21 @@ const Chat = ({
       document.removeEventListener('mousedown', handlePointerDown);
     };
   }, [historyOpen]);
+  React.useEffect(function () {
+    if (!modeMenuOpen) return;
+    const onDown = function (event) {
+      if (modeMenuRef.current && !modeMenuRef.current.contains(event.target)) setModeMenuOpen(false);
+    };
+    const onKey = function (event) {
+      if (event.key === 'Escape') setModeMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return function () {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [modeMenuOpen]);
   const materializeReferenceImages = React.useCallback(async function (refImages) {
     var refs = Array.isArray(refImages) ? refImages : [];
     return Promise.all(refs.map(async function (item, idx) {
@@ -8731,7 +8249,10 @@ const Chat = ({
   const normalizeAiImageModel = React.useCallback(function (model) {
     const value = String(model || '').trim().toLowerCase();
     if (!value) return '';
+    if (/^seedream-5[.-]0-(pro|flash)$/.test(value)) return value.replace('5.0', '5-0');
+    if (value === 'nano-banana-2.1' || value === 'gemini-nano-banana-2.1' || value === 'gemini-nano-banana-2.1-ext') return 'nano-banana-2.1';
     if (value.includes('nano') || value.includes('banana') || value.includes('gemini')) return 'nano-banana-pro';
+    if (/^gpt[\s_-]*image[\s_-]*2$/.test(value)) return 'gpt-image-2';
     if (value.includes('gpt') || value.includes('image')) return 'gpt-image-2.5';
     return value;
   }, []);
@@ -8801,7 +8322,9 @@ const Chat = ({
       image_url: msg.imageUrl
     } : null;
     if (!payload) {
-      window.alert('这条消息无法发布（缺少 job_id 和 image_url）');
+      window.dfToast('这条消息无法发布（缺少 job_id 和 image_url）', {
+        tone: 'warn'
+      });
       return;
     }
     payload.category = dialog.category || 'share_card';
@@ -8840,12 +8363,19 @@ const Chat = ({
           submitting: false
         }) : prev;
       });
-      window.alert('发布失败：' + (e.message || '未知错误'));
+      window.dfToast('发布失败：' + (e.message || '未知错误'), {
+        tone: 'danger'
+      });
     }
   }, [publishDialog]);
   const handleUnpublishInspiration = React.useCallback(async msg => {
     if (!msg || !msg.inspirationPostId) return;
-    if (!window.confirm('下架这条灵感？')) return;
+    if (!(await window.dfConfirm({
+      title: '下架这条灵感？',
+      message: '下架后其他人将看不到这张图。',
+      confirmText: '下架',
+      danger: true
+    }))) return;
     const postId = msg.inspirationPostId;
     setMessages(function (msgs) {
       return patchMessageOrImage(msgs, msg, {
@@ -8866,7 +8396,9 @@ const Chat = ({
           inspirationPublishing: false
         });
       });
-      window.alert('下架失败：' + (e.message || '未知错误'));
+      window.dfToast('下架失败：' + (e.message || '未知错误'), {
+        tone: 'danger'
+      });
     }
   }, []);
 
@@ -8909,10 +8441,6 @@ const Chat = ({
         error: e && e.message || String(e || ''),
         reachedServer: false
       });
-      alertAiImageError(prepErr, {
-        phaseLabel: describeAiImageFailPhase('prepare'),
-        clientRequestId: prepClientId
-      });
       setMessages(msgs => [...msgs, {
         who: 'ai',
         type: 'ai-image-generating',
@@ -8930,10 +8458,11 @@ const Chat = ({
         finalElapsed: 0,
         startedAt: failedAt,
         activeSkill: activeSkill,
-        meta: 'Loom',
+        meta: 'AI',
         hasReference: refImages.length > 0,
         refCount: refImages.length,
-        refPreviews: []
+        refPreviews: [],
+        retryArgs: [model, prompt, displayText, refImages, aiOptions]
       }]);
       setIsLoading(false);
       return;
@@ -8957,14 +8486,17 @@ const Chat = ({
       startedAt: baseAt,
       progress: 0,
       activeSkill: activeSkill,
-      meta: batchCount > 1 ? 'Loom · ×' + batchCount : 'Loom',
+      meta: batchCount > 1 ? 'AI · ×' + batchCount : 'AI',
       hasReference: refImages.length > 0,
       refCount: refImages.length,
       refPreviews: [],
       batchCount: batchCount,
-      images: batchCount > 1 ? [] : undefined
+      images: batchCount > 1 ? [] : undefined,
+      retryArgs: [model, prompt, displayText, refImages, aiOptions]
     }]);
-    if (activeSkill && !plannedPrompt && window.API && window.API.streamSkillPlan) {
+
+    // 按原任务重试时，后端会复用原任务的最终提示词，不再重新跑 Skill 规划
+    if (activeSkill && !plannedPrompt && !aiOptions.retryFromJobId && window.API && window.API.streamSkillPlan) {
       const primarySlotAt = slots[0];
       var streamedTrace = '';
       var plannerRefImages = (Array.isArray(finalRefImages) ? finalRefImages : []).slice(0, 3).map(function (r) {
@@ -8972,6 +8504,13 @@ const Chat = ({
       }).filter(Boolean);
       try {
         await window.API.streamSkillPlan(activeSkill, finalPrompt, plannerRefImages, {
+          onEvent: function (eventName) {
+            if (eventName !== 'reset') return;
+            streamedTrace = '';
+            setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === primarySlotAt ? Object.assign({}, m, {
+              promptTrace: ''
+            }) : m));
+          },
           onDelta: function (payload) {
             var delta = String(payload && payload.text || '');
             if (!delta) return;
@@ -9055,11 +8594,13 @@ const Chat = ({
           provider: provider,
           refCount: finalRefImages.length
         });
-        postAiImageForm(apiBase, fd, {
+
+        // 已有任务编号的失败重试走 /ai-image/retry，复用原任务的完整提示词和参考图集合
+        (aiOptions.retryFromJobId ? window.API.retryAiImage(aiOptions.retryFromJobId, currentAiChatId) : postAiImageForm(apiBase, fd, {
           clientRequestId: clientRequestId,
           maxAttempts: 2,
           timeoutMs: 120000
-        }).then(function (data) {
+        })).then(function (data) {
           if (data.chat_session_id) setCurrentAiChatId(data.chat_session_id);
           const jobId = data.job_id;
           if (!jobId) {
@@ -9073,10 +8614,6 @@ const Chat = ({
               provider: provider,
               reachedServer: true,
               error: 'response missing job_id'
-            });
-            alertAiImageError(noJobErr, {
-              phaseLabel: describeAiImageFailPhase('submit'),
-              clientRequestId: clientRequestId
             });
             setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
               status: 'failed',
@@ -9121,11 +8658,6 @@ const Chat = ({
               httpStatus: extra && extra.httpStatus,
               error: String(errorText || '').slice(0, 400),
               reachedServer: true
-            });
-            alertAiImageError(errText, {
-              phaseLabel: describeAiImageFailPhase(phase),
-              clientRequestId: clientRequestId,
-              jobId: jobId
             });
             setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
               status: 'failed',
@@ -9257,10 +8789,6 @@ const Chat = ({
             error: String(err && err.message || '').slice(0, 500),
             refCount: finalRefImages.length
           });
-          alertAiImageError(submitErr, {
-            phaseLabel: describeAiImageFailPhase(failPhase),
-            clientRequestId: clientRequestId
-          });
           setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
             status: 'failed',
             failPhase: failPhase,
@@ -9328,10 +8856,6 @@ const Chat = ({
               provider: provider,
               reachedServer: true,
               error: 'response missing job_ids'
-            });
-            alertAiImageError(noJobErr, {
-              phaseLabel: describeAiImageFailPhase('submit'),
-              clientRequestId: clientRequestId
             });
             setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
               status: 'failed',
@@ -9455,10 +8979,6 @@ const Chat = ({
                 error: String(firstErr || '').slice(0, 400),
                 reachedServer: true
               });
-              alertAiImageError(summary, {
-                phaseLabel: describeAiImageFailPhase('generate'),
-                clientRequestId: clientRequestId
-              });
             }
             loadAiChatHistory();
             if (okOrdered.length && onComposeComplete) {
@@ -9580,10 +9100,6 @@ const Chat = ({
             refCount: finalRefImages.length,
             batchCount: batchCount
           });
-          alertAiImageError(submitErr, {
-            phaseLabel: describeAiImageFailPhase(failPhase),
-            clientRequestId: clientRequestId
-          });
           setMessages(msgs => msgs.map(m => m.type === 'ai-image-generating' && m.startedAt === slotAt ? Object.assign({}, m, {
             status: 'failed',
             failPhase: failPhase,
@@ -9609,7 +9125,10 @@ const Chat = ({
     refImages = await materializeReferenceImages(refImages);
     const oversizedRefs = listOversizedReferences(refImages);
     if (oversizedRefs.length) {
-      window.alert(formatOversizedReferenceAlert(oversizedRefs));
+      window.dfToast(formatOversizedReferenceAlert(oversizedRefs), {
+        tone: 'warn',
+        duration: 6000
+      });
       return;
     }
 
@@ -9707,6 +9226,20 @@ const Chat = ({
         projectId = await ensureAgentProject();
         await window.API.streamAgentChat(projectId, executionText, {
           onEvent: function (eventName, payload) {
+            if (eventName === 'agent_reset') {
+              thinkingText = '';
+              thinkingStatus = '正在重新组织回复...';
+              setMessages(function (msgs) {
+                return msgs.map(function (m, i) {
+                  return i === assistantIdx ? Object.assign({}, m, {
+                    text: '',
+                    thinking: '',
+                    thinkingStatus: thinkingStatus
+                  }) : m;
+                });
+              });
+              return;
+            }
             if (eventName === 'agent_thinking') {
               var thinkingPatch = applyThinkingEvent(payload || {});
               setMessages(function (msgs) {
@@ -10105,7 +9638,7 @@ const Chat = ({
 
     // ── AI 生图指令匹配 ────────────────────────────────────────────────────────
     // 用户通过 UI 功能面板选择模型，输入框仅作为图片描述。
-    const targetAiModel = aiOptions.model || (aiOptions.mode === 'nano-banana-pro' ? 'nano-banana-pro' : aiOptions.workflow === 'ai-image' ? 'gpt-image-2.5' : '');
+    const targetAiModel = aiOptions.model || (aiOptions.mode === 'nano-banana-pro' || aiOptions.mode === 'nano-banana-2.1' ? aiOptions.mode : aiOptions.workflow === 'ai-image' ? 'gpt-image-2.5' : '');
     const isAiImageMode = Boolean(targetAiModel) || aiOptions.workflow === 'ai-image';
 
     // 继承上一张图修改、沿用需求重新生成还是全新需求，由后端 VLM 判断。
@@ -10214,7 +9747,7 @@ const Chat = ({
           type: 'generating',
           logs: specialRouteLogs.concat([`已选择${_cmdLabel}流程，正在启动合成…`]),
           status: 'running',
-          meta: `Loom · ${_cmdLabel}`,
+          meta: `AI · ${_cmdLabel}`,
           startedAt: Date.now()
         }];
       });
@@ -10379,7 +9912,7 @@ const Chat = ({
       setMessages(msgs => msgs.map((m, i) => i === thinkingIdx ? {
         who: 'ai',
         text: reply || '...',
-        meta: 'Loom'
+        meta: 'AI'
       } : m));
     } catch (e) {
       setMessages(msgs => msgs.map((m, i) => i === thinkingIdx ? {
@@ -10395,6 +9928,57 @@ const Chat = ({
   const handleQuickReply = React.useCallback(function (value) {
     handleSend(value, [], {});
   }, [handleSend]);
+
+  // ── 生图失败：重试 / 编辑后重发 ──────────────────────────────────────────
+  const handleRetryAiImage = React.useCallback(function (msg) {
+    if (!msg || !msg.retryArgs || isLoading) return;
+    const args = msg.retryArgs.slice();
+    const isBatch = Array.isArray(msg.images) && msg.images.length > 0;
+    if (msg.jobId && !isBatch) {
+      args[4] = Object.assign({}, args[4], {
+        retryFromJobId: msg.jobId,
+        batchCount: 1
+      });
+    }
+    runAiImageGeneration.apply(null, args);
+  }, [isLoading, runAiImageGeneration]);
+  const handleEditResend = React.useCallback(function (msg) {
+    const args = msg && msg.retryArgs;
+    const text = args && (args[2] || args[1]) || msg && msg.prompt || '';
+    const model = args && args[0] || msg && msg.model || '';
+    if (text) setLocalSeed({
+      text: String(text),
+      mode: normalizeAiImageModel(model) || 'gpt-image-2.5'
+    });
+  }, [normalizeAiImageModel]);
+  const handlePickSkill = React.useCallback(function (skill) {
+    if (!skill || !skill.name) return;
+    setLocalSeed({
+      text: '',
+      skill: skill.name
+    });
+  }, []);
+
+  // 技能列表同时供欢迎页和输入框使用
+  React.useEffect(() => {
+    let alive = true;
+    if (!window.API || !window.API.listAgentSkills) return function () {
+      alive = false;
+    };
+    window.API.listAgentSkills().then(function (skills) {
+      if (!alive) return;
+      setAgentSkills(Array.isArray(skills) ? skills : []);
+    }).catch(function (err) {
+      console.warn('Load agent skills failed:', err);
+    });
+    return function () {
+      alive = false;
+    };
+  }, []);
+  const handleComposerSeedConsumed = React.useCallback(function () {
+    setLocalSeed(null);
+    if (onSeedConsumed) onSeedConsumed();
+  }, [onSeedConsumed]);
 
   // ── 画布快捷编辑生图请求监听 ──────────────────────────────────────────────
   const lastQuickEditKeyRef = React.useRef(null);
@@ -10634,23 +10218,36 @@ const Chat = ({
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: openHistory,
-    title: agentEnabled ? 'Agent 对话历史' : '历史对话',
+    title: agentEnabled ? 'Agent 历史对话' : '历史对话',
+    "aria-label": "\u5386\u53F2\u5BF9\u8BDD",
     style: {
-      height: 24,
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 5,
-      padding: '0 7px',
+      height: 28,
+      width: 24,
+      display: 'inline-grid',
+      placeItems: 'center',
+      padding: 0,
       borderRadius: 7,
       background: historyOpen ? 'var(--panel-2)' : 'transparent',
       border: '1px solid ' + (historyOpen ? 'var(--line)' : 'transparent'),
       color: historyOpen ? 'var(--ink)' : 'var(--ink-3)',
       cursor: 'pointer',
-      fontSize: 10.5
+      fontSize: 11
+    },
+    onMouseEnter: e => {
+      if (!historyOpen) {
+        e.currentTarget.style.background = 'var(--panel-2)';
+        e.currentTarget.style.color = 'var(--ink)';
+      }
+    },
+    onMouseLeave: e => {
+      if (!historyOpen) {
+        e.currentTarget.style.background = 'transparent';
+        e.currentTarget.style.color = 'var(--ink-3)';
+      }
     }
   }, /*#__PURE__*/React.createElement(I.file, {
-    size: 11
-  }), /*#__PURE__*/React.createElement("span", null, "\u5386\u53F2")), historyOpen && /*#__PURE__*/React.createElement("div", {
+    size: 14
+  })), historyOpen && /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'absolute',
       top: 30,
@@ -10669,7 +10266,7 @@ const Chat = ({
     className: "mono",
     style: {
       padding: '6px 8px 7px',
-      fontSize: 9.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.06em'
@@ -10693,9 +10290,14 @@ const Chat = ({
     return /*#__PURE__*/React.createElement("div", {
       key: session.id,
       onMouseEnter: () => setHoveredHistoryId(session.id),
-      onMouseLeave: () => setHoveredHistoryId(function (prev) {
-        return prev === session.id ? '' : prev;
-      }),
+      onMouseLeave: () => {
+        setHoveredHistoryId(function (prev) {
+          return prev === session.id ? '' : prev;
+        });
+        setConfirmDeleteId(function (prev) {
+          return prev === session.id ? '' : prev;
+        });
+      },
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -10703,31 +10305,6 @@ const Chat = ({
         padding: '2px 0'
       }
     }, /*#__PURE__*/React.createElement("button", {
-      onClick: e => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (agentEnabled) deleteAgentProjectHistory(session.id);else deleteAiChatHistory(session.id);
-      },
-      title: "\u5220\u9664",
-      style: {
-        width: 18,
-        height: 18,
-        flexShrink: 0,
-        display: 'grid',
-        placeItems: 'center',
-        borderRadius: 6,
-        background: 'transparent',
-        border: 'none',
-        color: 'var(--ink-3)',
-        cursor: 'pointer',
-        padding: 0,
-        opacity: hoveredHistoryId === session.id ? 1 : 0,
-        pointerEvents: hoveredHistoryId === session.id ? 'auto' : 'none',
-        transition: 'opacity 120ms ease'
-      }
-    }, /*#__PURE__*/React.createElement(I.close, {
-      size: 10
-    })), /*#__PURE__*/React.createElement("button", {
       onClick: () => {
         if (agentEnabled) restoreAgentProjectSession(session.id);else restoreAiChatSession(session.id);
       },
@@ -10740,7 +10317,7 @@ const Chat = ({
         background: activeId === session.id ? 'var(--panel-2)' : 'transparent',
         border: '1px solid ' + (activeId === session.id ? 'var(--line-2)' : 'transparent'),
         color: activeId === session.id ? 'var(--ink)' : 'var(--ink-2)',
-        fontSize: 11.5,
+        fontSize: 12,
         cursor: 'pointer'
       },
       title: title
@@ -10753,11 +10330,40 @@ const Chat = ({
     }, title), metaLine && /*#__PURE__*/React.createElement("div", {
       className: "mono",
       style: {
-        fontSize: 9.5,
+        fontSize: 11,
         color: 'var(--ink-3)',
         marginTop: 3
       }
-    }, metaLine)));
+    }, metaLine)), (hoveredHistoryId === session.id || confirmDeleteId === session.id) && /*#__PURE__*/React.createElement("button", {
+      onClick: e => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (confirmDeleteId !== session.id) {
+          setConfirmDeleteId(session.id);
+          return;
+        }
+        setConfirmDeleteId('');
+        if (agentEnabled) deleteAgentProjectHistory(session.id);else deleteAiChatHistory(session.id);
+      },
+      title: confirmDeleteId === session.id ? '再点一次删除' : '删除',
+      "aria-label": confirmDeleteId === session.id ? '确认删除' : '删除',
+      style: {
+        height: 22,
+        minWidth: 22,
+        flexShrink: 0,
+        display: 'grid',
+        placeItems: 'center',
+        borderRadius: 6,
+        padding: confirmDeleteId === session.id ? '0 7px' : 0,
+        background: confirmDeleteId === session.id ? 'var(--danger)' : 'transparent',
+        border: 'none',
+        color: confirmDeleteId === session.id ? 'white' : 'var(--ink-3)',
+        fontSize: 11,
+        cursor: 'pointer'
+      }
+    }, confirmDeleteId === session.id ? '删除' : /*#__PURE__*/React.createElement(I.trash, {
+      size: 11
+    })));
   })));
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -10774,104 +10380,172 @@ const Chat = ({
       flexShrink: 0,
       display: 'flex',
       alignItems: 'center',
-      padding: '0 14px',
-      gap: 8,
+      padding: '0 10px 0 12px',
+      gap: 2,
       borderBottom: '1px solid var(--line)'
     }
   }, /*#__PURE__*/React.createElement("div", {
+    ref: modeMenuRef,
     style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 7
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      width: 7,
-      height: 7,
-      borderRadius: 99,
-      background: isLoading ? 'var(--accent)' : 'var(--ok)',
-      animation: isLoading ? 'pulse 1.2s ease-in-out infinite' : 'none'
-    }
-  }), /*#__PURE__*/React.createElement("button", {
-    onClick: startNewAiChat,
-    title: isLoading ? '生成中暂不可新建对话' : agentEnabled ? '开启新的 Agent 对话' : '开启新对话',
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
-      letterSpacing: '-0.01em',
-      color: 'var(--ink)',
-      background: 'transparent',
-      border: 'none',
-      padding: 0,
-      cursor: isLoading ? 'not-allowed' : 'pointer'
-    }
-  }, agentEnabled ? 'Agent助手' : 'Ai助手'), agentEnabled && /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 10.5,
-      color: 'var(--accent-ink)',
-      background: 'var(--accent-soft)',
-      border: '1px solid transparent',
-      borderRadius: 999,
-      padding: '2px 6px',
-      lineHeight: 1
-    }
-  }, "Agent"), /*#__PURE__*/React.createElement("span", {
-    className: "mono",
-    style: {
-      fontSize: 10,
-      color: 'var(--ink-3)'
-    }
-  }, isLoading ? 'working…' : messages.length === 0 ? 'ready' : messages.length + ' messages')), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 2,
-      padding: 2,
-      borderRadius: 8,
-      background: 'var(--panel-2)'
+      position: 'relative'
     }
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
-    onClick: () => {
-      if (agentEnabled) toggleAgentMode();
-    },
+    onClick: () => setModeMenuOpen(v => !v),
+    "aria-haspopup": "menu",
+    "aria-expanded": modeMenuOpen,
+    title: "\u5207\u6362\u6A21\u5F0F",
     style: {
-      height: 26,
-      padding: '0 10px',
-      borderRadius: 6,
+      height: 28,
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 4,
+      padding: '0 6px 0 8px',
+      marginLeft: -6,
+      borderRadius: 7,
+      background: modeMenuOpen ? 'var(--panel-2)' : 'transparent',
       border: 'none',
-      background: agentEnabled ? 'transparent' : 'var(--panel)',
-      color: agentEnabled ? 'var(--ink-3)' : 'var(--ink)',
-      fontSize: 12,
-      fontWeight: agentEnabled ? 500 : 700,
-      cursor: agentEnabled ? 'pointer' : 'default',
-      boxShadow: agentEnabled ? 'none' : '0 0 0 1px var(--line)'
+      color: 'var(--ink)',
+      fontSize: 13,
+      fontWeight: 600,
+      letterSpacing: '-0.01em',
+      cursor: 'pointer'
+    },
+    onMouseEnter: e => {
+      if (!modeMenuOpen) e.currentTarget.style.background = 'var(--panel-2)';
+    },
+    onMouseLeave: e => {
+      if (!modeMenuOpen) e.currentTarget.style.background = 'transparent';
     }
-  }, "Chat"), /*#__PURE__*/React.createElement("button", {
+  }, agentEnabled ? /*#__PURE__*/React.createElement(I.route, {
+    size: 14,
+    style: {
+      color: 'var(--ink-2)',
+      marginRight: 2
+    }
+  }) : /*#__PURE__*/React.createElement(I.sparkles, {
+    size: 14,
+    style: {
+      color: 'var(--ink-2)',
+      marginRight: 2
+    }
+  }), agentEnabled ? 'Agent' : 'AI助手', /*#__PURE__*/React.createElement(I.chevronDown, {
+    size: 12,
+    style: {
+      color: 'var(--ink-3)',
+      transform: modeMenuOpen ? 'rotate(180deg)' : 'none'
+    }
+  })), modeMenuOpen && /*#__PURE__*/React.createElement("div", {
+    role: "menu",
+    style: {
+      position: 'absolute',
+      top: 32,
+      left: -6,
+      width: 160,
+      borderRadius: 10,
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      boxShadow: '0 10px 24px rgba(15, 23, 42, 0.08)',
+      zIndex: 30,
+      padding: 4
+    }
+  }, [{
+    key: 'chat',
+    label: 'AI助手',
+    icon: I.sparkles,
+    on: !agentEnabled
+  }, {
+    key: 'agent',
+    label: 'Agent',
+    icon: I.route,
+    on: agentEnabled
+  }].map(function (opt) {
+    const OptIcon = opt.icon;
+    return /*#__PURE__*/React.createElement("button", {
+      key: opt.key,
+      type: "button",
+      role: "menuitemradio",
+      "aria-checked": opt.on,
+      onClick: () => {
+        setModeMenuOpen(false);
+        if (!opt.on) toggleAgentMode();
+      },
+      style: {
+        width: '100%',
+        height: 32,
+        padding: '0 8px',
+        borderRadius: 7,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        background: opt.on ? 'var(--panel-2)' : 'transparent',
+        border: 'none',
+        color: opt.on ? 'var(--ink)' : 'var(--ink-2)',
+        fontSize: 12,
+        fontWeight: opt.on ? 600 : 400,
+        cursor: 'pointer',
+        textAlign: 'left'
+      },
+      onMouseEnter: e => {
+        if (!opt.on) e.currentTarget.style.background = 'var(--panel-2)';
+      },
+      onMouseLeave: e => {
+        if (!opt.on) e.currentTarget.style.background = 'transparent';
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement(OptIcon, {
+      size: 14,
+      style: {
+        color: 'var(--ink-2)'
+      }
+    }), opt.label), opt.on && /*#__PURE__*/React.createElement(I.check, {
+      size: 12
+    }));
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }), historyControl, /*#__PURE__*/React.createElement("button", {
     type: "button",
-    onClick: () => {
-      if (!agentEnabled) toggleAgentMode();
-    },
+    onClick: startNewAiChat,
+    disabled: isLoading,
+    title: isLoading ? '生成中暂不可新建对话' : agentEnabled ? '新建 Agent 对话' : '新对话',
+    "aria-label": "\u65B0\u5BF9\u8BDD",
     style: {
-      height: 26,
-      padding: '0 10px',
-      borderRadius: 6,
-      border: 'none',
-      background: agentEnabled ? 'var(--panel)' : 'transparent',
-      color: agentEnabled ? 'var(--ink)' : 'var(--ink-3)',
-      fontSize: 12,
-      fontWeight: agentEnabled ? 700 : 500,
-      cursor: agentEnabled ? 'default' : 'pointer',
-      boxShadow: agentEnabled ? '0 0 0 1px var(--line)' : 'none'
+      marginLeft: -2,
+      height: 28,
+      width: 24,
+      display: 'inline-grid',
+      placeItems: 'center',
+      padding: 0,
+      borderRadius: 7,
+      background: 'transparent',
+      border: '1px solid transparent',
+      color: 'var(--ink-3)',
+      fontSize: 11,
+      cursor: isLoading ? 'not-allowed' : 'pointer',
+      opacity: isLoading ? 0.5 : 1,
+      flexShrink: 0
+    },
+    onMouseEnter: e => {
+      if (!isLoading) {
+        e.currentTarget.style.background = 'var(--panel-2)';
+        e.currentTarget.style.color = 'var(--ink)';
+      }
+    },
+    onMouseLeave: e => {
+      e.currentTarget.style.background = 'transparent';
+      e.currentTarget.style.color = 'var(--ink-3)';
     }
-  }, "Agent"))), /*#__PURE__*/React.createElement(ChatSessionBar, {
-    messages: messages,
-    historyControl: historyControl
-  }), publishDialog && /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(I.plus, {
+    size: 18,
+    stroke: 1.2
+  }))), publishDialog && /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'fixed',
       inset: 0,
@@ -10913,7 +10587,7 @@ const Chat = ({
     size: 14
   })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 14,
+      fontSize: 13,
       fontWeight: 700,
       color: 'var(--ink)'
     }
@@ -11030,9 +10704,7 @@ const Chat = ({
       cursor: publishDialog.submitting ? 'default' : 'pointer',
       opacity: publishDialog.submitting ? 0.7 : 1
     }
-  }, publishDialog.submitting ? '发布中…' : '确认发布')))), state === 'empty' && messages.length === 0 && /*#__PURE__*/React.createElement(ChatEmpty, {
-    greetingKey: greetingResetKey
-  }), state === 'empty' && messages.length > 0 && /*#__PURE__*/React.createElement(ChatReturned, {
+  }, publishDialog.submitting ? '发布中…' : '确认发布')))), /*#__PURE__*/React.createElement(ChatReturned, {
     messages: messages,
     template: template,
     onCompose: handleCompose,
@@ -11042,20 +10714,11 @@ const Chat = ({
     onQuickReply: handleQuickReply,
     agentEnabled: agentEnabled,
     onPublishInspiration: handlePublishInspiration,
-    onUnpublishInspiration: handleUnpublishInspiration
-  }), state === 'generating' && /*#__PURE__*/React.createElement(ChatGenerating, {
-    user: user
-  }), state === 'returned' && /*#__PURE__*/React.createElement(ChatReturned, {
-    messages: messages,
-    template: template,
-    onCompose: handleCompose,
-    isGenerating: isLoading,
-    user: user,
-    greetingKey: greetingResetKey,
-    onQuickReply: handleQuickReply,
-    agentEnabled: agentEnabled,
-    onPublishInspiration: handlePublishInspiration,
-    onUnpublishInspiration: handleUnpublishInspiration
+    onUnpublishInspiration: handleUnpublishInspiration,
+    onRetry: handleRetryAiImage,
+    onEditResend: handleEditResend,
+    agentSkills: agentSkills,
+    onPickSkill: handlePickSkill
   }), /*#__PURE__*/React.createElement(Composer, {
     onSend: handleSend,
     onParseTable: handleParseTable,
@@ -11067,141 +10730,13 @@ const Chat = ({
     onToggleAgent: toggleAgentMode,
     resetKey: composerResetKey,
     onRequestSpecialTemplate: onRequestSpecialTemplate,
-    seedPrompt: seedPrompt,
-    onSeedConsumed: onSeedConsumed,
-    canvasReferenceSelection: canvasReferenceSelection
+    seedPrompt: localSeed || seedPrompt,
+    onSeedConsumed: handleComposerSeedConsumed,
+    canvasReferenceSelection: canvasReferenceSelection,
+    agentSkills: agentSkills
   }));
 };
 window.Chat = Chat;
-
-// src/Tweaks.jsx
-// Tweaks panel — toggle between chat/canvas states
-
-const Tweaks = ({
-  visible,
-  tweaks,
-  onChange,
-  onClose
-}) => {
-  if (!visible) return null;
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: 'fixed',
-      bottom: 16,
-      right: 16,
-      zIndex: 50,
-      width: 260,
-      borderRadius: 12,
-      background: 'var(--panel)',
-      border: '1px solid var(--line)',
-      boxShadow: '0 10px 40px rgba(20,22,40,0.14), 0 2px 8px rgba(20,22,40,0.05)',
-      overflow: 'hidden'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: '10px 12px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8,
-      borderBottom: '1px solid var(--line-2)'
-    }
-  }, /*#__PURE__*/React.createElement(I.settings, {
-    size: 13,
-    style: {
-      color: 'var(--ink-2)'
-    }
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      fontSize: 12,
-      fontWeight: 600
-    }
-  }, "Tweaks"), /*#__PURE__*/React.createElement("button", {
-    onClick: onClose,
-    style: {
-      padding: 3,
-      color: 'var(--ink-3)',
-      borderRadius: 4
-    }
-  }, /*#__PURE__*/React.createElement(I.close, {
-    size: 12
-  }))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: 12,
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 12
-    }
-  }, /*#__PURE__*/React.createElement(TweakRow, {
-    label: "Chat state",
-    sub: "Empty \xB7 Generating \xB7 Returned",
-    value: tweaks.chatState,
-    options: [{
-      k: 'empty',
-      l: 'Empty'
-    }, {
-      k: 'generating',
-      l: 'Generating'
-    }, {
-      k: 'returned',
-      l: 'Returned'
-    }],
-    onChange: v => onChange({
-      chatState: v
-    })
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: '8px 12px',
-      borderTop: '1px solid var(--line-2)',
-      fontSize: 10,
-      color: 'var(--ink-3)'
-    },
-    className: "mono"
-  }, "Changes persist via host"));
-};
-const TweakRow = ({
-  label,
-  sub,
-  value,
-  options,
-  onChange
-}) => /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-  style: {
-    fontSize: 11,
-    fontWeight: 500,
-    color: 'var(--ink)',
-    marginBottom: 2
-  }
-}, label), sub && /*#__PURE__*/React.createElement("div", {
-  className: "mono",
-  style: {
-    fontSize: 9.5,
-    color: 'var(--ink-3)',
-    marginBottom: 6
-  }
-}, sub), /*#__PURE__*/React.createElement("div", {
-  style: {
-    display: 'flex',
-    background: 'var(--panel-2)',
-    borderRadius: 6,
-    padding: 2,
-    border: '1px solid var(--line-2)'
-  }
-}, options.map(o => /*#__PURE__*/React.createElement("button", {
-  key: o.k,
-  onClick: () => onChange(o.k),
-  style: {
-    flex: 1,
-    fontSize: 11,
-    padding: '5px 6px',
-    borderRadius: 4,
-    background: value === o.k ? 'var(--panel)' : 'transparent',
-    color: value === o.k ? 'var(--ink)' : 'var(--ink-3)',
-    fontWeight: value === o.k ? 500 : 400,
-    boxShadow: value === o.k ? 'var(--shadow-1)' : 'none'
-  }
-}, o.l))));
-window.Tweaks = Tweaks;
 
 // src/AdminPage.jsx
 function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
@@ -11283,9 +10818,9 @@ const ADMIN_CSS = `
   }
   .df-admin-brand { padding: 4px 10px 22px; }
   .df-admin-brandmark { width: 30px; height: 30px; margin-bottom: 12px; }
-  .df-admin-brandname { font-size: 16px; font-weight: 700; letter-spacing: -.025em; }
-  .df-admin-brandmeta { margin-top: 3px; font-size: 10px; color: #8e938a; letter-spacing: .14em; text-transform: uppercase; }
-  .df-admin-navlabel { padding: 0 10px 7px; color: #777c73; font-size: 9px; letter-spacing: .16em; text-transform: uppercase; }
+  .df-admin-brandname { font-size: 15px; font-weight: 700; letter-spacing: -.025em; }
+  .df-admin-brandmeta { margin-top: 3px; font-size: 11px; color: #8e938a; letter-spacing: .14em; text-transform: uppercase; }
+  .df-admin-navlabel { padding: 0 10px 7px; color: #777c73; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; }
   .df-admin-nav { display: flex; flex-direction: column; gap: 3px; }
   .df-admin-navbutton {
     width: 100%; height: 38px; display: flex; align-items: center; gap: 10px;
@@ -11305,11 +10840,11 @@ const ADMIN_CSS = `
     width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
     color: #151714; background: #d7ff60; font-size: 11px; font-weight: 700;
   }
-  .df-admin-username { min-width: 0; font-size: 11.5px; color: #f5f5f2; overflow: hidden; text-overflow: ellipsis; }
-  .df-admin-role { margin-top: 1px; color: #7f847b; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+  .df-admin-username { min-width: 0; font-size: 12px; color: #f5f5f2; overflow: hidden; text-overflow: ellipsis; }
+  .df-admin-role { margin-top: 1px; color: #7f847b; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
   .df-admin-back {
     width: 100%; height: 32px; border: 1px solid #343733; border-radius: 7px;
-    color: #aeb3aa; background: transparent; cursor: pointer; font-size: 10.5px;
+    color: #aeb3aa; background: transparent; cursor: pointer; font-size: 11px;
   }
   .df-admin-back:hover { color: #fff; border-color: #555a52; }
   .df-admin-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -11319,7 +10854,7 @@ const ADMIN_CSS = `
     backdrop-filter: blur(12px);
   }
   .df-admin-title { font-size: 18px; font-weight: 680; letter-spacing: -.03em; }
-  .df-admin-subtitle { margin-top: 2px; color: var(--admin-muted); font-size: 10.5px; }
+  .df-admin-subtitle { margin-top: 2px; color: var(--admin-muted); font-size: 11px; }
   .df-admin-headtools { margin-left: auto; display: flex; align-items: center; gap: 8px; }
   .df-admin-control {
     height: 32px; padding: 0 10px; border: 1px solid var(--admin-line);
@@ -11327,13 +10862,13 @@ const ADMIN_CSS = `
   }
   button.df-admin-control { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
   button.df-admin-control:hover { border-color: var(--admin-line-strong); background: #fafaf8; }
-  .df-admin-updated { color: var(--admin-faint); font-size: 9.5px; }
+  .df-admin-updated { color: var(--admin-faint); font-size: 11px; }
   .df-admin-scroll { flex: 1; min-height: 0; overflow: auto; padding: 22px 26px 42px; }
   .df-admin-content { width: min(1460px, 100%); margin: 0 auto; }
   .df-admin-alert {
     display: flex; align-items: center; gap: 10px; min-height: 42px; margin-bottom: 14px;
     padding: 8px 12px; border-radius: 8px; color: #814515;
-    background: var(--admin-amber-soft); border: 1px solid #f0d7b4; font-size: 11.5px;
+    background: var(--admin-amber-soft); border: 1px solid #f0d7b4; font-size: 12px;
   }
   .df-admin-alertdot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #dc8529; }
   .df-admin-alertclose {
@@ -11346,10 +10881,10 @@ const ADMIN_CSS = `
     min-height: 126px; padding: 17px 18px; border: 1px solid var(--admin-line);
     border-radius: 10px; background: var(--admin-surface);
   }
-  .df-admin-metrichead { display: flex; align-items: center; justify-content: space-between; color: var(--admin-muted); font-size: 10.5px; }
+  .df-admin-metrichead { display: flex; align-items: center; justify-content: space-between; color: var(--admin-muted); font-size: 11px; }
   .df-admin-metricdot { width: 7px; height: 7px; border-radius: 50%; background: var(--metric-color, #9b9f98); }
-  .df-admin-metricvalue { margin-top: 18px; font-size: 33px; font-weight: 680; line-height: 1; letter-spacing: -.055em; font-variant-numeric: tabular-nums; }
-  .df-admin-metricfoot { margin-top: 10px; color: var(--admin-faint); font-size: 9.5px; }
+  .df-admin-metricvalue { margin-top: 18px; font-size: 24px; font-weight: 680; line-height: 1; letter-spacing: -.055em; font-variant-numeric: tabular-nums; }
+  .df-admin-metricfoot { margin-top: 10px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-metricfoot strong { color: var(--admin-muted); font-weight: 550; }
   .df-admin-health {
     margin-top: 10px; padding: 16px 18px 17px; border: 1px solid var(--admin-line);
@@ -11365,7 +10900,7 @@ const ADMIN_CSS = `
   .df-admin-healthmark.is-degraded { background: var(--admin-red); box-shadow: 0 0 0 3px var(--admin-red-soft); }
   .df-admin-healthmark.is-unknown { background: #b9bdb6; box-shadow: 0 0 0 3px #f0f1ed; }
   .df-admin-healthname { font-size: 12px; font-weight: 650; }
-  .df-admin-healthmeta { color: var(--admin-faint); font-size: 9.5px; }
+  .df-admin-healthmeta { color: var(--admin-faint); font-size: 11px; }
   .df-admin-healthrate { margin-left: auto; color: var(--admin-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
   .df-admin-healthrail {
     display: grid; grid-template-columns: repeat(72, minmax(2px, 1fr)); gap: 3px;
@@ -11375,7 +10910,7 @@ const ADMIN_CSS = `
   .df-admin-healthbar.is-healthy { background: #55bc91; }
   .df-admin-healthbar.is-warning { background: #e7ad42; }
   .df-admin-healthbar.is-degraded { background: #df6b59; }
-  .df-admin-healthfoot { display: flex; align-items: center; gap: 12px; margin-top: 9px; color: var(--admin-faint); font-size: 8.5px; }
+  .df-admin-healthfoot { display: flex; align-items: center; gap: 12px; margin-top: 9px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-healthfoot span { display: inline-flex; align-items: center; gap: 4px; }
   .df-admin-healthfoot i { width: 5px; height: 5px; border-radius: 50%; background: #dfe2dc; }
   .df-admin-healthfoot .is-healthy i { background: #55bc91; }
@@ -11388,8 +10923,8 @@ const ADMIN_CSS = `
   }
   .df-admin-cardhead { min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--admin-line); }
   .df-admin-cardtitle { font-size: 12px; font-weight: 630; }
-  .df-admin-cardmeta { color: var(--admin-faint); font-size: 9.5px; }
-  .df-admin-cardaction { margin-left: auto; color: var(--admin-muted); border: 0; background: none; cursor: pointer; font-size: 10px; }
+  .df-admin-cardmeta { color: var(--admin-faint); font-size: 11px; }
+  .df-admin-cardaction { margin-left: auto; color: var(--admin-muted); border: 0; background: none; cursor: pointer; font-size: 11px; }
   .df-admin-chart { height: 218px; display: flex; align-items: stretch; gap: 8px; padding: 22px 18px 12px; }
   .df-admin-baritem { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; gap: 6px; }
   .df-admin-bartrack { height: 158px; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; border-radius: 4px 4px 2px 2px; background: #f0f1ed; }
@@ -11398,7 +10933,7 @@ const ADMIN_CSS = `
   .df-admin-bar.is-agent { background: #5f6fe8; }
   .df-admin-bar.is-compose { background: #55bc91; }
   .df-admin-bar.is-special { background: #e7ad42; }
-  .df-admin-barlabel { color: var(--admin-faint); text-align: center; font-size: 8.5px; white-space: nowrap; }
+  .df-admin-barlabel { color: var(--admin-faint); text-align: center; font-size: 11px; white-space: nowrap; }
   .df-admin-legend { display: inline-flex; align-items: center; gap: 9px; }
   .df-admin-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   .df-admin-legend i { width: 5px; height: 5px; border-radius: 50%; background: #2563eb; }
@@ -11424,16 +10959,16 @@ const ADMIN_CSS = `
   .df-admin-scroll-y::-webkit-scrollbar-thumb:hover { background: #b8bcb2; }
   .df-admin-rankrow { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 45px; border-bottom: 1px solid #eff0ec; }
   .df-admin-rankrow:last-child { border-bottom: 0; }
-  .df-admin-rankno { color: var(--admin-faint); font: 9.5px "JetBrains Mono", monospace; }
-  .df-admin-rankname { overflow: hidden; font-size: 10.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-  .df-admin-rankmeta { margin-top: 2px; color: var(--admin-faint); font-size: 8.5px; }
+  .df-admin-rankno { color: var(--admin-faint); font: 11px "JetBrains Mono", monospace; }
+  .df-admin-rankname { overflow: hidden; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .df-admin-rankmeta { margin-top: 2px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-rankvalue { font-size: 15px; font-weight: 680; font-variant-numeric: tabular-nums; }
-  .df-admin-rankunit { margin-left: 3px; color: var(--admin-faint); font-size: 8px; font-weight: 400; }
+  .df-admin-rankunit { margin-left: 3px; color: var(--admin-faint); font-size: 11px; font-weight: 400; }
   .df-admin-tablewrap { overflow: auto; }
-  .df-admin-table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+  .df-admin-table { width: 100%; border-collapse: collapse; font-size: 11px; }
   .df-admin-table th {
     height: 38px; padding: 0 12px; color: var(--admin-muted); background: #fafaf8;
-    border-bottom: 1px solid var(--admin-line); text-align: left; font-size: 9.5px; font-weight: 550; white-space: nowrap;
+    border-bottom: 1px solid var(--admin-line); text-align: left; font-size: 11px; font-weight: 550; white-space: nowrap;
   }
   .df-admin-table td { height: 45px; padding: 7px 12px; border-bottom: 1px solid #eff0ec; vertical-align: middle; }
   .df-admin-table tbody tr:last-child td { border-bottom: 0; }
@@ -11441,7 +10976,7 @@ const ADMIN_CSS = `
   .df-admin-table tbody tr.is-clickable:hover { background: #fafaf8; }
   .df-admin-status {
     display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 7px;
-    border-radius: 99px; color: #666c63; background: #f1f2ef; white-space: nowrap; font-size: 9.5px;
+    border-radius: 99px; color: #666c63; background: #f1f2ef; white-space: nowrap; font-size: 11px;
   }
   .df-admin-status::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #9ba097; }
   .df-admin-status.is-success { color: #157a4e; background: var(--admin-green-soft); }
@@ -11451,7 +10986,7 @@ const ADMIN_CSS = `
   .df-admin-status.is-active { color: #976018; background: var(--admin-amber-soft); }
   .df-admin-status.is-active::before { background: var(--admin-amber); animation: adminPulse 1.4s infinite; }
   @keyframes adminPulse { 50% { opacity: .35; } }
-  .df-admin-mono { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; font-size: 9.5px; }
+  .df-admin-mono { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; font-size: 11px; }
   .df-admin-muted { color: var(--admin-muted); }
   .df-admin-faint { color: var(--admin-faint); }
   .df-admin-ellipsis { max-width: 330px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -11460,19 +10995,19 @@ const ADMIN_CSS = `
   .df-admin-search { position: relative; min-width: 220px; flex: 1; max-width: 400px; }
   .df-admin-search svg { position: absolute; left: 10px; top: 9px; color: var(--admin-faint); pointer-events: none; }
   .df-admin-search input { width: 100%; padding-left: 31px; }
-  .df-admin-pageinfo { margin-left: auto; color: var(--admin-faint); font-size: 9.5px; }
+  .df-admin-pageinfo { margin-left: auto; color: var(--admin-faint); font-size: 11px; }
   .df-admin-pagebutton { width: 32px; padding: 0; justify-content: center; }
   .df-admin-servicegrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
   .df-admin-service { min-height: 146px; padding: 16px; border: 1px solid var(--admin-line); border-radius: 10px; background: #fff; }
   .df-admin-servicetop { display: flex; align-items: flex-start; gap: 10px; }
   .df-admin-serviceicon { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; color: #555b53; background: #f1f2ee; }
-  .df-admin-servicename { font-size: 11.5px; font-weight: 620; }
-  .df-admin-servicedesc { margin-top: 3px; color: var(--admin-faint); font-size: 9px; }
+  .df-admin-servicename { font-size: 12px; font-weight: 620; }
+  .df-admin-servicedesc { margin-top: 3px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-servicestate { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: #a7aba4; }
   .df-admin-servicestate.is-up { background: var(--admin-green); box-shadow: 0 0 0 4px var(--admin-green-soft); }
   .df-admin-servicestate.is-down { background: var(--admin-red); box-shadow: 0 0 0 4px var(--admin-red-soft); }
   .df-admin-servicestate.is-warn { background: var(--admin-amber); box-shadow: 0 0 0 4px var(--admin-amber-soft); }
-  .df-admin-servicebody { margin-top: 18px; color: var(--admin-muted); font-size: 9.5px; line-height: 1.65; word-break: break-all; }
+  .df-admin-servicebody { margin-top: 18px; color: var(--admin-muted); font-size: 11px; line-height: 1.65; word-break: break-all; }
   .df-admin-probelist { max-height: 410px; overflow: auto; padding: 0 16px; }
   .df-admin-probe {
     min-height: 54px; display: grid; grid-template-columns: 10px minmax(120px, 1fr) 110px 82px 38px;
@@ -11483,8 +11018,8 @@ const ADMIN_CSS = `
   .df-admin-probedot.is-done { background: var(--admin-green); box-shadow: 0 0 0 3px var(--admin-green-soft); }
   .df-admin-probedot.is-failed { background: var(--admin-red); box-shadow: 0 0 0 3px var(--admin-red-soft); }
   .df-admin-probedot.is-running { background: var(--admin-amber); box-shadow: 0 0 0 3px var(--admin-amber-soft); }
-  .df-admin-probetime { font-size: 10.5px; font-weight: 610; font-variant-numeric: tabular-nums; }
-  .df-admin-probemeta { color: var(--admin-faint); font-size: 9px; font-variant-numeric: tabular-nums; }
+  .df-admin-probetime { font-size: 11px; font-weight: 610; font-variant-numeric: tabular-nums; }
+  .df-admin-probemeta { color: var(--admin-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
   .df-admin-probethumb {
     width: 36px; height: 36px; display: block; overflow: hidden;
     border: 1px solid var(--admin-line); border-radius: 6px; background: #eff0ec;
@@ -11492,20 +11027,20 @@ const ADMIN_CSS = `
   .df-admin-probethumb img { width: 100%; height: 100%; display: block; object-fit: cover; }
   .df-admin-probenoimage { width: 36px; height: 36px; border-radius: 6px; background: #f1f2ee; }
   .df-admin-probeerror {
-    margin-top: 3px; overflow: hidden; color: #a73535; font-size: 8.5px;
+    margin-top: 3px; overflow: hidden; color: #a73535; font-size: 11px;
     text-overflow: ellipsis; white-space: nowrap;
   }
   .df-admin-form {
     display: grid; grid-template-columns: 1fr 1fr 1fr 110px auto auto; gap: 8px; align-items: center;
     padding: 14px; border-bottom: 1px solid var(--admin-line); background: #fafaf8;
   }
-  .df-admin-useridentity strong { display: block; font-size: 10.5px; }
-  .df-admin-useridentity span { display: block; margin-top: 3px; color: var(--admin-faint); font: 8.5px "JetBrains Mono", monospace; }
+  .df-admin-useridentity strong { display: block; font-size: 11px; }
+  .df-admin-useridentity span { display: block; margin-top: 3px; color: var(--admin-faint); font: 11px "JetBrains Mono", monospace; }
   .df-admin-primary { color: #fff; background: #1c1e1b; border-color: #1c1e1b; cursor: pointer; }
   .df-admin-primary:hover { color: #fff; background: #2a2d29; }
-  .df-admin-linkbutton { border: 0; background: none; color: #4f5ee8; cursor: pointer; font-size: 9.5px; }
+  .df-admin-linkbutton { border: 0; background: none; color: #4f5ee8; cursor: pointer; font-size: 11px; }
   .df-admin-dangerbutton { color: var(--admin-red); }
-  .df-admin-error { padding: 10px 12px; margin-bottom: 10px; border-radius: 7px; color: #a73535; background: var(--admin-red-soft); font-size: 10.5px; }
+  .df-admin-error { padding: 10px 12px; margin-bottom: 10px; border-radius: 7px; color: #a73535; background: var(--admin-red-soft); font-size: 11px; }
   .df-admin-drawerbackdrop { position: fixed; inset: 0; z-index: 90; background: rgba(18,20,17,.16); }
   .df-admin-drawer {
     position: fixed; z-index: 91; top: 0; right: 0; bottom: 0; width: min(620px, 94vw);
@@ -11514,19 +11049,19 @@ const ADMIN_CSS = `
   .df-admin-drawerhead { display: flex; align-items: center; gap: 10px; padding-bottom: 17px; border-bottom: 1px solid var(--admin-line); }
   .df-admin-drawertitle { font-size: 15px; font-weight: 680; }
   .df-admin-drawerclose { margin-left: auto; width: 30px; padding: 0; justify-content: center; }
-  .df-admin-detailgrid { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 17px 0; font-size: 10.5px; border-bottom: 1px solid var(--admin-line); }
+  .df-admin-detailgrid { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 17px 0; font-size: 11px; border-bottom: 1px solid var(--admin-line); }
   .df-admin-detailgrid dt { color: var(--admin-faint); }
   .df-admin-detailgrid dd { margin: 0; color: var(--admin-ink); word-break: break-word; }
   .df-admin-detailsection { padding: 17px 0; border-bottom: 1px solid var(--admin-line); }
   .df-admin-detailsection:last-child { border-bottom: 0; }
-  .df-admin-detailtitle { margin-bottom: 10px; color: var(--admin-muted); font-size: 9px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; }
+  .df-admin-detailtitle { margin-bottom: 10px; color: var(--admin-muted); font-size: 11px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; }
   .df-admin-detailcards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
   .df-admin-detailcard { min-width: 0; padding: 10px; border: 1px solid var(--admin-line); border-radius: 8px; background: #fafaf8; }
-  .df-admin-detailcard span { display: block; color: var(--admin-faint); font-size: 8.5px; }
-  .df-admin-detailcard strong { display: block; margin-top: 5px; overflow: hidden; color: var(--admin-ink); font-size: 10.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .df-admin-detailcard span { display: block; color: var(--admin-faint); font-size: 11px; }
+  .df-admin-detailcard strong { display: block; margin-top: 5px; overflow: hidden; color: var(--admin-ink); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
   .df-admin-prompt { margin-top: 8px; padding: 11px 12px; border: 1px solid var(--admin-line); border-radius: 8px; background: #fafaf8; }
   .df-admin-prompt:first-of-type { margin-top: 0; }
-  .df-admin-promptlabel { margin-bottom: 6px; color: var(--admin-faint); font-size: 8.5px; }
+  .df-admin-promptlabel { margin-bottom: 6px; color: var(--admin-faint); font-size: 11px; }
   .df-admin-prompttext { color: var(--admin-ink); font-size: 11px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
   .df-admin-resultimage { display: block; width: 100%; max-height: 320px; object-fit: contain; border: 1px solid var(--admin-line); border-radius: 8px; background: #f5f5f2; }
   .df-admin-references { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 12px; }
@@ -11535,8 +11070,8 @@ const ADMIN_CSS = `
   .df-admin-referencepreview img { display: block; width: 100%; height: 100%; object-fit: contain; }
   .df-admin-referencename { margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
   .df-admin-detailactions { display: flex; gap: 7px; margin-top: 9px; }
-  .df-admin-raw summary { margin-top: 12px; color: var(--admin-muted); cursor: pointer; font-size: 10px; }
-  .df-admin-code { margin-top: 14px; padding: 12px; border-radius: 8px; color: #d8ddd4; background: #20231f; font: 9.5px/1.6 "JetBrains Mono", monospace; white-space: pre-wrap; word-break: break-all; }
+  .df-admin-raw summary { margin-top: 12px; color: var(--admin-muted); cursor: pointer; font-size: 11px; }
+  .df-admin-code { margin-top: 14px; padding: 12px; border-radius: 8px; color: #d8ddd4; background: #20231f; font: 11px/1.6 "JetBrains Mono", monospace; white-space: pre-wrap; word-break: break-all; }
   @media (max-width: 1050px) {
     .df-admin { grid-template-columns: 74px minmax(0, 1fr); }
     .df-admin-brandname, .df-admin-brandmeta, .df-admin-navlabel, .df-admin-navbutton span, .df-admin-userline > div:last-child, .df-admin-back span { display: none; }
@@ -11576,7 +11111,7 @@ const ADMIN_CSS = `
   }
   @media (max-width: 520px) {
     .df-admin-metrics { grid-template-columns: 1fr; }
-    .df-admin-title { font-size: 16px; }
+    .df-admin-title { font-size: 15px; }
     .df-admin-subtitle { display: none; }
     .df-admin-headtools { margin-left: 0; }
     .df-admin-healthtop {
@@ -11910,41 +11445,61 @@ function AdminUserManagement({
   var updateRole = function (item) {
     if (busy || item.id === currentUser.id) return;
     var role = item.role === 'admin' ? 'user' : 'admin';
-    if (!window.confirm('将「' + adminUserLabel(item) + '」调整为' + (role === 'admin' ? '管理员' : '普通用户') + '？')) return;
-    setBusy(true);
-    setError('');
-    window.API.updateAdminUser(item.id, {
-      role: role
-    }).then(onReload).catch(function (err) {
-      setError(err.message || '更新失败');
-    }).finally(function () {
-      setBusy(false);
+    window.dfConfirm({
+      title: '调整账号角色',
+      message: '将「' + adminUserLabel(item) + '」调整为' + (role === 'admin' ? '管理员' : '普通用户') + '？'
+    }).then(function (ok) {
+      if (!ok) return;
+      setBusy(true);
+      setError('');
+      window.API.updateAdminUser(item.id, {
+        role: role
+      }).then(onReload).catch(function (err) {
+        setError(err.message || '更新失败');
+      }).finally(function () {
+        setBusy(false);
+      });
     });
   };
   var toggleTestStatus = function (item) {
     if (busy) return;
     var nextState = !item.is_test;
-    if (!window.confirm('将「' + adminUserLabel(item) + '」' + (nextState ? '标记为测试账号（将不计入后台统计与任务列表）' : '恢复为正常账号（将计入后台统计与任务列表）') + '？')) return;
-    setBusy(true);
-    setError('');
-    window.API.updateAdminUser(item.id, {
-      is_test: nextState
-    }).then(onReload).catch(function (err) {
-      setError(err.message || '测试标记更新失败');
-    }).finally(function () {
-      setBusy(false);
+    window.dfConfirm({
+      title: nextState ? '标记为测试账号' : '恢复为正常账号',
+      message: '将「' + adminUserLabel(item) + '」' + (nextState ? '标记为测试账号（将不计入后台统计与任务列表）' : '恢复为正常账号（将计入后台统计与任务列表）') + '？'
+    }).then(function (ok) {
+      if (!ok) return;
+      setBusy(true);
+      setError('');
+      window.API.updateAdminUser(item.id, {
+        is_test: nextState
+      }).then(onReload).catch(function (err) {
+        setError(err.message || '测试标记更新失败');
+      }).finally(function () {
+        setBusy(false);
+      });
     });
   };
   var resetPassword = function (item) {
-    if (busy || !window.confirm('重置「' + adminUserLabel(item) + '」的密码？')) return;
-    setBusy(true);
-    setError('');
-    window.API.resetAdminUserPassword(item.id).then(function () {
-      window.alert('密码已重置。该用户下次登录时会设置新密码。');
-    }).catch(function (err) {
-      setError(err.message || '重置失败');
-    }).finally(function () {
-      setBusy(false);
+    if (busy) return;
+    window.dfConfirm({
+      title: '重置密码',
+      message: '重置「' + adminUserLabel(item) + '」的密码？该用户下次登录时需要设置新密码。',
+      confirmText: '重置',
+      danger: true
+    }).then(function (ok) {
+      if (!ok) return;
+      setBusy(true);
+      setError('');
+      window.API.resetAdminUserPassword(item.id).then(function () {
+        window.dfToast('密码已重置。该用户下次登录时会设置新密码。', {
+          tone: 'ok'
+        });
+      }).catch(function (err) {
+        setError(err.message || '重置失败');
+      }).finally(function () {
+        setBusy(false);
+      });
     });
   };
   var updateDisplayName = function (item) {
@@ -11963,13 +11518,20 @@ function AdminUserManagement({
   };
   var deleteUser = function (item) {
     if (busy || item.id === currentUser.id) return;
-    if (!window.confirm('删除用户「' + adminUserLabel(item) + '」？该操作不会删除其历史任务。')) return;
-    setBusy(true);
-    setError('');
-    window.API.deleteAdminUser(item.id).then(onReload).catch(function (err) {
-      setError(err.message || '删除失败');
-    }).finally(function () {
-      setBusy(false);
+    window.dfConfirm({
+      title: '删除用户',
+      message: '删除用户「' + adminUserLabel(item) + '」？该操作不会删除其历史任务。',
+      confirmText: '删除',
+      danger: true
+    }).then(function (ok) {
+      if (!ok) return;
+      setBusy(true);
+      setError('');
+      window.API.deleteAdminUser(item.id).then(onReload).catch(function (err) {
+        setError(err.message || '删除失败');
+      }).finally(function () {
+        setBusy(false);
+      });
     });
   };
   return /*#__PURE__*/React.createElement("div", null, error ? /*#__PURE__*/React.createElement("div", {
@@ -11991,7 +11553,7 @@ function AdminUserManagement({
       display: 'flex',
       alignItems: 'center',
       gap: '5px',
-      fontSize: '11px',
+      fontSize: 11,
       color: 'var(--admin-muted)',
       cursor: 'pointer'
     }
@@ -12050,7 +11612,7 @@ function AdminUserManagement({
       display: 'flex',
       alignItems: 'center',
       gap: '5px',
-      fontSize: '11px',
+      fontSize: 11,
       color: 'var(--admin-muted)',
       cursor: 'pointer',
       whiteSpace: 'nowrap'
@@ -12084,7 +11646,7 @@ function AdminUserManagement({
         background: '#fef3c7',
         padding: '1px 5px',
         borderRadius: '3px',
-        fontSize: '10px',
+        fontSize: 11,
         fontWeight: 600
       }
     }, "\u6D4B\u8BD5") : null), /*#__PURE__*/React.createElement("td", null, item.total_jobs || 0), /*#__PURE__*/React.createElement("td", null, item.total_ai_images || 0), /*#__PURE__*/React.createElement("td", {
@@ -12901,7 +12463,7 @@ function AdminPage({
       style: {
         padding: 16,
         color: 'var(--admin-muted)',
-        fontSize: 10.5,
+        fontSize: 11,
         lineHeight: 1.8
       }
     }, "\u57FA\u7840\u670D\u52A1\u4F1A\u5728\u5237\u65B0\u65F6\u6267\u884C\u5B9E\u65F6\u63A2\u6D4B\u3002\u8BA2\u9605\u751F\u56FE\u7EBF\u8DEF\u5728\u6BCF\u65E5 09:00 \u81F3 21:00 \u6BCF\u5C0F\u65F6\u63D0\u4EA4\u4E00\u6B21\u771F\u5B9E\u751F\u56FE\u4EFB\u52A1\uFF0C \u53EA\u6709\u6210\u529F\u751F\u6210\u5E76\u53D6\u56DE\u56FE\u7247\u624D\u4F1A\u6807\u8BB0\u4E3A\u53EF\u7528\uFF1B\u63A2\u6D4B\u7ED3\u679C\u4E0D\u4F1A\u8BA1\u5165\u7528\u6237\u4EFB\u52A1\u4E0E\u4E1A\u52A1\u7EDF\u8BA1\u3002")));
@@ -13287,8 +12849,13 @@ const InspirationPanel = ({
   }, []);
 
   // 下架自己的
-  const handleUnpublish = React.useCallback(function (post) {
-    if (!window.confirm('下架这条灵感？')) return;
+  const handleUnpublish = React.useCallback(async function (post) {
+    if (!(await window.dfConfirm({
+      title: '下架这条灵感？',
+      message: '下架后其他人将看不到这张图。',
+      confirmText: '下架',
+      danger: true
+    }))) return;
     window.API.unpublishInspiration(post.id).then(function () {
       setPosts(function (prev) {
         return prev.filter(function (p) {
@@ -13297,7 +12864,9 @@ const InspirationPanel = ({
       });
       if (detailPost && detailPost.id === post.id) closeDetail();
     }).catch(function (e) {
-      window.alert('下架失败：' + (e.message || '未知错误'));
+      window.dfToast('下架失败：' + (e.message || '未知错误'), {
+        tone: 'danger'
+      });
     });
   }, [detailPost, closeDetail]);
   const toggleFavorite = React.useCallback(function (post) {
@@ -13339,7 +12908,9 @@ const InspirationPanel = ({
           favorited: !next
         }));
       }
-      window.alert((next ? '收藏' : '取消收藏') + '失败：' + (e.message || '未知错误'));
+      window.dfToast((next ? '收藏' : '取消收藏') + '失败：' + (e.message || '未知错误'), {
+        tone: 'danger'
+      });
     });
   }, [detailPost, tab]);
 
@@ -13397,7 +12968,7 @@ const InspirationPanel = ({
         borderBottom: '2px solid ' + (active ? 'var(--ink)' : 'transparent'),
         background: 'transparent',
         color: active ? 'var(--ink)' : 'var(--ink-2)',
-        fontSize: 11.5,
+        fontSize: 12,
         fontWeight: active ? 600 : 400,
         cursor: 'pointer',
         whiteSpace: 'nowrap',
@@ -13429,7 +13000,7 @@ const InspirationPanel = ({
       border: 'none',
       outline: 'none',
       background: 'transparent',
-      fontSize: 11.5,
+      fontSize: 12,
       color: 'var(--ink)'
     },
     onChange: function (e) {
@@ -13794,7 +13365,7 @@ const InspirationDetail = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.06em',
@@ -13819,7 +13390,7 @@ const InspirationDetail = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.06em',
@@ -13852,7 +13423,7 @@ const InspirationDetail = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: 'var(--ink-3)',
       textTransform: 'uppercase',
       letterSpacing: '0.06em'
@@ -13868,7 +13439,7 @@ const InspirationDetail = ({
       background: 'var(--panel)',
       color: 'var(--ink-2)',
       border: '1px solid var(--line)',
-      fontSize: 10.5,
+      fontSize: 11,
       display: 'inline-flex',
       alignItems: 'center',
       gap: 4,
@@ -13913,7 +13484,7 @@ const InspirationDetail = ({
       key: i,
       className: 'mono',
       style: {
-        fontSize: 10,
+        fontSize: 11,
         padding: '3px 8px',
         borderRadius: 4,
         background: 'var(--panel-2)',
@@ -13932,7 +13503,7 @@ const InspirationDetail = ({
     return React.createElement('span', {
       key: tag,
       style: {
-        fontSize: 10.5,
+        fontSize: 11,
         color: 'var(--ink-2)',
         padding: '3px 8px',
         borderRadius: 999,
@@ -14000,7 +13571,7 @@ const InspirationDetail = ({
     }
   }, "\u4E0B\u67B6")), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10.5,
+      fontSize: 11,
       color: 'var(--ink-3)',
       lineHeight: 1.4
     }
@@ -14178,7 +13749,7 @@ const WhatsNewModal = ({
     stroke: 1.8
   }))), React.createElement('div', {
     style: {
-      fontSize: 20,
+      fontSize: 18,
       fontWeight: 700,
       letterSpacing: '-0.02em',
       color: 'var(--ink)',
@@ -14187,7 +13758,7 @@ const WhatsNewModal = ({
     }
   }, release.title || 'XLJ Studio 更新了'), versionLabel ? React.createElement('div', {
     style: {
-      fontSize: 12.5,
+      fontSize: 12,
       color: 'var(--ink-3)',
       letterSpacing: '-0.01em',
       marginBottom: 18
@@ -14217,7 +13788,7 @@ const WhatsNewModal = ({
       }
     }, React.createElement('div', {
       style: {
-        fontSize: 13.5,
+        fontSize: 13,
         fontWeight: 650,
         color: 'var(--ink)',
         letterSpacing: '-0.01em',
@@ -14226,7 +13797,7 @@ const WhatsNewModal = ({
       }
     }, item.title || ''), item.desc ? React.createElement('div', {
       style: {
-        fontSize: 12.5,
+        fontSize: 12,
         color: 'var(--ink-2)',
         lineHeight: 1.55,
         letterSpacing: '-0.005em'
@@ -14252,7 +13823,7 @@ const WhatsNewModal = ({
       border: '1px solid var(--line)',
       background: 'var(--panel)',
       color: 'var(--ink-2)',
-      fontSize: 12.5,
+      fontSize: 12,
       fontWeight: 550,
       cursor: 'pointer',
       letterSpacing: '-0.01em'
@@ -14267,7 +13838,7 @@ const WhatsNewModal = ({
       border: '1px solid var(--ink)',
       background: 'var(--ink)',
       color: 'var(--panel)',
-      fontSize: 12.5,
+      fontSize: 12,
       fontWeight: 650,
       cursor: 'pointer',
       letterSpacing: '-0.01em'
@@ -14299,9 +13870,14 @@ window.markWhatsNewSeen = markWhatsNewSeen;
 window.WHATS_NEW_SEEN_KEY = WHATS_NEW_SEEN_KEY;
 
 // src/app.jsx
-// App root - wires panels + tweaks + host communication
+// App root - wires panels + overlays + host communication
 
 const LAST_USERNAME_KEY = 'designflow_last_username';
+const CHAT_WIDTH_KEY = 'designflow_chat_width';
+const TEMPLATE_HINT_KEY = 'designflow_template_hint_shown';
+const CHAT_WIDTH_MIN = 320;
+const CHAT_WIDTH_MAX = 600;
+const isTypingTarget = el => !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
 const LiteLoginGate = ({
   onLogin,
   loading,
@@ -14346,7 +13922,7 @@ const LiteLoginGate = ({
         .lg-sub { font-size: 13px; color: var(--ink-3); line-height: 1.6; margin-top: 6px; }
         .lg-field { position: relative; }
         .lg-input { width: 100%; box-sizing: border-box; height: 44px; border-radius: 10px; border: 1px solid var(--line);
-          background: var(--panel-2); color: var(--ink); padding: 0 14px; font-size: 14px; font-family: inherit; outline: none;
+          background: var(--panel-2); color: var(--ink); padding: 0 14px; font-size: 13px; font-family: inherit; outline: none;
           transition: border-color .15s, box-shadow .15s, background .15s; }
         .lg-input.has-eye { padding-right: 44px; }
         .lg-input::placeholder { color: var(--ink-3); }
@@ -14355,14 +13931,14 @@ const LiteLoginGate = ({
         .lg-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border-radius: 8px;
           display: grid; place-items: center; color: var(--ink-3); background: transparent; border: 0; cursor: pointer; }
         .lg-eye:hover { color: var(--ink); background: var(--line-2); }
-        .lg-btn { height: 44px; border-radius: 10px; border: 0; color: #fff; font-size: 14px; font-weight: 600; font-family: inherit; letter-spacing: .02em;
+        .lg-btn { height: 44px; border-radius: 10px; border: 0; color: #fff; font-size: 13px; font-weight: 600; font-family: inherit; letter-spacing: .02em;
           background: var(--ink); cursor: pointer; margin-top: 2px; transition: transform .12s, box-shadow .15s, background .15s; }
         .lg-btn:hover:not(:disabled) { background: oklch(0.26 0.02 260); transform: translateY(-1px); box-shadow: 0 8px 18px rgba(20,22,40,.2); }
         .lg-btn:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
         .lg-btn:disabled { background: var(--line); color: rgba(255,255,255,.95); cursor: default; }
-        .lg-err { font-size: 12.5px; color: oklch(0.5 0.17 45); background: oklch(0.97 0.03 70); border: 1px solid oklch(0.9 0.06 70);
+        .lg-err { font-size: 12px; color: oklch(0.5 0.17 45); background: oklch(0.97 0.03 70); border: 1px solid oklch(0.9 0.06 70);
           padding: 8px 12px; border-radius: 8px; }
-        .lg-foot { text-align: center; font-size: 11.5px; color: var(--ink-3); letter-spacing: .02em; padding-top: 4px; }
+        .lg-foot { text-align: center; font-size: 12px; color: var(--ink-3); letter-spacing: .02em; padding-top: 4px; }
       `), /*#__PURE__*/React.createElement("form", {
     className: "lg-card",
     onSubmit: e => {
@@ -14548,13 +14124,6 @@ const FlipStage = ({
   }, childrenB)));
 };
 const App = () => {
-  const DEFAULT_TWEAKS = {
-    chatState: 'returned',
-    canvasState: 'candidates',
-    theme: 'light'
-  };
-  const [tweaks, setTweaks] = React.useState(window.TWEAKS || DEFAULT_TWEAKS);
-  const [tweaksVisible, setTweaksVisible] = React.useState(false);
   const [activeTemplate, setActiveTemplate] = React.useState(TEMPLATES[0]);
   const [resultTemplate, setResultTemplate] = React.useState(null);
   const [editorCommand, setEditorCommand] = React.useState(null);
@@ -14569,6 +14138,14 @@ const App = () => {
   const [templatePanelCollapsed, setTemplatePanelCollapsed] = React.useState(true);
   const [templateRevealHovered, setTemplateRevealHovered] = React.useState(false);
   const [whatsNewRelease, setWhatsNewRelease] = React.useState(null);
+  const [chatWidth, setChatWidth] = React.useState(() => {
+    try {
+      const saved = parseInt(localStorage.getItem(CHAT_WIDTH_KEY), 10);
+      if (saved >= CHAT_WIDTH_MIN && saved <= CHAT_WIDTH_MAX) return saved;
+    } catch (e) {}
+    return 360;
+  });
+  const [chatResizing, setChatResizing] = React.useState(false);
   const isFirstTemplateMountRef = React.useRef(true);
   const handleUseInspirationPrompt = React.useCallback(function (post) {
     setInspirationOpen(false);
@@ -14592,6 +14169,26 @@ const App = () => {
     setCanvasReferenceSelection({
       key: Date.now() + Math.random(),
       images: images.slice(0, 9)
+    });
+  }, []);
+  const handleLightboxReference = React.useCallback(function (url, title) {
+    setInspirationOpen(false);
+    handleUseCanvasReferences([{
+      src: url,
+      name: (title ? String(title).slice(0, 24) : 'reference') + '.png'
+    }]);
+  }, [handleUseCanvasReferences]);
+  const handleLightboxInsert = React.useCallback(function (url, title) {
+    setInspirationOpen(false);
+    setEditorCommand({
+      key: Date.now() + Math.random(),
+      type: 'insert-images',
+      mode: 'image',
+      urls: [url],
+      images: [{
+        url: url
+      }],
+      name: title ? String(title).slice(0, 24) : '图片'
     });
   }, []);
   const [quickEditRequest, setQuickEditRequest] = React.useState(null);
@@ -14637,19 +14234,6 @@ const App = () => {
   });
   const [reauthOpen, setReauthOpen] = React.useState(false);
   const reauthRequestedRef = React.useRef(false);
-  const updateTweaks = partial => {
-    const next = {
-      ...tweaks,
-      ...partial
-    };
-    setTweaks(next);
-    try {
-      window.parent.postMessage({
-        type: '__edit_mode_set_keys',
-        edits: partial
-      }, '*');
-    } catch (e) {}
-  };
   const rememberUser = React.useCallback(user => {
     const username = user && user.username ? String(user.username).trim() : '';
     setCurrentUser(user || null);
@@ -14753,18 +14337,11 @@ const App = () => {
     const handler = e => {
       const d = e.data;
       if (!d || typeof d !== 'object') return;
-      if (d.type === '__activate_edit_mode') setTweaksVisible(true);
-      if (d.type === '__deactivate_edit_mode') setTweaksVisible(false);
       if (d.type === 'designflow:auth-required') {
         window.dispatchEvent(new CustomEvent('designflow-auth-required'));
       }
     };
     window.addEventListener('message', handler);
-    try {
-      window.parent.postMessage({
-        type: '__edit_mode_available'
-      }, '*');
-    } catch (e) {}
     return () => window.removeEventListener('message', handler);
   }, []);
   React.useEffect(() => {
@@ -14870,6 +14447,53 @@ const App = () => {
     setEditorCommand(null);
     setAuthError('');
   }, []);
+
+  // 模板栏快捷键 [（焦点在画布 iframe 内时由画布接管键盘，不触发）
+  React.useEffect(() => {
+    if (!currentUser) return;
+    const onKey = e => {
+      if (e.key !== '[' || e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(document.activeElement)) return;
+      e.preventDefault();
+      setTemplatePanelCollapsed(v => !v);
+    };
+    window.addEventListener('keydown', onKey);
+    let hintTimer = 0;
+    try {
+      if (!localStorage.getItem(TEMPLATE_HINT_KEY)) {
+        hintTimer = setTimeout(() => {
+          window.dfToast('模板栏默认收起：鼠标移到画布左边缘，或按 [ 键展开');
+          try {
+            localStorage.setItem(TEMPLATE_HINT_KEY, '1');
+          } catch (e) {}
+        }, 1500);
+      }
+    } catch (e) {}
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      clearTimeout(hintTimer);
+    };
+  }, [currentUser]);
+  const startChatResize = React.useCallback(e => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = chatWidth;
+    let latest = startWidth;
+    setChatResizing(true);
+    const onMove = ev => {
+      latest = Math.max(CHAT_WIDTH_MIN, Math.min(CHAT_WIDTH_MAX, startWidth + (startX - ev.clientX)));
+      setChatWidth(latest);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      setChatResizing(false);
+      try {
+        localStorage.setItem(CHAT_WIDTH_KEY, String(latest));
+      } catch (err) {}
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [chatWidth]);
   const selectTemplate = React.useCallback(t => {
     if (!t) return;
     setActiveTemplate(t);
@@ -14891,7 +14515,10 @@ const App = () => {
       flexDirection: 'column',
       overflow: 'hidden'
     }
-  }, /*#__PURE__*/React.createElement(ConnectionStatus, null), (!currentUser || reauthOpen) && /*#__PURE__*/React.createElement(LiteLoginGate, {
+  }, /*#__PURE__*/React.createElement(ConnectionStatus, null), /*#__PURE__*/React.createElement(OverlayHost, {
+    onInsertToCanvas: currentUser && !showAdmin ? handleLightboxInsert : null,
+    onUseAsReference: currentUser && !showAdmin ? handleLightboxReference : null
+  }), (!currentUser || reauthOpen) && /*#__PURE__*/React.createElement(LiteLoginGate, {
     onLogin: handleLogin,
     loading: authLoading,
     error: authError,
@@ -14916,10 +14543,12 @@ const App = () => {
       flex: 1,
       position: 'relative',
       display: 'grid',
-      gridTemplateColumns: templatePanelCollapsed ? '0px minmax(0, 1fr) 360px' : '260px minmax(0, 1fr) 360px',
+      gridTemplateColumns: (templatePanelCollapsed ? '0px' : '260px') + ' minmax(0, 1fr) ' + chatWidth + 'px',
       gridTemplateRows: 'minmax(0, 1fr)',
       minHeight: 0,
-      transition: 'grid-template-columns 180ms ease'
+      transition: chatResizing ? 'none' : 'grid-template-columns 180ms ease',
+      cursor: chatResizing ? 'col-resize' : undefined,
+      userSelect: chatResizing ? 'none' : undefined
     }
   }, /*#__PURE__*/React.createElement(TemplatePanel, {
     key: 'templates:' + currentUser.id,
@@ -14944,7 +14573,8 @@ const App = () => {
       transition: 'left 180ms ease'
     }
   }, /*#__PURE__*/React.createElement("button", {
-    title: templatePanelCollapsed ? '展开模板栏' : '收起模板栏',
+    title: (templatePanelCollapsed ? '展开模板栏' : '收起模板栏') + '（[）',
+    "aria-label": templatePanelCollapsed ? '展开模板栏' : '收起模板栏',
     onClick: function () {
       setTemplatePanelCollapsed(function (v) {
         return !v;
@@ -14996,9 +14626,37 @@ const App = () => {
       },
       onUsePrompt: handleUseInspirationPrompt
     })
+  }), /*#__PURE__*/React.createElement("div", {
+    role: "separator",
+    "aria-orientation": "vertical",
+    "aria-label": "\u62D6\u52A8\u8C03\u6574\u5BF9\u8BDD\u680F\u5BBD\u5EA6",
+    title: "\u62D6\u52A8\u8C03\u6574\u5BF9\u8BDD\u680F\u5BBD\u5EA6\uFF0C\u53CC\u51FB\u6062\u590D\u9ED8\u8BA4",
+    onMouseDown: startChatResize,
+    onDoubleClick: () => {
+      setChatWidth(360);
+      try {
+        localStorage.removeItem(CHAT_WIDTH_KEY);
+      } catch (e) {}
+    },
+    className: "df-chat-resizer",
+    style: {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      right: chatWidth - 3,
+      width: 6,
+      zIndex: 31,
+      cursor: 'col-resize'
+    }
+  }), chatResizing && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'absolute',
+      inset: 0,
+      zIndex: 32,
+      cursor: 'col-resize'
+    }
   }), /*#__PURE__*/React.createElement(Chat, {
     key: 'chat:' + currentUser.id,
-    state: tweaks.chatState,
     template: activeTemplate,
     onComposeComplete: function (jobId, penpotEditUrl, directImageUrls, resultTpl) {
       handleComposeComplete(jobId, penpotEditUrl, directImageUrls, resultTpl, currentUser.id);
@@ -15009,12 +14667,7 @@ const App = () => {
     onSeedConsumed: handleSeedConsumed,
     canvasReferenceSelection: canvasReferenceSelection,
     quickEditRequest: quickEditRequest
-  })), /*#__PURE__*/React.createElement(Tweaks, {
-    visible: tweaksVisible,
-    tweaks: tweaks,
-    onChange: updateTweaks,
-    onClose: () => setTweaksVisible(false)
-  })), currentUser && whatsNewRelease && window.WhatsNewModal && React.createElement(window.WhatsNewModal, {
+  }))), currentUser && whatsNewRelease && window.WhatsNewModal && React.createElement(window.WhatsNewModal, {
     release: whatsNewRelease,
     onClose: function () {
       setWhatsNewRelease(null);

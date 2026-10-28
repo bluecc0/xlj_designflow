@@ -22,6 +22,7 @@ from .ai_image import (
     smart_generate_image_async,
 )
 from .config import settings
+from .model_routing import get_model_routes, routed_chat_completion, routed_chat_stream
 
 logger = logging.getLogger(__name__)
 
@@ -1564,13 +1565,6 @@ def strip_action_block(text: str) -> str:
     return cleaned
 
 
-def _chat_completions_endpoint(base_url: str) -> str:
-    clean = (base_url or "").rstrip("/")
-    if clean.endswith("/v1"):
-        return clean + "/chat/completions"
-    return clean + "/v1/chat/completions"
-
-
 def _extract_first_json_object(text: str) -> Optional[dict[str, Any]]:
     if not text:
         return None
@@ -1621,7 +1615,7 @@ async def analyze_reference_images(
     user_message: str,
     state: dict[str, Any],
 ) -> Optional[ReferenceImageAnalysis]:
-    if not reference_images or not settings.agent_vlm_api_key:
+    if not reference_images or not get_model_routes("agent_vlm"):
         return None
     content: list[dict[str, Any]] = [{
         "type": "text",
@@ -1648,21 +1642,11 @@ async def analyze_reference_images(
             "image_url": {"url": f"data:{mime};base64,{encoded}"},
         })
     try:
-        async with httpx.AsyncClient(timeout=settings.agent_vlm_timeout_seconds, trust_env=False) as client:
-            resp = await client.post(
-                _chat_completions_endpoint(settings.agent_vlm_base_url),
-                headers={
-                    "Authorization": f"Bearer {settings.agent_vlm_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.agent_vlm_model,
-                    "messages": [{"role": "user", "content": content}],
-                    "max_tokens": 700,
-                    "temperature": 0.2,
-                    "stream": False,
-                },
-            )
+        resp = await routed_chat_completion("agent_vlm", {
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": 700, "temperature": 0.2,
+        }, timeout=settings.agent_vlm_timeout_seconds,
+            validate=lambda text: _normalize_reference_analysis(_extract_first_json_object(text) or {}, text) is not None)
         if resp.status_code != 200:
             return None
         data = resp.json()
@@ -1683,14 +1667,15 @@ async def call_agent_llm(
     *,
     on_chunk: Callable[[str], None] | None = None,
     on_think: Callable[[str], None] | None = None,
+    on_reset: Callable[[], None] | None = None,
 ) -> tuple[str, VisualIntentPatch]:
     """调用 Agent LLM，返回 (展示用文本, 结构化状态补丁)。
 
     当 on_chunk 不为 None 时，使用 stream=True 逐 token 回调；
     当 on_think 不为 None 时，实时回调模型的 reasoning_content（思考过程）。
     """
-    if not settings.agent_llm_api_key:
-        raise RuntimeError("AGENT_LLM_API_KEY 未配置")
+    if not get_model_routes("agent_llm"):
+        raise RuntimeError("Sub2API/APIMart LLM 未配置")
     history_lines = []
     for item in recent_messages[-6:]:
         role = "用户" if item.get("role") == "user" else "助手"
@@ -1760,73 +1745,46 @@ async def call_agent_llm(
     if needs_thinking_param:
         payload["enable_thinking"] = True
 
-    headers = {
-        "Authorization": f"Bearer {settings.agent_llm_api_key}",
-        "Content-Type": "application/json",
-    }
     accumulated = ""
     if use_stream:
         # ── 流式路径：逐 token 回调，自动过滤结构化 patch ──
         safe_len = 0  # 已回调给调用方的安全字符数
-        async with httpx.AsyncClient(timeout=settings.agent_llm_timeout_seconds, trust_env=False) as client:
-            async with client.stream(
-                "POST",
-                _chat_completions_endpoint(settings.agent_llm_base_url),
-                headers=headers,
-                json=payload,
-            ) as resp:
-                if resp.status_code != 200:
-                    raw = await resp.aread()
-                    raise RuntimeError(f"Agent LLM error: {raw.decode('utf-8', errors='ignore')[:240]}")
-                async for line in resp.aiter_lines():
-                    if not line or not line.startswith("data: "):
-                        continue
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-                    delta_content = ""
-                    delta_reasoning = ""
-                    try:
-                        choice_delta = ((((data or {}).get("choices") or [{}])[0].get("delta") or {}))
-                        delta_content = choice_delta.get("content") or ""
-                        delta_reasoning = choice_delta.get("reasoning_content") or ""
-                    except Exception:
-                        pass
-
-                    if delta_reasoning and on_think:
-                        on_think(delta_reasoning)
-
-                    if not delta_content:
-                        continue
-
-                    accumulated += delta_content
-
-                    markers = ["[[VISUAL_INTENT_PATCH]]", "[[ACTION_INTENT]]"]
-                    marker_positions = [accumulated.find(marker) for marker in markers if accumulated.find(marker) >= 0]
-                    patch_idx = min(marker_positions) if marker_positions else -1
-                    if patch_idx >= 0:
-                        if patch_idx > safe_len:
-                            on_chunk(accumulated[safe_len:patch_idx])
-                        safe_len = len(accumulated)
-                    elif safe_len < len(accumulated):
-                        new_text = accumulated[safe_len:]
-                        on_chunk(new_text)
-                        safe_len = len(accumulated)
+        async for data in routed_chat_stream(
+            "agent_llm", payload, timeout=settings.agent_llm_timeout_seconds,
+            validate=lambda text: isinstance(_extract_json_block(text), dict),
+        ):
+            if data.get("_route_reset"):
+                accumulated = ""
+                safe_len = 0
+                if on_reset:
+                    on_reset()
+                continue
+            choice = (data.get("choices") or [{}])[0]
+            choice_delta = choice.get("delta") or choice.get("message") or {}
+            delta_content = choice_delta.get("content") or ""
+            delta_reasoning = choice_delta.get("reasoning_content") or ""
+            if delta_reasoning and on_think:
+                on_think(delta_reasoning)
+            if not delta_content:
+                continue
+            accumulated += delta_content
+            markers = ["[[VISUAL_INTENT_PATCH]]", "[[ACTION_INTENT]]"]
+            marker_positions = [accumulated.find(marker) for marker in markers if accumulated.find(marker) >= 0]
+            patch_idx = min(marker_positions) if marker_positions else -1
+            if patch_idx >= 0:
+                if patch_idx > safe_len:
+                    on_chunk(accumulated[safe_len:patch_idx])
+                safe_len = len(accumulated)
+            elif safe_len < len(accumulated):
+                on_chunk(accumulated[safe_len:])
+                safe_len = len(accumulated)
     else:
-        async with httpx.AsyncClient(timeout=settings.agent_llm_timeout_seconds, trust_env=False) as client:
-            resp = await client.post(
-                _chat_completions_endpoint(settings.agent_llm_base_url),
-                headers=headers,
-                json=payload,
-            )
-            if resp.status_code != 200:
-                raise RuntimeError(f"Agent LLM error: {resp.text[:240]}")
-            data = resp.json()
-            accumulated = (((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        resp = await routed_chat_completion(
+            "agent_llm", payload, timeout=settings.agent_llm_timeout_seconds,
+            validate=lambda text: isinstance(_extract_json_block(text), dict),
+        )
+        data = resp.json()
+        accumulated = (((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
 
     # 提取 VisualIntentPatch
     parsed = _extract_json_block(accumulated) or {}
@@ -2154,7 +2112,7 @@ async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any
         "nextStepSuggestion": "",
         "status": "not_checked",
     }
-    if not settings.agent_vlm_api_key:
+    if not get_model_routes("agent_vlm"):
         return result
 
     # 将图片转为 base64 data URL
@@ -2238,21 +2196,11 @@ async def run_vlm_critic(image_url: str, state: dict[str, Any]) -> dict[str, Any
     ]
 
     try:
-        async with httpx.AsyncClient(timeout=settings.agent_vlm_timeout_seconds, trust_env=False) as client:
-            resp = await client.post(
-                _chat_completions_endpoint(settings.agent_vlm_base_url),
-                headers={
-                    "Authorization": f"Bearer {settings.agent_vlm_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.agent_vlm_model,
-                    "messages": [{"role": "user", "content": content}],
-                    "max_tokens": 600,
-                    "temperature": 0.2,
-                    "stream": False,
-                },
-            )
+        resp = await routed_chat_completion("agent_vlm", {
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": 600, "temperature": 0.2,
+        }, timeout=settings.agent_vlm_timeout_seconds,
+            validate=lambda text: bool(_extract_first_json_object(text)))
         if resp.status_code == 200:
             data = resp.json()
             content_text = (((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""

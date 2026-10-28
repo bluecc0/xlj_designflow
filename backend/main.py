@@ -86,7 +86,6 @@ from .agent_mode import (
     build_vlm_followup_decision,
     build_brief,
     call_agent_llm,
-    _chat_completions_endpoint,
     _coarse_subject_from_message,
     _deep_copy_json,
     _extract_first_json_object,
@@ -135,6 +134,7 @@ from .special_compose_full import run_special_full_compose
 from .special_export import SpecialExportSizeError, prepare_special_export_image
 from .compose import get_client, run_compose
 from .config import settings
+from .model_routing import get_model_routes, routed_chat_completion, routed_chat_stream
 from .agent_skill_loader import build_skill_context, list_agent_skills, load_agent_skill
 from .job_store import (
     acknowledge_admin_alert,
@@ -2494,12 +2494,14 @@ async def _probe_adobe2api(client: httpx.AsyncClient) -> dict:
 
 @app.get("/health")
 async def health():
-    return _local_health_payload()
+    # UNC filesystem checks can block for seconds when the library is offline.
+    # Keep them off the event loop so session heartbeats and task polls can run.
+    return await asyncio.to_thread(_local_health_payload)
 
 
 @app.get("/health/deep")
 async def health_deep():
-    local_health = _local_health_payload()
+    local_health = await asyncio.to_thread(_local_health_payload)
     # Penpot is a local/LAN dependency and must never be sent through the
     # optional AI API proxy. Keep a separate client so a proxy failure cannot
     # make a working Penpot instance appear offline in the service dashboard.
@@ -4345,13 +4347,16 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
 
             async def _run_llm():
                 nonlocal agent_reply, intent_patch
-                agent_reply, intent_patch = await call_agent_llm(
-                    message, state, recent_messages, reference_context,
-                    skill_context=active_skill_context,
-                    on_chunk=_on_llm_chunk,
-                    on_think=_on_llm_think,
-                )
-                text_queue.put_nowait((None, None))  # sentinel: LLM 完成
+                try:
+                    agent_reply, intent_patch = await call_agent_llm(
+                        message, state, recent_messages, reference_context,
+                        skill_context=active_skill_context,
+                        on_chunk=_on_llm_chunk,
+                        on_think=_on_llm_think,
+                        on_reset=lambda: text_queue.put_nowait(("reset", None)),
+                    )
+                finally:
+                    text_queue.put_nowait((None, None))  # 失败也结束等待，随后 await 抛出错误
 
             if should_direct_generate:
                 agent_reply = "收到，开始生成。"
@@ -4387,7 +4392,9 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
                     kind, content = item
                     if kind is None:  # sentinel
                         break
-                    if kind == "think":
+                    if kind == "reset":
+                        yield make_sse("agent_reset", {})
+                    elif kind == "think":
                         yield make_sse("agent_thinking", {"delta": content})
                     else:
                         yield make_sse("agent_text", {"delta": content})
@@ -4655,13 +4662,12 @@ async def agent_skill_plan_stream_endpoint(
 
     async def event_stream():
         skill_label = (skill_meta or {}).get("name") or skill_name
-        if not settings.skill_llm_api_key or not settings.skill_llm_base_url:
+        if not get_model_routes("skill_llm"):
             final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context, has_reference=has_reference)
             yield make_sse("delta", {"text": json.dumps(trace, ensure_ascii=False), "mode": "fallback"})
             yield make_sse("done", {"final_prompt": final_prompt, "prompt_trace": json.dumps(trace, ensure_ascii=False), "trace": trace})
             return
 
-        endpoint = _skill_llm_endpoint()
         planner_prompt = _build_skill_planner_prompt(user_prompt, skill_label, skill_context, has_reference=has_reference)
         if has_reference:
             user_content: Any = [{"type": "text", "text": planner_prompt}]
@@ -4671,46 +4677,24 @@ async def agent_skill_plan_stream_endpoint(
             user_content = planner_prompt
         raw_parts: list[str] = []
         try:
-            async with httpx.AsyncClient(timeout=settings.skill_llm_timeout_seconds, trust_env=False) as client:
-                async with client.stream(
-                    "POST",
-                    endpoint,
-                    headers={
-                        "Authorization": f"Bearer {settings.skill_llm_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": settings.skill_llm_model,
-                        "messages": [{"role": "user", "content": user_content}],
-                        "max_tokens": 1400,
-                        "temperature": 0.25,
-                        "stream": True,
-                    },
-                ) as resp:
-                    if resp.status_code != 200:
-                        body_text = (await resp.aread()).decode("utf-8", errors="ignore")
-                        raise RuntimeError(f"Skill planner HTTP {resp.status_code}: {body_text[:240]}")
-                    async for line in resp.aiter_lines():
-                        line = (line or "").strip()
-                        if not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if not data or data == "[DONE]":
-                            continue
-                        try:
-                            chunk = json.loads(data)
-                        except Exception:
-                            continue
-                        choice = (chunk.get("choices") or [{}])[0]
-                        delta = choice.get("delta") or {}
-                        message = choice.get("message") or {}
-                        content = delta.get("content")
-                        if content is None:
-                            content = message.get("content")
-                        if content:
-                            text = str(content)
-                            raw_parts.append(text)
-                            yield make_sse("delta", {"text": text, "mode": "llm", "model": settings.skill_llm_model})
+            route_meta = {}
+            async for chunk in routed_chat_stream("skill_llm", {
+                "messages": [{"role": "user", "content": user_content}],
+                "max_tokens": 1400, "temperature": 0.25,
+            }, timeout=settings.skill_llm_timeout_seconds,
+                validate=lambda text: bool(str(_extract_json_object(text).get("final_prompt") or "").strip())):
+                if chunk.get("_route_reset"):
+                    raw_parts.clear()
+                    yield make_sse("reset", {})
+                    continue
+                route_meta = chunk.get("_route") or {}
+                choice = (chunk.get("choices") or [{}])[0]
+                delta = choice.get("delta") or choice.get("message") or {}
+                content = delta.get("content")
+                if content:
+                    text = str(content)
+                    raw_parts.append(text)
+                    yield make_sse("delta", {"text": text, "mode": "llm", **route_meta})
 
             raw = "".join(raw_parts).strip()
             trace = _extract_json_object(raw)
@@ -4719,7 +4703,7 @@ async def agent_skill_plan_stream_endpoint(
                 final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context, has_reference=has_reference)
             trace.setdefault("skill", skill_label)
             trace.setdefault("mode", "llm")
-            trace.setdefault("model", settings.skill_llm_model)
+            trace.update(route_meta)
             if has_reference:
                 trace.setdefault("used_reference_images", True)
             yield make_sse("done", {"final_prompt": final_prompt, "prompt_trace": json.dumps(trace, ensure_ascii=False), "trace": trace})
@@ -4760,8 +4744,7 @@ async def _judge_context_intent(
     VLM 不可用或返回异常时按 edit 处理，保持原有行为。
     """
     fallback = {"mode": "edit", "reason": "", "source": "fallback"}
-    vlm_base_url, vlm_api_key, vlm_model = settings.current_vlm_config()
-    if not vlm_api_key:
+    if not get_model_routes("vlm"):
         return {**fallback, "reason": "VLM 未配置"}
 
     history_lines = []
@@ -4787,17 +4770,10 @@ reason 用一句中文说明依据。
     try:
         if prev_image_path:
             content.append({"type": "image_url", "image_url": {"url": _context_image_data_url(prev_image_path)}})
-        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
-            resp = await client.post(
-                _chat_completions_endpoint(vlm_base_url),
-                headers={"Authorization": f"Bearer {vlm_api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": vlm_model,
-                    "messages": [{"role": "user", "content": content}],
-                    "temperature": 0,
-                    "stream": False,
-                },
-            )
+        resp = await routed_chat_completion("vlm", {
+            "messages": [{"role": "user", "content": content}], "temperature": 0,
+        }, timeout=30,
+            validate=lambda text: str((_extract_first_json_object(text) or {}).get("mode") or "").lower() in CONTEXT_INTENT_MODES)
         if not resp.is_success:
             logger.warning("Context intent VLM error: %s", resp.text[:200])
             return {**fallback, "reason": f"VLM HTTP {resp.status_code}"}
@@ -4811,7 +4787,7 @@ reason 用一句中文说明依据。
             logger.warning("Context intent VLM returned unexpected content: %s", raw[:200])
             return {**fallback, "reason": "VLM 返回无法解析"}
         result = {"mode": mode, "reason": str(parsed.get("reason") or "")[:200], "source": "vlm"}
-        logger.info("Context intent [%s]: %s → %s (%s)", vlm_model, current_prompt[:60], mode, result["reason"][:60])
+        logger.info("Context intent [%s]: %s → %s (%s)", resp.extensions.get("model_route", {}).get("model"), current_prompt[:60], mode, result["reason"][:60])
         return result
     except Exception as exc:
         logger.exception("Context intent judge failed, falling back to edit")
@@ -4864,20 +4840,10 @@ async def _build_context_aware_prompt(
 改写的 prompt："""
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{settings.siliconflow_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.siliconflow_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.siliconflow_model,
-                    "messages": [{"role": "user", "content": enrichment_prompt}],
-                    "max_tokens": 512,
-                    "temperature": 0.3,
-                },
-            )
+        resp = await routed_chat_completion("chat_llm", {
+            "messages": [{"role": "user", "content": enrichment_prompt}],
+            "max_tokens": 512, "temperature": 0.3,
+        }, timeout=settings.chat_llm_timeout_seconds)
         if resp.status_code != 200:
             logger.warning("Context enrichment LLM error: %s", resp.text[:120])
             return current_prompt
@@ -4958,15 +4924,6 @@ def _fallback_skill_plan(
     return final_prompt, trace
 
 
-def _skill_llm_endpoint() -> str:
-    base_url = settings.skill_llm_base_url.rstrip("/")
-    if base_url.endswith("/chat/completions"):
-        return base_url
-    if base_url.endswith("/v1"):
-        return f"{base_url}/chat/completions"
-    return f"{base_url}/v1/chat/completions"
-
-
 def _build_skill_planner_prompt(
     user_prompt: str,
     skill_name: str,
@@ -5011,35 +4968,16 @@ async def _plan_skill_image_prompt(user_prompt: str, skill_name: str, skill_cont
     """让 LLM 显式解读 Skill，并产出可展示的解析过程与最终生图 prompt。"""
     if not skill_context:
         return user_prompt, {}
-    if not settings.skill_llm_api_key or not settings.skill_llm_base_url:
+    if not get_model_routes("skill_llm"):
         return _fallback_skill_plan(user_prompt, skill_name, skill_context)
 
-    endpoint = _skill_llm_endpoint()
     planner_prompt = _build_skill_planner_prompt(user_prompt, skill_name, skill_context)
     try:
-        async with httpx.AsyncClient(timeout=settings.skill_llm_timeout_seconds, trust_env=False) as client:
-            resp = await client.post(
-                endpoint,
-                headers={
-                    "Authorization": f"Bearer {settings.skill_llm_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.skill_llm_model,
-                    "messages": [{"role": "user", "content": planner_prompt}],
-                    "max_tokens": 1400,
-                    "temperature": 0.25,
-                },
-            )
-        if resp.status_code != 200:
-            logger.warning(
-                "Skill planner LLM error model=%s endpoint=%s status=%s body=%s",
-                settings.skill_llm_model,
-                endpoint,
-                resp.status_code,
-                resp.text[:240],
-            )
-            return _fallback_skill_plan(user_prompt, skill_name, skill_context)
+        resp = await routed_chat_completion("skill_llm", {
+            "messages": [{"role": "user", "content": planner_prompt}],
+            "max_tokens": 1400, "temperature": 0.25,
+        }, timeout=settings.skill_llm_timeout_seconds,
+            validate=lambda text: bool(str(_extract_json_object(text).get("final_prompt") or "").strip()))
         data = resp.json()
         content = (((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         trace = _extract_json_object(content)
@@ -5048,7 +4986,7 @@ async def _plan_skill_image_prompt(user_prompt: str, skill_name: str, skill_cont
             return _fallback_skill_plan(user_prompt, skill_name, skill_context)
         trace.setdefault("skill", skill_name)
         trace.setdefault("mode", "llm")
-        trace.setdefault("model", settings.skill_llm_model)
+        trace.update(resp.extensions.get("model_route") or {})
         return final_prompt, trace
     except Exception:
         logger.exception("Skill planner failed, falling back to deterministic plan")
@@ -6623,7 +6561,7 @@ async def describe_inspiration(request: Request, post_id: str):
             "cached": True,
             "cache_source": cached_vlm.get("id"),
         }
-    if not settings.vlm_api_key:
+    if not get_model_routes("vlm"):
         raise HTTPException(503, "VLM 未配置，无法反推 prompt")
     image_data_url = await _resolve_image_data_url(post.get("image_url") or post.get("thumb_url") or "")
     if not image_data_url:
@@ -6649,13 +6587,10 @@ async def describe_inspiration(request: Request, post_id: str):
         ],
     }]
     try:
-        endpoint = _chat_completions_endpoint(settings.vlm_base_url)
-        async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
-            resp = await client.post(
-                endpoint,
-                headers={"Authorization": f"Bearer {settings.vlm_api_key}", "Content-Type": "application/json"},
-                json={"model": settings.vlm_model, "messages": messages, "temperature": 0.2, "stream": False},
-            )
+        resp = await routed_chat_completion("vlm", {
+            "messages": messages, "temperature": 0.2,
+        }, timeout=60)
+        endpoint = str(resp.extensions.get("model_route", {}).get("provider") or "model-route")
         if not resp.is_success:
             raise HTTPException(resp.status_code, f"VLM 反推失败: {resp.text[:200]}")
 
@@ -7098,7 +7033,7 @@ async def ai_image_endpoint(
             context_intent = {"mode": "new", "reason": "会话首轮", "source": "rule"}
 
         # 2. LLM 根据历史改写 prompt（全新需求不改写）
-        if context_intent["mode"] != "new" and settings.siliconflow_api_key:
+        if context_intent["mode"] != "new" and get_model_routes("chat_llm"):
             enriched_prompt = await _build_context_aware_prompt(
                 session_id=session_id,
                 user_id=user["id"],
@@ -7734,12 +7669,10 @@ def layered_psd_status(request: Request, job_id: str):
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
     """
-    AI 对话接口：透传到 SiliconFlow，注入平台上下文和用户当前工作台状态。
+    AI 对话接口：Sub2API 优先、APIMart 兜底，注入平台上下文和工作台状态。
     """
-    if not ((settings.chat_llm_api_key and settings.chat_llm_base_url) or settings.siliconflow_api_key):
-        raise HTTPException(500, "未配置 CHAT_LLM_API_KEY 或 SILICONFLOW_API_KEY")
-
-    import httpx
+    if not get_model_routes("chat_llm"):
+        raise HTTPException(503, "未配置 Sub2API/APIMart LLM")
 
     # 构建工作台状态描述，让 AI 知道用户当前在哪一步
     ctx = req.context
@@ -7816,51 +7749,12 @@ async def chat_endpoint(req: ChatRequest):
     messages = [{"role": "system", "content": system_prompt}]
     messages += [{"role": m.role, "content": m.content} for m in req.messages]
 
-    async def call_chat_model(*, base_url: str, api_key: str, model: str, timeout: int):
-        endpoint = _chat_completions_endpoint(base_url)
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-            return await client.post(
-                endpoint,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "max_tokens": 2048,
-                    "temperature": 0.8,
-                },
-            )
-
-    resp = None
-    primary_error = ""
-    if settings.chat_llm_api_key and settings.chat_llm_base_url:
-        try:
-            resp = await call_chat_model(
-                base_url=settings.chat_llm_base_url,
-                api_key=settings.chat_llm_api_key,
-                model=settings.chat_llm_model,
-                timeout=settings.chat_llm_timeout_seconds,
-            )
-            if resp.status_code != 200:
-                primary_error = resp.text[:200]
-                resp = None
-        except Exception as exc:
-            primary_error = f"{type(exc).__name__}: {exc}"
-
-    if resp is None and settings.siliconflow_api_key:
-        resp = await call_chat_model(
-            base_url=settings.siliconflow_base_url,
-            api_key=settings.siliconflow_api_key,
-            model=settings.siliconflow_model,
-            timeout=30,
-        )
-
-    if resp is None:
-        raise HTTPException(500, f"AI 服务不可用: {primary_error or '主线路与兜底线路均未配置'}")
-    if resp.status_code != 200:
-        raise HTTPException(500, f"AI 服务返回错误: {resp.text[:200]}")
+    try:
+        resp = await routed_chat_completion("chat_llm", {
+            "messages": messages, "max_tokens": 2048, "temperature": 0.8,
+        }, timeout=settings.chat_llm_timeout_seconds)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
 
     data = resp.json()
     try:

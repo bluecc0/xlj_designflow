@@ -40,6 +40,7 @@ class JudgeContextIntentTest(unittest.TestCase):
         transport = httpx.MockTransport(handler)
         live_config = ("https://vlm.test/v1", api_key, "test-vlm")
         with patch.object(main.settings, "current_vlm_config", return_value=live_config), \
+                patch.multiple(main.settings, cliproxy_base_url="", cliproxy_api_key="", ai_image_api_key=""), \
                 patch.object(main.httpx, "AsyncClient", side_effect=lambda **kw: real_client(transport=transport, **kw)):
             return asyncio.run(main._judge_context_intent(HISTORY, "背景换成蓝色", prev, has_user_refs=False))
 

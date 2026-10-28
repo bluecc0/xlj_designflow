@@ -22,7 +22,7 @@ const Stripe = ({ label, ratio = '4/5', tone = 'neutral', seed = 'x', tag }) => 
       {label && (
         <div className="mono" style={{
           position: 'absolute', left: 8, top: 8,
-          fontSize: 9, letterSpacing: '0.02em',
+          fontSize: 11, letterSpacing: '0.02em',
           color: `oklch(0.45 0.05 ${hue})`,
           textTransform: 'uppercase',
         }}>{label}</div>
@@ -30,7 +30,7 @@ const Stripe = ({ label, ratio = '4/5', tone = 'neutral', seed = 'x', tag }) => 
       {tag && (
         <div style={{
           position: 'absolute', right: 8, bottom: 8,
-          fontSize: 10, color: `oklch(0.35 0.05 ${hue})`,
+          fontSize: 11, color: `oklch(0.35 0.05 ${hue})`,
           background: 'rgba(255,255,255,0.85)',
           backdropFilter: 'blur(4px)',
           padding: '2px 6px', borderRadius: 4,
@@ -43,7 +43,7 @@ const Stripe = ({ label, ratio = '4/5', tone = 'neutral', seed = 'x', tag }) => 
 const Swatch = ({ color, label }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
     <div style={{ height: 28, borderRadius: 6, background: color, border: '1px solid rgba(0,0,0,0.05)' }}/>
-    <div className="mono" style={{ fontSize: 9, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
+    <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
   </div>
 );
 
