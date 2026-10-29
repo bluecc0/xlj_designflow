@@ -7691,43 +7691,33 @@ async def chat_endpoint(req: ChatRequest):
     if not get_model_routes("chat_llm"):
         raise HTTPException(503, "未配置 Sub2API/APIMart LLM")
 
-    # 构建工作台状态描述，让 AI 知道用户当前在哪一步
+    # 构建工作台状态描述；前端未传的字段不写，避免误导 AI 认为用户什么都没做
     ctx = req.context
     state_lines = []
     if ctx.templateName:
         state_lines.append(f"- 已选模板：{ctx.templateName}（{ctx.templateSlotCount or '?'} 个插槽）")
-    else:
-        state_lines.append("- 尚未选择模板")
     if ctx.productCount:
         state_lines.append(f"- 已载入 {ctx.productCount} 个产品数据")
-    else:
-        state_lines.append("- 尚未上传产品表格")
     if ctx.jobStatus == "done":
-        state_lines.append("- 生图已完成，可导出 PNG 或切九宫格")
+        state_lines.append("- 上次任务已完成")
     elif ctx.jobStatus in ("pending", "running"):
-        state_lines.append("- 生图正在进行中")
+        state_lines.append("- 有任务正在进行中")
     elif ctx.jobStatus == "failed":
-        state_lines.append("- 上次生图失败")
-    else:
-        state_lines.append("- 尚未开始生图")
-
-    state_str = "\n".join(state_lines)
+        state_lines.append("- 上次任务失败")
 
     # 仅在会话首条消息注入完整知识库，后续消息使用精简上下文（LLM 已有记忆）
     is_first_message = not req.messages or len(req.messages) <= 1
     knowledge_block = (settings._load_knowledge() or "（暂无知识库文档）") if is_first_message else ""
 
-    system_prompt = f"""你是 DesignFlow 的 AI 设计助手。DesignFlow 是一个 AI 驱动的电商设计资产平台，核心功能是帮助运营/设计人员快速批量合成产品海报。
+    system_prompt = """你是 DesignFlow（鑫乐纪AI视觉创作平台）的 AI 设计助手，用户正在使用「问答」功能向你提问。DesignFlow 是 AI 驱动的电商设计工作台。
 
-平台工作流程：
-1. 在左侧模板库选择一个 Penpot 设计模板（单品/4宫格/6宫格/9宫格等）
-2. 上传产品需求表格（Excel/CSV），包含产品名称、价格、SKU 等信息
-3. AI 自动解析表格，将产品数据匹配到模板插槽
-4. 点击「/开始生图」，后端调用 Penpot API 自动填充并导出海报
-5. 导出 PNG 或切成九宫格图片用于投放
+平台主要用法：
+1. 在输入框左下角「选择功能」里选择要做的事：问答、AI 生图（GPT Image 2.5 / GPT Image 2 / Nano Banana Pro / Nano Banana 2.1 / Seedream 5.0）、智能铺货、特殊品
+2. 在「参数设置」里选比例、清晰度、并发数等，输入描述、SKU 或上传参考图/表格后发送
+3. 结果出现在对话区，可放入中间的无限画布继续排版，并在画布上扩图、抠图、高清放大、换装等"""
 
-当前用户工作台状态：
-{state_str}"""
+    if state_lines:
+        system_prompt += "\n\n当前用户工作台状态：\n" + "\n".join(state_lines)
 
     if knowledge_block:
         system_prompt += f"""
@@ -7757,7 +7747,7 @@ async def chat_endpoint(req: ChatRequest):
 你的角色：
 - 根据用户当前状态，主动给出下一步建议
 - 回答用户关于平台功能、操作方法的问题，严格参考上方知识库文档
-- 如果用户想执行操作，引导他们使用对应的快捷指令
+- 如果用户想执行操作，引导他们在功能菜单和参数面板中操作，不要提及已不存在的 / 指令
 - 可以解答电商设计、产品海报相关的专业问题
 - 语气自然、简洁，不要过度列举，像真人同事一样沟通
 - 回复使用中文，长度适中（2-5句为佳），绝对不要在句子中间截断，必须说完整
