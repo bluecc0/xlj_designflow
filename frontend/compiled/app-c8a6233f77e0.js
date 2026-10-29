@@ -3850,6 +3850,7 @@ const ChatReturned = ({
     style: {
       width: 20,
       height: 20,
+      padding: 0,
       display: 'grid',
       placeItems: 'center',
       borderRadius: 5,
@@ -3947,6 +3948,7 @@ const ChatReturned = ({
       transform: 'translateY(-50%)',
       width: 22,
       height: 22,
+      padding: 0,
       display: 'grid',
       placeItems: 'center',
       borderRadius: 5,

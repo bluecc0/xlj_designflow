@@ -933,7 +933,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                       disabled={skillUploading}
                       title="上传技能：包含 SKILL.md 的 .zip，或单个 .md 文件"
                       aria-label="上传技能"
-                      style={{ width: 20, height: 20, display: 'grid', placeItems: 'center', borderRadius: 5, color: 'var(--ink-3)', cursor: skillUploading ? 'default' : 'pointer' }}
+                      style={{ width: 20, height: 20, padding: 0, display: 'grid', placeItems: 'center', borderRadius: 5, color: 'var(--ink-3)', cursor: skillUploading ? 'default' : 'pointer' }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--panel-2)'; e.currentTarget.style.color = 'var(--ink)'; }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; }}
                     ><I.plus size={13}/></button>
@@ -981,7 +981,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                         onClick={() => onDeleteSkill(skill)}
                         title="删除技能"
                         aria-label={'删除技能 ' + (skill.title || skill.name)}
-                        style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', width: 22, height: 22, display: 'grid', placeItems: 'center', borderRadius: 5, color: 'var(--ink-3)', cursor: 'pointer' }}
+                        style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', width: 22, height: 22, padding: 0, display: 'grid', placeItems: 'center', borderRadius: 5, color: 'var(--ink-3)', cursor: 'pointer' }}
                         onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger)'; e.currentTarget.style.background = 'var(--panel)'; }}
                         onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--ink-3)'; e.currentTarget.style.background = 'transparent'; }}
                       ><I.trash size={12}/></button>
