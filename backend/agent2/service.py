@@ -52,7 +52,7 @@ def _split_next(text: str) -> tuple[str, list[str]]:
 
 
 async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict],
-                 tools: dict[str, Tool], model: ModelClient) -> AsyncIterator[str]:
+                 tools: dict[str, Tool], model: ModelClient, request: str = "") -> AsyncIterator[str]:
     """运行引擎；事件先落库，再通过队列按顺序推给前端。"""
     queue: asyncio.Queue = asyncio.Queue()
     session_id = session["id"]
@@ -70,7 +70,8 @@ async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict
     async def runner():
         try:
             result = await run_loop(model=model, tools=tools, messages=[system] + messages, emit=emit,
-                                    ctx_base={"user": user, "session_id": session_id, "turn_id": turn_id, "state": {}})
+                                    ctx_base={"user": user, "session_id": session_id, "turn_id": turn_id,
+                                              "state": {"request": request}})
             convo = result.messages[1:]
             title = session.get("title") or next(
                 (str(m.get("content"))[:30] for m in convo if m.get("role") == "user"), "")
@@ -121,7 +122,7 @@ async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], 
         content += "\n\n[用户上传了图片：" + "、".join(u["id"] for u in uploads) + "]"
     messages = store.load_session_messages(session) + [{"role": "user", "content": content}]
     async for chunk in _drive(user=user, session=session, turn_id=turn["id"], messages=messages,
-                              tools=tools_factory(), model=model_factory()):
+                              tools=tools_factory(), model=model_factory(), request=text):
         yield chunk
 
 
@@ -135,8 +136,9 @@ async def resume_turn(user: dict, session: dict, turn: dict, answer: str) -> Asy
     messages = store.load_session_messages(session) + [{
         "role": "tool", "tool_call_id": pending["call_id"],
         "content": json.dumps({"answer": answer}, ensure_ascii=False)}]
+    request = f"{turn.get('user_input') or ''}（补充：{answer}）"
     async for chunk in _drive(user=user, session=session, turn_id=turn["id"], messages=messages,
-                              tools=tools_factory(), model=model_factory()):
+                              tools=tools_factory(), model=model_factory(), request=request):
         yield chunk
 
 

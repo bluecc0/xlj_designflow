@@ -185,6 +185,61 @@ class Agent2EngineTest(unittest.TestCase):
         self.assertEqual(_events(chunks)[-1]["type"], "turn.cancelled")
         self.assertEqual(store.get_turn(turn_id, "u1")["status"], "cancelled")
 
+    def test_generate_image_self_checks_against_user_request(self):
+        from unittest.mock import MagicMock
+        from backend.agent2 import tools as a2tools
+
+        img = Path(self.tmp.name) / "out.png"
+        img.write_bytes(b"png")
+        seen_prompts = []
+
+        async def fake_generate(**kwargs):
+            return {"url": "/output/out.png", "provider": "fake"}
+
+        async def fake_vlm(purpose, payload, **kwargs):
+            seen_prompts.append(payload["messages"][0]["content"][0]["text"])
+            resp = MagicMock()
+            resp.json.return_value = {"choices": [{"message": {"content": json.dumps(
+                {"ok": False, "summary": "标题有错别字", "problems": ["标题\u201c跑步\u201d写成了\u201c跑不\u201d"]},
+                ensure_ascii=False)}}]}
+            return resp
+
+        main_stub = MagicMock()
+        main_stub._resolve_public_asset_path.return_value = img
+        self.tools["generate_image"] = a2tools.build_tools()["generate_image"]
+        model = FakeModel([
+            [("call", "generate_image", {"images": [{"prompt": "小红书风格，跑步海报"}], "aspect_ratio": "3:4"})],
+            [("text", "好了，标题有个错字。")],
+        ])
+        with patch.object(a2tools, "smart_generate_image_async", fake_generate), \
+                patch.object(a2tools, "routed_chat_completion", fake_vlm), \
+                patch.object(a2tools, "compress_image_to_data_url", lambda data, size: "data:image/png;base64,"), \
+                patch.object(a2tools, "save_ai_image_job", lambda **kw: None), \
+                patch.object(a2tools, "_main", lambda: main_stub):
+            events = self._run(model)
+        self.assertIn("生成 3 张小红书风格的跑步海报图", seen_prompts[0])
+        checked = [e for e in events if e["type"] == "image.checked"]
+        self.assertEqual(len(checked), 1)
+        self.assertFalse(checked[0]["payload"]["ok"])
+        tool_msg = [m for m in model.seen[1] if m["role"] == "tool"][0]
+        self.assertIn("跑不", tool_msg["content"])
+
+    def test_self_check_failure_does_not_block_images(self):
+        from unittest.mock import MagicMock
+        from backend.agent2 import tools as a2tools
+
+        img = Path(self.tmp.name) / "out.png"
+        img.write_bytes(b"png")
+
+        async def broken_vlm(purpose, payload, **kwargs):
+            raise RuntimeError("vlm down")
+
+        ctx = MagicMock()
+        ctx.state = {"request": "画一张"}
+        with patch.object(a2tools, "routed_chat_completion", broken_vlm), \
+                patch.object(a2tools, "compress_image_to_data_url", lambda data, size: ""):
+            self.assertIsNone(asyncio.run(a2tools._self_check(ctx, img, prompt="x", label="")))
+
     def test_delete_session_removes_records_for_owner_only(self):
         self._run(FakeModel([[("text", "好")]]), "你好")
         sid = self.session["id"]

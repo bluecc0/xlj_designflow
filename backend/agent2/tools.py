@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
 
 from ..agent_skill_loader import build_skill_context, load_agent_skill, load_reference_text
 from ..ai_image import compress_image_to_data_url, smart_generate_image_async
+from ..common_helpers import _extract_first_json_object
 from ..config import settings
 from ..job_store import save_ai_image_job
 from ..model_routing import routed_chat_completion
@@ -23,6 +25,8 @@ DEFAULT_IMAGE_MODEL = "gpt-image-2.5"
 ASPECT_RATIOS = ["auto", "1:1", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "2:3", "3:2"]
 MAX_IMAGES_PER_CALL = 6
 MAX_IMAGES_PER_TURN = 12
+
+logger = logging.getLogger(__name__)
 
 
 def _main():
@@ -85,7 +89,53 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, size: str, 
     await ctx.emit("artifact.created", {"call_id": ctx.call_id, "artifact": {
         "id": artifact["id"], "url": url, "label": label, "group_id": group_id, "group_type": group_type,
         "position": index}})
-    return {"index": index, "label": label, "id": artifact["id"], "url": url}
+    out = {"index": index, "label": label, "id": artifact["id"], "url": url}
+    check = await _self_check(ctx, local, prompt=prompt, label=label)
+    if check:
+        out["check"] = check
+        await ctx.emit("image.checked", {"call_id": ctx.call_id, "image_id": artifact["id"], **check})
+    return out
+
+
+SELF_CHECK_PROMPT = """你是出图质检。对照用户的需求，检查这张生成图是否满足要求。
+【用户需求】{request}
+【这张图的计划】{plan}
+
+只检查客观问题，不评价审美偏好：
+1. 主体和内容是否符合需求（要求的元素是否出现、有没有画错对象）
+2. 画面里的文字是否有错别字、乱码，或者和用户给的文案不一致
+3. 明显的生成缺陷：肢体或手指畸形、商品变形、主体被截断
+4. 用户明确要求的比例、风格、颜色是否满足
+
+只返回 JSON：{{"ok": true 或 false, "summary": "不超过 20 字的结论", "problems": ["具体问题，没有就留空"]}}"""
+
+
+async def _self_check(ctx: ToolContext, local, *, prompt: str, label: str) -> dict | None:
+    """出图后自检：拿生成图对照用户原话检查。失败时返回 None，不影响出图结果。"""
+    request = str(ctx.state.get("request") or "").strip()
+    if not request or not local or not Path(local).is_file():
+        return None
+    plan = (label + "：" if label else "") + prompt
+    payload = {
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": SELF_CHECK_PROMPT.format(request=request[:500], plan=plan[:500])},
+            {"type": "image_url", "image_url": {"url": compress_image_to_data_url(Path(local).read_bytes(), 1024)}},
+        ]}],
+        "max_tokens": 300, "temperature": 0.1,
+    }
+    try:
+        resp = await routed_chat_completion("agent_vlm", payload, timeout=settings.agent_vlm_timeout_seconds,
+                                            validate=lambda text: bool(_extract_first_json_object(text)))
+        content = (((resp.json() or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        parsed = _extract_first_json_object(content) or {}
+    except Exception:
+        logger.warning("[agent2] self check failed for %s", local, exc_info=True)
+        return None
+    if "ok" not in parsed:
+        return None
+    problems = [str(x).strip() for x in (parsed.get("problems") or []) if str(x).strip()][:3]
+    return {"ok": bool(parsed["ok"]) and not problems, "summary": str(parsed.get("summary") or "").strip()[:40],
+            "problems": problems}
 
 
 async def generate_image(ctx: ToolContext, args: dict) -> dict:

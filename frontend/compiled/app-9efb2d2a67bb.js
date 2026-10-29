@@ -4000,7 +4000,27 @@ const AgentToolCard = ({
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap'
       }
-    }, im.label) : null, /*#__PURE__*/React.createElement("a", {
+    }, im.label) : null, im.check ? /*#__PURE__*/React.createElement("span", {
+      title: im.check.summary,
+      style: {
+        fontSize: 11,
+        color: im.check.ok ? 'var(--ok)' : 'var(--warn)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 2,
+        flexShrink: 0
+      }
+    }, im.check.ok ? /*#__PURE__*/React.createElement(I.check, {
+      size: 10
+    }) : /*#__PURE__*/React.createElement(I.eye, {
+      size: 10
+    }), im.check.ok ? '自检通过' : '有问题') : running && m.tool === 'generate_image' ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--ink-3)',
+        flexShrink: 0
+      }
+    }, "\u81EA\u68C0\u4E2D\u2026") : null, /*#__PURE__*/React.createElement("a", {
       href: src,
       download: true,
       title: "\u4E0B\u8F7D",
@@ -4013,7 +4033,14 @@ const AgentToolCard = ({
       }
     }, /*#__PURE__*/React.createElement(I.download, {
       size: 11
-    }))));
+    }))), im.check && !im.check.ok && im.check.problems.length ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--warn)',
+        lineHeight: 1.45,
+        wordBreak: 'break-word'
+      }
+    }, im.check.problems.join('；')) : null);
   }), pendingSlots.map(function (slot) {
     return /*#__PURE__*/React.createElement("div", {
       key: 'p' + slot.idx,
@@ -8326,6 +8353,20 @@ const agent2Reduce = function (msgs, ev) {
         });
         return Object.assign({}, m, {
           images: images
+        });
+      });
+    case 'image.checked':
+      return updateCard(p.call_id, function (m) {
+        return Object.assign({}, m, {
+          images: m.images.map(function (im) {
+            return im.id === p.image_id ? Object.assign({}, im, {
+              check: {
+                ok: p.ok,
+                summary: p.summary || '',
+                problems: p.problems || []
+              }
+            }) : im;
+          })
         });
       });
     case 'tool.finished':

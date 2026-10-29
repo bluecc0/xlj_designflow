@@ -982,8 +982,18 @@ const AgentToolCard = ({ m, openImage }) => {
                 />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
                   {im.label ? <span style={{ fontSize: 11, color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{im.label}</span> : null}
+                  {im.check ? (
+                    <span title={im.check.summary} style={{ fontSize: 11, color: im.check.ok ? 'var(--ok)' : 'var(--warn)', display: 'inline-flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+                      {im.check.ok ? <I.check size={10}/> : <I.eye size={10}/>}{im.check.ok ? '自检通过' : '有问题'}
+                    </span>
+                  ) : running && m.tool === 'generate_image' ? (
+                    <span style={{ fontSize: 11, color: 'var(--ink-3)', flexShrink: 0 }}>自检中…</span>
+                  ) : null}
                   <a href={src} download title="下载" style={{ marginLeft: 'auto', color: 'var(--ink-3)', display: 'inline-flex', padding: 2, flexShrink: 0 }}><I.download size={11}/></a>
                 </div>
+                {im.check && !im.check.ok && im.check.problems.length ? (
+                  <div style={{ fontSize: 11, color: 'var(--warn)', lineHeight: 1.45, wordBreak: 'break-word' }}>{im.check.problems.join('；')}</div>
+                ) : null}
               </div>
             );
           })}
@@ -4205,6 +4215,12 @@ const agent2Reduce = function(msgs, ev) {
       return updateCard(p.call_id, function(m) {
         var images = m.images.concat([p.artifact || {}]).sort(function(a, b) { return (a.position || 0) - (b.position || 0); });
         return Object.assign({}, m, { images: images });
+      });
+    case 'image.checked':
+      return updateCard(p.call_id, function(m) {
+        return Object.assign({}, m, { images: m.images.map(function(im) {
+          return im.id === p.image_id ? Object.assign({}, im, { check: { ok: p.ok, summary: p.summary || '', problems: p.problems || [] } }) : im;
+        }) });
       });
     case 'tool.finished': {
       var done = updateCard(p.call_id, function(m) {
