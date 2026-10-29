@@ -44,7 +44,7 @@ from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from starlette.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .ai_image import (
@@ -666,6 +666,8 @@ _AUTH_EXEMPT_PREFIXES = (
 )
 _AUTH_EXEMPT_EXACT_PATHS = {
     "/",
+    "/favicon.svg",
+    "/favicon.ico",
     "/ai-image/client-event",
     "/ai-image/outpainting/config",
     *(f"/image-copy/original.{extension}" for _, extension in _IMAGE_COPY_FORMATS.values()),
@@ -2349,6 +2351,21 @@ def image_copy_file(extension: str, token: str = ""):
         content_disposition_type="inline",
         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"},
     )
+
+
+@app.api_route("/favicon.svg", methods=["GET", "HEAD"], include_in_schema=False)
+async def site_favicon():
+    return FileResponse(
+        _frontend_dist / "favicon.svg",
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
+
+
+@app.api_route("/favicon.ico", methods=["GET", "HEAD"], include_in_schema=False)
+async def default_site_favicon():
+    # 浏览器直接打开图片等文件时，会从站点根目录请求默认图标。
+    return RedirectResponse("/favicon.svg", headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @app.get("/", include_in_schema=False)
