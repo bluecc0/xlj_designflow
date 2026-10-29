@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterator, Optional
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
@@ -2841,6 +2841,10 @@ def load_admin_overview(hours: int = 24) -> dict:
     all_time = requested_hours == 0
     safe_hours = 0 if all_time else max(1, min(requested_hours, 24 * 31))
     now = time.time()
+    # 按自然日统计：1 天 = 今天 0 点至今，7 / 30 天 = 含今天在内的最近 N 个自然日
+    days = max(1, -(-safe_hours // 24))
+    start_dt = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
+    range_start = start_dt.timestamp()
 
     with _connect() as conn:
         rows = [dict(row) for row in _admin_task_rows(conn)]
@@ -2865,7 +2869,7 @@ def load_admin_overview(hours: int = 24) -> dict:
                     FROM operation_logs
                     WHERE created_at >= ? AND (user_id IS NULL OR user_id NOT IN ({placeholders}))
                     """,
-                    (now - safe_hours * 3600, *test_uids),
+                    (range_start, *test_uids),
                 ).fetchone()
             else:
                 active_user_rows = conn.execute(
@@ -2874,7 +2878,7 @@ def load_admin_overview(hours: int = 24) -> dict:
                     FROM operation_logs
                     WHERE created_at >= ?
                     """,
-                    (now - safe_hours * 3600,),
+                    (range_start,),
                 ).fetchone()
         user_rows = [row for row in conn.execute("SELECT id, username FROM users").fetchall() if row["id"] not in test_uids]
         stale_ack = conn.execute(
@@ -2885,9 +2889,11 @@ def load_admin_overview(hours: int = 24) -> dict:
         (float(row.get("created_at") or now) for row in rows),
         default=now,
     )
-    since = earliest_created_at if all_time else now - safe_hours * 3600
-    window_seconds = max(3600, now - since) if all_time else safe_hours * 3600
-    previous_since = since - window_seconds
+    since = earliest_created_at if all_time else range_start
+    window_seconds = max(3600, now - since)
+    # 上一周期取同样长度的同一时段，例如“今天”对比昨天 0 点到昨天此刻
+    previous_since = (start_dt - timedelta(days=days)).timestamp()
+    previous_end = previous_since + (now - since)
     username_map = {str(row["id"]): str(row["username"]) for row in user_rows}
     display_name_map = _admin_display_name_map()
 
@@ -2896,7 +2902,7 @@ def load_admin_overview(hours: int = 24) -> dict:
     ]
     previous = [] if all_time else [
         row for row in rows
-        if previous_since <= float(row["created_at"] or 0) < since
+        if previous_since <= float(row["created_at"] or 0) < previous_end
     ]
 
     def summarize(items: list[dict]) -> dict:
@@ -2931,8 +2937,15 @@ def load_admin_overview(hours: int = 24) -> dict:
         summary["type"] = task_type
         breakdown.append(summary)
 
-    bucket_count = 12
-    bucket_seconds = window_seconds / bucket_count
+    # 趋势图按整点 / 整天分桶，标签与时间段对齐
+    if all_time:
+        bucket_count, bucket_seconds = 12, window_seconds / 12
+    elif days == 1:
+        bucket_count, bucket_seconds = 12, 2 * 3600
+    elif days <= 7:
+        bucket_count, bucket_seconds = days, 86400
+    else:
+        bucket_count, bucket_seconds = -(-days // 2), 2 * 86400
     series = []
     for index in range(bucket_count):
         start = since + index * bucket_seconds
@@ -3097,6 +3110,34 @@ def load_admin_overview(hours: int = 24) -> dict:
     }
 
 
+# 生图任务的 request_meta_json 里记录了所用技能名；非法 JSON 时视为未用技能
+_SKILL_SQL = (
+    "CASE WHEN json_valid(request_meta_json) "
+    "THEN COALESCE(json_extract(request_meta_json, '$.skill'), '') ELSE '' END"
+)
+
+
+def load_skill_usage_stats() -> dict[tuple[str, str], dict]:
+    """按 (用户, 技能名) 统计生图任务次数、失败次数和最近使用时间。"""
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT user_id, {_SKILL_SQL} AS skill, COUNT(*) AS total,
+                   SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                   MAX(created_at) AS last_used_at
+            FROM ai_image_jobs
+            GROUP BY user_id, skill
+            HAVING skill != ''
+            """
+        ).fetchall()
+    return {
+        (row["user_id"], row["skill"]): {
+            "total": row["total"], "failed": row["failed"] or 0, "last_used_at": row["last_used_at"],
+        }
+        for row in rows
+    }
+
+
 def load_admin_tasks(
     *,
     limit: int = 50,
@@ -3107,6 +3148,7 @@ def load_admin_tasks(
     search: str | None = None,
     provider: str | None = None,
     reference: str | None = None,
+    skill: str | None = None,
 ) -> tuple[list[dict], int]:
     """Unified paginated task list used by the operations console."""
     safe_limit = max(1, min(int(limit or 50), 200))
@@ -3142,6 +3184,9 @@ def load_admin_tasks(
         clauses.append("has_reference = 1")
     elif reference == "no":
         clauses.append("has_reference = 0")
+    if skill:
+        clauses.append("skill = ?")
+        params.append(skill)
     clean_search = (search or "").strip()
     if clean_search:
         clauses.append(
@@ -3157,24 +3202,25 @@ def load_admin_tasks(
         params.extend([pattern] * 6)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
-    task_cte = """
+    task_cte = f"""
         WITH all_tasks AS (
             SELECT 'compose' AS task_type, id, user_id, status, created_at,
                    updated_at, error, '' AS model, request_json AS summary,
                    0 AS progress, '' AS image_url, 'penpot' AS provider,
-                   0 AS has_reference, NULL AS reference_count, '' AS resolution
+                   0 AS has_reference, NULL AS reference_count, '' AS resolution, '' AS skill
             FROM jobs
             UNION ALL
             SELECT 'special' AS task_type, id, user_id, status, created_at,
                    updated_at, error, '' AS model, sku AS summary,
                    0 AS progress, '' AS image_url, 'penpot' AS provider,
-                   0 AS has_reference, NULL AS reference_count, '' AS resolution
+                   0 AS has_reference, NULL AS reference_count, '' AS resolution, '' AS skill
             FROM special_jobs
             UNION ALL
             SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
                    COALESCE(updated_at, created_at) AS updated_at, error, model, prompt AS summary,
                    progress, COALESCE(image_url, '') AS image_url, COALESCE(provider, '') AS provider,
-                   has_reference, reference_count, COALESCE(resolution, '') AS resolution
+                   has_reference, reference_count, COALESCE(resolution, '') AS resolution,
+                   {_SKILL_SQL} AS skill
             FROM ai_image_jobs
             UNION ALL
             SELECT 'agent_image' AS task_type, id, user_id, 'done' AS status, created_at,
@@ -3182,7 +3228,7 @@ def load_admin_tasks(
                    100 AS progress, COALESCE(image_url, '') AS image_url, COALESCE(provider, '') AS provider,
                    CASE WHEN parent_image_id IS NULL THEN 0 ELSE 1 END AS has_reference,
                    CASE WHEN parent_image_id IS NULL THEN 0 ELSE 1 END AS reference_count,
-                   '' AS resolution
+                   '' AS resolution, '' AS skill
             FROM agent_images
         )
     """

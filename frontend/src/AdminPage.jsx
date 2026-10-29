@@ -14,6 +14,8 @@ const ADMIN_ACTIONS = {
   ai_image_upscale: ['高清放大', '#c45b21'],
   grid_promotional: ['智能铺货', '#4f46c8'],
   admin_alert_acknowledge: ['确认异常', '#bd741d'],
+  skill_upload: ['上传技能', '#0f8b78'],
+  skill_delete: ['删除技能', '#d64545'],
 };
 
 const ADMIN_TASK_TYPES = {
@@ -421,7 +423,7 @@ function adminUserLabel(item) {
 
 function adminRangeLabel(hours) {
   if (Number(hours) === 0) return '所有时间';
-  if (Number(hours) <= 24) return '1 天内';
+  if (Number(hours) <= 24) return '今天';
   if (Number(hours) <= 168) return '近 7 天';
   return '近 30 天';
 }
@@ -882,6 +884,67 @@ function AdminTaskDrawer({ task, detail, loading, error, onClose }) {
   );
 }
 
+function adminFormatBytes(value) {
+  var bytes = Number(value || 0);
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+function AdminSkillDrawer({ skill, detail, loading, error, onClose, onShowTasks }) {
+  if (!skill) return null;
+  var usage = skill.usage || {};
+  var manifest = detail && detail.manifest || {};
+  var warnings = manifest.warnings || skill.warnings || [];
+  var skipped = manifest.skipped_files || skill.skipped_files || [];
+  var files = detail && detail.files || [];
+  return (
+    <>
+      <div className="df-admin-drawerbackdrop" onClick={onClose} />
+      <aside className="df-admin-drawer">
+        <div className="df-admin-drawerhead">
+          <div>
+            <div className="df-admin-drawertitle">{skill.title || skill.name}</div>
+            <div className="df-admin-cardmeta">用户技能</div>
+          </div>
+          <button className="df-admin-control df-admin-drawerclose" aria-label="关闭技能详情" title="关闭" onClick={onClose}><I.close size={14} /></button>
+        </div>
+        <dl className="df-admin-detailgrid">
+          <dt>上传用户</dt><dd>{adminUserLabel(skill)} <span className="df-admin-faint">· {skill.user_id}</span></dd>
+          <dt>技能标识</dt><dd className="df-admin-mono">{skill.name}</dd>
+          <dt>描述</dt><dd>{skill.description || '-'}</dd>
+          <dt>原始文件</dt><dd>{skill.original_filename || '-'}</dd>
+          <dt>上传时间</dt><dd>{adminFormatTime(skill.uploaded_at, true)}</dd>
+          <dt>使用情况</dt><dd>
+            共 {usage.total || 0} 次 · 失败 {usage.failed || 0} 次{usage.last_used_at ? ' · 最近 ' + adminFormatTime(usage.last_used_at, true) : ''}
+            {usage.total ? <button className="df-admin-linkbutton" style={{ marginLeft: 8 }} onClick={function() { onShowTasks(skill); }}>查看相关任务 →</button> : null}
+          </dd>
+        </dl>
+        {warnings.length || skipped.length ? (
+          <section className="df-admin-detailsection">
+            <div className="df-admin-detailtitle">上传时的提示</div>
+            {warnings.map(function(text, index) { return <div className="df-admin-faint" key={index} style={{ lineHeight: 1.8 }}>· {text}</div>; })}
+            {skipped.length ? <div className="df-admin-code">{'已跳过的文件：\n' + skipped.join('\n')}</div> : null}
+          </section>
+        ) : null}
+        <section className="df-admin-detailsection">
+          <div className="df-admin-detailtitle">文件内容（{skill.file_count} 个 · {adminFormatBytes(skill.total_bytes)}）</div>
+          {loading ? <AdminEmpty text="正在读取技能文件…" /> : null}
+          {error ? <div className="df-admin-error">{error}</div> : null}
+          {files.map(function(file) {
+            return (
+              <details className="df-admin-raw" key={file.path} open={file.path === 'SKILL.md'}>
+                <summary>{file.path} <span className="df-admin-faint">· {adminFormatBytes(file.size)}</span></summary>
+                <div className="df-admin-code">{file.content}</div>
+              </details>
+            );
+          })}
+        </section>
+      </aside>
+    </>
+  );
+}
+
 function AdminPage({ user, onBack }) {
   var [view, setView] = React.useState('overview');
   var [rangeHours, setRangeHours] = React.useState(720);
@@ -892,7 +955,12 @@ function AdminPage({ user, onBack }) {
   var [tasks, setTasks] = React.useState([]);
   var [taskTotal, setTaskTotal] = React.useState(0);
   var [taskOffset, setTaskOffset] = React.useState(0);
-  var [taskFilters, setTaskFilters] = React.useState({ search: '', taskType: '', status: '', userId: '', provider: '', reference: '' });
+  var [taskFilters, setTaskFilters] = React.useState({ search: '', taskType: '', status: '', userId: '', provider: '', reference: '', skill: '' });
+  var [skills, setSkills] = React.useState([]);
+  var [selectedSkill, setSelectedSkill] = React.useState(null);
+  var [skillDetail, setSkillDetail] = React.useState(null);
+  var [skillDetailLoading, setSkillDetailLoading] = React.useState(false);
+  var [skillDetailError, setSkillDetailError] = React.useState('');
   var [selectedTask, setSelectedTask] = React.useState(null);
   var [taskDetail, setTaskDetail] = React.useState(null);
   var [taskDetailLoading, setTaskDetailLoading] = React.useState(false);
@@ -951,7 +1019,7 @@ function AdminPage({ user, onBack }) {
     return window.API.getAdminTasks({
       limit: 50, offset: taskOffset, search: taskFilters.search,
       taskType: taskFilters.taskType, status: taskFilters.status, userId: taskFilters.userId,
-      provider: taskFilters.provider, reference: taskFilters.reference,
+      provider: taskFilters.provider, reference: taskFilters.reference, skill: taskFilters.skill,
     }).then(function(data) {
       setTasks(data.tasks || []); setTaskTotal(data.total || 0); setUpdatedAt(Date.now());
     }).catch(function(err) {
@@ -990,6 +1058,29 @@ function AdminPage({ user, onBack }) {
   React.useEffect(function() {
     if (view === 'audit') loadOperations();
   }, [view, loadOperations]);
+
+  var loadSkills = React.useCallback(function() {
+    setLoading(true); setError('');
+    return window.API.getAdminSkills()
+      .then(function(data) { setSkills(data.skills || []); setUpdatedAt(Date.now()); })
+      .catch(function(err) { setError(err.message || '用户技能加载失败'); })
+      .finally(function() { setLoading(false); });
+  }, []);
+
+  React.useEffect(function() {
+    if (view === 'skills') loadSkills();
+  }, [view, loadSkills]);
+
+  React.useEffect(function() {
+    if (!selectedSkill) { setSkillDetail(null); setSkillDetailError(''); return; }
+    var cancelled = false;
+    setSkillDetail(null); setSkillDetailError(''); setSkillDetailLoading(true);
+    window.API.getAdminSkillDetail(selectedSkill.user_id, selectedSkill.name)
+      .then(function(data) { if (!cancelled) setSkillDetail(data.skill || null); })
+      .catch(function(err) { if (!cancelled) setSkillDetailError(err.message || '技能详情加载失败'); })
+      .finally(function() { if (!cancelled) setSkillDetailLoading(false); });
+    return function() { cancelled = true; };
+  }, [selectedSkill]);
 
   React.useEffect(function() {
     if (!selectedTask) {
@@ -1031,6 +1122,7 @@ function AdminPage({ user, onBack }) {
     ['tasks', '任务中心', I.layers],
     ['services', '服务状态', I.zap],
     ['users', '用户权限', I.user],
+    ['skills', '用户技能', I.wand],
     ['audit', '审计日志', I.file],
   ];
   var viewTitles = {
@@ -1038,6 +1130,7 @@ function AdminPage({ user, onBack }) {
     tasks: ['任务中心', '跨业务查询所有持久化任务'],
     services: ['服务状态', '本机资源与外部依赖连通性'],
     users: ['用户权限', '账号、角色和使用情况'],
+    skills: ['用户技能', '用户上传的技能、使用情况和原始内容'],
     audit: ['审计日志', '关键操作与请求上下文'],
   };
 
@@ -1045,6 +1138,7 @@ function AdminPage({ user, onBack }) {
     if (view === 'tasks') return loadTasks();
     if (view === 'audit') return loadOperations();
     if (view === 'users') return loadUsers();
+    if (view === 'skills') return loadSkills();
     if (view === 'services') return Promise.all([loadOverview(false), loadServiceProbes()]);
     return loadOverview(false);
   };
@@ -1055,10 +1149,10 @@ function AdminPage({ user, onBack }) {
   var successRate = summary.success_rate == null ? '-' : summary.success_rate + '%';
   var volumeFoot = summary.volume_change == null
     ? '上一周期暂无可比数据'
-    : <><strong>{summary.volume_change >= 0 ? '+' : ''}{summary.volume_change}%</strong> 较上一周期</>;
+    : <><strong>{summary.volume_change >= 0 ? '+' : ''}{summary.volume_change}%</strong> 较上一周期同时段</>;
   var successFoot = summary.success_rate_change == null
     ? '仅统计已结束任务'
-    : <><strong>{summary.success_rate_change >= 0 ? '+' : ''}{summary.success_rate_change}pp</strong> 较上一周期</>;
+    : <><strong>{summary.success_rate_change >= 0 ? '+' : ''}{summary.success_rate_change}pp</strong> 较上一周期同时段</>;
 
   var aiProvider = health && health.ai_provider || {};
   var apimartProvider = aiProvider.apimart || aiProvider;
@@ -1195,6 +1289,9 @@ function AdminPage({ user, onBack }) {
           <select className="df-admin-control" value={taskFilters.reference} onChange={function(e) { setTaskFilter('reference', e.target.value); }}>
             <option value="">参考图不限</option><option value="yes">使用参考图</option><option value="no">未用参考图</option>
           </select>
+          {taskFilters.skill ? (
+            <button className="df-admin-control" title="清除技能筛选" onClick={function() { setTaskFilter('skill', ''); }}>技能：{taskFilters.skill} <I.close size={11} /></button>
+          ) : null}
           <span className="df-admin-pageinfo">共 {taskTotal} 条</span>
           <button className="df-admin-control df-admin-pagebutton" disabled={!taskOffset} onClick={function() { setTaskOffset(Math.max(0, taskOffset - 50)); }}>‹</button>
           <button className="df-admin-control df-admin-pagebutton" disabled={taskOffset + 50 >= taskTotal} onClick={function() { setTaskOffset(taskOffset + 50); }}>›</button>
@@ -1278,6 +1375,34 @@ function AdminPage({ user, onBack }) {
     );
   };
 
+  var renderSkills = function() {
+    return (
+      <div className="df-admin-card">
+        {skills.length ? (
+          <div className="df-admin-tablewrap"><table className="df-admin-table">
+            <thead><tr><th>用户</th><th>技能</th><th>文件</th><th>上传提示</th><th>使用</th><th>最近使用</th><th>上传时间</th></tr></thead>
+            <tbody>{skills.map(function(item) {
+              var usage = item.usage || {};
+              var account = users.find(function(u) { return u.id === item.user_id; });
+              var hints = (item.warnings || []).length;
+              return (
+                <tr className="is-clickable" key={item.user_id + ':' + item.name} onClick={function() { setSelectedSkill(Object.assign({}, item, account ? { display_name: account.display_name, username: account.username } : {})); }}>
+                  <td>{adminUserLabel(account || item)}</td>
+                  <td><div>{item.title || item.name}</div><div className="df-admin-ellipsis df-admin-faint">{item.description || item.name}</div></td>
+                  <td className="df-admin-muted">{item.file_count} 个 · {adminFormatBytes(item.total_bytes)}</td>
+                  <td>{hints ? <span style={{ color: '#bd741d' }}>{hints} 条</span> : <span className="df-admin-faint">无</span>}</td>
+                  <td>{usage.total || 0} 次{usage.failed ? <span style={{ color: '#d64545' }}> · 失败 {usage.failed}</span> : null}</td>
+                  <td className="df-admin-muted">{usage.last_used_at ? adminFormatTime(usage.last_used_at, true) : '未使用'}</td>
+                  <td className="df-admin-muted">{adminFormatTime(item.uploaded_at, true)}</td>
+                </tr>
+              );
+            })}</tbody>
+          </table></div>
+        ) : <AdminEmpty text={loading ? '正在加载用户技能…' : '还没有用户上传技能'} />}
+      </div>
+    );
+  };
+
   var renderAudit = function() {
     return (
       <>
@@ -1347,7 +1472,7 @@ function AdminPage({ user, onBack }) {
           <div className="df-admin-headtools">
             {view === 'overview' ? (
               <select className="df-admin-control" value={rangeHours} onChange={function(e) { setRangeHours(Number(e.target.value)); }}>
-                <option value="24">1 天内</option><option value="168">最近 7 天</option><option value="720">最近 30 天</option><option value="0">所有时间</option>
+                <option value="24">今天</option><option value="168">最近 7 天</option><option value="720">最近 30 天</option><option value="0">所有时间</option>
               </select>
             ) : null}
             {updatedAt ? <span className="df-admin-updated">更新于 {new Date(updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span> : null}
@@ -1361,10 +1486,19 @@ function AdminPage({ user, onBack }) {
             {view === 'tasks' ? renderTasks() : null}
             {view === 'services' ? renderServices() : null}
             {view === 'users' ? <AdminUserManagement currentUser={user} users={users} onReload={function() { return loadUsers(showTestUsers); }} showTestUsers={showTestUsers} onToggleShowTest={handleToggleShowTestUsers} /> : null}
+            {view === 'skills' ? renderSkills() : null}
             {view === 'audit' ? renderAudit() : null}
           </div>
         </div>
       </main>
+      <AdminSkillDrawer skill={selectedSkill} detail={skillDetail} loading={skillDetailLoading} error={skillDetailError}
+        onClose={function() { setSelectedSkill(null); }}
+        onShowTasks={function(item) {
+          setSelectedSkill(null);
+          setTaskOffset(0);
+          setTaskFilters(Object.assign({}, taskFilters, { userId: item.user_id, skill: item.name }));
+          setView('tasks');
+        }} />
       <AdminTaskDrawer task={selectedTask} detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onClose={function() { setSelectedTask(null); }} />
     </div>
   );

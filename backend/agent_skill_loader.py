@@ -14,6 +14,7 @@ from typing import Any
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.S)
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$")
+SKILL_CONTEXT_MAX_CHARS = 28000
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class AgentSkill:
     content: str
     metadata: dict[str, Any]
     references: list[str]
+    scope: str = "system"
 
 
 def _parse_scalar(value: str) -> Any:
@@ -46,8 +48,24 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     raw_meta, body = match.group(1), match.group(2)
     meta: dict[str, Any] = {}
     current_key: str | None = None
+    block_key: str | None = None
+    block_style = ""
+    block_lines: list[str] = []
+
+    def _flush_block() -> None:
+        if block_key is None:
+            return
+        lines = [line.strip() for line in block_lines]
+        meta[block_key] = ("\n" if block_style == "|" else " ").join(lines).strip()
+
     for raw_line in raw_meta.splitlines():
         line = raw_line.rstrip()
+        if block_key is not None:
+            if not line.strip() or raw_line[:1] in (" ", "\t"):
+                block_lines.append(line)
+                continue
+            _flush_block()
+            block_key = None
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         list_match = re.match(r"^\s*-\s*(.+?)\s*$", line)
@@ -64,10 +82,14 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
             continue
         current_key = key
         value = value.strip()
+        if value in {">", ">-", ">+", "|", "|-", "|+"}:
+            block_key, block_style, block_lines = key, value[0], []
+            continue
         if value:
             meta[key] = _parse_scalar(value)
         else:
             meta[key] = []
+    _flush_block()
     return meta, body
 
 
@@ -93,7 +115,11 @@ def _discover_skill_dirs(search_paths: list[Path]) -> list[Path]:
         candidates = [root] if (root / "SKILL.md").exists() else []
         if not candidates:
             try:
-                candidates = [child for child in root.iterdir() if child.is_dir() and (child / "SKILL.md").exists()]
+                # 跳过 . 开头的目录：上传安装过程中的临时目录不能被当成 Skill
+                candidates = [
+                    child for child in root.iterdir()
+                    if child.is_dir() and not child.name.startswith(".") and (child / "SKILL.md").exists()
+                ]
             except OSError:
                 candidates = []
         for item in candidates:
@@ -119,20 +145,22 @@ def _collect_references(skill_dir: Path) -> list[str]:
     return refs
 
 
-def _load_skill_from_dir(skill_dir: Path) -> AgentSkill | None:
+def _load_skill_from_dir(skill_dir: Path, scope: str = "system") -> AgentSkill | None:
     skill_file = skill_dir / "SKILL.md"
     if not skill_file.exists():
         return None
     try:
-        text = skill_file.read_text(encoding="utf-8")
-    except OSError:
+        text = skill_file.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
         return None
     meta, _body = parse_frontmatter(text)
-    name = str(meta.get("name") or skill_dir.name).strip()
+    raw_name = str(meta.get("name") or skill_dir.name).strip()
+    # name 含中文等字符时用目录名作内部标识，原始 name 作显示名
+    name = raw_name if _SAFE_NAME_RE.match(raw_name) else skill_dir.name
     if not _SAFE_NAME_RE.match(name):
         return None
     description = str(meta.get("description") or "").strip()
-    title = str(meta.get("title") or name).strip() or name
+    title = str(meta.get("title") or raw_name).strip() or name
     skill_type = str(meta.get("type") or "instruction").strip() or "instruction"
     return AgentSkill(
         name=name,
@@ -143,15 +171,30 @@ def _load_skill_from_dir(skill_dir: Path) -> AgentSkill | None:
         content=text,
         metadata=meta,
         references=_collect_references(skill_dir),
+        scope=scope,
     )
 
 
-def list_agent_skills(raw_paths: str | None, root_dir: Path) -> list[dict[str, Any]]:
-    skills = []
+def _iter_skills(raw_paths: str | None, root_dir: Path, user_skill_dir: Path | None):
+    """先系统 Skill，再当前用户自己的 Skill；用户目录之外的 Skill 永远不可见。"""
     for skill_dir in _discover_skill_dirs(_split_skill_paths(raw_paths, root_dir)):
-        skill = _load_skill_from_dir(skill_dir)
-        if not skill:
+        skill = _load_skill_from_dir(skill_dir, "system")
+        if skill:
+            yield skill
+    if user_skill_dir is not None:
+        for skill_dir in _discover_skill_dirs([user_skill_dir]):
+            skill = _load_skill_from_dir(skill_dir, "user")
+            if skill:
+                yield skill
+
+
+def list_agent_skills(raw_paths: str | None, root_dir: Path, user_skill_dir: Path | None = None) -> list[dict[str, Any]]:
+    skills = []
+    seen: set[str] = set()
+    for skill in _iter_skills(raw_paths, root_dir, user_skill_dir):
+        if skill.name in seen:
             continue
+        seen.add(skill.name)
         skills.append({
             "name": skill.name,
             "title": skill.title,
@@ -160,18 +203,19 @@ def list_agent_skills(raw_paths: str | None, root_dir: Path) -> list[dict[str, A
             "type": skill.type,
             "tags": skill.metadata.get("tags") if isinstance(skill.metadata.get("tags"), list) else [],
             "references": skill.references,
+            "scope": skill.scope,
         })
-    skills.sort(key=lambda item: item["name"])
+    # 系统 Skill 在前，用户 Skill 在后，各自按名称排序
+    skills.sort(key=lambda item: (item["scope"] != "system", item["name"]))
     return skills
 
 
-def load_agent_skill(raw_paths: str | None, root_dir: Path, name: str) -> AgentSkill | None:
+def load_agent_skill(raw_paths: str | None, root_dir: Path, name: str, user_skill_dir: Path | None = None) -> AgentSkill | None:
     clean_name = str(name or "").strip()
     if not _SAFE_NAME_RE.match(clean_name):
         return None
-    for skill_dir in _discover_skill_dirs(_split_skill_paths(raw_paths, root_dir)):
-        skill = _load_skill_from_dir(skill_dir)
-        if skill and skill.name == clean_name:
+    for skill in _iter_skills(raw_paths, root_dir, user_skill_dir):
+        if skill.name == clean_name:
             return skill
     return None
 
@@ -195,7 +239,7 @@ def load_reference_text(skill: AgentSkill, rel_path: str) -> str | None:
 def build_skill_context(
     skill: AgentSkill,
     include_references: bool = False,
-    max_chars: int = 28000,
+    max_chars: int = SKILL_CONTEXT_MAX_CHARS,
     references_subset: list[str] | None = None,
 ) -> str:
     parts = [f"# Active Skill: {skill.name}\n", skill.content]

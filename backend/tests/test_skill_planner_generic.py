@@ -22,7 +22,7 @@ def _write_skill(root: Path, name: str, frontmatter_extra: str = "") -> None:
 class SkillReferenceDeclarationTest(unittest.TestCase):
     def _load(self, root: Path, name: str, has_reference_image: bool) -> str:
         with patch.multiple(main.settings, agent_skill_paths=str(root), root_dir=root):
-            context, _meta = main._load_active_skill_context(name, has_reference_image=has_reference_image)
+            context, _meta = main._load_active_skill_context(name, None, has_reference_image=has_reference_image)
         return context
 
     def test_declared_references_load_only_with_reference_image(self) -> None:
