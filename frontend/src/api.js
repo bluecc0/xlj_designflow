@@ -286,90 +286,63 @@
         body: JSON.stringify({ url: url, format: format || null }),
       });
     },
-    createAgentProject: function() {
-      return request('/api/projects', { method: 'POST' }).then(function(res) { return res.data; });
+    // 新版 Agent（/agent2）。事件流统一交给 onEvent(event)，event = {type, payload, seq, turn_id}
+    listAgent2Sessions: function() {
+      return request('/agent2/sessions').then(function(res) { return res.sessions || []; });
     },
-    listAgentProjects: function(page, limit, status) {
-      var qs = '?page=' + encodeURIComponent(page || 1) + '&limit=' + encodeURIComponent(limit || 20);
-      if (status) qs += '&status=' + encodeURIComponent(status);
-      return request('/api/projects' + qs);
+    createAgent2Session: function() {
+      return request('/agent2/sessions', { method: 'POST' });
     },
-    getAgentProject: function(projectId) {
-      return request('/api/projects/' + encodeURIComponent(projectId)).then(function(res) { return res.data; });
+    getAgent2Session: function(sessionId) {
+      return request('/agent2/sessions/' + encodeURIComponent(sessionId));
     },
-    deleteAgentProject: function(projectId) {
-      return request('/api/projects/' + encodeURIComponent(projectId), { method: 'DELETE' }).then(function(res) { return res.data; });
+    deleteAgent2Session: function(sessionId) {
+      return request('/agent2/sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' });
     },
-    listAgentProjectImages: function(projectId) {
-      return request('/api/projects/' + encodeURIComponent(projectId) + '/images').then(function(res) { return res.data || []; });
+    cancelAgent2Turn: function(turnId) {
+      return request('/agent2/turns/' + encodeURIComponent(turnId) + '/cancel', { method: 'POST' });
     },
-    streamAgentChat: function(projectId, message, handlers, refImages, options) {
-      handlers = handlers || {};
-      options = options || {};
-      var hasRefs = Array.isArray(refImages) && refImages.length > 0;
-      var init = {
-        method: 'POST',
-        credentials: 'include',
-      };
-      if (hasRefs) {
-        var form = new FormData();
-        form.append('message', message);
-        if (options.skill) form.append('skill', options.skill);
-        refImages.forEach(function(item) {
-          if (item && item.file) form.append('image', item.file);
-        });
-        init.body = form;
-      } else {
-        init.headers = { 'Content-Type': 'application/json' };
-        init.body = JSON.stringify({ message: message, skill: options.skill || '' });
-      }
-      return fetch(BASE + '/api/projects/' + encodeURIComponent(projectId) + '/chat', init).then(function(resp) {
+    streamAgent2: function(path, form, onEvent) {
+      return fetch(BASE + path, { method: 'POST', credentials: 'include', body: form }).then(function(resp) {
         if (!resp.ok) {
           return resp.text().then(function(text) {
-            throw new Error('HTTP ' + resp.status + ': ' + text.slice(0, 200));
+            var detail = text;
+            try { detail = JSON.parse(text).detail || text; } catch (e) {}
+            throw new Error(String(detail).slice(0, 200));
           });
-        }
-        if (!resp.body) {
-          throw new Error('SSE body not available');
         }
         var reader = resp.body.getReader();
         var decoder = new TextDecoder();
         var buffer = '';
-
-        function dispatchBlock(block) {
-          var eventName = 'message';
-          var dataLines = [];
-          block.split('\n').forEach(function(line) {
-            if (!line) return;
-            if (line.indexOf('event:') === 0) eventName = line.slice(6).trim();
-            if (line.indexOf('data:') === 0) dataLines.push(line.slice(5).trim());
-          });
-          if (!dataLines.length) return;
-          var payloadText = dataLines.join('\n');
-          var payload = null;
-          try { payload = JSON.parse(payloadText); } catch (e) { payload = { raw: payloadText }; }
-          if (handlers.onEvent) handlers.onEvent(eventName, payload);
-          if (eventName === 'done' && handlers.onDone) handlers.onDone(payload);
-          if (eventName === 'error' && handlers.onError) handlers.onError(payload);
-        }
-
         function pump() {
-          return reader.read().then(function(result) {
-            if (result.done) {
-              if (buffer.trim()) dispatchBlock(buffer.trim());
-              if (handlers.onClose) handlers.onClose();
-              return;
-            }
-            buffer += decoder.decode(result.value, { stream: true });
-            var parts = buffer.split('\n\n');
-            buffer = parts.pop() || '';
-            parts.forEach(function(part) { dispatchBlock(part.trim()); });
+          return reader.read().then(function(r) {
+            if (r.done) return;
+            buffer += decoder.decode(r.value, { stream: true });
+            var blocks = buffer.split('\n\n');
+            buffer = blocks.pop();
+            blocks.forEach(function(block) {
+              var line = block.split('\n').find(function(l) { return l.indexOf('data: ') === 0; });
+              if (line) {
+                try { onEvent(JSON.parse(line.slice(6))); } catch (e) { console.warn('agent2 event parse failed', e); }
+              }
+            });
             return pump();
           });
         }
-
         return pump();
       });
+    },
+    sendAgent2Message: function(sessionId, message, refImages, onEvent, skill) {
+      var form = new FormData();
+      form.append('message', message || '');
+      if (skill) form.append('skill', skill);
+      (refImages || []).forEach(function(item) { if (item && item.file) form.append('images', item.file); });
+      return this.streamAgent2('/agent2/sessions/' + encodeURIComponent(sessionId) + '/messages', form, onEvent);
+    },
+    answerAgent2: function(turnId, answer, onEvent) {
+      var form = new FormData();
+      form.append('answer', answer || '');
+      return this.streamAgent2('/agent2/turns/' + encodeURIComponent(turnId) + '/answer', form, onEvent);
     },
     fetchImageTypes: function() {
       return request('/image-types').then(function(res) { return res.types; });

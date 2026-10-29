@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 
-from backend import agent_mode, main, model_routing
+from backend import main, model_routing
 
 
 def completion(text: str = "ok") -> httpx.Response:
@@ -201,48 +201,12 @@ class ModelRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"reply": "回答"})
         self.assertEqual([r.url.host for r in self.requests], ["sub.test", "api.test"])
 
-    async def test_agent_stream_discards_failed_reply_and_patch(self):
-        final = '新回复[[VISUAL_INTENT_PATCH]]{"turnType":"add_detail","patch":{"subject":"新主体"}}'
-        def handler(request):
-            return sse("旧回复[[VISUAL_INTENT_PATCH]]", finished=False) if request.url.host == "sub.test" else sse(final)
-        visible = []
-        resets = []
-        def reset():
-            visible.clear()
-            resets.append(True)
-        with self.transport(handler):
-            text, patch_result = await agent_mode.call_agent_llm(
-                "生成", agent_mode.default_project_state(), [], on_chunk=visible.append, on_reset=reset,
-            )
-        self.assertEqual(text, "新回复")
-        self.assertEqual("".join(visible), "新回复")
-        self.assertEqual(patch_result.patch["subject"], "新主体")
-        self.assertEqual(resets, [True])
-
     async def test_skill_planner_uses_apimart_before_deterministic_fallback(self):
         reply = '{"final_prompt":"有效的生图描述","steps":["理解需求"]}'
         with self.transport(lambda r: httpx.Response(503) if r.url.host == "sub.test" else completion(reply)):
             prompt, trace = await main._plan_skill_image_prompt("海报", "test-skill", "skill instructions")
         self.assertEqual(prompt, "有效的生图描述")
         self.assertEqual(trace["provider"], "apimart")
-
-    async def test_reference_analysis_uses_vision_fallback(self):
-        reply = '{"summary":"一张商品图","extractedInfo":{"subject":"商品"}}'
-        with self.transport(lambda r: httpx.Response(503) if r.url.host == "sub.test" else completion(reply)):
-            result = await agent_mode.analyze_reference_images([(b"image", "image.png")], "分析", {})
-        self.assertEqual(result.summary, "一张商品图")
-        self.assertEqual([r.url.host for r in self.requests], ["sub.test", "api.test"])
-        for request in self.requests:
-            image = json.loads(request.content)["messages"][0]["content"][1]
-            self.assertTrue(image["image_url"]["url"].startswith("data:image/png;base64,"))
-
-    async def test_critic_uses_vision_fallback(self):
-        reply = '{"qualityScore":80,"intentMatch":90,"confidence":0.9}'
-        with self.transport(lambda r: httpx.Response(503) if r.url.host == "sub.test" else completion(reply)), \
-                patch.object(agent_mode, "_resolve_image_data_url", AsyncMock(return_value="data:image/png;base64,cGlj")):
-            result = await agent_mode.run_vlm_critic("/test.png", agent_mode.default_project_state())
-        self.assertEqual(result["status"], "checked")
-        self.assertEqual(result["qualityScore"], 80)
 
     async def test_context_rewrite_uses_new_route(self):
         with self.transport(lambda r: httpx.Response(503) if r.url.host == "sub.test" else completion("完整改写后的需求")), \
@@ -266,23 +230,6 @@ class ModelRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"final_prompt": "有效计划"', final_event)
         self.assertIn('"provider": "apimart"', final_event)
         self.assertNotIn("broken", final_event)
-
-    async def test_agent_endpoint_both_failures_end_with_error(self):
-        request = Mock()
-        request.headers = {"content-type": "application/json"}
-        request.json = AsyncMock(return_value={"message": "设计一张海报"})
-        with self.transport(lambda _: httpx.Response(503)), \
-                patch.object(main, "_current_user", return_value={"id": "test-user", "username": "tester"}), \
-                patch.object(main, "get_agent_project", return_value={"id": "test-project"}), \
-                patch.object(main, "load_agent_messages", return_value=[]), \
-                patch.object(main, "log_operation"), \
-                patch.object(main, "append_agent_message"):
-            response = await main.agent_project_chat_endpoint(request, "test-project")
-            async def collect():
-                return "".join([part async for part in response.body_iterator])
-            events = await asyncio.wait_for(collect(), timeout=1)
-        self.assertIn("event: error\n", events)
-        self.assertEqual([r.url.host for r in self.requests], ["sub.test", "api.test"])
 
 
 if __name__ == "__main__":
