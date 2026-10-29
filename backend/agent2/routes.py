@@ -91,3 +91,4 @@ def cancel(request: Request, turn_id: str):
     if not store.get_turn(turn_id, user["id"]):
         raise HTTPException(404, "轮次不存在")
     return {"cancelled": service.cancel_turn(turn_id)}
+

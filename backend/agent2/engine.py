@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 Emit = Callable[[str, dict], Awaitable[None]]
 
 MAX_STEPS = 12
+_OVERFLOW_HINTS = ("context_length", "context length", "maximum context", "too many tokens",
+                   "prompt is too long", "input is too long", "context window")
+
+
+class ContextOverflow(Exception):
+    """上游明确报上下文超限：换线路也没用，交给引擎压缩后重试。"""
 
 
 # ── 模型客户端 ────────────────────────────────────────────────────────────────
@@ -68,6 +74,9 @@ class RoutedModelClient:
                     async with client.stream("POST", chat_completions_endpoint(route.base_url),
                                              headers=_headers(route), json=body) as response:
                         if response.status_code != 200:
+                            detail = (await response.aread()).decode("utf-8", "ignore")[:500]
+                            if any(h in detail.lower() for h in _OVERFLOW_HINTS):
+                                raise ContextOverflow(detail)
                             raise ModelRoutingError(f"HTTP {response.status_code}")
                         async for line in response.aiter_lines():
                             if not line.startswith("data:"):
@@ -185,19 +194,32 @@ async def run_loop(
     emit: Emit,
     ctx_base: dict,
     max_steps: int = MAX_STEPS,
+    prepare: Callable[[list[dict], bool], Awaitable[list[dict]]] | None = None,
 ) -> TurnResult:
-    """执行到模型不再调用工具，或遇到需要用户回答的工具为止。"""
+    """执行到模型不再调用工具，或遇到需要用户回答的工具为止。
+
+    prepare(messages, force) 返回这一步实际发给模型的消息（裁剪、压缩后的视图），
+    messages 本身始终是完整历史。
+    """
     specs = [t.spec() for t in tools.values()]
     final_text = ""
     for _ in range(max_steps):
         step: ModelStep | None = None
-        async for kind, value in model.stream(messages, specs):
-            if kind == "text":
-                await emit("message.delta", {"text": value})
-            elif kind == "reset":
-                await emit("message.reset", {})
-            elif kind == "step":
-                step = value
+        for attempt in range(2):
+            view = await prepare(messages, attempt > 0) if prepare else messages
+            try:
+                async for kind, value in model.stream(view, specs):
+                    if kind == "text":
+                        await emit("message.delta", {"text": value})
+                    elif kind == "reset":
+                        await emit("message.reset", {})
+                    elif kind == "step":
+                        step = value
+                break
+            except ContextOverflow:
+                if attempt or not prepare:
+                    raise
+                logger.warning("[agent2] context overflow, forcing compaction")
         assert step is not None
         assistant: dict[str, Any] = {"role": "assistant", "content": step.text or None}
         if step.tool_calls:

@@ -110,6 +110,7 @@ from .compose import get_client, run_compose
 from .config import settings
 from .model_routing import get_model_routes, routed_chat_completion, routed_chat_stream
 from .agent_skill_loader import build_skill_context, list_agent_skills, load_agent_skill
+from .agent2.memory import list_all_memories
 from .agent2.routes import router as agent2_router
 from .agent2.store import init_tables as init_agent2_tables
 from .user_skill_store import (
@@ -7493,6 +7494,15 @@ def admin_user_skill_detail(request: Request, user_id: str, skill_name: str):
     if not detail:
         raise HTTPException(404, "技能不存在")
     return {"skill": detail}
+
+
+@app.get("/admin/memories")
+def admin_user_memories(request: Request):
+    """所有用户的 Agent 记忆，便于排查（仅管理员，只读）。"""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    return {"users": list_all_memories()}
 
 
 @app.get("/admin/users")

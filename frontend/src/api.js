@@ -381,6 +381,9 @@
     getAdminSkills: function() {
       return request('/admin/skills');
     },
+    getAdminMemories: function() {
+      return request('/admin/memories');
+    },
     getAdminSkillDetail: function(userId, name) {
       return request('/admin/skills/' + encodeURIComponent(userId) + '/' + encodeURIComponent(name));
     },

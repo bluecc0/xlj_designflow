@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from ..config import settings
-from . import store
+from . import memory, store
+from .context import ContextManager
 from .engine import ModelClient, RoutedModelClient, Tool, run_loop
 from .prompts import build_system_prompt
 from .tools import build_tools
@@ -65,13 +66,15 @@ async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict
                                    result=payload.get("result"), duration_ms=payload.get("duration_ms"))
         await queue.put(event)
 
-    system = {"role": "system", "content": build_system_prompt(_user_skill_dir(user))}
+    system = {"role": "system", "content": build_system_prompt(_user_skill_dir(user), memory.memory_index(user["id"]))}
+    context = ContextManager(session, emit)
 
     async def runner():
         try:
             result = await run_loop(model=model, tools=tools, messages=[system] + messages, emit=emit,
                                     ctx_base={"user": user, "session_id": session_id, "turn_id": turn_id,
-                                              "state": {"request": request}})
+                                              "state": {"request": request}},
+                                    prepare=context.prepare)
             convo = result.messages[1:]
             title = session.get("title") or next(
                 (str(m.get("content"))[:30] for m in convo if m.get("role") == "user"), "")

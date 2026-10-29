@@ -193,7 +193,10 @@ class Agent2EngineTest(unittest.TestCase):
         img.write_bytes(b"png")
         seen_prompts = []
 
+        gen_kwargs = []
+
         async def fake_generate(**kwargs):
+            gen_kwargs.append(kwargs)
             return {"url": "/output/out.png", "provider": "fake"}
 
         async def fake_vlm(purpose, payload, **kwargs):
@@ -218,6 +221,9 @@ class Agent2EngineTest(unittest.TestCase):
                 patch.object(a2tools, "_main", lambda: main_stub):
             events = self._run(model)
         self.assertIn("生成 3 张小红书风格的跑步海报图", seen_prompts[0])
+        # 用户没指定时默认 GPT Image 2.5 快速模式、1K
+        self.assertEqual((gen_kwargs[0]["model"], gen_kwargs[0]["variant"], gen_kwargs[0]["resolution"]),
+                         ("gpt-image-2.5", "flare", "1K"))
         checked = [e for e in events if e["type"] == "image.checked"]
         self.assertEqual(len(checked), 1)
         self.assertFalse(checked[0]["payload"]["ok"])

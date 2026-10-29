@@ -3786,10 +3786,29 @@ const WelcomeSkills = ({
     }
   }, "\u6B63\u5728\u6DFB\u52A0\u6280\u80FD\u2026"));
 };
+
+// Agent 欢迎语：按时段、星期挑一句，带上用户名
+const pickAgentGreeting = function (name, now) {
+  var h = now.getHours(),
+    day = now.getDay();
+  var hi = h < 5 ? '夜深了' : h < 9 ? '早上好' : h < 12 ? '上午好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好';
+  var pool = ['今天有什么想法', hi + '，今天有什么目标', hi + '，想做点什么图'];
+  if (h < 5 || h >= 22) pool = ['夜深了，还在忙吗', '这么晚还在做图，辛苦了'];else if (h >= 12 && h < 14) pool.push('中午好，吃过饭了吗');else if (h >= 18) pool.push('晚上好，今天辛苦了');
+  if (day === 1 && h < 12) pool.push('新的一周，今天有什么目标');
+  if (day === 5 && h >= 14 && h < 22) pool.push('周五了，做完这张就轻松了');
+  if ((day === 0 || day === 6) && h >= 5 && h < 22) pool.push('周末还在忙，辛苦了');
+  var line = pool[Math.floor(Math.random() * pool.length)];
+  return name ? line + '，' + name : line;
+};
 const AgentWelcome = ({
-  skillProps
+  skillProps,
+  user
 }) => {
-  // Agent 模式专属欢迎页（不随机轮播）—— 简约版
+  // Agent 模式专属欢迎页 —— 简约版
+  var name = user ? String(user.display_name || user.username || '').trim() : '';
+  var title = React.useMemo(function () {
+    return pickAgentGreeting(name, new Date());
+  }, [name]);
   return /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,
@@ -3825,9 +3844,10 @@ const AgentWelcome = ({
     style: {
       fontSize: 15,
       fontWeight: 500,
-      color: 'var(--ink)'
+      color: 'var(--ink)',
+      textAlign: 'center'
     }
-  }, "\u4F60\u60F3\u505A\u4E00\u5F20\u4EC0\u4E48\u6837\u7684\u56FE\uFF1F"), /*#__PURE__*/React.createElement("div", {
+  }, title), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--ink-3)',
@@ -3860,7 +3880,11 @@ const AgentToolCard = ({
   var result = m.result || {};
   var images = m.images || [];
   var args = m.args || {};
-  var label = AGENT2_TOOL_LABELS[m.tool] || m.tool;
+  var label = m.tool === 'remember' ? {
+    add: '记住',
+    update: '更新记忆',
+    'delete': '删除记忆'
+  }[args.action] || '记忆' : AGENT2_TOOL_LABELS[m.tool] || m.tool;
   var summary = '';
   if (m.tool === 'generate_image') {
     var count = (args.images || []).length;
@@ -3869,8 +3893,10 @@ const AgentToolCard = ({
     summary = [args.sku, args.name].filter(Boolean).join(' · ');
   } else if (m.tool === 'load_skill' || m.tool === 'read_skill_file') {
     summary = args.name || '';
+  } else if (m.tool === 'remember') {
+    summary = args.content || '';
   }
-  var compact = m.tool === 'analyze_image' || m.tool === 'load_skill' || m.tool === 'read_skill_file';
+  var compact = m.tool === 'analyze_image' || m.tool === 'load_skill' || m.tool === 'read_skill_file' || m.tool === 'remember';
   var doneIdx = {};
   images.forEach(function (im) {
     doneIdx[im.position || 0] = true;
@@ -4217,6 +4243,7 @@ const ChatReturned = ({
   }, messages.length === 0 ?
   // Agent 模式用专属欢迎页，否则随机轮播
   agentEnabled ? /*#__PURE__*/React.createElement(AgentWelcome, {
+    user: user,
     skillProps: {
       agentSkills,
       onPickSkill,
@@ -8251,7 +8278,8 @@ const AGENT2_TOOL_LABELS = {
   analyze_image: '看图',
   load_skill: '加载技能',
   read_skill_file: '读取技能资料',
-  special_compose: '特殊品合成'
+  special_compose: '特殊品合成',
+  remember: '记忆'
 };
 // 回复末尾的 [[NEXT: ...]] 由界面渲染成快捷按钮；流式过程中先把它隐藏
 const agent2StripNext = function (text) {
@@ -8355,6 +8383,10 @@ const agent2Reduce = function (msgs, ev) {
           images: images
         });
       });
+    case 'context.compacting':
+      return list.concat([Object.assign({}, thinking, {
+        text: '对话较长，正在整理较早的内容…'
+      })]);
     case 'image.checked':
       return updateCard(p.call_id, function (m) {
         return Object.assign({}, m, {
@@ -12347,6 +12379,7 @@ function AdminPage({
     skill: ''
   });
   var [skills, setSkills] = React.useState([]);
+  var [memories, setMemories] = React.useState([]);
   var [selectedSkill, setSelectedSkill] = React.useState(null);
   var [skillDetail, setSkillDetail] = React.useState(null);
   var [skillDetailLoading, setSkillDetailLoading] = React.useState(false);
@@ -12470,6 +12503,33 @@ function AdminPage({
   React.useEffect(function () {
     if (view === 'skills') loadSkills();
   }, [view, loadSkills]);
+  var loadMemories = React.useCallback(function () {
+    setLoading(true);
+    setError('');
+    return window.API.getAdminMemories().then(function (data) {
+      var rows = [];
+      (data.users || []).forEach(function (group) {
+        (group.memories || []).forEach(function (m) {
+          rows.push(Object.assign({
+            user_id: group.user_id,
+            username: group.username
+          }, m));
+        });
+      });
+      rows.sort(function (a, b) {
+        return (b.updated_at || 0) - (a.updated_at || 0);
+      });
+      setMemories(rows);
+      setUpdatedAt(Date.now());
+    }).catch(function (err) {
+      setError(err.message || '用户记忆加载失败');
+    }).finally(function () {
+      setLoading(false);
+    });
+  }, []);
+  React.useEffect(function () {
+    if (view === 'memories') loadMemories();
+  }, [view, loadMemories]);
   React.useEffect(function () {
     if (!selectedSkill) {
       setSkillDetail(null);
@@ -12530,13 +12590,14 @@ function AdminPage({
       });
     });
   };
-  var navItems = [['overview', '运营总览', I.grid], ['tasks', '任务中心', I.layers], ['services', '服务状态', I.zap], ['users', '用户权限', I.user], ['skills', '用户技能', I.wand], ['audit', '审计日志', I.file]];
+  var navItems = [['overview', '运营总览', I.grid], ['tasks', '任务中心', I.layers], ['services', '服务状态', I.zap], ['users', '用户权限', I.user], ['skills', '用户技能', I.wand], ['memories', '用户记忆', I.bookmark], ['audit', '审计日志', I.file]];
   var viewTitles = {
     overview: ['运营总览', '任务健康、异常和使用趋势'],
     tasks: ['任务中心', '跨业务查询所有持久化任务'],
     services: ['服务状态', '本机资源与外部依赖连通性'],
     users: ['用户权限', '账号、角色和使用情况'],
     skills: ['用户技能', '用户上传的技能、使用情况和原始内容'],
+    memories: ['用户记忆', 'Agent 为每个用户记下的长期偏好和信息'],
     audit: ['审计日志', '关键操作与请求上下文']
   };
   var doRefresh = function () {
@@ -12544,6 +12605,7 @@ function AdminPage({
     if (view === 'audit') return loadOperations();
     if (view === 'users') return loadUsers();
     if (view === 'skills') return loadSkills();
+    if (view === 'memories') return loadMemories();
     if (view === 'services') return Promise.all([loadOverview(false), loadServiceProbes()]);
     return loadOverview(false);
   };
@@ -13038,6 +13100,35 @@ function AdminPage({
       text: loading ? '正在加载用户技能…' : '还没有用户上传技能'
     }));
   };
+  var renderMemories = function () {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-card"
+    }, memories.length ? /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-tablewrap"
+    }, /*#__PURE__*/React.createElement("table", {
+      className: "df-admin-table"
+    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\u7528\u6237"), /*#__PURE__*/React.createElement("th", null, "\u7C7B\u578B"), /*#__PURE__*/React.createElement("th", null, "\u5185\u5BB9"), /*#__PURE__*/React.createElement("th", null, "\u6765\u6E90\u4F1A\u8BDD"), /*#__PURE__*/React.createElement("th", null, "\u66F4\u65B0\u65F6\u95F4"))), /*#__PURE__*/React.createElement("tbody", null, memories.map(function (item) {
+      var account = users.find(function (u) {
+        return u.id === item.user_id;
+      });
+      return /*#__PURE__*/React.createElement("tr", {
+        key: item.user_id + ':' + item.id
+      }, /*#__PURE__*/React.createElement("td", null, adminUserLabel(account || item)), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted"
+      }, item.kind === 'fact' ? '信息' : '偏好'), /*#__PURE__*/React.createElement("td", {
+        style: {
+          whiteSpace: 'normal',
+          wordBreak: 'break-word'
+        }
+      }, item.content), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-faint mono"
+      }, item.source_session ? item.source_session.slice(0, 8) : '手动'), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted"
+      }, adminFormatTime(item.updated_at, true)));
+    })))) : /*#__PURE__*/React.createElement(AdminEmpty, {
+      text: loading ? '正在加载用户记忆…' : '还没有用户记忆'
+    }));
+  };
   var renderAudit = function () {
     return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
       className: "df-admin-toolbar"
@@ -13226,7 +13317,7 @@ function AdminPage({
     },
     showTestUsers: showTestUsers,
     onToggleShowTest: handleToggleShowTestUsers
-  }) : null, view === 'skills' ? renderSkills() : null, view === 'audit' ? renderAudit() : null))), /*#__PURE__*/React.createElement(AdminSkillDrawer, {
+  }) : null, view === 'skills' ? renderSkills() : null, view === 'memories' ? renderMemories() : null, view === 'audit' ? renderAudit() : null))), /*#__PURE__*/React.createElement(AdminSkillDrawer, {
     skill: selectedSkill,
     detail: skillDetail,
     loading: skillDetailLoading,

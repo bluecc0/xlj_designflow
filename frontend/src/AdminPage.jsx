@@ -957,6 +957,7 @@ function AdminPage({ user, onBack }) {
   var [taskOffset, setTaskOffset] = React.useState(0);
   var [taskFilters, setTaskFilters] = React.useState({ search: '', taskType: '', status: '', userId: '', provider: '', reference: '', skill: '' });
   var [skills, setSkills] = React.useState([]);
+  var [memories, setMemories] = React.useState([]);
   var [selectedSkill, setSelectedSkill] = React.useState(null);
   var [skillDetail, setSkillDetail] = React.useState(null);
   var [skillDetailLoading, setSkillDetailLoading] = React.useState(false);
@@ -1071,6 +1072,25 @@ function AdminPage({ user, onBack }) {
     if (view === 'skills') loadSkills();
   }, [view, loadSkills]);
 
+  var loadMemories = React.useCallback(function() {
+    setLoading(true); setError('');
+    return window.API.getAdminMemories()
+      .then(function(data) {
+        var rows = [];
+        (data.users || []).forEach(function(group) {
+          (group.memories || []).forEach(function(m) { rows.push(Object.assign({ user_id: group.user_id, username: group.username }, m)); });
+        });
+        rows.sort(function(a, b) { return (b.updated_at || 0) - (a.updated_at || 0); });
+        setMemories(rows); setUpdatedAt(Date.now());
+      })
+      .catch(function(err) { setError(err.message || '用户记忆加载失败'); })
+      .finally(function() { setLoading(false); });
+  }, []);
+
+  React.useEffect(function() {
+    if (view === 'memories') loadMemories();
+  }, [view, loadMemories]);
+
   React.useEffect(function() {
     if (!selectedSkill) { setSkillDetail(null); setSkillDetailError(''); return; }
     var cancelled = false;
@@ -1123,6 +1143,7 @@ function AdminPage({ user, onBack }) {
     ['services', '服务状态', I.zap],
     ['users', '用户权限', I.user],
     ['skills', '用户技能', I.wand],
+    ['memories', '用户记忆', I.bookmark],
     ['audit', '审计日志', I.file],
   ];
   var viewTitles = {
@@ -1131,6 +1152,7 @@ function AdminPage({ user, onBack }) {
     services: ['服务状态', '本机资源与外部依赖连通性'],
     users: ['用户权限', '账号、角色和使用情况'],
     skills: ['用户技能', '用户上传的技能、使用情况和原始内容'],
+    memories: ['用户记忆', 'Agent 为每个用户记下的长期偏好和信息'],
     audit: ['审计日志', '关键操作与请求上下文'],
   };
 
@@ -1139,6 +1161,7 @@ function AdminPage({ user, onBack }) {
     if (view === 'audit') return loadOperations();
     if (view === 'users') return loadUsers();
     if (view === 'skills') return loadSkills();
+    if (view === 'memories') return loadMemories();
     if (view === 'services') return Promise.all([loadOverview(false), loadServiceProbes()]);
     return loadOverview(false);
   };
@@ -1403,6 +1426,30 @@ function AdminPage({ user, onBack }) {
     );
   };
 
+  var renderMemories = function() {
+    return (
+      <div className="df-admin-card">
+        {memories.length ? (
+          <div className="df-admin-tablewrap"><table className="df-admin-table">
+            <thead><tr><th>用户</th><th>类型</th><th>内容</th><th>来源会话</th><th>更新时间</th></tr></thead>
+            <tbody>{memories.map(function(item) {
+              var account = users.find(function(u) { return u.id === item.user_id; });
+              return (
+                <tr key={item.user_id + ':' + item.id}>
+                  <td>{adminUserLabel(account || item)}</td>
+                  <td className="df-admin-muted">{item.kind === 'fact' ? '信息' : '偏好'}</td>
+                  <td style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{item.content}</td>
+                  <td className="df-admin-faint mono">{item.source_session ? item.source_session.slice(0, 8) : '手动'}</td>
+                  <td className="df-admin-muted">{adminFormatTime(item.updated_at, true)}</td>
+                </tr>
+              );
+            })}</tbody>
+          </table></div>
+        ) : <AdminEmpty text={loading ? '正在加载用户记忆…' : '还没有用户记忆'} />}
+      </div>
+    );
+  };
+
   var renderAudit = function() {
     return (
       <>
@@ -1487,6 +1534,7 @@ function AdminPage({ user, onBack }) {
             {view === 'services' ? renderServices() : null}
             {view === 'users' ? <AdminUserManagement currentUser={user} users={users} onReload={function() { return loadUsers(showTestUsers); }} showTestUsers={showTestUsers} onToggleShowTest={handleToggleShowTestUsers} /> : null}
             {view === 'skills' ? renderSkills() : null}
+            {view === 'memories' ? renderMemories() : null}
             {view === 'audit' ? renderAudit() : null}
           </div>
         </div>

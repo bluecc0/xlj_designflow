@@ -895,8 +895,25 @@ const WelcomeSkills = ({ agentSkills, onPickSkill, onUploadSkill, onDeleteSkill,
   );
 };
 
-const AgentWelcome = ({ skillProps }) => {
-  // Agent 模式专属欢迎页（不随机轮播）—— 简约版
+// Agent 欢迎语：按时段、星期挑一句，带上用户名
+const pickAgentGreeting = function(name, now) {
+  var h = now.getHours(), day = now.getDay();
+  var hi = h < 5 ? '夜深了' : h < 9 ? '早上好' : h < 12 ? '上午好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好';
+  var pool = ['今天有什么想法', hi + '，今天有什么目标', hi + '，想做点什么图'];
+  if (h < 5 || h >= 22) pool = ['夜深了，还在忙吗', '这么晚还在做图，辛苦了'];
+  else if (h >= 12 && h < 14) pool.push('中午好，吃过饭了吗');
+  else if (h >= 18) pool.push('晚上好，今天辛苦了');
+  if (day === 1 && h < 12) pool.push('新的一周，今天有什么目标');
+  if (day === 5 && h >= 14 && h < 22) pool.push('周五了，做完这张就轻松了');
+  if ((day === 0 || day === 6) && h >= 5 && h < 22) pool.push('周末还在忙，辛苦了');
+  var line = pool[Math.floor(Math.random() * pool.length)];
+  return name ? line + '，' + name : line;
+};
+
+const AgentWelcome = ({ skillProps, user }) => {
+  // Agent 模式专属欢迎页 —— 简约版
+  var name = user ? String(user.display_name || user.username || '').trim() : '';
+  var title = React.useMemo(function() { return pickAgentGreeting(name, new Date()); }, [name]);
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
@@ -907,8 +924,8 @@ const AgentWelcome = ({ skillProps }) => {
         }}>
           <I.sparkles size={18} stroke={1.8}/>
         </div>
-        <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)' }}>
-          你想做一张什么样的图？
+        <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)', textAlign: 'center' }}>
+          {title}
         </div>
         <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
           说一句需求，Agent 会直接开始做；看到结果后再告诉它怎么调整。
@@ -929,7 +946,9 @@ const AgentToolCard = ({ m, openImage }) => {
   var result = m.result || {};
   var images = m.images || [];
   var args = m.args || {};
-  var label = AGENT2_TOOL_LABELS[m.tool] || m.tool;
+  var label = m.tool === 'remember'
+    ? ({ add: '记住', update: '更新记忆', 'delete': '删除记忆' }[args.action] || '记忆')
+    : (AGENT2_TOOL_LABELS[m.tool] || m.tool);
   var summary = '';
   if (m.tool === 'generate_image') {
     var count = (args.images || []).length;
@@ -940,8 +959,10 @@ const AgentToolCard = ({ m, openImage }) => {
     summary = [args.sku, args.name].filter(Boolean).join(' · ');
   } else if (m.tool === 'load_skill' || m.tool === 'read_skill_file') {
     summary = args.name || '';
+  } else if (m.tool === 'remember') {
+    summary = args.content || '';
   }
-  var compact = m.tool === 'analyze_image' || m.tool === 'load_skill' || m.tool === 'read_skill_file';
+  var compact = m.tool === 'analyze_image' || m.tool === 'load_skill' || m.tool === 'read_skill_file' || m.tool === 'remember';
   var doneIdx = {};
   images.forEach(function(im) { doneIdx[im.position || 0] = true; });
   var pendingSlots = [];
@@ -1090,7 +1111,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
     <div ref={contentRef} style={{ flex: '1 0 auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
       {messages.length === 0 ? (
         // Agent 模式用专属欢迎页，否则随机轮播
-        agentEnabled ? <AgentWelcome skillProps={{ agentSkills, onPickSkill, onUploadSkill, onDeleteSkill, skillUploading }}/> : (
+        agentEnabled ? <AgentWelcome user={user} skillProps={{ agentSkills, onPickSkill, onUploadSkill, onDeleteSkill, skillUploading }}/> : (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
             <div style={{
               width: 40, height: 40, borderRadius: 11,
@@ -4160,7 +4181,7 @@ const AGENT_MODE_KEY = 'designflow_agent_mode_enabled';
 const AGENT2_SESSION_KEY = 'designflow_agent2_session_id';
 const AGENT2_TOOL_LABELS = {
   generate_image: '生成图片', analyze_image: '看图', load_skill: '加载技能',
-  read_skill_file: '读取技能资料', special_compose: '特殊品合成',
+  read_skill_file: '读取技能资料', special_compose: '特殊品合成', remember: '记忆',
 };
 // 回复末尾的 [[NEXT: ...]] 由界面渲染成快捷按钮；流式过程中先把它隐藏
 const agent2StripNext = function(text) { return String(text || '').replace(/\[\[[\s\S]*$/, '').trimEnd(); };
@@ -4216,6 +4237,8 @@ const agent2Reduce = function(msgs, ev) {
         var images = m.images.concat([p.artifact || {}]).sort(function(a, b) { return (a.position || 0) - (b.position || 0); });
         return Object.assign({}, m, { images: images });
       });
+    case 'context.compacting':
+      return list.concat([Object.assign({}, thinking, { text: '对话较长，正在整理较早的内容…' })]);
     case 'image.checked':
       return updateCard(p.call_id, function(m) {
         return Object.assign({}, m, { images: m.images.map(function(im) {

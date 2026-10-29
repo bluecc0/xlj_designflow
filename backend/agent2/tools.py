@@ -18,10 +18,13 @@ from ..common_helpers import _extract_first_json_object
 from ..config import settings
 from ..job_store import save_ai_image_job
 from ..model_routing import routed_chat_completion
-from . import store
+from . import memory, store
 from .engine import Tool, ToolContext
 
 DEFAULT_IMAGE_MODEL = "gpt-image-2.5"
+IMAGE_MODELS = ["gpt-image-2.5", "gpt-image-2", "nano-banana-pro", "nano-banana-2.1",
+                "seedream-5.0-pro", "seedream-5.0-flash"]
+RESOLUTIONS = ["1K", "2K", "4K"]
 ASPECT_RATIOS = ["auto", "1:1", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "2:3", "3:2"]
 MAX_IMAGES_PER_CALL = 6
 MAX_IMAGES_PER_TURN = 12
@@ -46,8 +49,8 @@ def _artifact_bytes(ctx: ToolContext, artifact_id: str) -> tuple[bytes, str]:
 
 # ── generate_image ────────────────────────────────────────────────────────────
 
-async def _generate_one(ctx: ToolContext, index: int, item: dict, *, size: str, resolution: str,
-                        refs: list[tuple[bytes, str]], group_id: str | None, group_type: str | None) -> dict:
+async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str, variant: str,
+                        size: str, resolution: str, refs: list[tuple[bytes, str]], group_id: str | None, group_type: str | None) -> dict:
     prompt = str(item.get("prompt") or "").strip()
     label = str(item.get("label") or "").strip()
     # 单张指定的参考图优先：修改多张已有图时，每张只参考它自己的原图
@@ -56,7 +59,7 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, size: str, 
     job_id = uuid.uuid4().hex
     created_at = time.time()
     meta = {"source": "agent2", "session_id": ctx.session_id, "turn_id": ctx.turn_id, "tool_call_id": ctx.call_id}
-    job_args = dict(job_id=job_id, user_id=ctx.user["id"], model=DEFAULT_IMAGE_MODEL, prompt=prompt, size=size,
+    job_args = dict(job_id=job_id, user_id=ctx.user["id"], model=model, prompt=prompt, size=size,
                     resolution=resolution, has_reference=bool(refs), reference_count=len(refs),
                     request_meta=meta, created_at=created_at)
     save_ai_image_job(status="processing", **job_args)
@@ -69,8 +72,8 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, size: str, 
 
     try:
         result = await smart_generate_image_async(
-            model=DEFAULT_IMAGE_MODEL, prompt=prompt, images=refs or None, size=size, resolution=resolution,
-            user_id=ctx.user["id"], on_progress=progress_cb,
+            model=model, prompt=prompt, images=refs or None, size=size, resolution=resolution,
+            user_id=ctx.user["id"], variant=variant, on_progress=progress_cb,
         )
     except asyncio.CancelledError:
         save_ai_image_job(status="failed", error="用户已停止", **job_args)
@@ -153,11 +156,17 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
     if ratio not in ASPECT_RATIOS:
         return {"error": f"aspect_ratio 只能是 {', '.join(ASPECT_RATIOS)}"}
     resolution = str(args.get("resolution") or "1K").upper()
+    if resolution not in RESOLUTIONS:
+        return {"error": f"resolution 只能是 {', '.join(RESOLUTIONS)}"}
+    model = str(args.get("model") or DEFAULT_IMAGE_MODEL)
+    if model not in IMAGE_MODELS:
+        return {"error": f"model 只能是 {', '.join(IMAGE_MODELS)}"}
+    variant = "sunburst" if args.get("variant") == "sunburst" else "flare"
     refs = [_artifact_bytes(ctx, rid) for rid in (args.get("reference_image_ids") or [])]
     group_type = args.get("group_type") if args.get("group_type") in {"set", "variant"} else None
     group_id = ("grp_" + uuid.uuid4().hex[:8]) if group_type else None
     results = await asyncio.gather(*[
-        _generate_one(ctx, i, item, size=ratio, resolution=resolution, refs=refs,
+        _generate_one(ctx, i, item, model=model, variant=variant, size=ratio, resolution=resolution, refs=refs,
                       group_id=group_id, group_type=group_type)
         for i, item in enumerate(items)
     ])
@@ -293,6 +302,27 @@ async def special_compose(ctx: ToolContext, args: dict) -> dict:
 
 # ── 注册表 ────────────────────────────────────────────────────────────────────
 
+# ── remember ──────────────────────────────────────────────────────────────────
+
+async def remember(ctx: ToolContext, args: dict) -> dict:
+    action = str(args.get("action") or "add")
+    uid = ctx.user["id"]
+    try:
+        if action == "add":
+            entry = memory.add_memory(uid, args.get("content"), args.get("kind") or "preference",
+                                      source_session=ctx.session_id, username=str(ctx.user.get("username") or ""))
+        elif action == "update":
+            entry = memory.update_memory(uid, args.get("memory_id"), args.get("content"), args.get("kind") or "")
+        elif action == "delete":
+            memory.delete_memory(uid, args.get("memory_id"))
+            return {"ok": True, "deleted": args.get("memory_id")}
+        else:
+            return {"error": "action 只能是 add、update、delete"}
+    except memory.MemoryError as exc:
+        return {"error": str(exc)}
+    return {"ok": True, "memory": {"id": entry["id"], "kind": entry["kind"], "content": entry["content"]}}
+
+
 def build_tools() -> dict[str, Tool]:
     tools = [
         Tool("generate_image",
@@ -308,7 +338,12 @@ def build_tools() -> dict[str, Tool]:
                                              "description": "可选，只用于这一张的参考图；修改多张已有图时，每张填它自己的原图 ID"}},
                      "required": ["prompt"]}},
                  "aspect_ratio": {"type": "string", "enum": ASPECT_RATIOS},
-                 "resolution": {"type": "string", "enum": ["1K", "2K"]},
+                 "resolution": {"type": "string", "enum": RESOLUTIONS,
+                                "description": "默认 1K；只有用户指定分辨率时才改"},
+                 "model": {"type": "string", "enum": IMAGE_MODELS,
+                           "description": "默认 gpt-image-2.5；只有用户指定模型时才改"},
+                 "variant": {"type": "string", "enum": ["flare", "sunburst"],
+                             "description": "gpt-image-2.5 的模式：flare 快速（默认），sunburst 优质；只有用户要求优质模式时才用 sunburst"},
                  "reference_image_ids": {"type": "array", "items": {"type": "string"}},
                  "group_type": {"type": "string", "enum": ["set", "variant"]}},
               "required": ["images"]},
@@ -329,6 +364,17 @@ def build_tools() -> dict[str, Tool]:
              {"type": "object", "properties": {"name": {"type": "string"}, "path": {"type": "string"}},
               "required": ["name", "path"]},
              read_skill_file),
+        Tool("remember",
+             "管理用户的长期记忆（跨会话生效）。add 新增；update 修改已有的一条（填 memory_id）；"
+             "delete 删除（填 memory_id）。只记长期偏好和用户提供的店铺、商品信息，不记一次性的需求。",
+             {"type": "object", "properties": {
+                 "action": {"type": "string", "enum": ["add", "update", "delete"]},
+                 "content": {"type": "string", "description": "一句话，不超过 200 字，例如\"主色偏好橙色\""},
+                 "kind": {"type": "string", "enum": ["preference", "fact"],
+                          "description": "preference 偏好；fact 用户提供的店铺、商品信息"},
+                 "memory_id": {"type": "string", "description": "update / delete 时填，m_ 开头"}},
+              "required": ["action"]},
+             remember),
         Tool("special_compose",
              "平台原生功能：特殊品合成。用户说\"做一个特殊品 SKU，文案，时间\"或类似意思时直接调用。"
              "工具会自动检测素材、选择普通或完整线路、找到模板并合成，返回一组图片（套图）。",

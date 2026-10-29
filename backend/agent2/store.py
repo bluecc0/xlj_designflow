@@ -47,6 +47,12 @@ def init_tables() -> None:
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agent2_events_session ON agent2_events(session_id, seq)")
+        # 上下文压缩：summary 覆盖 messages_json 的前 compacted_upto 条消息
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(agent2_sessions)")}
+        if "summary" not in columns:
+            conn.execute("ALTER TABLE agent2_sessions ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
+        if "compacted_upto" not in columns:
+            conn.execute("ALTER TABLE agent2_sessions ADD COLUMN compacted_upto INTEGER NOT NULL DEFAULT 0")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS agent2_tool_calls (
                 id          TEXT PRIMARY KEY,
@@ -138,6 +144,12 @@ def save_session_messages(session_id: str, messages: list[dict], title: str | No
                 "UPDATE agent2_sessions SET messages_json = ?, updated_at = ? WHERE id = ?",
                 (json.dumps(messages, ensure_ascii=False), time.time(), session_id),
             )
+
+
+def save_compaction(session_id: str, summary: str, compacted_upto: int) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE agent2_sessions SET summary = ?, compacted_upto = ? WHERE id = ?",
+                     (summary, compacted_upto, session_id))
 
 
 def load_session_messages(session: dict) -> list[dict]:
@@ -246,6 +258,15 @@ def create_artifact(*, session_id: str, user_id: str, kind: str, url: str, path:
              parent_id, source_tool_call_id, json.dumps(artifact["meta"], ensure_ascii=False), artifact["created_at"]),
         )
     return artifact
+
+
+def list_artifacts(session_id: str, limit: int = 30) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, kind, label, group_type, created_at FROM agent2_artifacts WHERE session_id = ? "
+            "ORDER BY created_at DESC LIMIT ?", (session_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_artifact(artifact_id: str, user_id: str) -> dict | None:
