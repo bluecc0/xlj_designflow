@@ -429,46 +429,21 @@ window.deriveTemplateMeta = deriveTemplateMeta;
 window.aggregateTemplates = aggregateTemplates;
 
 // src/Overlays.jsx
-// Global feedback overlays: toast, confirm dialog, image lightbox.
+// Confirmation dialogs and image previews. Lightweight notifications live in feedback.js.
 // Usage: window.dfToast(msg, { tone }), await window.dfConfirm({ title, message, danger }),
 //        window.dfOpenLightbox({ src, downloadUrl, title, actions })
 
 var overlayState = {
-  toasts: [],
   confirm: null,
   lightbox: null
 };
 var overlayListeners = [];
-var toastSeq = 0;
 function setOverlayState(patch) {
   overlayState = Object.assign({}, overlayState, patch);
   overlayListeners.forEach(function (fn) {
     fn(overlayState);
   });
 }
-function dismissToast(id) {
-  setOverlayState({
-    toasts: overlayState.toasts.filter(function (t) {
-      return t.id !== id;
-    })
-  });
-}
-window.dfToast = function (message, opts) {
-  opts = opts || {};
-  var tone = opts.tone || 'info';
-  var id = ++toastSeq;
-  var duration = opts.duration || (tone === 'danger' ? 6000 : 3200);
-  setOverlayState({
-    toasts: overlayState.toasts.concat([{
-      id: id,
-      message: String(message || ''),
-      tone: tone
-    }]).slice(-4)
-  });
-  setTimeout(function () {
-    dismissToast(id);
-  }, duration);
-};
 window.dfConfirm = function (opts) {
   opts = typeof opts === 'string' ? {
     message: opts
@@ -487,20 +462,6 @@ window.dfOpenLightbox = function (opts) {
   setOverlayState({
     lightbox: opts
   });
-};
-const TOAST_TONES = {
-  info: {
-    dot: 'var(--ink-3)'
-  },
-  ok: {
-    dot: 'var(--ok)'
-  },
-  warn: {
-    dot: 'var(--warn)'
-  },
-  danger: {
-    dot: 'var(--danger)'
-  }
 };
 const overlayBtn = function (primary, danger) {
   return {
@@ -701,6 +662,7 @@ const Lightbox = ({
     },
     onError: function () {
       setFullState('failed');
+      window.dfError('原图加载失败，当前显示的是缩略图，请稍后重新打开。');
     },
     style: {
       display: showFull ? 'block' : 'none',
@@ -727,7 +689,7 @@ const Lightbox = ({
       fontSize: 12,
       color: 'rgba(255,255,255,0.72)'
     }
-  }, fullState === 'failed' ? '原图加载失败，当前显示的是缩略图' : '正在加载原图…'), box.title && /*#__PURE__*/React.createElement("div", {
+  }, fullState === 'failed' ? '缩略图预览' : '正在加载原图…'), box.title && /*#__PURE__*/React.createElement("div", {
     style: {
       maxWidth: 640,
       fontSize: 12,
@@ -784,81 +746,13 @@ const OverlayHost = ({
       });
     };
   }, []);
-  return /*#__PURE__*/React.createElement(React.Fragment, null, state.toasts.length > 0 && /*#__PURE__*/React.createElement("div", {
-    role: "status",
-    "aria-live": "polite",
-    style: {
-      position: 'fixed',
-      top: 58,
-      left: '50%',
-      transform: 'translateX(-50%)',
-      zIndex: 420,
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      gap: 8,
-      pointerEvents: 'none'
-    }
-  }, state.toasts.map(function (t) {
-    return /*#__PURE__*/React.createElement("div", {
-      key: t.id,
-      style: {
-        pointerEvents: 'auto',
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 8,
-        maxWidth: 'min(460px, calc(100vw - 32px))',
-        padding: '9px 10px 9px 14px',
-        borderRadius: 12,
-        background: 'var(--panel)',
-        color: 'var(--ink)',
-        border: '1px solid ' + (t.tone === 'danger' ? 'var(--danger-line)' : 'var(--line)'),
-        boxShadow: '0 6px 22px rgba(0,0,0,0.10)',
-        fontSize: 12,
-        lineHeight: 1.5,
-        animation: 'dfToastIn 160ms ease-out'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      "aria-hidden": "true",
-      style: {
-        width: 6,
-        height: 6,
-        borderRadius: 99,
-        marginTop: 7,
-        flexShrink: 0,
-        background: (TOAST_TONES[t.tone] || TOAST_TONES.info).dot
-      }
-    }), /*#__PURE__*/React.createElement("span", {
-      style: {
-        flex: 1,
-        whiteSpace: 'pre-line',
-        wordBreak: 'break-word'
-      }
-    }, t.message), /*#__PURE__*/React.createElement("button", {
-      type: "button",
-      "aria-label": "\u5173\u95ED\u63D0\u793A",
-      onClick: function () {
-        dismissToast(t.id);
-      },
-      style: {
-        width: 20,
-        height: 20,
-        borderRadius: 6,
-        color: 'var(--ink-3)',
-        display: 'grid',
-        placeItems: 'center',
-        flexShrink: 0
-      }
-    }, /*#__PURE__*/React.createElement(I.close, {
-      size: 10
-    })));
-  })), state.confirm && /*#__PURE__*/React.createElement(ConfirmDialog, {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, state.confirm && /*#__PURE__*/React.createElement(ConfirmDialog, {
     confirm: state.confirm
   }), state.lightbox && /*#__PURE__*/React.createElement(Lightbox, {
     box: state.lightbox,
     onInsertToCanvas: onInsertToCanvas,
     onUseAsReference: onUseAsReference
-  }), /*#__PURE__*/React.createElement("style", null, `@keyframes dfToastIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }`));
+  }));
 };
 window.OverlayHost = OverlayHost;
 
@@ -1383,7 +1277,7 @@ const TopBar = ({
         color: 'var(--ink-3)',
         lineHeight: 1.45
       }
-    }, String(apimart.message || adobe.message || sub2api.message).slice(0, 120)));
+    }, window.DesignflowFeedback.message(apimart.message || adobe.message || sub2api.message, '图片服务暂时不可用，请稍后再试。')));
   };
   window.renderAiProviderDetail = renderAiProviderDetail;
   return /*#__PURE__*/React.createElement("div", {
@@ -1728,20 +1622,34 @@ var TemplatePanel = function (_ref2) {
       window.TEMPLATES = groups;
     }).catch(function (err) {
       console.error('[TemplatePanel] fetchTemplates failed:', err);
-      setLoadErr(String(err));
+      setLoadErr(window.DesignflowFeedback.message(err, '模板暂时无法加载，请稍后点击刷新。'));
     }).finally(function () {
       setLoading(false);
     });
   }, [tab]);
   React.useEffect(function () {
+    if (!collapsed && loadErr) window.dfError(loadErr, undefined, {
+      key: 'template-load'
+    });else window.DesignflowFeedback.resolve('template-load');
+  }, [collapsed, loadErr]);
+  React.useEffect(function () {
     if (tab !== 'history') return;
     console.log('[TemplatePanel] Loading history...');
     setHistoryLoading(true);
-    Promise.all([window.API.listComposes(50).catch(function () {
+    Promise.all([window.API.listComposes(50).catch(function (err) {
+      window.dfError(err, '部分任务记录暂时无法加载，请稍后重新打开。', {
+        key: 'history-list'
+      });
       return [];
-    }), window.API.listSpecialComposes(50).catch(function () {
+    }), window.API.listSpecialComposes(50).catch(function (err) {
+      window.dfError(err, '部分任务记录暂时无法加载，请稍后重新打开。', {
+        key: 'history-list'
+      });
       return [];
-    }), window.API.listAiImages(50).catch(function () {
+    }), window.API.listAiImages(50).catch(function (err) {
+      window.dfError(err, '部分任务记录暂时无法加载，请稍后重新打开。', {
+        key: 'history-list'
+      });
       return [];
     })]).then(function (results) {
       var normal = (results[0] || []).map(function (j) {
@@ -1965,12 +1873,11 @@ var TemplatePanel = function (_ref2) {
       padding: 16,
       textAlign: 'center'
     }
-  }, React.createElement('div', null, '加载失败'), React.createElement('div', {
+  }, React.createElement('div', {
     style: {
-      color: 'var(--ink-3)',
-      fontSize: 11
+      color: 'var(--ink-3)'
     }
-  }, String(loadErr))), !loading && !loadErr && React.createElement('div', {
+  }, '模板暂不可用，可点击刷新')), !loading && !loadErr && React.createElement('div', {
     style: {
       flex: 1,
       minHeight: 0,
@@ -2369,6 +2276,9 @@ const Canvas = ({
   const pendingMessagesRef = React.useRef([]);
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
+  React.useEffect(() => {
+    if (editorInsertState?.status === 'failed') window.dfError(editorInsertState.message, '图片未能放入画布，请重新选择后再试。');
+  }, [editorInsertState]);
 
   // 清除 URL 中的历史遗留参数与 localStorage 残留
   React.useEffect(() => {
@@ -2408,6 +2318,7 @@ const Canvas = ({
   // 接收编辑器的 ready 信号，用于命令就绪判定（不控制 UI 可见性）
   React.useEffect(() => {
     const handleMessage = event => {
+      if (event.origin !== window.location.origin || event.source !== iframeRef.current?.contentWindow) return;
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       if (data.type === 'designflow:editor-ready') {
@@ -2545,7 +2456,7 @@ const Canvas = ({
           if (!prev || prev.status !== 'running') return prev;
           return {
             status: 'failed',
-            message: '放入画布超时，请刷新后重试'
+            message: '图片暂未放入画布，请检查当前画布，稍后再试。'
           };
         });
       }, 60000);
@@ -2588,13 +2499,7 @@ window.Canvas = Canvas;
 
 // 生图失败：用户可读原因
 function formatAiImageError(raw, jobId, extras) {
-  var msg = (raw == null ? '' : String(raw)).trim();
-  if (!msg) {
-    msg = '生成失败，没有返回具体原因，请稍后重试。';
-  }
-  // 去掉开发向尾巴
-  msg = msg.replace(/请查后端日志[^\s。]*/g, '').replace(/请打开控制台[^\s。]*/g, '').replace(/并用 client 号对照后端日志[。]?/g, '').replace(/请复制反馈信息发给管理员[。]?/g, '').replace(/点下方「复制反馈信息」[^\s。]*/g, '').replace(/若多次失败，请复制反馈信息发给管理员[。]?/g, '').replace(/若反复出现，请复制反馈信息发给管理员[。]?/g, '').replace(/\s{2,}/g, ' ').replace(/[；;]\s*[。.]?\s*$/g, '。').trim();
-  return msg || '生成失败，请稍后重试。';
+  return window.DesignflowFeedback.message(raw, '图片未能生成，服务暂未提供具体原因，请稍后再试。');
 }
 
 // 更新消息补丁：目标带 batchImageIndex 时落到批量卡对应那张图上，否则落到消息本身
@@ -2625,50 +2530,7 @@ function isTerminalAiImagePollStatus(status) {
 
 // 把 fetch/提交异常翻译成用户可读中文（技术细节进反馈包，不堆在主文案）
 function classifyAiImageSubmitError(err, meta) {
-  meta = meta || {};
-  var attempt = meta.attempt || 1;
-  var online = typeof navigator !== 'undefined' ? navigator.onLine : true;
-  var name = err && err.name || '';
-  var raw = String(err && err.message || err || '').trim() || '网络异常';
-  var retryHint = attempt > 1 ? '（已自动重试）' : '';
-
-  // 服务端已返回 HTTP（有 status）
-  if (err && err.httpStatus) {
-    var status = err.httpStatus;
-    if (status === 401) {
-      return '登录已失效，请重新登录后再试。';
-    }
-    if (status === 413) {
-      return '参考图或请求内容过大，请压缩图片后再试。';
-    }
-    if (status === 502 || status === 503 || status === 504) {
-      return '服务暂时繁忙或维护中' + retryHint + '，请稍后再试。';
-    }
-    // 业务错误原文通常已是中文，直接展示
-    if (raw && !/^HTTP\s*\d+/i.test(raw) && raw.length > 2) {
-      return raw;
-    }
-    return '提交失败（错误码 ' + status + '），请稍后重试。';
-  }
-
-  // JSON 解析失败
-  if (/Unexpected token|JSON\.parse|is not valid JSON|Failed to execute 'json'/i.test(raw)) {
-    return '服务返回异常，请稍后重试。';
-  }
-
-  // 客户端超时
-  if (name === 'AbortError' || /aborted|超时|timed out/i.test(raw)) {
-    return '提交超时' + retryHint + '。可能是网络较慢或参考图较大，请检查网络后重试。';
-  }
-
-  // 典型「请求未到达」
-  if (isLikelyUnreachedServerError(err)) {
-    if (!online) {
-      return '当前网络似乎已断开，请连上网络后重试。';
-    }
-    return '网络不稳定，请求可能没有成功发出' + retryHint + '。请检查网络后重试。';
-  }
-  return raw.indexOf('提交') === 0 || raw.indexOf('生成') === 0 || raw.indexOf('网络') === 0 ? raw : '提交失败：' + raw;
+  return window.DesignflowFeedback.message(err, '暂时无法确认任务是否已提交，请先查看任务记录，避免重复提交。');
 }
 function newClientRequestId() {
   return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -3051,6 +2913,7 @@ const CopyableTextBubble = ({
       }
     } catch (err) {
       console.warn('copy message failed', err);
+      window.dfError(err, '浏览器暂时无法复制，请手动选择文字后复制。');
     }
   }, [copyValue]);
   return /*#__PURE__*/React.createElement("div", {
@@ -3122,6 +2985,7 @@ var CopyButton2 = function (props) {
         }, 2000);
       } catch (err) {
         console.warn('copy json failed', err);
+        window.dfError(err, '浏览器暂时无法复制，请稍后再试。');
         setCopied(false);
         setCopyFailed(true);
         setTimeout(function () {
@@ -3538,6 +3402,8 @@ const LogBox = ({
     // 只滚动日志框自身，不带动外层对话列表
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [logs && logs.length]);
+  const visibleLogs = (logs || []).filter(log => !/失败|error|Traceback|HTTP|路由|轮询|上游|provider|API.?Key|[A-Z]+_[A-Z_]{3,}/i.test(String(log)));
+  if (!visibleLogs.length) return null;
   return /*#__PURE__*/React.createElement("div", {
     style: {
       border: '1px solid var(--line)',
@@ -3574,7 +3440,7 @@ const LogBox = ({
       overflowY: 'auto',
       padding: '6px 0'
     }
-  }, logs.map((log, i) => {
+  }, visibleLogs.map((log, i) => {
     const isError = log.includes('失败') || log.includes('Error') || log.includes('error');
     const isOk = log.includes('完成') || log.includes('就绪') || log.includes('保存');
     const isPath = log.includes('/') && (log.includes('.png') || log.includes('.py') || log.includes('\\'));
@@ -3738,6 +3604,7 @@ const ChatReturned = ({
   });
   const canRetryCard = (msg, idx) => {
     if (!msg.retryArgs) return false;
+    if (/无法确认|图片已生成|仍在处理|任务可能|暂未完整保存/.test(formatAiImageError(msg.error))) return false;
     const isBatch = Array.isArray(msg.images) && msg.images.length > 0;
     if (msg.jobId && !isBatch) return true;
     return idx === lastAiCardIdx;
@@ -3957,22 +3824,7 @@ const ChatReturned = ({
       startedAt: m.startedAt
     }) : null), m.status !== 'failed' && m.status !== 'done' && React.createElement(InlineRefStrip, {
       items: m.refPreviews
-    }), m.providerSwitched && React.createElement('div', {
-      style: {
-        padding: '6px 10px',
-        borderRadius: 6,
-        background: 'var(--panel)',
-        border: '1px solid var(--warn)',
-        fontSize: 11,
-        color: 'var(--warn)',
-        marginBottom: 6
-      }
-    }, '已自动切换到「' + ({
-      sub2api: '订阅',
-      tuzi: 'Tuzi',
-      adobe2api: 'Adobe',
-      apimart: 'APIMart'
-    }[m.provider] || m.provider || '备用') + '」线路'), showPromptTrace && React.createElement(PromptTraceBlock, {
+    }), showPromptTrace && React.createElement(PromptTraceBlock, {
       title: m.activeSkill ? 'Skill 解析 · $' + m.activeSkill : '生图 Prompt',
       text: promptTraceText || resolvedPromptText
     }), agentEnabled && promptInstruction && React.createElement('div', {
@@ -4351,12 +4203,9 @@ const ChatReturned = ({
       }
     }, '建议: ' + m.vlm.nextStepSuggestion)), m.status === 'failed' && !batchImages && React.createElement('div', {
       style: {
-        padding: '8px 10px',
-        borderRadius: 6,
-        background: 'var(--panel)',
-        border: '1px solid var(--warn)',
+        padding: '4px 0',
         fontSize: 11,
-        color: 'var(--warn)',
+        color: 'var(--ink-3)',
         lineHeight: 1.45,
         wordBreak: 'break-word'
       }
@@ -4826,14 +4675,10 @@ const ChatReturned = ({
     size: 11
   }), "\u5728Penpot\u4E2D\u7F16\u8F91")), m.status === 'failed' && m.error && /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: '10px 12px',
-      borderRadius: 6,
-      background: 'var(--panel)',
-      border: '1px solid var(--warn)',
       fontSize: 12,
-      color: 'var(--warn)'
+      color: 'var(--ink-3)'
     }
-  }, m.error)) : m.type === 'file-attach' ? /*#__PURE__*/React.createElement("div", {
+  }, formatAiImageError(m.error))) : m.type === 'file-attach' ? /*#__PURE__*/React.createElement("div", {
     style: {
       padding: '8px 10px',
       borderRadius: 8,
@@ -4993,7 +4838,7 @@ const ChatReturned = ({
     text: m.thinking
   }) : null, /*#__PURE__*/React.createElement(CopyableTextBubble, {
     who: m.who,
-    text: m.text,
+    text: m.who === 'ai' && (m.feedbackError || m.meta === '错误' || /^(Agent .*失败|错误[:：]|解析错误|下载失败|设置头像失败)/.test(m.text || '')) ? formatAiImageError(m.feedbackError || m.text) : m.text,
     markdown: true
   }), m.brief || m.contract ? /*#__PURE__*/React.createElement(BriefCard, {
     brief: m.brief,
@@ -5414,6 +5259,7 @@ const Composer = ({
         });
       } catch (err) {
         console.error('Load canvas reference images failed:', err);
+        window.dfError(err, '参考图暂时无法读取，请重新选择。');
       }
     })();
     return function () {
@@ -5836,6 +5682,7 @@ const Composer = ({
       setQuickPromptsLoaded(true);
     }).catch(function (err) {
       console.error('加载常用语失败', err);
+      window.dfError(err, '常用语暂时无法加载，请稍后重新打开。');
     }).finally(function () {
       setQuickPromptsLoading(false);
     });
@@ -5887,6 +5734,7 @@ const Composer = ({
       });
     }).catch(function (err) {
       console.error('删除常用语失败', err);
+      window.dfError(err, '常用语暂时无法删除，请稍后再试。');
     });
   }, []);
   const handleSaveQuickPrompt = React.useCallback(function () {
@@ -5917,6 +5765,7 @@ const Composer = ({
       setQuickPromptEditing(null);
     }).catch(function (err) {
       console.error('保存常用语失败', err);
+      window.dfError(err, '常用语暂时无法保存，请稍后再试。');
     }).finally(function () {
       setQuickPromptSaving(false);
     });
@@ -7928,6 +7777,29 @@ const Chat = ({
   const [modeMenuOpen, setModeMenuOpen] = React.useState(false);
   const modeMenuRef = React.useRef(null);
   const creatingAgentProjectRef = React.useRef(null);
+  const feedbackStartedAt = React.useRef(Date.now());
+  const previousTaskStates = React.useRef(new Map());
+  const notifiedMessages = React.useRef(new Set());
+  React.useEffect(() => {
+    const states = new Map();
+    messages.forEach((m, i) => {
+      const key = m.startedAt || m.jobId || m.id;
+      if (key) {
+        const previous = previousTaskStates.current.get(key);
+        if (m.status === 'failed' && previous !== 'failed' && (previous || m.startedAt >= feedbackStartedAt.current)) {
+          window.dfError(m.error, '本次任务未完成，请稍后查看任务记录。', {
+            key: 'task:' + key
+          });
+        }
+        states.set(key, m.status);
+      }
+      if (m.feedbackAt >= feedbackStartedAt.current && !notifiedMessages.current.has(m.feedbackAt)) {
+        notifiedMessages.current.add(m.feedbackAt);
+        window.dfError(m.feedbackError, '本次操作未完成，请稍后再试。');
+      }
+    });
+    previousTaskStates.current = states;
+  }, [messages]);
 
   // Extract required fields from template slots (e.g., "slot/product_1/name" -> "name")
   const getTemplateFields = React.useCallback(t => {
@@ -8004,12 +7876,16 @@ const Chat = ({
         if (!cancelled) {
           setAgentMessages([{
             who: 'ai',
-            text: 'Agent 初始化失败：' + (e && e.message || '未知错误'),
+            feedbackAt: Date.now(),
+            feedbackError: e.message,
+            text: formatAiImageError(e.message),
             meta: 'Agent'
           }]);
           setMessages([{
             who: 'ai',
-            text: 'Agent 初始化失败：' + (e && e.message || '未知错误'),
+            feedbackAt: Date.now(),
+            feedbackError: e.message,
+            text: formatAiImageError(e.message),
             meta: 'Agent'
           }]);
         }
@@ -8029,6 +7905,7 @@ const Chat = ({
       setHistorySessions(sessions || []);
     } catch (e) {
       console.error('load ai chat history failed:', e);
+      window.dfError(e, '任务记录暂时无法加载，请稍后重新打开。');
       setHistorySessions([]);
     } finally {
       setHistoryLoading(false);
@@ -8041,6 +7918,7 @@ const Chat = ({
       setHistorySessions(res && res.data || []);
     } catch (e) {
       console.error('load agent project history failed:', e);
+      window.dfError(e, '对话记录暂时无法加载，请稍后重新打开。');
       setHistorySessions([]);
     } finally {
       setHistoryLoading(false);
@@ -8067,6 +7945,7 @@ const Chat = ({
       setLastSubmittedMessage(lastUser ? lastUser.text : '');
     } catch (e) {
       console.error('restore ai chat session failed:', e);
+      window.dfError(e, '对话暂时无法打开，请稍后再试。');
     }
   }, []);
   const restoreAgentProjectSession = React.useCallback(async projectId => {
@@ -8157,7 +8036,9 @@ const Chat = ({
         } catch (e) {
           setMessages([{
             who: 'ai',
-            text: '新建 Agent 对话失败：' + (e && e.message || '未知错误'),
+            feedbackAt: Date.now(),
+            feedbackError: e.message,
+            text: formatAiImageError(e.message),
             meta: 'Agent'
           }]);
         } finally {
@@ -8322,7 +8203,7 @@ const Chat = ({
       image_url: msg.imageUrl
     } : null;
     if (!payload) {
-      window.dfToast('这条消息无法发布（缺少 job_id 和 image_url）', {
+      window.dfToast('这张图片暂时无法发布，请等待生成完成后再试。', {
         tone: 'warn'
       });
       return;
@@ -8970,6 +8851,7 @@ const Chat = ({
               imageUrl: okOrdered.length ? okOrdered[0].url : m.imageUrl
             }) : m));
             if (failCount > 0) {
+              if (okOrdered.length) window.dfError('已生成 ' + okOrdered.length + ' 张，' + failCount + ' 张未完成。' + formatAiImageError(firstErr));
               var summary = okOrdered.length ? '本次 ' + jobIds.length + ' 张中有 ' + failCount + ' 张失败：' + formatAiImageError(firstErr || '未知原因', null) : formatAiImageError(firstErr || '生图失败', jobIds[0]);
               reportAiImageClientEvent({
                 type: 'job_failed',
@@ -9363,7 +9245,9 @@ const Chat = ({
                   if (i !== assistantIdx) return m;
                   return {
                     who: 'ai',
-                    text: payload && payload.message || 'Agent 执行失败',
+                    feedbackAt: Date.now(),
+                    feedbackError: payload && payload.message,
+                    text: formatAiImageError(payload && payload.message),
                     meta: 'Agent'
                   };
                 });
@@ -9431,7 +9315,9 @@ const Chat = ({
                 if (i !== assistantIdx) return m;
                 return {
                   who: 'ai',
-                  text: payload && payload.message || 'Agent 执行失败',
+                  feedbackAt: Date.now(),
+                  feedbackError: payload && payload.message,
+                  text: formatAiImageError(payload && payload.message),
                   meta: 'Agent'
                 };
               });
@@ -9450,7 +9336,9 @@ const Chat = ({
             if (i !== assistantIdx) return m;
             return {
               who: 'ai',
-              text: 'Agent 执行失败：' + (e && e.message || '未知错误'),
+              feedbackAt: Date.now(),
+              feedbackError: e.message,
+              text: formatAiImageError(e.message),
               meta: 'Agent'
             };
           });
@@ -9491,7 +9379,9 @@ const Chat = ({
       } catch (e) {
         setMessages(msgs => [...msgs, {
           who: 'ai',
-          text: '设置头像失败: ' + (e.message || '未知错误')
+          feedbackAt: Date.now(),
+          feedbackError: e.message,
+          text: formatAiImageError(e.message)
         }]);
       }
       setIsLoading(false);
@@ -9626,7 +9516,9 @@ const Chat = ({
           clearTimeout(progressTimer);
           setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx ? {
             who: 'ai',
-            text: '下载失败: ' + (e.message || '未知错误'),
+            feedbackAt: Date.now(),
+            feedbackError: e.message,
+            text: formatAiImageError(e.message),
             meta: '花瓣下载'
           } : m));
         }
@@ -9870,7 +9762,7 @@ const Chat = ({
             throw new Error(s.error || '合成失败');
           }
         }
-        if (!done) throw new Error('合成超时，请检查后端日志');
+        if (!done) throw new Error('等待合成结果超时，任务可能仍在处理，请稍后查看任务记录。');
       } catch (e) {
         setMessages(msgs => msgs.map((m, idx) => {
           if (idx !== specialMsgIdx) return m;
@@ -9917,7 +9809,9 @@ const Chat = ({
     } catch (e) {
       setMessages(msgs => msgs.map((m, i) => i === thinkingIdx ? {
         who: 'ai',
-        text: '错误: ' + (e.message || '未知错误'),
+        feedbackAt: Date.now(),
+        feedbackError: e.message,
+        text: formatAiImageError(e.message),
         meta: '错误'
       } : m));
     }
@@ -10030,7 +9924,9 @@ const Chat = ({
     } catch (e) {
       setMessages(msgs => [...msgs, {
         who: 'ai',
-        text: '解析错误: ' + (e.message || '未知错误'),
+        feedbackAt: Date.now(),
+        feedbackError: e.message,
+        text: formatAiImageError(e.message),
         meta: '错误'
       }]);
     }
@@ -10102,7 +9998,9 @@ const Chat = ({
       setMessages(msgs => msgs.map(function (m) {
         return m.id === pendingId ? {
           who: 'ai',
-          text: '解析错误: ' + (e.message || '未知错误'),
+          feedbackAt: Date.now(),
+          feedbackError: e.message,
+          text: formatAiImageError(e.message),
           meta: '错误'
         } : m;
       }));
@@ -12734,6 +12632,8 @@ const InspirationPanel = ({
   const containerRef = React.useRef(null);
   const [containerWidth, setContainerWidth] = React.useState(0);
   const loadIdRef = React.useRef(0);
+  const openRef = React.useRef(open);
+  openRef.current = open;
 
   // ESC 快捷键关闭
   React.useEffect(function () {
@@ -12785,15 +12685,16 @@ const InspirationPanel = ({
       setPosts(rows || []);
     }).catch(function (e) {
       if (myLoadId !== loadIdRef.current) return;
-      setError(e.message || '加载失败');
+      setError(true);
+      if (openRef.current) window.dfError(e, '灵感列表暂时无法加载，请稍后再试。');
       setPosts([]);
     }).finally(function () {
       if (myLoadId === loadIdRef.current) setLoading(false);
     });
   }, [tab, search]);
   React.useEffect(function () {
-    loadPosts();
-  }, [loadPosts]);
+    if (open) loadPosts();
+  }, [loadPosts, open]);
 
   // 搜索过滤
   const setRatio = React.useCallback(function (postId, ratio) {
@@ -13047,13 +12948,15 @@ const InspirationPanel = ({
       overflowY: 'auto',
       padding: 16
     }
-  }, error && /*#__PURE__*/React.createElement("div", {
+  }, error && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: loadPosts,
     style: {
       padding: 12,
-      color: 'var(--warn)',
+      color: 'var(--ink-3)',
       fontSize: 12
     }
-  }, "\u52A0\u8F7D\u5931\u8D25\uFF1A", error), !error && loading && filtered.length === 0 && /*#__PURE__*/React.createElement("div", {
+  }, "\u91CD\u65B0\u52A0\u8F7D"), !error && loading && filtered.length === 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       padding: 24,
       color: 'var(--ink-3)',
@@ -13229,16 +13132,13 @@ const InspirationDetail = ({
     };
   }, []);
   const [describing, setDescribing] = React.useState(false);
-  const [describeError, setDescribeError] = React.useState('');
   const [localPost, setLocalPost] = React.useState(post);
   React.useEffect(function () {
     setLocalPost(post);
-    setDescribeError('');
   }, [post]);
   const activePost = localPost || post;
   const handleDescribe = React.useCallback(function () {
     if (!activePost || !activePost.id) return;
-    setDescribeError('');
     setDescribing(true);
     window.API.describeInspiration(activePost.id).then(function (res) {
       setLocalPost(function (prev) {
@@ -13248,7 +13148,7 @@ const InspirationDetail = ({
         });
       });
     }).catch(function (e) {
-      setDescribeError(e.message || '未知错误');
+      window.dfError(e, '图片暂时无法分析，请稍后重试。');
     }).finally(function () {
       setDescribing(false);
     });
@@ -13448,18 +13348,7 @@ const InspirationDetail = ({
     }
   }, /*#__PURE__*/React.createElement(I.eye, {
     size: 11
-  }), describing ? '分析中' : activePost.vlm_prompt ? '重新反推' : '反推')), describeError ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: 'var(--warn)',
-      lineHeight: 1.45,
-      padding: '7px 9px',
-      borderRadius: 6,
-      background: 'oklch(0.97 0.025 35)',
-      border: '1px solid oklch(0.9 0.05 35)',
-      marginBottom: 6
-    }
-  }, "\u53CD\u63A8\u5931\u8D25\uFF1A", describeError) : null, /*#__PURE__*/React.createElement("div", {
+  }), describing ? '分析中' : activePost.vlm_prompt ? '重新反推' : '反推')), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: activePost.vlm_prompt ? 'var(--ink)' : 'var(--ink-3)',
@@ -13881,7 +13770,6 @@ const isTypingTarget = el => !!el && (el.tagName === 'INPUT' || el.tagName === '
 const LiteLoginGate = ({
   onLogin,
   loading,
-  error,
   initialName,
   reauth
 }) => {
@@ -13936,8 +13824,6 @@ const LiteLoginGate = ({
         .lg-btn:hover:not(:disabled) { background: oklch(0.26 0.02 260); transform: translateY(-1px); box-shadow: 0 8px 18px rgba(20,22,40,.2); }
         .lg-btn:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
         .lg-btn:disabled { background: var(--line); color: rgba(255,255,255,.95); cursor: default; }
-        .lg-err { font-size: 12px; color: oklch(0.5 0.17 45); background: oklch(0.97 0.03 70); border: 1px solid oklch(0.9 0.06 70);
-          padding: 8px 12px; border-radius: 8px; }
         .lg-foot { text-align: center; font-size: 12px; color: var(--ink-3); letter-spacing: .02em; padding-top: 4px; }
       `), /*#__PURE__*/React.createElement("form", {
     className: "lg-card",
@@ -14010,9 +13896,7 @@ const LiteLoginGate = ({
     cx: "12",
     cy: "12",
     r: "3"
-  }))))), error && /*#__PURE__*/React.createElement("div", {
-    className: "lg-err"
-  }, error), /*#__PURE__*/React.createElement("button", {
+  }))))), /*#__PURE__*/React.createElement("button", {
     type: "submit",
     className: "lg-btn",
     disabled: !canSubmit
@@ -14033,38 +13917,15 @@ const ConnectionStatus = () => {
     restored: '连接已恢复'
   };
   const message = messages[state.status];
-  if (!message) return null;
-  return /*#__PURE__*/React.createElement("div", {
-    role: "status",
-    "aria-live": "polite",
-    style: {
-      position: 'fixed',
-      top: 12,
-      left: '50%',
-      transform: 'translateX(-50%)',
-      zIndex: 300,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8,
-      padding: '9px 14px',
-      borderRadius: 20,
-      background: 'var(--panel, #fff)',
-      color: 'var(--ink, #202127)',
-      border: '1px solid var(--line, #ddd)',
-      boxShadow: '0 4px 18px rgba(0,0,0,.08)',
-      fontSize: 12,
-      whiteSpace: 'nowrap',
-      pointerEvents: 'none'
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    "aria-hidden": "true",
-    style: {
-      width: 6,
-      height: 6,
-      borderRadius: '50%',
-      background: state.status === 'restored' ? '#45845a' : '#c18a36'
-    }
-  }), message);
+  React.useEffect(() => {
+    if (message) window.DesignflowFeedback.show(message, {
+      key: 'connection',
+      tone: state.status === 'restored' ? 'ok' : 'info',
+      persistent: state.status !== 'restored'
+    });else window.DesignflowFeedback.resolve('connection');
+  }, [message, state.status]);
+  React.useEffect(() => () => window.DesignflowFeedback.resolve('connection'), []);
+  return null;
 };
 const FlipStage = ({
   inspirationOpen,
@@ -14234,7 +14095,13 @@ const App = () => {
   });
   const [reauthOpen, setReauthOpen] = React.useState(false);
   const reauthRequestedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (authError) window.dfError(authError, '登录未成功，请检查用户名和密码后重试。', {
+      key: 'login'
+    });else window.DesignflowFeedback.resolve('login');
+  }, [authError]);
   const rememberUser = React.useCallback(user => {
+    if (currentUserIdRef.current !== String(user && user.id || '')) window.DesignflowFeedback.clear();
     const username = user && user.username ? String(user.username).trim() : '';
     setCurrentUser(user || null);
     if (window.DesignflowConnection) window.DesignflowConnection.setUser(user);
@@ -14439,6 +14306,7 @@ const App = () => {
     try {
       await window.API.logout();
     } catch (e) {}
+    window.DesignflowFeedback.clear();
     setCurrentUser(null);
     if (window.DesignflowConnection) window.DesignflowConnection.setUser(null);
     reauthRequestedRef.current = false;
@@ -14521,7 +14389,6 @@ const App = () => {
   }), (!currentUser || reauthOpen) && /*#__PURE__*/React.createElement(LiteLoginGate, {
     onLogin: handleLogin,
     loading: authLoading,
-    error: authError,
     initialName: lastUsername || (currentUser ? currentUser.username : ''),
     reauth: reauthOpen && !!currentUser
   }), currentUser && showAdmin && /*#__PURE__*/React.createElement(AdminPage, {

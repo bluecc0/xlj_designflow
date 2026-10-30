@@ -51,6 +51,7 @@
       <span id="hint" hidden>右键图片可复制或保存</span>
       <a id="original" hidden>打开图片文件</a>
     </footer>
+    <script src="/ui/src/feedback.js"></script>
     <script>
       const params = new URLSearchParams(location.search)
       const image = document.getElementById('image')
@@ -70,12 +71,14 @@
           document.title = name
           image.alt = name
           image.onload = () => {
+            window.DesignflowFeedback?.resolve('viewer-load')
             status.hidden = true
             image.hidden = false
             hint.hidden = false
           }
           image.onerror = () => {
-            status.textContent = '图片加载失败，请刷新后重试。'
+            status.hidden = true
+            window.dfError('图片暂时无法加载，请稍后重新打开。', undefined, { key: 'viewer-load', persistent: true })
           }
           original.href = url.href
           original.hidden = false
@@ -97,8 +100,9 @@
           // 复制出的 HTML 使用单图临时链接，WPS 无需浏览器登录状态即可取图。
           image.src = imageUrl
         } catch (error) {
-          status.textContent = error.message === 'missing image' || error.message === 'invalid image URL'
-            ? '图片地址无效。' : (error.message || '图片加载失败，请刷新后重试。')
+          status.hidden = true
+          window.dfError(error.message === 'missing image' || error.message === 'invalid image URL'
+            ? '图片地址无效，请重新从画布打开。' : error, '图片暂时无法加载，请稍后重新打开。', { key: 'viewer-load', persistent: true })
         }
       }
       loadImage()

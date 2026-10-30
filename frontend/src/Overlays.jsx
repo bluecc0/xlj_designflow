@@ -1,28 +1,14 @@
-// Global feedback overlays: toast, confirm dialog, image lightbox.
+// Confirmation dialogs and image previews. Lightweight notifications live in feedback.js.
 // Usage: window.dfToast(msg, { tone }), await window.dfConfirm({ title, message, danger }),
 //        window.dfOpenLightbox({ src, downloadUrl, title, actions })
 
-var overlayState = { toasts: [], confirm: null, lightbox: null };
+var overlayState = { confirm: null, lightbox: null };
 var overlayListeners = [];
-var toastSeq = 0;
 
 function setOverlayState(patch) {
   overlayState = Object.assign({}, overlayState, patch);
   overlayListeners.forEach(function(fn) { fn(overlayState); });
 }
-
-function dismissToast(id) {
-  setOverlayState({ toasts: overlayState.toasts.filter(function(t) { return t.id !== id; }) });
-}
-
-window.dfToast = function(message, opts) {
-  opts = opts || {};
-  var tone = opts.tone || 'info';
-  var id = ++toastSeq;
-  var duration = opts.duration || (tone === 'danger' ? 6000 : 3200);
-  setOverlayState({ toasts: overlayState.toasts.concat([{ id: id, message: String(message || ''), tone: tone }]).slice(-4) });
-  setTimeout(function() { dismissToast(id); }, duration);
-};
 
 window.dfConfirm = function(opts) {
   opts = typeof opts === 'string' ? { message: opts } : (opts || {});
@@ -35,13 +21,6 @@ window.dfConfirm = function(opts) {
 window.dfOpenLightbox = function(opts) {
   if (!opts || !opts.src) return;
   setOverlayState({ lightbox: opts });
-};
-
-const TOAST_TONES = {
-  info: { dot: 'var(--ink-3)' },
-  ok: { dot: 'var(--ok)' },
-  warn: { dot: 'var(--warn)' },
-  danger: { dot: 'var(--danger)' },
 };
 
 const overlayBtn = function(primary, danger) {
@@ -118,7 +97,7 @@ const Lightbox = ({ box, onInsertToCanvas, onUseAsReference }) => {
       }}><I.close size={14}/></button>
       <img src={fullUrl} alt={box.title || '预览'}
         onLoad={function() { setFullState('loaded'); }}
-        onError={function() { setFullState('failed'); }}
+        onError={function() { setFullState('failed'); window.dfError('原图加载失败，当前显示的是缩略图，请稍后重新打开。'); }}
         style={{
           display: showFull ? 'block' : 'none',
           maxWidth: '100%', maxHeight: 'calc(100vh - 140px)', objectFit: 'contain', borderRadius: 8,
@@ -132,7 +111,7 @@ const Lightbox = ({ box, onInsertToCanvas, onUseAsReference }) => {
       )}
       {hasPreview && fullState !== 'loaded' && (
         <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.72)' }}>
-          {fullState === 'failed' ? '原图加载失败，当前显示的是缩略图' : '正在加载原图…'}
+          {fullState === 'failed' ? '缩略图预览' : '正在加载原图…'}
         </div>
       )}
       {box.title && <div style={{ maxWidth: 640, fontSize: 12, color: 'rgba(255,255,255,0.72)', textAlign: 'center', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{box.title}</div>}
@@ -156,31 +135,8 @@ const OverlayHost = ({ onInsertToCanvas, onUseAsReference }) => {
   }, []);
   return (
     <>
-      {state.toasts.length > 0 && (
-        <div role="status" aria-live="polite" style={{
-          position: 'fixed', top: 58, left: '50%', transform: 'translateX(-50%)', zIndex: 420,
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, pointerEvents: 'none',
-        }}>
-          {state.toasts.map(function(t) {
-            return (
-              <div key={t.id} style={{
-                pointerEvents: 'auto', display: 'flex', alignItems: 'flex-start', gap: 8, maxWidth: 'min(460px, calc(100vw - 32px))',
-                padding: '9px 10px 9px 14px', borderRadius: 12, background: 'var(--panel)', color: 'var(--ink)',
-                border: '1px solid ' + (t.tone === 'danger' ? 'var(--danger-line)' : 'var(--line)'),
-                boxShadow: '0 6px 22px rgba(0,0,0,0.10)', fontSize: 12, lineHeight: 1.5,
-                animation: 'dfToastIn 160ms ease-out',
-              }}>
-                <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, marginTop: 7, flexShrink: 0, background: (TOAST_TONES[t.tone] || TOAST_TONES.info).dot }}/>
-                <span style={{ flex: 1, whiteSpace: 'pre-line', wordBreak: 'break-word' }}>{t.message}</span>
-                <button type="button" aria-label="关闭提示" onClick={function() { dismissToast(t.id); }} style={{ width: 20, height: 20, borderRadius: 6, color: 'var(--ink-3)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><I.close size={10}/></button>
-              </div>
-            );
-          })}
-        </div>
-      )}
       {state.confirm && <ConfirmDialog confirm={state.confirm}/>}
       {state.lightbox && <Lightbox box={state.lightbox} onInsertToCanvas={onInsertToCanvas} onUseAsReference={onUseAsReference}/>}
-      <style>{`@keyframes dfToastIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }`}</style>
     </>
   );
 };

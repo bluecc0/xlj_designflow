@@ -2509,10 +2509,33 @@ SMART_ROUTE_ROUNDS = 2
 
 
 def public_generation_error(exc: BaseException | str | None = None) -> str:
-    """把任务失败收敛为前端允许展示的两类文案。"""
+    """Only expose an evidenced cause and a useful next step, keeping diagnostics in logs."""
+    if isinstance(exc, AmbiguousUpstreamError):
+        return "暂时无法确认任务是否已提交，请先查看任务记录，避免重复提交。"
+    if isinstance(exc, FinalImageDownloadError):
+        return "图片已生成，暂时无法取回结果，请稍后查看任务记录。"
     if isinstance(exc, SafetyReviewError) or is_safety_review_error(exc):
-        return "内容被上游安全审核系统拦截，请调整提示词或参考图后重试"
-    return f"所有可用 AI 生图线路经过 {SMART_ROUTE_ROUNDS} 轮尝试后仍未成功，请稍后重试"
+        return "提示词或参考图未通过内容审核，请调整内容后再试。"
+    causes = getattr(exc, "provider_errors", ())
+    if causes:
+        messages = {public_generation_error(cause) for cause in causes}
+        if len(messages) == 1:
+            return messages.pop()
+        return "图片未能生成，图片服务暂未提供一致的失败原因，请稍后再试。"
+    raw = str(exc or "")
+    if re.search(r"无权限或余额|余额或权限", raw):
+        return "图片服务暂不可用，请联系管理员检查服务权限和额度。"
+    if re.search(r"余额不足|额度不足|配额.*(?:用尽|不足)|insufficient|quota|\b402\b", raw, re.I):
+        return "图片服务额度不足，请联系管理员处理后再试。"
+    if re.search(r"API.?KEY|密钥|未配置|服务配置|unauthorized|invalid.*token|\b401\b", raw, re.I):
+        return "图片服务暂不可用，请联系管理员检查服务配置。"
+    if re.search(r"过于频繁|rate.?limit|too many requests|\b429\b", raw, re.I):
+        return "当前使用人数较多，请稍后再试。"
+    if re.search(r"参考图过大|payload too large|\b413\b", raw, re.I):
+        return "参考图过大，请减小图片后再试。"
+    if re.search(r"invalid.*(size|resolution|aspect)|不支持.*(尺寸|分辨率|比例)", raw, re.I):
+        return "所选尺寸或分辨率不受支持，请调整图片参数后再试。"
+    return "图片未能生成，图片服务暂未提供具体原因，请稍后再试。"
 
 
 async def smart_generate_image_async(
@@ -2703,6 +2726,7 @@ async def smart_generate_image_async(
     final.provider = last_provider  # type: ignore[attr-defined]
     final.task_id = next((task_id for task_id in reversed(tuple(accepted.values())) if task_id), "")  # type: ignore[attr-defined]
     final.provider_errors = tuple(errors)  # type: ignore[attr-defined]
+    final.args = (public_generation_error(final),)
     raise final
 
 

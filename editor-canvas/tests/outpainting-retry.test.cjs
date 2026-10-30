@@ -236,7 +236,7 @@ test('恢复期间延长原任务的查询等待，不因原先的前端计时�
 
 test('恢复等待保留总时限，始终只查询原任务', async () => {
   const h = harness(() => response({ status: 'processing', recovering: true }))
-  await assert.rejects(h.poll(2), /任务超时/)
+  await assert.rejects(h.poll(2), /任务可能仍在处理/)
   assert.equal(h.posts().length, 0)
   assert.equal(h.polls().length, 3600)
 })
@@ -251,7 +251,7 @@ test('结果图读取失败仅重试加载原结果，不重复提交或轮询',
 
 test('处理中任务轮询超时后继续查询原任务，三次后停止', async () => {
   const h = harness(call => call.method === 'POST' ? response({ job_id: 'job-original' }) : response({ status: 'processing' }))
-  await assert.rejects(h.run(), /已尝试 3 次仍未成功：任务超时/)
+  await assert.rejects(h.run(), /已尝试 3 次仍未成功：.*任务可能仍在处理/)
   assert.equal(h.posts().length, 1)
   assert.equal(h.polls().length, 900)
 })

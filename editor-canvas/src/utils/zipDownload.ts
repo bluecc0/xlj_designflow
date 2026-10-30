@@ -1,3 +1,4 @@
+import { notifyError } from './feedback'
 import JSZip from 'jszip'
 
 export interface DownloadImageTarget {
@@ -104,6 +105,7 @@ export async function downloadImagesAsZip(
   const zip = new JSZip()
   const nameCounts = new Map<string, number>()
   const total = images.length
+  let failed = 0
 
   for (let i = 0; i < images.length; i++) {
     const item = images[i]
@@ -128,9 +130,12 @@ export async function downloadImagesAsZip(
 
       zip.file(filename, blob)
     } catch (err) {
+      failed += 1
       console.error(`[zipDownload] 图片打包失败，跳过第 ${i + 1} 张:`, item, err)
     }
   }
+
+  if (failed === total) throw new Error('图片暂时无法下载，请检查连接后重试。')
 
   const zipBlob = await zip.generateAsync({
     type: 'blob',
@@ -150,6 +155,7 @@ export async function downloadImagesAsZip(
   a.download = options?.zipName || defaultZipName
   document.body.appendChild(a)
   a.click()
+  if (failed) notifyError(`已下载 ${total - failed} 张，${failed} 张未能下载。请稍后重新下载缺少的图片。`)
   document.body.removeChild(a)
 
   setTimeout(() => {

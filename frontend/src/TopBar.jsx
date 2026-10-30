@@ -404,7 +404,7 @@ const renderAiProviderDetail = function(data) {
       </div>
       {(apimart.message || adobe.message || sub2api.message) && (
         <div style={{ fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.45 }}>
-          {String(apimart.message || adobe.message || sub2api.message).slice(0, 120)}
+          {window.DesignflowFeedback.message(apimart.message || adobe.message || sub2api.message, '图片服务暂时不可用，请稍后再试。')}
         </div>
       )}
     </div>

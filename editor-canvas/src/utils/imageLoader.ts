@@ -1,3 +1,4 @@
+import { notifyError, feedback } from './feedback'
 export interface LoadedImageItem {
   url: string
   name: string
@@ -53,7 +54,12 @@ export async function loadImagesFromFiles(files: FileList | File[]): Promise<Loa
     return !f.type && /\.(png|jpe?g|webp|gif)$/i.test(f.name)
   })
 
-  if (imageFiles.length === 0) return []
+  if (imageFiles.length === 0) {
+    if (fileArray.length) notifyError('请选择 PNG、JPG、WebP 或 GIF 图片。');
+    return [];
+  }
+  let failed = 0;
+  let lastError: unknown;
 
   const promises = imageFiles.map(async (file): Promise<LoadedImageItem | null> => {
     try {
@@ -69,11 +75,18 @@ export async function loadImagesFromFiles(files: FileList | File[]): Promise<Loa
         mimeType: file.type,
       }
     } catch (error) {
+      failed += 1; lastError = error;
       console.warn(`[Canvas] ${file.name} 上传失败:`, error)
       return null
     }
   })
 
   const results = await Promise.all(promises)
+  if (failed || fileArray.length > imageFiles.length) {
+    const skipped = fileArray.length - imageFiles.length;
+    const summary = `已导入 ${imageFiles.length - failed} 张，${failed + skipped} 张未导入。`;
+    const reason = failed ? feedback.message(lastError, '部分图片暂时无法上传，请稍后重试。') : '仅支持 PNG、JPG、WebP 或 GIF 图片。';
+    notifyError(summary + reason);
+  }
   return results.filter((it): it is LoadedImageItem => it !== null && Boolean(it.url))
 }

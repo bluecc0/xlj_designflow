@@ -9,6 +9,10 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
 
+  React.useEffect(() => {
+    if (editorInsertState?.status === 'failed') window.dfError(editorInsertState.message, '图片未能放入画布，请重新选择后再试。');
+  }, [editorInsertState]);
+
   // 清除 URL 中的历史遗留参数与 localStorage 残留
   React.useEffect(() => {
     try {
@@ -48,6 +52,7 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
   // 接收编辑器的 ready 信号，用于命令就绪判定（不控制 UI 可见性）
   React.useEffect(() => {
     const handleMessage = (event) => {
+      if (event.origin !== window.location.origin || event.source !== iframeRef.current?.contentWindow) return;
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       if (data.type === 'designflow:editor-ready') {
@@ -171,7 +176,7 @@ const Canvas = ({ template, resultTemplate, editorCommand, onUseReferenceImages,
       const timer = setTimeout(() => {
         setEditorInsertState((prev) => {
           if (!prev || prev.status !== 'running') return prev;
-          return { status: 'failed', message: '放入画布超时，请刷新后重试' };
+          return { status: 'failed', message: '图片暂未放入画布，请检查当前画布，稍后再试。' };
         });
       }, 60000);
       return () => clearTimeout(timer);

@@ -5,23 +5,7 @@
 
 // 生图失败：用户可读原因
 function formatAiImageError(raw, jobId, extras) {
-  var msg = (raw == null ? '' : String(raw)).trim();
-  if (!msg) {
-    msg = '生成失败，没有返回具体原因，请稍后重试。';
-  }
-  // 去掉开发向尾巴
-  msg = msg
-    .replace(/请查后端日志[^\s。]*/g, '')
-    .replace(/请打开控制台[^\s。]*/g, '')
-    .replace(/并用 client 号对照后端日志[。]?/g, '')
-    .replace(/请复制反馈信息发给管理员[。]?/g, '')
-    .replace(/点下方「复制反馈信息」[^\s。]*/g, '')
-    .replace(/若多次失败，请复制反馈信息发给管理员[。]?/g, '')
-    .replace(/若反复出现，请复制反馈信息发给管理员[。]?/g, '')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/[；;]\s*[。.]?\s*$/g, '。')
-    .trim();
-  return msg || '生成失败，请稍后重试。';
+  return window.DesignflowFeedback.message(raw, '图片未能生成，服务暂未提供具体原因，请稍后再试。');
 }
 
 // 更新消息补丁：目标带 batchImageIndex 时落到批量卡对应那张图上，否则落到消息本身
@@ -53,53 +37,7 @@ function isTerminalAiImagePollStatus(status) {
 
 // 把 fetch/提交异常翻译成用户可读中文（技术细节进反馈包，不堆在主文案）
 function classifyAiImageSubmitError(err, meta) {
-  meta = meta || {};
-  var attempt = meta.attempt || 1;
-  var online = (typeof navigator !== 'undefined') ? navigator.onLine : true;
-  var name = (err && err.name) || '';
-  var raw = String((err && err.message) || err || '').trim() || '网络异常';
-  var retryHint = attempt > 1 ? '（已自动重试）' : '';
-
-  // 服务端已返回 HTTP（有 status）
-  if (err && err.httpStatus) {
-    var status = err.httpStatus;
-    if (status === 401) {
-      return '登录已失效，请重新登录后再试。';
-    }
-    if (status === 413) {
-      return '参考图或请求内容过大，请压缩图片后再试。';
-    }
-    if (status === 502 || status === 503 || status === 504) {
-      return '服务暂时繁忙或维护中' + retryHint + '，请稍后再试。';
-    }
-    // 业务错误原文通常已是中文，直接展示
-    if (raw && !/^HTTP\s*\d+/i.test(raw) && raw.length > 2) {
-      return raw;
-    }
-    return '提交失败（错误码 ' + status + '），请稍后重试。';
-  }
-
-  // JSON 解析失败
-  if (/Unexpected token|JSON\.parse|is not valid JSON|Failed to execute 'json'/i.test(raw)) {
-    return '服务返回异常，请稍后重试。';
-  }
-
-  // 客户端超时
-  if (name === 'AbortError' || /aborted|超时|timed out/i.test(raw)) {
-    return '提交超时' + retryHint + '。可能是网络较慢或参考图较大，请检查网络后重试。';
-  }
-
-  // 典型「请求未到达」
-  if (isLikelyUnreachedServerError(err)) {
-    if (!online) {
-      return '当前网络似乎已断开，请连上网络后重试。';
-    }
-    return '网络不稳定，请求可能没有成功发出' + retryHint + '。请检查网络后重试。';
-  }
-
-  return (raw.indexOf('提交') === 0 || raw.indexOf('生成') === 0 || raw.indexOf('网络') === 0)
-    ? raw
-    : ('提交失败：' + raw);
+  return window.DesignflowFeedback.message(err, '暂时无法确认任务是否已提交，请先查看任务记录，避免重复提交。');
 }
 
 function newClientRequestId() {
@@ -431,6 +369,7 @@ const CopyableTextBubble = ({ who, text, markdown }) => {
       }
     } catch (err) {
       console.warn('copy message failed', err);
+        window.dfError(err, '浏览器暂时无法复制，请手动选择文字后复制。');
     }
   }, [copyValue]);
 
@@ -497,6 +436,7 @@ var CopyButton2 = function(props) {
         setTimeout(function() { setCopied(false); }, 2000);
       } catch(err) {
         console.warn('copy json failed', err);
+        window.dfError(err, '浏览器暂时无法复制，请稍后再试。');
         setCopied(false);
         setCopyFailed(true);
         setTimeout(function() { setCopyFailed(false); }, 2000);
@@ -776,6 +716,8 @@ const LogBox = ({ logs, running }) => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [logs && logs.length]);
 
+  const visibleLogs = (logs || []).filter(log => !/失败|error|Traceback|HTTP|路由|轮询|上游|provider|API.?Key|[A-Z]+_[A-Z_]{3,}/i.test(String(log)));
+  if (!visibleLogs.length) return null;
   return (
     <div style={{ border: '1px solid var(--line)', borderRadius: 8, background: 'var(--panel)', overflow: 'hidden' }}>
       <div style={{ padding: '7px 12px', borderBottom: '1px solid var(--line-2)', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -783,7 +725,7 @@ const LogBox = ({ logs, running }) => {
         {running && <div style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--accent)', animation: 'pulse 1.2s ease-in-out infinite' }}/>}
       </div>
       <div ref={listRef} style={{ maxHeight: 140, overflowY: 'auto', padding: '6px 0' }}>
-        {logs.map((log, i) => {
+        {visibleLogs.map((log, i) => {
           const isError = log.includes('失败') || log.includes('Error') || log.includes('error');
           const isOk = log.includes('完成') || log.includes('就绪') || log.includes('保存');
           const isPath = log.includes('/') && (log.includes('.png') || log.includes('.py') || log.includes('\\'));
@@ -892,6 +834,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
   messages.forEach((msg, idx) => { if (msg.type === 'ai-image-generating') lastAiCardIdx = idx; });
   const canRetryCard = (msg, idx) => {
     if (!msg.retryArgs) return false;
+    if (/无法确认|图片已生成|仍在处理|任务可能|暂未完整保存/.test(formatAiImageError(msg.error))) return false;
     const isBatch = Array.isArray(msg.images) && msg.images.length > 0;
     if (msg.jobId && !isBatch) return true;
     return idx === lastAiCardIdx;
@@ -992,14 +935,6 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     : null
               ),
               m.status !== 'failed' && m.status !== 'done' && React.createElement(InlineRefStrip, { items: m.refPreviews }),
-              m.providerSwitched && React.createElement('div', {
-                style: { padding: '6px 10px', borderRadius: 6, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)', marginBottom: 6 }
-              }, '已自动切换到「' + ({
-                sub2api: '订阅',
-                tuzi: 'Tuzi',
-                adobe2api: 'Adobe',
-                apimart: 'APIMart',
-              }[m.provider] || m.provider || '备用') + '」线路'),
               showPromptTrace && React.createElement(PromptTraceBlock, {
                 title: m.activeSkill ? ('Skill 解析 · $' + m.activeSkill) : '生图 Prompt',
                 text: promptTraceText || resolvedPromptText,
@@ -1138,8 +1073,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
               ),
               m.status === 'failed' && !batchImages && React.createElement('div', {
                 style: {
-                  padding: '8px 10px', borderRadius: 6, background: 'var(--panel)',
-                  border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)',
+                  padding: '4px 0', fontSize: 11, color: 'var(--ink-3)',
                   lineHeight: 1.45, wordBreak: 'break-word',
                 }
               },
@@ -1393,8 +1327,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   </div>
                 )}
                 {m.status === 'failed' && m.error && (
-                  <div style={{ padding: '10px 12px', borderRadius: 6, background: 'var(--panel)', border: '1px solid var(--warn)', fontSize: 12, color: 'var(--warn)' }}>
-                    {m.error}
+                  <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+                    {formatAiImageError(m.error)}
                   </div>
                 )}
               </div>
@@ -1484,7 +1418,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 {m.thinking ? (
                   <ThinkingBlock text={m.thinking}/>
                 ) : null}
-                <CopyableTextBubble who={m.who} text={m.text} markdown/>
+                <CopyableTextBubble who={m.who} text={m.who === 'ai' && (m.feedbackError || m.meta === '错误' || /^(Agent .*失败|错误[:：]|解析错误|下载失败|设置头像失败)/.test(m.text || '')) ? formatAiImageError(m.feedbackError || m.text) : m.text} markdown/>
                 {/* Agent CONFIRM 阶段的创意方案卡片 */}
                 {m.brief || m.contract ? (
                   <BriefCard brief={m.brief} contract={m.contract} completeness={m.completeness}/>
@@ -1844,6 +1778,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
         });
       } catch (err) {
         console.error('Load canvas reference images failed:', err);
+        window.dfError(err, '参考图暂时无法读取，请重新选择。');
       }
     })();
     return function() {
@@ -2180,6 +2115,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       })
       .catch(function(err) {
         console.error('加载常用语失败', err);
+        window.dfError(err, '常用语暂时无法加载，请稍后重新打开。');
       })
       .finally(function() {
         setQuickPromptsLoading(false);
@@ -2233,6 +2169,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       })
       .catch(function(err) {
         console.error('删除常用语失败', err);
+        window.dfError(err, '常用语暂时无法删除，请稍后再试。');
       });
   }, []);
 
@@ -2259,6 +2196,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
       })
       .catch(function(err) {
         console.error('保存常用语失败', err);
+        window.dfError(err, '常用语暂时无法保存，请稍后再试。');
       })
       .finally(function() {
         setQuickPromptSaving(false);
@@ -4063,6 +4001,28 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
   const [modeMenuOpen, setModeMenuOpen] = React.useState(false);
   const modeMenuRef = React.useRef(null);
   const creatingAgentProjectRef = React.useRef(null);
+  const feedbackStartedAt = React.useRef(Date.now());
+  const previousTaskStates = React.useRef(new Map());
+  const notifiedMessages = React.useRef(new Set());
+  React.useEffect(() => {
+    const states = new Map();
+    messages.forEach((m, i) => {
+      const key = m.startedAt || m.jobId || m.id;
+      if (key) {
+        const previous = previousTaskStates.current.get(key);
+        if (m.status === 'failed' && previous !== 'failed' && (previous || m.startedAt >= feedbackStartedAt.current)) {
+          window.dfError(m.error, '本次任务未完成，请稍后查看任务记录。', { key: 'task:' + key });
+        }
+        states.set(key, m.status);
+      }
+      if (m.feedbackAt >= feedbackStartedAt.current && !notifiedMessages.current.has(m.feedbackAt)) {
+        notifiedMessages.current.add(m.feedbackAt);
+        window.dfError(m.feedbackError, '本次操作未完成，请稍后再试。');
+      }
+    });
+    previousTaskStates.current = states;
+  }, [messages]);
+
 
   // Extract required fields from template slots (e.g., "slot/product_1/name" -> "name")
   const getTemplateFields = React.useCallback((t) => {
@@ -4141,8 +4101,8 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         setMessages(mapped);
       } catch (e) {
         if (!cancelled) {
-          setAgentMessages([{ who: 'ai', text: 'Agent 初始化失败：' + ((e && e.message) || '未知错误'), meta: 'Agent' }]);
-          setMessages([{ who: 'ai', text: 'Agent 初始化失败：' + ((e && e.message) || '未知错误'), meta: 'Agent' }]);
+          setAgentMessages([{ who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message), meta: 'Agent' }]);
+          setMessages([{ who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message), meta: 'Agent' }]);
         }
       }
     })();
@@ -4161,6 +4121,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       setHistorySessions(sessions || []);
     } catch (e) {
       console.error('load ai chat history failed:', e);
+      window.dfError(e, '任务记录暂时无法加载，请稍后重新打开。');
       setHistorySessions([]);
     } finally {
       setHistoryLoading(false);
@@ -4174,6 +4135,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       setHistorySessions((res && res.data) || []);
     } catch (e) {
       console.error('load agent project history failed:', e);
+      window.dfError(e, '对话记录暂时无法加载，请稍后重新打开。');
       setHistorySessions([]);
     } finally {
       setHistoryLoading(false);
@@ -4201,6 +4163,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       setLastSubmittedMessage(lastUser ? lastUser.text : '');
     } catch (e) {
       console.error('restore ai chat session failed:', e);
+      window.dfError(e, '对话暂时无法打开，请稍后再试。');
     }
   }, []);
 
@@ -4273,7 +4236,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
           setGreetingResetKey(function(prev) { return prev + 1; });
           if (onComposeComplete) onComposeComplete(null, null, [], null);
         } catch (e) {
-          setMessages([{ who: 'ai', text: '新建 Agent 对话失败：' + ((e && e.message) || '未知错误'), meta: 'Agent' }]);
+          setMessages([{ who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message), meta: 'Agent' }]);
         } finally {
           setIsLoading(false);
         }
@@ -4416,7 +4379,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       ? { job_id: msg.jobId }
       : (msg.imageUrl ? { image_url: msg.imageUrl } : null);
     if (!payload) {
-      window.dfToast('这条消息无法发布（缺少 job_id 和 image_url）', { tone: 'warn' });
+      window.dfToast('这张图片暂时无法发布，请等待生成完成后再试。', { tone: 'warn' });
       return;
     }
     payload.category = dialog.category || 'share_card';
@@ -5031,6 +4994,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
                   : m
               ));
               if (failCount > 0) {
+                if (okOrdered.length) window.dfError('已生成 ' + okOrdered.length + ' 张，' + failCount + ' 张未完成。' + formatAiImageError(firstErr));
                 var summary = okOrdered.length
                   ? ('本次 ' + jobIds.length + ' 张中有 ' + failCount + ' 张失败：' + formatAiImageError(firstErr || '未知原因', null))
                   : formatAiImageError(firstErr || '生图失败', jobIds[0]);
@@ -5359,7 +5323,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
               setMessages(function(msgs) {
                 return msgs.map(function(m, i) {
                   if (i !== assistantIdx) return m;
-                  return { who: 'ai', text: (payload && payload.message) || 'Agent 执行失败', meta: 'Agent' };
+                  return { who: 'ai', feedbackAt: Date.now(), feedbackError: payload && payload.message, text: formatAiImageError(payload && payload.message), meta: 'Agent' };
                 });
               });
             }
@@ -5424,7 +5388,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
             setMessages(function(msgs) {
               return msgs.map(function(m, i) {
                 if (i !== assistantIdx) return m;
-                return { who: 'ai', text: (payload && payload.message) || 'Agent 执行失败', meta: 'Agent' };
+                return { who: 'ai', feedbackAt: Date.now(), feedbackError: payload && payload.message, text: formatAiImageError(payload && payload.message), meta: 'Agent' };
               });
             });
             setIsLoading(false);
@@ -5437,7 +5401,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         setMessages(function(msgs) {
           return msgs.map(function(m, i) {
             if (i !== assistantIdx) return m;
-            return { who: 'ai', text: 'Agent 执行失败：' + ((e && e.message) || '未知错误'), meta: 'Agent' };
+            return { who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message), meta: 'Agent' };
           });
         });
         setIsLoading(false);
@@ -5462,7 +5426,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         const data = await res.json();
         setMessages(msgs => [...msgs, { who: 'ai', text: '头像设置成功！刷新页面后生效。' }]);
       } catch (e) {
-        setMessages(msgs => [...msgs, { who: 'ai', text: '设置头像失败: ' + (e.message || '未知错误') }]);
+        setMessages(msgs => [...msgs, { who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message) }]);
       }
       setIsLoading(false);
       return;
@@ -5565,7 +5529,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
           clearTimeout(progressTimer);
           setMessages(msgs => msgs.map((m, idx) => idx === pendingIdx ? {
             who: 'ai',
-            text: '下载失败: ' + (e.message || '未知错误'),
+            feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message),
             meta: '花瓣下载',
           } : m));
         }
@@ -5759,7 +5723,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
             throw new Error(s.error || '合成失败');
           }
         }
-        if (!done) throw new Error('合成超时，请检查后端日志');
+        if (!done) throw new Error('等待合成结果超时，任务可能仍在处理，请稍后查看任务记录。');
       } catch (e) {
         setMessages(msgs => msgs.map((m, idx) => {
           if (idx !== specialMsgIdx) return m;
@@ -5790,7 +5754,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       ));
     } catch (e) {
       setMessages(msgs => msgs.map((m, i) =>
-        i === thinkingIdx ? { who: 'ai', text: '错误: ' + (e.message || '未知错误'), meta: '错误' } : m
+        i === thinkingIdx ? { who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message), meta: '错误' } : m
       ));
     }
     setIsLoading(false);
@@ -5886,7 +5850,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         fields: templateFields
       }]);
     } catch (e) {
-      setMessages(msgs => [...msgs, { who: 'ai', text: '解析错误: ' + (e.message || '未知错误'), meta: '错误' }]);
+      setMessages(msgs => [...msgs, { who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message), meta: '错误' }]);
     }
     setIsLoading(false);
   }, [isLoading, templateFields]);
@@ -5940,7 +5904,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       }));
     } catch (e) {
       setMessages(msgs => msgs.map(function(m) {
-        return m.id === pendingId ? { who: 'ai', text: '解析错误: ' + (e.message || '未知错误'), meta: '错误' } : m;
+        return m.id === pendingId ? { who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message), meta: '错误' } : m;
       }));
     }
     setIsLoading(false);

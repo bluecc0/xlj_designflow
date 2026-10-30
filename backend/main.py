@@ -6609,7 +6609,9 @@ async def describe_inspiration(request: Request, post_id: str):
         }, timeout=60)
         endpoint = str(resp.extensions.get("model_route", {}).get("provider") or "model-route")
         if not resp.is_success:
-            raise HTTPException(resp.status_code, f"VLM 反推失败: {resp.text[:200]}")
+            logger.warning("Image description service failed: provider=%s status=%s", endpoint, resp.status_code)
+            # A provider's authentication failure is not the user's expired login session.
+            raise HTTPException(502, "图片分析服务暂时不可用，请稍后再试。")
 
         raw = ""
         try:
