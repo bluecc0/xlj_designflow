@@ -311,6 +311,32 @@ def list_call_artifacts(call_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def count_pending_image_jobs(session_id: str) -> int:
+    """会话里还在执行或等待后台恢复的 Agent 生图任务数（用户停止的不算）。"""
+    with _connect() as conn:
+        row = conn.execute("""
+            SELECT COUNT(*) FROM ai_image_jobs
+            WHERE status IN ('pending', 'queued', 'processing', 'running') AND json_valid(request_meta_json)
+              AND json_extract(request_meta_json, '$.source') = 'agent2'
+              AND json_extract(request_meta_json, '$.session_id') = ?
+              AND COALESCE(json_extract(request_meta_json, '$.recovery.phase'), '') != 'cancelled'
+        """, (session_id,)).fetchone()
+    return int(row[0] or 0)
+
+
+def take_unannounced_recovered(session_id: str) -> list[dict]:
+    """取出重启后补回、还没告诉模型的图片，并标记为已告知。"""
+    with _connect() as conn:
+        rows = [dict(r) for r in conn.execute("""
+            SELECT id, label FROM agent2_artifacts WHERE session_id = ?
+              AND json_extract(meta_json, '$.recovered') = 1 AND COALESCE(json_extract(meta_json, '$.announced'), 0) = 0
+            ORDER BY created_at
+        """, (session_id,))]
+        conn.executemany("UPDATE agent2_artifacts SET meta_json = json_set(meta_json, '$.announced', 1) WHERE id = ?",
+                         [(r["id"],) for r in rows])
+    return rows
+
+
 def find_job_artifact(job_id: str) -> dict | None:
     with _connect() as conn:
         return _row(conn.execute(

@@ -170,6 +170,10 @@ async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], 
         content = f"[用户选择了技能：{skill}，请先用 load_skill 加载它再执行]\n{content}"
     if uploads:
         content += "\n\n[用户上传了图片：" + "、".join(u["id"] for u in uploads) + "]"
+    recovered = store.take_unannounced_recovered(session["id"])
+    if recovered:
+        content += "\n\n[服务重启后，之前没完成的生图已在后台补回：" + "、".join(
+            r["id"] + (f"（{r['label']}）" if r.get("label") else "") for r in recovered) + "]"
     messages = settle_tool_calls(store.load_session_messages(session)) + [{"role": "user", "content": content}]
     async for chunk in _drive(user=user, session=session, turn_id=turn["id"], messages=messages,
                               tools=tools_factory(), model=model_factory(), request=text):

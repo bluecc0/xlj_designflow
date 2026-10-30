@@ -53,7 +53,7 @@ def _artifact_bytes(ctx: ToolContext, artifact_id: str) -> tuple[bytes, str]:
 
 # ── generate_image ────────────────────────────────────────────────────────────
 
-def create_job_artifact(job: dict) -> dict | None:
+def create_job_artifact(job: dict, recovered: bool = False) -> dict | None:
     """把完成的生图任务登记为会话产物；同一任务只登记一次（实时完成和重启恢复共用）。"""
     meta = job.get("request_meta") or {}
     url = str(job.get("image_url") or "")
@@ -66,23 +66,25 @@ def create_job_artifact(job: dict) -> dict | None:
         session_id=meta["session_id"], user_id=job["user_id"], kind="image", url=url, path=str(local or ""),
         label=meta.get("label") or "", group_id=meta.get("group_id"), group_type=meta.get("group_type"),
         position=int(meta.get("position") or 0), source_tool_call_id=meta.get("tool_call_id"),
-        meta={"prompt": job.get("prompt"), "job_id": job["id"], "provider": job.get("provider")},
+        meta={"prompt": job.get("prompt"), "job_id": job["id"], "provider": job.get("provider"),
+              **({"recovered": True, "announced": False} if recovered else {})},
     )
 
 
-def _artifact_event(artifact: dict) -> dict:
-    return {"call_id": artifact["source_tool_call_id"], "artifact": {
+def _artifact_event(artifact: dict, recovered: bool = False) -> dict:
+    return {"call_id": artifact["source_tool_call_id"], "recovered": recovered, "artifact": {
         "id": artifact["id"], "url": artifact["url"], "label": artifact["label"], "group_id": artifact["group_id"],
         "group_type": artifact["group_type"], "position": artifact["position"]}}
 
 
 async def backfill_recovered_job(job_id: str) -> None:
-    """服务重启后由后台恢复完成的 Agent 生图：补登产物，并在原轮次下追加事件。"""
+    """服务重启后由后台恢复完成的 Agent 生图：补登产物并追加事件；前端据 recovered 更新卡片、交付画布，
+    下一轮开始时再把图片 ID 告诉模型。"""
     job = load_ai_image_job(job_id)
-    artifact = create_job_artifact(job) if job else None
+    artifact = create_job_artifact(job, recovered=True) if job else None
     if artifact:
         store.append_event(artifact["session_id"], job["request_meta"].get("turn_id") or "", "artifact.created",
-                           _artifact_event(artifact))
+                           _artifact_event(artifact, recovered=True))
 
 
 def _job_terminal(job: dict | None) -> bool:

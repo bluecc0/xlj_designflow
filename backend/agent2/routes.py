@@ -48,7 +48,9 @@ def get_session(request: Request, session_id: str, after_seq: int = 0):
     # active_turn：刷新或断线后，前端据此按 seq 续接事件直到这一轮结束
     return {"session": {k: session[k] for k in ("id", "title", "created_at", "updated_at")},
             "events": store.list_events(session_id, after_seq),
-            "active_turn": store.get_active_turn(session_id)}
+            "active_turn": store.get_active_turn(session_id),
+            # 还有后台生图未完成时，前端在本轮结束后继续低频轮询，接收重启恢复后补回的图片
+            "pending_jobs": store.count_pending_image_jobs(session_id)}
 
 
 @router.delete("/sessions/{session_id}")

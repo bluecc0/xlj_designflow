@@ -370,6 +370,55 @@ class Agent2EngineTest(unittest.TestCase):
         self.assertEqual(store.list_events(self.session["id"])[-1]["type"], "turn.failed")
         self.assertIsNone(store.get_active_turn(self.session["id"]))
 
+    def test_restart_recovery_reaches_user_and_model_without_refresh(self):
+        from types import SimpleNamespace
+        from backend.agent2 import routes, tools as a2tools
+
+        img = Path(self.tmp.name) / "out.png"
+        img.write_bytes(b"png")
+        patches, _ = self._durable_image_tools(img)
+        sid = self.session["id"]
+        # 重启前：轮次运行中，生图工具已发起（消息已落库），任务还在上游执行
+        turn = store.claim_turn(sid, "u1", "画一张跑鞋")
+        store.save_session_messages(sid, [
+            {"role": "user", "content": "画一张跑鞋"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "generate_image", "arguments": "{}"}}]},
+        ])
+        meta = {"source": "agent2", "session_id": sid, "turn_id": turn["id"], "tool_call_id": "c1", "label": "首屏",
+                "recovery": {"version": 1, "phase": "accepted", "task_id": "t1"}}
+        job = dict(job_id="j1", user_id="u1", model="gpt-image-2.5", prompt="跑鞋", size="1:1", request_meta=meta)
+        job_store.save_ai_image_job(status="processing", **job)
+
+        request = SimpleNamespace(state=SimpleNamespace(user=self.user))
+        service.fail_stale_turns()
+        snapshot = routes.get_session(request, sid)
+        # 轮次已结束，但还有后台任务：前端据 pending_jobs 继续轮询
+        self.assertIsNone(snapshot["active_turn"])
+        self.assertEqual(snapshot["pending_jobs"], 1)
+
+        # 后台恢复完成 → 回填
+        job_store.save_ai_image_job(status="done", image_url="/output/out.png", progress=100, **job)
+        with patches[1]:
+            asyncio.run(a2tools.backfill_recovered_job("j1"))
+        after = routes.get_session(request, sid, after_seq=snapshot["events"][-1]["seq"])
+        self.assertEqual(after["pending_jobs"], 0)
+        self.assertEqual([e["type"] for e in after["events"]], ["artifact.created"])
+        self.assertTrue(after["events"][0]["payload"]["recovered"])
+        image_id = after["events"][0]["payload"]["artifact"]["id"]
+
+        # 下一轮：模型能看到补回的图片 ID，悬空的工具调用也被补齐
+        model = FakeModel([[("text", "看到了")]])
+        self._run(model, "把刚才那张背景换成蓝色")
+        sent = model.seen[0]
+        self.assertIn(image_id, sent[-1]["content"])
+        self.assertEqual([m["role"] for m in sent[1:]], ["user", "assistant", "tool", "user"])
+        self.assertIn(image_id, sent[3]["content"])
+        # 只告知一次
+        model2 = FakeModel([[("text", "好")]])
+        self._run(model2, "再来一张")
+        self.assertNotIn("后台补回", model2.seen[0][-1]["content"])
+
     def test_delete_session_removes_records_for_owner_only(self):
         self._run(FakeModel([[("text", "好")]]), "你好")
         sid = self.session["id"]
