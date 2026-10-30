@@ -11187,9 +11187,33 @@ const ADMIN_ACTIONS = {
   skill_upload: ['上传技能', '#0f8b78'],
   skill_delete: ['删除技能', '#d64545']
 };
+
+// Agent 模式：使用层（会话、轮次）+ 产出层（它发起的生图、特殊品任务，已计入任务总量）
+function AdminAgentUsage({
+  usage
+}) {
+  if (!usage) return null;
+  var items = [['使用人数', usage.users], ['会话', usage.sessions], ['对话轮次', usage.turns], ['失败 / 停止轮次', (usage.failed_turns || 0) + ' / ' + (usage.cancelled_turns || 0)], ['生图任务', usage.images], ['出图成功', usage.images_done], ['特殊品任务', usage.special], ['每轮平均出图', usage.images_per_turn == null ? '-' : usage.images_per_turn]];
+  return /*#__PURE__*/React.createElement("section", {
+    className: "df-admin-card df-admin-section"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-cardhead"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "df-admin-cardtitle"
+  }, "Agent \u6A21\u5F0F"), /*#__PURE__*/React.createElement("span", {
+    className: "df-admin-cardmeta"
+  }, "\u7528\u6237\u6BCF\u53D1\u4E00\u6761\u9700\u6C42\u7B97\u4E00\u8F6E\uFF1B\u751F\u56FE\u3001\u7279\u6B8A\u54C1\u4EFB\u52A1\u5DF2\u8BA1\u5165\u4E0A\u65B9\u4EFB\u52A1\u603B\u91CF")), /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-agentstats"
+  }, items.map(function (item) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-detailcard",
+      key: item[0]
+    }, /*#__PURE__*/React.createElement("span", null, item[0]), /*#__PURE__*/React.createElement("strong", null, item[1] == null ? 0 : item[1]));
+  })));
+}
 const ADMIN_TASK_TYPES = {
   ai_image: 'AI 生图',
-  agent_image: 'Agent 生图',
+  agent_image: '旧版 Agent 生图',
   compose: '模板合成',
   special: '特殊品'
 };
@@ -11379,6 +11403,10 @@ const ADMIN_CSS = `
   .df-admin-progress { height: 3px; margin-top: 8px; border-radius: 9px; overflow: hidden; background: #eeefeb; }
   .df-admin-progress > span { display: block; height: 100%; background: #292c28; }
   .df-admin-section { margin-top: 10px; }
+  .df-admin-agentstats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; padding: 4px 16px 16px; }
+  .df-admin-agentstats strong { display: block; margin-top: 4px; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .df-admin-agentstats span { font-size: 11px; color: var(--admin-faint); }
+  .df-admin-sourcetag { margin-left: 5px; padding: 1px 5px; border-radius: 4px; background: #eef0fd; color: #4b58c9; font-size: 10px; }
   .df-admin-split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
   .df-admin-overviewtriple { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 10px; }
   .df-admin-ranking { padding: 7px 16px 12px; }
@@ -11510,6 +11538,7 @@ const ADMIN_CSS = `
     .df-admin-navbutton.is-active::after { display: none; }
     .df-admin-back { display: grid; place-items: center; }
     .df-admin-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .df-admin-agentstats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .df-admin-servicegrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 760px) {
@@ -11673,7 +11702,7 @@ function AdminTrendChart({
     return /*#__PURE__*/React.createElement("div", {
       className: "df-admin-baritem",
       key: index,
-      title: '共 ' + item.total + ' · AI 生图 ' + item.ai_image + ' · Agent 生图 ' + item.agent_image + ' · 模板合成 ' + item.compose + ' · 特殊品 ' + item.special
+      title: '共 ' + item.total + ' · AI 生图 ' + item.ai_image + ' · 旧版 Agent ' + item.agent_image + ' · 模板合成 ' + item.compose + ' · 特殊品 ' + item.special
     }, /*#__PURE__*/React.createElement("div", {
       className: "df-admin-bartrack"
     }, /*#__PURE__*/React.createElement("span", {
@@ -12388,7 +12417,8 @@ function AdminPage({
     userId: '',
     provider: '',
     reference: '',
-    skill: ''
+    skill: '',
+    source: ''
   });
   var [skills, setSkills] = React.useState([]);
   var [memories, setMemories] = React.useState([]);
@@ -12457,7 +12487,8 @@ function AdminPage({
       userId: taskFilters.userId,
       provider: taskFilters.provider,
       reference: taskFilters.reference,
-      skill: taskFilters.skill
+      skill: taskFilters.skill,
+      source: taskFilters.source
     }).then(function (data) {
       setTasks(data.tasks || []);
       setTaskTotal(data.total || 0);
@@ -12767,7 +12798,7 @@ function AdminPage({
       className: "is-ai"
     }, /*#__PURE__*/React.createElement("i", null), "AI \u751F\u56FE"), /*#__PURE__*/React.createElement("span", {
       className: "is-agent"
-    }, /*#__PURE__*/React.createElement("i", null), "Agent"), /*#__PURE__*/React.createElement("span", {
+    }, /*#__PURE__*/React.createElement("i", null), "\u65E7\u7248 Agent"), /*#__PURE__*/React.createElement("span", {
       className: "is-compose"
     }, /*#__PURE__*/React.createElement("i", null), "\u6A21\u677F\u5408\u6210"), /*#__PURE__*/React.createElement("span", {
       className: "is-special"
@@ -12791,7 +12822,9 @@ function AdminPage({
         key: item.type
       }, /*#__PURE__*/React.createElement("div", {
         className: "df-admin-breaktop"
-      }, /*#__PURE__*/React.createElement("span", null, ADMIN_TASK_TYPES[item.type] || item.type), /*#__PURE__*/React.createElement("span", {
+      }, /*#__PURE__*/React.createElement("span", null, ADMIN_TASK_TYPES[item.type] || item.type, item.agent ? /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-faint"
+      }, "\uFF08\u5176\u4E2D Agent ", item.agent, "\uFF09") : null), /*#__PURE__*/React.createElement("span", {
         className: "df-admin-breakvalue"
       }, item.total)), /*#__PURE__*/React.createElement("div", {
         className: "df-admin-progress"
@@ -12801,7 +12834,9 @@ function AdminPage({
           background: barColor
         }
       })));
-    })))), /*#__PURE__*/React.createElement("div", {
+    })))), /*#__PURE__*/React.createElement(AdminAgentUsage, {
+      usage: overview.agent
+    }), /*#__PURE__*/React.createElement("div", {
       className: "df-admin-overviewtriple"
     }, /*#__PURE__*/React.createElement(AdminUserRanking, {
       items: overview.user_ranking,
@@ -12886,7 +12921,7 @@ function AdminPage({
       value: "ai_image"
     }, "AI \u751F\u56FE"), /*#__PURE__*/React.createElement("option", {
       value: "agent_image"
-    }, "Agent \u751F\u56FE"), /*#__PURE__*/React.createElement("option", {
+    }, "\u65E7\u7248 Agent \u751F\u56FE"), /*#__PURE__*/React.createElement("option", {
       value: "compose"
     }, "\u6A21\u677F\u5408\u6210"), /*#__PURE__*/React.createElement("option", {
       value: "special"
@@ -12949,7 +12984,19 @@ function AdminPage({
       value: "yes"
     }, "\u4F7F\u7528\u53C2\u8003\u56FE"), /*#__PURE__*/React.createElement("option", {
       value: "no"
-    }, "\u672A\u7528\u53C2\u8003\u56FE")), taskFilters.skill ? /*#__PURE__*/React.createElement("button", {
+    }, "\u672A\u7528\u53C2\u8003\u56FE")), /*#__PURE__*/React.createElement("select", {
+      className: "df-admin-control",
+      value: taskFilters.source,
+      onChange: function (e) {
+        setTaskFilter('source', e.target.value);
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "\u5168\u90E8\u6765\u6E90"), /*#__PURE__*/React.createElement("option", {
+      value: "agent"
+    }, "Agent \u6A21\u5F0F"), /*#__PURE__*/React.createElement("option", {
+      value: "normal"
+    }, "\u666E\u901A\u5165\u53E3")), taskFilters.skill ? /*#__PURE__*/React.createElement("button", {
       className: "df-admin-control",
       title: "\u6E05\u9664\u6280\u80FD\u7B5B\u9009",
       onClick: function () {
@@ -12986,7 +13033,9 @@ function AdminPage({
         }
       }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(AdminStatusBadge, {
         status: item.status
-      })), /*#__PURE__*/React.createElement("td", null, ADMIN_TASK_TYPES[item.task_type] || item.task_type), /*#__PURE__*/React.createElement("td", {
+      })), /*#__PURE__*/React.createElement("td", null, ADMIN_TASK_TYPES[item.task_type] || item.task_type, item.source === 'agent' ? /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-sourcetag"
+      }, "Agent") : null), /*#__PURE__*/React.createElement("td", {
         className: "df-admin-mono"
       }, String(item.id).slice(0, 12)), /*#__PURE__*/React.createElement("td", null, adminUserLabel(item)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", null, item.model || '-'), /*#__PURE__*/React.createElement("div", {
         className: "df-admin-ellipsis df-admin-faint"

@@ -374,6 +374,7 @@
       if (options.provider) qs += '&provider=' + encodeURIComponent(options.provider);
       if (options.reference) qs += '&reference=' + encodeURIComponent(options.reference);
       if (options.skill) qs += '&skill=' + encodeURIComponent(options.skill);
+      if (options.source) qs += '&source=' + encodeURIComponent(options.source);
       return request('/admin/tasks' + qs);
     },
     getAdminSkills: function() {

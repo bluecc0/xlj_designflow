@@ -325,7 +325,8 @@ async def special_compose(ctx: ToolContext, args: dict) -> dict:
                                 else (SpecialComposeRequest, SpecialComposeJob, run_special_compose))
     request = req_cls(file_id=group[0].file_id, page_id=group[0].page_id, frame_ids=[t.id for t in group],
                       sku=sku, fields=fields, export_scale=2.0)
-    job = job_cls(id=str(uuid.uuid4()), user_id=ctx.user["id"], request=request, created_at=time.time())
+    job = job_cls(id=str(uuid.uuid4()), user_id=ctx.user["id"], request=request, created_at=time.time(),
+                  source="agent2")
     with main._jobs_lock:
         main._jobs[job.id] = job
     save_special_job(job)

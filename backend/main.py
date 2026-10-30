@@ -7366,6 +7366,7 @@ def admin_tasks(
     provider: str = "",
     reference: str = "",
     skill: str = "",
+    source: str = "",
 ):
     """统一任务中心（仅管理员，只读）。"""
     user = _current_user(request)
@@ -7380,6 +7381,8 @@ def admin_tasks(
         raise HTTPException(400, "不支持的任务类型")
     if reference not in allowed_references:
         raise HTTPException(400, "不支持的参考图筛选条件")
+    if source not in {"", "agent", "normal"}:
+        raise HTTPException(400, "不支持的来源筛选条件")
     tasks, total = load_admin_tasks(
         limit=limit,
         offset=offset,
@@ -7390,6 +7393,7 @@ def admin_tasks(
         provider=provider or None,
         reference=reference or None,
         skill=skill or None,
+        source=source or None,
     )
     return {
         "tasks": tasks,

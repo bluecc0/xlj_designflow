@@ -176,7 +176,8 @@ def init_db() -> None:
                 updated_at       REAL NOT NULL
             )
         """)
-        for col, typ in [("user_id", "TEXT"), ("result_frame_names_json", "TEXT"), ("recovery_json", "TEXT")]:
+        for col, typ in [("user_id", "TEXT"), ("result_frame_names_json", "TEXT"), ("recovery_json", "TEXT"),
+                         ("source", "TEXT")]:
             try:
                 conn.execute(f"ALTER TABLE special_jobs ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
@@ -637,15 +638,17 @@ def save_special_job(job) -> None:
                 updated_at       REAL NOT NULL
             )
         """)
-        try:
-            conn.execute("ALTER TABLE special_jobs ADD COLUMN result_frame_names_json TEXT")
-        except sqlite3.OperationalError:
-            pass
+        for col in ("result_frame_names_json", "source"):
+            try:
+                conn.execute(f"ALTER TABLE special_jobs ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass
         conn.execute("""
             INSERT INTO special_jobs
               (id, user_id, status, sku, request_json, result_paths_json, result_frame_ids_json, result_frame_names_json,
-               penpot_file_id, penpot_page_id, penpot_edit_url, error, progress_json, created_at, updated_at, recovery_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               penpot_file_id, penpot_page_id, penpot_edit_url, error, progress_json, created_at, updated_at, recovery_json,
+               source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 user_id              = excluded.user_id,
                 status               = excluded.status,
@@ -658,7 +661,9 @@ def save_special_job(job) -> None:
                 error               = excluded.error,
                 progress_json       = excluded.progress_json,
                 updated_at          = excluded.updated_at,
-                recovery_json       = excluded.recovery_json
+                recovery_json       = excluded.recovery_json,
+                -- 来源只在创建时确定；恢复时重建的任务对象没有来源，不能把它清掉
+                source              = COALESCE(NULLIF(excluded.source, ''), special_jobs.source)
         """, (
             job.id,
             getattr(job, "user_id", None),
@@ -676,6 +681,7 @@ def save_special_job(job) -> None:
             job.created_at or now,
             now,
             json.dumps(job.recovery, ensure_ascii=False),
+            getattr(job, "source", "") or "",
         ))
         conn.commit()
 
@@ -2293,39 +2299,39 @@ def _admin_task_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         return conn.execute(
             f"""
             SELECT 'compose' AS task_type, id, user_id, status, created_at,
-                   updated_at, error, '' AS model
+                   updated_at, error, '' AS model, '' AS source
             FROM jobs {where}
             UNION ALL
             SELECT 'special' AS task_type, id, user_id, status, created_at,
-                   updated_at, error, '' AS model
+                   updated_at, error, '' AS model, {_SPECIAL_SOURCE_SQL} AS source
             FROM special_jobs {where}
             UNION ALL
             SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
-                   COALESCE(updated_at, created_at) AS updated_at, error, model
+                   COALESCE(updated_at, created_at) AS updated_at, error, model, {_AI_SOURCE_SQL} AS source
             FROM ai_image_jobs {where}
             UNION ALL
             SELECT 'agent_image' AS task_type, id, user_id, 'done' AS status, created_at,
-                   created_at AS updated_at, '' AS error, model
+                   created_at AS updated_at, '' AS error, model, '' AS source
             FROM agent_images {where}
             """,
             tuple(params),
         ).fetchall()
     return conn.execute(
-        """
+        f"""
         SELECT 'compose' AS task_type, id, user_id, status, created_at,
-               updated_at, error, '' AS model
+               updated_at, error, '' AS model, '' AS source
         FROM jobs
         UNION ALL
         SELECT 'special' AS task_type, id, user_id, status, created_at,
-               updated_at, error, '' AS model
+               updated_at, error, '' AS model, {_SPECIAL_SOURCE_SQL} AS source
         FROM special_jobs
         UNION ALL
         SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
-               COALESCE(updated_at, created_at) AS updated_at, error, model
+               COALESCE(updated_at, created_at) AS updated_at, error, model, {_AI_SOURCE_SQL} AS source
         FROM ai_image_jobs
         UNION ALL
         SELECT 'agent_image' AS task_type, id, user_id, 'done' AS status, created_at,
-               created_at AS updated_at, '' AS error, model
+               created_at AS updated_at, '' AS error, model, '' AS source
         FROM agent_images
         """
     ).fetchall()
@@ -2506,6 +2512,33 @@ def prune_service_probes(service: str, before: float) -> list[str]:
     return image_urls
 
 
+def _agent_usage(since: float, test_uids: set, agent_tasks: list[dict]) -> dict:
+    """Agent 模式的使用情况：会话、轮次（用户每发一条需求算一轮）和它发起的生图 / 特殊品任务。"""
+    images = [item for item in agent_tasks if item["task_type"] == "ai_image"]
+    images_done = sum(1 for item in images if item["status"] == "done")
+    usage = {"sessions": 0, "turns": 0, "failed_turns": 0, "cancelled_turns": 0, "users": 0,
+             "images": len(images), "images_done": images_done,
+             "special": sum(1 for item in agent_tasks if item["task_type"] == "special"),
+             "images_per_turn": None}
+    where, params = "started_at >= ?", [since]
+    if test_uids:
+        where += f" AND user_id NOT IN ({','.join('?' for _ in test_uids)})"
+        params.extend(test_uids)
+    with _connect() as conn:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent2_turns'").fetchone():
+            return usage
+        row = conn.execute(f"""
+            SELECT COUNT(*) AS turns, COUNT(DISTINCT session_id) AS sessions, COUNT(DISTINCT user_id) AS users,
+                   SUM(status = 'failed') AS failed, SUM(status = 'cancelled') AS cancelled
+            FROM agent2_turns WHERE {where}
+        """, tuple(params)).fetchone()
+    usage.update(sessions=row["sessions"], turns=row["turns"], users=row["users"],
+                 failed_turns=row["failed"] or 0, cancelled_turns=row["cancelled"] or 0)
+    if usage["turns"]:
+        usage["images_per_turn"] = round(images_done / usage["turns"], 1)
+    return usage
+
+
 def load_admin_overview(hours: int = 24) -> dict:
     """Operational overview for Admin; all calculations are read-only."""
     requested_hours = int(hours)
@@ -2604,9 +2637,12 @@ def load_admin_overview(hours: int = 24) -> dict:
 
     breakdown = []
     for task_type in ("ai_image", "agent_image", "compose", "special"):
-        summary = summarize([item for item in current if item["task_type"] == task_type])
+        items = [item for item in current if item["task_type"] == task_type]
+        summary = summarize(items)
         summary["type"] = task_type
+        summary["agent"] = sum(1 for item in items if item.get("source") == "agent")  # 其中由 Agent 模式发起
         breakdown.append(summary)
+    agent_usage = _agent_usage(since, test_uids, [item for item in current if item.get("source") == "agent"])
 
     # 趋势图按整点 / 整天分桶，标签与时间段对齐
     if all_time:
@@ -2764,6 +2800,7 @@ def load_admin_overview(hours: int = 24) -> dict:
         "summary": current_summary,
         "previous_summary": previous_summary,
         "breakdown": breakdown,
+        "agent": agent_usage,
         "series": series,
         "health_timeline": health_timeline,
         "active_users": int(active_user_rows["c"] if active_user_rows else 0),
@@ -2779,6 +2816,14 @@ def load_admin_overview(hours: int = 24) -> dict:
             reverse=True,
         ),
     }
+
+
+# 任务来源：Agent 模式发起的生图 / 特殊品记为 agent，其余入口为空
+_AI_SOURCE_SQL = (
+    "CASE WHEN json_valid(request_meta_json) AND json_extract(request_meta_json, '$.source') = 'agent2' "
+    "THEN 'agent' ELSE '' END"
+)
+_SPECIAL_SOURCE_SQL = "CASE WHEN source = 'agent2' THEN 'agent' ELSE '' END"
 
 
 # 生图任务的 request_meta_json 里记录了所用技能名；非法 JSON 时视为未用技能
@@ -2820,6 +2865,7 @@ def load_admin_tasks(
     provider: str | None = None,
     reference: str | None = None,
     skill: str | None = None,
+    source: str | None = None,
 ) -> tuple[list[dict], int]:
     """Unified paginated task list used by the operations console."""
     safe_limit = max(1, min(int(limit or 50), 200))
@@ -2858,6 +2904,10 @@ def load_admin_tasks(
     if skill:
         clauses.append("skill = ?")
         params.append(skill)
+    if source == "agent":
+        clauses.append("source = 'agent'")
+    elif source == "normal":
+        clauses.append("source = ''")
     clean_search = (search or "").strip()
     if clean_search:
         clauses.append(
@@ -2878,20 +2928,21 @@ def load_admin_tasks(
             SELECT 'compose' AS task_type, id, user_id, status, created_at,
                    updated_at, error, '' AS model, request_json AS summary,
                    0 AS progress, '' AS image_url, 'penpot' AS provider,
-                   0 AS has_reference, NULL AS reference_count, '' AS resolution, '' AS skill
+                   0 AS has_reference, NULL AS reference_count, '' AS resolution, '' AS skill, '' AS source
             FROM jobs
             UNION ALL
             SELECT 'special' AS task_type, id, user_id, status, created_at,
                    updated_at, error, '' AS model, sku AS summary,
                    0 AS progress, '' AS image_url, 'penpot' AS provider,
-                   0 AS has_reference, NULL AS reference_count, '' AS resolution, '' AS skill
+                   0 AS has_reference, NULL AS reference_count, '' AS resolution, '' AS skill,
+                   {_SPECIAL_SOURCE_SQL} AS source
             FROM special_jobs
             UNION ALL
             SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
                    COALESCE(updated_at, created_at) AS updated_at, error, model, prompt AS summary,
                    progress, COALESCE(image_url, '') AS image_url, COALESCE(provider, '') AS provider,
                    has_reference, reference_count, COALESCE(resolution, '') AS resolution,
-                   {_SKILL_SQL} AS skill
+                   {_SKILL_SQL} AS skill, {_AI_SOURCE_SQL} AS source
             FROM ai_image_jobs
             UNION ALL
             SELECT 'agent_image' AS task_type, id, user_id, 'done' AS status, created_at,
@@ -2899,7 +2950,7 @@ def load_admin_tasks(
                    100 AS progress, COALESCE(image_url, '') AS image_url, COALESCE(provider, '') AS provider,
                    CASE WHEN parent_image_id IS NULL THEN 0 ELSE 1 END AS has_reference,
                    CASE WHEN parent_image_id IS NULL THEN 0 ELSE 1 END AS reference_count,
-                   '' AS resolution, '' AS skill
+                   '' AS resolution, '' AS skill, '' AS source
             FROM agent_images
         )
     """
