@@ -602,14 +602,6 @@ if _frontend_dist.exists():
         name="frontend",
     )
 
-_editor_beta_dist = Path(__file__).parent.parent / "editor-lab-tldraw" / "dist"
-if _editor_beta_dist.exists():
-    app.mount(
-        "/editor-beta",
-        CacheAwareStaticFiles(directory=str(_editor_beta_dist), html=True),
-        name="editor-beta",
-    )
-
 _editor_canvas_dist = Path(__file__).parent.parent / "editor-canvas" / "dist"
 if not _editor_canvas_dist.exists():
     _editor_canvas_dist = Path(__file__).parent.parent / "editor-lab-kun" / "dist"
@@ -647,7 +639,6 @@ _AUTH_EXEMPT_PREFIXES = (
     "/products/reference-image",
     "/products/mock-image",
     "/avatars",
-    "/editor-beta",
     "/editor-canvas",
     "/editor-kun",
     "/ui",

@@ -14,12 +14,6 @@
       "port": 8000
     },
     {
-      "name": "editor-lab",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "editor-lab-tldraw"],
-      "port": 8013
-    },
-    {
       "name": "editor-canvas",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "editor-canvas"],
