@@ -82,6 +82,10 @@ class UserSkillStoreTest(unittest.TestCase):
             "缺少 SKILL.md": _zip({"README.md": "x"}),
             "多个 SKILL.md": _zip({"a/SKILL.md": SKILL_MD, "b/SKILL.md": SKILL_MD}),
             "不安全的路径": _zip({"../SKILL.md": SKILL_MD}),
+            "Windows 盘符绝对路径": _zip({"SKILL.md": SKILL_MD, "C:/Users/Public/outside.txt": "x"}),
+            "Windows 盘符反斜杠路径": _zip({"SKILL.md": SKILL_MD, "C:\\Windows\\outside.md": "x"}),
+            "Windows 盘符相对路径": _zip({"SKILL.md": SKILL_MD, "C:outside.txt": "x"}),
+            "UNC 路径": _zip({"SKILL.md": SKILL_MD, "//server/share/outside.txt": "x"}),
             "系统技能": _zip({"SKILL.md": SKILL_MD.replace("poster-main", "text-art-design")}),
             "缺少 description": _zip({"SKILL.md": "---\nname: a\n---\n"}),
         }
@@ -90,6 +94,16 @@ class UserSkillStoreTest(unittest.TestCase):
                 self._install(data)
         with self.assertRaises(SkillUploadError):
             self._install(b"x", "skill.rar")
+
+    def test_write_guard_rejects_targets_outside_staging_dir(self) -> None:
+        from backend.user_skill_store import _safe_target
+        tmp = self.root / "staging"
+        tmp.mkdir()
+        self.assertEqual(_safe_target(tmp, "refs/a.md"), (tmp / "refs" / "a.md").resolve())
+        for rel in ["../outside.md", str(self.root / "outside.md"), "."]:
+            with self.subTest(rel), self.assertRaises(SkillUploadError):
+                _safe_target(tmp, rel)
+        self.assertFalse((self.root / "outside.md").exists())
 
     def test_same_name_requires_overwrite(self) -> None:
         self._install(_zip({"SKILL.md": SKILL_MD}))
