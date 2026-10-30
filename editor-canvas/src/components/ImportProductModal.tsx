@@ -1,3 +1,4 @@
+import { notifyError, feedback } from '../utils/feedback'
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import {
   Package,
@@ -38,11 +39,19 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
   const [selectedAssetTypes, setSelectedAssetTypes] = useState<string[]>(['white'])
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  useEffect(() => { if (visible && errorMsg) notifyError(errorMsg, '商品素材未能导入，请稍后再试。', { key: 'product-import' }); else feedback.resolve('product-import'); }, [errorMsg, visible]);
+  useEffect(() => () => feedback.resolve('product-import'), []);
+
   const [notFoundInfo, setNotFoundInfo] = useState<{
     missingSkus: string[]
     libraryExists: boolean
     allItems: { sku: string; mockUrl: string }[]
   } | null>(null)
+
+  useEffect(() => {
+    if (!visible || !notFoundInfo) return;
+    notifyError(notFoundInfo.libraryExists ? '部分商品未找到素材，请检查货号和素材类型后再试。' : '商品素材库暂未连接，请先上传本地图片或联系管理员。', undefined, { key: 'product-import' });
+  }, [notFoundInfo, visible]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const addImages = useCanvasStore((s) => s.addImages)
@@ -206,7 +215,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
       const skuQuery = parsedSkus.join(',')
       const res = await fetch(`/products/search-sku?sku=${encodeURIComponent(skuQuery)}`)
       if (!res.ok) {
-        throw new Error(`查询接口异常 (${res.status})`)
+        throw feedback.responseError(res.status, await res.text())
       }
       const data = await res.json()
       const skuItems: any[] = data.items || []
@@ -266,16 +275,8 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
         })
       }
     } catch (e: any) {
-      // 若后端接口未启动或网络异常，支持一键载入测试模拟图
-      setErrorMsg(e.message || '连接素材库失败')
-      setNotFoundInfo({
-        missingSkus: parsedSkus,
-        libraryExists: false,
-        allItems: parsedSkus.map((s) => ({
-          sku: s,
-          mockUrl: `/products/mock-image?sku=${encodeURIComponent(s)}&asset_type=white`,
-        })),
-      })
+      setErrorMsg(feedback.message(e, '商品素材暂时无法检索，请稍后再试。'))
+
     } finally {
       setLoading(false)
     }
@@ -565,28 +566,8 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
             </div>
           )}
 
-          {/* 错误提示 */}
-          {errorMsg && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '8px 12px',
-                borderRadius: 8,
-                backgroundColor: '#fef2f2',
-                border: '1px solid #fecaca',
-                color: '#ef4444',
-                fontSize: 12,
-              }}
-            >
-              <AlertCircle size={14} style={{ flexShrink: 0 }} />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
           {/* 未在素材库找到时的反馈与开发模拟图置入 */}
-          {notFoundInfo && (
+          {import.meta.env.DEV && notFoundInfo && (
             <div
               style={{
                 padding: '12px 14px',

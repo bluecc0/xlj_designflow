@@ -24,15 +24,16 @@ const AUTO_DISMISS_MS = 6000
  * AI 换装后台任务托盘：提交后弹窗即关闭，用户可继续编辑画布，这里展示进度与结果。
  */
 export const OutfitTaskTray = memo(function OutfitTaskTray({ tasks, onDismiss }: Props) {
-  // 全部成功的任务几秒后自动收起；失败的保留到用户手动关闭
+  // 完成后收起进度；失败原因由统一提示条展示。
   useEffect(() => {
     const timers = tasks
-      .filter((t) => t.status === 'done' && t.failed === 0)
+      .filter((t) => t.status !== 'running')
       .map((t) => setTimeout(() => onDismiss(t.id), AUTO_DISMISS_MS))
     return () => timers.forEach(clearTimeout)
   }, [tasks, onDismiss])
 
-  if (tasks.length === 0) return null
+  const visibleTasks = tasks.filter((task) => task.status === 'running' || (task.status === 'done' && task.failed === 0))
+  if (visibleTasks.length === 0) return null
 
   return (
     <div
@@ -48,7 +49,7 @@ export const OutfitTaskTray = memo(function OutfitTaskTray({ tasks, onDismiss }:
         gap: 8,
       }}
     >
-      {tasks.map((task) => {
+      {visibleTasks.map((task) => {
         const finished = task.done + task.failed
         const pct =
           task.status === 'running'

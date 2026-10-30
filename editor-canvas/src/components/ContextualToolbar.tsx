@@ -1,3 +1,4 @@
+import { notifyError } from '../utils/feedback'
 import React, { useState } from 'react'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
@@ -223,7 +224,7 @@ export function ContextualToolbar({
       )
     } catch (err) {
       console.error('打包下载失败:', err)
-      alert('打包下载失败，请重试')
+      notifyError('打包下载失败，请重试')
     } finally {
       setIsZipping(false)
       setZipProgress(null)
@@ -236,7 +237,7 @@ export function ContextualToolbar({
     if (!target) return
 
     if (!claimOperation('matting', '智能抠图中...')) {
-      alert('已有 AI 任务在进行中')
+      notifyError('已有 AI 任务在进行中')
       return
     }
     setActiveTaskMsg('智能抠图中...')
@@ -263,7 +264,7 @@ export function ContextualToolbar({
         opacity: 1,
       })
     } catch (e: any) {
-      alert(`抠图失败: ${e.message}`)
+      notifyError(e, '图片暂时无法抠图，请稍后再试。')
     } finally {
       releaseOperation()
       setActiveTaskMsg(null)
@@ -276,7 +277,7 @@ export function ContextualToolbar({
     if (!target) return
 
     if (!claimOperation('upscale', '超分高清放大中...')) {
-      alert('已有 AI 任务在进行中')
+      notifyError('已有 AI 任务在进行中')
       return
     }
     setActiveTaskMsg('超分高清放大中...')
@@ -303,7 +304,7 @@ export function ContextualToolbar({
         opacity: 1,
       })
     } catch (e: any) {
-      alert(`放大失败: ${e.message}`)
+      notifyError(e, '图片暂时无法放大，请稍后再试。')
     } finally {
       releaseOperation()
       setActiveTaskMsg(null)
@@ -316,7 +317,7 @@ export function ContextualToolbar({
     if (!target) return
 
     if (!claimOperation('vectorize', '矢量化提取轮廓中...')) {
-      alert('已有 AI 任务在进行中')
+      notifyError('已有 AI 任务在进行中')
       return
     }
     setActiveTaskMsg('矢量化提取轮廓中...')
@@ -341,7 +342,7 @@ export function ContextualToolbar({
         opacity: 1,
       })
     } catch (e: any) {
-      alert(`矢量化失败: ${e.message}`)
+      notifyError(e, '图片暂时无法转换，请稍后再试。')
     } finally {
       releaseOperation()
       setActiveTaskMsg(null)
@@ -354,7 +355,7 @@ export function ContextualToolbar({
     if (!target) return
 
     if (!claimOperation('layer-extract', '正在分解 PSD 图层...')) {
-      alert('已有 AI 任务在进行中')
+      notifyError('已有 AI 任务在进行中')
       return
     }
     setActiveTaskMsg('正在分解 PSD 图层...')
@@ -399,7 +400,7 @@ export function ContextualToolbar({
         )
       }
     } catch (e: any) {
-      alert(`分层提取失败: ${e.message}`)
+      notifyError(e, '图片暂时无法分层，请稍后再试。')
     } finally {
       releaseOperation()
       setActiveTaskMsg(null)
@@ -771,11 +772,7 @@ export function ContextualToolbar({
           </>
         )}
       </div>
-      {outpaintError && (
-        <div role="status" style={{ marginTop: 6, maxWidth: 440, padding: '7px 10px', borderRadius: 6, background: '#fef2f2', color: '#b91c1c', fontSize: 12 }}>
-          {outpaintError}
-        </div>
-      )}
+
     </div>
   )
 }

@@ -128,19 +128,24 @@ var TemplatePanel = function(_ref2) {
       })
       .catch(function(err) {
         console.error('[TemplatePanel] fetchTemplates failed:', err);
-        setLoadErr(String(err));
+        setLoadErr(window.DesignflowFeedback.message(err, '模板暂时无法加载，请稍后点击刷新。'));
       })
       .finally(function() { setLoading(false); });
   }, [tab]);
+
+  React.useEffect(function() {
+    if (!collapsed && loadErr) window.dfError(loadErr, undefined, { key: 'template-load' });
+    else window.DesignflowFeedback.resolve('template-load');
+  }, [collapsed, loadErr]);
 
   React.useEffect(function() {
     if (tab !== 'history') return;
     console.log('[TemplatePanel] Loading history...');
     setHistoryLoading(true);
     Promise.all([
-      window.API.listComposes(50).catch(function() { return []; }),
-      window.API.listSpecialComposes(50).catch(function() { return []; }),
-      window.API.listAiImages(50).catch(function() { return []; }),
+      window.API.listComposes(50).catch(function(err) { window.dfError(err, '部分任务记录暂时无法加载，请稍后重新打开。', { key: 'history-list' }); return []; }),
+      window.API.listSpecialComposes(50).catch(function(err) { window.dfError(err, '部分任务记录暂时无法加载，请稍后重新打开。', { key: 'history-list' }); return []; }),
+      window.API.listAiImages(50).catch(function(err) { window.dfError(err, '部分任务记录暂时无法加载，请稍后重新打开。', { key: 'history-list' }); return []; }),
     ]).then(function(results) {
       var normal = (results[0] || []).map(function(j) { return Object.assign({}, j, { _type: 'normal' }); });
       var special = (results[1] || []).map(function(j) { return Object.assign({}, j, { _type: 'special' }); });
@@ -246,8 +251,7 @@ var TemplatePanel = function(_ref2) {
           '加载模板…'
         ),
         !loading && loadErr && React.createElement('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--danger)', fontSize: 12, padding: 16, textAlign: 'center' } },
-          React.createElement('div', null, '加载失败'),
-          React.createElement('div', { style: { color: 'var(--ink-3)', fontSize: 11 } }, String(loadErr))
+          React.createElement('div', { style: { color: 'var(--ink-3)' } }, '模板暂不可用，可点击刷新')
         ),
         !loading && !loadErr && React.createElement('div', { style: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 14px 56px' } },
           filteredSections.map(function(section) {

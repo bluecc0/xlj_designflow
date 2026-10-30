@@ -83,7 +83,7 @@ export async function pollJob(
       onProgress(data.message, data.progress)
     }
   }
-  throw new Error('任务超时，请稍后重试')
+  throw new Error('暂时未能取得任务结果，任务可能仍在处理，请稍后查看任务记录。')
 }
 
 /**
@@ -102,7 +102,7 @@ export async function runMatting(
   })
   if (!resp.ok) {
     const txt = await resp.text()
-    throw new Error(txt || `HTTP ${resp.status}`)
+    throw new AiImageRequestError(txt || `HTTP ${resp.status}`, resp.status)
   }
   const { job_id } = await resp.json()
   if (!job_id) throw new Error('没有返回任务 ID')
@@ -131,7 +131,7 @@ export async function runUpscale(
   })
   if (!resp.ok) {
     const txt = await resp.text()
-    throw new Error(txt || `HTTP ${resp.status}`)
+    throw new AiImageRequestError(txt || `HTTP ${resp.status}`, resp.status)
   }
   const { job_id } = await resp.json()
   if (!job_id) throw new Error('没有返回任务 ID')
@@ -159,7 +159,7 @@ export async function runVectorize(
   })
   if (!resp.ok) {
     const txt = await resp.text()
-    throw new Error(txt || `HTTP ${resp.status}`)
+    throw new AiImageRequestError(txt || `HTTP ${resp.status}`, resp.status)
   }
   const { job_id } = await resp.json()
   if (!job_id) throw new Error('没有返回任务 ID')
@@ -290,7 +290,7 @@ export async function runLayerExtract(
   })
   if (!resp.ok) {
     const txt = await resp.text()
-    throw new Error(txt || `HTTP ${resp.status}`)
+    throw new AiImageRequestError(txt || `HTTP ${resp.status}`, resp.status)
   }
   const { job_id } = await resp.json()
   if (!job_id) throw new Error('没有返回任务 ID')
@@ -490,7 +490,7 @@ export async function runQuickEdit(
 
   if (!resp.ok) {
     const txt = await resp.text()
-    throw new Error(txt || `HTTP ${resp.status}`)
+    throw new AiImageRequestError(txt || `HTTP ${resp.status}`, resp.status)
   }
 
   const data = await resp.json()

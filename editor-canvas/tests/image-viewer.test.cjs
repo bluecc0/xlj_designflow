@@ -10,14 +10,15 @@ const script = html.match(/<script>([\s\S]*?)<\/script>/)[1]
 async function loadViewer(src, response = { ok: true, json: async () => ({ url: '/image-copy/original.png?token=test' }) }) {
   const elements = Object.fromEntries(['image', 'status', 'original', 'hint'].map(id => [id, { hidden: true }]))
   const calls = []
+  const errors = []
   const url = new URL('http://designflow.test/editor-canvas/image-viewer.html')
   url.searchParams.set('src', src)
   await vm.runInNewContext(script, {
-    URL, URLSearchParams, location: url,
+    URL, URLSearchParams, location: url, window: { dfError: error => errors.push(error) },
     document: { getElementById: id => elements[id] },
     fetch: async (...args) => { calls.push(args); return response },
   })
-  return { elements, calls }
+  return { elements, calls, errors }
 }
 
 test('protected originals use the granted URL as the actual image source copied by the browser', async () => {
@@ -35,9 +36,10 @@ test('protected originals use the granted URL as the actual image source copied 
 })
 
 test('login failures stay visible and do not silently copy an inaccessible original URL', async () => {
-  const { elements } = await loadViewer('/ai-images/user/file.png', { ok: false, status: 401 })
+  const { elements, errors } = await loadViewer('/ai-images/user/file.png', { ok: false, status: 401 })
   assert.equal(elements.image.src, undefined)
-  assert.match(elements.status.textContent, /登录/)
+  assert.match(String(errors[0]), /登录/)
+  assert.equal(elements.status.hidden, true)
 })
 
 test('public, external and embedded images keep their original loading behavior', async () => {

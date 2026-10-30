@@ -1,3 +1,4 @@
+import { notifyError, feedback } from '../utils/feedback'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
@@ -125,6 +126,10 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
 
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  useEffect(() => { if (searchError) notifyError(searchError, '商品素材暂时无法检索，请稍后再试。', { key: 'outfit-search' }); else feedback.resolve('outfit-search'); }, [searchError]);
+  useEffect(() => { if (submitError) notifyError(submitError, '换装任务暂时无法提交，请稍后再试。', { key: 'outfit-submit' }); else feedback.resolve('outfit-submit'); }, [submitError]);
+  useEffect(() => () => { feedback.resolve('outfit-search'); feedback.resolve('outfit-submit'); }, []);
+
   const [preview, setPreview] = useState<string | null>(null)
 
   const skuInputRef = useRef<HTMLInputElement>(null)
@@ -231,7 +236,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
           ...prev,
           ...Object.fromEntries(result.items.filter((group) => group.found).map((group) => [group.sku, group])),
         }))
-        if (!result.library_exists) setSearchError('未挂载商品素材库，可用「上传图片」添加素材')
+        if (!result.library_exists) setSearchError('商品素材库暂未连接，请先上传图片或联系管理员。')
       } catch (err: any) {
         if (current) setSearchError(err?.message || '检索失败，请重试')
       } finally {
@@ -517,13 +522,7 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
                 }}
                 style={{ display: 'none' }}
               />
-              {searchError && (
-                <div style={styles.errorNotice} role="alert">
-                  <AlertCircle size={13} style={{ flexShrink: 0 }} />
-                  <span>{searchError}</span>
-                  <button type="button" style={styles.textButton} onClick={() => setSearchAttempt((n) => n + 1)} disabled={submitting || searching}>重试</button>
-                </div>
-              )}
+              {searchError && <button type="button" style={styles.textButton} onClick={() => setSearchAttempt((n) => n + 1)} disabled={submitting || searching}>重新检索</button>}
               {searchResult?.truncated && (
                 <div style={styles.searchHint} role="status">一次最多检索 6 个不同货号，超出的请分批输入，已选素材会保留。</div>
               )}
@@ -716,11 +715,6 @@ export const OutfitChangeModal: React.FC<Props> = ({ image, onClose, onSubmit })
           </div>
 
           <div style={styles.footerActions}>
-            {submitError && (
-              <span style={styles.submitError} role="alert" title={submitError}>
-                {submitError}
-              </span>
-            )}
             <span style={{ ...styles.refCount, color: remaining <= 0 ? C.ink : C.subtle }}>
               {totalSelected}/{maxRefs}
             </span>

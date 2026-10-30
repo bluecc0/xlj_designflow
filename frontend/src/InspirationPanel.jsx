@@ -34,6 +34,8 @@ const InspirationPanel = ({ open = true, onClose, onUsePrompt }) => {
   const containerRef = React.useRef(null);
   const [containerWidth, setContainerWidth] = React.useState(0);
   const loadIdRef = React.useRef(0);
+  const openRef = React.useRef(open);
+  openRef.current = open;
 
   // ESC 快捷键关闭
   React.useEffect(function() {
@@ -83,7 +85,8 @@ const InspirationPanel = ({ open = true, onClose, onUsePrompt }) => {
       })
       .catch(function(e) {
         if (myLoadId !== loadIdRef.current) return;
-        setError(e.message || '加载失败');
+        setError(true);
+        if (openRef.current) window.dfError(e, '灵感列表暂时无法加载，请稍后再试。');
         setPosts([]);
       })
       .finally(function() {
@@ -91,7 +94,7 @@ const InspirationPanel = ({ open = true, onClose, onUsePrompt }) => {
       });
   }, [tab, search]);
 
-  React.useEffect(function() { loadPosts(); }, [loadPosts]);
+  React.useEffect(function() { if (open) loadPosts(); }, [loadPosts, open]);
 
   // 搜索过滤
   const setRatio = React.useCallback(function(postId, ratio) {
@@ -274,7 +277,7 @@ const InspirationPanel = ({ open = true, onClose, onUsePrompt }) => {
       {/* 主体 */}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 16 }}>
         {error && (
-          <div style={{ padding: 12, color: 'var(--warn)', fontSize: 12 }}>加载失败：{error}</div>
+          <button type="button" onClick={loadPosts} style={{ padding: 12, color: 'var(--ink-3)', fontSize: 12 }}>重新加载</button>
         )}
         {!error && loading && filtered.length === 0 && (
           <div style={{ padding: 24, color: 'var(--ink-3)', fontSize: 12, textAlign: 'center' }}>加载中…</div>
@@ -419,13 +422,11 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnp
   }, []);
 
   const [describing, setDescribing] = React.useState(false);
-  const [describeError, setDescribeError] = React.useState('');
   const [localPost, setLocalPost] = React.useState(post);
-  React.useEffect(function() { setLocalPost(post); setDescribeError(''); }, [post]);
+  React.useEffect(function() { setLocalPost(post); }, [post]);
   const activePost = localPost || post;
   const handleDescribe = React.useCallback(function() {
     if (!activePost || !activePost.id) return;
-    setDescribeError('');
     setDescribing(true);
     window.API.describeInspiration(activePost.id)
       .then(function(res) {
@@ -436,7 +437,7 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnp
           });
         });
       })
-      .catch(function(e) { setDescribeError(e.message || '未知错误'); })
+      .catch(function(e) { window.dfError(e, '图片暂时无法分析，请稍后重试。'); })
       .finally(function() { setDescribing(false); });
   }, [activePost]);
   return (
@@ -537,12 +538,6 @@ const InspirationDetail = ({ post, onClose, onUsePrompt, onToggleFavorite, onUnp
 	                <I.eye size={11}/>{describing ? '分析中' : (activePost.vlm_prompt ? '重新反推' : '反推')}
 	              </button>
 	            </div>
-	            {describeError ? <div style={{
-	              fontSize: 11, color: 'var(--warn)', lineHeight: 1.45,
-	              padding: '7px 9px', borderRadius: 6,
-	              background: 'oklch(0.97 0.025 35)', border: '1px solid oklch(0.9 0.05 35)',
-	              marginBottom: 6,
-	            }}>反推失败：{describeError}</div> : null}
 	            <div style={{
 	              fontSize: 12, color: activePost.vlm_prompt ? 'var(--ink)' : 'var(--ink-3)', lineHeight: 1.55,
 	              padding: '8px 10px', borderRadius: 6,

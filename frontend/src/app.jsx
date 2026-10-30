@@ -8,7 +8,7 @@ const CHAT_WIDTH_MAX = 600;
 
 const isTypingTarget = (el) => !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
 
-const LiteLoginGate = ({ onLogin, loading, error, initialName, reauth }) => {
+const LiteLoginGate = ({ onLogin, loading, initialName, reauth }) => {
   const [name, setName] = React.useState(initialName || '');
   const [password, setPassword] = React.useState('');
 
@@ -64,8 +64,6 @@ const LiteLoginGate = ({ onLogin, loading, error, initialName, reauth }) => {
         .lg-btn:hover:not(:disabled) { background: oklch(0.26 0.02 260); transform: translateY(-1px); box-shadow: 0 8px 18px rgba(20,22,40,.2); }
         .lg-btn:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
         .lg-btn:disabled { background: var(--line); color: rgba(255,255,255,.95); cursor: default; }
-        .lg-err { font-size: 12px; color: oklch(0.5 0.17 45); background: oklch(0.97 0.03 70); border: 1px solid oklch(0.9 0.06 70);
-          padding: 8px 12px; border-radius: 8px; }
         .lg-foot { text-align: center; font-size: 12px; color: var(--ink-3); letter-spacing: .02em; padding-top: 4px; }
       `}</style>
       <form className="lg-card" onSubmit={(e) => { e.preventDefault(); submit(); }}>
@@ -111,7 +109,7 @@ const LiteLoginGate = ({ onLogin, loading, error, initialName, reauth }) => {
             </svg>
           </button>
         </div>
-        {error && <div className="lg-err">{error}</div>}
+
         <button type="submit" className="lg-btn" disabled={!canSubmit}>
           {loading ? '登录中...' : (reauth ? '重新登录' : '进入工作台')}
         </button>
@@ -132,13 +130,12 @@ const ConnectionStatus = () => {
     restored: '连接已恢复',
   };
   const message = messages[state.status];
-  if (!message) return null;
-  return <div role="status" aria-live="polite" style={{
-    position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
-    display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', borderRadius: 20,
-    background: 'var(--panel, #fff)', color: 'var(--ink, #202127)', border: '1px solid var(--line, #ddd)',
-    boxShadow: '0 4px 18px rgba(0,0,0,.08)', fontSize: 12, whiteSpace: 'nowrap', pointerEvents: 'none',
-  }}><span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: state.status === 'restored' ? '#45845a' : '#c18a36' }} />{message}</div>;
+  React.useEffect(() => {
+    if (message) window.DesignflowFeedback.show(message, { key: 'connection', tone: state.status === 'restored' ? 'ok' : 'info', persistent: state.status !== 'restored' });
+    else window.DesignflowFeedback.resolve('connection');
+  }, [message, state.status]);
+  React.useEffect(() => () => window.DesignflowFeedback.resolve('connection'), []);
+  return null;
 };
 
 const FlipStage = ({ inspirationOpen, childrenA, childrenB }) => {
@@ -311,7 +308,13 @@ const App = () => {
   const [reauthOpen, setReauthOpen] = React.useState(false);
   const reauthRequestedRef = React.useRef(false);
 
+  React.useEffect(() => {
+    if (authError) window.dfError(authError, '登录未成功，请检查用户名和密码后重试。', { key: 'login' });
+    else window.DesignflowFeedback.resolve('login');
+  }, [authError]);
+
   const rememberUser = React.useCallback((user) => {
+    if (currentUserIdRef.current !== String(user && user.id || '')) window.DesignflowFeedback.clear();
     const username = user && user.username ? String(user.username).trim() : '';
     setCurrentUser(user || null);
     if (window.DesignflowConnection) window.DesignflowConnection.setUser(user);
@@ -514,6 +517,7 @@ const App = () => {
     try {
       await window.API.logout();
     } catch (e) {}
+    window.DesignflowFeedback.clear();
     setCurrentUser(null);
     if (window.DesignflowConnection) window.DesignflowConnection.setUser(null);
     reauthRequestedRef.current = false;
@@ -595,7 +599,6 @@ const App = () => {
         <LiteLoginGate
           onLogin={handleLogin}
           loading={authLoading}
-          error={authError}
           initialName={lastUsername || (currentUser ? currentUser.username : '')}
           reauth={reauthOpen && !!currentUser}
         />

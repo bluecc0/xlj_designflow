@@ -1,3 +1,4 @@
+import { notifyError, feedback } from './utils/feedback'
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { Sparkles } from 'lucide-react'
 import { CanvasGrid } from './components/CanvasGrid'
@@ -110,6 +111,16 @@ export function App() {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved')
   const [saveError, setSaveError] = useState('')
   const [snapshotStatus, setSnapshotStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  useEffect(() => {
+    if (saveStatus === 'error' && saveError) notifyError(saveError, '画布暂未保存，请保留当前页面，稍后重试。', { key: 'canvas-save', persistent: true });
+    else if (saveStatus === 'saved') feedback.resolve('canvas-save');
+  }, [saveStatus, saveError]);
+  useEffect(() => {
+    if (snapshotStatus === 'error') notifyError('画布暂时无法加载，正在自动重试，请稍候。', undefined, { key: 'canvas-load', persistent: true });
+    else feedback.resolve('canvas-load');
+  }, [snapshotStatus]);
+  useEffect(() => () => { feedback.resolve('canvas-save'); feedback.resolve('canvas-load'); }, []);
+
 
   const claimOperation = useAIOperationStore((s) => s.claimOperation)
   const updateOperation = useAIOperationStore((s) => s.updateOperation)
@@ -309,12 +320,12 @@ export function App() {
     const plan = getOutpaintingPlan(target, outpaintInitialImage, outpaintMargins, mode, outpaintingLimits)
     const validationError = outpaintingConfigError || outpaintingSourceError || plan.error
     if (validationError) {
-      alert(validationError)
+      notifyError(validationError)
       return
     }
 
     if (!claimOperation('outpainting', '正在准备扩图...')) {
-      alert('已有 AI 任务在进行中，请等待完成')
+      notifyError('已有 AI 任务在进行中，请等待完成')
       return
     }
 
@@ -358,7 +369,7 @@ export function App() {
       outpaintInitialImageRef.current = null
       setSelected([newImg.id], 'image')
     } catch (err: any) {
-      alert(`扩图失败: ${err.message}`)
+      notifyError(err, '扩图未完成，请稍后查看任务记录。')
     } finally {
       releaseOperation()
     }
@@ -474,7 +485,7 @@ export function App() {
           setQuickEditMarkers([])
         }
       } catch (err: any) {
-        alert(`快捷编辑失败: ${err.message}`)
+        notifyError(err, '图片编辑未完成，请稍后查看任务记录。')
       } finally {
         setIsQuickEditSubmitting(false)
         releaseOperation()
@@ -588,11 +599,12 @@ export function App() {
             done += 1
           } catch (err: any) {
             failed += 1
-            lastError = err?.message || '生成失败'
+            lastError = feedback.message(err) || '生成失败'
           }
           updateOutfitTask(taskId, { done, failed })
         })
       )
+      if (failed) notifyError(`完成 ${done} 张，${failed} 张未完成。${lastError}`, '换装未完成，请稍后查看任务记录。', { key: taskId });
       updateOutfitTask(taskId, {
         status: done > 0 ? 'done' : 'error',
         message:
@@ -862,6 +874,7 @@ export function App() {
         }
         img.onerror = () => {
           console.warn('[Canvas] 粘贴图片链接加载失败:', text)
+          notifyError('这张图片暂时无法读取，请检查链接，或保存图片后重新上传。')
         }
         img.src = text
       }
@@ -1346,7 +1359,7 @@ export function App() {
             }
           } else {
             setSaveStatus('error')
-            setSaveError(`服务器暂时无法保存 (${res.status})，本地修改已保留，稍后自动重试`)
+            setSaveError(`画布暂时无法保存，本地修改已保留，稍后自动重试`)
             clearTimeout(autoSaveRetryTimerRef.current)
             autoSaveRetryTimerRef.current = setTimeout(() => {
               if (useCanvasStore.getState().isDirty && snapshotHydratedRef.current && !isConflictRef.current) {
@@ -1989,7 +2002,7 @@ export function App() {
             fontWeight: 600,
           }}
         >
-          {snapshotStatus === 'loading' ? '正在加载画板…' : '画板加载失败，正在重试…'}
+          {snapshotStatus === 'loading' ? '正在加载画板…' : '正在重新连接画布…'}
         </div>
       )}
     </div>

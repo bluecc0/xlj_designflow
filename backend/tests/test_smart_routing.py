@@ -424,7 +424,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_smart_route_rejects_empty_candidates_before_dispatch(self) -> None:
         with patch.object(ai_image, "get_smart_route_candidates", return_value=[]):
-            with self.assertRaisesRegex(ai_image.AllProvidersFailedError, "经过 2 轮尝试后仍未成功"):
+            with self.assertRaisesRegex(ai_image.AllProvidersFailedError, "图片未能生成"):
                 await ai_image.smart_generate_image_async(
                     model="gpt-image-2",
                     prompt="test",
@@ -875,7 +875,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(calls, {"sub": 2, "adobe": 2})
-        self.assertIn("2 轮", str(ctx.exception))
+        self.assertEqual("当前使用人数较多，请稍后再试。", str(ctx.exception))
 
 
     def test_skill_generation_uses_smart_routing(self) -> None:
@@ -1267,7 +1267,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                     user_id="u",
                 )
         self.assertEqual(calls, {"sub": 1, "adobe": 0})
-        self.assertEqual(str(ctx.exception), "内容被上游安全审核系统拦截，请调整提示词或参考图后重试")
+        self.assertEqual(str(ctx.exception), "提示词或参考图未通过内容审核，请调整内容后再试。")
 
 
 class AdobeHealthProbeTest(unittest.IsolatedAsyncioTestCase):
@@ -1403,14 +1403,14 @@ class TimeoutClassificationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("未收到受理确认", str(ctx.exception))
 
 
-    def test_public_error_has_only_two_categories(self) -> None:
+    def test_public_error_explains_known_causes(self) -> None:
         self.assertEqual(
             ai_image.public_generation_error(RuntimeError("HTTP 401 unauthorized")),
-            ai_image.public_generation_error(),
+            "图片服务暂不可用，请联系管理员检查服务配置。",
         )
         self.assertEqual(
             ai_image.public_generation_error(RuntimeError("blocked by safety filter")),
-            "内容被上游安全审核系统拦截，请调整提示词或参考图后重试",
+            "提示词或参考图未通过内容审核，请调整内容后再试。",
         )
         self.assertFalse(ai_image.is_safety_review_error(RuntimeError("HTTP 403 permission denied")))
 

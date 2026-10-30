@@ -12,7 +12,7 @@
           } catch (e) {}
         }
         return resp.text().then(function(text) {
-          throw new Error('HTTP ' + resp.status + ': ' + text.slice(0, 200));
+          throw window.DesignflowFeedback.responseError(resp.status, text);
         });
       }
       return resp.json();
@@ -36,7 +36,7 @@
     return fetch(BASE + '/parse-table', { method: 'POST', body: form, credentials: 'include' }).then(function(resp) {
       if (!resp.ok) {
         return resp.text().then(function(text) {
-          throw new Error('解析失败 HTTP ' + resp.status + ': ' + text.slice(0, 200));
+          throw window.DesignflowFeedback.responseError(resp.status, text);
         });
       }
       return resp.json();
@@ -51,7 +51,7 @@
     return fetch(BASE + '/smart-distribute', { method: 'POST', body: form, credentials: 'include' }).then(function(resp) {
       if (!resp.ok) {
         return resp.text().then(function(text) {
-          throw new Error('智能铺货 HTTP ' + resp.status + ': ' + text.slice(0, 200));
+          throw window.DesignflowFeedback.responseError(resp.status, text);
         });
       }
       return resp.json();
@@ -198,7 +198,7 @@
       }).then(function(resp) {
         if (!resp.ok) {
           return resp.text().then(function(text) {
-            throw new Error('HTTP ' + resp.status + ': ' + text.slice(0, 200));
+            throw window.DesignflowFeedback.responseError(resp.status, text);
           });
         }
         if (!resp.body) throw new Error('SSE body not available');
@@ -262,7 +262,7 @@
       }).then(function(resp) {
         if (!resp.ok) {
           return resp.text().then(function(text) {
-            throw new Error('HTTP ' + resp.status + ': ' + text.slice(0, 200));
+            throw window.DesignflowFeedback.responseError(resp.status, text);
           });
         }
         return resp.json();
@@ -306,9 +306,7 @@
       return fetch(BASE + path, { method: 'POST', credentials: 'include', body: form }).then(function(resp) {
         if (!resp.ok) {
           return resp.text().then(function(text) {
-            var detail = text;
-            try { detail = JSON.parse(text).detail || text; } catch (e) {}
-            throw new Error(String(detail).slice(0, 200));
+            throw window.DesignflowFeedback.responseError(resp.status, text);
           });
         }
         var reader = resp.body.getReader();
