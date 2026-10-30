@@ -185,6 +185,30 @@ class Agent2EngineTest(unittest.TestCase):
         self.assertEqual(_events(chunks)[-1]["type"], "turn.cancelled")
         self.assertEqual(store.get_turn(turn_id, "u1")["status"], "cancelled")
 
+    def _durable_image_tools(self, img: Path, *, fail: str = ""):
+        """用真实任务表走 generate_image：执行器直接把任务写成完成（或失败）。"""
+        from unittest.mock import MagicMock
+        from backend.agent2 import tools as a2tools
+
+        job_store.init_db()
+        executed = []
+
+        async def fake_execute(worker, job_id, initial=None):
+            job = job_store.load_ai_image_job(job_id)
+            executed.append(job)
+            job_store.save_ai_image_job(
+                job_id=job_id, user_id=job["user_id"], status="failed" if fail else "done", model=job["model"],
+                prompt=job["prompt"], size=job["size"], resolution=job["resolution"], error=fail or None,
+                image_url=None if fail else "/output/out.png", progress=100, request_meta=job["request_meta"],
+                created_at=job["created_at"])
+
+        main_stub = MagicMock()
+        main_stub._resolve_public_asset_path.return_value = img
+        self.tools["generate_image"] = a2tools.build_tools()["generate_image"]
+        patches = [patch.object(a2tools, "execute_image_job", fake_execute), patch.object(a2tools, "_main", lambda: main_stub),
+                   patch.object(a2tools, "JOB_POLL_SECONDS", 0.01)]
+        return patches, executed
+
     def test_generate_image_self_checks_against_user_request(self):
         from unittest.mock import MagicMock
         from backend.agent2 import tools as a2tools
@@ -192,12 +216,6 @@ class Agent2EngineTest(unittest.TestCase):
         img = Path(self.tmp.name) / "out.png"
         img.write_bytes(b"png")
         seen_prompts = []
-
-        gen_kwargs = []
-
-        async def fake_generate(**kwargs):
-            gen_kwargs.append(kwargs)
-            return {"url": "/output/out.png", "provider": "fake"}
 
         async def fake_vlm(purpose, payload, **kwargs):
             seen_prompts.append(payload["messages"][0]["content"][0]["text"])
@@ -207,28 +225,55 @@ class Agent2EngineTest(unittest.TestCase):
                 ensure_ascii=False)}}]}
             return resp
 
-        main_stub = MagicMock()
-        main_stub._resolve_public_asset_path.return_value = img
-        self.tools["generate_image"] = a2tools.build_tools()["generate_image"]
+        patches, executed = self._durable_image_tools(img)
         model = FakeModel([
             [("call", "generate_image", {"images": [{"prompt": "小红书风格，跑步海报"}], "aspect_ratio": "3:4"})],
             [("text", "好了，标题有个错字。")],
         ])
-        with patch.object(a2tools, "smart_generate_image_async", fake_generate), \
+        with patches[0], patches[1], patches[2], \
                 patch.object(a2tools, "routed_chat_completion", fake_vlm), \
-                patch.object(a2tools, "compress_image_to_data_url", lambda data, size: "data:image/png;base64,"), \
-                patch.object(a2tools, "save_ai_image_job", lambda **kw: None), \
-                patch.object(a2tools, "_main", lambda: main_stub):
+                patch.object(a2tools, "compress_image_to_data_url", lambda data, size: "data:image/png;base64,"):
             events = self._run(model)
         self.assertIn("生成 3 张小红书风格的跑步海报图", seen_prompts[0])
-        # 用户没指定时默认 GPT Image 2.5 快速模式、1K
-        self.assertEqual((gen_kwargs[0]["model"], gen_kwargs[0]["variant"], gen_kwargs[0]["resolution"]),
-                         ("gpt-image-2.5", "flare", "1K"))
+        # 走可恢复任务：默认 GPT Image 2.5 快速模式、1K，带恢复断点
+        job = executed[0]
+        self.assertEqual((job["model"], job["request_meta"]["variant"], job["resolution"]), ("gpt-image-2.5", "flare", "1K"))
+        self.assertEqual(job["request_meta"]["recovery"]["phase"], "queued")
+        self.assertEqual(job["request_meta"]["source"], "agent2")
+        created = [e for e in events if e["type"] == "artifact.created"]
+        self.assertEqual(len(created), 1)
         checked = [e for e in events if e["type"] == "image.checked"]
         self.assertEqual(len(checked), 1)
         self.assertFalse(checked[0]["payload"]["ok"])
         tool_msg = [m for m in model.seen[1] if m["role"] == "tool"][0]
         self.assertIn("跑不", tool_msg["content"])
+
+    def test_failed_image_job_is_reported_to_model(self):
+        img = Path(self.tmp.name) / "out.png"
+        patches, _ = self._durable_image_tools(img, fail="上游安全审核拦截")
+        model = FakeModel([[("call", "generate_image", {"images": [{"prompt": "x"}]})], [("text", "没生成成功")]])
+        with patches[0], patches[1], patches[2]:
+            self._run(model)
+        tool_msg = [m for m in model.seen[1] if m["role"] == "tool"][0]
+        self.assertIn("上游安全审核拦截", tool_msg["content"])
+
+    def test_recovered_job_is_backfilled_once(self):
+        from backend.agent2 import tools as a2tools
+
+        img = Path(self.tmp.name) / "out.png"
+        img.write_bytes(b"png")
+        patches, _ = self._durable_image_tools(img)
+        job_store.save_ai_image_job(
+            job_id="j1", user_id="u1", status="done", model="gpt-image-2.5", prompt="x", size="3:4",
+            image_url="/output/out.png", request_meta={"source": "agent2", "session_id": self.session["id"],
+                                                       "turn_id": "t1", "tool_call_id": "c1", "label": "首屏"})
+        with patches[1]:
+            asyncio.run(a2tools.backfill_recovered_job("j1"))
+            asyncio.run(a2tools.backfill_recovered_job("j1"))
+        events = [e for e in store.list_events(self.session["id"]) if e["type"] == "artifact.created"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["payload"]["call_id"], "c1")
+        self.assertEqual(store.list_call_artifacts("c1")[0]["label"], "首屏")
 
     def test_self_check_failure_does_not_block_images(self):
         from unittest.mock import MagicMock
@@ -245,6 +290,85 @@ class Agent2EngineTest(unittest.TestCase):
         with patch.object(a2tools, "routed_chat_completion", broken_vlm), \
                 patch.object(a2tools, "compress_image_to_data_url", lambda data, size: ""):
             self.assertIsNone(asyncio.run(a2tools._self_check(ctx, img, prompt="x", label="")))
+
+    def _stored(self):
+        return store.load_session_messages(store.get_session(self.session["id"], "u1"))
+
+    def test_model_failure_after_tool_keeps_conversation(self):
+        class FailSecond(FakeModel):
+            async def stream(self, messages, tools):
+                if len(self.seen) == 1:
+                    self.seen.append(messages)
+                    raise RuntimeError("总结超时")
+                async for part in super().stream(messages, tools):
+                    yield part
+
+        model = FailSecond([[("call", "generate_image", {"images": [{"prompt": "x"}]})]])
+        events = self._run(model, "画一张跑鞋")
+        self.assertEqual(events[-1]["type"], "turn.failed")
+        roles = [m["role"] for m in self._stored()]
+        self.assertEqual(roles, ["user", "assistant", "tool"])
+        self.assertIn("img_1", self._stored()[2]["content"])
+
+    def test_cancel_during_tool_saves_settled_sequence_with_created_images(self):
+        started = asyncio.Event()
+
+        async def slow(ctx, args):
+            store.create_artifact(session_id=ctx.session_id, user_id="u1", kind="image", url="/a.png",
+                                  label="首屏", source_tool_call_id=ctx.call_id)
+            started.set()
+            await asyncio.sleep(30)
+
+        self.tools["generate_image"] = Tool("generate_image", "gen", {"type": "object"}, slow)
+        model = FakeModel([[("call", "generate_image", {"images": [{"prompt": "x"}]})]])
+
+        async def scenario():
+            with patch.object(service, "model_factory", lambda: model):
+                session = store.get_session(self.session["id"], "u1")
+                consumer = asyncio.create_task(_collect(service.start_turn(self.user, session, "画一张", [])))
+                await asyncio.wait_for(started.wait(), 5)
+                service.cancel_turn(store.list_events(self.session["id"])[0]["turn_id"])
+                await asyncio.wait_for(consumer, 5)
+
+        asyncio.run(scenario())
+        stored = self._stored()
+        self.assertEqual([m["role"] for m in stored], ["user", "assistant", "tool"])
+        result = json.loads(stored[2]["content"])
+        self.assertIn("没有完成", result["error"])
+        self.assertEqual(result["images"][0]["label"], "首屏")
+
+    def test_session_allows_one_running_turn(self):
+        first = store.claim_turn(self.session["id"], "u1", "a")
+        self.assertIsNotNone(first)
+        self.assertIsNone(store.claim_turn(self.session["id"], "u1", "b"))
+        session = store.get_session(self.session["id"], "u1")
+        with self.assertRaises(service.TurnBusy):
+            service.claim_turn(self.user, session, "b")
+        store.update_turn(first["id"], status="done")
+        self.assertIsNotNone(store.claim_turn(self.session["id"], "u1", "c"))
+
+    def test_answer_can_only_be_claimed_once(self):
+        events = self._run(FakeModel([[("call", "ask_user", {"question": "货号？"})]]), "做特殊品")
+        turn_id = events[-1]["turn_id"]
+        self.assertTrue(store.claim_answer(turn_id, "u1"))
+        self.assertFalse(store.claim_answer(turn_id, "u1"))
+
+    def test_new_message_while_waiting_settles_the_question(self):
+        events = self._run(FakeModel([[("call", "ask_user", {"question": "货号？"})]]), "做特殊品")
+        waiting = events[-1]["turn_id"]
+        model = FakeModel([[("text", "好的")]])
+        self._run(model, "算了，先画一张海报")
+        self.assertEqual(store.get_turn(waiting, "u1")["status"], "done")
+        roles = [m["role"] for m in model.seen[0]]
+        self.assertEqual(roles, ["system", "user", "assistant", "tool", "user"])
+        self.assertIn("没有完成", model.seen[0][3]["content"])
+
+    def test_stale_running_turns_fail_on_startup(self):
+        turn = store.claim_turn(self.session["id"], "u1", "a")
+        service.fail_stale_turns()
+        self.assertEqual(store.get_turn(turn["id"], "u1")["status"], "failed")
+        self.assertEqual(store.list_events(self.session["id"])[-1]["type"], "turn.failed")
+        self.assertIsNone(store.get_active_turn(self.session["id"]))
 
     def test_delete_session_removes_records_for_owner_only(self):
         self._run(FakeModel([[("text", "好")]]), "你好")

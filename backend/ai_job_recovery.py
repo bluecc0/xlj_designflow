@@ -60,6 +60,8 @@ async def execute_image_job(worker, job_id: str, *, initial: dict | None = None)
         def fail(message, phase="failed"):
             recovery.update(phase=phase, message=message)
             persist(message, "failed")
+            if meta.get("source") == "agent2":  # Agent 的结果写在 Agent 会话里
+                return
             append_ai_chat_message(
                 session_id=meta.get("chat_session_id") or "", user_id=job["user_id"],
                 role="ai", type="ai_image_result", text=job.get("prompt"),

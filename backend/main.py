@@ -112,6 +112,8 @@ from .model_routing import get_model_routes, routed_chat_completion, routed_chat
 from .agent_skill_loader import build_skill_context, list_agent_skills, load_agent_skill
 from .agent2.memory import list_all_memories
 from .agent2.routes import router as agent2_router
+from .agent2.service import fail_stale_turns as agent2_fail_stale_turns
+from .agent2.tools import backfill_recovered_job as agent2_backfill_recovered_job
 from .agent2.store import init_tables as init_agent2_tables
 from .user_skill_store import (
     MAX_UPLOAD_BYTES as MAX_SKILL_UPLOAD_BYTES,
@@ -376,6 +378,7 @@ def _ensure_ui_build() -> None:
 async def lifespan(app: FastAPI):
     init_db()
     init_agent2_tables()
+    agent2_fail_stale_turns()
     app.state.outpainting_semaphore = asyncio.Semaphore(
         max(1, int(settings.bfl_outpainting_max_concurrency or 2))
     )
@@ -485,7 +488,7 @@ async def _recover_background_jobs_once():
         if len(image_tasks) >= 8:
             break
         if job["id"] not in claims:
-            claimed_task(job["id"], execute_image_job(_execute_ai_image_background, job["id"]), image_tasks)
+            claimed_task(job["id"], _recover_image_job(job), image_tasks)
     compose_tasks = getattr(app.state, "compose_recovery_tasks", None)
     if compose_tasks is None:
         compose_tasks = app.state.compose_recovery_tasks = set()
@@ -505,6 +508,13 @@ async def _recover_background_jobs_once():
                   run_special_full_compose if isinstance(job, SpecialFullComposeJob) else run_special_compose)
         job.recovering = True
         claimed_task(job.id, asyncio.to_thread(runner, job), compose_tasks)
+
+
+async def _recover_image_job(job: dict):
+    await execute_image_job(_execute_ai_image_background, job["id"])
+    if (job.get("request_meta") or {}).get("source") == "agent2":
+        # Agent 的轮次可能已随重启结束：完成后把图片补回原会话
+        await agent2_backfill_recovered_job(job["id"])
 
 
 async def _job_recovery_loop():
@@ -4762,31 +4772,33 @@ async def _execute_ai_image_background(
         except Exception:
             logger.exception("failed to write success operation log: job_id=%s", job_id)
         try:
-            append_ai_chat_message(
-                session_id=session_id, user_id=user_id,
-                role="ai", type="ai_image_result",
-                text=prompt, image_url=result.get("url"),
-                meta={
-                    "job_id": job_id,
-                    "model": model, "prompt": prompt,
-                    "variant": variant, "quality": quality,
-                    "resolvedPrompt": resolved_prompt or prompt,
-                    "promptTrace": prompt_trace,
-                    "provider": actual_provider,
-                    "providerSwitched": provider_switched,
-                    "taskId": upstream_task_id,
-                    "size": size, "resolution": resolution,
-                    "status": "done",
-                    "hasReference": has_reference,
-                    "refCount": reference_count,
-                    "refPreviews": ref_previews or [],
-                    "previewUrl": preview_url,
-                    "batchId": batch_id,
-                    "batchIndex": batch_index,
-                    "batchCount": batch_count,
-                },
-                created_at=time.time(),
-            )
+            # Agent 的生图结果写在 Agent 会话里，不进普通聊天记录
+            if (request_meta or {}).get("source") != "agent2":
+                append_ai_chat_message(
+                    session_id=session_id, user_id=user_id,
+                    role="ai", type="ai_image_result",
+                    text=prompt, image_url=result.get("url"),
+                    meta={
+                        "job_id": job_id,
+                        "model": model, "prompt": prompt,
+                        "variant": variant, "quality": quality,
+                        "resolvedPrompt": resolved_prompt or prompt,
+                        "promptTrace": prompt_trace,
+                        "provider": actual_provider,
+                        "providerSwitched": provider_switched,
+                        "taskId": upstream_task_id,
+                        "size": size, "resolution": resolution,
+                        "status": "done",
+                        "hasReference": has_reference,
+                        "refCount": reference_count,
+                        "refPreviews": ref_previews or [],
+                        "previewUrl": preview_url,
+                        "batchId": batch_id,
+                        "batchIndex": batch_index,
+                        "batchCount": batch_count,
+                    },
+                    created_at=time.time(),
+                )
         except Exception:
             logger.exception("failed to append success chat message: job_id=%s", job_id)
             raise

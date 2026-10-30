@@ -4185,6 +4185,8 @@ const AGENT2_TOOL_LABELS = {
 };
 // 回复末尾的 [[NEXT: ...]] 由界面渲染成快捷按钮；流式过程中先把它隐藏
 const agent2StripNext = function(text) { return String(text || '').replace(/\[\[[\s\S]*$/, '').trimEnd(); };
+const AGENT2_TERMINAL = { 'turn.finished': true, 'turn.failed': true, 'turn.cancelled': true, 'input.required': true };
+const agent2Sleep = function(ms) { return new Promise(function(resolve) { setTimeout(resolve, ms); }); };
 const agent2AbsUrl = function(u) { return u && u.charAt(0) === '/' ? ((window.API_BASE || window.location.origin) + u) : (u || ''); };
 
 // 新版 Agent 的事件 → 现有消息格式。实时推送和历史回放共用这一个归约函数。
@@ -4302,6 +4304,8 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
   });
   // turnId：当前轮次；waitingTurnId：Agent 正在等用户回答的轮次
   const agentTurnRef = React.useRef({ turnId: '', waitingTurnId: '' });
+  // 续接事件：lastSeq 是已应用的最后一个事件；followToken 变化时停止旧的轮询；pushed 记录已放到画布的工具调用
+  const agentStreamRef = React.useRef({ lastSeq: 0, followToken: 0, pushed: {} });
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [historyLoading, setHistoryLoading] = React.useState(false);
   const [historySessions, setHistorySessions] = React.useState([]);
@@ -4351,6 +4355,48 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     }), null);
   }, [onComposeComplete]);
 
+  // 实时推送和续接轮询共用：应用一个事件，返回它是否结束了当前轮次
+  const applyAgentEvent = React.useCallback(function(ev) {
+    var st = agentStreamRef.current;
+    if (ev.seq) {
+      if (ev.seq <= st.lastSeq) return false;
+      st.lastSeq = ev.seq;
+    }
+    if (ev.turn_id && !AGENT2_TERMINAL[ev.type]) agentTurnRef.current.turnId = ev.turn_id;
+    if (ev.type === 'input.required') agentTurnRef.current.waitingTurnId = ev.turn_id;
+    setMessages(function(msgs) { return agent2Reduce(msgs, ev); });
+    var p = ev.payload || {};
+    if (ev.type === 'tool.finished' && p.ok && !st.pushed[p.call_id]) {
+      st.pushed[p.call_id] = true;
+      pushAgentImagesToCanvas(p.result);
+    }
+    return !!AGENT2_TERMINAL[ev.type];
+  }, [pushAgentImagesToCanvas]);
+
+  // 刷新或断线后：按 seq 轮询补拉事件，直到这一轮结束
+  const followAgentTurn = React.useCallback(async function(sessionId) {
+    var st = agentStreamRef.current;
+    var token = ++st.followToken;
+    setIsLoading(true);
+    try {
+      while (st.followToken === token) {
+        await agent2Sleep(1500);
+        if (st.followToken !== token) return;
+        var data;
+        try { data = await window.API.getAgent2Session(sessionId, st.lastSeq); } catch (e) { continue; }
+        if (st.followToken !== token) return;
+        var ended = false;
+        ((data && data.events) || []).forEach(function(ev) { if (applyAgentEvent(ev)) ended = true; });
+        if (ended || !(data && data.active_turn && data.active_turn.status === 'running')) break;
+      }
+    } finally {
+      if (st.followToken === token) {
+        setMessages(function(msgs) { return msgs.filter(function(m) { return !m.a2Thinking; }); });
+        setIsLoading(false);
+      }
+    }
+  }, [applyAgentEvent]);
+
   const stopAgentTurn = React.useCallback(function() {
     var turnId = agentTurnRef.current.turnId;
     if (!turnId) return;
@@ -4360,16 +4406,28 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
   }, []);
 
   const loadAgentSession = React.useCallback(async function(sessionId) {
+    const st = agentStreamRef.current;
+    st.followToken++;
     const data = await window.API.getAgent2Session(sessionId);
     const events = (data && data.events) || [];
-    // 回放时去掉残留的"思考中"占位（轮次可能已经结束或中断）
-    const mapped = events.reduce(agent2Reduce, []).filter(function(m) { return !m.a2Thinking; });
+    const active = data && data.active_turn;
+    const running = !!(active && active.status === 'running');
+    // 回放时去掉残留的"思考中"占位；这一轮仍在运行时保留，随后续接事件
+    const replayed = events.reduce(agent2Reduce, []);
+    const mapped = running ? replayed : replayed.filter(function(m) { return !m.a2Thinking; });
     const last = events[events.length - 1];
-    agentTurnRef.current = { turnId: '', waitingTurnId: last && last.type === 'input.required' ? last.turn_id : '' };
+    st.lastSeq = last ? last.seq : 0;
+    st.pushed = {};
+    events.forEach(function(ev) { if (ev.type === 'tool.finished') st.pushed[(ev.payload || {}).call_id] = true; });
+    agentTurnRef.current = {
+      turnId: running ? active.id : '',
+      waitingTurnId: active && active.status === 'waiting_user' ? active.id : '',
+    };
     setAgentSessionId(sessionId);
     setMessages(mapped);
+    if (running) followAgentTurn(sessionId);
     return mapped;
-  }, []);
+  }, [followAgentTurn]);
 
   const ensureAgentSession = React.useCallback(async function() {
     if (agentSessionId) return agentSessionId;
@@ -4491,6 +4549,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       if (agentSessionId === sessionId) {
         setAgentSessionId('');
         agentTurnRef.current = { turnId: '', waitingTurnId: '' };
+        agentStreamRef.current.followToken++;
         setMessages([]);
         setComposerResetKey(function(prev) { return prev + 1; });
         if (onComposeComplete) onComposeComplete(null, null, [], null);
@@ -4507,6 +4566,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       // 新会话在发送第一条消息时才创建，避免产生空会话
       setAgentSessionId('');
       agentTurnRef.current = { turnId: '', waitingTurnId: '' };
+      agentStreamRef.current.followToken++;
       setMessages([]);
       setHistoryOpen(false);
       setComposerResetKey(function(prev) { return prev + 1; });
@@ -5434,29 +5494,36 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
 
     if (agentEnabled && aiOptions.workflow !== 'ai-image') {
       setIsLoading(true);
-      var onAgentEvent = function(ev) {
-        if (ev.type === 'turn.started') agentTurnRef.current.turnId = ev.turn_id;
-        if (ev.type === 'input.required') agentTurnRef.current.waitingTurnId = ev.turn_id;
-        setMessages(function(msgs) { return agent2Reduce(msgs, ev); });
-        if (ev.type === 'tool.finished' && ev.payload && ev.payload.ok) pushAgentImagesToCanvas(ev.payload.result);
-      };
+      agentStreamRef.current.followToken++;
+      agentTurnRef.current.turnId = '';
+      var ended = false;
+      var onAgentEvent = function(ev) { if (applyAgentEvent(ev)) ended = true; };
+      var streamError = null;
+      var sessionId = agentSessionId;
       try {
         var waitingTurnId = agentTurnRef.current.waitingTurnId;
         if (waitingTurnId) {
           agentTurnRef.current.waitingTurnId = '';
           await window.API.answerAgent2(waitingTurnId, text.trim(), onAgentEvent);
         } else {
-          var sessionId = await ensureAgentSession();
+          sessionId = await ensureAgentSession();
           await window.API.sendAgent2Message(sessionId, executionText, refImages, onAgentEvent, activeSkill);
         }
       } catch (e) {
-        setMessages(function(msgs) {
-          return agent2Reduce(msgs, { type: 'turn.failed', payload: { message: (e && e.message) || '网络异常，请稍后重试' } });
-        });
-      } finally {
-        setMessages(function(msgs) { return msgs.filter(function(m) { return !m.a2Thinking; }); });
-        setIsLoading(false);
+        streamError = e;
       }
+      if (!ended && sessionId && agentTurnRef.current.turnId) {
+        // 连接中断但这一轮已在服务端运行：改为按 seq 续接，不当作失败
+        followAgentTurn(sessionId);
+        return;
+      }
+      if (streamError) {
+        setMessages(function(msgs) {
+          return agent2Reduce(msgs, { type: 'turn.failed', payload: { message: (streamError && streamError.message) || '网络异常，请稍后重试' } });
+        });
+      }
+      setMessages(function(msgs) { return msgs.filter(function(m) { return !m.a2Thinking; }); });
+      setIsLoading(false);
       return;
     }
 
@@ -5809,7 +5876,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       ));
     }
     setIsLoading(false);
-  }, [agentEnabled, currentAiChatId, ensureAgentSession, pushAgentImagesToCanvas, getLastAiImageOptions, hasDoneAiImageInCurrentThread, isLikelyAiImageFollowup, isLoading, loadAiChatHistory, materializeReferenceImages, normalizeAiImageModel, onComposeComplete, runAiImageGeneration, template]);
+  }, [agentEnabled, agentSessionId, applyAgentEvent, followAgentTurn, currentAiChatId, ensureAgentSession, pushAgentImagesToCanvas, getLastAiImageOptions, hasDoneAiImageInCurrentThread, isLikelyAiImageFollowup, isLoading, loadAiChatHistory, materializeReferenceImages, normalizeAiImageModel, onComposeComplete, runAiImageGeneration, template]);
 
   // ── 快捷回复：点击选项按钮触发 ──────────────────────────────────────────────
   const handleQuickReply = React.useCallback(function(value) {

@@ -12,7 +12,7 @@ from typing import AsyncIterator
 from ..config import settings
 from . import memory, store
 from .context import ContextManager
-from .engine import ModelClient, RoutedModelClient, Tool, run_loop
+from .engine import ModelClient, RoutedModelClient, Tool, run_loop, user_cancelled
 from .prompts import build_system_prompt
 from .tools import build_tools
 
@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 
 _NEXT_RE = re.compile(r"\[\[NEXT:\s*(.+?)\]\]\s*$", re.S)
 _running: dict[str, asyncio.Task] = {}
+INTERRUPTED_NOTE = "这一步没有完成（本轮被停止、中断，或用户改发了新消息）"
+
+
+class TurnBusy(Exception):
+    """同一会话已有运行中的轮次。"""
 
 # 测试可替换
 model_factory = RoutedModelClient
@@ -52,6 +57,31 @@ def _split_next(text: str) -> tuple[str, list[str]]:
     return text[:match.start()].rstrip(), options
 
 
+def settle_tool_calls(convo: list[dict], note: str = INTERRUPTED_NOTE) -> list[dict]:
+    """补齐没有结果的工具调用，保证消息序列合法；这次调用已经生成的图片 ID 一并写进结果。"""
+    answered = {m.get("tool_call_id") for m in convo if m.get("role") == "tool"}
+    out: list[dict] = []
+    pending: list[dict] = []
+
+    def flush():
+        for call in pending:
+            result = {"error": note}
+            images = store.list_call_artifacts(call["id"])
+            if images:
+                result["images"] = images
+            out.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(result, ensure_ascii=False)})
+        pending.clear()
+
+    for m in convo:
+        if m.get("role") != "tool":
+            flush()
+        out.append(m)
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            pending.extend(c for c in m["tool_calls"] if c.get("id") not in answered)
+    flush()
+    return out
+
+
 async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict],
                  tools: dict[str, Tool], model: ModelClient, request: str = "") -> AsyncIterator[str]:
     """运行引擎；事件先落库，再通过队列按顺序推给前端。"""
@@ -69,16 +99,21 @@ async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict
     system = {"role": "system", "content": build_system_prompt(_user_skill_dir(user), memory.memory_index(user["id"]))}
     context = ContextManager(session, emit)
 
+    full = [system] + messages
+    title = session.get("title") or next((str(m.get("content"))[:30] for m in messages if m.get("role") == "user"), "")
+
+    def save(msgs: list[dict], settle: bool = False) -> None:
+        convo = msgs[1:]
+        store.save_session_messages(session_id, settle_tool_calls(convo) if settle else convo, title=title)
+
     async def runner():
         try:
-            result = await run_loop(model=model, tools=tools, messages=[system] + messages, emit=emit,
+            save(full)  # 本轮的用户输入先落库
+            result = await run_loop(model=model, tools=tools, messages=full, emit=emit,
                                     ctx_base={"user": user, "session_id": session_id, "turn_id": turn_id,
                                               "state": {"request": request}},
-                                    prepare=context.prepare)
-            convo = result.messages[1:]
-            title = session.get("title") or next(
-                (str(m.get("content"))[:30] for m in convo if m.get("role") == "user"), "")
-            store.save_session_messages(session_id, convo, title=title)
+                                    prepare=context.prepare, checkpoint=save)
+            save(result.messages)
             if result.status == "waiting_user":
                 store.update_turn(turn_id, status="waiting_user", engine_state={"pending": result.pending})
             else:
@@ -88,14 +123,17 @@ async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict
                 await emit("turn.finished", {"text": text})
                 store.update_turn(turn_id, status="done")
         except asyncio.CancelledError:
+            save(full, settle=True)
             store.update_turn(turn_id, status="cancelled")
             await emit("turn.cancelled", {})
         except Exception as exc:
             logger.exception("[agent2] turn %s failed", turn_id)
+            save(full, settle=True)
             store.update_turn(turn_id, status="failed", error=str(exc)[:500])
             await emit("turn.failed", {"message": str(exc)[:300]})
         finally:
             _running.pop(turn_id, None)
+            user_cancelled.discard(turn_id)
             await queue.put(None)
 
     task = asyncio.create_task(runner())
@@ -112,8 +150,17 @@ def _user_skill_dir(user: dict):
     return main._user_skill_dir(user)
 
 
-async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], skill: str = "") -> AsyncIterator[str]:
-    turn = store.create_turn(session["id"], user["id"], text)
+def claim_turn(user: dict, session: dict, text: str) -> dict:
+    turn = store.claim_turn(session["id"], user["id"], text)
+    if not turn:
+        raise TurnBusy("上一轮还在进行中，请等它完成或先停止")
+    return turn
+
+
+async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], skill: str = "",
+                     turn: dict | None = None) -> AsyncIterator[str]:
+    turn = turn or claim_turn(user, session, text)
+    session = store.get_session(session["id"], user["id"]) or session  # 占用后读最新历史
     first = store.append_event(session["id"], turn["id"], "turn.started", {
         "text": text, "uploads": [{"id": u["id"], "url": u["url"]} for u in uploads]})
     yield sse(first)
@@ -123,18 +170,18 @@ async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], 
         content = f"[用户选择了技能：{skill}，请先用 load_skill 加载它再执行]\n{content}"
     if uploads:
         content += "\n\n[用户上传了图片：" + "、".join(u["id"] for u in uploads) + "]"
-    messages = store.load_session_messages(session) + [{"role": "user", "content": content}]
+    messages = settle_tool_calls(store.load_session_messages(session)) + [{"role": "user", "content": content}]
     async for chunk in _drive(user=user, session=session, turn_id=turn["id"], messages=messages,
                               tools=tools_factory(), model=model_factory(), request=text):
         yield chunk
 
 
-async def resume_turn(user: dict, session: dict, turn: dict, answer: str) -> AsyncIterator[str]:
+async def resume_turn(user: dict, session: dict, turn: dict, answer: str, claimed: bool = False) -> AsyncIterator[str]:
     state = json.loads(turn.get("engine_state") or "{}")
     pending = state.get("pending") or {}
-    if turn["status"] != "waiting_user" or not pending.get("call_id"):
+    if not pending.get("call_id") or not (claimed or store.claim_answer(turn["id"], user["id"])):
         raise ValueError("这一轮没有在等待回答")
-    store.update_turn(turn["id"], status="running")
+    session = store.get_session(session["id"], user["id"]) or session
     yield sse(store.append_event(session["id"], turn["id"], "input.answered", {"answer": answer}))
     messages = store.load_session_messages(session) + [{
         "role": "tool", "tool_call_id": pending["call_id"],
@@ -149,5 +196,13 @@ def cancel_turn(turn_id: str) -> bool:
     task = _running.get(turn_id)
     if not task:
         return False
+    user_cancelled.add(turn_id)
     task.cancel()
     return True
+
+
+def fail_stale_turns() -> None:
+    """服务启动时调用：上次进程中断的轮次标记失败并推送终态事件，前端续接时能结束等待。"""
+    message = "服务重启，本轮已中断；已提交的生图任务会在后台继续，完成后图片会补回到这里"
+    for row in store.fail_stale_turns(message):
+        store.append_event(row["session_id"], row["id"], "turn.failed", {"message": message})

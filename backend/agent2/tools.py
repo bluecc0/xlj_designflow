@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -13,13 +14,14 @@ import uuid
 from pathlib import Path
 
 from ..agent_skill_loader import build_skill_context, load_agent_skill, load_reference_text
-from ..ai_image import compress_image_to_data_url, smart_generate_image_async
+from ..ai_image import compress_image_to_data_url, save_user_refs
+from ..ai_job_recovery import execute_image_job
 from ..common_helpers import _extract_first_json_object
 from ..config import settings
-from ..job_store import save_ai_image_job
+from ..job_store import load_ai_image_job, save_ai_image_job, save_image_checkpoint
 from ..model_routing import routed_chat_completion
 from . import memory, store
-from .engine import Tool, ToolContext
+from .engine import Tool, ToolContext, user_cancelled
 
 DEFAULT_IMAGE_MODEL = "gpt-image-2.5"
 IMAGE_MODELS = ["gpt-image-2.5", "gpt-image-2", "nano-banana-pro", "nano-banana-2.1",
@@ -28,6 +30,8 @@ RESOLUTIONS = ["1K", "2K", "4K"]
 ASPECT_RATIOS = ["auto", "1:1", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "2:3", "3:2"]
 MAX_IMAGES_PER_CALL = 6
 MAX_IMAGES_PER_TURN = 12
+JOB_POLL_SECONDS = 1.5
+JOB_MAX_WAIT_SECONDS = 15 * 60
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,42 @@ def _artifact_bytes(ctx: ToolContext, artifact_id: str) -> tuple[bytes, str]:
 
 # ── generate_image ────────────────────────────────────────────────────────────
 
+def create_job_artifact(job: dict) -> dict | None:
+    """把完成的生图任务登记为会话产物；同一任务只登记一次（实时完成和重启恢复共用）。"""
+    meta = job.get("request_meta") or {}
+    url = str(job.get("image_url") or "")
+    if job.get("status") != "done" or not url or meta.get("source") != "agent2":
+        return None
+    if store.find_job_artifact(job["id"]):
+        return None
+    local = _main()._resolve_public_asset_path(url)
+    return store.create_artifact(
+        session_id=meta["session_id"], user_id=job["user_id"], kind="image", url=url, path=str(local or ""),
+        label=meta.get("label") or "", group_id=meta.get("group_id"), group_type=meta.get("group_type"),
+        position=int(meta.get("position") or 0), source_tool_call_id=meta.get("tool_call_id"),
+        meta={"prompt": job.get("prompt"), "job_id": job["id"], "provider": job.get("provider")},
+    )
+
+
+def _artifact_event(artifact: dict) -> dict:
+    return {"call_id": artifact["source_tool_call_id"], "artifact": {
+        "id": artifact["id"], "url": artifact["url"], "label": artifact["label"], "group_id": artifact["group_id"],
+        "group_type": artifact["group_type"], "position": artifact["position"]}}
+
+
+async def backfill_recovered_job(job_id: str) -> None:
+    """服务重启后由后台恢复完成的 Agent 生图：补登产物，并在原轮次下追加事件。"""
+    job = load_ai_image_job(job_id)
+    artifact = create_job_artifact(job) if job else None
+    if artifact:
+        store.append_event(artifact["session_id"], job["request_meta"].get("turn_id") or "", "artifact.created",
+                           _artifact_event(artifact))
+
+
+def _job_terminal(job: dict | None) -> bool:
+    return bool(job) and (job["status"] == "failed" or (job["status"] == "done" and bool(job.get("image_url"))))
+
+
 async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str, variant: str,
                         size: str, resolution: str, refs: list[tuple[bytes, str]], group_id: str | None, group_type: str | None) -> dict:
     prompt = str(item.get("prompt") or "").strip()
@@ -56,44 +96,62 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str,
     # 单张指定的参考图优先：修改多张已有图时，每张只参考它自己的原图
     if item.get("reference_image_ids"):
         refs = [_artifact_bytes(ctx, rid) for rid in item["reference_image_ids"]]
+    uid = ctx.user["id"]
     job_id = uuid.uuid4().hex
-    created_at = time.time()
-    meta = {"source": "agent2", "session_id": ctx.session_id, "turn_id": ctx.turn_id, "tool_call_id": ctx.call_id}
-    job_args = dict(job_id=job_id, user_id=ctx.user["id"], model=model, prompt=prompt, size=size,
-                    resolution=resolution, has_reference=bool(refs), reference_count=len(refs),
-                    request_meta=meta, created_at=created_at)
-    save_ai_image_job(status="processing", **job_args)
-
-    async def on_progress(pct, _status=""):
-        await ctx.emit("tool.progress", {"call_id": ctx.call_id, "index": index, "label": label, "progress": int(pct or 0)})
-
-    def progress_cb(pct: int, status: str = ""):
-        asyncio.get_running_loop().create_task(on_progress(pct, status))
-
+    # 和普通生图一样建成可恢复任务：执行锁防重复执行，断点记录上游 task_id，重启后由后台续跑
+    meta = {"source": "agent2", "session_id": ctx.session_id, "turn_id": ctx.turn_id, "tool_call_id": ctx.call_id,
+            "position": index, "label": label, "group_id": group_id, "group_type": group_type,
+            "recovery": {"version": 1, "phase": "queued"}, "execution_prompt": prompt, "chat_session_id": "",
+            "variant": variant, "quality": "auto", "reference_storage_job_id": job_id,
+            "reference_names": [name for _data, name in refs]}
+    if refs:
+        save_user_refs(uid, job_id, refs)
+    save_ai_image_job(job_id=job_id, user_id=uid, status="processing", model=model, prompt=prompt, size=size,
+                      provider="auto", resolution=resolution, original_prompt=prompt, resolved_prompt=prompt,
+                      has_reference=bool(refs), reference_count=len(refs), request_meta=meta, created_at=time.time())
+    worker = asyncio.create_task(execute_image_job(
+        _main()._execute_ai_image_background, job_id,
+        initial={"refs": refs, "username": str(ctx.user.get("username") or "")}))
+    last_progress, waited = -1, 0.0
     try:
-        result = await smart_generate_image_async(
-            model=model, prompt=prompt, images=refs or None, size=size, resolution=resolution,
-            user_id=ctx.user["id"], variant=variant, on_progress=progress_cb,
-        )
+        # 以任务记录为准：执行者也可能是抢先认领这条任务的后台恢复扫描
+        while True:
+            if not worker.done():
+                await asyncio.wait({worker}, timeout=JOB_POLL_SECONDS)
+            else:
+                await asyncio.sleep(JOB_POLL_SECONDS)
+            job = load_ai_image_job(job_id)
+            if _job_terminal(job):
+                break
+            waited += JOB_POLL_SECONDS
+            if waited > JOB_MAX_WAIT_SECONDS:
+                return {"index": index, "label": label, "error": "生成超时，任务仍在后台继续，完成后会补回到会话里"}
+            progress = int((job or {}).get("progress") or 0)
+            if progress != last_progress:
+                last_progress = progress
+                await ctx.emit("tool.progress", {"call_id": ctx.call_id, "index": index, "label": label, "progress": progress})
     except asyncio.CancelledError:
-        save_ai_image_job(status="failed", error="用户已停止", **job_args)
+        worker.cancel()
+        with contextlib.suppress(BaseException):
+            await worker
+        if ctx.turn_id in user_cancelled:
+            # 用户主动停止：不再恢复这条任务；服务重启导致的取消则保留断点，交给后台续跑
+            job = load_ai_image_job(job_id)
+            if job and job["status"] != "done":
+                job_meta = job["request_meta"]
+                job_meta.setdefault("recovery", {}).update(phase="cancelled", resuming=False, message="用户已停止")
+                save_image_checkpoint(job_id, job_meta, provider=str(job.get("provider") or "auto"),
+                                      task_id=str(job.get("task_id") or ""), error="用户已停止", status="failed")
         raise
-    except Exception as exc:
-        save_ai_image_job(status="failed", error=str(exc)[:500], **job_args)
-        return {"index": index, "label": label, "error": str(exc)[:200]}
-    url = str(result.get("url") or "")
-    save_ai_image_job(status="done", image_url=url, provider=str(result.get("provider") or ""), progress=100, **job_args)
-    local = _main()._resolve_public_asset_path(url)
-    artifact = store.create_artifact(
-        session_id=ctx.session_id, user_id=ctx.user["id"], kind="image", url=url, path=str(local or ""),
-        label=label, group_id=group_id, group_type=group_type, position=index, source_tool_call_id=ctx.call_id,
-        meta={"prompt": prompt, "job_id": job_id, "provider": result.get("provider")},
-    )
-    await ctx.emit("artifact.created", {"call_id": ctx.call_id, "artifact": {
-        "id": artifact["id"], "url": url, "label": label, "group_id": group_id, "group_type": group_type,
-        "position": index}})
-    out = {"index": index, "label": label, "id": artifact["id"], "url": url}
-    check = await _self_check(ctx, local, prompt=prompt, label=label)
+    if job["status"] != "done":
+        return {"index": index, "label": label, "error": str(job.get("error") or "生成失败")[:200]}
+    artifact = create_job_artifact(job)
+    if artifact:
+        await ctx.emit("artifact.created", _artifact_event(artifact))
+    else:  # 已由其它途径登记过
+        artifact = store.find_job_artifact(job_id)
+    out = {"index": index, "label": label, "id": artifact["id"], "url": artifact["url"]}
+    check = await _self_check(ctx, artifact.get("path") or "", prompt=prompt, label=label)
     if check:
         out["check"] = check
         await ctx.emit("image.checked", {"call_id": ctx.call_id, "image_id": artifact["id"], **check})

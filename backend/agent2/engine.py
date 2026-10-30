@@ -17,6 +17,7 @@ import httpx
 
 from ..model_routing import (
     ModelRoutingError,
+    _check_response_error,
     _client_options,
     _headers,
     _payload,
@@ -31,6 +32,10 @@ Emit = Callable[[str, dict], Awaitable[None]]
 MAX_STEPS = 12
 _OVERFLOW_HINTS = ("context_length", "context length", "maximum context", "too many tokens",
                    "prompt is too long", "input is too long", "context window")
+
+
+# 用户主动停止的轮次：工具据此区分"用户停止"和"服务重启"，后者要保留任务以便恢复
+user_cancelled: set[str] = set()
 
 
 class ContextOverflow(Exception):
@@ -88,8 +93,8 @@ class RoutedModelClient:
                                 finished = True
                                 break
                             chunk = json.loads(raw)
-                            if chunk.get("error"):
-                                raise ModelRoutingError("模型返回错误响应")
+                            # 顶层 error 或 finish_reason=error 都是失败：丢弃本线路的文字和工具调用，换下一条
+                            _check_response_error(chunk)
                             for choice in chunk.get("choices") or []:
                                 delta = choice.get("delta") or choice.get("message") or {}
                                 content = delta.get("content")
@@ -195,11 +200,12 @@ async def run_loop(
     ctx_base: dict,
     max_steps: int = MAX_STEPS,
     prepare: Callable[[list[dict], bool], Awaitable[list[dict]]] | None = None,
+    checkpoint: Callable[[list[dict]], None] | None = None,
 ) -> TurnResult:
     """执行到模型不再调用工具，或遇到需要用户回答的工具为止。
 
     prepare(messages, force) 返回这一步实际发给模型的消息（裁剪、压缩后的视图），
-    messages 本身始终是完整历史。
+    messages 本身始终是完整历史。checkpoint(messages) 在每步工具结果写回后调用，用于逐步持久化。
     """
     specs = [t.spec() for t in tools.values()]
     final_text = ""
@@ -228,6 +234,8 @@ async def run_loop(
                 for c in step.tool_calls
             ]
         messages.append(assistant)
+        if step.tool_calls and checkpoint:
+            checkpoint(messages)  # 工具开始前先落库：中途中断也知道发起过哪些调用
         if step.text:
             final_text = step.text
         if not step.tool_calls:
@@ -240,6 +248,8 @@ async def run_loop(
         ])
         for call, content in zip(normal, results):
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": content})
+        if checkpoint:
+            checkpoint(messages)
         if suspending:
             call = suspending[0]
             # 同一步里多余的提问直接回复"已忽略"，保证消息序列完整

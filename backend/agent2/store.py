@@ -162,15 +162,49 @@ def load_session_messages(session: dict) -> list[dict]:
 
 # ── 轮次 ──────────────────────────────────────────────────────────────────────
 
-def create_turn(session_id: str, user_id: str, user_input: str) -> dict:
+def claim_turn(session_id: str, user_id: str, user_input: str) -> dict | None:
+    """原子占用会话：已有运行中的轮次时返回 None；还在等回答的轮次视为被新消息取代。"""
     turn = {"id": uuid.uuid4().hex, "session_id": session_id, "user_id": user_id, "status": "running",
             "user_input": user_input, "started_at": time.time()}
     with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM agent2_turns WHERE session_id = ? AND status = 'running'",
+                        (session_id,)).fetchone():
+            return None
+        conn.execute("UPDATE agent2_turns SET status = 'done', finished_at = ? WHERE session_id = ? AND status = 'waiting_user'",
+                     (turn["started_at"], session_id))
         conn.execute(
             "INSERT INTO agent2_turns (id, session_id, user_id, status, user_input, started_at) VALUES (?, ?, ?, ?, ?, ?)",
             (turn["id"], session_id, user_id, "running", user_input, turn["started_at"]),
         )
     return turn
+
+
+def claim_answer(turn_id: str, user_id: str) -> bool:
+    """回答提问：只有一个请求能把 waiting_user 切到 running。"""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE agent2_turns SET status = 'running' WHERE id = ? AND user_id = ? AND status = 'waiting_user'",
+            (turn_id, user_id),
+        )
+        return cur.rowcount == 1
+
+
+def get_active_turn(session_id: str) -> dict | None:
+    with _connect() as conn:
+        return _row(conn.execute(
+            "SELECT id, status FROM agent2_turns WHERE session_id = ? AND status IN ('running', 'waiting_user') "
+            "ORDER BY started_at DESC LIMIT 1", (session_id,),
+        ).fetchone())
+
+
+def fail_stale_turns(message: str) -> list[dict]:
+    """服务启动时：上次进程留下的 running 轮次已经没有执行者，标记为失败。"""
+    with _connect() as conn:
+        rows = [dict(r) for r in conn.execute("SELECT id, session_id FROM agent2_turns WHERE status = 'running'")]
+        conn.execute("UPDATE agent2_turns SET status = 'failed', error = ?, finished_at = ? WHERE status = 'running'",
+                     (message, time.time()))
+    return rows
 
 
 def get_turn(turn_id: str, user_id: str) -> dict | None:
@@ -267,6 +301,21 @@ def list_artifacts(session_id: str, limit: int = 30) -> list[dict]:
             "ORDER BY created_at DESC LIMIT ?", (session_id, limit),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def list_call_artifacts(call_id: str) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, label FROM agent2_artifacts WHERE source_tool_call_id = ? ORDER BY position", (call_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def find_job_artifact(job_id: str) -> dict | None:
+    with _connect() as conn:
+        return _row(conn.execute(
+            "SELECT * FROM agent2_artifacts WHERE json_extract(meta_json, '$.job_id') = ? LIMIT 1", (job_id,),
+        ).fetchone())
 
 
 def get_artifact(artifact_id: str, user_id: str) -> dict | None:

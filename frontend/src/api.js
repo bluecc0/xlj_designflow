@@ -293,8 +293,8 @@
     createAgent2Session: function() {
       return request('/agent2/sessions', { method: 'POST' });
     },
-    getAgent2Session: function(sessionId) {
-      return request('/agent2/sessions/' + encodeURIComponent(sessionId));
+    getAgent2Session: function(sessionId, afterSeq) {
+      return request('/agent2/sessions/' + encodeURIComponent(sessionId) + (afterSeq ? '?after_seq=' + afterSeq : ''));
     },
     deleteAgent2Session: function(sessionId) {
       return request('/agent2/sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' });

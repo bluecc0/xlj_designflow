@@ -45,8 +45,10 @@ def list_sessions(request: Request):
 @router.get("/sessions/{session_id}")
 def get_session(request: Request, session_id: str, after_seq: int = 0):
     _user_, session = _session(request, session_id)
+    # active_turn：刷新或断线后，前端据此按 seq 续接事件直到这一轮结束
     return {"session": {k: session[k] for k in ("id", "title", "created_at", "updated_at")},
-            "events": store.list_events(session_id, after_seq)}
+            "events": store.list_events(session_id, after_seq),
+            "active_turn": store.get_active_turn(session_id)}
 
 
 @router.delete("/sessions/{session_id}")
@@ -63,14 +65,20 @@ async def send_message(request: Request, session_id: str, message: str = Form(""
     text = message.strip()
     if not text and not images:
         raise HTTPException(400, "消息不能为空")
-    uploads = []
+    files = []
     for upload in (images or [])[:MAX_UPLOADS]:
         data = await upload.read(MAX_UPLOAD_BYTES + 1)
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(400, "单张图片不能超过 20MB")
         if data:
-            uploads.append(service.save_upload(user, session_id, data, upload.filename or ""))
-    return _stream(service.start_turn(user, session, text, uploads, skill=skill.strip()))
+            files.append((data, upload.filename or ""))
+    # 校验通过后再占用会话，避免报错留下一直"运行中"的轮次
+    try:
+        turn = service.claim_turn(user, session, text)
+    except service.TurnBusy as exc:
+        raise HTTPException(409, str(exc))
+    uploads = [service.save_upload(user, session_id, data, name) for data, name in files]
+    return _stream(service.start_turn(user, session, text, uploads, skill=skill.strip(), turn=turn))
 
 
 @router.post("/turns/{turn_id}/answer")
@@ -80,9 +88,9 @@ async def answer(request: Request, turn_id: str, answer: str = Form(...)):
     if not turn:
         raise HTTPException(404, "轮次不存在")
     _user_, session = _session(request, turn["session_id"])
-    if turn["status"] != "waiting_user":
+    if not store.claim_answer(turn_id, user["id"]):
         raise HTTPException(409, "这一轮没有在等待回答")
-    return _stream(service.resume_turn(user, session, turn, answer.strip()))
+    return _stream(service.resume_turn(user, session, turn, answer.strip(), claimed=True))
 
 
 @router.post("/turns/{turn_id}/cancel")
