@@ -4615,7 +4615,7 @@ def _load_active_skill_context(
     skill_name: str | None,
     *,
     include_references: bool = False,
-    references_subset: list[str] | None = None,
+    has_reference_image: bool = False,
 ) -> tuple[str, dict | None]:
     clean = str(skill_name or "").strip()
     if not clean:
@@ -4623,6 +4623,13 @@ def _load_active_skill_context(
     skill = load_agent_skill(settings.agent_skill_paths, settings.root_dir, clean)
     if not skill:
         raise HTTPException(404, f"Skill 不存在: {clean}")
+    # 有参考图时带哪些 reference 由 Skill 自己在 frontmatter 的 references_with_image 里声明
+    references_subset = None
+    if has_reference_image:
+        declared = skill.metadata.get("references_with_image") or []
+        if isinstance(declared, str):
+            declared = [declared]
+        references_subset = [str(item) for item in declared] if isinstance(declared, list) else []
     return build_skill_context(
         skill,
         include_references=include_references,
@@ -4651,8 +4658,8 @@ async def agent_skill_plan_stream_endpoint(
 ):
     """Stream Skill planner output so the UI can show live reasoning/progress.
 
-    支持多模态：上传参考图时压缩后随 SKILL.md + reference-image-analysis.md
-    一起发给 skill LLM，planner 真正看图分析并产出带风格转移指令的 final_prompt。
+    支持多模态：上传参考图时压缩后随 SKILL.md 及其 references_with_image 声明的文件
+    一起发给 skill LLM，planner 真正看图分析并产出 final_prompt。
     """
     _current_user(request)
     user_prompt = (prompt or "").strip()
@@ -4672,15 +4679,14 @@ async def agent_skill_plan_stream_endpoint(
             logger.warning("Failed to compress skill planner reference image", exc_info=True)
     has_reference = bool(ref_data_urls)
 
-    subset = ["references/reference-image-analysis.md"] if has_reference else None
-    skill_context, skill_meta = _load_active_skill_context(skill_name, references_subset=subset)
+    skill_context, skill_meta = _load_active_skill_context(skill_name, has_reference_image=has_reference)
     if not skill_context:
         raise HTTPException(404, f"未找到 Skill: {skill_name}")
 
     async def event_stream():
         skill_label = (skill_meta or {}).get("name") or skill_name
         if not get_model_routes("skill_llm"):
-            final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context, has_reference=has_reference)
+            final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label)
             yield make_sse("delta", {"text": json.dumps(trace, ensure_ascii=False), "mode": "fallback"})
             yield make_sse("done", {"final_prompt": final_prompt, "prompt_trace": json.dumps(trace, ensure_ascii=False), "trace": trace})
             return
@@ -4717,7 +4723,7 @@ async def agent_skill_plan_stream_endpoint(
             trace = _extract_json_object(raw)
             final_prompt = str(trace.get("final_prompt") or "").strip()
             if not final_prompt:
-                final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context, has_reference=has_reference)
+                final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label)
             trace.setdefault("skill", skill_label)
             trace.setdefault("mode", "llm")
             trace.update(route_meta)
@@ -4726,7 +4732,7 @@ async def agent_skill_plan_stream_endpoint(
             yield make_sse("done", {"final_prompt": final_prompt, "prompt_trace": json.dumps(trace, ensure_ascii=False), "trace": trace})
         except Exception as exc:
             logger.exception("Skill planner stream failed: %s", skill_name)
-            final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label, skill_context, has_reference=has_reference)
+            final_prompt, trace = _fallback_skill_plan(user_prompt, skill_label)
             trace["stream_error"] = str(exc)
             yield make_sse("error", {"message": str(exc), "fallback_prompt": final_prompt, "prompt_trace": json.dumps(trace, ensure_ascii=False), "trace": trace})
 
@@ -4902,42 +4908,15 @@ def _extract_json_object(text: str) -> dict:
     return {}
 
 
-def _fallback_skill_plan(
-    user_prompt: str,
-    skill_name: str,
-    skill_context: str,
-    *,
-    has_reference: bool = False,
-) -> tuple[str, dict]:
-    base = f"""{user_prompt}
-
-请严格按 ${skill_name} 的中文艺术字设计规范执行：先判断用户意图和文字主体，再选择合适的字形、笔画、材质、构图、负面约束；画面重点服务于中文标题字本身，避免把说明文字或 Skill 文档内容画进图里。""".strip()
-    ref_suffix = ""
-    applied_rules = [
-        "中文文字是画面主体，优先保证可读性和视觉风格一致。",
-        "按用户主题推导字形、材质、氛围和构图，不展示 Skill 文档。",
-    ]
-    if has_reference:
-        ref_suffix = "\n\n用户已上传参考图，请从参考图中提取字形结构、笔画形态、材质、边缘处理、色彩分布、装饰体系与构图特征，将其作为风格转移约束转移到目标中文文字上；不要复制参考图里的文字内容或无关装饰。"
-        applied_rules.append("参考图控制视觉风格(字形/笔画/材质/色彩/构图)，不复制其文字内容。")
-    final_prompt = (base + ref_suffix).strip()
-    steps = [
-        "识别到用户显式调用 Skill，进入中文艺术字/标题字生图链路。",
-        "读取 SKILL.md 的适用场景、风格判断和生成约束。",
-        "将用户原始需求转换为 Image 2 可执行的最终生图 prompt。",
-    ]
-    if has_reference:
-        steps.insert(1, "结合用户上传的参考图，提取风格特征并约束风格转移。")
+def _fallback_skill_plan(user_prompt: str, skill_name: str) -> tuple[str, dict]:
+    """Planner 不可用时按原始需求出图，并在 trace 里如实说明技能未生效。"""
+    final_prompt = user_prompt.strip()
     trace = {
         "mode": "fallback",
         "skill": skill_name,
-        "steps": steps,
-        "applied_rules": applied_rules,
+        "steps": [f"技能「{skill_name}」解析未成功，本次按原始需求直接生成，技能规则未生效。"],
         "final_prompt": final_prompt,
-        "negative_prompt": "不要生成英文主体字、不要把说明文档画进图里、不要低清晰度、不要乱码、不要多余水印。",
     }
-    if has_reference:
-        trace["used_reference_images"] = True
     return final_prompt, trace
 
 
@@ -4953,9 +4932,7 @@ def _build_skill_planner_prompt(
         ref_section = """
 
 [用户已上传参考图]
-请按 reference-image-analysis 的维度分析附图：字形结构、笔画形态、材质、边缘处理、色彩分布、装饰体系、构图。
-在 final_prompt 中给出具体的、可执行的风格转移指令：从参考图提取哪些特征、如何转移到目标中文文字上。
-不要复制参考图里的文字内容、品牌名或无关装饰；转移的是风格原理，不是内容。
+附图是用户提供的参考。如果 Skill 规定了参考图的分析和使用方式，按 Skill 执行；否则根据用户需求判断要从参考图中借鉴什么，并在 final_prompt 中写成具体、可执行的画面描述。
 """
     return f"""你是 DesignFlow 的 Skill Planner。你的任务不是直接聊天，而是读取用户显式调用的 Codex-style SKILL.md，并把它转换为一次可执行的生图请求。
 
@@ -4969,7 +4946,7 @@ def _build_skill_planner_prompt(
 
 约束：
 1. final_prompt 必须围绕用户需求，不要泛化成模板说明。
-2. 如果是中文艺术字/标题字，必须明确主体文字、字体气质、笔画/材质/构图/背景/质量要求。
+2. 画面要素以 Skill 的规则为准，写到具体可执行的程度。
 3. 不要把“请遵守 Skill”这类元指令写进 final_prompt，要把规则消化成具体画面语言。
 4. 不要编造用户没说的品牌名、日期、价格。
 {ref_section}
@@ -4986,7 +4963,7 @@ async def _plan_skill_image_prompt(user_prompt: str, skill_name: str, skill_cont
     if not skill_context:
         return user_prompt, {}
     if not get_model_routes("skill_llm"):
-        return _fallback_skill_plan(user_prompt, skill_name, skill_context)
+        return _fallback_skill_plan(user_prompt, skill_name)
 
     planner_prompt = _build_skill_planner_prompt(user_prompt, skill_name, skill_context)
     try:
@@ -5000,14 +4977,14 @@ async def _plan_skill_image_prompt(user_prompt: str, skill_name: str, skill_cont
         trace = _extract_json_object(content)
         final_prompt = str(trace.get("final_prompt") or "").strip()
         if not final_prompt:
-            return _fallback_skill_plan(user_prompt, skill_name, skill_context)
+            return _fallback_skill_plan(user_prompt, skill_name)
         trace.setdefault("skill", skill_name)
         trace.setdefault("mode", "llm")
         trace.update(resp.extensions.get("model_route") or {})
         return final_prompt, trace
     except Exception:
         logger.exception("Skill planner failed, falling back to deterministic plan")
-        return _fallback_skill_plan(user_prompt, skill_name, skill_context)
+        return _fallback_skill_plan(user_prompt, skill_name)
 
 
 @app.get("/history/ai-chats")
