@@ -15,7 +15,7 @@ import shutil
 import time
 import uuid
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .agent_skill_loader import SKILL_CONTEXT_MAX_CHARS, _SAFE_NAME_RE, parse_frontmatter
 
@@ -82,7 +82,9 @@ def _read_zip(data: bytes) -> tuple[dict[str, bytes], list[str]]:
             continue
         name = info.filename.replace("\\", "/")
         path = PurePosixPath(name)
-        if path.is_absolute() or ".." in path.parts or not path.parts:
+        # 正式机是 Windows：C:/x、C:x 这类盘符路径在 PurePosixPath 下看似相对，拼接后却会写到暂存目录外
+        if (path.is_absolute() or ".." in path.parts or not path.parts
+                or PureWindowsPath(name).anchor or any(":" in part for part in path.parts)):
             raise SkillUploadError(f"压缩包里有不安全的路径：{info.filename}")
         if (info.external_attr >> 16) & 0o170000 == 0o120000:
             raise SkillUploadError(f"压缩包里不能包含符号链接：{info.filename}")
@@ -113,6 +115,15 @@ def _read_zip(data: bytes) -> tuple[dict[str, bytes], list[str]]:
         key = "SKILL.md" if rel == (rel[-1],) and rel[-1].lower() == "skill.md" else "/".join(rel)
         files[key] = archive.read(info)
     return files, skipped
+
+
+def _safe_target(tmp: Path, rel: str) -> Path:
+    """写入前再确认一次：解析后的目标必须严格位于暂存目录内。"""
+    root = tmp.resolve()
+    target = (tmp / rel).resolve()
+    if target == root or root not in target.parents:
+        raise SkillUploadError(f"压缩包里有不安全的路径：{rel}")
+    return target
 
 
 def install_user_skill(
@@ -178,7 +189,7 @@ def install_user_skill(
     tmp = user_dir / f".tmp-{uuid.uuid4().hex}"
     try:
         for rel, text in texts.items():
-            target = tmp / rel
+            target = _safe_target(tmp, rel)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
         (tmp / MANIFEST_NAME).write_text(json.dumps({
