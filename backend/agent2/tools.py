@@ -90,7 +90,8 @@ def _job_terminal(job: dict | None) -> bool:
 
 
 async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str, variant: str,
-                        size: str, resolution: str, refs: list[tuple[bytes, str]], group_id: str | None, group_type: str | None) -> dict:
+                        size: str, resolution: str, refs: list[tuple[bytes, str]], group_id: str | None, group_type: str | None,
+                        extra_meta: dict | None = None) -> dict:
     prompt = str(item.get("prompt") or "").strip()
     label = str(item.get("label") or "").strip()
     # 单张指定的参考图优先：修改多张已有图时，每张只参考它自己的原图
@@ -103,7 +104,7 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str,
             "position": index, "label": label, "group_id": group_id, "group_type": group_type,
             "recovery": {"version": 1, "phase": "queued"}, "execution_prompt": prompt, "chat_session_id": "",
             "variant": variant, "quality": "auto", "reference_storage_job_id": job_id,
-            "reference_names": [name for _data, name in refs]}
+            "reference_names": [name for _data, name in refs], **(extra_meta or {})}
     if refs:
         save_user_refs(uid, job_id, refs)
     save_ai_image_job(job_id=job_id, user_id=uid, status="processing", model=model, prompt=prompt, size=size,
@@ -385,6 +386,7 @@ async def remember(ctx: ToolContext, args: dict) -> dict:
 
 
 def build_tools() -> dict[str, Tool]:
+    from .image_ops import build_image_op_tools  # image_ops 依赖本模块，延迟导入
     tools = [
         Tool("generate_image",
              "生成图片（文生图或参考图生图）。images 里每一项生成一张，可以各自不同的 prompt；"
@@ -413,7 +415,9 @@ def build_tools() -> dict[str, Tool]:
              {"type": "object", "properties": {"image_id": {"type": "string"}, "question": {"type": "string"}},
               "required": ["image_id"]},
              analyze_image),
-        Tool("ask_user", "向用户提一个问题并给出 2–4 个选项。只在确实无法继续时使用（例如缺少 SKU），不要用来确认方向。",
+        Tool("ask_user", "向用户提一个问题并给出 2–4 个选项。只在主体不明确（用户没说要表现什么内容，例如只说“生成海报”）"
+             "或缺少必需的业务信息（例如缺少 SKU）时使用；比例、风格、张数等用默认值，不要用来确认方向。"
+             "主体不明确时，选项最后一个固定为“先随便出一张看看”。",
              {"type": "object", "properties": {"question": {"type": "string"},
                                                "options": {"type": "array", "items": {"type": "string"}, "maxItems": 4}},
               "required": ["question"]},
@@ -446,5 +450,5 @@ def build_tools() -> dict[str, Tool]:
                  "route": {"type": "string", "enum": ["auto", "normal", "full"], "description": "默认 auto"}},
               "required": ["sku"]},
              special_compose),
-    ]
+    ] + build_image_op_tools()
     return {t.name: t for t in tools}

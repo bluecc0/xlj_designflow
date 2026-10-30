@@ -3981,7 +3981,38 @@ const AgentToolCard = ({
         lineHeight: 1.45
       }
     }, (f.label || '第 ' + ((f.index || 0) + 1) + ' 张') + ' 失败：' + (f.error || ''));
-  }), result.zip_url ? /*#__PURE__*/React.createElement("div", {
+  }), Array.isArray(result.files) && result.files.length ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, result.files.map(function (f) {
+    return /*#__PURE__*/React.createElement("a", {
+      key: f.id || f.url,
+      href: agent2AbsUrl(f.url),
+      download: true,
+      style: {
+        fontSize: 11,
+        padding: '4px 10px',
+        borderRadius: 5,
+        background: 'var(--ink)',
+        color: 'white',
+        textDecoration: 'none',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4
+      }
+    }, /*#__PURE__*/React.createElement(I.download, {
+      size: 10
+    }), "\u4E0B\u8F7D", f.name ? ' ' + f.name : '');
+  }), result.layer_count ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-3)',
+      alignSelf: 'center'
+    }
+  }, "\u5171 ", result.layer_count, " \u4E2A\u56FE\u5C42") : null) : null, result.zip_url ? /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex'
     }
@@ -6296,7 +6327,11 @@ const Composer = ({
     const images = fileList.filter(f => f.type.startsWith('image/'));
     const others = fileList.filter(f => !f.type.startsWith('image/'));
     if (images.length) addImageFiles(images);
-    if (others.length && !agentEnabled) {
+    if (others.length && agentEnabled) {
+      window.dfToast('Agent 目前只支持上传图片；Excel 铺货表请用功能菜单里的「智能铺货」', {
+        tone: 'warn'
+      });
+    } else if (others.length) {
       const file = others[0];
       if (selectedWorkflow === 'distribute' && isSmartDistributeFile(file)) {
         addSmartDistributeFile(file);
@@ -8135,7 +8170,14 @@ const AGENT2_TOOL_LABELS = {
   load_skill: '加载技能',
   read_skill_file: '读取技能资料',
   special_compose: '特殊品合成',
-  remember: '记忆'
+  remember: '记忆',
+  remove_background: '抠图',
+  fill_background: '换底色',
+  upscale_image: '高清放大',
+  vectorize_image: '转矢量图',
+  split_layers: '拆分 PSD 图层',
+  outpaint_image: '扩图',
+  outfit_change: 'AI 换装'
 };
 // 回复末尾的 [[NEXT: ...]] 由界面渲染成快捷按钮；流式过程中先把它隐藏
 const agent2StripNext = function (text) {

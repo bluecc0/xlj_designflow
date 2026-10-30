@@ -4946,7 +4946,15 @@ async def ai_image_outpainting(request: Request):
     else:
         source, source_image_url = _outpainting_internal_path(image_url, request, user)
         source_kind = "internal_url"
+    return await submit_outpainting_job(user, body, source=source, source_kind=source_kind,
+                                        source_image_url=source_image_url,
+                                        client_request_id=client_request_id, mode=mode)
 
+
+async def submit_outpainting_job(user: dict, body: dict, *, source, source_kind: str, source_image_url,
+                                 client_request_id: str, mode: str, extra_meta: dict | None = None) -> dict:
+    """校验几何、占用并发名额、建任务并提交后台扩图。画布接口和 Agent 工具共用；
+    extra_meta 记录调用方信息（例如 Agent 的会话和工具调用）。"""
     raw_outpaint = body.get("outpaint")
     outpaint = raw_outpaint if isinstance(raw_outpaint, dict) else body
     limits = _outpainting_effective_limits(mode)
@@ -5034,6 +5042,7 @@ async def ai_image_outpainting(request: Request):
                 "mode": mode,
                 "phase": "queued",
                 "cost": None,
+                **(extra_meta or {}),
             }
             claims[job_id] = user_id
             try:
@@ -5131,22 +5140,11 @@ async def ai_image_upscale(request: Request):
     except Exception:
         scale = settings.upscale_cli_scale or 2
     job_id = uuid.uuid4().hex
-    scale = max(1, min(scale, 4))
     if image_url.startswith("data:image/"):
         src_path = _persist_data_url_image(image_url, user_id=user["id"], job_id=job_id)
     else:
         src_path = _resolve_public_asset_path(image_url, user)
-    created_at = time.time()
-    prompt = f"local upscale x{scale}"
-    save_ai_image_job(
-        job_id=job_id, user_id=user["id"], status="processing",
-        model="local-upscale", prompt=prompt, size="",
-        provider="local", reference_count=1,
-        request_meta={"operation": "upscale", "scale": scale, "source_image_url": image_url},
-        original_prompt=prompt, resolved_prompt=prompt,
-        has_reference=True, progress=0, created_at=created_at,
-    )
-    asyncio.create_task(_run_upscale_background(job_id, dict(user), src_path, scale, created_at))
+    start_image_operation(user, "upscale", job_id, src_path, image_url, scale=scale)
     return {"job_id": job_id, "status": "processing", "progress": 0}
 
 
@@ -5157,21 +5155,11 @@ async def ai_image_vectorize(request: Request):
     body = await request.json()
     image_url = str(body.get("image_url") or "").strip()
     job_id = uuid.uuid4().hex
-    created_at = time.time()
     if image_url.startswith("data:image/"):
         src_path = _persist_data_url_image(image_url, user_id=user["id"], job_id=job_id)
     else:
         src_path = _resolve_public_asset_path(image_url, user)
-    prompt = "local vectorize to svg"
-    save_ai_image_job(
-        job_id=job_id, user_id=user["id"], status="processing",
-        model="local-vectorize", prompt=prompt, size="",
-        provider="local", reference_count=1,
-        request_meta={"operation": "vectorize", "source_image_url": image_url},
-        original_prompt=prompt, resolved_prompt=prompt,
-        has_reference=True, progress=0, created_at=created_at,
-    )
-    asyncio.create_task(_run_vectorize_background(job_id, dict(user), src_path, created_at))
+    start_image_operation(user, "vectorize", job_id, src_path, image_url)
     return {"job_id": job_id, "status": "processing", "progress": 0}
 
 
@@ -5184,21 +5172,11 @@ async def ai_image_matting(request: Request):
     body = await request.json()
     image_url = str(body.get("image_url") or "").strip()
     job_id = uuid.uuid4().hex
-    created_at = time.time()
     if image_url.startswith("data:image/"):
         src_path = _persist_data_url_image(image_url, user_id=user["id"], job_id=job_id)
     else:
         src_path = _resolve_public_asset_path(image_url, user)
-    prompt = "local ai matting background removal"
-    save_ai_image_job(
-        job_id=job_id, user_id=user["id"], status="processing",
-        model="local-matting", prompt=prompt, size="",
-        provider="local", reference_count=1,
-        request_meta={"operation": "matting", "source_image_url": image_url},
-        original_prompt=prompt, resolved_prompt=prompt,
-        has_reference=True, progress=0, created_at=created_at,
-    )
-    asyncio.create_task(_run_matting_background(job_id, dict(user), src_path, created_at))
+    start_image_operation(user, "matting", job_id, src_path, image_url)
     return {"job_id": job_id, "status": "processing", "progress": 0}
 
 
@@ -5210,29 +5188,51 @@ async def ai_image_layer_extract(request: Request):
     body = await request.json()
     image_url = str(body.get("image_url") or "").strip()
     job_id = uuid.uuid4().hex
-    created_at = time.time()
     if image_url.startswith("data:image/"):
         src_path = _persist_data_url_image(image_url, user_id=user["id"], job_id=job_id)
     else:
         src_path = _resolve_public_asset_path(image_url, user)
-    provider = getattr(settings, "layer_extract_provider", "apimart")
-    model_name = getattr(settings, "layer_extract_model", "seedream-5-0-pro")
-    prompt = "Seedream 5.0 Pro 图层分离并导出 PSD"
+    start_image_operation(user, "layer_extract", job_id, src_path, image_url)
+    return {"job_id": job_id, "status": "processing", "progress": 0}
+
+
+def start_image_operation(user: dict, operation: str, job_id: str, src_path: Path, image_url: str, *,
+                          scale: int | None = None, extra_meta: dict | None = None) -> None:
+    """建任务记录并在后台执行图片处理（放大 / 矢量化 / 抠图 / 转分层 PSD）。
+    画布接口和 Agent 工具共用；extra_meta 记录调用方信息（例如 Agent 的会话和工具调用）。"""
+    created_at = time.time()
+    meta = {"operation": operation, "source_image_url": image_url}
+    provider, model = "local", f"local-{operation}"
+    if operation == "upscale":
+        scale = max(1, min(int(scale or settings.upscale_cli_scale or 2), 4))
+        prompt = f"local upscale x{scale}"
+        meta["scale"] = scale
+        runner = _run_upscale_background(job_id, dict(user), src_path, scale, created_at)
+    elif operation == "vectorize":
+        prompt = "local vectorize to svg"
+        runner = _run_vectorize_background(job_id, dict(user), src_path, created_at)
+    elif operation == "matting":
+        if not settings.matting_enabled:
+            raise HTTPException(503, "抠图服务未启用 (MATTING_ENABLED=false)")
+        prompt = "local ai matting background removal"
+        runner = _run_matting_background(job_id, dict(user), src_path, created_at)
+    elif operation == "layer_extract":
+        provider = getattr(settings, "layer_extract_provider", "apimart")
+        model_name = getattr(settings, "layer_extract_model", "seedream-5-0-pro")
+        model, prompt = "layer-extract", "Seedream 5.0 Pro 图层分离并导出 PSD"
+        meta.update(provider=provider, model=model_name)
+        runner = _run_layer_extract_background(job_id, dict(user), src_path, created_at)
+    else:
+        raise ValueError(f"unknown image operation: {operation}")
     save_ai_image_job(
         job_id=job_id, user_id=user["id"], status="processing",
-        model="layer-extract", prompt=prompt, size="",
+        model=model, prompt=prompt, size="",
         provider=provider, reference_count=1,
-        request_meta={
-            "operation": "layer_extract",
-            "provider": provider,
-            "model": model_name,
-            "source_image_url": image_url,
-        },
+        request_meta={**meta, **(extra_meta or {})},
         original_prompt=prompt, resolved_prompt=prompt,
         has_reference=True, progress=0, created_at=created_at,
     )
-    asyncio.create_task(_run_layer_extract_background(job_id, dict(user), src_path, created_at))
-    return {"job_id": job_id, "status": "processing", "progress": 0}
+    asyncio.create_task(runner)
 
 
 def _sanitize_log_field(value, limit: int) -> str:

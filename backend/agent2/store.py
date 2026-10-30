@@ -373,6 +373,9 @@ def _count_pending_image_jobs(conn, session_id: str) -> int:
           AND json_extract(j.request_meta_json, '$.source') = 'agent2'
           AND json_extract(j.request_meta_json, '$.session_id') = ?
           AND COALESCE(json_extract(j.request_meta_json, '$.recovery.phase'), '') != 'cancelled'
+          -- 抠图、放大、扩图等处理任务随工具调用结束，不参与重启后的补图
+          AND COALESCE(json_extract(j.request_meta_json, '$.operation'), '') NOT IN
+              ('matting', 'upscale', 'vectorize', 'layer_extract', 'outpainting')
           AND (j.status IN ('pending', 'queued', 'processing', 'running')
                OR (j.status = 'done' AND COALESCE(j.updated_at, j.created_at) > ?
                    AND NOT EXISTS (SELECT 1 FROM agent2_artifacts a WHERE a.session_id = ?

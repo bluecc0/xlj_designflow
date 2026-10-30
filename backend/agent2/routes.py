@@ -1,15 +1,27 @@
 """新版 Agent 的 HTTP 接口。鉴权沿用全局中间件（request.state.user）。"""
 from __future__ import annotations
 
+import io
+
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from PIL import Image
 
 from . import service, store
 
 router = APIRouter(prefix="/agent2")
 
-MAX_UPLOADS = 4
+MAX_UPLOADS = 9  # 与输入框参考图上限一致（换装最多 1 张人物 + 8 张服装）
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+
+
+def _is_image(data: bytes) -> bool:
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img.verify()
+        return True
+    except Exception:
+        return False
 
 
 def _user(request: Request) -> dict:
@@ -66,11 +78,15 @@ async def send_message(request: Request, session_id: str, message: str = Form(""
     text = message.strip()
     if not text and not images:
         raise HTTPException(400, "消息不能为空")
+    if len(images or []) > MAX_UPLOADS:
+        raise HTTPException(400, f"一次最多上传 {MAX_UPLOADS} 张图片")
     files = []
-    for upload in (images or [])[:MAX_UPLOADS]:
+    for upload in images or []:
         data = await upload.read(MAX_UPLOAD_BYTES + 1)
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(400, "单张图片不能超过 20MB")
+        if data and not _is_image(data):
+            raise HTTPException(400, f"{upload.filename or '文件'} 不是图片；Agent 目前只支持上传图片")
         if data:
             files.append((data, upload.filename or ""))
     # 校验通过后再占用会话，避免报错留下一直"运行中"的轮次
