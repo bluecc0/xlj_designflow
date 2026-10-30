@@ -190,12 +190,26 @@ def claim_answer(turn_id: str, user_id: str) -> bool:
         return cur.rowcount == 1
 
 
+def _active_turn(conn, session_id: str) -> dict | None:
+    return _row(conn.execute(
+        "SELECT id, status FROM agent2_turns WHERE session_id = ? AND status IN ('running', 'waiting_user') "
+        "ORDER BY started_at DESC LIMIT 1", (session_id,),
+    ).fetchone())
+
+
 def get_active_turn(session_id: str) -> dict | None:
     with _connect() as conn:
-        return _row(conn.execute(
-            "SELECT id, status FROM agent2_turns WHERE session_id = ? AND status IN ('running', 'waiting_user') "
-            "ORDER BY started_at DESC LIMIT 1", (session_id,),
-        ).fetchone())
+        return _active_turn(conn, session_id)
+
+
+def session_snapshot(session_id: str, after_seq: int = 0) -> dict:
+    """续接轮询用：事件、活动轮次、未完成生图在同一个读事务里读取，保证是同一时刻的状态。
+    否则查完事件后后台才写入补图事件，接口会返回"没有新事件、也没有待处理任务"，前端就此停止轮询。"""
+    with _connect() as conn:
+        conn.execute("BEGIN")
+        return {"events": _list_events(conn, session_id, after_seq),
+                "active_turn": _active_turn(conn, session_id),
+                "pending_jobs": _count_pending_image_jobs(conn, session_id)}
 
 
 def fail_stale_turns(message: str) -> list[dict]:
@@ -227,24 +241,32 @@ def update_turn(turn_id: str, *, status: str, engine_state: dict | None = None, 
 
 def append_event(session_id: str, turn_id: str, event_type: str, payload: dict) -> dict:
     """事件先落库再推送；seq 按会话递增，断线重连时据此补发。"""
-    now = time.time()
     with _connect() as conn:
-        row = conn.execute("SELECT next_seq FROM agent2_sessions WHERE id = ?", (session_id,)).fetchone()
-        seq = int(row["next_seq"]) if row else 1
-        conn.execute("UPDATE agent2_sessions SET next_seq = ?, updated_at = ? WHERE id = ?", (seq + 1, now, session_id))
-        conn.execute(
-            "INSERT INTO agent2_events (session_id, turn_id, seq, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (session_id, turn_id, seq, event_type, json.dumps(payload, ensure_ascii=False), now),
-        )
+        return _append_event(conn, session_id, turn_id, event_type, payload)
+
+
+def _append_event(conn, session_id: str, turn_id: str, event_type: str, payload: dict) -> dict:
+    now = time.time()
+    row = conn.execute("SELECT next_seq FROM agent2_sessions WHERE id = ?", (session_id,)).fetchone()
+    seq = int(row["next_seq"]) if row else 1
+    conn.execute("UPDATE agent2_sessions SET next_seq = ?, updated_at = ? WHERE id = ?", (seq + 1, now, session_id))
+    conn.execute(
+        "INSERT INTO agent2_events (session_id, turn_id, seq, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (session_id, turn_id, seq, event_type, json.dumps(payload, ensure_ascii=False), now),
+    )
     return {"session_id": session_id, "turn_id": turn_id, "seq": seq, "type": event_type, "payload": payload}
 
 
 def list_events(session_id: str, after_seq: int = 0) -> list[dict]:
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT turn_id, seq, type, payload_json FROM agent2_events WHERE session_id = ? AND seq > ? ORDER BY seq",
-            (session_id, after_seq),
-        ).fetchall()
+        return _list_events(conn, session_id, after_seq)
+
+
+def _list_events(conn, session_id: str, after_seq: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT turn_id, seq, type, payload_json FROM agent2_events WHERE session_id = ? AND seq > ? ORDER BY seq",
+        (session_id, after_seq),
+    ).fetchall()
     return [
         {"session_id": session_id, "turn_id": r["turn_id"], "seq": r["seq"], "type": r["type"],
          "payload": json.loads(r["payload_json"] or "{}")}
@@ -282,16 +304,38 @@ def create_artifact(*, session_id: str, user_id: str, kind: str, url: str, path:
         "meta": meta or {}, "created_at": time.time(),
     }
     with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO agent2_artifacts (id, session_id, user_id, kind, url, path, label, group_id, group_type,
-                position, parent_id, source_tool_call_id, meta_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (artifact["id"], session_id, user_id, kind, url, path, label, group_id, group_type, position,
-             parent_id, source_tool_call_id, json.dumps(artifact["meta"], ensure_ascii=False), artifact["created_at"]),
-        )
+        _insert_artifact(conn, artifact)
     return artifact
+
+
+def _insert_artifact(conn, a: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO agent2_artifacts (id, session_id, user_id, kind, url, path, label, group_id, group_type,
+            position, parent_id, source_tool_call_id, meta_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (a["id"], a["session_id"], a["user_id"], a["kind"], a["url"], a["path"], a["label"], a["group_id"],
+         a["group_type"], a["position"], a["parent_id"], a["source_tool_call_id"],
+         json.dumps(a["meta"], ensure_ascii=False), a["created_at"]),
+    )
+
+
+def register_job_artifact(job_id: str, turn_id: str, make_event, **fields) -> tuple[dict, dict] | None:
+    """生图任务的产物和 artifact.created 事件在同一个事务里写入：要么都有，要么都没有。
+    同一任务只登记一次（实时完成和重启恢复共用）；已登记过返回 None。"""
+    artifact = {"id": "img_" + uuid.uuid4().hex[:10], "kind": "image", "path": "", "label": "",
+                "group_id": None, "group_type": None, "position": 0, "parent_id": None,
+                "source_tool_call_id": None, "created_at": time.time(), **fields}
+    artifact["meta"] = {**(fields.get("meta") or {}), "job_id": job_id}
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM agent2_artifacts WHERE json_extract(meta_json, '$.job_id') = ? LIMIT 1",
+                        (job_id,)).fetchone():
+            return None
+        _insert_artifact(conn, artifact)
+        event = _append_event(conn, artifact["session_id"], turn_id, "artifact.created", make_event(artifact))
+    return artifact, event
 
 
 def list_artifacts(session_id: str, limit: int = 30) -> list[dict]:
@@ -311,16 +355,29 @@ def list_call_artifacts(call_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# 已出图但产物还没登记的任务也算待处理（后台恢复写完 done 到补登产物之间有空档）；
+# 只看最近完成的，历史上没登记成功的任务不会让前端一直轮询
+UNDELIVERED_WINDOW_SECONDS = 600
+
+
 def count_pending_image_jobs(session_id: str) -> int:
-    """会话里还在执行或等待后台恢复的 Agent 生图任务数（用户停止的不算）。"""
+    """会话里还没交付的 Agent 生图任务数：执行中、等待后台恢复，或已出图但产物和事件还没写入（用户停止的不算）。"""
     with _connect() as conn:
-        row = conn.execute("""
-            SELECT COUNT(*) FROM ai_image_jobs
-            WHERE status IN ('pending', 'queued', 'processing', 'running') AND json_valid(request_meta_json)
-              AND json_extract(request_meta_json, '$.source') = 'agent2'
-              AND json_extract(request_meta_json, '$.session_id') = ?
-              AND COALESCE(json_extract(request_meta_json, '$.recovery.phase'), '') != 'cancelled'
-        """, (session_id,)).fetchone()
+        return _count_pending_image_jobs(conn, session_id)
+
+
+def _count_pending_image_jobs(conn, session_id: str) -> int:
+    row = conn.execute("""
+        SELECT COUNT(*) FROM ai_image_jobs j
+        WHERE json_valid(j.request_meta_json)
+          AND json_extract(j.request_meta_json, '$.source') = 'agent2'
+          AND json_extract(j.request_meta_json, '$.session_id') = ?
+          AND COALESCE(json_extract(j.request_meta_json, '$.recovery.phase'), '') != 'cancelled'
+          AND (j.status IN ('pending', 'queued', 'processing', 'running')
+               OR (j.status = 'done' AND COALESCE(j.updated_at, j.created_at) > ?
+                   AND NOT EXISTS (SELECT 1 FROM agent2_artifacts a WHERE a.session_id = ?
+                                   AND json_extract(a.meta_json, '$.job_id') = j.id)))
+    """, (session_id, time.time() - UNDELIVERED_WINDOW_SECONDS, session_id)).fetchone()
     return int(row[0] or 0)
 
 

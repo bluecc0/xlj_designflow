@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -418,6 +419,79 @@ class Agent2EngineTest(unittest.TestCase):
         model2 = FakeModel([[("text", "好")]])
         self._run(model2, "再来一张")
         self.assertNotIn("后台补回", model2.seen[0][-1]["content"])
+
+    def _recovering_job(self):
+        """服务重启后的状态：轮次已被标记失败，一条 Agent 生图任务还在后台恢复。"""
+        from types import SimpleNamespace
+        sid = self.session["id"]
+        turn = store.claim_turn(sid, "u1", "画一张跑鞋")
+        meta = {"source": "agent2", "session_id": sid, "turn_id": turn["id"], "tool_call_id": "c1", "label": "首屏",
+                "recovery": {"version": 1, "phase": "accepted", "task_id": "t1"}}
+        job = dict(job_id="j1", user_id="u1", model="gpt-image-2.5", prompt="跑鞋", size="1:1", request_meta=meta)
+        job_store.save_ai_image_job(status="processing", **job)
+        service.fail_stale_turns()
+        return SimpleNamespace(state=SimpleNamespace(user=self.user)), sid, job
+
+    def test_poll_never_reports_idle_while_image_done_but_not_delivered(self):
+        from backend.agent2 import routes, tools as a2tools
+        img = Path(self.tmp.name) / "out.png"
+        img.write_bytes(b"png")
+        patches, _ = self._durable_image_tools(img)
+        request, sid, job = self._recovering_job()
+        seq = routes.get_session(request, sid)["events"][-1]["seq"]
+
+        # 任务已写成 done，回填还没执行：仍算待处理，前端不会停止轮询
+        job_store.save_ai_image_job(status="done", image_url="/output/out.png", progress=100, **job)
+        gap = routes.get_session(request, sid, after_seq=seq)
+        self.assertEqual((gap["events"], gap["active_turn"], gap["pending_jobs"]), ([], None, 1))
+
+        with patches[1]:
+            asyncio.run(a2tools.backfill_recovered_job("j1"))
+            asyncio.run(a2tools.backfill_recovered_job("j1"))  # 重复回填不重复登记
+        after = routes.get_session(request, sid, after_seq=seq)
+        self.assertEqual([e["type"] for e in after["events"]], ["artifact.created"])
+        self.assertEqual(after["pending_jobs"], 0)
+
+        # 很久以前完成却没登记的任务不再算待处理，避免前端一直轮询
+        job_store.save_ai_image_job(status="done", image_url="/output/old.png", progress=100,
+                                    **{**job, "job_id": "j-old"})
+        with job_store._connect() as conn:
+            conn.execute("UPDATE ai_image_jobs SET updated_at = ? WHERE id = 'j-old'",
+                         (time.time() - store.UNDELIVERED_WINDOW_SECONDS - 1,))
+        self.assertEqual(routes.get_session(request, sid, after_seq=seq)["pending_jobs"], 0)
+
+    def test_poll_snapshot_is_consistent_when_backfill_lands_between_reads(self):
+        import threading
+        from backend.agent2 import routes, tools as a2tools
+        img = Path(self.tmp.name) / "out.png"
+        img.write_bytes(b"png")
+        patches, _ = self._durable_image_tools(img)
+        request, sid, job = self._recovering_job()
+        seq = routes.get_session(request, sid)["events"][-1]["seq"]
+
+        def finish():
+            job_store.save_ai_image_job(status="done", image_url="/output/out.png", progress=100, **job)
+            asyncio.run(a2tools.backfill_recovered_job("j1"))
+
+        worker = threading.Thread(target=finish)
+        real_list_events = store._list_events
+
+        def list_events_then_finish(conn, session_id, after_seq):
+            # 审核复现的交错：事件已读完，后台此刻完成并写入补图事件，之后才读活动轮次和待处理数
+            rows = real_list_events(conn, session_id, after_seq)
+            worker.start()
+            worker.join(0.3)
+            return rows
+
+        with patches[1], patch.object(store, "_list_events", list_events_then_finish):
+            first = routes.get_session(request, sid, after_seq=seq)
+            worker.join(5)
+        self.assertFalse(worker.is_alive())
+        # 同一快照：没读到事件，就一定还报告有待处理任务，前端会继续轮询
+        self.assertEqual((first["events"], first["pending_jobs"]), ([], 1))
+        second = routes.get_session(request, sid, after_seq=seq)
+        self.assertEqual([e["type"] for e in second["events"]], ["artifact.created"])
+        self.assertEqual(second["pending_jobs"], 0)
 
     def test_delete_session_removes_records_for_owner_only(self):
         self._run(FakeModel([[("text", "好")]]), "你好")

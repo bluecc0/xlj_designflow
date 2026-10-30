@@ -156,6 +156,7 @@ class ToolContext:
     call_id: str
     emit: Emit
     state: dict  # 轮次内共享的计数等
+    publish: Callable[[dict], Awaitable[None]] | None = None  # 推送已落库的事件（和数据同一事务写入的）
 
 
 @dataclass

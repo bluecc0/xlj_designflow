@@ -96,6 +96,9 @@ async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict
                                    result=payload.get("result"), duration_ms=payload.get("duration_ms"))
         await queue.put(event)
 
+    async def publish(event: dict) -> None:
+        await queue.put(event)
+
     system = {"role": "system", "content": build_system_prompt(_user_skill_dir(user), memory.memory_index(user["id"]))}
     context = ContextManager(session, emit)
 
@@ -111,7 +114,7 @@ async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict
             save(full)  # 本轮的用户输入先落库
             result = await run_loop(model=model, tools=tools, messages=full, emit=emit,
                                     ctx_base={"user": user, "session_id": session_id, "turn_id": turn_id,
-                                              "state": {"request": request}},
+                                              "state": {"request": request}, "publish": publish},
                                     prepare=context.prepare, checkpoint=save)
             save(result.messages)
             if result.status == "waiting_user":

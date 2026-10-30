@@ -45,12 +45,11 @@ def list_sessions(request: Request):
 @router.get("/sessions/{session_id}")
 def get_session(request: Request, session_id: str, after_seq: int = 0):
     _user_, session = _session(request, session_id)
-    # active_turn：刷新或断线后，前端据此按 seq 续接事件直到这一轮结束
+    # active_turn：刷新或断线后，前端据此按 seq 续接事件直到这一轮结束；
+    # pending_jobs：还有后台生图没交付时，前端在本轮结束后继续低频轮询，接收重启恢复后补回的图片。
+    # 三者来自同一个读事务，前端据此停止轮询时不会漏掉刚写入的事件
     return {"session": {k: session[k] for k in ("id", "title", "created_at", "updated_at")},
-            "events": store.list_events(session_id, after_seq),
-            "active_turn": store.get_active_turn(session_id),
-            # 还有后台生图未完成时，前端在本轮结束后继续低频轮询，接收重启恢复后补回的图片
-            "pending_jobs": store.count_pending_image_jobs(session_id)}
+            **store.session_snapshot(session_id, after_seq)}
 
 
 @router.delete("/sessions/{session_id}")
