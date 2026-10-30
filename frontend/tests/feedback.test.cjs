@@ -34,6 +34,31 @@ test('uncertain acceptance and completed images never advise another generation'
   }
 });
 
+test('partial batch failures preserve counts and the actual cause through notification rendering', () => {
+  const cases = [
+    ['APIMart insufficient quota', '图片服务额度不足，请联系管理员处理后再试。'],
+    ['content_policy_violation', '提示词或参考图未通过内容审核，请调整内容后再试。'],
+    ['HTTP 429 too many requests', '当前使用人数较多，请稍后再试。'],
+    ['提交后受理状态暂无法确认，避免重复扣费', '暂时无法确认任务是否已提交，请先查看任务记录，避免重复提交。'],
+    ['图片已生成，但结果写入失败', '图片已生成，结果暂未完整保存。请保留当前页面，稍后查看任务记录。'],
+    ['upstream Exception: secret', '操作未完成，暂时无法确认原因，请稍后再试。'],
+  ];
+  for (const [cause, reason] of cases) {
+    const expected = '已生成 1 张，1 张未完成。' + reason;
+    const batch = { kind: 'batch-generation', successCount: 1, failureCount: 1, cause };
+    assert.equal(feedback.message(batch), expected);
+    // Formatting the displayed summary again must preserve both counts and reason.
+    assert.equal(feedback.message(expected), expected);
+    const { root, hosts } = browserHarness();
+    root.dfError(batch);
+    assert.equal(hosts[0].children[1].textContent, expected);
+  }
+  assert.equal(
+    feedback.message('已生成 2 张，3 张未完成。APIMart insufficient quota'),
+    '已生成 2 张，3 张未完成。图片服务额度不足，请联系管理员处理后再试。'
+  );
+});
+
 test('safe validation and unsaved work guidance are preserved', () => {
   assert.equal(feedback.message('请选择 PNG、JPG 或 WebP 图片。'), '请选择 PNG、JPG 或 WebP 图片。');
   assert.match(feedback.message('画布暂时无法保存，本地修改已保留，请勿刷新或关闭页面'), /本地修改已保留.*请勿刷新/);

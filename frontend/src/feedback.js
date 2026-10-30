@@ -22,7 +22,14 @@
   }
 
   function message(error, fallback) {
+    // Batch counts describe separate tasks; normalize only the failed tasks' cause.
+    if (error && error.kind === 'batch-generation' && Number.isInteger(error.successCount) && error.successCount > 0 && Number.isInteger(error.failureCount) && error.failureCount > 0) {
+      return '已生成 ' + error.successCount + ' 张，' + error.failureCount + ' 张未完成。' + message(error.cause, fallback);
+    }
     var raw = detailOf(error && error.diagnostic != null ? error.diagnostic : error);
+    // Keep legacy and already-formatted summaries safe when formatted a second time.
+    var batch = raw.match(/^(已生成\s*\d+\s*张[，,]\s*\d+\s*张未完成[。.])\s*([\s\S]*)$/);
+    if (batch) return batch[1] + message(batch[2], fallback);
     var status = Number(error && (error.httpStatus || error.status)) || Number((raw.match(/HTTP\s*(\d+)/i) || [])[1]);
     var otherwise = fallback || '操作未完成，暂时无法确认原因，请稍后再试。';
     // These phases must never suggest another paid generation.

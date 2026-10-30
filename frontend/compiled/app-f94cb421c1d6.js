@@ -8851,7 +8851,12 @@ const Chat = ({
               imageUrl: okOrdered.length ? okOrdered[0].url : m.imageUrl
             }) : m));
             if (failCount > 0) {
-              if (okOrdered.length) window.dfError('已生成 ' + okOrdered.length + ' 张，' + failCount + ' 张未完成。' + formatAiImageError(firstErr));
+              if (okOrdered.length) window.dfError({
+                kind: 'batch-generation',
+                successCount: okOrdered.length,
+                failureCount: failCount,
+                cause: firstErr
+              });
               var summary = okOrdered.length ? '本次 ' + jobIds.length + ' 张中有 ' + failCount + ' 张失败：' + formatAiImageError(firstErr || '未知原因', null) : formatAiImageError(firstErr || '生图失败', jobIds[0]);
               reportAiImageClientEvent({
                 type: 'job_failed',
