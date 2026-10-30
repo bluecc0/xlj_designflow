@@ -136,6 +136,15 @@ from .compose import get_client, run_compose
 from .config import settings
 from .model_routing import get_model_routes, routed_chat_completion, routed_chat_stream
 from .agent_skill_loader import build_skill_context, list_agent_skills, load_agent_skill
+from .user_skill_store import (
+    MAX_UPLOAD_BYTES as MAX_SKILL_UPLOAD_BYTES,
+    SkillUploadError,
+    delete_user_skill,
+    install_user_skill,
+    list_all_user_skills,
+    read_user_skill_detail,
+    user_skill_dir,
+)
 from .job_store import (
     acknowledge_admin_alert,
     append_ai_chat_message,
@@ -161,6 +170,7 @@ from .job_store import (
     load_admin_overview,
     load_admin_task_detail,
     load_admin_tasks,
+    load_skill_usage_stats,
     load_admin_users,
     claim_service_probe,
     complete_service_probe,
@@ -4264,7 +4274,7 @@ async def agent_project_chat_endpoint(request: Request, project_id: str):
     active_skill_context = ""
     active_skill_meta = None
     if active_skill_name:
-        active_skill_context, active_skill_meta = _load_active_skill_context(active_skill_name, include_references=False)
+        active_skill_context, active_skill_meta = _load_active_skill_context(active_skill_name, user)
 
     async def event_stream():
         try:
@@ -4611,8 +4621,15 @@ class ChatRequest(pydantic.BaseModel):
     context: ChatContext = pydantic.Field(default_factory=ChatContext)
 
 
+def _user_skill_dir(user: dict | None) -> Path | None:
+    if not user or not user.get("id"):
+        return None
+    return user_skill_dir(settings.user_skills_path, str(user["id"]))
+
+
 def _load_active_skill_context(
     skill_name: str | None,
+    user: dict | None,
     *,
     include_references: bool = False,
     has_reference_image: bool = False,
@@ -4620,9 +4637,9 @@ def _load_active_skill_context(
     clean = str(skill_name or "").strip()
     if not clean:
         return "", None
-    skill = load_agent_skill(settings.agent_skill_paths, settings.root_dir, clean)
+    skill = load_agent_skill(settings.agent_skill_paths, settings.root_dir, clean, _user_skill_dir(user))
     if not skill:
-        raise HTTPException(404, f"Skill 不存在: {clean}")
+        raise HTTPException(404, f"技能「{clean}」不存在或已删除")
     # 有参考图时带哪些 reference 由 Skill 自己在 frontmatter 的 references_with_image 里声明
     references_subset = None
     if has_reference_image:
@@ -4645,8 +4662,48 @@ def _load_active_skill_context(
 
 @app.get("/agent-skills")
 async def agent_skills_endpoint(request: Request):
-    _current_user(request)
-    return {"skills": list_agent_skills(settings.agent_skill_paths, settings.root_dir)}
+    user = _current_user(request)
+    return {"skills": list_agent_skills(settings.agent_skill_paths, settings.root_dir, _user_skill_dir(user))}
+
+
+@app.post("/agent-skills")
+async def agent_skill_upload_endpoint(
+    request: Request,
+    file: UploadFile = File(...),
+    overwrite: bool = Form(False),
+):
+    """上传 Skill（.zip 或 SKILL.md），只安装到当前用户自己的目录。"""
+    user = _current_user(request)
+    user_dir = _user_skill_dir(user)
+    data = await file.read(MAX_SKILL_UPLOAD_BYTES + 1)
+    system_skills = {
+        item["name"]: item["title"]
+        for item in list_agent_skills(settings.agent_skill_paths, settings.root_dir)
+    }
+    try:
+        name, warnings = install_user_skill(
+            data, file.filename or "", user_dir, system_skills=system_skills, uploader=user, overwrite=overwrite,
+        )
+    except SkillUploadError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    skill = next(
+        item for item in list_agent_skills(settings.agent_skill_paths, settings.root_dir, user_dir)
+        if item["name"] == name
+    )
+    log_operation(user_id=user["id"], username=user.get("username", ""), action="skill_upload",
+                  payload=json.dumps({"name": name, "overwrite": overwrite}, ensure_ascii=False))
+    return {"skill": skill, "warnings": warnings}
+
+
+@app.delete("/agent-skills/{skill_name}")
+async def agent_skill_delete_endpoint(request: Request, skill_name: str):
+    """只能删除当前用户自己上传的 Skill，系统 Skill 不可删除。"""
+    user = _current_user(request)
+    if not delete_user_skill(_user_skill_dir(user), skill_name):
+        raise HTTPException(404, "技能不存在，或不是你上传的技能")
+    log_operation(user_id=user["id"], username=user.get("username", ""), action="skill_delete",
+                  payload=json.dumps({"name": skill_name}, ensure_ascii=False))
+    return {"ok": True}
 
 
 @app.post("/agent-skills/{skill_name}/plan/stream")
@@ -4661,7 +4718,7 @@ async def agent_skill_plan_stream_endpoint(
     支持多模态：上传参考图时压缩后随 SKILL.md 及其 references_with_image 声明的文件
     一起发给 skill LLM，planner 真正看图分析并产出 final_prompt。
     """
-    _current_user(request)
+    user = _current_user(request)
     user_prompt = (prompt or "").strip()
     if not user_prompt:
         raise HTTPException(400, "prompt 不能为空")
@@ -4679,7 +4736,7 @@ async def agent_skill_plan_stream_endpoint(
             logger.warning("Failed to compress skill planner reference image", exc_info=True)
     has_reference = bool(ref_data_urls)
 
-    skill_context, skill_meta = _load_active_skill_context(skill_name, has_reference_image=has_reference)
+    skill_context, skill_meta = _load_active_skill_context(skill_name, user, has_reference_image=has_reference)
     if not skill_context:
         raise HTTPException(404, f"未找到 Skill: {skill_name}")
 
@@ -6980,9 +7037,9 @@ async def ai_image_endpoint(
     active_skill_name = (skill or "").strip()
     active_skill_context = ""
     active_skill_meta = None
-    if active_skill_name:
-        active_skill_context, active_skill_meta = _load_active_skill_context(active_skill_name, include_references=False)
     user = _current_user(request)
+    if active_skill_name:
+        active_skill_context, active_skill_meta = _load_active_skill_context(active_skill_name, user)
     job_id = uuid.uuid4().hex
     session_id = (chat_session_id or "").strip()
     session = get_ai_chat_session(session_id, user_id=user["id"]) if session_id else None
@@ -7663,7 +7720,7 @@ def layered_psd_status(request: Request, job_id: str):
 
 
 @app.post("/chat")
-async def chat_endpoint(req: ChatRequest):
+async def chat_endpoint(req: ChatRequest, request: Request):
     """
     AI 对话接口：Sub2API 优先、APIMart 兜底，注入平台上下文和工作台状态。
     """
@@ -7710,7 +7767,7 @@ async def chat_endpoint(req: ChatRequest):
     skill_context = ""
     skill_meta = None
     if ctx.skill:
-        skill_context, skill_meta = _load_active_skill_context(ctx.skill, include_references=False)
+        skill_context, skill_meta = _load_active_skill_context(ctx.skill, getattr(request.state, "user", None))
     if skill_context:
         system_prompt += f"""
 
@@ -7833,6 +7890,7 @@ def admin_tasks(
     search: str = "",
     provider: str = "",
     reference: str = "",
+    skill: str = "",
 ):
     """统一任务中心（仅管理员，只读）。"""
     user = _current_user(request)
@@ -7856,6 +7914,7 @@ def admin_tasks(
         search=search or None,
         provider=provider or None,
         reference=reference or None,
+        skill=skill or None,
     )
     return {
         "tasks": tasks,
@@ -7949,6 +8008,31 @@ def admin_task_detail(request: Request, task_type: str, task_id: str):
     if task_type == "ai_image":
         detail["request"]["reference_images"] = _admin_reference_images(detail)
     return {"task": detail}
+
+
+@app.get("/admin/skills")
+def admin_user_skills(request: Request):
+    """所有用户上传的技能，附带使用次数，便于排查（仅管理员，只读）。"""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    skills = list_all_user_skills(settings.user_skills_path)
+    usage = load_skill_usage_stats()
+    for item in skills:
+        item["usage"] = usage.get((item["user_id"], item["name"]), {"total": 0, "failed": 0, "last_used_at": None})
+    return {"skills": skills}
+
+
+@app.get("/admin/skills/{user_id}/{skill_name}")
+def admin_user_skill_detail(request: Request, user_id: str, skill_name: str):
+    """单个用户技能的上传记录和全部文件内容（仅管理员，只读）。"""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    detail = read_user_skill_detail(user_skill_dir(settings.user_skills_path, user_id), skill_name)
+    if not detail:
+        raise HTTPException(404, "技能不存在")
+    return {"skill": detail}
 
 
 @app.get("/admin/users")

@@ -3547,9 +3547,14 @@ const ChatReturned = ({
   onRetry,
   onEditResend,
   agentSkills,
-  onPickSkill
+  onPickSkill,
+  onUploadSkill,
+  onDeleteSkill,
+  skillUploading
 }) => {
   const scrollRef = React.useRef(null);
+  const skillFileRef = React.useRef(null);
+  const [hoverSkill, setHoverSkill] = React.useState('');
   const contentRef = React.useRef(null);
   const stickRef = React.useRef(true);
   const prevLenRef = React.useRef(messages.length);
@@ -3680,7 +3685,7 @@ const ChatReturned = ({
       maxWidth: 240,
       lineHeight: 1.5
     }
-  }, greeting.sub), onPickSkill && agentSkills && agentSkills.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, greeting.sub), onPickSkill && /*#__PURE__*/React.createElement("div", {
     style: {
       width: '100%',
       maxWidth: 300,
@@ -3691,36 +3696,82 @@ const ChatReturned = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 11,
-      color: 'var(--ink-3)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
       padding: '0 2px'
     }
-  }, "\u6280\u80FD"), agentSkills.map(skill => /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-3)'
+    }
+  }, "\u6280\u80FD"), onUploadSkill && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      if (skillFileRef.current) skillFileRef.current.click();
+    },
+    disabled: skillUploading,
+    title: "\u4E0A\u4F20\u6280\u80FD\uFF1A\u5305\u542B SKILL.md \u7684 .zip\uFF0C\u6216\u5355\u4E2A .md \u6587\u4EF6",
+    "aria-label": "\u4E0A\u4F20\u6280\u80FD",
+    style: {
+      width: 20,
+      height: 20,
+      padding: 0,
+      display: 'grid',
+      placeItems: 'center',
+      borderRadius: 5,
+      color: 'var(--ink-3)',
+      cursor: skillUploading ? 'default' : 'pointer'
+    },
+    onMouseEnter: e => {
+      e.currentTarget.style.background = 'var(--panel-2)';
+      e.currentTarget.style.color = 'var(--ink)';
+    },
+    onMouseLeave: e => {
+      e.currentTarget.style.background = 'transparent';
+      e.currentTarget.style.color = 'var(--ink-3)';
+    }
+  }, /*#__PURE__*/React.createElement(I.plus, {
+    size: 13
+  })), /*#__PURE__*/React.createElement("input", {
+    ref: skillFileRef,
+    type: "file",
+    accept: ".zip,.md",
+    style: {
+      display: 'none'
+    },
+    onChange: e => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (file && onUploadSkill) onUploadSkill(file);
+    }
+  })), (agentSkills || []).map(skill => /*#__PURE__*/React.createElement("div", {
     key: skill.name,
+    style: {
+      position: 'relative'
+    },
+    onMouseEnter: () => setHoverSkill(skill.name),
+    onMouseLeave: () => setHoverSkill('')
+  }, /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => onPickSkill(skill),
-    title: skill.summary || skill.title || skill.name,
+    title: skill.summary || skill.description || skill.title || skill.name,
     style: {
+      width: '100%',
       display: 'flex',
       alignItems: 'center',
       gap: 9,
       padding: '9px 11px',
       borderRadius: 10,
-      background: 'var(--panel)',
-      border: '1px solid var(--line-2)',
+      background: hoverSkill === skill.name ? 'var(--panel-2)' : 'var(--panel)',
+      border: '1px solid ' + (hoverSkill === skill.name ? 'var(--line)' : 'var(--line-2)'),
       textAlign: 'left',
       fontSize: 12,
       lineHeight: 1.5,
       color: 'var(--ink)',
-      transition: 'border-color 120ms, background 120ms'
-    },
-    onMouseEnter: e => {
-      e.currentTarget.style.borderColor = 'var(--line)';
-      e.currentTarget.style.background = 'var(--panel-2)';
-    },
-    onMouseLeave: e => {
-      e.currentTarget.style.borderColor = 'var(--line-2)';
-      e.currentTarget.style.background = 'var(--panel)';
+      transition: 'border-color 120ms, background 120ms',
+      paddingRight: skill.scope === 'user' ? 34 : 11
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
@@ -3735,7 +3786,16 @@ const ChatReturned = ({
       fontWeight: 600,
       flexShrink: 0
     }
-  }, skill.title || skill.name), skill.summary && /*#__PURE__*/React.createElement("span", {
+  }, skill.title || skill.name), skill.scope === 'user' && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: 'var(--ink-3)',
+      border: '1px solid var(--line-2)',
+      borderRadius: 4,
+      padding: '0 4px',
+      flexShrink: 0
+    }
+  }, "\u6211\u7684"), (skill.summary || skill.scope === 'user' && skill.description) && /*#__PURE__*/React.createElement("span", {
     style: {
       color: 'var(--ink-3)',
       minWidth: 0,
@@ -3743,7 +3803,44 @@ const ChatReturned = ({
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap'
     }
-  }, skill.summary))))) : messages.map((m, i) => /*#__PURE__*/React.createElement(Bubble, {
+  }, skill.summary || skill.description)), skill.scope === 'user' && onDeleteSkill && hoverSkill === skill.name && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onDeleteSkill(skill),
+    title: "\u5220\u9664\u6280\u80FD",
+    "aria-label": '删除技能 ' + (skill.title || skill.name),
+    style: {
+      position: 'absolute',
+      right: 8,
+      top: '50%',
+      transform: 'translateY(-50%)',
+      width: 22,
+      height: 22,
+      padding: 0,
+      display: 'grid',
+      placeItems: 'center',
+      borderRadius: 5,
+      color: 'var(--ink-3)',
+      cursor: 'pointer'
+    },
+    onMouseEnter: e => {
+      e.currentTarget.style.color = 'var(--danger)';
+      e.currentTarget.style.background = 'var(--panel)';
+    },
+    onMouseLeave: e => {
+      e.currentTarget.style.color = 'var(--ink-3)';
+      e.currentTarget.style.background = 'transparent';
+    }
+  }, /*#__PURE__*/React.createElement(I.trash, {
+    size: 12
+  })))), skillUploading && /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '9px 11px',
+      borderRadius: 10,
+      border: '1px dashed var(--line-2)',
+      fontSize: 12,
+      color: 'var(--ink-3)'
+    }
+  }, "\u6B63\u5728\u6DFB\u52A0\u6280\u80FD\u2026"))) : messages.map((m, i) => /*#__PURE__*/React.createElement(Bubble, {
     key: i,
     who: m.who,
     meta: m.meta,
@@ -5123,6 +5220,12 @@ const Composer = ({
       prompt: String(match[2] || '').trimStart()
     };
   }, []);
+  React.useEffect(function () {
+    if (!selectedSkill || !agentSkills.length) return;
+    if (!agentSkills.some(function (skill) {
+      return skill && skill.name === selectedSkill;
+    })) setSelectedSkill('');
+  }, [agentSkills, selectedSkill]);
   const activeSkillInfo = React.useMemo(function () {
     const parsed = parseSkillInvocation(text);
     const skillName = selectedSkill || parsed.skill;
@@ -9857,6 +9960,65 @@ const Chat = ({
       skill: skill.name
     });
   }, []);
+  const [skillUploading, setSkillUploading] = React.useState(false);
+  const refreshAgentSkills = React.useCallback(function () {
+    return window.API.listAgentSkills().then(function (skills) {
+      setAgentSkills(Array.isArray(skills) ? skills : []);
+    });
+  }, []);
+  const handleUploadSkill = React.useCallback(async function (file) {
+    setSkillUploading(true);
+    try {
+      let result;
+      try {
+        result = await window.API.uploadAgentSkill(file, false);
+      } catch (err) {
+        if (err.status !== 409) throw err;
+        const ok = await window.dfConfirm({
+          title: '覆盖同名技能？',
+          message: err.message + '，上传后会覆盖原来的内容。',
+          confirmText: '覆盖'
+        });
+        if (!ok) return;
+        result = await window.API.uploadAgentSkill(file, true);
+      }
+      await refreshAgentSkills();
+      const skill = result.skill || {};
+      const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+      handlePickSkill(skill);
+      window.dfToast('已添加技能「' + (skill.title || skill.name) + '」' + (warnings.length ? '。' + warnings.join('；') : ''), {
+        tone: warnings.length ? 'warn' : 'ok',
+        duration: warnings.length ? 6000 : 3200
+      });
+    } catch (err) {
+      window.dfToast('添加技能失败：' + (err && err.message || err), {
+        tone: 'danger'
+      });
+    } finally {
+      setSkillUploading(false);
+    }
+  }, [handlePickSkill, refreshAgentSkills]);
+  const handleDeleteSkill = React.useCallback(async function (skill) {
+    if (!skill || !skill.name) return;
+    const ok = await window.dfConfirm({
+      title: '删除技能「' + (skill.title || skill.name) + '」？',
+      message: '删除后无法恢复。',
+      confirmText: '删除',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      await window.API.deleteAgentSkill(skill.name);
+      await refreshAgentSkills();
+      window.dfToast('已删除技能「' + (skill.title || skill.name) + '」', {
+        tone: 'ok'
+      });
+    } catch (err) {
+      window.dfToast('删除技能失败：' + (err && err.message || err), {
+        tone: 'danger'
+      });
+    }
+  }, [refreshAgentSkills]);
 
   // 技能列表同时供欢迎页和输入框使用
   React.useEffect(() => {
@@ -10621,7 +10783,10 @@ const Chat = ({
     onRetry: handleRetryAiImage,
     onEditResend: handleEditResend,
     agentSkills: agentSkills,
-    onPickSkill: handlePickSkill
+    onPickSkill: handlePickSkill,
+    onUploadSkill: handleUploadSkill,
+    onDeleteSkill: handleDeleteSkill,
+    skillUploading: skillUploading
   }), /*#__PURE__*/React.createElement(Composer, {
     onSend: handleSend,
     onParseTable: handleParseTable,
@@ -10658,7 +10823,9 @@ const ADMIN_ACTIONS = {
   ai_image_vectorize: ['图片矢量化', '#2563bd'],
   ai_image_upscale: ['高清放大', '#c45b21'],
   grid_promotional: ['智能铺货', '#4f46c8'],
-  admin_alert_acknowledge: ['确认异常', '#bd741d']
+  admin_alert_acknowledge: ['确认异常', '#bd741d'],
+  skill_upload: ['上传技能', '#0f8b78'],
+  skill_delete: ['删除技能', '#d64545']
 };
 const ADMIN_TASK_TYPES = {
   ai_image: 'AI 生图',
@@ -11058,7 +11225,7 @@ function adminUserLabel(item) {
 }
 function adminRangeLabel(hours) {
   if (Number(hours) === 0) return '所有时间';
-  if (Number(hours) <= 24) return '1 天内';
+  if (Number(hours) <= 24) return '今天';
   if (Number(hours) <= 168) return '近 7 天';
   return '近 30 天';
 }
@@ -11755,6 +11922,92 @@ function AdminTaskDrawer({
     className: "df-admin-code"
   }, adminJsonText(data))))) : null));
 }
+function adminFormatBytes(value) {
+  var bytes = Number(value || 0);
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+function AdminSkillDrawer({
+  skill,
+  detail,
+  loading,
+  error,
+  onClose,
+  onShowTasks
+}) {
+  if (!skill) return null;
+  var usage = skill.usage || {};
+  var manifest = detail && detail.manifest || {};
+  var warnings = manifest.warnings || skill.warnings || [];
+  var skipped = manifest.skipped_files || skill.skipped_files || [];
+  var files = detail && detail.files || [];
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-drawerbackdrop",
+    onClick: onClose
+  }), /*#__PURE__*/React.createElement("aside", {
+    className: "df-admin-drawer"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-drawerhead"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-drawertitle"
+  }, skill.title || skill.name), /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-cardmeta"
+  }, "\u7528\u6237\u6280\u80FD")), /*#__PURE__*/React.createElement("button", {
+    className: "df-admin-control df-admin-drawerclose",
+    "aria-label": "\u5173\u95ED\u6280\u80FD\u8BE6\u60C5",
+    title: "\u5173\u95ED",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement(I.close, {
+    size: 14
+  }))), /*#__PURE__*/React.createElement("dl", {
+    className: "df-admin-detailgrid"
+  }, /*#__PURE__*/React.createElement("dt", null, "\u4E0A\u4F20\u7528\u6237"), /*#__PURE__*/React.createElement("dd", null, adminUserLabel(skill), " ", /*#__PURE__*/React.createElement("span", {
+    className: "df-admin-faint"
+  }, "\xB7 ", skill.user_id)), /*#__PURE__*/React.createElement("dt", null, "\u6280\u80FD\u6807\u8BC6"), /*#__PURE__*/React.createElement("dd", {
+    className: "df-admin-mono"
+  }, skill.name), /*#__PURE__*/React.createElement("dt", null, "\u63CF\u8FF0"), /*#__PURE__*/React.createElement("dd", null, skill.description || '-'), /*#__PURE__*/React.createElement("dt", null, "\u539F\u59CB\u6587\u4EF6"), /*#__PURE__*/React.createElement("dd", null, skill.original_filename || '-'), /*#__PURE__*/React.createElement("dt", null, "\u4E0A\u4F20\u65F6\u95F4"), /*#__PURE__*/React.createElement("dd", null, adminFormatTime(skill.uploaded_at, true)), /*#__PURE__*/React.createElement("dt", null, "\u4F7F\u7528\u60C5\u51B5"), /*#__PURE__*/React.createElement("dd", null, "\u5171 ", usage.total || 0, " \u6B21 \xB7 \u5931\u8D25 ", usage.failed || 0, " \u6B21", usage.last_used_at ? ' · 最近 ' + adminFormatTime(usage.last_used_at, true) : '', usage.total ? /*#__PURE__*/React.createElement("button", {
+    className: "df-admin-linkbutton",
+    style: {
+      marginLeft: 8
+    },
+    onClick: function () {
+      onShowTasks(skill);
+    }
+  }, "\u67E5\u770B\u76F8\u5173\u4EFB\u52A1 \u2192") : null)), warnings.length || skipped.length ? /*#__PURE__*/React.createElement("section", {
+    className: "df-admin-detailsection"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-detailtitle"
+  }, "\u4E0A\u4F20\u65F6\u7684\u63D0\u793A"), warnings.map(function (text, index) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-faint",
+      key: index,
+      style: {
+        lineHeight: 1.8
+      }
+    }, "\xB7 ", text);
+  }), skipped.length ? /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-code"
+  }, '已跳过的文件：\n' + skipped.join('\n')) : null) : null, /*#__PURE__*/React.createElement("section", {
+    className: "df-admin-detailsection"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-detailtitle"
+  }, "\u6587\u4EF6\u5185\u5BB9\uFF08", skill.file_count, " \u4E2A \xB7 ", adminFormatBytes(skill.total_bytes), "\uFF09"), loading ? /*#__PURE__*/React.createElement(AdminEmpty, {
+    text: "\u6B63\u5728\u8BFB\u53D6\u6280\u80FD\u6587\u4EF6\u2026"
+  }) : null, error ? /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-error"
+  }, error) : null, files.map(function (file) {
+    return /*#__PURE__*/React.createElement("details", {
+      className: "df-admin-raw",
+      key: file.path,
+      open: file.path === 'SKILL.md'
+    }, /*#__PURE__*/React.createElement("summary", null, file.path, " ", /*#__PURE__*/React.createElement("span", {
+      className: "df-admin-faint"
+    }, "\xB7 ", adminFormatBytes(file.size))), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-code"
+    }, file.content));
+  }))));
+}
 function AdminPage({
   user,
   onBack
@@ -11774,8 +12027,14 @@ function AdminPage({
     status: '',
     userId: '',
     provider: '',
-    reference: ''
+    reference: '',
+    skill: ''
   });
+  var [skills, setSkills] = React.useState([]);
+  var [selectedSkill, setSelectedSkill] = React.useState(null);
+  var [skillDetail, setSkillDetail] = React.useState(null);
+  var [skillDetailLoading, setSkillDetailLoading] = React.useState(false);
+  var [skillDetailError, setSkillDetailError] = React.useState('');
   var [selectedTask, setSelectedTask] = React.useState(null);
   var [taskDetail, setTaskDetail] = React.useState(null);
   var [taskDetailLoading, setTaskDetailLoading] = React.useState(false);
@@ -11836,7 +12095,8 @@ function AdminPage({
       status: taskFilters.status,
       userId: taskFilters.userId,
       provider: taskFilters.provider,
-      reference: taskFilters.reference
+      reference: taskFilters.reference,
+      skill: taskFilters.skill
     }).then(function (data) {
       setTasks(data.tasks || []);
       setTaskTotal(data.total || 0);
@@ -11879,6 +12139,42 @@ function AdminPage({
   React.useEffect(function () {
     if (view === 'audit') loadOperations();
   }, [view, loadOperations]);
+  var loadSkills = React.useCallback(function () {
+    setLoading(true);
+    setError('');
+    return window.API.getAdminSkills().then(function (data) {
+      setSkills(data.skills || []);
+      setUpdatedAt(Date.now());
+    }).catch(function (err) {
+      setError(err.message || '用户技能加载失败');
+    }).finally(function () {
+      setLoading(false);
+    });
+  }, []);
+  React.useEffect(function () {
+    if (view === 'skills') loadSkills();
+  }, [view, loadSkills]);
+  React.useEffect(function () {
+    if (!selectedSkill) {
+      setSkillDetail(null);
+      setSkillDetailError('');
+      return;
+    }
+    var cancelled = false;
+    setSkillDetail(null);
+    setSkillDetailError('');
+    setSkillDetailLoading(true);
+    window.API.getAdminSkillDetail(selectedSkill.user_id, selectedSkill.name).then(function (data) {
+      if (!cancelled) setSkillDetail(data.skill || null);
+    }).catch(function (err) {
+      if (!cancelled) setSkillDetailError(err.message || '技能详情加载失败');
+    }).finally(function () {
+      if (!cancelled) setSkillDetailLoading(false);
+    });
+    return function () {
+      cancelled = true;
+    };
+  }, [selectedSkill]);
   React.useEffect(function () {
     if (!selectedTask) {
       setTaskDetail(null);
@@ -11918,18 +12214,20 @@ function AdminPage({
       });
     });
   };
-  var navItems = [['overview', '运营总览', I.grid], ['tasks', '任务中心', I.layers], ['services', '服务状态', I.zap], ['users', '用户权限', I.user], ['audit', '审计日志', I.file]];
+  var navItems = [['overview', '运营总览', I.grid], ['tasks', '任务中心', I.layers], ['services', '服务状态', I.zap], ['users', '用户权限', I.user], ['skills', '用户技能', I.wand], ['audit', '审计日志', I.file]];
   var viewTitles = {
     overview: ['运营总览', '任务健康、异常和使用趋势'],
     tasks: ['任务中心', '跨业务查询所有持久化任务'],
     services: ['服务状态', '本机资源与外部依赖连通性'],
     users: ['用户权限', '账号、角色和使用情况'],
+    skills: ['用户技能', '用户上传的技能、使用情况和原始内容'],
     audit: ['审计日志', '关键操作与请求上下文']
   };
   var doRefresh = function () {
     if (view === 'tasks') return loadTasks();
     if (view === 'audit') return loadOperations();
     if (view === 'users') return loadUsers();
+    if (view === 'skills') return loadSkills();
     if (view === 'services') return Promise.all([loadOverview(false), loadServiceProbes()]);
     return loadOverview(false);
   };
@@ -11939,8 +12237,8 @@ function AdminPage({
     return item.id === (user && user.id);
   }) || user || {};
   var successRate = summary.success_rate == null ? '-' : summary.success_rate + '%';
-  var volumeFoot = summary.volume_change == null ? '上一周期暂无可比数据' : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("strong", null, summary.volume_change >= 0 ? '+' : '', summary.volume_change, "%"), " \u8F83\u4E0A\u4E00\u5468\u671F");
-  var successFoot = summary.success_rate_change == null ? '仅统计已结束任务' : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("strong", null, summary.success_rate_change >= 0 ? '+' : '', summary.success_rate_change, "pp"), " \u8F83\u4E0A\u4E00\u5468\u671F");
+  var volumeFoot = summary.volume_change == null ? '上一周期暂无可比数据' : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("strong", null, summary.volume_change >= 0 ? '+' : '', summary.volume_change, "%"), " \u8F83\u4E0A\u4E00\u5468\u671F\u540C\u65F6\u6BB5");
+  var successFoot = summary.success_rate_change == null ? '仅统计已结束任务' : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("strong", null, summary.success_rate_change >= 0 ? '+' : '', summary.success_rate_change, "pp"), " \u8F83\u4E0A\u4E00\u5468\u671F\u540C\u65F6\u6BB5");
   var aiProvider = health && health.ai_provider || {};
   var apimartProvider = aiProvider.apimart || aiProvider;
   var services = [{
@@ -12261,7 +12559,15 @@ function AdminPage({
       value: "yes"
     }, "\u4F7F\u7528\u53C2\u8003\u56FE"), /*#__PURE__*/React.createElement("option", {
       value: "no"
-    }, "\u672A\u7528\u53C2\u8003\u56FE")), /*#__PURE__*/React.createElement("span", {
+    }, "\u672A\u7528\u53C2\u8003\u56FE")), taskFilters.skill ? /*#__PURE__*/React.createElement("button", {
+      className: "df-admin-control",
+      title: "\u6E05\u9664\u6280\u80FD\u7B5B\u9009",
+      onClick: function () {
+        setTaskFilter('skill', '');
+      }
+    }, "\u6280\u80FD\uFF1A", taskFilters.skill, " ", /*#__PURE__*/React.createElement(I.close, {
+      size: 11
+    })) : null, /*#__PURE__*/React.createElement("span", {
       className: "df-admin-pageinfo"
     }, "\u5171 ", taskTotal, " \u6761"), /*#__PURE__*/React.createElement("button", {
       className: "df-admin-control df-admin-pagebutton",
@@ -12370,6 +12676,51 @@ function AdminPage({
         lineHeight: 1.8
       }
     }, "\u57FA\u7840\u670D\u52A1\u4F1A\u5728\u5237\u65B0\u65F6\u6267\u884C\u5B9E\u65F6\u63A2\u6D4B\u3002\u8BA2\u9605\u751F\u56FE\u7EBF\u8DEF\u5728\u6BCF\u65E5 09:00 \u81F3 21:00 \u6BCF\u5C0F\u65F6\u63D0\u4EA4\u4E00\u6B21\u771F\u5B9E\u751F\u56FE\u4EFB\u52A1\uFF0C \u53EA\u6709\u6210\u529F\u751F\u6210\u5E76\u53D6\u56DE\u56FE\u7247\u624D\u4F1A\u6807\u8BB0\u4E3A\u53EF\u7528\uFF1B\u63A2\u6D4B\u7ED3\u679C\u4E0D\u4F1A\u8BA1\u5165\u7528\u6237\u4EFB\u52A1\u4E0E\u4E1A\u52A1\u7EDF\u8BA1\u3002")));
+  };
+  var renderSkills = function () {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-card"
+    }, skills.length ? /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-tablewrap"
+    }, /*#__PURE__*/React.createElement("table", {
+      className: "df-admin-table"
+    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\u7528\u6237"), /*#__PURE__*/React.createElement("th", null, "\u6280\u80FD"), /*#__PURE__*/React.createElement("th", null, "\u6587\u4EF6"), /*#__PURE__*/React.createElement("th", null, "\u4E0A\u4F20\u63D0\u793A"), /*#__PURE__*/React.createElement("th", null, "\u4F7F\u7528"), /*#__PURE__*/React.createElement("th", null, "\u6700\u8FD1\u4F7F\u7528"), /*#__PURE__*/React.createElement("th", null, "\u4E0A\u4F20\u65F6\u95F4"))), /*#__PURE__*/React.createElement("tbody", null, skills.map(function (item) {
+      var usage = item.usage || {};
+      var account = users.find(function (u) {
+        return u.id === item.user_id;
+      });
+      var hints = (item.warnings || []).length;
+      return /*#__PURE__*/React.createElement("tr", {
+        className: "is-clickable",
+        key: item.user_id + ':' + item.name,
+        onClick: function () {
+          setSelectedSkill(Object.assign({}, item, account ? {
+            display_name: account.display_name,
+            username: account.username
+          } : {}));
+        }
+      }, /*#__PURE__*/React.createElement("td", null, adminUserLabel(account || item)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", null, item.title || item.name), /*#__PURE__*/React.createElement("div", {
+        className: "df-admin-ellipsis df-admin-faint"
+      }, item.description || item.name)), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted"
+      }, item.file_count, " \u4E2A \xB7 ", adminFormatBytes(item.total_bytes)), /*#__PURE__*/React.createElement("td", null, hints ? /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: '#bd741d'
+        }
+      }, hints, " \u6761") : /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-faint"
+      }, "\u65E0")), /*#__PURE__*/React.createElement("td", null, usage.total || 0, " \u6B21", usage.failed ? /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: '#d64545'
+        }
+      }, " \xB7 \u5931\u8D25 ", usage.failed) : null), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted"
+      }, usage.last_used_at ? adminFormatTime(usage.last_used_at, true) : '未使用'), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted"
+      }, adminFormatTime(item.uploaded_at, true)));
+    })))) : /*#__PURE__*/React.createElement(AdminEmpty, {
+      text: loading ? '正在加载用户技能…' : '还没有用户上传技能'
+    }));
   };
   var renderAudit = function () {
     return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
@@ -12528,7 +12879,7 @@ function AdminPage({
     }
   }, /*#__PURE__*/React.createElement("option", {
     value: "24"
-  }, "1 \u5929\u5185"), /*#__PURE__*/React.createElement("option", {
+  }, "\u4ECA\u5929"), /*#__PURE__*/React.createElement("option", {
     value: "168"
   }, "\u6700\u8FD1 7 \u5929"), /*#__PURE__*/React.createElement("option", {
     value: "720"
@@ -12559,7 +12910,24 @@ function AdminPage({
     },
     showTestUsers: showTestUsers,
     onToggleShowTest: handleToggleShowTestUsers
-  }) : null, view === 'audit' ? renderAudit() : null))), /*#__PURE__*/React.createElement(AdminTaskDrawer, {
+  }) : null, view === 'skills' ? renderSkills() : null, view === 'audit' ? renderAudit() : null))), /*#__PURE__*/React.createElement(AdminSkillDrawer, {
+    skill: selectedSkill,
+    detail: skillDetail,
+    loading: skillDetailLoading,
+    error: skillDetailError,
+    onClose: function () {
+      setSelectedSkill(null);
+    },
+    onShowTasks: function (item) {
+      setSelectedSkill(null);
+      setTaskOffset(0);
+      setTaskFilters(Object.assign({}, taskFilters, {
+        userId: item.user_id,
+        skill: item.name
+      }));
+      setView('tasks');
+    }
+  }), /*#__PURE__*/React.createElement(AdminTaskDrawer, {
     task: selectedTask,
     detail: taskDetail,
     loading: taskDetailLoading,

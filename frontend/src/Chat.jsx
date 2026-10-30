@@ -783,8 +783,10 @@ const AgentWelcome = () => {
   );
 };
 
-const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greetingKey, onQuickReply, agentEnabled, onPublishInspiration, onUnpublishInspiration, onRetry, onEditResend, agentSkills, onPickSkill }) => {
+const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greetingKey, onQuickReply, agentEnabled, onPublishInspiration, onUnpublishInspiration, onRetry, onEditResend, agentSkills, onPickSkill, onUploadSkill, onDeleteSkill, skillUploading }) => {
   const scrollRef = React.useRef(null);
+  const skillFileRef = React.useRef(null);
+  const [hoverSkill, setHoverSkill] = React.useState('');
   const contentRef = React.useRef(null);
   const stickRef = React.useRef(true);
   const prevLenRef = React.useRef(messages.length);
@@ -863,28 +865,75 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
             <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
               {greeting.sub}
             </div>
-            {onPickSkill && agentSkills && agentSkills.length > 0 && (
+            {onPickSkill && (
               <div style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
-                <div style={{ fontSize: 11, color: 'var(--ink-3)', padding: '0 2px' }}>技能</div>
-                {agentSkills.map((skill) => (
-                  <button
-                    key={skill.name}
-                    type="button"
-                    onClick={() => onPickSkill(skill)}
-                    title={skill.summary || skill.title || skill.name}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px', borderRadius: 10,
-                      background: 'var(--panel)', border: '1px solid var(--line-2)', textAlign: 'left',
-                      fontSize: 12, lineHeight: 1.5, color: 'var(--ink)', transition: 'border-color 120ms, background 120ms',
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 2px' }}>
+                  <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>技能</span>
+                  {onUploadSkill && (
+                    <button
+                      type="button"
+                      onClick={() => { if (skillFileRef.current) skillFileRef.current.click(); }}
+                      disabled={skillUploading}
+                      title="上传技能：包含 SKILL.md 的 .zip，或单个 .md 文件"
+                      aria-label="上传技能"
+                      style={{ width: 20, height: 20, padding: 0, display: 'grid', placeItems: 'center', borderRadius: 5, color: 'var(--ink-3)', cursor: skillUploading ? 'default' : 'pointer' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--panel-2)'; e.currentTarget.style.color = 'var(--ink)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; }}
+                    ><I.plus size={13}/></button>
+                  )}
+                  <input
+                    ref={skillFileRef}
+                    type="file"
+                    accept=".zip,.md"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const file = e.target.files && e.target.files[0];
+                      e.target.value = '';
+                      if (file && onUploadSkill) onUploadSkill(file);
                     }}
-                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--line)'; e.currentTarget.style.background = 'var(--panel-2)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--line-2)'; e.currentTarget.style.background = 'var(--panel)'; }}
+                  />
+                </div>
+                {(agentSkills || []).map((skill) => (
+                  <div
+                    key={skill.name}
+                    style={{ position: 'relative' }}
+                    onMouseEnter={() => setHoverSkill(skill.name)}
+                    onMouseLeave={() => setHoverSkill('')}
                   >
-                    <span style={{ color: 'var(--ink-3)', display: 'inline-flex', flexShrink: 0 }}><I.wand size={13}/></span>
-                    <span style={{ fontWeight: 600, flexShrink: 0 }}>{skill.title || skill.name}</span>
-                    {skill.summary && <span style={{ color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{skill.summary}</span>}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => onPickSkill(skill)}
+                      title={skill.summary || skill.description || skill.title || skill.name}
+                      style={{
+                        width: '100%',
+                        display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px', borderRadius: 10,
+                        background: hoverSkill === skill.name ? 'var(--panel-2)' : 'var(--panel)',
+                        border: '1px solid ' + (hoverSkill === skill.name ? 'var(--line)' : 'var(--line-2)'), textAlign: 'left',
+                        fontSize: 12, lineHeight: 1.5, color: 'var(--ink)', transition: 'border-color 120ms, background 120ms',
+                        paddingRight: skill.scope === 'user' ? 34 : 11,
+                      }}
+                    >
+                      <span style={{ color: 'var(--ink-3)', display: 'inline-flex', flexShrink: 0 }}><I.wand size={13}/></span>
+                      <span style={{ fontWeight: 600, flexShrink: 0 }}>{skill.title || skill.name}</span>
+                      {skill.scope === 'user' && <span style={{ fontSize: 10, color: 'var(--ink-3)', border: '1px solid var(--line-2)', borderRadius: 4, padding: '0 4px', flexShrink: 0 }}>我的</span>}
+                      {(skill.summary || (skill.scope === 'user' && skill.description)) && <span style={{ color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{skill.summary || skill.description}</span>}
+                    </button>
+                    {skill.scope === 'user' && onDeleteSkill && hoverSkill === skill.name && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteSkill(skill)}
+                        title="删除技能"
+                        aria-label={'删除技能 ' + (skill.title || skill.name)}
+                        style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', width: 22, height: 22, padding: 0, display: 'grid', placeItems: 'center', borderRadius: 5, color: 'var(--ink-3)', cursor: 'pointer' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger)'; e.currentTarget.style.background = 'var(--panel)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--ink-3)'; e.currentTarget.style.background = 'transparent'; }}
+                      ><I.trash size={12}/></button>
+                    )}
+                  </div>
                 ))}
+                {skillUploading && (
+                  <div style={{ padding: '9px 11px', borderRadius: 10, border: '1px dashed var(--line-2)', fontSize: 12, color: 'var(--ink-3)' }}>正在添加技能…</div>
+                )}
               </div>
             )}
           </div>
@@ -1638,6 +1687,11 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
     if (!match) return { skill: '', prompt: original };
     return { skill: match[1], prompt: String(match[2] || '').trimStart() };
   }, []);
+
+  React.useEffect(function() {
+    if (!selectedSkill || !agentSkills.length) return;
+    if (!agentSkills.some(function(skill) { return skill && skill.name === selectedSkill; })) setSelectedSkill('');
+  }, [agentSkills, selectedSkill]);
 
   const activeSkillInfo = React.useMemo(function() {
     const parsed = parseSkillInvocation(text);
@@ -5785,6 +5839,47 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     if (!skill || !skill.name) return;
     setLocalSeed({ text: '', skill: skill.name });
   }, []);
+  const [skillUploading, setSkillUploading] = React.useState(false);
+  const refreshAgentSkills = React.useCallback(function() {
+    return window.API.listAgentSkills().then(function(skills) {
+      setAgentSkills(Array.isArray(skills) ? skills : []);
+    });
+  }, []);
+  const handleUploadSkill = React.useCallback(async function(file) {
+    setSkillUploading(true);
+    try {
+      let result;
+      try {
+        result = await window.API.uploadAgentSkill(file, false);
+      } catch (err) {
+        if (err.status !== 409) throw err;
+        const ok = await window.dfConfirm({ title: '覆盖同名技能？', message: err.message + '，上传后会覆盖原来的内容。', confirmText: '覆盖' });
+        if (!ok) return;
+        result = await window.API.uploadAgentSkill(file, true);
+      }
+      await refreshAgentSkills();
+      const skill = result.skill || {};
+      const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+      handlePickSkill(skill);
+      window.dfToast('已添加技能「' + (skill.title || skill.name) + '」' + (warnings.length ? '。' + warnings.join('；') : ''), { tone: warnings.length ? 'warn' : 'ok', duration: warnings.length ? 6000 : 3200 });
+    } catch (err) {
+      window.dfToast('添加技能失败：' + ((err && err.message) || err), { tone: 'danger' });
+    } finally {
+      setSkillUploading(false);
+    }
+  }, [handlePickSkill, refreshAgentSkills]);
+  const handleDeleteSkill = React.useCallback(async function(skill) {
+    if (!skill || !skill.name) return;
+    const ok = await window.dfConfirm({ title: '删除技能「' + (skill.title || skill.name) + '」？', message: '删除后无法恢复。', confirmText: '删除', danger: true });
+    if (!ok) return;
+    try {
+      await window.API.deleteAgentSkill(skill.name);
+      await refreshAgentSkills();
+      window.dfToast('已删除技能「' + (skill.title || skill.name) + '」', { tone: 'ok' });
+    } catch (err) {
+      window.dfToast('删除技能失败：' + ((err && err.message) || err), { tone: 'danger' });
+    }
+  }, [refreshAgentSkills]);
 
   // 技能列表同时供欢迎页和输入框使用
   React.useEffect(() => {
@@ -6367,7 +6462,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         </div>
       )}
 
-      <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration} onRetry={handleRetryAiImage} onEditResend={handleEditResend} agentSkills={agentSkills} onPickSkill={handlePickSkill}/>
+      <ChatReturned messages={messages} template={template} onCompose={handleCompose} isGenerating={isLoading} user={user} greetingKey={greetingResetKey} onQuickReply={handleQuickReply} agentEnabled={agentEnabled} onPublishInspiration={handlePublishInspiration} onUnpublishInspiration={handleUnpublishInspiration} onRetry={handleRetryAiImage} onEditResend={handleEditResend} agentSkills={agentSkills} onPickSkill={handlePickSkill} onUploadSkill={handleUploadSkill} onDeleteSkill={handleDeleteSkill} skillUploading={skillUploading}/>
 
       <Composer
         onSend={handleSend}

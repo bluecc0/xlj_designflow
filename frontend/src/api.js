@@ -170,6 +170,22 @@
     listAgentSkills: function() {
       return request('/agent-skills').then(function(res) { return res.skills || []; });
     },
+    uploadAgentSkill: function(file, overwrite) {
+      var form = new FormData();
+      form.append('file', file);
+      form.append('overwrite', overwrite ? 'true' : 'false');
+      return fetch(BASE + '/agent-skills', { method: 'POST', credentials: 'include', body: form }).then(function(resp) {
+        return resp.json().catch(function() { return {}; }).then(function(data) {
+          if (resp.ok) return data;
+          var err = new Error((data && data.detail) || ('HTTP ' + resp.status));
+          err.status = resp.status;
+          throw err;
+        });
+      });
+    },
+    deleteAgentSkill: function(name) {
+      return request('/agent-skills/' + encodeURIComponent(name), { method: 'DELETE' });
+    },
     streamSkillPlan: function(skillName, prompt, refImages, handlers) {
       handlers = handlers || {};
       var form = new FormData();
@@ -386,7 +402,14 @@
       if (options.search) qs += '&search=' + encodeURIComponent(options.search);
       if (options.provider) qs += '&provider=' + encodeURIComponent(options.provider);
       if (options.reference) qs += '&reference=' + encodeURIComponent(options.reference);
+      if (options.skill) qs += '&skill=' + encodeURIComponent(options.skill);
       return request('/admin/tasks' + qs);
+    },
+    getAdminSkills: function() {
+      return request('/admin/skills');
+    },
+    getAdminSkillDetail: function(userId, name) {
+      return request('/admin/skills/' + encodeURIComponent(userId) + '/' + encodeURIComponent(name));
     },
     getAdminTaskDetail: function(taskType, taskId) {
       return request('/admin/tasks/' + encodeURIComponent(taskType) + '/' + encodeURIComponent(taskId));

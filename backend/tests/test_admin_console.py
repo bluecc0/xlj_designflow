@@ -4,6 +4,7 @@ import json
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -576,3 +577,96 @@ class AdminReferenceImagesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AdminSkillUsageTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_db_path = job_store._DB_PATH
+        self.original_login_users = list(job_store.settings.allowed_login_users)
+        job_store.settings.allowed_login_users = []
+        job_store._DB_PATH = Path(self.temp_dir.name) / "skill-usage.db"
+        job_store.init_db()
+        now = time.time()
+        with job_store._connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO ai_image_jobs
+                  (id, user_id, status, model, prompt, size, progress, created_at, request_meta_json)
+                VALUES (?, ?, ?, 'gpt-image-2', 'p', 'auto', 0, ?, ?)
+                """,
+                [
+                    ("s1", "alice", "done", now - 30, '{"skill": "poster-main"}'),
+                    ("s2", "alice", "failed", now - 20, '{"skill": "poster-main"}'),
+                    ("s3", "bob", "done", now - 10, '{"skill": "poster-main"}'),
+                    ("s4", "alice", "done", now - 5, '{"skill": ""}'),
+                    ("s5", "alice", "done", now, "not json"),
+                ],
+            )
+
+    def tearDown(self) -> None:
+        job_store._DB_PATH = self.original_db_path
+        job_store.settings.allowed_login_users = self.original_login_users
+        self.temp_dir.cleanup()
+
+    def test_usage_stats_group_by_user_and_skill(self) -> None:
+        stats = job_store.load_skill_usage_stats()
+        self.assertEqual(set(stats), {("alice", "poster-main"), ("bob", "poster-main")})
+        self.assertEqual(stats[("alice", "poster-main")]["total"], 2)
+        self.assertEqual(stats[("alice", "poster-main")]["failed"], 1)
+
+    def test_admin_tasks_filter_by_skill_and_user(self) -> None:
+        tasks, total = job_store.load_admin_tasks(skill="poster-main", user_id="alice")
+        self.assertEqual(total, 2)
+        self.assertEqual(sorted(task["id"] for task in tasks), ["s1", "s2"])
+
+
+class AdminOverviewCalendarRangeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_db_path = job_store._DB_PATH
+        self.original_login_users = list(job_store.settings.allowed_login_users)
+        job_store.settings.allowed_login_users = []
+        job_store._DB_PATH = Path(self.temp_dir.name) / "calendar.db"
+        job_store.init_db()
+        self.today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        self.now = (self.today + timedelta(hours=10)).timestamp()
+        rows = [
+            ("today-early", self.today + timedelta(minutes=30)),
+            ("yesterday-late", self.today - timedelta(hours=1)),
+            ("yesterday-morning", self.today - timedelta(hours=19)),
+            ("six-days-ago", self.today - timedelta(days=6) + timedelta(hours=1)),
+            ("seven-days-ago", self.today - timedelta(days=7) + timedelta(hours=1)),
+        ]
+        with job_store._connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO ai_image_jobs (id, user_id, status, model, prompt, size, progress, created_at)
+                VALUES (?, 'u1', 'done', 'gpt-image-2', 'p', 'auto', 100, ?)
+                """,
+                [(task_id, at.timestamp()) for task_id, at in rows],
+            )
+
+    def tearDown(self) -> None:
+        job_store._DB_PATH = self.original_db_path
+        job_store.settings.allowed_login_users = self.original_login_users
+        self.temp_dir.cleanup()
+
+    def _overview(self, hours: int) -> dict:
+        with patch("backend.job_store.time.time", return_value=self.now):
+            return job_store.load_admin_overview(hours)
+
+    def test_today_starts_at_midnight_and_compares_same_period_yesterday(self) -> None:
+        overview = self._overview(24)
+        # 昨天 23:00 的任务距此刻不足 24 小时，但不属于“今天”
+        self.assertEqual(overview["summary"]["total"], 1)
+        # 上一周期是昨天 0 点到昨天 10 点：只含昨天 05:00 那条
+        self.assertEqual(overview["previous_summary"]["total"], 1)
+        self.assertEqual(overview["series"][0]["timestamp"], self.today.timestamp())
+        self.assertEqual(len(overview["series"]), 12)
+
+    def test_seven_days_includes_today_and_previous_six_calendar_days(self) -> None:
+        overview = self._overview(168)
+        self.assertEqual(overview["summary"]["total"], 4)
+        self.assertEqual(len(overview["series"]), 7)
+        self.assertEqual(overview["series"][0]["timestamp"], (self.today - timedelta(days=6)).timestamp())

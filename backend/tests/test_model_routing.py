@@ -197,7 +197,7 @@ class ModelRoutingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_chat_endpoint_uses_new_fallback(self):
         with self.transport(lambda r: httpx.Response(503) if r.url.host == "sub.test" else completion("回答")):
-            result = await main.chat_endpoint(main.ChatRequest(messages=[{"role": "user", "content": "你好"}]))
+            result = await main.chat_endpoint(main.ChatRequest(messages=[{"role": "user", "content": "你好"}]), Mock())
         self.assertEqual(result, {"reply": "回答"})
         self.assertEqual([r.url.host for r in self.requests], ["sub.test", "api.test"])
 
