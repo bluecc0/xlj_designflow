@@ -883,7 +883,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             Path(__file__).resolve().parents[2] / "frontend" / "src" / "Chat.jsx"
         ).read_text(encoding="utf-8")
         skill_start = chat_source.index(
-            "if (activeSkill && aiOptions.workflow !== 'download')"
+            "if (activeSkill && aiOptions.workflow !== 'download' && !agentEnabled)"
         )
         agent_start = chat_source.index(
             "if (agentEnabled && aiOptions.workflow !== 'ai-image')"

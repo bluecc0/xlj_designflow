@@ -176,7 +176,8 @@ def init_db() -> None:
                 updated_at       REAL NOT NULL
             )
         """)
-        for col, typ in [("user_id", "TEXT"), ("result_frame_names_json", "TEXT"), ("recovery_json", "TEXT")]:
+        for col, typ in [("user_id", "TEXT"), ("result_frame_names_json", "TEXT"), ("recovery_json", "TEXT"),
+                         ("source", "TEXT")]:
             try:
                 conn.execute(f"ALTER TABLE special_jobs ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
@@ -637,15 +638,17 @@ def save_special_job(job) -> None:
                 updated_at       REAL NOT NULL
             )
         """)
-        try:
-            conn.execute("ALTER TABLE special_jobs ADD COLUMN result_frame_names_json TEXT")
-        except sqlite3.OperationalError:
-            pass
+        for col in ("result_frame_names_json", "source"):
+            try:
+                conn.execute(f"ALTER TABLE special_jobs ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass
         conn.execute("""
             INSERT INTO special_jobs
               (id, user_id, status, sku, request_json, result_paths_json, result_frame_ids_json, result_frame_names_json,
-               penpot_file_id, penpot_page_id, penpot_edit_url, error, progress_json, created_at, updated_at, recovery_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               penpot_file_id, penpot_page_id, penpot_edit_url, error, progress_json, created_at, updated_at, recovery_json,
+               source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 user_id              = excluded.user_id,
                 status               = excluded.status,
@@ -658,7 +661,9 @@ def save_special_job(job) -> None:
                 error               = excluded.error,
                 progress_json       = excluded.progress_json,
                 updated_at          = excluded.updated_at,
-                recovery_json       = excluded.recovery_json
+                recovery_json       = excluded.recovery_json,
+                -- 来源只在创建时确定；恢复时重建的任务对象没有来源，不能把它清掉
+                source              = COALESCE(NULLIF(excluded.source, ''), special_jobs.source)
         """, (
             job.id,
             getattr(job, "user_id", None),
@@ -676,6 +681,7 @@ def save_special_job(job) -> None:
             job.created_at or now,
             now,
             json.dumps(job.recovery, ensure_ascii=False),
+            getattr(job, "source", "") or "",
         ))
         conn.commit()
 
@@ -2106,335 +2112,6 @@ def load_editor_snapshot(user_id: str) -> tuple[str | None, int]:
     return row["snapshot_json"], int(row["revision"] or 1)
 
 
-def create_agent_project(
-    *,
-    user_id: str,
-    title: str,
-    status: str,
-    phase: dict,
-    intent: dict,
-    brief: Optional[dict] = None,
-    current_prompt: Optional[dict] = None,
-    current_image: Optional[dict] = None,
-    conversation_summary: str = "",
-    metadata: Optional[dict] = None,
-    created_at: float | None = None,
-) -> dict:
-    now = created_at or time.time()
-    project_id = uuid.uuid4().hex
-    clean_title = (title or "").strip() or "新项目"
-    with _lock, _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO agent_projects
-              (id, user_id, title, status, phase_json, intent_json, brief_json, current_prompt_json, current_image_json, conversation_summary, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                project_id,
-                user_id,
-                clean_title,
-                status,
-                json.dumps(phase or {}, ensure_ascii=False),
-                json.dumps(intent or {}, ensure_ascii=False),
-                json.dumps(brief, ensure_ascii=False) if brief is not None else None,
-                json.dumps(current_prompt, ensure_ascii=False) if current_prompt is not None else None,
-                json.dumps(current_image, ensure_ascii=False) if current_image is not None else None,
-                conversation_summary or "",
-                json.dumps(metadata or {}, ensure_ascii=False),
-                now,
-                now,
-            ),
-        )
-        conn.commit()
-    return get_agent_project(project_id, user_id=user_id) or {}
-
-
-def get_agent_project(project_id: str, user_id: Optional[str] = None) -> Optional[dict]:
-    with _connect() as conn:
-        if user_id:
-            row = conn.execute(
-                "SELECT * FROM agent_projects WHERE id = ? AND user_id = ?",
-                (project_id, user_id),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT * FROM agent_projects WHERE id = ?",
-                (project_id,),
-            ).fetchone()
-    if not row:
-        return None
-    return _row_to_agent_project(row)
-
-
-def update_agent_project(
-    project_id: str,
-    *,
-    title: Optional[str] = None,
-    status: Optional[str] = None,
-    phase: Optional[dict] = None,
-    intent: Optional[dict] = None,
-    brief: Optional[dict] = None,
-    current_prompt: Optional[dict] = None,
-    current_image: Optional[dict] = None,
-    conversation_summary: Optional[str] = None,
-    metadata: Optional[dict] = None,
-    updated_at: float | None = None,
-) -> Optional[dict]:
-    existing = get_agent_project(project_id)
-    if not existing:
-        return None
-    now = updated_at or time.time()
-    with _lock, _connect() as conn:
-        conn.execute(
-            """
-            UPDATE agent_projects
-            SET title = ?, status = ?, phase_json = ?, intent_json = ?, brief_json = ?, current_prompt_json = ?, current_image_json = ?, conversation_summary = ?, metadata_json = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                (title if title is not None else existing["title"]),
-                (status if status is not None else existing["status"]),
-                json.dumps(phase if phase is not None else existing["phase"], ensure_ascii=False),
-                json.dumps(intent if intent is not None else existing["intent"], ensure_ascii=False),
-                json.dumps(brief if brief is not None else existing["brief"], ensure_ascii=False) if (brief if brief is not None else existing["brief"]) is not None else None,
-                json.dumps(current_prompt if current_prompt is not None else existing["current_prompt"], ensure_ascii=False) if (current_prompt if current_prompt is not None else existing["current_prompt"]) is not None else None,
-                json.dumps(current_image if current_image is not None else existing["current_image"], ensure_ascii=False) if (current_image if current_image is not None else existing["current_image"]) is not None else None,
-                conversation_summary if conversation_summary is not None else (existing["conversation_summary"] or ""),
-                json.dumps(metadata if metadata is not None else existing["metadata"], ensure_ascii=False),
-                now,
-                project_id,
-            ),
-        )
-        conn.commit()
-    return get_agent_project(project_id)
-
-
-def list_agent_projects(limit: int = 20, user_id: Optional[str] = None, status: Optional[str] = None) -> list[dict]:
-    query = "SELECT * FROM agent_projects"
-    params: list = []
-    clauses = []
-    if user_id:
-        clauses.append("user_id = ?")
-        params.append(user_id)
-    if status:
-        clauses.append("status = ?")
-        params.append(status)
-    if clauses:
-        query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY updated_at DESC LIMIT ?"
-    params.append(limit)
-    with _connect() as conn:
-        rows = conn.execute(query, tuple(params)).fetchall()
-    return [_row_to_agent_project(row) for row in rows]
-
-
-def delete_agent_project(project_id: str, user_id: Optional[str] = None) -> bool:
-    with _lock, _connect() as conn:
-        if user_id:
-            row = conn.execute(
-                "SELECT id FROM agent_projects WHERE id = ? AND user_id = ?",
-                (project_id, user_id),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT id FROM agent_projects WHERE id = ?",
-                (project_id,),
-            ).fetchone()
-        if not row:
-            return False
-        conn.execute("DELETE FROM agent_messages WHERE project_id = ?", (project_id,))
-        conn.execute("DELETE FROM agent_images WHERE project_id = ?", (project_id,))
-        if user_id:
-            conn.execute("DELETE FROM agent_projects WHERE id = ? AND user_id = ?", (project_id, user_id))
-        else:
-            conn.execute("DELETE FROM agent_projects WHERE id = ?", (project_id,))
-        conn.commit()
-        return True
-
-
-def append_agent_message(
-    *,
-    project_id: str,
-    user_id: str,
-    role: str,
-    type: str,
-    text: str | None = None,
-    payload: Optional[dict] = None,
-    decision_action: str | None = None,
-    created_at: float | None = None,
-) -> int:
-    now = created_at or time.time()
-    with _lock, _connect() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO agent_messages
-              (project_id, user_id, role, type, text, payload_json, decision_action, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                project_id,
-                user_id,
-                role,
-                type,
-                text,
-                json.dumps(payload or {}, ensure_ascii=False),
-                decision_action,
-                now,
-            ),
-        )
-        conn.execute(
-            "UPDATE agent_projects SET updated_at = ? WHERE id = ?",
-            (now, project_id),
-        )
-        conn.commit()
-        return int(cur.lastrowid)
-
-
-def load_agent_messages(project_id: str, user_id: Optional[str] = None, limit: Optional[int] = None) -> list[dict]:
-    with _connect() as conn:
-        if user_id:
-            query = """
-                SELECT m.*
-                FROM agent_messages m
-                JOIN agent_projects p ON p.id = m.project_id
-                WHERE m.project_id = ? AND p.user_id = ?
-                ORDER BY m.created_at ASC, m.id ASC
-            """
-            params = [project_id, user_id]
-        else:
-            query = "SELECT * FROM agent_messages WHERE project_id = ? ORDER BY created_at ASC, id ASC"
-            params = [project_id]
-        rows = conn.execute(query, tuple(params)).fetchall()
-    items = [
-        {
-            "id": row["id"],
-            "project_id": row["project_id"],
-            "user_id": row["user_id"],
-            "role": row["role"],
-            "type": row["type"],
-            "text": row["text"] or "",
-            "payload": json.loads(row["payload_json"] or "{}"),
-            "decision_action": row["decision_action"],
-            "created_at": row["created_at"],
-        }
-        for row in rows
-    ]
-    if limit is not None and limit > 0:
-        return items[-limit:]
-    return items
-
-
-def create_agent_image(
-    *,
-    project_id: str,
-    user_id: str,
-    provider: str,
-    model: str,
-    prompt: dict,
-    image_url: str,
-    vlm_analysis: Optional[dict] = None,
-    parent_image_id: Optional[str] = None,
-    iteration_number: int = 1,
-    created_at: float | None = None,
-) -> dict:
-    now = created_at or time.time()
-    image_id = uuid.uuid4().hex
-    with _lock, _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO agent_images
-              (id, project_id, user_id, parent_image_id, iteration_number, provider, model, prompt_json, image_url, vlm_analysis_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                image_id,
-                project_id,
-                user_id,
-                parent_image_id,
-                iteration_number,
-                provider,
-                model,
-                json.dumps(prompt or {}, ensure_ascii=False),
-                image_url,
-                json.dumps(vlm_analysis or {}, ensure_ascii=False),
-                now,
-            ),
-        )
-        conn.execute(
-            "UPDATE agent_projects SET updated_at = ? WHERE id = ?",
-            (now, project_id),
-        )
-        conn.commit()
-    return get_agent_image(image_id) or {}
-
-
-def get_agent_image(image_id: str) -> Optional[dict]:
-    with _connect() as conn:
-        row = conn.execute("SELECT * FROM agent_images WHERE id = ?", (image_id,)).fetchone()
-    if not row:
-        return None
-    return _row_to_agent_image(row)
-
-
-def list_agent_images(project_id: str, user_id: Optional[str] = None) -> list[dict]:
-    with _connect() as conn:
-        if user_id:
-            rows = conn.execute(
-                """
-                SELECT i.*
-                FROM agent_images i
-                JOIN agent_projects p ON p.id = i.project_id
-                WHERE i.project_id = ? AND p.user_id = ?
-                ORDER BY i.created_at ASC
-                """,
-                (project_id, user_id),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM agent_images WHERE project_id = ? ORDER BY created_at ASC",
-                (project_id,),
-            ).fetchall()
-    return [_row_to_agent_image(row) for row in rows]
-
-
-def _row_to_agent_project(row: sqlite3.Row) -> dict:
-    return {
-        "id": row["id"],
-        "user_id": row["user_id"],
-        "title": row["title"],
-        "status": row["status"],
-        "phase": json.loads(row["phase_json"] or "{}"),
-        "intent": json.loads(row["intent_json"] or "{}"),
-        "brief": json.loads(row["brief_json"]) if row["brief_json"] else None,
-        "current_prompt": json.loads(row["current_prompt_json"]) if row["current_prompt_json"] else None,
-        "current_image": json.loads(row["current_image_json"]) if row["current_image_json"] else None,
-        "conversation_summary": row["conversation_summary"] or "",
-        "metadata": json.loads(row["metadata_json"] or "{}"),
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
-
-
-def _row_to_agent_image(row: sqlite3.Row) -> dict:
-    return {
-        "id": row["id"],
-        "project_id": row["project_id"],
-        "user_id": row["user_id"],
-        "parent_image_id": row["parent_image_id"],
-        "iteration_number": row["iteration_number"],
-        "provider": row["provider"],
-        "model": row["model"],
-        "prompt": json.loads(row["prompt_json"] or "{}"),
-        "image_url": row["image_url"],
-        "vlm_analysis": json.loads(row["vlm_analysis_json"] or "{}"),
-        "user_feedback": row["user_feedback"],
-        "is_favorite": bool(row["is_favorite"]),
-        "user_rating": row["user_rating"],
-        "created_at": row["created_at"],
-    }
-
-
 # ─── 操作日志 ──────────────────────────────────────────────────────────────────
 
 def log_operation(*, user_id: str, username: str, action: str, detail: str = "", payload: str = "") -> None:
@@ -2622,39 +2299,39 @@ def _admin_task_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         return conn.execute(
             f"""
             SELECT 'compose' AS task_type, id, user_id, status, created_at,
-                   updated_at, error, '' AS model
+                   updated_at, error, '' AS model, '' AS source
             FROM jobs {where}
             UNION ALL
             SELECT 'special' AS task_type, id, user_id, status, created_at,
-                   updated_at, error, '' AS model
+                   updated_at, error, '' AS model, {_SPECIAL_SOURCE_SQL} AS source
             FROM special_jobs {where}
             UNION ALL
             SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
-                   COALESCE(updated_at, created_at) AS updated_at, error, model
+                   COALESCE(updated_at, created_at) AS updated_at, error, model, {_AI_SOURCE_SQL} AS source
             FROM ai_image_jobs {where}
             UNION ALL
             SELECT 'agent_image' AS task_type, id, user_id, 'done' AS status, created_at,
-                   created_at AS updated_at, '' AS error, model
+                   created_at AS updated_at, '' AS error, model, '' AS source
             FROM agent_images {where}
             """,
             tuple(params),
         ).fetchall()
     return conn.execute(
-        """
+        f"""
         SELECT 'compose' AS task_type, id, user_id, status, created_at,
-               updated_at, error, '' AS model
+               updated_at, error, '' AS model, '' AS source
         FROM jobs
         UNION ALL
         SELECT 'special' AS task_type, id, user_id, status, created_at,
-               updated_at, error, '' AS model
+               updated_at, error, '' AS model, {_SPECIAL_SOURCE_SQL} AS source
         FROM special_jobs
         UNION ALL
         SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
-               COALESCE(updated_at, created_at) AS updated_at, error, model
+               COALESCE(updated_at, created_at) AS updated_at, error, model, {_AI_SOURCE_SQL} AS source
         FROM ai_image_jobs
         UNION ALL
         SELECT 'agent_image' AS task_type, id, user_id, 'done' AS status, created_at,
-               created_at AS updated_at, '' AS error, model
+               created_at AS updated_at, '' AS error, model, '' AS source
         FROM agent_images
         """
     ).fetchall()
@@ -2835,6 +2512,33 @@ def prune_service_probes(service: str, before: float) -> list[str]:
     return image_urls
 
 
+def _agent_usage(since: float, test_uids: set, agent_tasks: list[dict]) -> dict:
+    """Agent 模式的使用情况：会话、轮次（用户每发一条需求算一轮）和它发起的生图 / 特殊品任务。"""
+    images = [item for item in agent_tasks if item["task_type"] == "ai_image"]
+    images_done = sum(1 for item in images if item["status"] == "done")
+    usage = {"sessions": 0, "turns": 0, "failed_turns": 0, "cancelled_turns": 0, "users": 0,
+             "images": len(images), "images_done": images_done,
+             "special": sum(1 for item in agent_tasks if item["task_type"] == "special"),
+             "images_per_turn": None}
+    where, params = "started_at >= ?", [since]
+    if test_uids:
+        where += f" AND user_id NOT IN ({','.join('?' for _ in test_uids)})"
+        params.extend(test_uids)
+    with _connect() as conn:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent2_turns'").fetchone():
+            return usage
+        row = conn.execute(f"""
+            SELECT COUNT(*) AS turns, COUNT(DISTINCT session_id) AS sessions, COUNT(DISTINCT user_id) AS users,
+                   SUM(status = 'failed') AS failed, SUM(status = 'cancelled') AS cancelled
+            FROM agent2_turns WHERE {where}
+        """, tuple(params)).fetchone()
+    usage.update(sessions=row["sessions"], turns=row["turns"], users=row["users"],
+                 failed_turns=row["failed"] or 0, cancelled_turns=row["cancelled"] or 0)
+    if usage["turns"]:
+        usage["images_per_turn"] = round(images_done / usage["turns"], 1)
+    return usage
+
+
 def load_admin_overview(hours: int = 24) -> dict:
     """Operational overview for Admin; all calculations are read-only."""
     requested_hours = int(hours)
@@ -2933,9 +2637,12 @@ def load_admin_overview(hours: int = 24) -> dict:
 
     breakdown = []
     for task_type in ("ai_image", "agent_image", "compose", "special"):
-        summary = summarize([item for item in current if item["task_type"] == task_type])
+        items = [item for item in current if item["task_type"] == task_type]
+        summary = summarize(items)
         summary["type"] = task_type
+        summary["agent"] = sum(1 for item in items if item.get("source") == "agent")  # 其中由 Agent 模式发起
         breakdown.append(summary)
+    agent_usage = _agent_usage(since, test_uids, [item for item in current if item.get("source") == "agent"])
 
     # 趋势图按整点 / 整天分桶，标签与时间段对齐
     if all_time:
@@ -3093,6 +2800,7 @@ def load_admin_overview(hours: int = 24) -> dict:
         "summary": current_summary,
         "previous_summary": previous_summary,
         "breakdown": breakdown,
+        "agent": agent_usage,
         "series": series,
         "health_timeline": health_timeline,
         "active_users": int(active_user_rows["c"] if active_user_rows else 0),
@@ -3108,6 +2816,14 @@ def load_admin_overview(hours: int = 24) -> dict:
             reverse=True,
         ),
     }
+
+
+# 任务来源：Agent 模式发起的生图 / 特殊品记为 agent，其余入口为空
+_AI_SOURCE_SQL = (
+    "CASE WHEN json_valid(request_meta_json) AND json_extract(request_meta_json, '$.source') = 'agent2' "
+    "THEN 'agent' ELSE '' END"
+)
+_SPECIAL_SOURCE_SQL = "CASE WHEN source = 'agent2' THEN 'agent' ELSE '' END"
 
 
 # 生图任务的 request_meta_json 里记录了所用技能名；非法 JSON 时视为未用技能
@@ -3149,6 +2865,7 @@ def load_admin_tasks(
     provider: str | None = None,
     reference: str | None = None,
     skill: str | None = None,
+    source: str | None = None,
 ) -> tuple[list[dict], int]:
     """Unified paginated task list used by the operations console."""
     safe_limit = max(1, min(int(limit or 50), 200))
@@ -3187,6 +2904,10 @@ def load_admin_tasks(
     if skill:
         clauses.append("skill = ?")
         params.append(skill)
+    if source == "agent":
+        clauses.append("source = 'agent'")
+    elif source == "normal":
+        clauses.append("source = ''")
     clean_search = (search or "").strip()
     if clean_search:
         clauses.append(
@@ -3207,20 +2928,21 @@ def load_admin_tasks(
             SELECT 'compose' AS task_type, id, user_id, status, created_at,
                    updated_at, error, '' AS model, request_json AS summary,
                    0 AS progress, '' AS image_url, 'penpot' AS provider,
-                   0 AS has_reference, NULL AS reference_count, '' AS resolution, '' AS skill
+                   0 AS has_reference, NULL AS reference_count, '' AS resolution, '' AS skill, '' AS source
             FROM jobs
             UNION ALL
             SELECT 'special' AS task_type, id, user_id, status, created_at,
                    updated_at, error, '' AS model, sku AS summary,
                    0 AS progress, '' AS image_url, 'penpot' AS provider,
-                   0 AS has_reference, NULL AS reference_count, '' AS resolution, '' AS skill
+                   0 AS has_reference, NULL AS reference_count, '' AS resolution, '' AS skill,
+                   {_SPECIAL_SOURCE_SQL} AS source
             FROM special_jobs
             UNION ALL
             SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
                    COALESCE(updated_at, created_at) AS updated_at, error, model, prompt AS summary,
                    progress, COALESCE(image_url, '') AS image_url, COALESCE(provider, '') AS provider,
                    has_reference, reference_count, COALESCE(resolution, '') AS resolution,
-                   {_SKILL_SQL} AS skill
+                   {_SKILL_SQL} AS skill, {_AI_SOURCE_SQL} AS source
             FROM ai_image_jobs
             UNION ALL
             SELECT 'agent_image' AS task_type, id, user_id, 'done' AS status, created_at,
@@ -3228,7 +2950,7 @@ def load_admin_tasks(
                    100 AS progress, COALESCE(image_url, '') AS image_url, COALESCE(provider, '') AS provider,
                    CASE WHEN parent_image_id IS NULL THEN 0 ELSE 1 END AS has_reference,
                    CASE WHEN parent_image_id IS NULL THEN 0 ELSE 1 END AS reference_count,
-                   '' AS resolution, '' AS skill
+                   '' AS resolution, '' AS skill, '' AS source
             FROM agent_images
         )
     """

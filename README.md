@@ -7,7 +7,7 @@ DesignFlow 是面向电商设计生产的本地 Web 工具：通过对话、Penp
 ## 维护原则
 
 1. 区分源码、构建产物和运行数据。源码需要提交，运行数据、密钥和本机日志不能提交。
-2. 主 UI、当前画布和旧 tldraw 画布是独立构建目标，改哪一边就重建哪一边。
+2. 主 UI 和画布（`editor-canvas`）是独立构建目标，改哪一边就重建哪一边。
 3. `8000` 是正式入口；`8003` 只用于隔离测试，不应作为正式用户入口。
 4. 8000 和 8003 不得同时写同一个 SQLite 文件。`jobs.db` 不通过 Git 同步。
 5. 构建成功不等于运行时安全。前端改动还要做 bundle 语法、`no-undef` 和浏览器关键路径检查。
@@ -28,12 +28,9 @@ DesignFlow 是面向电商设计生产的本地 Web 工具：通过对话、Penp
 | `frontend/build.py` | JSX 编译和内容哈希 bundle 生成器 |
 | `frontend/compiled/` | 当前生效的主 UI bundle |
 | `editor-canvas/` | 当前主画布，挂载 `/editor-canvas/` |
-| `editor-lab-tldraw/` | 旧 tldraw 画布，挂载 `/editor-beta/` |
 | `ensure_ui_build.py` | 启动前检查并重建前端和画布 |
 | `special_flows.json` | 特殊品字段流程配置 |
 | `slot_schema.json` | 普通合成字段别名和列映射 |
-
-正式主线使用 `editor-canvas`。`editor-lab-tldraw` 只用于兼容、回归或旧实现验证，修改其中一边不会自动更新另一边。
 
 ## 启动与端口
 
@@ -65,8 +62,6 @@ npm install
 npm run build
 cd ..
 ```
-
-修改旧 tldraw 画布后，在 `editor-lab-tldraw` 目录执行同样的 `npm install` 和 `npm run build`。产物分别是两个目录下的 `dist/`。
 
 启动前检查或强制重建：
 
@@ -178,7 +173,7 @@ Loom AI 是 DesignFlow 配套的 Photoshop CEP 插件，仍是实际工作流的
 
 按改动范围优先运行 `backend.tests.test_special_compose_detect`、`backend.tests.test_smart_routing` 和 `backend.tests.test_editor_snapshot_isolation`。提交前执行 `git status --short` 和 `git diff --check`。
 
-允许提交源码、测试、文档和经验证的 `frontend/compiled/`、`editor-canvas/dist/`、`editor-lab-tldraw/dist/`。禁止提交 `.env`、真实 key、`login_users.json`、`jobs.db`、`backups/`、`output/`、图库、模型、本机日志和 `frontend/whats-new.json`。
+允许提交源码、测试、文档和经验证的 `frontend/compiled/`、`editor-canvas/dist/`。禁止提交 `.env`、真实 key、`login_users.json`、`jobs.db`、`backups/`、`output/`、图库、模型、本机日志和 `frontend/whats-new.json`。
 
 推荐同步流程：`git fetch origin master`，检查工作区和差异，修改并测试后 `git add`、`git commit`、`git push origin master`，最后比较 `git rev-parse HEAD` 与 `git rev-parse origin/master`。远程有提交时先 review 再 pull；有未提交改动时不要直接 pull 覆盖。
 

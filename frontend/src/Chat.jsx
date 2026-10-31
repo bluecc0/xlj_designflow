@@ -760,8 +760,102 @@ const GREETINGS = [
 
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 
-const AgentWelcome = () => {
-  // Agent 模式专属欢迎页（不随机轮播）—— 简约版
+// 欢迎页的技能列表：普通模式和 Agent 模式共用
+const WelcomeSkills = ({ agentSkills, onPickSkill, onUploadSkill, onDeleteSkill, skillUploading }) => {
+  const skillFileRef = React.useRef(null);
+  const [hoverSkill, setHoverSkill] = React.useState('');
+  return (
+    <div style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 2px' }}>
+        <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>技能</span>
+        {onUploadSkill && (
+          <button
+            type="button"
+            onClick={() => { if (skillFileRef.current) skillFileRef.current.click(); }}
+            disabled={skillUploading}
+            title="上传技能：包含 SKILL.md 的 .zip，或单个 .md 文件"
+            aria-label="上传技能"
+            style={{ width: 20, height: 20, padding: 0, display: 'grid', placeItems: 'center', borderRadius: 5, color: 'var(--ink-3)', cursor: skillUploading ? 'default' : 'pointer' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--panel-2)'; e.currentTarget.style.color = 'var(--ink)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; }}
+          ><I.plus size={13}/></button>
+        )}
+        <input
+          ref={skillFileRef}
+          type="file"
+          accept=".zip,.md"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const file = e.target.files && e.target.files[0];
+            e.target.value = '';
+            if (file && onUploadSkill) onUploadSkill(file);
+          }}
+        />
+      </div>
+      {(agentSkills || []).map((skill) => (
+        <div
+          key={skill.name}
+          style={{ position: 'relative' }}
+          onMouseEnter={() => setHoverSkill(skill.name)}
+          onMouseLeave={() => setHoverSkill('')}
+        >
+          <button
+            type="button"
+            onClick={() => onPickSkill(skill)}
+            title={skill.summary || skill.description || skill.title || skill.name}
+            style={{
+              width: '100%',
+              display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px', borderRadius: 10,
+              background: hoverSkill === skill.name ? 'var(--panel-2)' : 'var(--panel)',
+              border: '1px solid ' + (hoverSkill === skill.name ? 'var(--line)' : 'var(--line-2)'), textAlign: 'left',
+              fontSize: 12, lineHeight: 1.5, color: 'var(--ink)', transition: 'border-color 120ms, background 120ms',
+              paddingRight: skill.scope === 'user' ? 34 : 11,
+            }}
+          >
+            <span style={{ color: 'var(--ink-3)', display: 'inline-flex', flexShrink: 0 }}><I.wand size={13}/></span>
+            <span style={{ fontWeight: 600, flexShrink: 0 }}>{skill.title || skill.name}</span>
+            {skill.scope === 'user' && <span style={{ fontSize: 10, color: 'var(--ink-3)', border: '1px solid var(--line-2)', borderRadius: 4, padding: '0 4px', flexShrink: 0 }}>我的</span>}
+            {(skill.summary || (skill.scope === 'user' && skill.description)) && <span style={{ color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{skill.summary || skill.description}</span>}
+          </button>
+          {skill.scope === 'user' && onDeleteSkill && hoverSkill === skill.name && (
+            <button
+              type="button"
+              onClick={() => onDeleteSkill(skill)}
+              title="删除技能"
+              aria-label={'删除技能 ' + (skill.title || skill.name)}
+              style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', width: 22, height: 22, padding: 0, display: 'grid', placeItems: 'center', borderRadius: 5, color: 'var(--ink-3)', cursor: 'pointer' }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger)'; e.currentTarget.style.background = 'var(--panel)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--ink-3)'; e.currentTarget.style.background = 'transparent'; }}
+            ><I.trash size={12}/></button>
+          )}
+        </div>
+      ))}
+      {skillUploading && (
+        <div style={{ padding: '9px 11px', borderRadius: 10, border: '1px dashed var(--line-2)', fontSize: 12, color: 'var(--ink-3)' }}>正在添加技能…</div>
+      )}
+    </div>
+  );
+};
+
+// Agent 欢迎语：按时段、星期挑一句，带上用户名
+const pickAgentGreeting = function(name, now) {
+  var h = now.getHours(), day = now.getDay();
+  var hi = h < 5 ? '夜深了' : h < 9 ? '早上好' : h < 12 ? '上午好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好';
+  var pool = ['今天有什么想法', hi + '，今天有什么目标', hi + '，想做点什么图'];
+  if (h < 5 || h >= 22) pool = ['夜深了，还在忙吗', '这么晚还在做图，辛苦了'];
+  else if (h >= 12 && h < 14) pool.push('中午好，吃过饭了吗');
+  else if (h >= 18) pool.push('晚上好，今天辛苦了');
+  if (day === 1 && h < 12) pool.push('新的一周，今天有什么目标');
+  if (day === 5 && h >= 14 && h < 22) pool.push('周五了，做完这张就轻松了');
+  if ((day === 0 || day === 6) && h >= 5 && h < 22) pool.push('周末还在忙，辛苦了');
+  var line = pool[Math.floor(Math.random() * pool.length)];
+  return name ? line + '，' + name : line;
+};
+
+const AgentWelcome = ({ skillProps, user }) => {
+  // Agent 模式专属欢迎页 —— 简约版
+  var name = user ? String(user.display_name || user.username || '').trim() : '';
+  var title = React.useMemo(function() { return pickAgentGreeting(name, new Date()); }, [name]);
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
@@ -772,21 +866,142 @@ const AgentWelcome = () => {
         }}>
           <I.sparkles size={18} stroke={1.8}/>
         </div>
-        <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)' }}>
-          你想做一张什么样的图？
+        <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)', textAlign: 'center' }}>
+          {title}
         </div>
         <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
-          描述你的需求，Agent 会先和你确认方向，再开始生成。
+          说一句需求，Agent 会直接开始做；看到结果后再告诉它怎么调整。
         </div>
+        {skillProps && skillProps.onPickSkill ? <WelcomeSkills {...skillProps}/> : null}
       </div>
+    </div>
+  );
+};
+
+const agent2Spinner = function(size) {
+  return <div style={{ width: size, height: size, borderRadius: 99, border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', animation: 'spin 0.8s linear infinite', flexShrink: 0 }}/>;
+};
+
+// Agent 调用工具的过程卡片：样式与生图卡片一致，结果逐张出现
+const AgentToolCard = ({ m, openImage }) => {
+  var running = m.status === 'running';
+  var result = m.result || {};
+  var images = m.images || [];
+  var args = m.args || {};
+  var label = m.tool === 'remember'
+    ? ({ add: '记住', update: '更新记忆', 'delete': '删除记忆' }[args.action] || '记忆')
+    : (AGENT2_TOOL_LABELS[m.tool] || m.tool);
+  var summary = '';
+  if (m.tool === 'generate_image') {
+    var count = (args.images || []).length;
+    summary = count + ' 张'
+      + (args.aspect_ratio && args.aspect_ratio !== 'auto' ? ' · ' + args.aspect_ratio : '')
+      + (args.group_type === 'set' ? ' · 套图' : args.group_type === 'variant' ? ' · 多方案' : '');
+  } else if (m.tool === 'special_compose') {
+    summary = [args.sku, args.name].filter(Boolean).join(' · ');
+  } else if (m.tool === 'load_skill' || m.tool === 'read_skill_file') {
+    summary = args.name || '';
+  } else if (m.tool === 'remember') {
+    summary = args.content || '';
+  }
+  var compact = m.tool === 'analyze_image' || m.tool === 'load_skill' || m.tool === 'read_skill_file' || m.tool === 'remember';
+  var doneIdx = {};
+  images.forEach(function(im) { doneIdx[im.position || 0] = true; });
+  var pendingSlots = [];
+  if (running && m.tool === 'generate_image') {
+    (args.images || []).forEach(function(item, idx) {
+      if (!doneIdx[idx]) pendingSlots.push({ idx: idx, label: item.label || '', progress: (m.progress || {})[idx] || 0 });
+    });
+  }
+  var failedItems = Array.isArray(result.failed) ? result.failed : [];
+  var seconds = m.durationMs ? Math.max(1, Math.round(m.durationMs / 1000)) : 0;
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 8, padding: compact ? '8px 10px' : '10px 12px',
+      borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)',
+      width: compact ? 'auto' : '100%', maxWidth: '100%', minWidth: compact ? 0 : 220, boxSizing: 'border-box',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        {running ? agent2Spinner(12) : (
+          <span style={{ width: 7, height: 7, borderRadius: 99, flexShrink: 0, background: m.status === 'failed' ? 'var(--warn)' : m.status === 'stopped' ? 'var(--ink-3)' : 'var(--ok)' }}/>
+        )}
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', flexShrink: 0 }}>{label}</span>
+        {summary ? <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span> : null}
+        {seconds ? <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--ink-3)', flexShrink: 0 }}>{seconds}s</span> : null}
+        {m.status === 'stopped' ? <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--ink-3)', flexShrink: 0 }}>已停止</span> : null}
+        {m.recovered ? <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--ink-3)', flexShrink: 0 }}>服务恢复后补回</span> : null}
+      </div>
+      {running && m.log ? <div style={{ fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.5 }}>{m.log}</div> : null}
+      {(images.length > 0 || pendingSlots.length > 0) ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+          {images.map(function(im) {
+            var src = agent2AbsUrl(im.url);
+            return (
+              <div key={im.id || im.url} style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                <img
+                  src={src}
+                  alt={im.label || label}
+                  onClick={function() { openImage(src, src, im.label || label); }}
+                  style={{ width: '100%', borderRadius: 8, display: 'block', border: '1px solid var(--line-2)', cursor: 'zoom-in', background: 'var(--panel-2)' }}
+                />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                  {im.label ? <span style={{ fontSize: 11, color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{im.label}</span> : null}
+                  {im.check ? (
+                    <span title={im.check.summary} style={{ fontSize: 11, color: im.check.ok ? 'var(--ok)' : 'var(--warn)', display: 'inline-flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+                      {im.check.ok ? <I.check size={10}/> : <I.eye size={10}/>}{im.check.ok ? '自检通过' : '有问题'}
+                    </span>
+                  ) : running && m.tool === 'generate_image' ? (
+                    <span style={{ fontSize: 11, color: 'var(--ink-3)', flexShrink: 0 }}>自检中…</span>
+                  ) : null}
+                  <a href={src} download title="下载" style={{ marginLeft: 'auto', color: 'var(--ink-3)', display: 'inline-flex', padding: 2, flexShrink: 0 }}><I.download size={11}/></a>
+                </div>
+                {im.check && !im.check.ok && im.check.problems.length ? (
+                  <div style={{ fontSize: 11, color: 'var(--warn)', lineHeight: 1.45, wordBreak: 'break-word' }}>{im.check.problems.join('；')}</div>
+                ) : null}
+              </div>
+            );
+          })}
+          {pendingSlots.map(function(slot) {
+            return (
+              <div key={'p' + slot.idx} style={{ minHeight: 110, borderRadius: 8, border: '1px dashed var(--line-2)', background: 'var(--panel)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, order: slot.idx }}>
+                {agent2Spinner(14)}
+                <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)' }}>{slot.label ? slot.label + ' · ' : ''}{slot.progress}%</div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {m.status === 'failed' && result.error ? (
+        <div style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid var(--warn)', fontSize: 11, color: 'var(--warn)', lineHeight: 1.45, wordBreak: 'break-word' }}>{result.error}</div>
+      ) : null}
+      {failedItems.map(function(f, fi) {
+        return <div key={'f' + fi} style={{ fontSize: 11, color: 'var(--warn)', lineHeight: 1.45 }}>{(f.label || ('第 ' + ((f.index || 0) + 1) + ' 张')) + ' 失败：' + (f.error || '')}</div>;
+      })}
+      {Array.isArray(result.files) && result.files.length ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {result.files.map(function(f) {
+            return (
+              <a key={f.id || f.url} href={agent2AbsUrl(f.url)} download style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <I.download size={10}/>下载{f.name ? ' ' + f.name : ''}
+              </a>
+            );
+          })}
+          {result.layer_count ? <span style={{ fontSize: 11, color: 'var(--ink-3)', alignSelf: 'center' }}>共 {result.layer_count} 个图层</span> : null}
+        </div>
+      ) : null}
+      {result.zip_url ? (
+        <div style={{ display: 'flex' }}>
+          <a href={agent2AbsUrl(result.zip_url)} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <I.download size={10}/>打包下载
+          </a>
+        </div>
+      ) : null}
     </div>
   );
 };
 
 const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greetingKey, onQuickReply, agentEnabled, onPublishInspiration, onUnpublishInspiration, onRetry, onEditResend, agentSkills, onPickSkill, onUploadSkill, onDeleteSkill, skillUploading }) => {
   const scrollRef = React.useRef(null);
-  const skillFileRef = React.useRef(null);
-  const [hoverSkill, setHoverSkill] = React.useState('');
   const contentRef = React.useRef(null);
   const stickRef = React.useRef(true);
   const prevLenRef = React.useRef(messages.length);
@@ -852,7 +1067,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
     <div ref={contentRef} style={{ flex: '1 0 auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
       {messages.length === 0 ? (
         // Agent 模式用专属欢迎页，否则随机轮播
-        agentEnabled ? <AgentWelcome /> : (
+        agentEnabled ? <AgentWelcome user={user} skillProps={{ agentSkills, onPickSkill, onUploadSkill, onDeleteSkill, skillUploading }}/> : (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
             <div style={{
               width: 40, height: 40, borderRadius: 11,
@@ -866,75 +1081,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
               {greeting.sub}
             </div>
             {onPickSkill && (
-              <div style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 2px' }}>
-                  <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>技能</span>
-                  {onUploadSkill && (
-                    <button
-                      type="button"
-                      onClick={() => { if (skillFileRef.current) skillFileRef.current.click(); }}
-                      disabled={skillUploading}
-                      title="上传技能：包含 SKILL.md 的 .zip，或单个 .md 文件"
-                      aria-label="上传技能"
-                      style={{ width: 20, height: 20, padding: 0, display: 'grid', placeItems: 'center', borderRadius: 5, color: 'var(--ink-3)', cursor: skillUploading ? 'default' : 'pointer' }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--panel-2)'; e.currentTarget.style.color = 'var(--ink)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; }}
-                    ><I.plus size={13}/></button>
-                  )}
-                  <input
-                    ref={skillFileRef}
-                    type="file"
-                    accept=".zip,.md"
-                    style={{ display: 'none' }}
-                    onChange={(e) => {
-                      const file = e.target.files && e.target.files[0];
-                      e.target.value = '';
-                      if (file && onUploadSkill) onUploadSkill(file);
-                    }}
-                  />
-                </div>
-                {(agentSkills || []).map((skill) => (
-                  <div
-                    key={skill.name}
-                    style={{ position: 'relative' }}
-                    onMouseEnter={() => setHoverSkill(skill.name)}
-                    onMouseLeave={() => setHoverSkill('')}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onPickSkill(skill)}
-                      title={skill.summary || skill.description || skill.title || skill.name}
-                      style={{
-                        width: '100%',
-                        display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px', borderRadius: 10,
-                        background: hoverSkill === skill.name ? 'var(--panel-2)' : 'var(--panel)',
-                        border: '1px solid ' + (hoverSkill === skill.name ? 'var(--line)' : 'var(--line-2)'), textAlign: 'left',
-                        fontSize: 12, lineHeight: 1.5, color: 'var(--ink)', transition: 'border-color 120ms, background 120ms',
-                        paddingRight: skill.scope === 'user' ? 34 : 11,
-                      }}
-                    >
-                      <span style={{ color: 'var(--ink-3)', display: 'inline-flex', flexShrink: 0 }}><I.wand size={13}/></span>
-                      <span style={{ fontWeight: 600, flexShrink: 0 }}>{skill.title || skill.name}</span>
-                      {skill.scope === 'user' && <span style={{ fontSize: 10, color: 'var(--ink-3)', border: '1px solid var(--line-2)', borderRadius: 4, padding: '0 4px', flexShrink: 0 }}>我的</span>}
-                      {(skill.summary || (skill.scope === 'user' && skill.description)) && <span style={{ color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{skill.summary || skill.description}</span>}
-                    </button>
-                    {skill.scope === 'user' && onDeleteSkill && hoverSkill === skill.name && (
-                      <button
-                        type="button"
-                        onClick={() => onDeleteSkill(skill)}
-                        title="删除技能"
-                        aria-label={'删除技能 ' + (skill.title || skill.name)}
-                        style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', width: 22, height: 22, padding: 0, display: 'grid', placeItems: 'center', borderRadius: 5, color: 'var(--ink-3)', cursor: 'pointer' }}
-                        onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger)'; e.currentTarget.style.background = 'var(--panel)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--ink-3)'; e.currentTarget.style.background = 'transparent'; }}
-                      ><I.trash size={12}/></button>
-                    )}
-                  </div>
-                ))}
-                {skillUploading && (
-                  <div style={{ padding: '9px 11px', borderRadius: 10, border: '1px dashed var(--line-2)', fontSize: 12, color: 'var(--ink-3)' }}>正在添加技能…</div>
-                )}
-              </div>
+              <WelcomeSkills agentSkills={agentSkills} onPickSkill={onPickSkill} onUploadSkill={onUploadSkill} onDeleteSkill={onDeleteSkill} skillUploading={skillUploading}/>
             )}
           </div>
         )
@@ -1447,6 +1594,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   </div>
                 )}
               </div>
+            ) : m.type === 'agent2-tool' ? (
+              <AgentToolCard m={m} openImage={openImage}/>
             ) : m.type === 'thinking' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1624,7 +1773,7 @@ const DEFAULT_COMPOSER_MODE = 'gpt-image-2.5';
 
 const NO_SKILLS = [];
 
-const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection, agentSkills: agentSkillsProp }) => {
+const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection, agentSkills: agentSkillsProp }) => {
   const agentSkills = agentSkillsProp || NO_SKILLS;
   const [text, setText] = React.useState('');
   const [selectedMode, setSelectedMode] = React.useState(DEFAULT_COMPOSER_MODE);
@@ -1920,12 +2069,18 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
     if (onSeedConsumed) onSeedConsumed();
   }, [seedPrompt, onSeedConsumed]);
 
+  // 进入 Agent 时清空输入框模式；退出 Agent 时回到默认生图模式，否则会停在问答
+  const wasAgentRef = React.useRef(agentEnabled);
   React.useEffect(() => {
     if (agentEnabled) {
       setSelectedMode('');
       setSelectedSkill('');
       setSelectedWorkflow('chat');
+    } else if (wasAgentRef.current) {
+      setSelectedMode(DEFAULT_COMPOSER_MODE);
+      setSelectedWorkflow('chat');
     }
+    wasAgentRef.current = agentEnabled;
   }, [agentEnabled]);
 
   React.useEffect(() => {
@@ -2377,7 +2532,9 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
     const images = fileList.filter(f => f.type.startsWith('image/'));
     const others = fileList.filter(f => !f.type.startsWith('image/'));
     if (images.length) addImageFiles(images);
-    if (others.length && !agentEnabled) {
+    if (others.length && agentEnabled) {
+      window.dfToast('Agent 目前只支持上传图片；Excel 铺货表请用功能菜单里的「智能铺货」', { tone: 'warn' });
+    } else if (others.length) {
       const file = others[0];
       if (selectedWorkflow === 'distribute' && isSmartDistributeFile(file)) {
         addSmartDistributeFile(file);
@@ -2600,7 +2757,7 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
     files.length > 0 ? ('文件 ' + files.length) : '',
   ].filter(Boolean);
   const composerPlaceholder = agentEnabled
-    ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）'
+    ? '说一句需求，例如：生成 3 张小红书风格的跑步海报图'
     : activeMode === 'ai-image'
       ? (activeAiModel.indexOf('nano-banana') === 0
         ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景'
@@ -3950,16 +4107,20 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
             height: 34,
           })}
           <button
-            onClick={handleSend}
+            onClick={isLoading && onStop ? onStop : handleSend}
+            title={isLoading && onStop ? '停止' : undefined}
+            aria-label={isLoading && onStop ? '停止' : '发送'}
             style={{
               width: 34, height: 34, borderRadius: 10,
-              background: canSend ? 'var(--ink)' : 'var(--line)',
-              color: canSend ? 'white' : 'var(--ink-3)',
+              background: (canSend || (isLoading && onStop)) ? 'var(--ink)' : 'var(--line)',
+              color: (canSend || (isLoading && onStop)) ? 'white' : 'var(--ink-3)',
               display: 'grid', placeItems: 'center',
-              cursor: canSend ? 'pointer' : 'default',
+              cursor: (canSend || (isLoading && onStop)) ? 'pointer' : 'default',
               boxShadow: 'none',
             }}>
-            {isLoading ? (
+            {isLoading && onStop ? (
+              <I.stop size={14}/>
+            ) : isLoading ? (
               <div style={{ width: 14, height: 14, borderRadius: 99, border: '2px solid var(--ink-3)', borderRightColor: 'transparent', animation: 'spin 0.7s linear infinite' }}/>
             ) : (
               <I.arrowUp size={14} stroke={2.2}/>
@@ -3976,72 +4137,137 @@ const Composer = ({ onSend, onParseTable, onSmartDistribute, isLoading, template
 // ---------- Main ----------
 
 const AGENT_MODE_KEY = 'designflow_agent_mode_enabled';
-const AGENT_PROJECT_ID_KEY = 'designflow_agent_project_id';
-const mapAgentProjectMessages = function(project, images) {
-  const base = Array.isArray(project && project.messages) ? project.messages.map(function(item) {
-    var payload = item && item.payload ? item.payload : {};
-    var refMeta = Array.isArray(payload.reference_images) ? payload.reference_images : [];
-    var decision = (payload && payload.decision) || {};
-    var intentPatch = (payload && (payload.intent_patch || payload.action_intent)) || {};
-    var msg = {
-      who: item && item.role === 'user' ? 'user' : 'ai',
-      text: (item && item.text) || '',
-      meta: item && item.role === 'assistant' ? 'Agent' : undefined,
-      refMeta: refMeta,
-      intentPatch: intentPatch,
-    };
-    // 恢复 CONFIRM 的 Brief 卡片 + 快捷按钮
-    if (decision && decision.type === 'CONFIRM') {
-      if (decision.brief) msg.brief = decision.brief;
-      if (decision.contract) msg.contract = decision.contract;
-      if (decision.completeness) msg.completeness = decision.completeness;
-      if (Array.isArray(decision.quickActions) && decision.quickActions.length > 0) {
-        msg.quickActions = decision.quickActions;
-      }
-      msg.decisionType = 'CONFIRM';
-    } else if (decision && decision.type === 'ASK') {
-      if (decision.brief) msg.brief = decision.brief;
-      if (decision.contract) msg.contract = decision.contract;
-      if (decision.completeness) msg.completeness = decision.completeness;
-      if (Array.isArray(decision.choices) && decision.choices.length > 0) {
-        msg.choices = decision.choices;
-      }
-      msg.decisionType = 'ASK';
+const AGENT2_SESSION_KEY = 'designflow_agent2_session_id';
+const AGENT2_TOOL_LABELS = {
+  generate_image: '生成图片', analyze_image: '看图', load_skill: '加载技能',
+  read_skill_file: '读取技能资料', special_compose: '特殊品合成', remember: '记忆',
+  remove_background: '抠图', find_product_images: '素材库取图', fill_background: '换底色', upscale_image: '高清放大', vectorize_image: '转矢量图',
+  split_layers: '拆分 PSD 图层', outpaint_image: '扩图', outfit_change: 'AI 换装',
+};
+// 回复末尾的 [[NEXT: ...]] 由界面渲染成快捷按钮；流式过程中先把它隐藏
+const agent2StripNext = function(text) { return String(text || '').replace(/\[\[[\s\S]*$/, '').trimEnd(); };
+const AGENT2_TERMINAL = { 'turn.finished': true, 'turn.failed': true, 'turn.cancelled': true, 'input.required': true };
+const agent2Sleep = function(ms) { return new Promise(function(resolve) { setTimeout(resolve, ms); }); };
+const agent2AbsUrl = function(u) { return u && u.charAt(0) === '/' ? ((window.API_BASE || window.location.origin) + u) : (u || ''); };
+
+// 新版 Agent 的事件 → 现有消息格式。实时推送和历史回放共用这一个归约函数。
+const agent2Reduce = function(msgs, ev) {
+  var p = (ev && ev.payload) || {};
+  var list = msgs.filter(function(m) { return !m.a2Thinking; });
+  var thinking = { who: 'ai', type: 'thinking', meta: 'Agent', text: '正在思考…', a2Thinking: true };
+  var updateCard = function(callId, fn) {
+    return list.map(function(m) { return m.type === 'agent2-tool' && m.callId === callId ? fn(m) : m; });
+  };
+  var lastTextIdx = function() {
+    for (var i = list.length - 1; i >= 0; i--) {
+      if (list[i].a2Text) return i;
+      if (list[i].who === 'user') return -1;
     }
-    return msg;
-  }) : [];
-  const items = Array.isArray(images) ? images : [];
-  if (!items.length) return base;
-  return base.concat(items.map(function(image) {
-    var promptPayload = image && image.prompt ? image.prompt : null;
-    return {
-      who: 'ai',
-      type: 'ai-image-generating',
-      model: (image && image.model) || 'agent',
-      prompt: promptPayload ? (promptPayload.instruction || promptPayload.positive || '') : '',
-      promptPayload: promptPayload,
-      status: 'done',
-      imageUrl: image && image.image_url ? ((window.API_BASE || window.location.origin) + image.image_url) : '',
-      finalElapsed: null,
-      progress: 100,
-      meta: 'Agent',
-      vlm: image && image.vlm_analysis ? image.vlm_analysis : null,
-    };
-  }));
+    return -1;
+  };
+  switch (ev && ev.type) {
+    case 'turn.started':
+      return list.concat([{
+        who: 'user', text: p.text || '',
+        refPreviews: (p.uploads || []).map(function(u) { return agent2AbsUrl(u.url); }),
+      }, thinking]);
+    case 'message.delta': {
+      var last = list[list.length - 1];
+      if (last && last.a2Text && !last.a2Closed) {
+        var raw = (last.a2Raw || '') + (p.text || '');
+        return list.slice(0, -1).concat([Object.assign({}, last, { a2Raw: raw, text: agent2StripNext(raw) })]);
+      }
+      return list.concat([{ who: 'ai', meta: 'Agent', a2Text: true, a2Raw: p.text || '', text: agent2StripNext(p.text) }]);
+    }
+    case 'message.reset': {
+      var tail = list[list.length - 1];
+      return tail && tail.a2Text && !tail.a2Closed ? list.slice(0, -1) : list;
+    }
+    case 'tool.started':
+      return list.map(function(m) { return m.a2Text ? Object.assign({}, m, { a2Closed: true }) : m; }).concat([{
+        who: 'ai', meta: 'Agent', type: 'agent2-tool', callId: p.call_id, tool: p.tool, args: p.args || {},
+        status: 'running', progress: {}, log: '', images: [],
+      }]);
+    case 'tool.progress':
+      return updateCard(p.call_id, function(m) {
+        if (p.message) return Object.assign({}, m, { log: p.message });
+        var progress = Object.assign({}, m.progress);
+        progress[p.index || 0] = p.progress || 0;
+        return Object.assign({}, m, { progress: progress });
+      });
+    case 'artifact.created':
+      return updateCard(p.call_id, function(m) {
+        var images = m.images.concat([p.artifact || {}]).sort(function(a, b) { return (a.position || 0) - (b.position || 0); });
+        // 服务重启后由后台补回：卡片从失败/中断转为完成
+        return Object.assign({}, m, { images: images }, p.recovered ? { status: 'done', recovered: true } : {});
+      });
+    case 'context.compacting':
+      return list.concat([Object.assign({}, thinking, { text: '对话较长，正在整理较早的内容…' })]);
+    case 'image.checked':
+      return updateCard(p.call_id, function(m) {
+        return Object.assign({}, m, { images: m.images.map(function(im) {
+          return im.id === p.image_id ? Object.assign({}, im, { check: { ok: p.ok, summary: p.summary || '', problems: p.problems || [] } }) : im;
+        }) });
+      });
+    case 'tool.finished': {
+      var done = updateCard(p.call_id, function(m) {
+        return Object.assign({}, m, { status: p.ok ? 'done' : 'failed', result: p.result || {}, durationMs: p.duration_ms });
+      });
+      var stillRunning = done.some(function(m) { return m.type === 'agent2-tool' && m.status === 'running'; });
+      return stillRunning ? done : done.concat([thinking]);
+    }
+    case 'input.required':
+      return list.concat([{
+        who: 'ai', meta: 'Agent', text: p.question || '', a2Ask: ev.turn_id,
+        choices: (p.options || []).map(function(o) { return { label: o, value: o }; }),
+      }]);
+    case 'input.answered':
+      return list.map(function(m) { return m.a2Ask ? Object.assign({}, m, { choices: [] }) : m; })
+        .concat([{ who: 'user', text: p.answer || '' }, thinking]);
+    case 'suggestions': {
+      var actions = (p.options || []).map(function(o) { return { label: o, value: o }; });
+      var si = lastTextIdx();
+      if (si < 0) return list;
+      return list.map(function(m, i) { return i === si ? Object.assign({}, m, { quickActions: actions }) : m; });
+    }
+    case 'turn.finished': {
+      var fi = lastTextIdx();
+      if (fi < 0 || p.text == null) return list;
+      return list.map(function(m, i) { return i === fi ? Object.assign({}, m, { text: p.text, a2Closed: true }) : m; });
+    }
+    case 'turn.failed':
+    case 'turn.cancelled': {
+      var stopped = ev.type === 'turn.cancelled';
+      var settled = list.map(function(m) {
+        return m.type === 'agent2-tool' && m.status === 'running'
+          ? Object.assign({}, m, { status: stopped ? 'stopped' : 'failed', log: '' })
+          : m;
+      });
+      return settled.concat([{ who: 'ai', meta: 'Agent', text: stopped ? '已停止。' : ('出错了：' + (p.message || '未知错误')) }]);
+    }
+    default:
+      return msgs;
+  }
 };
 
 const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection, quickEditRequest }) => {
   const [messages, setMessages] = React.useState([]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
-  const [agentMessages, setAgentMessages] = React.useState([]);
   const [isLoading, setIsLoading] = React.useState(false);
   const [lastSubmittedMessage, setLastSubmittedMessage] = React.useState('');
   const [currentAiChatId, setCurrentAiChatId] = React.useState('');
   const [composerResetKey, setComposerResetKey] = React.useState(0);
   const [greetingResetKey, setGreetingResetKey] = React.useState(0);
-  const [agentEnabled, setAgentEnabled] = React.useState(false);
-  const [agentProjectId, setAgentProjectId] = React.useState('');
-  const [agentProject, setAgentProject] = React.useState(null);
+  const [agentEnabled, setAgentEnabled] = React.useState(function() {
+    try { return localStorage.getItem(AGENT_MODE_KEY) === '1'; } catch (e) { return false; }
+  });
+  const [agentSessionId, setAgentSessionId] = React.useState(function() {
+    try { return localStorage.getItem(AGENT2_SESSION_KEY) || ''; } catch (e) { return ''; }
+  });
+  // turnId：当前轮次；waitingTurnId：Agent 正在等用户回答的轮次
+  const agentTurnRef = React.useRef({ turnId: '', waitingTurnId: '' });
+  // cursor：当前会话的事件游标（见 agent2Cursor.js）；followToken 变化时停止旧的轮询
+  const agentStreamRef = React.useRef({ followToken: 0, cursor: window.Agent2Cursor.create('') });
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [historyLoading, setHistoryLoading] = React.useState(false);
   const [historySessions, setHistorySessions] = React.useState([]);
@@ -4054,7 +4280,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
   const historyWrapRef = React.useRef(null);
   const [modeMenuOpen, setModeMenuOpen] = React.useState(false);
   const modeMenuRef = React.useRef(null);
-  const creatingAgentProjectRef = React.useRef(null);
   const feedbackStartedAt = React.useRef(Date.now());
   const previousTaskStates = React.useRef(new Map());
   const notifiedMessages = React.useRef(new Set());
@@ -4094,78 +4319,143 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
 
   const templateFields = getTemplateFields(template);
 
-  const loadAgentProject = React.useCallback(async function(projectId) {
-    if (!projectId) return null;
-    const data = await window.API.getAgentProject(projectId);
-    const imgs = await window.API.listAgentProjectImages(projectId);
-    const mapped = mapAgentProjectMessages(data, imgs);
-    setAgentProject(data);
-    setAgentProjectId(projectId);
-    setAgentMessages(mapped);
-    if (agentEnabled) setMessages(mapped);
-    if (onComposeComplete && data) {
-      onComposeComplete(null, null, data.currentImageUrl ? [data.currentImageUrl] : [], null);
-    }
-    return data;
-  }, [agentEnabled, onComposeComplete]);
+  // 刷新后保持上次选择的模式
+  React.useEffect(function() {
+    try { localStorage.setItem(AGENT_MODE_KEY, agentEnabled ? '1' : '0'); } catch (e) {}
+  }, [agentEnabled]);
 
-  const ensureAgentProject = React.useCallback(async function() {
-    // 如果有保存的 ID，先尝试加载；加载失败则重新创建
-    if (agentProjectId) {
-      try {
-        const data = await window.API.getAgentProject(agentProjectId);
-        if (data && data.id) return agentProjectId;
-      } catch (e) {
-        // 项目已不存在（404），清除旧 ID，继续创建新项目
-        setAgentProjectId('');
-        try { localStorage.removeItem(AGENT_PROJECT_ID_KEY); } catch (ex) {}
-      }
+  React.useEffect(function() {
+    try {
+      if (agentSessionId) localStorage.setItem(AGENT2_SESSION_KEY, agentSessionId);
+      else localStorage.removeItem(AGENT2_SESSION_KEY);
+    } catch (e) {}
+  }, [agentSessionId]);
+
+  const pushAgentImagesToCanvas = React.useCallback(function(result) {
+    var items = (result && Array.isArray(result.images)) ? result.images : [];
+    if (!items.length || !onComposeComplete) return;
+    onComposeComplete(null, null, items.map(function(im) {
+      return { url: im.url, prompt: im.label || '', originalPrompt: im.label || '', model: 'agent', jobId: im.id || '', createdAt: Date.now() };
+    }), null);
+  }, [onComposeComplete]);
+
+  // 切换会话身份（新建、删除、加载、首次创建）时换新游标：每个会话的 seq 都从 1 开始
+  const resetAgentCursor = React.useCallback(function(sessionId) {
+    var st = agentStreamRef.current;
+    st.followToken++;
+    st.cursor = window.Agent2Cursor.create(sessionId);
+  }, []);
+
+  // 实时推送和续接轮询共用：应用一个事件，返回它是否结束了当前轮次
+  const applyAgentEvent = React.useCallback(function(ev) {
+    var cursor = agentStreamRef.current.cursor;
+    if (!window.Agent2Cursor.accept(cursor, ev)) return false;
+    if (ev.turn_id && !AGENT2_TERMINAL[ev.type] && ev.type !== 'artifact.created') agentTurnRef.current.turnId = ev.turn_id;
+    if (ev.type === 'input.required') agentTurnRef.current.waitingTurnId = ev.turn_id;
+    setMessages(function(msgs) { return agent2Reduce(msgs, ev); });
+    var p = ev.payload || {};
+    if (ev.type === 'tool.finished' && p.ok && window.Agent2Cursor.deliverOnce(cursor, 'call:' + p.call_id)) {
+      pushAgentImagesToCanvas(p.result);
     }
-    if (creatingAgentProjectRef.current) return creatingAgentProjectRef.current;
-    creatingAgentProjectRef.current = window.API.createAgentProject()
-      .then(function(created) {
-        setAgentProject(created);
-        setAgentProjectId(created.id);
-        return created.id;
-      })
-      .finally(function() {
-        creatingAgentProjectRef.current = null;
-      });
-    return creatingAgentProjectRef.current;
-  }, [agentProjectId]);
+    // 服务重启后由后台补回的图片：按图片 ID 交付一次
+    if (ev.type === 'artifact.created' && p.recovered && p.artifact && window.Agent2Cursor.deliverOnce(cursor, 'img:' + p.artifact.id)) {
+      pushAgentImagesToCanvas({ images: [p.artifact] });
+    }
+    return !!AGENT2_TERMINAL[ev.type];
+  }, [pushAgentImagesToCanvas]);
+
+  // 按 seq 补拉事件。busy：这一轮仍在运行（刷新或断线后），期间锁定输入并保留停止按钮；
+  // 轮次结束后如果还有后台生图未完成（例如服务重启后在恢复），继续低频轮询，补回的图片自动出现。
+  const followAgentTurn = React.useCallback(async function(sessionId, busy) {
+    var st = agentStreamRef.current;
+    var token = ++st.followToken;
+    var release = function() {
+      if (!busy) return;
+      busy = false;
+      setMessages(function(msgs) { return msgs.filter(function(m) { return !m.a2Thinking; }); });
+      setIsLoading(false);
+    };
+    if (busy) setIsLoading(true);
+    try {
+      while (st.followToken === token) {
+        await agent2Sleep(busy ? 1500 : 4000);
+        if (st.followToken !== token) return;
+        var data;
+        try { data = await window.API.getAgent2Session(sessionId, st.cursor.floor); } catch (e) { continue; }
+        if (st.followToken !== token) return;
+        var ended = false;
+        ((data && data.events) || []).forEach(function(ev) { if (applyAgentEvent(ev)) ended = true; });
+        var running = !!(data && data.active_turn && data.active_turn.status === 'running');
+        if (ended || !running) release();
+        if (!running && !(data && data.pending_jobs)) break;
+      }
+    } finally {
+      if (st.followToken === token) release();
+    }
+  }, [applyAgentEvent]);
+
+  const stopAgentTurn = React.useCallback(function() {
+    var turnId = agentTurnRef.current.turnId;
+    if (!turnId) return;
+    window.API.cancelAgent2Turn(turnId).catch(function(e) {
+      window.dfToast((e && e.message) ? e.message : '停止失败', { tone: 'danger' });
+    });
+  }, []);
+
+  const loadAgentSession = React.useCallback(async function(sessionId) {
+    resetAgentCursor(sessionId);
+    const cursor = agentStreamRef.current.cursor;
+    const data = await window.API.getAgent2Session(sessionId);
+    const events = ((data && data.events) || []).filter(function(ev) { return window.Agent2Cursor.accept(cursor, ev); });
+    const active = data && data.active_turn;
+    const running = !!(active && active.status === 'running');
+    // 回放时去掉残留的"思考中"占位；这一轮仍在运行时保留，随后续接事件
+    const replayed = events.reduce(agent2Reduce, []);
+    const mapped = running ? replayed : replayed.filter(function(m) { return !m.a2Thinking; });
+    // 历史里已有的结果不再重复交付到画布（恢复会话时另由 restoreAgentSession 放回最近一组）
+    events.forEach(function(ev) {
+      var p = ev.payload || {};
+      if (ev.type === 'tool.finished') window.Agent2Cursor.deliverOnce(cursor, 'call:' + p.call_id);
+      if (ev.type === 'artifact.created' && p.artifact) window.Agent2Cursor.deliverOnce(cursor, 'img:' + p.artifact.id);
+    });
+    agentTurnRef.current = {
+      turnId: running ? active.id : '',
+      waitingTurnId: active && active.status === 'waiting_user' ? active.id : '',
+    };
+    setAgentSessionId(sessionId);
+    setMessages(mapped);
+    if (running || (data && data.pending_jobs)) followAgentTurn(sessionId, running);
+    return mapped;
+  }, [followAgentTurn, resetAgentCursor]);
+
+  const ensureAgentSession = React.useCallback(async function() {
+    if (agentSessionId) return agentSessionId;
+    const created = await window.API.createAgent2Session();
+    setAgentSessionId(created.id);
+    return created.id;
+  }, [agentSessionId]);
 
   React.useEffect(() => {
     if (!user) return;
     let cancelled = false;
-    (async function() {
-      if (!agentEnabled) {
-        setMessages(defaultMessages);
-        return;
-      }
-      try {
-        const projectId = await ensureAgentProject();
-        if (cancelled) return;
-        const data = await window.API.getAgentProject(projectId);
-        const imgs = await window.API.listAgentProjectImages(projectId);
-        if (cancelled) return;
-        const mapped = mapAgentProjectMessages(data, imgs);
-        setAgentProject(data);
-        setAgentProjectId(projectId);
-        setAgentMessages(mapped);
-        setMessages(mapped);
-      } catch (e) {
-        if (!cancelled) {
-          setAgentMessages([{ who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message), meta: 'Agent' }]);
-          setMessages([{ who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message), meta: 'Agent' }]);
-        }
-      }
-    })();
+    if (!agentEnabled) {
+      setMessages(defaultMessages);
+      return;
+    }
+    if (!agentSessionId) {
+      setMessages([]);
+      return;
+    }
+    loadAgentSession(agentSessionId).catch(function() {
+      if (cancelled) return;
+      setAgentSessionId('');
+      setMessages([]);
+    });
     return function() { cancelled = true; };
-  }, [agentEnabled, ensureAgentProject, user]);
+  }, [agentEnabled, user]);
 
   React.useEffect(() => {
-    if (agentEnabled) setAgentMessages(messages);
-    else setDefaultMessages(messages);
+    if (!agentEnabled) setDefaultMessages(messages);
   }, [agentEnabled, messages]);
 
   const loadAiChatHistory = React.useCallback(async () => {
@@ -4182,13 +4472,12 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     }
   }, []);
 
-  const loadAgentProjectHistory = React.useCallback(async () => {
+  const loadAgentSessionHistory = React.useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const res = await window.API.listAgentProjects(1, 20);
-      setHistorySessions((res && res.data) || []);
+      setHistorySessions(await window.API.listAgent2Sessions());
     } catch (e) {
-      console.error('load agent project history failed:', e);
+      console.error('load agent session history failed:', e);
       window.dfError(e, '对话记录暂时无法加载，请稍后重新打开。');
       setHistorySessions([]);
     } finally {
@@ -4200,12 +4489,12 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     setHistoryOpen(function(prev) {
       const next = !prev;
       if (!prev) {
-        if (agentEnabled) loadAgentProjectHistory();
+        if (agentEnabled) loadAgentSessionHistory();
         else loadAiChatHistory();
       }
       return next;
     });
-  }, [agentEnabled, loadAgentProjectHistory, loadAiChatHistory]);
+  }, [agentEnabled, loadAgentSessionHistory, loadAiChatHistory]);
 
   const restoreAiChatSession = React.useCallback(async (sessionId) => {
     try {
@@ -4221,15 +4510,18 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     }
   }, []);
 
-  const restoreAgentProjectSession = React.useCallback(async (projectId) => {
+  const restoreAgentSession = React.useCallback(async (sessionId) => {
     try {
-      await loadAgentProject(projectId);
+      const mapped = await loadAgentSession(sessionId);
       setHistoryOpen(false);
+      // 和旧版一致：恢复时把最近一次的生成结果放回画布
+      const lastCard = mapped.slice().reverse().find(function(m) { return m.type === 'agent2-tool' && (m.images || []).length > 0; });
+      if (lastCard) pushAgentImagesToCanvas({ images: lastCard.images });
     } catch (e) {
-      console.error('restore agent project failed:', e);
+      console.error('restore agent session failed:', e);
       window.dfToast((e && e.message) ? e.message : '恢复 Agent 对话失败', { tone: 'danger' });
     }
-  }, [loadAgentProject]);
+  }, [loadAgentSession, pushAgentImagesToCanvas]);
 
   const deleteAiChatHistory = React.useCallback(async (sessionId) => {
     if (!sessionId) return;
@@ -4249,52 +4541,39 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     }
   }, [currentAiChatId]);
 
-  const deleteAgentProjectHistory = React.useCallback(async (projectId) => {
-    if (!projectId) return;
+  const deleteAgentSession = React.useCallback(async (sessionId) => {
+    if (!sessionId) return;
     try {
-      await window.API.deleteAgentProject(projectId);
+      await window.API.deleteAgent2Session(sessionId);
       setHistorySessions(function(prev) {
-        return prev.filter(function(project) { return project.id !== projectId; });
+        return prev.filter(function(session) { return session.id !== sessionId; });
       });
-      if (agentProjectId === projectId) {
-        setAgentProjectId('');
-        setAgentProject(null);
-        setAgentMessages([]);
+      if (agentSessionId === sessionId) {
+        setAgentSessionId('');
+        agentTurnRef.current = { turnId: '', waitingTurnId: '' };
+        resetAgentCursor('');
         setMessages([]);
         setComposerResetKey(function(prev) { return prev + 1; });
         if (onComposeComplete) onComposeComplete(null, null, [], null);
       }
     } catch (e) {
-      console.error('delete agent project failed:', e);
+      console.error('delete agent session failed:', e);
       window.dfToast((e && e.message) ? e.message : '删除失败，请稍后重试', { tone: 'danger' });
     }
-  }, [agentProjectId, onComposeComplete]);
+  }, [agentSessionId, onComposeComplete]);
 
   const startNewAiChat = React.useCallback(() => {
     if (isLoading) return;
     if (agentEnabled) {
-      (async function() {
-        setIsLoading(true);
-        try {
-          creatingAgentProjectRef.current = null;
-          setAgentProject(null);
-          setAgentProjectId('');
-          try { localStorage.removeItem(AGENT_PROJECT_ID_KEY); } catch (ex) {}
-          const created = await window.API.createAgentProject();
-          setAgentProject(created);
-          setAgentProjectId(created.id);
-          setAgentMessages([]);
-          setMessages([]);
-          setHistoryOpen(false);
-          setComposerResetKey(function(prev) { return prev + 1; });
-          setGreetingResetKey(function(prev) { return prev + 1; });
-          if (onComposeComplete) onComposeComplete(null, null, [], null);
-        } catch (e) {
-          setMessages([{ who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message), meta: 'Agent' }]);
-        } finally {
-          setIsLoading(false);
-        }
-      })();
+      // 新会话在发送第一条消息时才创建，避免产生空会话
+      setAgentSessionId('');
+      agentTurnRef.current = { turnId: '', waitingTurnId: '' };
+      resetAgentCursor('');
+      setMessages([]);
+      setHistoryOpen(false);
+      setComposerResetKey(function(prev) { return prev + 1; });
+      setGreetingResetKey(function(prev) { return prev + 1; });
+      if (onComposeComplete) onComposeComplete(null, null, [], null);
       return;
     }
     setMessages([]);
@@ -5195,7 +5474,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     // 显式 Skill 是一条直接执行的生图链路：先由 Skill planner 解读需求，
     // 再把 planned_prompt 提交给 Image API。不能让 Agent 分支提前截获它，
     // 否则 Skill 只会作为上下文参与问答/确认，永远不会进入 planner。
-    if (activeSkill && aiOptions.workflow !== 'download') {
+    if (activeSkill && aiOptions.workflow !== 'download' && !agentEnabled) {
       const skillImageOptions = Object.assign({}, aiOptions, {
         provider: 'auto',
         size: aiOptions.size || 'auto',
@@ -5218,248 +5497,39 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
 
     if (agentEnabled && aiOptions.workflow !== 'ai-image') {
       setIsLoading(true);
-      var projectId = '';
-      var assistantIdx = null;
-      var imageIdx = null;
-      var thinkingText = '';
-      var thinkingStatus = '正在连接 Agent...';
-      var thinkingPhaseLabels = {
-        analyzing_reference: '正在分析参考图，提取主体、风格和构图线索...',
-        understanding_intent: '正在理解需求，并整理可以确认的创意方向...',
-        llm_waiting: '正在组织回复，先把需求拆成可执行的视觉要点...',
-      };
-      var applyThinkingEvent = function(payload) {
-        var delta = payload && payload.delta ? String(payload.delta) : '';
-        var message = payload && payload.message ? String(payload.message) : '';
-        var phaseMessage = payload && payload.phase ? thinkingPhaseLabels[payload.phase] : '';
-        if (delta) {
-          thinkingText += delta;
-          thinkingStatus = '正在输出思考过程...';
-          return { thinking: thinkingText, thinkingStatus: thinkingStatus };
-        }
-        var nextStatus = message || phaseMessage || '正在处理...';
-        if (nextStatus) {
-          thinkingStatus = nextStatus;
-        }
-        return { thinking: thinkingText, thinkingStatus: thinkingStatus };
-      };
-      setMessages(function(msgs) {
-        assistantIdx = msgs.length + 1;
-        return msgs.concat([
-          { who: 'user', text: text, refPreviews: userRefPreviews, refMeta: userRefMeta, activeSkill: activeSkill },
-          { who: 'ai', type: 'thinking', text: '正在连接 Agent...', thinkingStatus: thinkingStatus, meta: 'Agent' },
-        ]);
-      });
+      agentStreamRef.current.followToken++;  // 停掉低频轮询，本轮由实时推送接管
+      agentTurnRef.current.turnId = '';
+      var ended = false;
+      var onAgentEvent = function(ev) { if (applyAgentEvent(ev)) ended = true; };
+      var streamError = null;
+      var sessionId = agentSessionId;
       try {
-        projectId = await ensureAgentProject();
-        await window.API.streamAgentChat(projectId, executionText, {
-          onEvent: function(eventName, payload) {
-            if (eventName === 'agent_reset') {
-              thinkingText = '';
-              thinkingStatus = '正在重新组织回复...';
-              setMessages(function(msgs) {
-                return msgs.map(function(m, i) {
-                  return i === assistantIdx
-                    ? Object.assign({}, m, { text: '', thinking: '', thinkingStatus: thinkingStatus })
-                    : m;
-                });
-              });
-              return;
-            }
-            if (eventName === 'agent_thinking') {
-              var thinkingPatch = applyThinkingEvent(payload || {});
-              setMessages(function(msgs) {
-                return msgs.map(function(m, i) {
-                  if (i !== assistantIdx) return m;
-                  var patch = { thinkingStatus: thinkingPatch.thinkingStatus };
-                  if (thinkingPatch.thinking) {
-                    patch.thinking = thinkingPatch.thinking;
-                  }
-                  return Object.assign({}, m, patch);
-                });
-              });
-              return;
-            }
-            if (eventName === 'agent_text') {
-              setMessages(function(msgs) {
-                return msgs.map(function(m, i) {
-                  if (i !== assistantIdx) return m;
-                  return { who: 'ai', text: (m.text || '') + (payload.delta || ''), meta: 'Agent', thinking: m.thinking, thinkingStatus: m.thinkingStatus };
-                });
-              });
-              return;
-            }
-            if (eventName === 'decision') {
-              if (payload && (payload.type === 'ASK' || payload.type === 'CONFIRM')) {
-                var opts = payload.type === 'ASK' ? payload.choices : payload.quickActions;
-                setMessages(function(msgs) {
-                  return msgs.map(function(m, i) {
-                    if (i !== assistantIdx) return m;
-                    var patch = {
-                      choices: payload.type === 'ASK' ? [] : undefined,
-                      quickActions: payload.type === 'CONFIRM' ? [] : undefined,
-                    };
-                    if (Array.isArray(opts) && opts.length > 0) {
-                      patch[payload.type === 'ASK' ? 'choices' : 'quickActions'] = opts;
-                    }
-                    // CONFIRM 阶段附带 Creative Brief 卡片数据
-                    if (payload.type === 'CONFIRM' && payload.brief) {
-                      patch.brief = payload.brief;
-                    }
-                    if (payload.type === 'ASK' && payload.brief) {
-                      patch.brief = payload.brief;
-                    }
-                    if (payload.contract) {
-                      patch.contract = payload.contract;
-                    }
-                    if (payload.completeness) {
-                      patch.completeness = payload.completeness;
-                    }
-                    patch.decisionType = payload.type;
-                    return Object.assign({}, m, patch);
-                  });
-                });
-              }
-              if (payload && (payload.type === 'GENERATE' || payload.type === 'REFINE')) {
-                var promptModel = payload.prompt && payload.prompt.model ? payload.prompt.model : 'agent';
-                var modelLabel = promptModel === 'nano banana pro' ? 'Nano Banana' : ((promptModel === 'gpt image 2' || promptModel === 'gpt image 2.5') ? 'GPT Image 2.5' : promptModel);
-                var actionLabel = payload.type === 'REFINE' ? '修改' : '生成';
-                setMessages(function(msgs) {
-                  if (imageIdx == null) imageIdx = msgs.length;
-                  return msgs.concat([{
-                    who: 'ai',
-                    type: 'ai-image-generating',
-                    model: modelLabel,
-                    prompt: payload.prompt && (payload.prompt.instruction || payload.prompt.positive) ? (payload.prompt.instruction || payload.prompt.positive) : text,
-                    promptPayload: payload.prompt || null,
-                    size: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.size : 'auto',
-                    resolution: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.resolution : '1K',
-                    status: 'running',
-                    startedAt: Date.now(),
-                    progress: 0,
-                    meta: 'Agent · ' + actionLabel,
-                    refPreviews: userRefPreviews,
-                  }]);
-                });
-              }
-              return;
-            }
-            if (eventName === 'generation_progress') {
-              setMessages(function(msgs) {
-                return msgs.map(function(m, i) {
-                  if (i !== imageIdx) return m;
-                  return { ...m, status: 'running', progress: payload.progress || m.progress || 0 };
-                });
-              });
-              return;
-            }
-            if (eventName === 'generation_completed') {
-              var generatedImage = payload && payload.image ? payload.image : null;
-              var generatedUrl = generatedImage && generatedImage.url
-                ? ((window.API_BASE || window.location.origin) + generatedImage.url)
-                : '';
-              setMessages(function(msgs) {
-                return msgs.map(function(m, i) {
-                  if (i !== imageIdx) return m;
-                  return Object.assign({}, m, {
-                    status: 'done',
-                    imageUrl: generatedUrl || m.imageUrl || '',
-                    previewUrl: generatedUrl || m.previewUrl || '',
-                    progress: 100,
-                    finalElapsed: m.startedAt ? Math.floor((Date.now() - m.startedAt) / 1000) : m.finalElapsed,
-                    vlmPending: true,
-                  });
-                });
-              });
-              return;
-            }
-            if (eventName === 'error') {
-              setMessages(function(msgs) {
-                return msgs.map(function(m, i) {
-                  if (i !== assistantIdx) return m;
-                  return { who: 'ai', feedbackAt: Date.now(), feedbackError: payload && payload.message, text: formatAiImageError(payload && payload.message), meta: 'Agent' };
-                });
-              });
-            }
-          },
-          onDone: async function(payload) {
-            if (payload && payload.project) setAgentProject(payload.project);
-            if (payload && payload.image) {
-              var imageUrl = (window.API_BASE || window.location.origin) + payload.image.image_url;
-              var vlm = payload.vlmAnalysis || null;
-              setMessages(function(msgs) {
-                return msgs.map(function(m, i) {
-                  if (i !== imageIdx) return m;
-                  return {
-                    ...m,
-                    status: 'done',
-                    imageUrl: imageUrl,
-                    progress: 100,
-                    finalElapsed: m.startedAt ? Math.floor((Date.now() - m.startedAt) / 1000) : null,
-                    vlm: vlm,
-                    vlmPending: false,
-                    promptPayload: (payload && payload.generationInstruction)
-                      ? Object.assign({}, m.promptPayload || {}, payload.generationInstruction)
-                      : m.promptPayload,
-                  };
-                });
-              });
-              if (onComposeComplete) {
-                const agentPrompt = (payload && payload.generationInstruction && (payload.generationInstruction.prompt || payload.generationInstruction.text))
-                  || (payload && payload.image && payload.image.prompt && (payload.image.prompt.prompt || payload.image.prompt.generationInstruction))
-                  || '';
-                onComposeComplete(null, null, [{
-                  url: payload.image.image_url,
-                  prompt: agentPrompt,
-                  originalPrompt: agentPrompt,
-                  model: (payload && payload.image && payload.image.model) || 'agent',
-                  provider: (payload && payload.image && payload.image.provider) || '',
-                  jobId: (payload && payload.image && payload.image.id) || '',
-                  createdAt: Date.now(),
-                }], null);
-              }
-            }
-            if (projectId) {
-              const latest = await window.API.getAgentProject(projectId);
-              const imgs = await window.API.listAgentProjectImages(projectId);
-              const mapped = mapAgentProjectMessages(latest, imgs);
-              // 保留流式过程中累积的 thinking/status 字段（服务端不存储）
-              setMessages(function(msgs) {
-                return mapped.map(function(mm, i) {
-                  var cm = msgs[i];
-                  if (cm && (cm.thinking || cm.thinkingStatus)) {
-                    return Object.assign({}, mm, { thinking: cm.thinking, thinkingStatus: cm.thinkingStatus });
-                  }
-                  return mm;
-                });
-              });
-              setAgentProject(latest);
-              setAgentMessages(mapped);
-            }
-            setIsLoading(false);
-          },
-          onError: function(payload) {
-            setMessages(function(msgs) {
-              return msgs.map(function(m, i) {
-                if (i !== assistantIdx) return m;
-                return { who: 'ai', feedbackAt: Date.now(), feedbackError: payload && payload.message, text: formatAiImageError(payload && payload.message), meta: 'Agent' };
-              });
-            });
-            setIsLoading(false);
-          },
-          onClose: function() {
-            setIsLoading(false);
-          },
-        }, refImages, { skill: activeSkill });
+        var waitingTurnId = agentTurnRef.current.waitingTurnId;
+        if (waitingTurnId) {
+          agentTurnRef.current.waitingTurnId = '';
+          await window.API.answerAgent2(waitingTurnId, text.trim(), onAgentEvent);
+        } else {
+          sessionId = await ensureAgentSession();
+          if (agentStreamRef.current.cursor.sessionId !== sessionId) resetAgentCursor(sessionId);
+          await window.API.sendAgent2Message(sessionId, executionText, refImages, onAgentEvent, activeSkill);
+        }
       } catch (e) {
-        setMessages(function(msgs) {
-          return msgs.map(function(m, i) {
-            if (i !== assistantIdx) return m;
-            return { who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message), meta: 'Agent' };
-          });
-        });
-        setIsLoading(false);
+        streamError = e;
       }
+      if (!ended && sessionId && agentTurnRef.current.turnId) {
+        // 连接中断但这一轮已在服务端运行：改为按 seq 续接，不当作失败
+        followAgentTurn(sessionId, true);
+        return;
+      }
+      if (streamError) {
+        setMessages(function(msgs) {
+          return agent2Reduce(msgs, { type: 'turn.failed', payload: { message: (streamError && streamError.message) || '网络异常，请稍后重试' } });
+        });
+      }
+      setMessages(function(msgs) { return msgs.filter(function(m) { return !m.a2Thinking; }); });
+      setIsLoading(false);
+      // 本轮期间可能有后台补回的图片：低频检查一次，有未完成的生图就继续跟进
+      if (sessionId) followAgentTurn(sessionId, false);
       return;
     }
 
@@ -5812,7 +5882,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       ));
     }
     setIsLoading(false);
-  }, [agentEnabled, currentAiChatId, ensureAgentProject, getLastAiImageOptions, hasDoneAiImageInCurrentThread, isLikelyAiImageFollowup, isLoading, loadAiChatHistory, materializeReferenceImages, normalizeAiImageModel, onComposeComplete, runAiImageGeneration, template]);
+  }, [agentEnabled, agentSessionId, applyAgentEvent, followAgentTurn, resetAgentCursor, currentAiChatId, ensureAgentSession, pushAgentImagesToCanvas, getLastAiImageOptions, hasDoneAiImageInCurrentThread, isLikelyAiImageFollowup, isLoading, loadAiChatHistory, materializeReferenceImages, normalizeAiImageModel, onComposeComplete, runAiImageGeneration, template]);
 
   // ── 快捷回复：点击选项按钮触发 ──────────────────────────────────────────────
   const handleQuickReply = React.useCallback(function(value) {
@@ -6152,10 +6222,10 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
             <div style={{ padding: '8px', fontSize: 11, color: 'var(--ink-3)' }}>暂无历史对话</div>
           )}
           {!historyLoading && historySessions.map(function(session) {
-            var activeId = agentEnabled ? agentProjectId : currentAiChatId;
+            var activeId = agentEnabled ? agentSessionId : currentAiChatId;
             var title = session.title || '未命名对话';
-            var metaLine = agentEnabled
-              ? ((session.totalGenerations || 0) > 0 ? ('已生成 ' + session.totalGenerations + ' 张') : '仅对话')
+            var metaLine = agentEnabled && session.updated_at
+              ? new Date(session.updated_at * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
               : '';
             return (
               <div
@@ -6174,7 +6244,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
               >
                 <button
                   onClick={() => {
-                    if (agentEnabled) restoreAgentProjectSession(session.id);
+                    if (agentEnabled) restoreAgentSession(session.id);
                     else restoreAiChatSession(session.id);
                   }}
                   style={{
@@ -6205,7 +6275,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
                       e.stopPropagation();
                       if (confirmDeleteId !== session.id) { setConfirmDeleteId(session.id); return; }
                       setConfirmDeleteId('');
-                      if (agentEnabled) deleteAgentProjectHistory(session.id);
+                      if (agentEnabled) deleteAgentSession(session.id);
                       else deleteAiChatHistory(session.id);
                     }}
                     title={confirmDeleteId === session.id ? '再点一次删除' : '删除'}
@@ -6466,6 +6536,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
 
       <Composer
         onSend={handleSend}
+        onStop={agentEnabled ? stopAgentTurn : undefined}
         onParseTable={handleParseTable}
         onSmartDistribute={handleSmartDistribute}
         isLoading={isLoading}

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 
-from backend import agent_mode, main, model_routing
+from backend import main, model_routing
 
 
 def completion(text: str = "ok") -> httpx.Response:
@@ -36,6 +36,11 @@ class ModelRoutingTest(unittest.IsolatedAsyncioTestCase):
         )
         self.settings_patch.start()
         self.addCleanup(self.settings_patch.stop)
+        # 冷却是跨请求的进程级状态；原有用例关掉它，冷却行为由专门的用例覆盖
+        for p in (patch.dict(model_routing._cooldown, clear=True),
+                  patch.object(model_routing, "ROUTE_COOLDOWN_SECONDS", 0)):
+            p.start()
+            self.addCleanup(p.stop)
         self.requests = []
         self.real_client = httpx.AsyncClient
 
@@ -56,6 +61,14 @@ class ModelRoutingTest(unittest.IsolatedAsyncioTestCase):
         with patch.multiple(model_routing.settings, apimart_llm_model="api-text", apimart_vlm_model="api-vision"):
             self.assertEqual(model_routing.get_model_routes("chat_llm")[1].model, "api-text")
             self.assertEqual(model_routing.get_model_routes("vlm")[1].model, "api-vision")
+
+    def test_gpt_tool_calls_disable_reasoning(self):
+        gpt = model_routing.ModelRoute("apimart", "https://api.test", "k", "gpt-6-luna")
+        claude = model_routing.ModelRoute("apimart", "https://api.test", "k", "claude-sonnet-4-6")
+        tools = [{"type": "function", "function": {"name": "f"}}]
+        self.assertEqual(model_routing._payload(gpt, {"tools": tools}, stream=True)["reasoning_effort"], "none")
+        self.assertNotIn("reasoning_effort", model_routing._payload(gpt, {}, stream=True))
+        self.assertNotIn("reasoning_effort", model_routing._payload(claude, {"tools": tools}, stream=True))
 
     def test_endpoint_normalization(self):
         for base in ("https://api.test", "https://api.test/v1/", "https://api.test/v1/chat/completions"):
@@ -137,6 +150,43 @@ class ModelRoutingTest(unittest.IsolatedAsyncioTestCase):
             _ = [c async for c in model_routing.routed_chat_stream("agent_llm", {"messages": []})]
         self.assertEqual(len(self.requests), 2)
 
+    def _model_of(self, request) -> str:
+        return f"{request.url.host}/{json.loads(request.content)['model']}"
+
+    def test_model_lists_build_routes_per_provider(self):
+        with patch.multiple(model_routing.settings, chat_llm_model="a, b ,a", apimart_llm_model="x,y"):
+            routes = model_routing.get_model_routes("chat_llm")
+        self.assertEqual([(r.provider, r.model) for r in routes],
+                         [("sub2api", "a"), ("sub2api", "b"), ("apimart", "x"), ("apimart", "y")])
+
+    async def test_model_error_tries_next_model_on_same_provider(self):
+        def handler(request):
+            return httpx.Response(502) if self._model_of(request) == "sub.test/a" else completion()
+        with patch.object(model_routing.settings, "chat_llm_model", "a,b"), self.transport(handler):
+            response = await model_routing.routed_chat_completion("chat_llm", {"messages": []})
+        self.assertEqual([self._model_of(r) for r in self.requests], ["sub.test/a", "sub.test/b"])
+        self.assertEqual(response.extensions["model_route"], {"provider": "sub2api", "model": "b"})
+
+    async def test_provider_outage_skips_its_other_models_and_cools_down(self):
+        def handler(request):
+            if request.url.host == "sub.test":
+                raise httpx.ConnectError("down", request=request)
+            return completion()
+        with patch.object(model_routing, "ROUTE_COOLDOWN_SECONDS", 60), \
+                patch.object(model_routing.settings, "chat_llm_model", "a,b"), self.transport(handler):
+            await model_routing.routed_chat_completion("chat_llm", {"messages": []})
+            self.assertEqual([self._model_of(r) for r in self.requests], ["sub.test/a", "api.test/a"])
+            # 冷却期内下一次请求直接从 apimart 开始
+            self.requests.clear()
+            await model_routing.routed_chat_completion("chat_llm", {"messages": []})
+            self.assertEqual([self._model_of(r) for r in self.requests], ["api.test/a"])
+
+    async def test_auth_error_marks_whole_provider_down(self):
+        with patch.object(model_routing.settings, "chat_llm_model", "a,b"), \
+                self.transport(lambda r: httpx.Response(401) if r.url.host == "sub.test" else completion()):
+            await model_routing.routed_chat_completion("chat_llm", {"messages": []})
+        self.assertEqual([self._model_of(r) for r in self.requests], ["sub.test/a", "api.test/a"])
+
     async def test_missing_subscription_uses_apimart(self):
         with patch.multiple(model_routing.settings, cliproxy_base_url="", cliproxy_api_key=""), self.transport(lambda _: completion()):
             response = await model_routing.routed_chat_completion("agent_vlm", {"messages": []})
@@ -201,48 +251,12 @@ class ModelRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"reply": "回答"})
         self.assertEqual([r.url.host for r in self.requests], ["sub.test", "api.test"])
 
-    async def test_agent_stream_discards_failed_reply_and_patch(self):
-        final = '新回复[[VISUAL_INTENT_PATCH]]{"turnType":"add_detail","patch":{"subject":"新主体"}}'
-        def handler(request):
-            return sse("旧回复[[VISUAL_INTENT_PATCH]]", finished=False) if request.url.host == "sub.test" else sse(final)
-        visible = []
-        resets = []
-        def reset():
-            visible.clear()
-            resets.append(True)
-        with self.transport(handler):
-            text, patch_result = await agent_mode.call_agent_llm(
-                "生成", agent_mode.default_project_state(), [], on_chunk=visible.append, on_reset=reset,
-            )
-        self.assertEqual(text, "新回复")
-        self.assertEqual("".join(visible), "新回复")
-        self.assertEqual(patch_result.patch["subject"], "新主体")
-        self.assertEqual(resets, [True])
-
     async def test_skill_planner_uses_apimart_before_deterministic_fallback(self):
         reply = '{"final_prompt":"有效的生图描述","steps":["理解需求"]}'
         with self.transport(lambda r: httpx.Response(503) if r.url.host == "sub.test" else completion(reply)):
             prompt, trace = await main._plan_skill_image_prompt("海报", "test-skill", "skill instructions")
         self.assertEqual(prompt, "有效的生图描述")
         self.assertEqual(trace["provider"], "apimart")
-
-    async def test_reference_analysis_uses_vision_fallback(self):
-        reply = '{"summary":"一张商品图","extractedInfo":{"subject":"商品"}}'
-        with self.transport(lambda r: httpx.Response(503) if r.url.host == "sub.test" else completion(reply)):
-            result = await agent_mode.analyze_reference_images([(b"image", "image.png")], "分析", {})
-        self.assertEqual(result.summary, "一张商品图")
-        self.assertEqual([r.url.host for r in self.requests], ["sub.test", "api.test"])
-        for request in self.requests:
-            image = json.loads(request.content)["messages"][0]["content"][1]
-            self.assertTrue(image["image_url"]["url"].startswith("data:image/png;base64,"))
-
-    async def test_critic_uses_vision_fallback(self):
-        reply = '{"qualityScore":80,"intentMatch":90,"confidence":0.9}'
-        with self.transport(lambda r: httpx.Response(503) if r.url.host == "sub.test" else completion(reply)), \
-                patch.object(agent_mode, "_resolve_image_data_url", AsyncMock(return_value="data:image/png;base64,cGlj")):
-            result = await agent_mode.run_vlm_critic("/test.png", agent_mode.default_project_state())
-        self.assertEqual(result["status"], "checked")
-        self.assertEqual(result["qualityScore"], 80)
 
     async def test_context_rewrite_uses_new_route(self):
         with self.transport(lambda r: httpx.Response(503) if r.url.host == "sub.test" else completion("完整改写后的需求")), \
@@ -266,23 +280,6 @@ class ModelRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"final_prompt": "有效计划"', final_event)
         self.assertIn('"provider": "apimart"', final_event)
         self.assertNotIn("broken", final_event)
-
-    async def test_agent_endpoint_both_failures_end_with_error(self):
-        request = Mock()
-        request.headers = {"content-type": "application/json"}
-        request.json = AsyncMock(return_value={"message": "设计一张海报"})
-        with self.transport(lambda _: httpx.Response(503)), \
-                patch.object(main, "_current_user", return_value={"id": "test-user", "username": "tester"}), \
-                patch.object(main, "get_agent_project", return_value={"id": "test-project"}), \
-                patch.object(main, "load_agent_messages", return_value=[]), \
-                patch.object(main, "log_operation"), \
-                patch.object(main, "append_agent_message"):
-            response = await main.agent_project_chat_endpoint(request, "test-project")
-            async def collect():
-                return "".join([part async for part in response.body_iterator])
-            events = await asyncio.wait_for(collect(), timeout=1)
-        self.assertIn("event: error\n", events)
-        self.assertEqual([r.url.host for r in self.requests], ["sub.test", "api.test"])
 
 
 if __name__ == "__main__":

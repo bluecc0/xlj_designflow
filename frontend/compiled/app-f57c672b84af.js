@@ -3484,208 +3484,18 @@ const GREETINGS = [{
   sub: '在功能里选择「问答」，直接提问就能找到答案。'
 }];
 const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
-const AgentWelcome = () => {
-  // Agent 模式专属欢迎页（不随机轮播）—— 简约版
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      overflowY: 'auto',
-      padding: 16,
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 14
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 40,
-      height: 40,
-      borderRadius: 11,
-      background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
-      color: 'white',
-      display: 'grid',
-      placeItems: 'center'
-    }
-  }, /*#__PURE__*/React.createElement(I.sparkles, {
-    size: 18,
-    stroke: 1.8
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 15,
-      fontWeight: 500,
-      color: 'var(--ink)'
-    }
-  }, "\u4F60\u60F3\u505A\u4E00\u5F20\u4EC0\u4E48\u6837\u7684\u56FE\uFF1F"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: 'var(--ink-3)',
-      textAlign: 'center',
-      maxWidth: 240,
-      lineHeight: 1.5
-    }
-  }, "\u63CF\u8FF0\u4F60\u7684\u9700\u6C42\uFF0CAgent \u4F1A\u5148\u548C\u4F60\u786E\u8BA4\u65B9\u5411\uFF0C\u518D\u5F00\u59CB\u751F\u6210\u3002")));
-};
-const ChatReturned = ({
-  messages,
-  template,
-  onCompose,
-  isGenerating,
-  user,
-  greetingKey,
-  onQuickReply,
-  agentEnabled,
-  onPublishInspiration,
-  onUnpublishInspiration,
-  onRetry,
-  onEditResend,
+
+// 欢迎页的技能列表：普通模式和 Agent 模式共用
+const WelcomeSkills = ({
   agentSkills,
   onPickSkill,
   onUploadSkill,
   onDeleteSkill,
   skillUploading
 }) => {
-  const scrollRef = React.useRef(null);
   const skillFileRef = React.useRef(null);
   const [hoverSkill, setHoverSkill] = React.useState('');
-  const contentRef = React.useRef(null);
-  const stickRef = React.useRef(true);
-  const prevLenRef = React.useRef(messages.length);
-  const [hasUnseen, setHasUnseen] = React.useState(false);
-  const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
-  const scrollToBottom = React.useCallback(smooth => {
-    const el = scrollRef.current;
-    if (el) el.scrollTo({
-      top: el.scrollHeight,
-      behavior: smooth ? 'smooth' : 'auto'
-    });
-  }, []);
-
-  // 仅当用户本来就停在底部附近时才跟随新内容；往上翻阅时不打扰，改为提示「有新消息」
-  React.useEffect(() => {
-    const prevLen = prevLenRef.current;
-    prevLenRef.current = messages.length;
-    const last = messages[messages.length - 1];
-    if (messages.length < prevLen || messages.length > prevLen && last && last.who === 'user') {
-      stickRef.current = true;
-    }
-    if (stickRef.current) {
-      setHasUnseen(false);
-      scrollToBottom(messages.length > prevLen);
-    } else if (messages.length > prevLen) {
-      setHasUnseen(true);
-    }
-  }, [messages, scrollToBottom]);
-
-  // 图片加载、日志展开等会改变高度但不改 messages，用 ResizeObserver 跟随
-  React.useEffect(() => {
-    if (!contentRef.current || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => {
-      if (stickRef.current) scrollToBottom(false);
-    });
-    ro.observe(contentRef.current);
-    return () => ro.disconnect();
-  }, [scrollToBottom]);
-  const handleScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    stickRef.current = nearBottom;
-    if (nearBottom) setHasUnseen(false);
-  };
-
-  // 重试规则：单张且已有任务编号的卡片可随时按原任务重试；
-  // 没有任务编号或批量的卡片只能重新提交，仅当它是最后一张生图卡（上下文未变）时允许
-  let lastAiCardIdx = -1;
-  messages.forEach((msg, idx) => {
-    if (msg.type === 'ai-image-generating') lastAiCardIdx = idx;
-  });
-  const canRetryCard = (msg, idx) => {
-    if (!msg.retryArgs) return false;
-    if (/无法确认|图片已生成|仍在处理|任务可能|暂未完整保存/.test(formatAiImageError(msg.error))) return false;
-    const isBatch = Array.isArray(msg.images) && msg.images.length > 0;
-    if (msg.jobId && !isBatch) return true;
-    return idx === lastAiCardIdx;
-  };
-  const openImage = (src, full, title) => {
-    window.dfOpenLightbox({
-      src: src || full,
-      downloadUrl: full,
-      title: title
-    });
-  };
   return /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minHeight: 0,
-      position: 'relative',
-      display: 'flex',
-      flexDirection: 'column'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    ref: scrollRef,
-    onScroll: handleScroll,
-    style: {
-      flex: 1,
-      overflowY: 'auto',
-      padding: 16,
-      display: 'flex',
-      flexDirection: 'column'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    ref: contentRef,
-    style: {
-      flex: '1 0 auto',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 14
-    }
-  }, messages.length === 0 ?
-  // Agent 模式用专属欢迎页，否则随机轮播
-  agentEnabled ? /*#__PURE__*/React.createElement(AgentWelcome, null) : /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 40,
-      height: 40,
-      borderRadius: 11,
-      background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
-      color: 'white',
-      display: 'grid',
-      placeItems: 'center'
-    }
-  }, /*#__PURE__*/React.createElement(I.sparkles, {
-    size: 18,
-    stroke: 1.8
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 15,
-      fontWeight: 500,
-      color: 'var(--ink)'
-    }
-  }, greeting.title), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: 'var(--ink-3)',
-      textAlign: 'center',
-      maxWidth: 240,
-      lineHeight: 1.5
-    }
-  }, greeting.sub), onPickSkill && /*#__PURE__*/React.createElement("div", {
     style: {
       width: '100%',
       maxWidth: 300,
@@ -3840,7 +3650,555 @@ const ChatReturned = ({
       fontSize: 12,
       color: 'var(--ink-3)'
     }
-  }, "\u6B63\u5728\u6DFB\u52A0\u6280\u80FD\u2026"))) : messages.map((m, i) => /*#__PURE__*/React.createElement(Bubble, {
+  }, "\u6B63\u5728\u6DFB\u52A0\u6280\u80FD\u2026"));
+};
+
+// Agent 欢迎语：按时段、星期挑一句，带上用户名
+const pickAgentGreeting = function (name, now) {
+  var h = now.getHours(),
+    day = now.getDay();
+  var hi = h < 5 ? '夜深了' : h < 9 ? '早上好' : h < 12 ? '上午好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好';
+  var pool = ['今天有什么想法', hi + '，今天有什么目标', hi + '，想做点什么图'];
+  if (h < 5 || h >= 22) pool = ['夜深了，还在忙吗', '这么晚还在做图，辛苦了'];else if (h >= 12 && h < 14) pool.push('中午好，吃过饭了吗');else if (h >= 18) pool.push('晚上好，今天辛苦了');
+  if (day === 1 && h < 12) pool.push('新的一周，今天有什么目标');
+  if (day === 5 && h >= 14 && h < 22) pool.push('周五了，做完这张就轻松了');
+  if ((day === 0 || day === 6) && h >= 5 && h < 22) pool.push('周末还在忙，辛苦了');
+  var line = pool[Math.floor(Math.random() * pool.length)];
+  return name ? line + '，' + name : line;
+};
+const AgentWelcome = ({
+  skillProps,
+  user
+}) => {
+  // Agent 模式专属欢迎页 —— 简约版
+  var name = user ? String(user.display_name || user.username || '').trim() : '';
+  var title = React.useMemo(function () {
+    return pickAgentGreeting(name, new Date());
+  }, [name]);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      overflowY: 'auto',
+      padding: 16,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
+      color: 'white',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement(I.sparkles, {
+    size: 18,
+    stroke: 1.8
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 500,
+      color: 'var(--ink)',
+      textAlign: 'center'
+    }
+  }, title), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--ink-3)',
+      textAlign: 'center',
+      maxWidth: 240,
+      lineHeight: 1.5
+    }
+  }, "\u8BF4\u4E00\u53E5\u9700\u6C42\uFF0CAgent \u4F1A\u76F4\u63A5\u5F00\u59CB\u505A\uFF1B\u770B\u5230\u7ED3\u679C\u540E\u518D\u544A\u8BC9\u5B83\u600E\u4E48\u8C03\u6574\u3002"), skillProps && skillProps.onPickSkill ? /*#__PURE__*/React.createElement(WelcomeSkills, skillProps) : null));
+};
+const agent2Spinner = function (size) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: size,
+      height: size,
+      borderRadius: 99,
+      border: '2px solid var(--line-2)',
+      borderTopColor: 'var(--accent)',
+      animation: 'spin 0.8s linear infinite',
+      flexShrink: 0
+    }
+  });
+};
+
+// Agent 调用工具的过程卡片：样式与生图卡片一致，结果逐张出现
+const AgentToolCard = ({
+  m,
+  openImage
+}) => {
+  var running = m.status === 'running';
+  var result = m.result || {};
+  var images = m.images || [];
+  var args = m.args || {};
+  var label = m.tool === 'remember' ? {
+    add: '记住',
+    update: '更新记忆',
+    'delete': '删除记忆'
+  }[args.action] || '记忆' : AGENT2_TOOL_LABELS[m.tool] || m.tool;
+  var summary = '';
+  if (m.tool === 'generate_image') {
+    var count = (args.images || []).length;
+    summary = count + ' 张' + (args.aspect_ratio && args.aspect_ratio !== 'auto' ? ' · ' + args.aspect_ratio : '') + (args.group_type === 'set' ? ' · 套图' : args.group_type === 'variant' ? ' · 多方案' : '');
+  } else if (m.tool === 'special_compose') {
+    summary = [args.sku, args.name].filter(Boolean).join(' · ');
+  } else if (m.tool === 'load_skill' || m.tool === 'read_skill_file') {
+    summary = args.name || '';
+  } else if (m.tool === 'remember') {
+    summary = args.content || '';
+  }
+  var compact = m.tool === 'analyze_image' || m.tool === 'load_skill' || m.tool === 'read_skill_file' || m.tool === 'remember';
+  var doneIdx = {};
+  images.forEach(function (im) {
+    doneIdx[im.position || 0] = true;
+  });
+  var pendingSlots = [];
+  if (running && m.tool === 'generate_image') {
+    (args.images || []).forEach(function (item, idx) {
+      if (!doneIdx[idx]) pendingSlots.push({
+        idx: idx,
+        label: item.label || '',
+        progress: (m.progress || {})[idx] || 0
+      });
+    });
+  }
+  var failedItems = Array.isArray(result.failed) ? result.failed : [];
+  var seconds = m.durationMs ? Math.max(1, Math.round(m.durationMs / 1000)) : 0;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8,
+      padding: compact ? '8px 10px' : '10px 12px',
+      borderRadius: 10,
+      background: 'var(--panel)',
+      border: '1px solid var(--line-2)',
+      width: compact ? 'auto' : '100%',
+      maxWidth: '100%',
+      minWidth: compact ? 0 : 220,
+      boxSizing: 'border-box'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      minWidth: 0
+    }
+  }, running ? agent2Spinner(12) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: 99,
+      flexShrink: 0,
+      background: m.status === 'failed' ? 'var(--warn)' : m.status === 'stopped' ? 'var(--ink-3)' : 'var(--ok)'
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: 'var(--ink)',
+      flexShrink: 0
+    }
+  }, label), summary ? /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-3)',
+      minWidth: 0,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, summary) : null, seconds ? /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      marginLeft: 'auto',
+      fontSize: 11,
+      color: 'var(--ink-3)',
+      flexShrink: 0
+    }
+  }, seconds, "s") : null, m.status === 'stopped' ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 'auto',
+      fontSize: 11,
+      color: 'var(--ink-3)',
+      flexShrink: 0
+    }
+  }, "\u5DF2\u505C\u6B62") : null, m.recovered ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 'auto',
+      fontSize: 11,
+      color: 'var(--ink-3)',
+      flexShrink: 0
+    }
+  }, "\u670D\u52A1\u6062\u590D\u540E\u8865\u56DE") : null), running && m.log ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-3)',
+      lineHeight: 1.5
+    }
+  }, m.log) : null, images.length > 0 || pendingSlots.length > 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+      gap: 8
+    }
+  }, images.map(function (im) {
+    var src = agent2AbsUrl(im.url);
+    return /*#__PURE__*/React.createElement("div", {
+      key: im.id || im.url,
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("img", {
+      src: src,
+      alt: im.label || label,
+      onClick: function () {
+        openImage(src, src, im.label || label);
+      },
+      style: {
+        width: '100%',
+        borderRadius: 8,
+        display: 'block',
+        border: '1px solid var(--line-2)',
+        cursor: 'zoom-in',
+        background: 'var(--panel-2)'
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
+        minWidth: 0
+      }
+    }, im.label ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--ink-3)',
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, im.label) : null, im.check ? /*#__PURE__*/React.createElement("span", {
+      title: im.check.summary,
+      style: {
+        fontSize: 11,
+        color: im.check.ok ? 'var(--ok)' : 'var(--warn)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 2,
+        flexShrink: 0
+      }
+    }, im.check.ok ? /*#__PURE__*/React.createElement(I.check, {
+      size: 10
+    }) : /*#__PURE__*/React.createElement(I.eye, {
+      size: 10
+    }), im.check.ok ? '自检通过' : '有问题') : running && m.tool === 'generate_image' ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--ink-3)',
+        flexShrink: 0
+      }
+    }, "\u81EA\u68C0\u4E2D\u2026") : null, /*#__PURE__*/React.createElement("a", {
+      href: src,
+      download: true,
+      title: "\u4E0B\u8F7D",
+      style: {
+        marginLeft: 'auto',
+        color: 'var(--ink-3)',
+        display: 'inline-flex',
+        padding: 2,
+        flexShrink: 0
+      }
+    }, /*#__PURE__*/React.createElement(I.download, {
+      size: 11
+    }))), im.check && !im.check.ok && im.check.problems.length ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--warn)',
+        lineHeight: 1.45,
+        wordBreak: 'break-word'
+      }
+    }, im.check.problems.join('；')) : null);
+  }), pendingSlots.map(function (slot) {
+    return /*#__PURE__*/React.createElement("div", {
+      key: 'p' + slot.idx,
+      style: {
+        minHeight: 110,
+        borderRadius: 8,
+        border: '1px dashed var(--line-2)',
+        background: 'var(--panel)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        order: slot.idx
+      }
+    }, agent2Spinner(14), /*#__PURE__*/React.createElement("div", {
+      className: "mono",
+      style: {
+        fontSize: 11,
+        color: 'var(--ink-3)'
+      }
+    }, slot.label ? slot.label + ' · ' : '', slot.progress, "%"));
+  })) : null, m.status === 'failed' && result.error ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '8px 10px',
+      borderRadius: 6,
+      border: '1px solid var(--warn)',
+      fontSize: 11,
+      color: 'var(--warn)',
+      lineHeight: 1.45,
+      wordBreak: 'break-word'
+    }
+  }, result.error) : null, failedItems.map(function (f, fi) {
+    return /*#__PURE__*/React.createElement("div", {
+      key: 'f' + fi,
+      style: {
+        fontSize: 11,
+        color: 'var(--warn)',
+        lineHeight: 1.45
+      }
+    }, (f.label || '第 ' + ((f.index || 0) + 1) + ' 张') + ' 失败：' + (f.error || ''));
+  }), Array.isArray(result.files) && result.files.length ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, result.files.map(function (f) {
+    return /*#__PURE__*/React.createElement("a", {
+      key: f.id || f.url,
+      href: agent2AbsUrl(f.url),
+      download: true,
+      style: {
+        fontSize: 11,
+        padding: '4px 10px',
+        borderRadius: 5,
+        background: 'var(--ink)',
+        color: 'white',
+        textDecoration: 'none',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4
+      }
+    }, /*#__PURE__*/React.createElement(I.download, {
+      size: 10
+    }), "\u4E0B\u8F7D", f.name ? ' ' + f.name : '');
+  }), result.layer_count ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-3)',
+      alignSelf: 'center'
+    }
+  }, "\u5171 ", result.layer_count, " \u4E2A\u56FE\u5C42") : null) : null, result.zip_url ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex'
+    }
+  }, /*#__PURE__*/React.createElement("a", {
+    href: agent2AbsUrl(result.zip_url),
+    style: {
+      fontSize: 11,
+      padding: '4px 10px',
+      borderRadius: 5,
+      background: 'var(--ink)',
+      color: 'white',
+      textDecoration: 'none',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 4
+    }
+  }, /*#__PURE__*/React.createElement(I.download, {
+    size: 10
+  }), "\u6253\u5305\u4E0B\u8F7D")) : null);
+};
+const ChatReturned = ({
+  messages,
+  template,
+  onCompose,
+  isGenerating,
+  user,
+  greetingKey,
+  onQuickReply,
+  agentEnabled,
+  onPublishInspiration,
+  onUnpublishInspiration,
+  onRetry,
+  onEditResend,
+  agentSkills,
+  onPickSkill,
+  onUploadSkill,
+  onDeleteSkill,
+  skillUploading
+}) => {
+  const scrollRef = React.useRef(null);
+  const contentRef = React.useRef(null);
+  const stickRef = React.useRef(true);
+  const prevLenRef = React.useRef(messages.length);
+  const [hasUnseen, setHasUnseen] = React.useState(false);
+  const greeting = React.useMemo(() => pickGreeting(), [greetingKey]);
+  const scrollToBottom = React.useCallback(smooth => {
+    const el = scrollRef.current;
+    if (el) el.scrollTo({
+      top: el.scrollHeight,
+      behavior: smooth ? 'smooth' : 'auto'
+    });
+  }, []);
+
+  // 仅当用户本来就停在底部附近时才跟随新内容；往上翻阅时不打扰，改为提示「有新消息」
+  React.useEffect(() => {
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = messages.length;
+    const last = messages[messages.length - 1];
+    if (messages.length < prevLen || messages.length > prevLen && last && last.who === 'user') {
+      stickRef.current = true;
+    }
+    if (stickRef.current) {
+      setHasUnseen(false);
+      scrollToBottom(messages.length > prevLen);
+    } else if (messages.length > prevLen) {
+      setHasUnseen(true);
+    }
+  }, [messages, scrollToBottom]);
+
+  // 图片加载、日志展开等会改变高度但不改 messages，用 ResizeObserver 跟随
+  React.useEffect(() => {
+    if (!contentRef.current || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (stickRef.current) scrollToBottom(false);
+    });
+    ro.observe(contentRef.current);
+    return () => ro.disconnect();
+  }, [scrollToBottom]);
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickRef.current = nearBottom;
+    if (nearBottom) setHasUnseen(false);
+  };
+
+  // 重试规则：单张且已有任务编号的卡片可随时按原任务重试；
+  // 没有任务编号或批量的卡片只能重新提交，仅当它是最后一张生图卡（上下文未变）时允许
+  let lastAiCardIdx = -1;
+  messages.forEach((msg, idx) => {
+    if (msg.type === 'ai-image-generating') lastAiCardIdx = idx;
+  });
+  const canRetryCard = (msg, idx) => {
+    if (!msg.retryArgs) return false;
+    if (/无法确认|图片已生成|仍在处理|任务可能|暂未完整保存/.test(formatAiImageError(msg.error))) return false;
+    const isBatch = Array.isArray(msg.images) && msg.images.length > 0;
+    if (msg.jobId && !isBatch) return true;
+    return idx === lastAiCardIdx;
+  };
+  const openImage = (src, full, title) => {
+    window.dfOpenLightbox({
+      src: src || full,
+      downloadUrl: full,
+      title: title
+    });
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minHeight: 0,
+      position: 'relative',
+      display: 'flex',
+      flexDirection: 'column'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    ref: scrollRef,
+    onScroll: handleScroll,
+    style: {
+      flex: 1,
+      overflowY: 'auto',
+      padding: 16,
+      display: 'flex',
+      flexDirection: 'column'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    ref: contentRef,
+    style: {
+      flex: '1 0 auto',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, messages.length === 0 ?
+  // Agent 模式用专属欢迎页，否则随机轮播
+  agentEnabled ? /*#__PURE__*/React.createElement(AgentWelcome, {
+    user: user,
+    skillProps: {
+      agentSkills,
+      onPickSkill,
+      onUploadSkill,
+      onDeleteSkill,
+      skillUploading
+    }
+  }) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
+      color: 'white',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement(I.sparkles, {
+    size: 18,
+    stroke: 1.8
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 500,
+      color: 'var(--ink)'
+    }
+  }, greeting.title), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--ink-3)',
+      textAlign: 'center',
+      maxWidth: 240,
+      lineHeight: 1.5
+    }
+  }, greeting.sub), onPickSkill && /*#__PURE__*/React.createElement(WelcomeSkills, {
+    agentSkills: agentSkills,
+    onPickSkill: onPickSkill,
+    onUploadSkill: onUploadSkill,
+    onDeleteSkill: onDeleteSkill,
+    skillUploading: skillUploading
+  })) : messages.map((m, i) => /*#__PURE__*/React.createElement(Bubble, {
     key: i,
     who: m.who,
     meta: m.meta,
@@ -4898,7 +5256,10 @@ const ChatReturned = ({
     style: actionBtnPrimaryStyle
   }, /*#__PURE__*/React.createElement(I.download, {
     size: 11
-  }), "\u4E0B\u8F7D\u6587\u4EF6"))) : m.type === 'thinking' ? /*#__PURE__*/React.createElement("div", {
+  }), "\u4E0B\u8F7D\u6587\u4EF6"))) : m.type === 'agent2-tool' ? /*#__PURE__*/React.createElement(AgentToolCard, {
+    m: m,
+    openImage: openImage
+  }) : m.type === 'thinking' ? /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -5141,6 +5502,7 @@ const DEFAULT_COMPOSER_MODE = 'gpt-image-2.5';
 const NO_SKILLS = [];
 const Composer = ({
   onSend,
+  onStop,
   onParseTable,
   onSmartDistribute,
   isLoading,
@@ -5452,12 +5814,19 @@ const Composer = ({
     }, 0);
     if (onSeedConsumed) onSeedConsumed();
   }, [seedPrompt, onSeedConsumed]);
+
+  // 进入 Agent 时清空输入框模式；退出 Agent 时回到默认生图模式，否则会停在问答
+  const wasAgentRef = React.useRef(agentEnabled);
   React.useEffect(() => {
     if (agentEnabled) {
       setSelectedMode('');
       setSelectedSkill('');
       setSelectedWorkflow('chat');
+    } else if (wasAgentRef.current) {
+      setSelectedMode(DEFAULT_COMPOSER_MODE);
+      setSelectedWorkflow('chat');
     }
+    wasAgentRef.current = agentEnabled;
   }, [agentEnabled]);
   React.useEffect(() => {
     if (template && (template.is_special || template.is_special_full)) return;
@@ -5965,7 +6334,11 @@ const Composer = ({
     const images = fileList.filter(f => f.type.startsWith('image/'));
     const others = fileList.filter(f => !f.type.startsWith('image/'));
     if (images.length) addImageFiles(images);
-    if (others.length && !agentEnabled) {
+    if (others.length && agentEnabled) {
+      window.dfToast('Agent 目前只支持上传图片；Excel 铺货表请用功能菜单里的「智能铺货」', {
+        tone: 'warn'
+      });
+    } else if (others.length) {
       const file = others[0];
       if (selectedWorkflow === 'distribute' && isSmartDistributeFile(file)) {
         addSmartDistributeFile(file);
@@ -6209,7 +6582,7 @@ const Composer = ({
   }[aiVariant] || aiVariant) + qualityTag : '') : activeMode === 'special_full' ? '线路 完整' : activeMode === 'special' ? '线路 ' + (specialRouteMode === 'auto' ? '自动' : specialRouteMode === 'full' ? '完整' : '普通') : selectedWorkflow === 'compose' ? imageType ? '素材 ' + (IMAGE_TYPES.find(t => t.key === imageType)?.label || imageType) : '' : selectedWorkflow === 'distribute' ? smartDistributeMode === 'patch' ? '方式 增量' : '方式 全量' : '';
   const isSub2ApiRoute = activeMode === 'ai-image' && (aiProvider === 'sub2api' || aiProvider === 'auto' && (activeAiModel === 'gpt-image-2.5' || activeAiModel === 'gpt-image-2') && (aiQuality === '1K' || !aiQuality) && !(activeAiModel === 'gpt-image-2.5' && (aiQualityTier === 'max' || aiQualityTier === 'xhigh')));
   const selectedSettingBits = [activeSkillInfo ? '$' + (activeSkillInfo.title || activeSkillInfo.name) : '', activeSkillInfo ? '' : agentEnabled ? 'Agent' : activeTaskLabel, agentEnabled ? '沉浸创作' : activeMode === 'ai-image' ? '⚡ 智能' : '', agentEnabled ? '' : modeParamLabel, activeMode === 'ai-image' && normalizeBatchCount(aiBatchCount) > 1 ? 'x' + normalizeBatchCount(aiBatchCount) : '', refImages.length > 0 ? 'ref ' + refImages.length + '/' + MAX_REFERENCE_IMAGES : '', files.length > 0 ? '文件 ' + files.length : ''].filter(Boolean);
-  const composerPlaceholder = agentEnabled ? '描述你的创作目标，或回复 Agent 的问题（也可点选项快速回答）' : activeMode === 'ai-image' ? activeAiModel.indexOf('nano-banana') === 0 ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
+  const composerPlaceholder = agentEnabled ? '说一句需求，例如：生成 3 张小红书风格的跑步海报图' : activeMode === 'ai-image' ? activeAiModel.indexOf('nano-banana') === 0 ? '描述要怎么编辑参考图，例如：保留鞋型，换成雨天街拍背景' : '描述想生成的画面，例如：电商主图，白色跑鞋，清爽科技感' : activeMode === 'special_full' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : activeMode === 'special' ? 'ABAW023-6，飓风2 极限之力 雷暴篮球专业比赛鞋，5月20日 10点发售' : selectedWorkflow === 'compose' ? '上传表格后补充合成要求，例如：优先使用白底图，文案保持简洁' : selectedWorkflow === 'distribute' ? '上传或拖入 Excel（.xlsx / .xlsm），确认参数后发送生成铺货 JSON' : selectedWorkflow === 'download' ? '输入花瓣项目 ID 或链接，格式会自动识别' : '忘了怎么用？试试直接提问吧';
   const statusBarVisible = Boolean(text.trim() || selectedMode || modeParamLabel || refImages.length > 0 || files.length > 0 || activeSkillInfo || skillMenuOpen || !agentEnabled && prototypePanel);
   const minComposerHeight = statusBarVisible ? STATUS_COMPOSER_HEIGHT : COLLAPSED_COMPOSER_HEIGHT;
   minComposerHeightRef.current = minComposerHeight;
@@ -7763,19 +8136,23 @@ const Composer = ({
     minWidth: 34,
     height: 34
   }), /*#__PURE__*/React.createElement("button", {
-    onClick: handleSend,
+    onClick: isLoading && onStop ? onStop : handleSend,
+    title: isLoading && onStop ? '停止' : undefined,
+    "aria-label": isLoading && onStop ? '停止' : '发送',
     style: {
       width: 34,
       height: 34,
       borderRadius: 10,
-      background: canSend ? 'var(--ink)' : 'var(--line)',
-      color: canSend ? 'white' : 'var(--ink-3)',
+      background: canSend || isLoading && onStop ? 'var(--ink)' : 'var(--line)',
+      color: canSend || isLoading && onStop ? 'white' : 'var(--ink-3)',
       display: 'grid',
       placeItems: 'center',
-      cursor: canSend ? 'pointer' : 'default',
+      cursor: canSend || isLoading && onStop ? 'pointer' : 'default',
       boxShadow: 'none'
     }
-  }, isLoading ? /*#__PURE__*/React.createElement("div", {
+  }, isLoading && onStop ? /*#__PURE__*/React.createElement(I.stop, {
+    size: 14
+  }) : isLoading ? /*#__PURE__*/React.createElement("div", {
     style: {
       width: 14,
       height: 14,
@@ -7793,58 +8170,240 @@ const Composer = ({
 // ---------- Main ----------
 
 const AGENT_MODE_KEY = 'designflow_agent_mode_enabled';
-const AGENT_PROJECT_ID_KEY = 'designflow_agent_project_id';
-const mapAgentProjectMessages = function (project, images) {
-  const base = Array.isArray(project && project.messages) ? project.messages.map(function (item) {
-    var payload = item && item.payload ? item.payload : {};
-    var refMeta = Array.isArray(payload.reference_images) ? payload.reference_images : [];
-    var decision = payload && payload.decision || {};
-    var intentPatch = payload && (payload.intent_patch || payload.action_intent) || {};
-    var msg = {
-      who: item && item.role === 'user' ? 'user' : 'ai',
-      text: item && item.text || '',
-      meta: item && item.role === 'assistant' ? 'Agent' : undefined,
-      refMeta: refMeta,
-      intentPatch: intentPatch
-    };
-    // 恢复 CONFIRM 的 Brief 卡片 + 快捷按钮
-    if (decision && decision.type === 'CONFIRM') {
-      if (decision.brief) msg.brief = decision.brief;
-      if (decision.contract) msg.contract = decision.contract;
-      if (decision.completeness) msg.completeness = decision.completeness;
-      if (Array.isArray(decision.quickActions) && decision.quickActions.length > 0) {
-        msg.quickActions = decision.quickActions;
-      }
-      msg.decisionType = 'CONFIRM';
-    } else if (decision && decision.type === 'ASK') {
-      if (decision.brief) msg.brief = decision.brief;
-      if (decision.contract) msg.contract = decision.contract;
-      if (decision.completeness) msg.completeness = decision.completeness;
-      if (Array.isArray(decision.choices) && decision.choices.length > 0) {
-        msg.choices = decision.choices;
-      }
-      msg.decisionType = 'ASK';
+const AGENT2_SESSION_KEY = 'designflow_agent2_session_id';
+const AGENT2_TOOL_LABELS = {
+  generate_image: '生成图片',
+  analyze_image: '看图',
+  load_skill: '加载技能',
+  read_skill_file: '读取技能资料',
+  special_compose: '特殊品合成',
+  remember: '记忆',
+  remove_background: '抠图',
+  find_product_images: '素材库取图',
+  fill_background: '换底色',
+  upscale_image: '高清放大',
+  vectorize_image: '转矢量图',
+  split_layers: '拆分 PSD 图层',
+  outpaint_image: '扩图',
+  outfit_change: 'AI 换装'
+};
+// 回复末尾的 [[NEXT: ...]] 由界面渲染成快捷按钮；流式过程中先把它隐藏
+const agent2StripNext = function (text) {
+  return String(text || '').replace(/\[\[[\s\S]*$/, '').trimEnd();
+};
+const AGENT2_TERMINAL = {
+  'turn.finished': true,
+  'turn.failed': true,
+  'turn.cancelled': true,
+  'input.required': true
+};
+const agent2Sleep = function (ms) {
+  return new Promise(function (resolve) {
+    setTimeout(resolve, ms);
+  });
+};
+const agent2AbsUrl = function (u) {
+  return u && u.charAt(0) === '/' ? (window.API_BASE || window.location.origin) + u : u || '';
+};
+
+// 新版 Agent 的事件 → 现有消息格式。实时推送和历史回放共用这一个归约函数。
+const agent2Reduce = function (msgs, ev) {
+  var p = ev && ev.payload || {};
+  var list = msgs.filter(function (m) {
+    return !m.a2Thinking;
+  });
+  var thinking = {
+    who: 'ai',
+    type: 'thinking',
+    meta: 'Agent',
+    text: '正在思考…',
+    a2Thinking: true
+  };
+  var updateCard = function (callId, fn) {
+    return list.map(function (m) {
+      return m.type === 'agent2-tool' && m.callId === callId ? fn(m) : m;
+    });
+  };
+  var lastTextIdx = function () {
+    for (var i = list.length - 1; i >= 0; i--) {
+      if (list[i].a2Text) return i;
+      if (list[i].who === 'user') return -1;
     }
-    return msg;
-  }) : [];
-  const items = Array.isArray(images) ? images : [];
-  if (!items.length) return base;
-  return base.concat(items.map(function (image) {
-    var promptPayload = image && image.prompt ? image.prompt : null;
-    return {
-      who: 'ai',
-      type: 'ai-image-generating',
-      model: image && image.model || 'agent',
-      prompt: promptPayload ? promptPayload.instruction || promptPayload.positive || '' : '',
-      promptPayload: promptPayload,
-      status: 'done',
-      imageUrl: image && image.image_url ? (window.API_BASE || window.location.origin) + image.image_url : '',
-      finalElapsed: null,
-      progress: 100,
-      meta: 'Agent',
-      vlm: image && image.vlm_analysis ? image.vlm_analysis : null
-    };
-  }));
+    return -1;
+  };
+  switch (ev && ev.type) {
+    case 'turn.started':
+      return list.concat([{
+        who: 'user',
+        text: p.text || '',
+        refPreviews: (p.uploads || []).map(function (u) {
+          return agent2AbsUrl(u.url);
+        })
+      }, thinking]);
+    case 'message.delta':
+      {
+        var last = list[list.length - 1];
+        if (last && last.a2Text && !last.a2Closed) {
+          var raw = (last.a2Raw || '') + (p.text || '');
+          return list.slice(0, -1).concat([Object.assign({}, last, {
+            a2Raw: raw,
+            text: agent2StripNext(raw)
+          })]);
+        }
+        return list.concat([{
+          who: 'ai',
+          meta: 'Agent',
+          a2Text: true,
+          a2Raw: p.text || '',
+          text: agent2StripNext(p.text)
+        }]);
+      }
+    case 'message.reset':
+      {
+        var tail = list[list.length - 1];
+        return tail && tail.a2Text && !tail.a2Closed ? list.slice(0, -1) : list;
+      }
+    case 'tool.started':
+      return list.map(function (m) {
+        return m.a2Text ? Object.assign({}, m, {
+          a2Closed: true
+        }) : m;
+      }).concat([{
+        who: 'ai',
+        meta: 'Agent',
+        type: 'agent2-tool',
+        callId: p.call_id,
+        tool: p.tool,
+        args: p.args || {},
+        status: 'running',
+        progress: {},
+        log: '',
+        images: []
+      }]);
+    case 'tool.progress':
+      return updateCard(p.call_id, function (m) {
+        if (p.message) return Object.assign({}, m, {
+          log: p.message
+        });
+        var progress = Object.assign({}, m.progress);
+        progress[p.index || 0] = p.progress || 0;
+        return Object.assign({}, m, {
+          progress: progress
+        });
+      });
+    case 'artifact.created':
+      return updateCard(p.call_id, function (m) {
+        var images = m.images.concat([p.artifact || {}]).sort(function (a, b) {
+          return (a.position || 0) - (b.position || 0);
+        });
+        // 服务重启后由后台补回：卡片从失败/中断转为完成
+        return Object.assign({}, m, {
+          images: images
+        }, p.recovered ? {
+          status: 'done',
+          recovered: true
+        } : {});
+      });
+    case 'context.compacting':
+      return list.concat([Object.assign({}, thinking, {
+        text: '对话较长，正在整理较早的内容…'
+      })]);
+    case 'image.checked':
+      return updateCard(p.call_id, function (m) {
+        return Object.assign({}, m, {
+          images: m.images.map(function (im) {
+            return im.id === p.image_id ? Object.assign({}, im, {
+              check: {
+                ok: p.ok,
+                summary: p.summary || '',
+                problems: p.problems || []
+              }
+            }) : im;
+          })
+        });
+      });
+    case 'tool.finished':
+      {
+        var done = updateCard(p.call_id, function (m) {
+          return Object.assign({}, m, {
+            status: p.ok ? 'done' : 'failed',
+            result: p.result || {},
+            durationMs: p.duration_ms
+          });
+        });
+        var stillRunning = done.some(function (m) {
+          return m.type === 'agent2-tool' && m.status === 'running';
+        });
+        return stillRunning ? done : done.concat([thinking]);
+      }
+    case 'input.required':
+      return list.concat([{
+        who: 'ai',
+        meta: 'Agent',
+        text: p.question || '',
+        a2Ask: ev.turn_id,
+        choices: (p.options || []).map(function (o) {
+          return {
+            label: o,
+            value: o
+          };
+        })
+      }]);
+    case 'input.answered':
+      return list.map(function (m) {
+        return m.a2Ask ? Object.assign({}, m, {
+          choices: []
+        }) : m;
+      }).concat([{
+        who: 'user',
+        text: p.answer || ''
+      }, thinking]);
+    case 'suggestions':
+      {
+        var actions = (p.options || []).map(function (o) {
+          return {
+            label: o,
+            value: o
+          };
+        });
+        var si = lastTextIdx();
+        if (si < 0) return list;
+        return list.map(function (m, i) {
+          return i === si ? Object.assign({}, m, {
+            quickActions: actions
+          }) : m;
+        });
+      }
+    case 'turn.finished':
+      {
+        var fi = lastTextIdx();
+        if (fi < 0 || p.text == null) return list;
+        return list.map(function (m, i) {
+          return i === fi ? Object.assign({}, m, {
+            text: p.text,
+            a2Closed: true
+          }) : m;
+        });
+      }
+    case 'turn.failed':
+    case 'turn.cancelled':
+      {
+        var stopped = ev.type === 'turn.cancelled';
+        var settled = list.map(function (m) {
+          return m.type === 'agent2-tool' && m.status === 'running' ? Object.assign({}, m, {
+            status: stopped ? 'stopped' : 'failed',
+            log: ''
+          }) : m;
+        });
+        return settled.concat([{
+          who: 'ai',
+          meta: 'Agent',
+          text: stopped ? '已停止。' : '出错了：' + (p.message || '未知错误')
+        }]);
+      }
+    default:
+      return msgs;
+  }
 };
 const Chat = ({
   template,
@@ -7858,15 +8417,35 @@ const Chat = ({
 }) => {
   const [messages, setMessages] = React.useState([]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
-  const [agentMessages, setAgentMessages] = React.useState([]);
   const [isLoading, setIsLoading] = React.useState(false);
   const [lastSubmittedMessage, setLastSubmittedMessage] = React.useState('');
   const [currentAiChatId, setCurrentAiChatId] = React.useState('');
   const [composerResetKey, setComposerResetKey] = React.useState(0);
   const [greetingResetKey, setGreetingResetKey] = React.useState(0);
-  const [agentEnabled, setAgentEnabled] = React.useState(false);
-  const [agentProjectId, setAgentProjectId] = React.useState('');
-  const [agentProject, setAgentProject] = React.useState(null);
+  const [agentEnabled, setAgentEnabled] = React.useState(function () {
+    try {
+      return localStorage.getItem(AGENT_MODE_KEY) === '1';
+    } catch (e) {
+      return false;
+    }
+  });
+  const [agentSessionId, setAgentSessionId] = React.useState(function () {
+    try {
+      return localStorage.getItem(AGENT2_SESSION_KEY) || '';
+    } catch (e) {
+      return '';
+    }
+  });
+  // turnId：当前轮次；waitingTurnId：Agent 正在等用户回答的轮次
+  const agentTurnRef = React.useRef({
+    turnId: '',
+    waitingTurnId: ''
+  });
+  // cursor：当前会话的事件游标（见 agent2Cursor.js）；followToken 变化时停止旧的轮询
+  const agentStreamRef = React.useRef({
+    followToken: 0,
+    cursor: window.Agent2Cursor.create('')
+  });
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [historyLoading, setHistoryLoading] = React.useState(false);
   const [historySessions, setHistorySessions] = React.useState([]);
@@ -7879,7 +8458,6 @@ const Chat = ({
   const historyWrapRef = React.useRef(null);
   const [modeMenuOpen, setModeMenuOpen] = React.useState(false);
   const modeMenuRef = React.useRef(null);
-  const creatingAgentProjectRef = React.useRef(null);
   const feedbackStartedAt = React.useRef(Date.now());
   const previousTaskStates = React.useRef(new Map());
   const notifiedMessages = React.useRef(new Set());
@@ -7918,88 +8496,167 @@ const Chat = ({
     return result.length > 0 ? result : ['name'];
   }, []);
   const templateFields = getTemplateFields(template);
-  const loadAgentProject = React.useCallback(async function (projectId) {
-    if (!projectId) return null;
-    const data = await window.API.getAgentProject(projectId);
-    const imgs = await window.API.listAgentProjectImages(projectId);
-    const mapped = mapAgentProjectMessages(data, imgs);
-    setAgentProject(data);
-    setAgentProjectId(projectId);
-    setAgentMessages(mapped);
-    if (agentEnabled) setMessages(mapped);
-    if (onComposeComplete && data) {
-      onComposeComplete(null, null, data.currentImageUrl ? [data.currentImageUrl] : [], null);
-    }
-    return data;
-  }, [agentEnabled, onComposeComplete]);
-  const ensureAgentProject = React.useCallback(async function () {
-    // 如果有保存的 ID，先尝试加载；加载失败则重新创建
-    if (agentProjectId) {
-      try {
-        const data = await window.API.getAgentProject(agentProjectId);
-        if (data && data.id) return agentProjectId;
-      } catch (e) {
-        // 项目已不存在（404），清除旧 ID，继续创建新项目
-        setAgentProjectId('');
-        try {
-          localStorage.removeItem(AGENT_PROJECT_ID_KEY);
-        } catch (ex) {}
-      }
-    }
-    if (creatingAgentProjectRef.current) return creatingAgentProjectRef.current;
-    creatingAgentProjectRef.current = window.API.createAgentProject().then(function (created) {
-      setAgentProject(created);
-      setAgentProjectId(created.id);
-      return created.id;
-    }).finally(function () {
-      creatingAgentProjectRef.current = null;
+
+  // 刷新后保持上次选择的模式
+  React.useEffect(function () {
+    try {
+      localStorage.setItem(AGENT_MODE_KEY, agentEnabled ? '1' : '0');
+    } catch (e) {}
+  }, [agentEnabled]);
+  React.useEffect(function () {
+    try {
+      if (agentSessionId) localStorage.setItem(AGENT2_SESSION_KEY, agentSessionId);else localStorage.removeItem(AGENT2_SESSION_KEY);
+    } catch (e) {}
+  }, [agentSessionId]);
+  const pushAgentImagesToCanvas = React.useCallback(function (result) {
+    var items = result && Array.isArray(result.images) ? result.images : [];
+    if (!items.length || !onComposeComplete) return;
+    onComposeComplete(null, null, items.map(function (im) {
+      return {
+        url: im.url,
+        prompt: im.label || '',
+        originalPrompt: im.label || '',
+        model: 'agent',
+        jobId: im.id || '',
+        createdAt: Date.now()
+      };
+    }), null);
+  }, [onComposeComplete]);
+
+  // 切换会话身份（新建、删除、加载、首次创建）时换新游标：每个会话的 seq 都从 1 开始
+  const resetAgentCursor = React.useCallback(function (sessionId) {
+    var st = agentStreamRef.current;
+    st.followToken++;
+    st.cursor = window.Agent2Cursor.create(sessionId);
+  }, []);
+
+  // 实时推送和续接轮询共用：应用一个事件，返回它是否结束了当前轮次
+  const applyAgentEvent = React.useCallback(function (ev) {
+    var cursor = agentStreamRef.current.cursor;
+    if (!window.Agent2Cursor.accept(cursor, ev)) return false;
+    if (ev.turn_id && !AGENT2_TERMINAL[ev.type] && ev.type !== 'artifact.created') agentTurnRef.current.turnId = ev.turn_id;
+    if (ev.type === 'input.required') agentTurnRef.current.waitingTurnId = ev.turn_id;
+    setMessages(function (msgs) {
+      return agent2Reduce(msgs, ev);
     });
-    return creatingAgentProjectRef.current;
-  }, [agentProjectId]);
+    var p = ev.payload || {};
+    if (ev.type === 'tool.finished' && p.ok && window.Agent2Cursor.deliverOnce(cursor, 'call:' + p.call_id)) {
+      pushAgentImagesToCanvas(p.result);
+    }
+    // 服务重启后由后台补回的图片：按图片 ID 交付一次
+    if (ev.type === 'artifact.created' && p.recovered && p.artifact && window.Agent2Cursor.deliverOnce(cursor, 'img:' + p.artifact.id)) {
+      pushAgentImagesToCanvas({
+        images: [p.artifact]
+      });
+    }
+    return !!AGENT2_TERMINAL[ev.type];
+  }, [pushAgentImagesToCanvas]);
+
+  // 按 seq 补拉事件。busy：这一轮仍在运行（刷新或断线后），期间锁定输入并保留停止按钮；
+  // 轮次结束后如果还有后台生图未完成（例如服务重启后在恢复），继续低频轮询，补回的图片自动出现。
+  const followAgentTurn = React.useCallback(async function (sessionId, busy) {
+    var st = agentStreamRef.current;
+    var token = ++st.followToken;
+    var release = function () {
+      if (!busy) return;
+      busy = false;
+      setMessages(function (msgs) {
+        return msgs.filter(function (m) {
+          return !m.a2Thinking;
+        });
+      });
+      setIsLoading(false);
+    };
+    if (busy) setIsLoading(true);
+    try {
+      while (st.followToken === token) {
+        await agent2Sleep(busy ? 1500 : 4000);
+        if (st.followToken !== token) return;
+        var data;
+        try {
+          data = await window.API.getAgent2Session(sessionId, st.cursor.floor);
+        } catch (e) {
+          continue;
+        }
+        if (st.followToken !== token) return;
+        var ended = false;
+        (data && data.events || []).forEach(function (ev) {
+          if (applyAgentEvent(ev)) ended = true;
+        });
+        var running = !!(data && data.active_turn && data.active_turn.status === 'running');
+        if (ended || !running) release();
+        if (!running && !(data && data.pending_jobs)) break;
+      }
+    } finally {
+      if (st.followToken === token) release();
+    }
+  }, [applyAgentEvent]);
+  const stopAgentTurn = React.useCallback(function () {
+    var turnId = agentTurnRef.current.turnId;
+    if (!turnId) return;
+    window.API.cancelAgent2Turn(turnId).catch(function (e) {
+      window.dfToast(e && e.message ? e.message : '停止失败', {
+        tone: 'danger'
+      });
+    });
+  }, []);
+  const loadAgentSession = React.useCallback(async function (sessionId) {
+    resetAgentCursor(sessionId);
+    const cursor = agentStreamRef.current.cursor;
+    const data = await window.API.getAgent2Session(sessionId);
+    const events = (data && data.events || []).filter(function (ev) {
+      return window.Agent2Cursor.accept(cursor, ev);
+    });
+    const active = data && data.active_turn;
+    const running = !!(active && active.status === 'running');
+    // 回放时去掉残留的"思考中"占位；这一轮仍在运行时保留，随后续接事件
+    const replayed = events.reduce(agent2Reduce, []);
+    const mapped = running ? replayed : replayed.filter(function (m) {
+      return !m.a2Thinking;
+    });
+    // 历史里已有的结果不再重复交付到画布（恢复会话时另由 restoreAgentSession 放回最近一组）
+    events.forEach(function (ev) {
+      var p = ev.payload || {};
+      if (ev.type === 'tool.finished') window.Agent2Cursor.deliverOnce(cursor, 'call:' + p.call_id);
+      if (ev.type === 'artifact.created' && p.artifact) window.Agent2Cursor.deliverOnce(cursor, 'img:' + p.artifact.id);
+    });
+    agentTurnRef.current = {
+      turnId: running ? active.id : '',
+      waitingTurnId: active && active.status === 'waiting_user' ? active.id : ''
+    };
+    setAgentSessionId(sessionId);
+    setMessages(mapped);
+    if (running || data && data.pending_jobs) followAgentTurn(sessionId, running);
+    return mapped;
+  }, [followAgentTurn, resetAgentCursor]);
+  const ensureAgentSession = React.useCallback(async function () {
+    if (agentSessionId) return agentSessionId;
+    const created = await window.API.createAgent2Session();
+    setAgentSessionId(created.id);
+    return created.id;
+  }, [agentSessionId]);
   React.useEffect(() => {
     if (!user) return;
     let cancelled = false;
-    (async function () {
-      if (!agentEnabled) {
-        setMessages(defaultMessages);
-        return;
-      }
-      try {
-        const projectId = await ensureAgentProject();
-        if (cancelled) return;
-        const data = await window.API.getAgentProject(projectId);
-        const imgs = await window.API.listAgentProjectImages(projectId);
-        if (cancelled) return;
-        const mapped = mapAgentProjectMessages(data, imgs);
-        setAgentProject(data);
-        setAgentProjectId(projectId);
-        setAgentMessages(mapped);
-        setMessages(mapped);
-      } catch (e) {
-        if (!cancelled) {
-          setAgentMessages([{
-            who: 'ai',
-            feedbackAt: Date.now(),
-            feedbackError: e.message,
-            text: formatAiImageError(e.message),
-            meta: 'Agent'
-          }]);
-          setMessages([{
-            who: 'ai',
-            feedbackAt: Date.now(),
-            feedbackError: e.message,
-            text: formatAiImageError(e.message),
-            meta: 'Agent'
-          }]);
-        }
-      }
-    })();
+    if (!agentEnabled) {
+      setMessages(defaultMessages);
+      return;
+    }
+    if (!agentSessionId) {
+      setMessages([]);
+      return;
+    }
+    loadAgentSession(agentSessionId).catch(function () {
+      if (cancelled) return;
+      setAgentSessionId('');
+      setMessages([]);
+    });
     return function () {
       cancelled = true;
     };
-  }, [agentEnabled, ensureAgentProject, user]);
+  }, [agentEnabled, user]);
   React.useEffect(() => {
-    if (agentEnabled) setAgentMessages(messages);else setDefaultMessages(messages);
+    if (!agentEnabled) setDefaultMessages(messages);
   }, [agentEnabled, messages]);
   const loadAiChatHistory = React.useCallback(async () => {
     setHistoryLoading(true);
@@ -8014,13 +8671,12 @@ const Chat = ({
       setHistoryLoading(false);
     }
   }, []);
-  const loadAgentProjectHistory = React.useCallback(async () => {
+  const loadAgentSessionHistory = React.useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const res = await window.API.listAgentProjects(1, 20);
-      setHistorySessions(res && res.data || []);
+      setHistorySessions(await window.API.listAgent2Sessions());
     } catch (e) {
-      console.error('load agent project history failed:', e);
+      console.error('load agent session history failed:', e);
       window.dfError(e, '对话记录暂时无法加载，请稍后重新打开。');
       setHistorySessions([]);
     } finally {
@@ -8031,11 +8687,11 @@ const Chat = ({
     setHistoryOpen(function (prev) {
       const next = !prev;
       if (!prev) {
-        if (agentEnabled) loadAgentProjectHistory();else loadAiChatHistory();
+        if (agentEnabled) loadAgentSessionHistory();else loadAiChatHistory();
       }
       return next;
     });
-  }, [agentEnabled, loadAgentProjectHistory, loadAiChatHistory]);
+  }, [agentEnabled, loadAgentSessionHistory, loadAiChatHistory]);
   const restoreAiChatSession = React.useCallback(async sessionId => {
     try {
       const data = await window.API.getAiChat(sessionId);
@@ -8051,17 +8707,24 @@ const Chat = ({
       window.dfError(e, '对话暂时无法打开，请稍后再试。');
     }
   }, []);
-  const restoreAgentProjectSession = React.useCallback(async projectId => {
+  const restoreAgentSession = React.useCallback(async sessionId => {
     try {
-      await loadAgentProject(projectId);
+      const mapped = await loadAgentSession(sessionId);
       setHistoryOpen(false);
+      // 和旧版一致：恢复时把最近一次的生成结果放回画布
+      const lastCard = mapped.slice().reverse().find(function (m) {
+        return m.type === 'agent2-tool' && (m.images || []).length > 0;
+      });
+      if (lastCard) pushAgentImagesToCanvas({
+        images: lastCard.images
+      });
     } catch (e) {
-      console.error('restore agent project failed:', e);
+      console.error('restore agent session failed:', e);
       window.dfToast(e && e.message ? e.message : '恢复 Agent 对话失败', {
         tone: 'danger'
       });
     }
-  }, [loadAgentProject]);
+  }, [loadAgentSession, pushAgentImagesToCanvas]);
   const deleteAiChatHistory = React.useCallback(async sessionId => {
     if (!sessionId) return;
     try {
@@ -8085,19 +8748,22 @@ const Chat = ({
       });
     }
   }, [currentAiChatId]);
-  const deleteAgentProjectHistory = React.useCallback(async projectId => {
-    if (!projectId) return;
+  const deleteAgentSession = React.useCallback(async sessionId => {
+    if (!sessionId) return;
     try {
-      await window.API.deleteAgentProject(projectId);
+      await window.API.deleteAgent2Session(sessionId);
       setHistorySessions(function (prev) {
-        return prev.filter(function (project) {
-          return project.id !== projectId;
+        return prev.filter(function (session) {
+          return session.id !== sessionId;
         });
       });
-      if (agentProjectId === projectId) {
-        setAgentProjectId('');
-        setAgentProject(null);
-        setAgentMessages([]);
+      if (agentSessionId === sessionId) {
+        setAgentSessionId('');
+        agentTurnRef.current = {
+          turnId: '',
+          waitingTurnId: ''
+        };
+        resetAgentCursor('');
         setMessages([]);
         setComposerResetKey(function (prev) {
           return prev + 1;
@@ -8105,49 +8771,31 @@ const Chat = ({
         if (onComposeComplete) onComposeComplete(null, null, [], null);
       }
     } catch (e) {
-      console.error('delete agent project failed:', e);
+      console.error('delete agent session failed:', e);
       window.dfToast(e && e.message ? e.message : '删除失败，请稍后重试', {
         tone: 'danger'
       });
     }
-  }, [agentProjectId, onComposeComplete]);
+  }, [agentSessionId, onComposeComplete]);
   const startNewAiChat = React.useCallback(() => {
     if (isLoading) return;
     if (agentEnabled) {
-      (async function () {
-        setIsLoading(true);
-        try {
-          creatingAgentProjectRef.current = null;
-          setAgentProject(null);
-          setAgentProjectId('');
-          try {
-            localStorage.removeItem(AGENT_PROJECT_ID_KEY);
-          } catch (ex) {}
-          const created = await window.API.createAgentProject();
-          setAgentProject(created);
-          setAgentProjectId(created.id);
-          setAgentMessages([]);
-          setMessages([]);
-          setHistoryOpen(false);
-          setComposerResetKey(function (prev) {
-            return prev + 1;
-          });
-          setGreetingResetKey(function (prev) {
-            return prev + 1;
-          });
-          if (onComposeComplete) onComposeComplete(null, null, [], null);
-        } catch (e) {
-          setMessages([{
-            who: 'ai',
-            feedbackAt: Date.now(),
-            feedbackError: e.message,
-            text: formatAiImageError(e.message),
-            meta: 'Agent'
-          }]);
-        } finally {
-          setIsLoading(false);
-        }
-      })();
+      // 新会话在发送第一条消息时才创建，避免产生空会话
+      setAgentSessionId('');
+      agentTurnRef.current = {
+        turnId: '',
+        waitingTurnId: ''
+      };
+      resetAgentCursor('');
+      setMessages([]);
+      setHistoryOpen(false);
+      setComposerResetKey(function (prev) {
+        return prev + 1;
+      });
+      setGreetingResetKey(function (prev) {
+        return prev + 1;
+      });
+      if (onComposeComplete) onComposeComplete(null, null, [], null);
       return;
     }
     setMessages([]);
@@ -9143,7 +9791,7 @@ const Chat = ({
     // 显式 Skill 是一条直接执行的生图链路：先由 Skill planner 解读需求，
     // 再把 planned_prompt 提交给 Image API。不能让 Agent 分支提前截获它，
     // 否则 Skill 只会作为上下文参与问答/确认，永远不会进入 planner。
-    if (activeSkill && aiOptions.workflow !== 'download') {
+    if (activeSkill && aiOptions.workflow !== 'download' && !agentEnabled) {
       const skillImageOptions = Object.assign({}, aiOptions, {
         provider: 'auto',
         size: aiOptions.size || 'auto',
@@ -9165,294 +9813,50 @@ const Chat = ({
     }
     if (agentEnabled && aiOptions.workflow !== 'ai-image') {
       setIsLoading(true);
-      var projectId = '';
-      var assistantIdx = null;
-      var imageIdx = null;
-      var thinkingText = '';
-      var thinkingStatus = '正在连接 Agent...';
-      var thinkingPhaseLabels = {
-        analyzing_reference: '正在分析参考图，提取主体、风格和构图线索...',
-        understanding_intent: '正在理解需求，并整理可以确认的创意方向...',
-        llm_waiting: '正在组织回复，先把需求拆成可执行的视觉要点...'
+      agentStreamRef.current.followToken++; // 停掉低频轮询，本轮由实时推送接管
+      agentTurnRef.current.turnId = '';
+      var ended = false;
+      var onAgentEvent = function (ev) {
+        if (applyAgentEvent(ev)) ended = true;
       };
-      var applyThinkingEvent = function (payload) {
-        var delta = payload && payload.delta ? String(payload.delta) : '';
-        var message = payload && payload.message ? String(payload.message) : '';
-        var phaseMessage = payload && payload.phase ? thinkingPhaseLabels[payload.phase] : '';
-        if (delta) {
-          thinkingText += delta;
-          thinkingStatus = '正在输出思考过程...';
-          return {
-            thinking: thinkingText,
-            thinkingStatus: thinkingStatus
-          };
-        }
-        var nextStatus = message || phaseMessage || '正在处理...';
-        if (nextStatus) {
-          thinkingStatus = nextStatus;
-        }
-        return {
-          thinking: thinkingText,
-          thinkingStatus: thinkingStatus
-        };
-      };
-      setMessages(function (msgs) {
-        assistantIdx = msgs.length + 1;
-        return msgs.concat([{
-          who: 'user',
-          text: text,
-          refPreviews: userRefPreviews,
-          refMeta: userRefMeta,
-          activeSkill: activeSkill
-        }, {
-          who: 'ai',
-          type: 'thinking',
-          text: '正在连接 Agent...',
-          thinkingStatus: thinkingStatus,
-          meta: 'Agent'
-        }]);
-      });
+      var streamError = null;
+      var sessionId = agentSessionId;
       try {
-        projectId = await ensureAgentProject();
-        await window.API.streamAgentChat(projectId, executionText, {
-          onEvent: function (eventName, payload) {
-            if (eventName === 'agent_reset') {
-              thinkingText = '';
-              thinkingStatus = '正在重新组织回复...';
-              setMessages(function (msgs) {
-                return msgs.map(function (m, i) {
-                  return i === assistantIdx ? Object.assign({}, m, {
-                    text: '',
-                    thinking: '',
-                    thinkingStatus: thinkingStatus
-                  }) : m;
-                });
-              });
-              return;
-            }
-            if (eventName === 'agent_thinking') {
-              var thinkingPatch = applyThinkingEvent(payload || {});
-              setMessages(function (msgs) {
-                return msgs.map(function (m, i) {
-                  if (i !== assistantIdx) return m;
-                  var patch = {
-                    thinkingStatus: thinkingPatch.thinkingStatus
-                  };
-                  if (thinkingPatch.thinking) {
-                    patch.thinking = thinkingPatch.thinking;
-                  }
-                  return Object.assign({}, m, patch);
-                });
-              });
-              return;
-            }
-            if (eventName === 'agent_text') {
-              setMessages(function (msgs) {
-                return msgs.map(function (m, i) {
-                  if (i !== assistantIdx) return m;
-                  return {
-                    who: 'ai',
-                    text: (m.text || '') + (payload.delta || ''),
-                    meta: 'Agent',
-                    thinking: m.thinking,
-                    thinkingStatus: m.thinkingStatus
-                  };
-                });
-              });
-              return;
-            }
-            if (eventName === 'decision') {
-              if (payload && (payload.type === 'ASK' || payload.type === 'CONFIRM')) {
-                var opts = payload.type === 'ASK' ? payload.choices : payload.quickActions;
-                setMessages(function (msgs) {
-                  return msgs.map(function (m, i) {
-                    if (i !== assistantIdx) return m;
-                    var patch = {
-                      choices: payload.type === 'ASK' ? [] : undefined,
-                      quickActions: payload.type === 'CONFIRM' ? [] : undefined
-                    };
-                    if (Array.isArray(opts) && opts.length > 0) {
-                      patch[payload.type === 'ASK' ? 'choices' : 'quickActions'] = opts;
-                    }
-                    // CONFIRM 阶段附带 Creative Brief 卡片数据
-                    if (payload.type === 'CONFIRM' && payload.brief) {
-                      patch.brief = payload.brief;
-                    }
-                    if (payload.type === 'ASK' && payload.brief) {
-                      patch.brief = payload.brief;
-                    }
-                    if (payload.contract) {
-                      patch.contract = payload.contract;
-                    }
-                    if (payload.completeness) {
-                      patch.completeness = payload.completeness;
-                    }
-                    patch.decisionType = payload.type;
-                    return Object.assign({}, m, patch);
-                  });
-                });
-              }
-              if (payload && (payload.type === 'GENERATE' || payload.type === 'REFINE')) {
-                var promptModel = payload.prompt && payload.prompt.model ? payload.prompt.model : 'agent';
-                var modelLabel = promptModel === 'nano banana pro' ? 'Nano Banana' : promptModel === 'gpt image 2' || promptModel === 'gpt image 2.5' ? 'GPT Image 2.5' : promptModel;
-                var actionLabel = payload.type === 'REFINE' ? '修改' : '生成';
-                setMessages(function (msgs) {
-                  if (imageIdx == null) imageIdx = msgs.length;
-                  return msgs.concat([{
-                    who: 'ai',
-                    type: 'ai-image-generating',
-                    model: modelLabel,
-                    prompt: payload.prompt && (payload.prompt.instruction || payload.prompt.positive) ? payload.prompt.instruction || payload.prompt.positive : text,
-                    promptPayload: payload.prompt || null,
-                    size: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.size : 'auto',
-                    resolution: payload.prompt && payload.prompt.parameters ? payload.prompt.parameters.resolution : '1K',
-                    status: 'running',
-                    startedAt: Date.now(),
-                    progress: 0,
-                    meta: 'Agent · ' + actionLabel,
-                    refPreviews: userRefPreviews
-                  }]);
-                });
-              }
-              return;
-            }
-            if (eventName === 'generation_progress') {
-              setMessages(function (msgs) {
-                return msgs.map(function (m, i) {
-                  if (i !== imageIdx) return m;
-                  return {
-                    ...m,
-                    status: 'running',
-                    progress: payload.progress || m.progress || 0
-                  };
-                });
-              });
-              return;
-            }
-            if (eventName === 'generation_completed') {
-              var generatedImage = payload && payload.image ? payload.image : null;
-              var generatedUrl = generatedImage && generatedImage.url ? (window.API_BASE || window.location.origin) + generatedImage.url : '';
-              setMessages(function (msgs) {
-                return msgs.map(function (m, i) {
-                  if (i !== imageIdx) return m;
-                  return Object.assign({}, m, {
-                    status: 'done',
-                    imageUrl: generatedUrl || m.imageUrl || '',
-                    previewUrl: generatedUrl || m.previewUrl || '',
-                    progress: 100,
-                    finalElapsed: m.startedAt ? Math.floor((Date.now() - m.startedAt) / 1000) : m.finalElapsed,
-                    vlmPending: true
-                  });
-                });
-              });
-              return;
-            }
-            if (eventName === 'error') {
-              setMessages(function (msgs) {
-                return msgs.map(function (m, i) {
-                  if (i !== assistantIdx) return m;
-                  return {
-                    who: 'ai',
-                    feedbackAt: Date.now(),
-                    feedbackError: payload && payload.message,
-                    text: formatAiImageError(payload && payload.message),
-                    meta: 'Agent'
-                  };
-                });
-              });
-            }
-          },
-          onDone: async function (payload) {
-            if (payload && payload.project) setAgentProject(payload.project);
-            if (payload && payload.image) {
-              var imageUrl = (window.API_BASE || window.location.origin) + payload.image.image_url;
-              var vlm = payload.vlmAnalysis || null;
-              setMessages(function (msgs) {
-                return msgs.map(function (m, i) {
-                  if (i !== imageIdx) return m;
-                  return {
-                    ...m,
-                    status: 'done',
-                    imageUrl: imageUrl,
-                    progress: 100,
-                    finalElapsed: m.startedAt ? Math.floor((Date.now() - m.startedAt) / 1000) : null,
-                    vlm: vlm,
-                    vlmPending: false,
-                    promptPayload: payload && payload.generationInstruction ? Object.assign({}, m.promptPayload || {}, payload.generationInstruction) : m.promptPayload
-                  };
-                });
-              });
-              if (onComposeComplete) {
-                const agentPrompt = payload && payload.generationInstruction && (payload.generationInstruction.prompt || payload.generationInstruction.text) || payload && payload.image && payload.image.prompt && (payload.image.prompt.prompt || payload.image.prompt.generationInstruction) || '';
-                onComposeComplete(null, null, [{
-                  url: payload.image.image_url,
-                  prompt: agentPrompt,
-                  originalPrompt: agentPrompt,
-                  model: payload && payload.image && payload.image.model || 'agent',
-                  provider: payload && payload.image && payload.image.provider || '',
-                  jobId: payload && payload.image && payload.image.id || '',
-                  createdAt: Date.now()
-                }], null);
-              }
-            }
-            if (projectId) {
-              const latest = await window.API.getAgentProject(projectId);
-              const imgs = await window.API.listAgentProjectImages(projectId);
-              const mapped = mapAgentProjectMessages(latest, imgs);
-              // 保留流式过程中累积的 thinking/status 字段（服务端不存储）
-              setMessages(function (msgs) {
-                return mapped.map(function (mm, i) {
-                  var cm = msgs[i];
-                  if (cm && (cm.thinking || cm.thinkingStatus)) {
-                    return Object.assign({}, mm, {
-                      thinking: cm.thinking,
-                      thinkingStatus: cm.thinkingStatus
-                    });
-                  }
-                  return mm;
-                });
-              });
-              setAgentProject(latest);
-              setAgentMessages(mapped);
-            }
-            setIsLoading(false);
-          },
-          onError: function (payload) {
-            setMessages(function (msgs) {
-              return msgs.map(function (m, i) {
-                if (i !== assistantIdx) return m;
-                return {
-                  who: 'ai',
-                  feedbackAt: Date.now(),
-                  feedbackError: payload && payload.message,
-                  text: formatAiImageError(payload && payload.message),
-                  meta: 'Agent'
-                };
-              });
-            });
-            setIsLoading(false);
-          },
-          onClose: function () {
-            setIsLoading(false);
-          }
-        }, refImages, {
-          skill: activeSkill
-        });
+        var waitingTurnId = agentTurnRef.current.waitingTurnId;
+        if (waitingTurnId) {
+          agentTurnRef.current.waitingTurnId = '';
+          await window.API.answerAgent2(waitingTurnId, text.trim(), onAgentEvent);
+        } else {
+          sessionId = await ensureAgentSession();
+          if (agentStreamRef.current.cursor.sessionId !== sessionId) resetAgentCursor(sessionId);
+          await window.API.sendAgent2Message(sessionId, executionText, refImages, onAgentEvent, activeSkill);
+        }
       } catch (e) {
+        streamError = e;
+      }
+      if (!ended && sessionId && agentTurnRef.current.turnId) {
+        // 连接中断但这一轮已在服务端运行：改为按 seq 续接，不当作失败
+        followAgentTurn(sessionId, true);
+        return;
+      }
+      if (streamError) {
         setMessages(function (msgs) {
-          return msgs.map(function (m, i) {
-            if (i !== assistantIdx) return m;
-            return {
-              who: 'ai',
-              feedbackAt: Date.now(),
-              feedbackError: e.message,
-              text: formatAiImageError(e.message),
-              meta: 'Agent'
-            };
+          return agent2Reduce(msgs, {
+            type: 'turn.failed',
+            payload: {
+              message: streamError && streamError.message || '网络异常，请稍后重试'
+            }
           });
         });
-        setIsLoading(false);
       }
+      setMessages(function (msgs) {
+        return msgs.filter(function (m) {
+          return !m.a2Thinking;
+        });
+      });
+      setIsLoading(false);
+      // 本轮期间可能有后台补回的图片：低频检查一次，有未完成的生图就继续跟进
+      if (sessionId) followAgentTurn(sessionId, false);
       return;
     }
 
@@ -9924,7 +10328,7 @@ const Chat = ({
       } : m));
     }
     setIsLoading(false);
-  }, [agentEnabled, currentAiChatId, ensureAgentProject, getLastAiImageOptions, hasDoneAiImageInCurrentThread, isLikelyAiImageFollowup, isLoading, loadAiChatHistory, materializeReferenceImages, normalizeAiImageModel, onComposeComplete, runAiImageGeneration, template]);
+  }, [agentEnabled, agentSessionId, applyAgentEvent, followAgentTurn, resetAgentCursor, currentAiChatId, ensureAgentSession, pushAgentImagesToCanvas, getLastAiImageOptions, hasDoneAiImageInCurrentThread, isLikelyAiImageFollowup, isLoading, loadAiChatHistory, materializeReferenceImages, normalizeAiImageModel, onComposeComplete, runAiImageGeneration, template]);
 
   // ── 快捷回复：点击选项按钮触发 ──────────────────────────────────────────────
   const handleQuickReply = React.useCallback(function (value) {
@@ -10349,9 +10753,14 @@ const Chat = ({
       color: 'var(--ink-3)'
     }
   }, "\u6682\u65E0\u5386\u53F2\u5BF9\u8BDD"), !historyLoading && historySessions.map(function (session) {
-    var activeId = agentEnabled ? agentProjectId : currentAiChatId;
+    var activeId = agentEnabled ? agentSessionId : currentAiChatId;
     var title = session.title || '未命名对话';
-    var metaLine = agentEnabled ? (session.totalGenerations || 0) > 0 ? '已生成 ' + session.totalGenerations + ' 张' : '仅对话' : '';
+    var metaLine = agentEnabled && session.updated_at ? new Date(session.updated_at * 1000).toLocaleString('zh-CN', {
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }) : '';
     return /*#__PURE__*/React.createElement("div", {
       key: session.id,
       onMouseEnter: () => setHoveredHistoryId(session.id),
@@ -10371,7 +10780,7 @@ const Chat = ({
       }
     }, /*#__PURE__*/React.createElement("button", {
       onClick: () => {
-        if (agentEnabled) restoreAgentProjectSession(session.id);else restoreAiChatSession(session.id);
+        if (agentEnabled) restoreAgentSession(session.id);else restoreAiChatSession(session.id);
       },
       style: {
         flex: 1,
@@ -10408,7 +10817,7 @@ const Chat = ({
           return;
         }
         setConfirmDeleteId('');
-        if (agentEnabled) deleteAgentProjectHistory(session.id);else deleteAiChatHistory(session.id);
+        if (agentEnabled) deleteAgentSession(session.id);else deleteAiChatHistory(session.id);
       },
       title: confirmDeleteId === session.id ? '再点一次删除' : '删除',
       "aria-label": confirmDeleteId === session.id ? '确认删除' : '删除',
@@ -10789,6 +11198,7 @@ const Chat = ({
     skillUploading: skillUploading
   }), /*#__PURE__*/React.createElement(Composer, {
     onSend: handleSend,
+    onStop: agentEnabled ? stopAgentTurn : undefined,
     onParseTable: handleParseTable,
     onSmartDistribute: handleSmartDistribute,
     isLoading: isLoading,
@@ -10827,9 +11237,33 @@ const ADMIN_ACTIONS = {
   skill_upload: ['上传技能', '#0f8b78'],
   skill_delete: ['删除技能', '#d64545']
 };
+
+// Agent 模式：使用层（会话、轮次）+ 产出层（它发起的生图、特殊品任务，已计入任务总量）
+function AdminAgentUsage({
+  usage
+}) {
+  if (!usage) return null;
+  var items = [['使用人数', usage.users], ['会话', usage.sessions], ['对话轮次', usage.turns], ['失败 / 停止轮次', (usage.failed_turns || 0) + ' / ' + (usage.cancelled_turns || 0)], ['生图任务', usage.images], ['出图成功', usage.images_done], ['特殊品任务', usage.special], ['每轮平均出图', usage.images_per_turn == null ? '-' : usage.images_per_turn]];
+  return /*#__PURE__*/React.createElement("section", {
+    className: "df-admin-card df-admin-section"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-cardhead"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "df-admin-cardtitle"
+  }, "Agent \u6A21\u5F0F"), /*#__PURE__*/React.createElement("span", {
+    className: "df-admin-cardmeta"
+  }, "\u7528\u6237\u6BCF\u53D1\u4E00\u6761\u9700\u6C42\u7B97\u4E00\u8F6E\uFF1B\u751F\u56FE\u3001\u7279\u6B8A\u54C1\u4EFB\u52A1\u5DF2\u8BA1\u5165\u4E0A\u65B9\u4EFB\u52A1\u603B\u91CF")), /*#__PURE__*/React.createElement("div", {
+    className: "df-admin-agentstats"
+  }, items.map(function (item) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-detailcard",
+      key: item[0]
+    }, /*#__PURE__*/React.createElement("span", null, item[0]), /*#__PURE__*/React.createElement("strong", null, item[1] == null ? 0 : item[1]));
+  })));
+}
 const ADMIN_TASK_TYPES = {
   ai_image: 'AI 生图',
-  agent_image: 'Agent 生图',
+  agent_image: '旧版 Agent 生图',
   compose: '模板合成',
   special: '特殊品'
 };
@@ -11019,6 +11453,10 @@ const ADMIN_CSS = `
   .df-admin-progress { height: 3px; margin-top: 8px; border-radius: 9px; overflow: hidden; background: #eeefeb; }
   .df-admin-progress > span { display: block; height: 100%; background: #292c28; }
   .df-admin-section { margin-top: 10px; }
+  .df-admin-agentstats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; padding: 4px 16px 16px; }
+  .df-admin-agentstats strong { display: block; margin-top: 4px; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .df-admin-agentstats span { font-size: 11px; color: var(--admin-faint); }
+  .df-admin-sourcetag { margin-left: 5px; padding: 1px 5px; border-radius: 4px; background: #eef0fd; color: #4b58c9; font-size: 10px; }
   .df-admin-split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
   .df-admin-overviewtriple { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 10px; }
   .df-admin-ranking { padding: 7px 16px 12px; }
@@ -11150,6 +11588,7 @@ const ADMIN_CSS = `
     .df-admin-navbutton.is-active::after { display: none; }
     .df-admin-back { display: grid; place-items: center; }
     .df-admin-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .df-admin-agentstats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .df-admin-servicegrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 760px) {
@@ -11313,7 +11752,7 @@ function AdminTrendChart({
     return /*#__PURE__*/React.createElement("div", {
       className: "df-admin-baritem",
       key: index,
-      title: '共 ' + item.total + ' · AI 生图 ' + item.ai_image + ' · Agent 生图 ' + item.agent_image + ' · 模板合成 ' + item.compose + ' · 特殊品 ' + item.special
+      title: '共 ' + item.total + ' · AI 生图 ' + item.ai_image + ' · 旧版 Agent ' + item.agent_image + ' · 模板合成 ' + item.compose + ' · 特殊品 ' + item.special
     }, /*#__PURE__*/React.createElement("div", {
       className: "df-admin-bartrack"
     }, /*#__PURE__*/React.createElement("span", {
@@ -12028,9 +12467,11 @@ function AdminPage({
     userId: '',
     provider: '',
     reference: '',
-    skill: ''
+    skill: '',
+    source: ''
   });
   var [skills, setSkills] = React.useState([]);
+  var [memories, setMemories] = React.useState([]);
   var [selectedSkill, setSelectedSkill] = React.useState(null);
   var [skillDetail, setSkillDetail] = React.useState(null);
   var [skillDetailLoading, setSkillDetailLoading] = React.useState(false);
@@ -12096,7 +12537,8 @@ function AdminPage({
       userId: taskFilters.userId,
       provider: taskFilters.provider,
       reference: taskFilters.reference,
-      skill: taskFilters.skill
+      skill: taskFilters.skill,
+      source: taskFilters.source
     }).then(function (data) {
       setTasks(data.tasks || []);
       setTaskTotal(data.total || 0);
@@ -12154,6 +12596,33 @@ function AdminPage({
   React.useEffect(function () {
     if (view === 'skills') loadSkills();
   }, [view, loadSkills]);
+  var loadMemories = React.useCallback(function () {
+    setLoading(true);
+    setError('');
+    return window.API.getAdminMemories().then(function (data) {
+      var rows = [];
+      (data.users || []).forEach(function (group) {
+        (group.memories || []).forEach(function (m) {
+          rows.push(Object.assign({
+            user_id: group.user_id,
+            username: group.username
+          }, m));
+        });
+      });
+      rows.sort(function (a, b) {
+        return (b.updated_at || 0) - (a.updated_at || 0);
+      });
+      setMemories(rows);
+      setUpdatedAt(Date.now());
+    }).catch(function (err) {
+      setError(err.message || '用户记忆加载失败');
+    }).finally(function () {
+      setLoading(false);
+    });
+  }, []);
+  React.useEffect(function () {
+    if (view === 'memories') loadMemories();
+  }, [view, loadMemories]);
   React.useEffect(function () {
     if (!selectedSkill) {
       setSkillDetail(null);
@@ -12214,13 +12683,14 @@ function AdminPage({
       });
     });
   };
-  var navItems = [['overview', '运营总览', I.grid], ['tasks', '任务中心', I.layers], ['services', '服务状态', I.zap], ['users', '用户权限', I.user], ['skills', '用户技能', I.wand], ['audit', '审计日志', I.file]];
+  var navItems = [['overview', '运营总览', I.grid], ['tasks', '任务中心', I.layers], ['services', '服务状态', I.zap], ['users', '用户权限', I.user], ['skills', '用户技能', I.wand], ['memories', '用户记忆', I.bookmark], ['audit', '审计日志', I.file]];
   var viewTitles = {
     overview: ['运营总览', '任务健康、异常和使用趋势'],
     tasks: ['任务中心', '跨业务查询所有持久化任务'],
     services: ['服务状态', '本机资源与外部依赖连通性'],
     users: ['用户权限', '账号、角色和使用情况'],
     skills: ['用户技能', '用户上传的技能、使用情况和原始内容'],
+    memories: ['用户记忆', 'Agent 为每个用户记下的长期偏好和信息'],
     audit: ['审计日志', '关键操作与请求上下文']
   };
   var doRefresh = function () {
@@ -12228,6 +12698,7 @@ function AdminPage({
     if (view === 'audit') return loadOperations();
     if (view === 'users') return loadUsers();
     if (view === 'skills') return loadSkills();
+    if (view === 'memories') return loadMemories();
     if (view === 'services') return Promise.all([loadOverview(false), loadServiceProbes()]);
     return loadOverview(false);
   };
@@ -12377,7 +12848,7 @@ function AdminPage({
       className: "is-ai"
     }, /*#__PURE__*/React.createElement("i", null), "AI \u751F\u56FE"), /*#__PURE__*/React.createElement("span", {
       className: "is-agent"
-    }, /*#__PURE__*/React.createElement("i", null), "Agent"), /*#__PURE__*/React.createElement("span", {
+    }, /*#__PURE__*/React.createElement("i", null), "\u65E7\u7248 Agent"), /*#__PURE__*/React.createElement("span", {
       className: "is-compose"
     }, /*#__PURE__*/React.createElement("i", null), "\u6A21\u677F\u5408\u6210"), /*#__PURE__*/React.createElement("span", {
       className: "is-special"
@@ -12401,7 +12872,9 @@ function AdminPage({
         key: item.type
       }, /*#__PURE__*/React.createElement("div", {
         className: "df-admin-breaktop"
-      }, /*#__PURE__*/React.createElement("span", null, ADMIN_TASK_TYPES[item.type] || item.type), /*#__PURE__*/React.createElement("span", {
+      }, /*#__PURE__*/React.createElement("span", null, ADMIN_TASK_TYPES[item.type] || item.type, item.agent ? /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-faint"
+      }, "\uFF08\u5176\u4E2D Agent ", item.agent, "\uFF09") : null), /*#__PURE__*/React.createElement("span", {
         className: "df-admin-breakvalue"
       }, item.total)), /*#__PURE__*/React.createElement("div", {
         className: "df-admin-progress"
@@ -12411,7 +12884,9 @@ function AdminPage({
           background: barColor
         }
       })));
-    })))), /*#__PURE__*/React.createElement("div", {
+    })))), /*#__PURE__*/React.createElement(AdminAgentUsage, {
+      usage: overview.agent
+    }), /*#__PURE__*/React.createElement("div", {
       className: "df-admin-overviewtriple"
     }, /*#__PURE__*/React.createElement(AdminUserRanking, {
       items: overview.user_ranking,
@@ -12496,7 +12971,7 @@ function AdminPage({
       value: "ai_image"
     }, "AI \u751F\u56FE"), /*#__PURE__*/React.createElement("option", {
       value: "agent_image"
-    }, "Agent \u751F\u56FE"), /*#__PURE__*/React.createElement("option", {
+    }, "\u65E7\u7248 Agent \u751F\u56FE"), /*#__PURE__*/React.createElement("option", {
       value: "compose"
     }, "\u6A21\u677F\u5408\u6210"), /*#__PURE__*/React.createElement("option", {
       value: "special"
@@ -12559,7 +13034,19 @@ function AdminPage({
       value: "yes"
     }, "\u4F7F\u7528\u53C2\u8003\u56FE"), /*#__PURE__*/React.createElement("option", {
       value: "no"
-    }, "\u672A\u7528\u53C2\u8003\u56FE")), taskFilters.skill ? /*#__PURE__*/React.createElement("button", {
+    }, "\u672A\u7528\u53C2\u8003\u56FE")), /*#__PURE__*/React.createElement("select", {
+      className: "df-admin-control",
+      value: taskFilters.source,
+      onChange: function (e) {
+        setTaskFilter('source', e.target.value);
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "\u5168\u90E8\u6765\u6E90"), /*#__PURE__*/React.createElement("option", {
+      value: "agent"
+    }, "Agent \u6A21\u5F0F"), /*#__PURE__*/React.createElement("option", {
+      value: "normal"
+    }, "\u666E\u901A\u5165\u53E3")), taskFilters.skill ? /*#__PURE__*/React.createElement("button", {
       className: "df-admin-control",
       title: "\u6E05\u9664\u6280\u80FD\u7B5B\u9009",
       onClick: function () {
@@ -12596,7 +13083,9 @@ function AdminPage({
         }
       }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(AdminStatusBadge, {
         status: item.status
-      })), /*#__PURE__*/React.createElement("td", null, ADMIN_TASK_TYPES[item.task_type] || item.task_type), /*#__PURE__*/React.createElement("td", {
+      })), /*#__PURE__*/React.createElement("td", null, ADMIN_TASK_TYPES[item.task_type] || item.task_type, item.source === 'agent' ? /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-sourcetag"
+      }, "Agent") : null), /*#__PURE__*/React.createElement("td", {
         className: "df-admin-mono"
       }, String(item.id).slice(0, 12)), /*#__PURE__*/React.createElement("td", null, adminUserLabel(item)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", null, item.model || '-'), /*#__PURE__*/React.createElement("div", {
         className: "df-admin-ellipsis df-admin-faint"
@@ -12720,6 +13209,35 @@ function AdminPage({
       }, adminFormatTime(item.uploaded_at, true)));
     })))) : /*#__PURE__*/React.createElement(AdminEmpty, {
       text: loading ? '正在加载用户技能…' : '还没有用户上传技能'
+    }));
+  };
+  var renderMemories = function () {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-card"
+    }, memories.length ? /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-tablewrap"
+    }, /*#__PURE__*/React.createElement("table", {
+      className: "df-admin-table"
+    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\u7528\u6237"), /*#__PURE__*/React.createElement("th", null, "\u7C7B\u578B"), /*#__PURE__*/React.createElement("th", null, "\u5185\u5BB9"), /*#__PURE__*/React.createElement("th", null, "\u6765\u6E90\u4F1A\u8BDD"), /*#__PURE__*/React.createElement("th", null, "\u66F4\u65B0\u65F6\u95F4"))), /*#__PURE__*/React.createElement("tbody", null, memories.map(function (item) {
+      var account = users.find(function (u) {
+        return u.id === item.user_id;
+      });
+      return /*#__PURE__*/React.createElement("tr", {
+        key: item.user_id + ':' + item.id
+      }, /*#__PURE__*/React.createElement("td", null, adminUserLabel(account || item)), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted"
+      }, item.kind === 'fact' ? '信息' : '偏好'), /*#__PURE__*/React.createElement("td", {
+        style: {
+          whiteSpace: 'normal',
+          wordBreak: 'break-word'
+        }
+      }, item.content), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-faint mono"
+      }, item.source_session ? item.source_session.slice(0, 8) : '手动'), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted"
+      }, adminFormatTime(item.updated_at, true)));
+    })))) : /*#__PURE__*/React.createElement(AdminEmpty, {
+      text: loading ? '正在加载用户记忆…' : '还没有用户记忆'
     }));
   };
   var renderAudit = function () {
@@ -12910,7 +13428,7 @@ function AdminPage({
     },
     showTestUsers: showTestUsers,
     onToggleShowTest: handleToggleShowTestUsers
-  }) : null, view === 'skills' ? renderSkills() : null, view === 'audit' ? renderAudit() : null))), /*#__PURE__*/React.createElement(AdminSkillDrawer, {
+  }) : null, view === 'skills' ? renderSkills() : null, view === 'memories' ? renderMemories() : null, view === 'audit' ? renderAudit() : null))), /*#__PURE__*/React.createElement(AdminSkillDrawer, {
     skill: selectedSkill,
     detail: skillDetail,
     loading: skillDetailLoading,
