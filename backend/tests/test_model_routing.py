@@ -36,6 +36,11 @@ class ModelRoutingTest(unittest.IsolatedAsyncioTestCase):
         )
         self.settings_patch.start()
         self.addCleanup(self.settings_patch.stop)
+        # 冷却是跨请求的进程级状态；原有用例关掉它，冷却行为由专门的用例覆盖
+        for p in (patch.dict(model_routing._cooldown, clear=True),
+                  patch.object(model_routing, "ROUTE_COOLDOWN_SECONDS", 0)):
+            p.start()
+            self.addCleanup(p.stop)
         self.requests = []
         self.real_client = httpx.AsyncClient
 
@@ -56,6 +61,14 @@ class ModelRoutingTest(unittest.IsolatedAsyncioTestCase):
         with patch.multiple(model_routing.settings, apimart_llm_model="api-text", apimart_vlm_model="api-vision"):
             self.assertEqual(model_routing.get_model_routes("chat_llm")[1].model, "api-text")
             self.assertEqual(model_routing.get_model_routes("vlm")[1].model, "api-vision")
+
+    def test_gpt_tool_calls_disable_reasoning(self):
+        gpt = model_routing.ModelRoute("apimart", "https://api.test", "k", "gpt-6-luna")
+        claude = model_routing.ModelRoute("apimart", "https://api.test", "k", "claude-sonnet-4-6")
+        tools = [{"type": "function", "function": {"name": "f"}}]
+        self.assertEqual(model_routing._payload(gpt, {"tools": tools}, stream=True)["reasoning_effort"], "none")
+        self.assertNotIn("reasoning_effort", model_routing._payload(gpt, {}, stream=True))
+        self.assertNotIn("reasoning_effort", model_routing._payload(claude, {"tools": tools}, stream=True))
 
     def test_endpoint_normalization(self):
         for base in ("https://api.test", "https://api.test/v1/", "https://api.test/v1/chat/completions"):
@@ -136,6 +149,43 @@ class ModelRoutingTest(unittest.IsolatedAsyncioTestCase):
         with self.transport(lambda _: httpx.Response(503)), self.assertRaises(model_routing.ModelRoutingError):
             _ = [c async for c in model_routing.routed_chat_stream("agent_llm", {"messages": []})]
         self.assertEqual(len(self.requests), 2)
+
+    def _model_of(self, request) -> str:
+        return f"{request.url.host}/{json.loads(request.content)['model']}"
+
+    def test_model_lists_build_routes_per_provider(self):
+        with patch.multiple(model_routing.settings, chat_llm_model="a, b ,a", apimart_llm_model="x,y"):
+            routes = model_routing.get_model_routes("chat_llm")
+        self.assertEqual([(r.provider, r.model) for r in routes],
+                         [("sub2api", "a"), ("sub2api", "b"), ("apimart", "x"), ("apimart", "y")])
+
+    async def test_model_error_tries_next_model_on_same_provider(self):
+        def handler(request):
+            return httpx.Response(502) if self._model_of(request) == "sub.test/a" else completion()
+        with patch.object(model_routing.settings, "chat_llm_model", "a,b"), self.transport(handler):
+            response = await model_routing.routed_chat_completion("chat_llm", {"messages": []})
+        self.assertEqual([self._model_of(r) for r in self.requests], ["sub.test/a", "sub.test/b"])
+        self.assertEqual(response.extensions["model_route"], {"provider": "sub2api", "model": "b"})
+
+    async def test_provider_outage_skips_its_other_models_and_cools_down(self):
+        def handler(request):
+            if request.url.host == "sub.test":
+                raise httpx.ConnectError("down", request=request)
+            return completion()
+        with patch.object(model_routing, "ROUTE_COOLDOWN_SECONDS", 60), \
+                patch.object(model_routing.settings, "chat_llm_model", "a,b"), self.transport(handler):
+            await model_routing.routed_chat_completion("chat_llm", {"messages": []})
+            self.assertEqual([self._model_of(r) for r in self.requests], ["sub.test/a", "api.test/a"])
+            # 冷却期内下一次请求直接从 apimart 开始
+            self.requests.clear()
+            await model_routing.routed_chat_completion("chat_llm", {"messages": []})
+            self.assertEqual([self._model_of(r) for r in self.requests], ["api.test/a"])
+
+    async def test_auth_error_marks_whole_provider_down(self):
+        with patch.object(model_routing.settings, "chat_llm_model", "a,b"), \
+                self.transport(lambda r: httpx.Response(401) if r.url.host == "sub.test" else completion()):
+            await model_routing.routed_chat_completion("chat_llm", {"messages": []})
+        self.assertEqual([self._model_of(r) for r in self.requests], ["sub.test/a", "api.test/a"])
 
     async def test_missing_subscription_uses_apimart(self):
         with patch.multiple(model_routing.settings, cliproxy_base_url="", cliproxy_api_key=""), self.transport(lambda _: completion()):

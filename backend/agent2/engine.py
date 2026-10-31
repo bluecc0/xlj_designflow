@@ -17,12 +17,15 @@ import httpx
 
 from ..model_routing import (
     ModelRoutingError,
+    RouteHTTPError,
     _check_response_error,
     _client_options,
     _headers,
     _payload,
     chat_completions_endpoint,
     get_model_routes,
+    route_failed,
+    route_succeeded,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,7 +71,10 @@ class RoutedModelClient:
         routes = get_model_routes(self.purpose)
         if not routes:
             raise ModelRoutingError("Agent 模型线路未配置")
+        down: set[str] = set()
         for route in routes:
+            if route.provider in down:
+                continue
             emitted = False
             text_parts: list[str] = []
             calls: dict[int, dict] = {}
@@ -82,7 +88,7 @@ class RoutedModelClient:
                             detail = (await response.aread()).decode("utf-8", "ignore")[:500]
                             if any(h in detail.lower() for h in _OVERFLOW_HINTS):
                                 raise ContextOverflow(detail)
-                            raise ModelRoutingError(f"HTTP {response.status_code}")
+                            raise RouteHTTPError(response.status_code)
                         async for line in response.aiter_lines():
                             if not line.startswith("data:"):
                                 continue
@@ -121,13 +127,16 @@ class RoutedModelClient:
                     {"id": c["id"] or f"call_{i}", "name": c["name"], "arguments": c["arguments"]}
                     for i, c in sorted(calls.items())
                 ]
+                route_succeeded(route)
                 yield ("step", ModelStep(text="".join(text_parts), tool_calls=tool_calls,
                                          route={"provider": route.provider, "model": route.model}))
                 return
             except (httpx.HTTPError, ValueError, ModelRoutingError) as exc:
                 reason = str(exc) if isinstance(exc, ModelRoutingError) else type(exc).__name__
-                errors.append(f"{route.provider}: {reason}")
-                logger.warning("[agent2] %s route %s failed (%s)", self.purpose, route.provider, reason)
+                errors.append(f"{route.provider}/{route.model}: {reason}")
+                if route_failed(route, exc):
+                    down.add(route.provider)
+                logger.warning("[agent2] %s route %s model=%s failed (%s)", self.purpose, route.provider, route.model, reason)
                 if emitted:
                     yield ("reset", None)
         raise ModelRoutingError("模型服务暂不可用（" + "；".join(errors) + "）")
