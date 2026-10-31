@@ -1,4 +1,4 @@
-"""平台已有的图片处理能力包装成 Agent 工具：抠图、高清放大、转矢量、拆分 PSD 图层、扩图、AI 换装。
+"""平台已有的图片处理能力包装成 Agent 工具：抠图、高清放大、转矢量、拆分 PSD 图层、扩图、AI 换装、素材库取图。
 
 都复用画布那一套后台任务（main.start_image_operation、main.submit_outpainting_job、换装 prompt），
 Agent 只负责找到图片、等任务结束、把结果登记为会话产物。
@@ -222,6 +222,43 @@ async def fill_background(ctx: ToolContext, args: dict) -> dict:
     return {"images": [{"id": artifact["id"], "url": url, "label": label}]}
 
 
+# ── 素材库取图（按货号拼路径查找，不浏览目录）─────────────────────────────────
+
+MAX_LIBRARY_IMAGES = 6
+
+
+async def find_product_images(ctx: ToolContext, args: dict) -> dict:
+    sku = str(args.get("sku") or "").strip()
+    asset_type = str(args.get("asset_type") or "").strip()
+    assets = await asyncio.to_thread(outfit_change.list_sku_assets, sku)
+    if asset_type:
+        assets = [a for a in assets if a.get("asset_type") == asset_type]
+    if not assets:
+        kind = outfit_change.ASSET_TYPE_LABELS.get(asset_type, "商品图") if asset_type else "商品图"
+        return {"error": f"素材库里没有找到货号 {sku} 的{kind}，请确认货号，或直接上传图片"}
+    images = []
+    for asset in assets[:MAX_LIBRARY_IMAGES]:
+        src = await asyncio.to_thread(outfit_change.resolve_library_asset, asset["asset_type"], asset["path"])
+        # 复制到输出目录：对话卡片能预览下载，后续抠图、放大等工具也能直接用
+        job_id = uuid.uuid4().hex
+        out = settings.output_path / "ai-images" / ctx.user["id"] / "library" / f"{job_id}{src.suffix.lower()}"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(out.write_bytes, await asyncio.to_thread(src.read_bytes))
+        url = f"/ai-images/{quote(ctx.user['id'])}/library/{quote(out.name)}"
+        label = f"{sku} {asset.get('type_label') or ''} {asset.get('angle') or ''}".strip()
+        artifact, event = store.register_job_artifact(
+            job_id, ctx.turn_id, lambda a: _artifact_event(a), session_id=ctx.session_id, user_id=ctx.user["id"],
+            url=url, path=str(out), label=label, source_tool_call_id=ctx.call_id,
+            meta={"operation": "library", "sku": sku, "asset_type": asset["asset_type"], "filename": src.name})
+        if ctx.publish:
+            await ctx.publish(event)
+        images.append({"id": artifact["id"], "url": url, "label": label})
+    out = {"images": images}
+    if len(assets) > MAX_LIBRARY_IMAGES:
+        out["note"] = f"共找到 {len(assets)} 张，只取了前 {MAX_LIBRARY_IMAGES} 张"
+    return out
+
+
 # ── AI 换装 ───────────────────────────────────────────────────────────────────
 
 MAX_SKU_ANGLES = 3
@@ -303,6 +340,15 @@ def build_image_op_tools() -> list[Tool]:
                                "description": "往哪边扩：center 四周（默认）、left、right、top、bottom"}},
               "required": ["image_id"]},
              outpaint_image),
+        Tool("find_product_images", "素材库取图：按货号从公司商品素材库取出商品图（白底图、透明 PNG、模特图等），"
+             "直接作为图片发给用户，之后可以继续抠图、换底色、做海报参考。只能按完整货号查，不能浏览或搜索文件夹。",
+             {"type": "object", "properties": {
+                 "sku": {"type": "string", "description": "商品货号"},
+                 "asset_type": {"type": "string", "enum": list(outfit_change.ASSET_TYPE_LABELS),
+                                "description": "图片类型：" + "、".join(f"{k} {v}" for k, v in outfit_change.ASSET_TYPE_LABELS.items())
+                                               + "；用户没说就不填，返回全部类型"}},
+              "required": ["sku"]},
+             find_product_images),
         Tool("outfit_change", "AI 换装：给人物照片换上指定服装，保持人物、姿势和背景不变。"
              "服装来自用户上传的服装图（garment_image_ids），或素材库货号（sku）。",
              {"type": "object", "properties": {

@@ -5814,12 +5814,19 @@ const Composer = ({
     }, 0);
     if (onSeedConsumed) onSeedConsumed();
   }, [seedPrompt, onSeedConsumed]);
+
+  // 进入 Agent 时清空输入框模式；退出 Agent 时回到默认生图模式，否则会停在问答
+  const wasAgentRef = React.useRef(agentEnabled);
   React.useEffect(() => {
     if (agentEnabled) {
       setSelectedMode('');
       setSelectedSkill('');
       setSelectedWorkflow('chat');
+    } else if (wasAgentRef.current) {
+      setSelectedMode(DEFAULT_COMPOSER_MODE);
+      setSelectedWorkflow('chat');
     }
+    wasAgentRef.current = agentEnabled;
   }, [agentEnabled]);
   React.useEffect(() => {
     if (template && (template.is_special || template.is_special_full)) return;
@@ -8172,6 +8179,7 @@ const AGENT2_TOOL_LABELS = {
   special_compose: '特殊品合成',
   remember: '记忆',
   remove_background: '抠图',
+  find_product_images: '素材库取图',
   fill_background: '换底色',
   upscale_image: '高清放大',
   vectorize_image: '转矢量图',

@@ -2069,12 +2069,18 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
     if (onSeedConsumed) onSeedConsumed();
   }, [seedPrompt, onSeedConsumed]);
 
+  // 进入 Agent 时清空输入框模式；退出 Agent 时回到默认生图模式，否则会停在问答
+  const wasAgentRef = React.useRef(agentEnabled);
   React.useEffect(() => {
     if (agentEnabled) {
       setSelectedMode('');
       setSelectedSkill('');
       setSelectedWorkflow('chat');
+    } else if (wasAgentRef.current) {
+      setSelectedMode(DEFAULT_COMPOSER_MODE);
+      setSelectedWorkflow('chat');
     }
+    wasAgentRef.current = agentEnabled;
   }, [agentEnabled]);
 
   React.useEffect(() => {
@@ -4135,7 +4141,7 @@ const AGENT2_SESSION_KEY = 'designflow_agent2_session_id';
 const AGENT2_TOOL_LABELS = {
   generate_image: '生成图片', analyze_image: '看图', load_skill: '加载技能',
   read_skill_file: '读取技能资料', special_compose: '特殊品合成', remember: '记忆',
-  remove_background: '抠图', fill_background: '换底色', upscale_image: '高清放大', vectorize_image: '转矢量图',
+  remove_background: '抠图', find_product_images: '素材库取图', fill_background: '换底色', upscale_image: '高清放大', vectorize_image: '转矢量图',
   split_layers: '拆分 PSD 图层', outpaint_image: '扩图', outfit_change: 'AI 换装',
 };
 // 回复末尾的 [[NEXT: ...]] 由界面渲染成快捷按钮；流式过程中先把它隐藏

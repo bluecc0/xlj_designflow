@@ -163,6 +163,35 @@ class Agent2ImageOpsTest(unittest.TestCase):
         self.assertFalse(finished[1]["ok"])
         self.assertIn("先抠图", finished[1]["result"]["error"])
 
+    def test_find_product_images_copies_library_files_into_session(self):
+        lib = Path(self.tmp.name) / "lib"
+        (lib / "White_Base").mkdir(parents=True)
+        (lib / "PNG").mkdir()
+        (lib / "White_Base" / "A1234.jpg").write_bytes(_png())
+        (lib / "White_Base" / "A1234_1.jpg").write_bytes(_png())
+        (lib / "PNG" / "A1234.png").write_bytes(_png())
+        image_ops.outfit_change._ASSET_CACHE.clear()
+        with patch.object(image_ops.settings, "product_library_path", lib), \
+                patch.object(image_ops.settings, "output_path", Path(self.tmp.name) / "out"):
+            events, _ = self._run([
+                [("call", "find_product_images", {"sku": "A1234", "asset_type": "white"})],
+                [("call", "find_product_images", {"sku": "../etc"})],
+                [("call", "find_product_images", {"sku": "Z9999"})],
+                [("text", "好了")],
+            ], "把 A1234 的白底图发我")
+        finished = [e["payload"] for e in events if e["type"] == "tool.finished"]
+        images = finished[0]["result"]["images"]
+        self.assertEqual(len(images), 2)
+        self.assertEqual(len([e for e in events if e["type"] == "artifact.created"]), 2)
+        art = store.get_artifact(images[0]["id"], "u1")
+        self.assertTrue(Path(art["path"]).is_file())
+        self.assertNotIn(str(lib), art["path"])
+        self.assertIn("/library/", art["url"])
+        # 越界货号和不存在的货号都只报找不到
+        self.assertFalse(finished[1]["ok"])
+        self.assertFalse(finished[2]["ok"])
+        self.assertIn("Z9999", finished[2]["result"]["error"])
+
     def test_outfit_change_uses_durable_generation_with_built_in_prompt(self):
         person = self.source
         garment_path = Path(self.tmp.name) / "shirt.png"
