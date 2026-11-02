@@ -3609,7 +3609,10 @@ const WelcomeSkills = ({
   })), /*#__PURE__*/React.createElement("span", {
     style: {
       fontWeight: 600,
-      flexShrink: 0
+      minWidth: 0,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
     }
   }, skill.title || skill.name), skill.scope === 'user' && /*#__PURE__*/React.createElement("span", {
     style: {
@@ -3622,6 +3625,7 @@ const WelcomeSkills = ({
     }
   }, "\u6211\u7684"), (skill.summary || skill.scope === 'user' && skill.description) && /*#__PURE__*/React.createElement("span", {
     style: {
+      flex: '1 1 0',
       color: 'var(--ink-3)',
       minWidth: 0,
       overflow: 'hidden',
@@ -3728,15 +3732,7 @@ const AgentWelcome = ({
       color: 'var(--ink)',
       textAlign: 'center'
     }
-  }, title), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: 'var(--ink-3)',
-      textAlign: 'center',
-      maxWidth: 240,
-      lineHeight: 1.5
-    }
-  }, "\u8BF4\u4E00\u53E5\u9700\u6C42\uFF0CAgent \u4F1A\u76F4\u63A5\u5F00\u59CB\u505A\uFF1B\u770B\u5230\u7ED3\u679C\u540E\u518D\u544A\u8BC9\u5B83\u600E\u4E48\u8C03\u6574\u3002"), skillProps && skillProps.onPickSkill ? /*#__PURE__*/React.createElement(WelcomeSkills, skillProps) : null));
+  }, title), skillProps && skillProps.onPickSkill ? /*#__PURE__*/React.createElement(WelcomeSkills, skillProps) : null));
 };
 const agent2Spinner = function (size) {
   return /*#__PURE__*/React.createElement("div", {

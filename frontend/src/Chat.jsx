@@ -813,9 +813,10 @@ const WelcomeSkills = ({ agentSkills, onPickSkill, onUploadSkill, onDeleteSkill,
             }}
           >
             <span style={{ color: 'var(--ink-3)', display: 'inline-flex', flexShrink: 0 }}><I.wand size={13}/></span>
-            <span style={{ fontWeight: 600, flexShrink: 0 }}>{skill.title || skill.name}</span>
+            {/* 名称过长时省略，"我的"标签始终留在卡片内；描述排在名称之后，先被压缩 */}
+            <span style={{ fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{skill.title || skill.name}</span>
             {skill.scope === 'user' && <span style={{ fontSize: 10, color: 'var(--ink-3)', border: '1px solid var(--line-2)', borderRadius: 4, padding: '0 4px', flexShrink: 0 }}>我的</span>}
-            {(skill.summary || (skill.scope === 'user' && skill.description)) && <span style={{ color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{skill.summary || skill.description}</span>}
+            {(skill.summary || (skill.scope === 'user' && skill.description)) && <span style={{ flex: '1 1 0', color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{skill.summary || skill.description}</span>}
           </button>
           {skill.scope === 'user' && onDeleteSkill && hoverSkill === skill.name && (
             <button
@@ -868,9 +869,6 @@ const AgentWelcome = ({ skillProps, user }) => {
         </div>
         <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)', textAlign: 'center' }}>
           {title}
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.5 }}>
-          说一句需求，Agent 会直接开始做；看到结果后再告诉它怎么调整。
         </div>
         {skillProps && skillProps.onPickSkill ? <WelcomeSkills {...skillProps}/> : null}
       </div>
