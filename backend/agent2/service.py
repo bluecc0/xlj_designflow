@@ -127,8 +127,13 @@ async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict
                 store.update_turn(turn_id, status="done")
         except asyncio.CancelledError:
             save(full, settle=True)
-            store.update_turn(turn_id, status="cancelled")
-            await emit("turn.cancelled", {})
+            if turn_id in user_cancelled:
+                store.update_turn(turn_id, status="cancelled")
+                await emit("turn.cancelled", {})
+            else:
+                # 关服、reload 等非用户取消：记为中断而不是停止，已提交的任务完成后照常补回
+                store.update_turn(turn_id, status="failed", error=INTERRUPTED_MESSAGE)
+                await emit("turn.failed", {"message": INTERRUPTED_MESSAGE})
         except Exception as exc:
             logger.exception("[agent2] turn %s failed", turn_id)
             save(full, settle=True)
@@ -146,6 +151,10 @@ async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict
         if event is None:
             break
         yield sse(event)
+
+
+# 只有用户点停止才记 cancelled（补交付据此跳过）；其余取消一律按服务中断处理
+INTERRUPTED_MESSAGE = "服务重启，本轮已中断；已提交的任务会在后台继续，完成后结果会补回到这里"
 
 
 def _user_skill_dir(user: dict):
@@ -210,6 +219,5 @@ def cancel_turn(turn_id: str) -> bool:
 
 def fail_stale_turns() -> None:
     """服务启动时调用：上次进程中断的轮次标记失败并推送终态事件，前端续接时能结束等待。"""
-    message = "服务重启，本轮已中断；已提交的生图任务会在后台继续，完成后图片会补回到这里"
-    for row in store.fail_stale_turns(message):
-        store.append_event(row["session_id"], row["id"], "turn.failed", {"message": message})
+    for row in store.fail_stale_turns(INTERRUPTED_MESSAGE):
+        store.append_event(row["session_id"], row["id"], "turn.failed", {"message": INTERRUPTED_MESSAGE})

@@ -157,13 +157,54 @@ class Agent2ImageOpsTest(unittest.TestCase):
         self.assertEqual((artifact["label"], artifact["source_tool_call_id"]), ("抠图", finished["call_id"]))
         self.assertEqual(store.count_pending_image_jobs(self.session["id"]), 0)
 
-    def test_results_of_user_stopped_turns_are_not_delivered(self):
-        turn = store.claim_turn(self.session["id"], "u1", "抠图")
-        store.update_turn(turn["id"], status="cancelled")
-        self._agent_job("stopped1", operation="matting", turn_id=turn["id"])
-        self.assertEqual(store.count_pending_image_jobs(self.session["id"]), 0)
+    def _interrupt_running_tool(self, user_stop: bool):
+        """真实走一轮：抠图工具等待后台任务时取消轮次。user_stop=False 模拟关服/reload 直接取消 runner。"""
+        def slow(user, operation, job_id, src_path, image_url, *, scale=None, extra_meta=None):
+            self.started.append(job_id)
+            job_store.save_ai_image_job(job_id=job_id, user_id="u1", status="processing", model="local-matting",
+                                        prompt="matting", size="", request_meta={"operation": operation, **extra_meta})
+        self.main.start_image_operation.side_effect = slow
+        model = FakeModel([[("call", "remove_background", {"image_id": self.source["id"]})]])
+
+        async def scenario():
+            with patch.object(service, "model_factory", lambda: model):
+                session = store.get_session(self.session["id"], "u1")
+                chunks = []
+
+                async def consume():
+                    async for c in service.start_turn(self.user, session, "抠图", []):
+                        chunks.append(c)
+                consumer = asyncio.create_task(consume())
+                while not self.started:
+                    await asyncio.sleep(0.01)
+                turn_id = store.list_events(self.session["id"])[0]["turn_id"]
+                if user_stop:
+                    self.assertTrue(service.cancel_turn(turn_id))
+                else:
+                    service._running[turn_id].cancel()
+                await asyncio.wait_for(consumer, 5)
+                return chunks, turn_id
+        chunks, turn_id = asyncio.run(scenario())
+        # 取消后后台任务照常完成
+        job = job_store.load_ai_image_job(self.started[0])
+        job_store.save_ai_image_job(job_id=job["id"], user_id="u1", status="done", model=job["model"], prompt="matting",
+                                    size="", image_url="/ai-images/u1/result.png", request_meta=job["request_meta"])
         with patch.object(store, "DELIVERY_GRACE_SECONDS", -1):
-            self.assertEqual(a2tools.deliver_finished_jobs(), 0)
+            delivered = a2tools.deliver_finished_jobs()
+        return _events(chunks)[-1]["type"], store.get_turn(turn_id, "u1")["status"], delivered, job["id"]
+
+    def test_shutdown_cancel_still_delivers_finished_result(self):
+        event, status, delivered, job_id = self._interrupt_running_tool(user_stop=False)
+        self.assertEqual((event, status), ("turn.failed", "failed"))
+        self.assertEqual(delivered, 1)
+        self.assertTrue(store.find_job_artifact(job_id)["meta"]["recovered"])
+
+    def test_results_of_user_stopped_turns_are_not_delivered(self):
+        event, status, delivered, job_id = self._interrupt_running_tool(user_stop=True)
+        self.assertEqual((event, status), ("turn.cancelled", "cancelled"))
+        self.assertEqual(delivered, 0)
+        self.assertIsNone(store.find_job_artifact(job_id))
+        self.assertEqual(store.count_pending_image_jobs(self.session["id"]), 0)
 
     def test_failed_job_and_unknown_image_are_reported(self):
         def failing(user, operation, job_id, *a, **k):
