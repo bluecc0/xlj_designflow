@@ -4561,13 +4561,12 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         resetAgentCursor('');
         setMessages([]);
         setComposerResetKey(function(prev) { return prev + 1; });
-        if (onComposeComplete) onComposeComplete(null, null, [], null);
       }
     } catch (e) {
       console.error('delete agent session failed:', e);
       window.dfToast((e && e.message) ? e.message : '删除失败，请稍后重试', { tone: 'danger' });
     }
-  }, [agentSessionId, onComposeComplete]);
+  }, [agentSessionId]);
 
   const startNewAiChat = React.useCallback(() => {
     if (isLoading) return;
@@ -4580,7 +4579,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       setHistoryOpen(false);
       setComposerResetKey(function(prev) { return prev + 1; });
       setGreetingResetKey(function(prev) { return prev + 1; });
-      if (onComposeComplete) onComposeComplete(null, null, [], null);
       return;
     }
     setMessages([]);
@@ -4589,7 +4587,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     setHistoryOpen(false);
     setComposerResetKey(function(prev) { return prev + 1; });
     setGreetingResetKey(function(prev) { return prev + 1; });
-  }, [agentEnabled, isLoading, onComposeComplete]);
+  }, [agentEnabled, isLoading]);
 
   React.useEffect(() => {
     if (!historyOpen) return;

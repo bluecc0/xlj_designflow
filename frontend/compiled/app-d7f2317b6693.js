@@ -8777,7 +8777,6 @@ const Chat = ({
         setComposerResetKey(function (prev) {
           return prev + 1;
         });
-        if (onComposeComplete) onComposeComplete(null, null, [], null);
       }
     } catch (e) {
       console.error('delete agent session failed:', e);
@@ -8785,7 +8784,7 @@ const Chat = ({
         tone: 'danger'
       });
     }
-  }, [agentSessionId, onComposeComplete]);
+  }, [agentSessionId]);
   const startNewAiChat = React.useCallback(() => {
     if (isLoading) return;
     if (agentEnabled) {
@@ -8804,7 +8803,6 @@ const Chat = ({
       setGreetingResetKey(function (prev) {
         return prev + 1;
       });
-      if (onComposeComplete) onComposeComplete(null, null, [], null);
       return;
     }
     setMessages([]);
@@ -8817,7 +8815,7 @@ const Chat = ({
     setGreetingResetKey(function (prev) {
       return prev + 1;
     });
-  }, [agentEnabled, isLoading, onComposeComplete]);
+  }, [agentEnabled, isLoading]);
   React.useEffect(() => {
     if (!historyOpen) return;
     const handlePointerDown = function (event) {
