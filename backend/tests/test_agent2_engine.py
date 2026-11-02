@@ -249,6 +249,44 @@ class Agent2EngineTest(unittest.TestCase):
         tool_msg = [m for m in model.seen[1] if m["role"] == "tool"][0]
         self.assertIn("跑不", tool_msg["content"])
 
+    def test_each_image_can_use_its_own_model(self):
+        from unittest.mock import MagicMock
+        from backend.agent2 import tools as a2tools
+
+        img = Path(self.tmp.name) / "out.png"
+        img.write_bytes(b"png")
+
+        async def fake_vlm(purpose, payload, **kwargs):
+            resp = MagicMock()
+            resp.json.return_value = {"choices": [{"message": {"content": '{"ok": true, "summary": "", "problems": []}'}}]}
+            return resp
+
+        patches, executed = self._durable_image_tools(img)
+        model = FakeModel([
+            [("call", "generate_image", {"images": [
+                {"prompt": "猫", "label": "GPT Image 2.5"},
+                {"prompt": "猫", "label": "Nano Banana Pro", "model": "nano-banana-pro"},
+                {"prompt": "猫", "label": "Seedream", "model": "seedream-5.0-pro"}]})],
+            [("call", "generate_image", {"images": [{"prompt": "猫", "model": "midjourney"}]})],
+            [("text", "好了")],
+        ])
+        with patches[0], patches[1], patches[2], \
+                patch.object(a2tools, "routed_chat_completion", fake_vlm), \
+                patch.object(a2tools, "compress_image_to_data_url", lambda data, size: "data:image/png;base64,"):
+            events = self._run(model)
+        # 实际提交的任务各用各的模型，而不是只改了名称
+        self.assertEqual(sorted(j["model"] for j in executed), ["gpt-image-2.5", "nano-banana-pro", "seedream-5.0-pro"])
+        created = {e["payload"]["artifact"]["label"]: e["payload"]["artifact"]["model"]
+                   for e in events if e["type"] == "artifact.created"}
+        self.assertEqual(created, {"GPT Image 2.5": "gpt-image-2.5", "Nano Banana Pro": "nano-banana-pro",
+                                   "Seedream": "seedream-5.0-pro"})
+        finished = [e["payload"] for e in events if e["type"] == "tool.finished"]
+        self.assertEqual(sorted(i["model"] for i in finished[0]["result"]["images"]),
+                         ["gpt-image-2.5", "nano-banana-pro", "seedream-5.0-pro"])
+        # 不支持的模型整批拒绝，不会偷偷换成默认模型
+        self.assertIn("midjourney", finished[1]["result"]["error"])
+        self.assertEqual(len(executed), 3)
+
     def test_failed_image_job_is_reported_to_model(self):
         img = Path(self.tmp.name) / "out.png"
         patches, _ = self._durable_image_tools(img, fail="上游安全审核拦截")

@@ -68,6 +68,8 @@ def create_job_artifact(job: dict, recovered: bool = False) -> tuple[dict, dict]
     local = str(_main()._resolve_public_asset_path(url) or "")
     operation = str(meta.get("operation") or "")
     extra: dict = {"prompt": job.get("prompt"), "provider": job.get("provider"), "operation": operation}
+    if operation in ("", "outfit-change"):  # 生图记下实际请求的模型，卡片据此显示，不依赖模型写的 label
+        extra["model"] = job.get("model")
     if operation == "layer_extract":
         try:
             extra["layer_count"] = len(json.loads(job.get("prompt_trace") or "{}").get("layers") or [])
@@ -87,6 +89,8 @@ def create_job_artifact(job: dict, recovered: bool = False) -> tuple[dict, dict]
 def _artifact_event(artifact: dict, recovered: bool = False) -> dict:
     out = {"id": artifact["id"], "url": artifact["url"], "label": artifact["label"], "group_id": artifact["group_id"],
            "group_type": artifact["group_type"], "position": artifact["position"], "kind": artifact.get("kind") or "image"}
+    if (artifact.get("meta") or {}).get("model"):
+        out["model"] = artifact["meta"]["model"]
     if out["kind"] == "file":
         out["name"] = Path(artifact.get("path") or artifact["url"]).name
         if (artifact.get("meta") or {}).get("layer_count"):
@@ -181,7 +185,7 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str,
             await ctx.publish(event)
     else:  # 已由其它途径登记过
         artifact = store.find_job_artifact(job_id)
-    out = {"index": index, "label": label, "id": artifact["id"], "url": artifact["url"]}
+    out = {"index": index, "label": label, "id": artifact["id"], "url": artifact["url"], "model": model}
     check = await _self_check(ctx, artifact.get("path") or "", prompt=prompt, label=label)
     if check:
         out["check"] = check
@@ -248,14 +252,17 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
     if resolution not in RESOLUTIONS:
         return {"error": f"resolution 只能是 {', '.join(RESOLUTIONS)}"}
     model = str(args.get("model") or DEFAULT_IMAGE_MODEL)
-    if model not in IMAGE_MODELS:
-        return {"error": f"model 只能是 {', '.join(IMAGE_MODELS)}"}
+    # 每张可以单独指定模型（例如用户要对比几个模型），没填的用整批的 model
+    models = [str(item.get("model") or model) for item in items]
+    bad = sorted({m for m in models if m not in IMAGE_MODELS})
+    if bad:
+        return {"error": f"model 只能是 {', '.join(IMAGE_MODELS)}（收到 {', '.join(bad)}）"}
     variant = "sunburst" if args.get("variant") == "sunburst" else "flare"
     refs = [_artifact_bytes(ctx, rid) for rid in (args.get("reference_image_ids") or [])]
     group_type = args.get("group_type") if args.get("group_type") in {"set", "variant"} else None
     group_id = ("grp_" + uuid.uuid4().hex[:8]) if group_type else None
     results = await asyncio.gather(*[
-        _generate_one(ctx, i, item, model=model, variant=variant, size=ratio, resolution=resolution, refs=refs,
+        _generate_one(ctx, i, item, model=models[i], variant=variant, size=ratio, resolution=resolution, refs=refs,
                       group_id=group_id, group_type=group_type)
         for i, item in enumerate(items)
     ])
@@ -425,6 +432,8 @@ def build_tools() -> dict[str, Tool]:
                  "images": {"type": "array", "maxItems": MAX_IMAGES_PER_CALL, "items": {"type": "object", "properties": {
                      "prompt": {"type": "string", "description": "这张图的生图描述，以用户原话为主体"},
                      "label": {"type": "string", "description": "可选，这张图的名称，例如\"首屏主视觉\""},
+                     "model": {"type": "string", "enum": IMAGE_MODELS,
+                               "description": "可选，只用于这一张的模型；用户要用几个模型分别出图对比时，每张填一个"},
                      "reference_image_ids": {"type": "array", "items": {"type": "string"},
                                              "description": "可选，只用于这一张的参考图；修改多张已有图时，每张填它自己的原图 ID"}},
                      "required": ["prompt"]}},

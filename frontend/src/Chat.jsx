@@ -887,6 +887,9 @@ const AgentToolCard = ({ m, openImage }) => {
   var running = m.status === 'running';
   var result = m.result || {};
   var images = m.images || [];
+  // 卡片里用了多个模型，或用的不是默认模型时，标出每张实际请求的模型（来自任务记录，不是模型写的名称）
+  var imageModels = images.map(function(im) { return im.model || ''; }).filter(Boolean);
+  var showModel = imageModels.some(function(x) { return x !== imageModels[0] || x !== 'gpt-image-2.5'; });
   // 工具结果里的文件优先；等待超时后由后台补回的文件来自 artifact.created 事件
   var files = (Array.isArray(result.files) && result.files.length) ? result.files : (m.files || []);
   var layerCount = result.layer_count || (files[0] && files[0].layer_count) || 0;
@@ -948,7 +951,11 @@ const AgentToolCard = ({ m, openImage }) => {
                   style={{ width: '100%', borderRadius: 8, display: 'block', border: '1px solid var(--line-2)', cursor: 'zoom-in', background: 'var(--panel-2)' }}
                 />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-                  {im.label ? <span style={{ fontSize: 11, color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{im.label}</span> : null}
+                  {(function() {
+                    var modelName = showModel && im.model ? (AGENT2_MODEL_NAMES[im.model] || im.model) : '';
+                    var text = [im.label, modelName && !(im.label || '').includes(modelName) ? modelName : ''].filter(Boolean).join(' · ');
+                    return text ? <span title={modelName ? '实际使用模型：' + modelName : undefined} style={{ fontSize: 11, color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{text}</span> : null;
+                  })()}
                   {im.check ? (
                     <span title={im.check.summary} style={{ fontSize: 11, color: im.check.ok ? 'var(--ok)' : 'var(--warn)', display: 'inline-flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
                       {im.check.ok ? <I.check size={10}/> : <I.eye size={10}/>}{im.check.ok ? '自检通过' : '有问题'}
@@ -4149,6 +4156,10 @@ const AGENT2_TOOL_LABELS = {
 };
 // 回复末尾的 [[NEXT: ...]] 由界面渲染成快捷按钮；流式过程中先把它隐藏
 const agent2StripNext = function(text) { return String(text || '').replace(/\[\[[\s\S]*$/, '').trimEnd(); };
+const AGENT2_MODEL_NAMES = {
+  'gpt-image-2.5': 'GPT Image 2.5', 'gpt-image-2': 'GPT Image 2', 'nano-banana-pro': 'Nano Banana Pro',
+  'nano-banana-2.1': 'Nano Banana 2.1', 'seedream-5.0-pro': 'Seedream 5.0 Pro', 'seedream-5.0-flash': 'Seedream 5.0 Flash',
+};
 const AGENT2_TERMINAL = { 'turn.finished': true, 'turn.failed': true, 'turn.cancelled': true, 'input.required': true };
 const agent2Sleep = function(ms) { return new Promise(function(resolve) { setTimeout(resolve, ms); }); };
 const agent2AbsUrl = function(u) { return u && u.charAt(0) === '/' ? ((window.API_BASE || window.location.origin) + u) : (u || ''); };
