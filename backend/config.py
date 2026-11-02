@@ -197,6 +197,8 @@ class Settings:
     agent_skill_paths: str = os.getenv("AGENT_SKILL_PATHS", "./skills")
     # 用户上传的 Skill，按用户 id 分目录存放
     user_skills_path: Path = Path(os.getenv("USER_SKILLS_PATH", "./user-skills"))
+    # Agent 的用户记忆，同样按用户 id 分目录存放
+    user_memory_path: Path = Path(os.getenv("USER_MEMORY_PATH", "./user-memory"))
 
     # Skill planner LLM. Defaults to the subscription OpenAI-compatible line so
     # SKILL.md interpretation can use a stronger model without affecting chat.
@@ -252,6 +254,8 @@ class Settings:
             self.knowledge_path = self.root_dir / self.knowledge_path
         if not self.user_skills_path.is_absolute():
             self.user_skills_path = self.root_dir / self.user_skills_path
+        if not self.user_memory_path.is_absolute():
+            self.user_memory_path = self.root_dir / self.user_memory_path
 
         # 自动检测本地 models/ 目录下的抠图模型权重（方便离线拷贝迁移）
         if not self.matting_model_path:

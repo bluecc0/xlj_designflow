@@ -18,9 +18,33 @@ const ADMIN_ACTIONS = {
   skill_delete: ['删除技能', '#d64545'],
 };
 
+// Agent 模式：使用层（会话、轮次）+ 产出层（它发起的生图、特殊品任务，已计入任务总量）
+function AdminAgentUsage({ usage }) {
+  if (!usage) return null;
+  var items = [
+    ['使用人数', usage.users], ['会话', usage.sessions], ['对话轮次', usage.turns],
+    ['失败 / 停止轮次', (usage.failed_turns || 0) + ' / ' + (usage.cancelled_turns || 0)],
+    ['生图任务', usage.images], ['出图成功', usage.images_done], ['特殊品任务', usage.special],
+    ['每轮平均出图', usage.images_per_turn == null ? '-' : usage.images_per_turn],
+  ];
+  return (
+    <section className="df-admin-card df-admin-section">
+      <div className="df-admin-cardhead">
+        <span className="df-admin-cardtitle">Agent 模式</span>
+        <span className="df-admin-cardmeta">用户每发一条需求算一轮；生图、特殊品任务已计入上方任务总量</span>
+      </div>
+      <div className="df-admin-agentstats">
+        {items.map(function(item) {
+          return <div className="df-admin-detailcard" key={item[0]}><span>{item[0]}</span><strong>{item[1] == null ? 0 : item[1]}</strong></div>;
+        })}
+      </div>
+    </section>
+  );
+}
+
 const ADMIN_TASK_TYPES = {
   ai_image: 'AI 生图',
-  agent_image: 'Agent 生图',
+  agent_image: '旧版 Agent 生图',
   compose: '模板合成',
   special: '特殊品',
 };
@@ -213,6 +237,10 @@ const ADMIN_CSS = `
   .df-admin-progress { height: 3px; margin-top: 8px; border-radius: 9px; overflow: hidden; background: #eeefeb; }
   .df-admin-progress > span { display: block; height: 100%; background: #292c28; }
   .df-admin-section { margin-top: 10px; }
+  .df-admin-agentstats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; padding: 4px 16px 16px; }
+  .df-admin-agentstats strong { display: block; margin-top: 4px; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .df-admin-agentstats span { font-size: 11px; color: var(--admin-faint); }
+  .df-admin-sourcetag { margin-left: 5px; padding: 1px 5px; border-radius: 4px; background: #eef0fd; color: #4b58c9; font-size: 10px; }
   .df-admin-split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
   .df-admin-overviewtriple { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 10px; }
   .df-admin-ranking { padding: 7px 16px 12px; }
@@ -344,6 +372,7 @@ const ADMIN_CSS = `
     .df-admin-navbutton.is-active::after { display: none; }
     .df-admin-back { display: grid; place-items: center; }
     .df-admin-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .df-admin-agentstats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .df-admin-servicegrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 760px) {
@@ -491,7 +520,7 @@ function AdminTrendChart({ series, hours }) {
           ? String(d.getHours()).padStart(2, '0') + ':00'
           : (d.getMonth() + 1) + '/' + d.getDate();
         return (
-          <div className="df-admin-baritem" key={index} title={'共 ' + item.total + ' · AI 生图 ' + item.ai_image + ' · Agent 生图 ' + item.agent_image + ' · 模板合成 ' + item.compose + ' · 特殊品 ' + item.special}>
+          <div className="df-admin-baritem" key={index} title={'共 ' + item.total + ' · AI 生图 ' + item.ai_image + ' · 旧版 Agent ' + item.agent_image + ' · 模板合成 ' + item.compose + ' · 特殊品 ' + item.special}>
             <div className="df-admin-bartrack">
               <span className="df-admin-bar is-special" style={{ height: specialHeight }} />
               <span className="df-admin-bar is-compose" style={{ height: composeHeight }} />
@@ -955,8 +984,9 @@ function AdminPage({ user, onBack }) {
   var [tasks, setTasks] = React.useState([]);
   var [taskTotal, setTaskTotal] = React.useState(0);
   var [taskOffset, setTaskOffset] = React.useState(0);
-  var [taskFilters, setTaskFilters] = React.useState({ search: '', taskType: '', status: '', userId: '', provider: '', reference: '', skill: '' });
+  var [taskFilters, setTaskFilters] = React.useState({ search: '', taskType: '', status: '', userId: '', provider: '', reference: '', skill: '', source: '' });
   var [skills, setSkills] = React.useState([]);
+  var [memories, setMemories] = React.useState([]);
   var [selectedSkill, setSelectedSkill] = React.useState(null);
   var [skillDetail, setSkillDetail] = React.useState(null);
   var [skillDetailLoading, setSkillDetailLoading] = React.useState(false);
@@ -1020,6 +1050,7 @@ function AdminPage({ user, onBack }) {
       limit: 50, offset: taskOffset, search: taskFilters.search,
       taskType: taskFilters.taskType, status: taskFilters.status, userId: taskFilters.userId,
       provider: taskFilters.provider, reference: taskFilters.reference, skill: taskFilters.skill,
+      source: taskFilters.source,
     }).then(function(data) {
       setTasks(data.tasks || []); setTaskTotal(data.total || 0); setUpdatedAt(Date.now());
     }).catch(function(err) {
@@ -1070,6 +1101,25 @@ function AdminPage({ user, onBack }) {
   React.useEffect(function() {
     if (view === 'skills') loadSkills();
   }, [view, loadSkills]);
+
+  var loadMemories = React.useCallback(function() {
+    setLoading(true); setError('');
+    return window.API.getAdminMemories()
+      .then(function(data) {
+        var rows = [];
+        (data.users || []).forEach(function(group) {
+          (group.memories || []).forEach(function(m) { rows.push(Object.assign({ user_id: group.user_id, username: group.username }, m)); });
+        });
+        rows.sort(function(a, b) { return (b.updated_at || 0) - (a.updated_at || 0); });
+        setMemories(rows); setUpdatedAt(Date.now());
+      })
+      .catch(function(err) { setError(err.message || '用户记忆加载失败'); })
+      .finally(function() { setLoading(false); });
+  }, []);
+
+  React.useEffect(function() {
+    if (view === 'memories') loadMemories();
+  }, [view, loadMemories]);
 
   React.useEffect(function() {
     if (!selectedSkill) { setSkillDetail(null); setSkillDetailError(''); return; }
@@ -1123,6 +1173,7 @@ function AdminPage({ user, onBack }) {
     ['services', '服务状态', I.zap],
     ['users', '用户权限', I.user],
     ['skills', '用户技能', I.wand],
+    ['memories', '用户记忆', I.bookmark],
     ['audit', '审计日志', I.file],
   ];
   var viewTitles = {
@@ -1131,6 +1182,7 @@ function AdminPage({ user, onBack }) {
     services: ['服务状态', '本机资源与外部依赖连通性'],
     users: ['用户权限', '账号、角色和使用情况'],
     skills: ['用户技能', '用户上传的技能、使用情况和原始内容'],
+    memories: ['用户记忆', 'Agent 为每个用户记下的长期偏好和信息'],
     audit: ['审计日志', '关键操作与请求上下文'],
   };
 
@@ -1139,6 +1191,7 @@ function AdminPage({ user, onBack }) {
     if (view === 'audit') return loadOperations();
     if (view === 'users') return loadUsers();
     if (view === 'skills') return loadSkills();
+    if (view === 'memories') return loadMemories();
     if (view === 'services') return Promise.all([loadOverview(false), loadServiceProbes()]);
     return loadOverview(false);
   };
@@ -1207,7 +1260,7 @@ function AdminPage({ user, onBack }) {
             <div className="df-admin-cardhead">
               <span className="df-admin-cardtitle">使用趋势</span>
               <span className="df-admin-cardmeta df-admin-legend">
-                <span className="is-ai"><i />AI 生图</span><span className="is-agent"><i />Agent</span><span className="is-compose"><i />模板合成</span><span className="is-special"><i />特殊品</span>
+                <span className="is-ai"><i />AI 生图</span><span className="is-agent"><i />旧版 Agent</span><span className="is-compose"><i />模板合成</span><span className="is-special"><i />特殊品</span>
               </span>
             </div>
             <AdminTrendChart series={overview.series} hours={overview.range_hours} />
@@ -1223,7 +1276,7 @@ function AdminPage({ user, onBack }) {
                 return (
                   <div className="df-admin-breakrow" key={item.type}>
                     <div className="df-admin-breaktop">
-                      <span>{ADMIN_TASK_TYPES[item.type] || item.type}</span>
+                      <span>{ADMIN_TASK_TYPES[item.type] || item.type}{item.agent ? <span className="df-admin-faint">（其中 Agent {item.agent}）</span> : null}</span>
                       <span className="df-admin-breakvalue">{item.total}</span>
                     </div>
                     <div className="df-admin-progress"><span style={{ width: Math.round(item.total * 100 / maxBreakdown) + '%', background: barColor }} /></div>
@@ -1233,6 +1286,7 @@ function AdminPage({ user, onBack }) {
             </div>
           </section>
         </div>
+        <AdminAgentUsage usage={overview.agent} />
         <div className="df-admin-overviewtriple">
           <AdminUserRanking items={overview.user_ranking} hours={overview.range_hours} />
           <section className="df-admin-card">
@@ -1275,7 +1329,7 @@ function AdminPage({ user, onBack }) {
           <div className="df-admin-search"><I.search size={13} /><input className="df-admin-control" value={taskFilters.search} placeholder="搜索任务 ID、用户、模型或内容"
             onChange={function(e) { setTaskFilter('search', e.target.value); }} /></div>
           <select className="df-admin-control" value={taskFilters.taskType} onChange={function(e) { setTaskFilter('taskType', e.target.value); }}>
-            <option value="">全部业务</option><option value="ai_image">AI 生图</option><option value="agent_image">Agent 生图</option><option value="compose">模板合成</option><option value="special">特殊品</option>
+            <option value="">全部业务</option><option value="ai_image">AI 生图</option><option value="agent_image">旧版 Agent 生图</option><option value="compose">模板合成</option><option value="special">特殊品</option>
           </select>
           <select className="df-admin-control" value={taskFilters.status} onChange={function(e) { setTaskFilter('status', e.target.value); }}>
             <option value="">全部状态</option><option value="active">进行中</option><option value="done">已完成</option><option value="failed">失败</option>
@@ -1288,6 +1342,9 @@ function AdminPage({ user, onBack }) {
           </select>
           <select className="df-admin-control" value={taskFilters.reference} onChange={function(e) { setTaskFilter('reference', e.target.value); }}>
             <option value="">参考图不限</option><option value="yes">使用参考图</option><option value="no">未用参考图</option>
+          </select>
+          <select className="df-admin-control" value={taskFilters.source} onChange={function(e) { setTaskFilter('source', e.target.value); }}>
+            <option value="">全部来源</option><option value="agent">Agent 模式</option><option value="normal">普通入口</option>
           </select>
           {taskFilters.skill ? (
             <button className="df-admin-control" title="清除技能筛选" onClick={function() { setTaskFilter('skill', ''); }}>技能：{taskFilters.skill} <I.close size={11} /></button>
@@ -1304,7 +1361,7 @@ function AdminPage({ user, onBack }) {
                 return (
                   <tr className="is-clickable" key={item.task_type + ':' + item.id} onClick={function() { setSelectedTask(item); }}>
                     <td><AdminStatusBadge status={item.status} /></td>
-                    <td>{ADMIN_TASK_TYPES[item.task_type] || item.task_type}</td>
+                    <td>{ADMIN_TASK_TYPES[item.task_type] || item.task_type}{item.source === 'agent' ? <span className="df-admin-sourcetag">Agent</span> : null}</td>
                     <td className="df-admin-mono">{String(item.id).slice(0, 12)}</td>
                     <td>{adminUserLabel(item)}</td>
                     <td><div>{item.model || '-'}</div><div className="df-admin-ellipsis df-admin-faint">{item.summary || item.error || '-'}</div></td>
@@ -1403,6 +1460,30 @@ function AdminPage({ user, onBack }) {
     );
   };
 
+  var renderMemories = function() {
+    return (
+      <div className="df-admin-card">
+        {memories.length ? (
+          <div className="df-admin-tablewrap"><table className="df-admin-table">
+            <thead><tr><th>用户</th><th>类型</th><th>内容</th><th>来源会话</th><th>更新时间</th></tr></thead>
+            <tbody>{memories.map(function(item) {
+              var account = users.find(function(u) { return u.id === item.user_id; });
+              return (
+                <tr key={item.user_id + ':' + item.id}>
+                  <td>{adminUserLabel(account || item)}</td>
+                  <td className="df-admin-muted">{item.kind === 'fact' ? '信息' : '偏好'}</td>
+                  <td style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{item.content}</td>
+                  <td className="df-admin-faint mono">{item.source_session ? item.source_session.slice(0, 8) : '手动'}</td>
+                  <td className="df-admin-muted">{adminFormatTime(item.updated_at, true)}</td>
+                </tr>
+              );
+            })}</tbody>
+          </table></div>
+        ) : <AdminEmpty text={loading ? '正在加载用户记忆…' : '还没有用户记忆'} />}
+      </div>
+    );
+  };
+
   var renderAudit = function() {
     return (
       <>
@@ -1487,6 +1568,7 @@ function AdminPage({ user, onBack }) {
             {view === 'services' ? renderServices() : null}
             {view === 'users' ? <AdminUserManagement currentUser={user} users={users} onReload={function() { return loadUsers(showTestUsers); }} showTestUsers={showTestUsers} onToggleShowTest={handleToggleShowTestUsers} /> : null}
             {view === 'skills' ? renderSkills() : null}
+            {view === 'memories' ? renderMemories() : null}
             {view === 'audit' ? renderAudit() : null}
           </div>
         </div>

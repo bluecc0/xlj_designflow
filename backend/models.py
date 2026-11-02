@@ -199,6 +199,7 @@ class SpecialComposeJob(BaseModel):
     error: Optional[str] = None
     progress: list[str] = Field(default_factory=list)
     created_at: Optional[float] = None
+    source: str = ""  # 发起来源：agent2 = Agent 模式，空 = 普通入口
     recovery: dict = Field(default_factory=lambda: {"version": 1, "kind": "special", "phase": "queued"}, exclude=True)
     recovering: bool = False
 
@@ -236,6 +237,7 @@ class SpecialFullComposeJob(BaseModel):
     error: Optional[str] = None
     progress: list[str] = Field(default_factory=list)
     created_at: Optional[float] = None
+    source: str = ""  # 发起来源：agent2 = Agent 模式，空 = 普通入口
     recovery: dict = Field(default_factory=lambda: {"version": 1, "kind": "special-full", "phase": "queued"}, exclude=True)
     recovering: bool = False
 

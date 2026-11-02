@@ -169,6 +169,56 @@ class AdminConsoleStoreTest(unittest.TestCase):
         )
         self.assertEqual(sum(item["total"] for item in overview["series"]), 6)
 
+    def test_agent_mode_counted_per_request_and_by_source(self) -> None:
+        from backend.agent2 import store as agent2_store
+        from backend.models import SpecialComposeJob, SpecialComposeRequest
+
+        agent2_store.init_tables()
+        with job_store._connect() as conn:
+            conn.executemany(
+                "INSERT INTO ai_image_jobs (id, user_id, status, model, prompt, size, progress, created_at, request_meta_json)"
+                " VALUES (?, ?, ?, 'gpt-image-2.5', '跑鞋', '3:4', 100, ?, ?)",
+                [("agent-ai-1", "designer", "done", self.now - 50, '{"source":"agent2","session_id":"s1"}'),
+                 ("agent-ai-2", "designer", "failed", self.now - 40, '{"source":"agent2","session_id":"s1"}')],
+            )
+            conn.executemany(
+                "INSERT INTO agent2_turns (id, session_id, user_id, status, started_at) VALUES (?, ?, ?, ?, ?)",
+                [("t1", "s1", "designer", "done", self.now - 60), ("t2", "s1", "designer", "failed", self.now - 45),
+                 ("t3", "s2", "admin", "cancelled", self.now - 30), ("t-old", "s0", "admin", "done", self.now - 30 * 86400)],
+            )
+        request = SpecialComposeRequest(file_id="f", page_id="p", frame_ids=["a"], sku="ABAW1", fields={})
+        job = SpecialComposeJob(id="agent-special", user_id="designer", request=request,
+                                created_at=self.now - 20, source="agent2")
+        job_store.save_special_job(job)
+        # 恢复时重建的任务对象没有来源，再保存也不能清掉
+        job_store.save_special_job(job.model_copy(update={"source": ""}))
+
+        with patch("backend.job_store.time.time", return_value=self.now):
+            overview = job_store.load_admin_overview(24)
+        # 产出层：每次生图、特殊品都是一个任务，计入总量，并标出其中来自 Agent 的数量
+        self.assertEqual(overview["summary"]["total"], 8)
+        breakdown = {item["type"]: item for item in overview["breakdown"]}
+        self.assertEqual((breakdown["ai_image"]["total"], breakdown["ai_image"]["agent"]), (5, 2))
+        self.assertEqual((breakdown["special"]["total"], breakdown["special"]["agent"]), (1, 1))
+        # 使用层：会话、轮次只统计时间范围内的
+        self.assertEqual(overview["agent"], {
+            "sessions": 2, "turns": 3, "failed_turns": 1, "cancelled_turns": 1, "users": 2,
+            "images": 2, "images_done": 1, "special": 1, "images_per_turn": 0.3})
+
+        agent_tasks, total = job_store.load_admin_tasks(source="agent")
+        self.assertEqual(total, 3)
+        self.assertEqual({t["id"] for t in agent_tasks}, {"agent-ai-1", "agent-ai-2", "agent-special"})
+        self.assertTrue(all(t["source"] == "agent" for t in agent_tasks))
+        normal, _ = job_store.load_admin_tasks(source="normal")
+        self.assertFalse({t["id"] for t in normal} & {"agent-ai-1", "agent-special"})
+        with (
+            patch.object(main, "_current_user", return_value={"id": "admin", "role": "admin"}),
+            patch.object(main, "_is_admin", return_value=True),
+            self.assertRaises(HTTPException) as raised,
+        ):
+            main.admin_tasks(object(), source="bogus")
+        self.assertEqual(raised.exception.status_code, 400)
+
     def test_task_list_filters_and_formats_compose_summary(self) -> None:
         failed, failed_total = job_store.load_admin_tasks(status="failed")
         self.assertEqual(failed_total, 2)

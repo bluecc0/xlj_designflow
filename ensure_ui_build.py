@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rebuild frontend JSX and tldraw canvas only when sources are newer than artifacts."""
+"""Rebuild frontend JSX and editor-canvas only when sources are newer than artifacts."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND = ROOT / "frontend"
-TLDRAW = ROOT / "editor-lab-tldraw"
 EDITOR_CANVAS = ROOT / "editor-canvas"
 MTIME_EPS = 0.01
 
@@ -111,31 +110,6 @@ def frontend_status() -> tuple[bool, str]:
     return False, "fresh"
 
 
-def tldraw_sources() -> list[Path]:
-    files = walk_files(TLDRAW / "src")
-    files.extend(walk_files(TLDRAW / "public"))
-    for name in (
-        "package.json",
-        "package-lock.json",
-        "vite.config.ts",
-        "tsconfig.json",
-        "index.html",
-    ):
-        path = TLDRAW / name
-        if path.is_file():
-            files.append(path)
-    return files
-
-
-def tldraw_status() -> tuple[bool, str]:
-    dist = TLDRAW / "dist" / "index.html"
-    if not dist.is_file():
-        return True, "missing dist/index.html"
-    if newest_mtime(tldraw_sources()) > dist.stat().st_mtime + MTIME_EPS:
-        return True, "sources newer than dist"
-    return False, "fresh"
-
-
 def editor_canvas_sources() -> list[Path]:
     if not EDITOR_CANVAS.is_dir():
         return []
@@ -193,32 +167,8 @@ def rebuild_editor_canvas() -> None:
     run([resolve_cmd("npm"), "run", "build"], EDITOR_CANVAS)
 
 
-def ensure_npm() -> None:
-    node_modules = TLDRAW / "node_modules"
-    marker = node_modules / "tldraw"
-    lock = TLDRAW / "package-lock.json"
-    package = TLDRAW / "package.json"
-    need_install = not marker.exists()
-    if not need_install and node_modules.is_dir():
-        baseline = node_modules.stat().st_mtime
-        for path in (lock, package):
-            if path.is_file() and path.stat().st_mtime > baseline + MTIME_EPS:
-                need_install = True
-                break
-    if need_install:
-        print("[UI] npm install editor-lab-tldraw")
-        run([resolve_cmd("npm"), "install"], TLDRAW)
-
-
 def rebuild_frontend() -> None:
     run([sys.executable, str(FRONTEND / "build.py")], FRONTEND)
-
-
-def rebuild_tldraw() -> None:
-    if not shutil.which("node") and not shutil.which("node.exe"):
-        raise RuntimeError("Node.js is required to build editor-lab-tldraw")
-    ensure_npm()
-    run([resolve_cmd("npm"), "run", "build"], TLDRAW)
 
 
 def wait_open(port: int) -> int:
@@ -238,7 +188,7 @@ def wait_open(port: int) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Rebuild frontend / tldraw when source files are stale."
+        description="Rebuild frontend / editor-canvas when source files are stale."
     )
     parser.add_argument(
         "--force",
@@ -263,13 +213,6 @@ def main() -> int:
             rebuild_frontend()
         else:
             print("[UI] frontend up to date")
-
-        need_canvas, canvas_reason = tldraw_status()
-        if args.force or need_canvas:
-            print(f"[UI] rebuild canvas ({('forced' if args.force else canvas_reason)})")
-            rebuild_tldraw()
-        else:
-            print("[UI] canvas up to date")
 
         need_editor_canvas, editor_canvas_reason = editor_canvas_status()
         if args.force or need_editor_canvas:
