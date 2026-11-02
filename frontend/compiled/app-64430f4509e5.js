@@ -3760,6 +3760,13 @@ const AgentToolCard = ({
   var running = m.status === 'running';
   var result = m.result || {};
   var images = m.images || [];
+  // 卡片里用了多个模型，或用的不是默认模型时，标出每张实际请求的模型（来自任务记录，不是模型写的名称）
+  var imageModels = images.map(function (im) {
+    return im.model || '';
+  }).filter(Boolean);
+  var showModel = imageModels.some(function (x) {
+    return x !== imageModels[0] || x !== 'gpt-image-2.5';
+  });
   // 工具结果里的文件优先；等待超时后由后台补回的文件来自 artifact.created 事件
   var files = Array.isArray(result.files) && result.files.length ? result.files : m.files || [];
   var layerCount = result.layer_count || files[0] && files[0].layer_count || 0;
@@ -3908,16 +3915,21 @@ const AgentToolCard = ({
         gap: 4,
         minWidth: 0
       }
-    }, im.label ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        color: 'var(--ink-3)',
-        minWidth: 0,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap'
-      }
-    }, im.label) : null, im.check ? /*#__PURE__*/React.createElement("span", {
+    }, function () {
+      var modelName = showModel && im.model ? AGENT2_MODEL_NAMES[im.model] || im.model : '';
+      var text = [im.label, modelName && !(im.label || '').includes(modelName) ? modelName : ''].filter(Boolean).join(' · ');
+      return text ? /*#__PURE__*/React.createElement("span", {
+        title: modelName ? '实际使用模型：' + modelName : undefined,
+        style: {
+          fontSize: 11,
+          color: 'var(--ink-3)',
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        }
+      }, text) : null;
+    }(), im.check ? /*#__PURE__*/React.createElement("span", {
       title: im.check.summary,
       style: {
         fontSize: 11,
@@ -8209,6 +8221,14 @@ const AGENT2_TOOL_LABELS = {
 const agent2StripNext = function (text) {
   return String(text || '').replace(/\[\[[\s\S]*$/, '').trimEnd();
 };
+const AGENT2_MODEL_NAMES = {
+  'gpt-image-2.5': 'GPT Image 2.5',
+  'gpt-image-2': 'GPT Image 2',
+  'nano-banana-pro': 'Nano Banana Pro',
+  'nano-banana-2.1': 'Nano Banana 2.1',
+  'seedream-5.0-pro': 'Seedream 5.0 Pro',
+  'seedream-5.0-flash': 'Seedream 5.0 Flash'
+};
 const AGENT2_TERMINAL = {
   'turn.finished': true,
   'turn.failed': true,
@@ -11369,7 +11389,8 @@ const ADMIN_CSS = `
   .df-admin-username { min-width: 0; font-size: 12px; color: #f5f5f2; overflow: hidden; text-overflow: ellipsis; }
   .df-admin-role { margin-top: 1px; color: #7f847b; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
   .df-admin-back {
-    width: 100%; height: 32px; border: 1px solid #343733; border-radius: 7px;
+    width: 100%; height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border: 1px solid #343733; border-radius: 7px;
     color: #aeb3aa; background: transparent; cursor: pointer; font-size: 11px;
   }
   .df-admin-back:hover { color: #fff; border-color: #555a52; }
@@ -11386,8 +11407,25 @@ const ADMIN_CSS = `
     height: 32px; padding: 0 10px; border: 1px solid var(--admin-line);
     border-radius: 7px; background: #fff; color: var(--admin-ink); outline: none; font-size: 11px;
   }
-  button.df-admin-control { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-  button.df-admin-control:hover { border-color: var(--admin-line-strong); background: #fafaf8; }
+  .df-admin-control::placeholder { color: var(--admin-faint); }
+  .df-admin-control:focus-visible, input.df-admin-control:focus, select.df-admin-control:focus {
+    border-color: #b9bdb3; box-shadow: 0 0 0 3px rgba(23,25,22,.06);
+  }
+  button.df-admin-control, a.df-admin-control {
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer; text-decoration: none; white-space: nowrap;
+  }
+  button.df-admin-control:hover, a.df-admin-control:hover { border-color: var(--admin-line-strong); background: #fafaf8; }
+  .df-admin-control:disabled { opacity: .45; cursor: not-allowed; }
+  button.df-admin-control:disabled:hover { border-color: var(--admin-line); background: #fff; }
+  /* 下拉框用自绘箭头：原生箭头紧贴右边框，且各浏览器位置不一 */
+  select.df-admin-control {
+    appearance: none; -webkit-appearance: none; cursor: pointer;
+    padding-right: 30px; text-overflow: ellipsis;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2373786f' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 11px center; background-size: 10px 6px;
+  }
+  select.df-admin-control:hover { border-color: var(--admin-line-strong); }
+  .df-admin input[type="checkbox"] { width: 14px; height: 14px; margin: 0; accent-color: #1c1e1b; cursor: pointer; }
   .df-admin-updated { color: var(--admin-faint); font-size: 11px; }
   .df-admin-scroll { flex: 1; min-height: 0; overflow: auto; padding: 22px 26px 42px; }
   .df-admin-content { width: min(1460px, 100%); margin: 0 auto; }
@@ -11451,6 +11489,7 @@ const ADMIN_CSS = `
   .df-admin-cardtitle { font-size: 12px; font-weight: 630; }
   .df-admin-cardmeta { color: var(--admin-faint); font-size: 11px; }
   .df-admin-cardaction { margin-left: auto; color: var(--admin-muted); border: 0; background: none; cursor: pointer; font-size: 11px; }
+  .df-admin-cardaction:hover { color: var(--admin-ink); }
   .df-admin-chart { height: 218px; display: flex; align-items: stretch; gap: 8px; padding: 22px 18px 12px; }
   .df-admin-baritem { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; gap: 6px; }
   .df-admin-bartrack { height: 158px; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; border-radius: 4px 4px 2px 2px; background: #f0f1ed; }
@@ -11519,6 +11558,9 @@ const ADMIN_CSS = `
   .df-admin-mono { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; font-size: 11px; }
   .df-admin-muted { color: var(--admin-muted); }
   .df-admin-faint { color: var(--admin-faint); }
+  .df-admin-nowrap { white-space: nowrap; }
+  .df-admin-actions { white-space: nowrap; }
+  .df-admin-actions .df-admin-linkbutton + .df-admin-linkbutton { margin-left: 10px; }
   .df-admin-ellipsis { max-width: 330px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .df-admin-empty { min-height: 150px; display: grid; place-items: center; color: var(--admin-faint); font-size: 11px; }
   .df-admin-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
@@ -11566,10 +11608,15 @@ const ADMIN_CSS = `
   }
   .df-admin-useridentity strong { display: block; font-size: 11px; }
   .df-admin-useridentity span { display: block; margin-top: 3px; color: var(--admin-faint); font: 11px "JetBrains Mono", monospace; }
-  .df-admin-primary { color: #fff; background: #1c1e1b; border-color: #1c1e1b; cursor: pointer; }
-  .df-admin-primary:hover { color: #fff; background: #2a2d29; }
-  .df-admin-linkbutton { border: 0; background: none; color: #4f5ee8; cursor: pointer; font-size: 11px; }
+  .df-admin-primary { justify-content: center; color: #fff; background: #1c1e1b; border-color: #1c1e1b; cursor: pointer; }
+  /* 提高优先级：否则会被 button.df-admin-control:hover 的白底盖掉，变成白底白字 */
+  button.df-admin-primary:hover { color: #fff; background: #2a2d29; border-color: #2a2d29; }
+  button.df-admin-primary:disabled:hover { background: #1c1e1b; border-color: #1c1e1b; }
+  .df-admin-linkbutton { padding: 2px 1px; border: 0; background: none; color: #4f5ee8; cursor: pointer; font-size: 11px; }
+  .df-admin-linkbutton:hover { color: #3341c9; text-decoration: underline; text-underline-offset: 2px; }
+  .df-admin-linkbutton:disabled { opacity: .4; cursor: not-allowed; text-decoration: none; }
   .df-admin-dangerbutton { color: var(--admin-red); }
+  .df-admin-dangerbutton:hover { color: #b03030; }
   .df-admin-error { padding: 10px 12px; margin-bottom: 10px; border-radius: 7px; color: #a73535; background: var(--admin-red-soft); font-size: 11px; }
   .df-admin-drawerbackdrop { position: fixed; inset: 0; z-index: 90; background: rgba(18,20,17,.16); }
   .df-admin-drawer {
@@ -11612,6 +11659,7 @@ const ADMIN_CSS = `
     .df-admin-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .df-admin-agentstats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .df-admin-servicegrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .df-admin-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   }
   @media (max-width: 760px) {
     .df-admin { grid-template-columns: 1fr; grid-template-rows: 52px minmax(0, 1fr); }
@@ -12181,10 +12229,12 @@ function AdminUserManagement({
         fontWeight: 600
       }
     }, "\u6D4B\u8BD5") : null), /*#__PURE__*/React.createElement("td", null, item.total_jobs || 0), /*#__PURE__*/React.createElement("td", null, item.total_ai_images || 0), /*#__PURE__*/React.createElement("td", {
-      className: "df-admin-muted"
+      className: "df-admin-muted df-admin-nowrap"
     }, item.last_action ? adminActionMeta(item.last_action.action)[0] + ' · ' + adminFormatTime(item.last_action.created_at) : '-'), /*#__PURE__*/React.createElement("td", {
-      className: "df-admin-muted"
-    }, adminFormatTime(item.created_at)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
+      className: "df-admin-muted df-admin-nowrap"
+    }, adminFormatTime(item.created_at)), /*#__PURE__*/React.createElement("td", {
+      className: "df-admin-actions"
+    }, /*#__PURE__*/React.createElement("button", {
       className: "df-admin-linkbutton",
       disabled: busy,
       onClick: function () {
@@ -12595,6 +12645,7 @@ function AdminPage({
   }, [view, loadServiceProbes]);
   React.useEffect(function () {
     if (view !== 'tasks') return;
+    setLoading(true); // 防抖等待期间也显示加载中，不先闪出“没有匹配的任务”
     var timer = window.setTimeout(loadTasks, 220);
     return function () {
       window.clearTimeout(timer);
@@ -12666,6 +12717,20 @@ function AdminPage({
       cancelled = true;
     };
   }, [selectedSkill]);
+
+  // 详情抽屉支持 Esc 关闭
+  React.useEffect(function () {
+    if (!selectedTask && !selectedSkill) return;
+    var onKey = function (e) {
+      if (e.key !== 'Escape') return;
+      setSelectedTask(null);
+      setSelectedSkill(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return function () {
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [selectedTask, selectedSkill]);
   React.useEffect(function () {
     if (!selectedTask) {
       setTaskDetail(null);
@@ -13078,7 +13143,7 @@ function AdminPage({
       size: 11
     })) : null, /*#__PURE__*/React.createElement("span", {
       className: "df-admin-pageinfo"
-    }, "\u5171 ", taskTotal, " \u6761"), /*#__PURE__*/React.createElement("button", {
+    }, loading && !tasks.length ? '加载中…' : '共 ' + taskTotal + ' 条'), /*#__PURE__*/React.createElement("button", {
       className: "df-admin-control df-admin-pagebutton",
       disabled: !taskOffset,
       onClick: function () {
@@ -13105,11 +13170,15 @@ function AdminPage({
         }
       }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(AdminStatusBadge, {
         status: item.status
-      })), /*#__PURE__*/React.createElement("td", null, ADMIN_TASK_TYPES[item.task_type] || item.task_type, item.source === 'agent' ? /*#__PURE__*/React.createElement("span", {
+      })), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap"
+      }, ADMIN_TASK_TYPES[item.task_type] || item.task_type, item.source === 'agent' ? /*#__PURE__*/React.createElement("span", {
         className: "df-admin-sourcetag"
       }, "Agent") : null), /*#__PURE__*/React.createElement("td", {
         className: "df-admin-mono"
-      }, String(item.id).slice(0, 12)), /*#__PURE__*/React.createElement("td", null, adminUserLabel(item)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", null, item.model || '-'), /*#__PURE__*/React.createElement("div", {
+      }, String(item.id).slice(0, 12)), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap"
+      }, adminUserLabel(item)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", null, item.model || '-'), /*#__PURE__*/React.createElement("div", {
         className: "df-admin-ellipsis df-admin-faint"
       }, item.summary || item.error || '-')), /*#__PURE__*/React.createElement("td", null, adminProviderLabel(item.provider)), /*#__PURE__*/React.createElement("td", null, item.has_reference ? item.reference_count == null ? '有' : item.reference_count + ' 张' : '无'), /*#__PURE__*/React.createElement("td", null, Number(item.progress || 0), "%"), /*#__PURE__*/React.createElement("td", {
         className: "df-admin-muted"
@@ -13299,7 +13368,7 @@ function AdminPage({
       }, ADMIN_ACTIONS[key][0]);
     })), /*#__PURE__*/React.createElement("span", {
       className: "df-admin-pageinfo"
-    }, "\u5171 ", operationTotal, " \u6761"), /*#__PURE__*/React.createElement("button", {
+    }, loading && !operations.length ? '加载中…' : '共 ' + operationTotal + ' 条'), /*#__PURE__*/React.createElement("button", {
       className: "df-admin-control df-admin-pagebutton",
       disabled: !operationOffset,
       onClick: function () {
@@ -13400,8 +13469,14 @@ function AdminPage({
     className: "df-admin-role"
   }, "Administrator"))), /*#__PURE__*/React.createElement("button", {
     className: "df-admin-back",
-    onClick: onBack
-  }, /*#__PURE__*/React.createElement("span", null, "\u8FD4\u56DE\u5DE5\u4F5C\u53F0")))), /*#__PURE__*/React.createElement("main", {
+    onClick: onBack,
+    title: "\u8FD4\u56DE\u5DE5\u4F5C\u53F0"
+  }, /*#__PURE__*/React.createElement(I.arrowRight, {
+    size: 12,
+    style: {
+      transform: 'rotate(180deg)'
+    }
+  }), /*#__PURE__*/React.createElement("span", null, "\u8FD4\u56DE\u5DE5\u4F5C\u53F0")))), /*#__PURE__*/React.createElement("main", {
     className: "df-admin-main"
   }, /*#__PURE__*/React.createElement("header", {
     className: "df-admin-header"
