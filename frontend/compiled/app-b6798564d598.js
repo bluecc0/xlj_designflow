@@ -2264,7 +2264,7 @@ window.TEMPLATES = TEMPLATES;
 const Canvas = ({
   template,
   resultTemplate,
-  editorCommand,
+  editorCommands,
   onUseReferenceImages,
   onQuickEditGenerate,
   userId
@@ -2390,8 +2390,18 @@ const Canvas = ({
   React.useEffect(() => {
     editorReadyRef.current = false;
   }, [iframeNonce]);
+
+  // 已处理过的指令 key；挂载时只补发队列里最后一条（和改成队列前一致），避免切换账号重挂载时重放历史指令
+  const handledCommandsRef = React.useRef(null);
   React.useEffect(() => {
-    if (!editorCommand) return;
+    const queue = editorCommands || [];
+    if (!handledCommandsRef.current) {
+      handledCommandsRef.current = new Set(queue.slice(0, -1).map(c => c && c.key));
+    }
+    const handled = handledCommandsRef.current;
+    const fresh = queue.filter(c => c && !handled.has(c.key));
+    if (!fresh.length) return;
+    fresh.forEach(c => handled.add(c.key));
     const normalizeAssetUrl = rawUrl => {
       const value = String(rawUrl || '').trim();
       if (!value) return '';
@@ -2407,50 +2417,55 @@ const Canvas = ({
         return value;
       }
     };
-    let message = null;
-    if (editorCommand.type === 'insert-images') {
-      message = {
-        type: 'designflow:insert-image',
-        urls: (editorCommand.urls || []).map(normalizeAssetUrl).filter(Boolean),
-        images: (editorCommand.images || []).map(function (img) {
-          if (typeof img === 'object' && img !== null && img.url) {
-            return Object.assign({}, img, {
-              url: normalizeAssetUrl(img.url)
-            });
-          }
-          return {
-            url: normalizeAssetUrl(img)
-          };
-        }).filter(function (x) {
-          return Boolean(x.url);
-        }),
-        mode: editorCommand.mode,
-        name: editorCommand.name
-      };
+    let inserting = false;
+    fresh.forEach(editorCommand => {
+      let message = null;
+      if (editorCommand.type === 'insert-images') {
+        message = {
+          type: 'designflow:insert-image',
+          urls: (editorCommand.urls || []).map(normalizeAssetUrl).filter(Boolean),
+          images: (editorCommand.images || []).map(function (img) {
+            if (typeof img === 'object' && img !== null && img.url) {
+              return Object.assign({}, img, {
+                url: normalizeAssetUrl(img.url)
+              });
+            }
+            return {
+              url: normalizeAssetUrl(img)
+            };
+          }).filter(function (x) {
+            return Boolean(x.url);
+          }),
+          mode: editorCommand.mode,
+          name: editorCommand.name
+        };
+        inserting = true;
+      } else if (editorCommand.type === 'auth-restored') {
+        message = {
+          type: 'designflow:auth-restored',
+          user: editorCommand.user
+        };
+      } else if (editorCommand.type === 'new-canvas') {
+        message = {
+          type: 'designflow:new-canvas',
+          pageName: editorCommand.pageName || t?.name || '画板 1'
+        };
+      }
+      if (!message) return;
+      if (editorReadyRef.current) {
+        postToEditor(message);
+      } else {
+        pendingMessagesRef.current.push(message);
+        postToEditor({
+          type: 'designflow:ping'
+        });
+      }
+    });
+    if (inserting) {
       setEditorInsertState({
         status: 'running',
         message: '正在放入画布'
       });
-    } else if (editorCommand.type === 'auth-restored') {
-      message = {
-        type: 'designflow:auth-restored',
-        user: editorCommand.user
-      };
-    } else if (editorCommand.type === 'new-canvas') {
-      message = {
-        type: 'designflow:new-canvas',
-        pageName: editorCommand.pageName || t?.name || '画板 1'
-      };
-    }
-    if (editorReadyRef.current) {
-      postToEditor(message);
-    } else {
-      pendingMessagesRef.current.push(message);
-      postToEditor({
-        type: 'designflow:ping'
-      });
-    }
-    if (editorCommand.type === 'insert-images') {
       const timer = setTimeout(() => {
         setEditorInsertState(prev => {
           if (!prev || prev.status !== 'running') return prev;
@@ -2462,7 +2477,7 @@ const Canvas = ({
       }, 60000);
       return () => clearTimeout(timer);
     }
-  }, [editorCommand, postToEditor, t]);
+  }, [editorCommands, postToEditor, t]);
   return /*#__PURE__*/React.createElement("div", {
     id: "designflow-canvas-container",
     style: {
@@ -14885,7 +14900,13 @@ const FlipStage = ({
 const App = () => {
   const [activeTemplate, setActiveTemplate] = React.useState(TEMPLATES[0]);
   const [resultTemplate, setResultTemplate] = React.useState(null);
-  const [editorCommand, setEditorCommand] = React.useState(null);
+  // 画布指令排队：同一次渲染里连续下发的多条指令（例如 Agent 同时取回几张图）都要送达，不能互相覆盖
+  const [editorCommands, setEditorCommands] = React.useState([]);
+  const setEditorCommand = React.useCallback(function (command) {
+    setEditorCommands(function (queue) {
+      return queue.concat([command]).slice(-50);
+    });
+  }, []);
   const [currentUser, setCurrentUser] = React.useState(null);
   const currentUserIdRef = React.useRef('');
   currentUserIdRef.current = currentUser && currentUser.id ? String(currentUser.id) : '';
@@ -15379,7 +15400,7 @@ const App = () => {
       key: 'canvas:' + currentUser.id,
       template: activeTemplate,
       resultTemplate: resultTemplate,
-      editorCommand: editorCommand,
+      editorCommands: editorCommands,
       onUseReferenceImages: handleUseCanvasReferences,
       onQuickEditGenerate: handleQuickEditGenerate,
       userId: currentUser.id

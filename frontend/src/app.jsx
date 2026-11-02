@@ -203,7 +203,11 @@ const FlipStage = ({ inspirationOpen, childrenA, childrenB }) => {
 const App = () => {
   const [activeTemplate, setActiveTemplate] = React.useState(TEMPLATES[0]);
   const [resultTemplate, setResultTemplate] = React.useState(null);
-  const [editorCommand, setEditorCommand] = React.useState(null);
+  // 画布指令排队：同一次渲染里连续下发的多条指令（例如 Agent 同时取回几张图）都要送达，不能互相覆盖
+  const [editorCommands, setEditorCommands] = React.useState([]);
+  const setEditorCommand = React.useCallback(function(command) {
+    setEditorCommands(function(queue) { return queue.concat([command]).slice(-50); });
+  }, []);
   const [currentUser, setCurrentUser] = React.useState(null);
   const currentUserIdRef = React.useRef('');
   currentUserIdRef.current = currentUser && currentUser.id ? String(currentUser.id) : '';
@@ -678,7 +682,7 @@ const App = () => {
                   key={'canvas:' + currentUser.id}
                   template={activeTemplate}
                   resultTemplate={resultTemplate}
-                  editorCommand={editorCommand}
+                  editorCommands={editorCommands}
                   onUseReferenceImages={handleUseCanvasReferences}
                   onQuickEditGenerate={handleQuickEditGenerate}
                   userId={currentUser.id}
