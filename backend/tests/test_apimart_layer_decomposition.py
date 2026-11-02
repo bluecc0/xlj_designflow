@@ -1,14 +1,50 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.apimart_layer_decomposition import ApimartLayerDecompositionClient
+import httpx
+from PIL import Image
+
+from backend.apimart_layer_decomposition import ApimartLayerDecompositionClient, ApimartLayerDecompositionError
+from backend.layer_extract_worker import LAYER_DECOMPOSITION_PROMPT
 
 
 class ApimartLayerDecompositionClientTest(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_or_rejected_decomposition_keeps_task_id_without_resubmitting(self) -> None:
+        for terminal in (
+            {"status": "completed", "result": {"images": [{"layers": []}]}},
+            {"status": "failed", "error": {"message": "No decomposable layers found"}},
+        ):
+            with self.subTest(status=terminal["status"]), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "source.png"
+                Image.new("RGB", (16, 12), "white").save(source)
+                requests = []
+
+                def respond(request):
+                    requests.append(request)
+                    if request.method == "POST":
+                        return httpx.Response(200, json={"data": [{"task_id": "task-1"}]})
+                    return httpx.Response(200, json={"data": terminal})
+
+                http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+                client = ApimartLayerDecompositionClient(api_key="test-key")
+                with patch("backend.apimart_layer_decomposition.httpx.AsyncClient", return_value=http_client):
+                    with self.assertRaisesRegex(ApimartLayerDecompositionError, "task_id=task-1") as caught:
+                        await client.run(source, prompt=LAYER_DECOMPOSITION_PROMPT)
+
+                self.assertEqual([request.method for request in requests], ["POST", "GET"])
+                self.assertEqual(requests[1].url.path, "/v1/tasks/task-1")
+                payload = json.loads(requests[0].content)
+                self.assertTrue(payload["layer_decomposition"])
+                self.assertEqual(payload["prompt"], LAYER_DECOMPOSITION_PROMPT)
+                self.assertTrue(payload["image_urls"][0].startswith("data:image/png;base64,"))
+                if terminal["status"] == "failed":
+                    self.assertIn("No decomposable layers found", str(caught.exception))
+
     async def test_proxy_argument_is_accepted_and_used_for_run(self) -> None:
         class FakeClient:
             async def __aenter__(self):

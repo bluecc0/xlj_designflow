@@ -38,16 +38,17 @@ from backend.layer_psd import export_psd
 
 logger = logging.getLogger("layer_extract_worker")
 
-# 这是发给图层分离模型的固定任务说明，限制最多拆分 7 层，避免细碎过度拆分。
+# 按图片实际内容拆分；只限制层数上限，不要求背景或任何固定的元素类别。
 LAYER_DECOMPOSITION_PROMPT = (
-    "Separate this image into independent editable Photoshop layers. "
-    "Limit the decomposition to at most 7 layers in total (including the background layer). "
-    "Return one full-canvas background layer first, followed by the primary visually "
-    "independent foreground objects, person, product, text group, logo, shadow, "
-    "or decoration. Merge tiny fragments and decorations into their corresponding "
-    "main element to avoid over-segmentation. Preserve the original canvas and composition. "
-    "Return exact bounding boxes and z-order for every layer, keep foreground layers tightly "
-    "cropped with transparency outside visible content, and do not invent or redesign any content."
+    "Decompose this image into meaningful, independently editable image layers based on its actual visible content. "
+    "Let the image determine the layer types and count, using as few layers as needed and at most 7 in total. "
+    "There are no required layer categories and no minimum layer count. "
+    "For a simple image, extract the single useful element rather than rejecting it for lacking other categories. "
+    "Keep related details together and avoid splitting tiny fragments. "
+    "Preserve the original appearance, canvas, proportions, positions, colors, text, and stacking order. "
+    "Keep isolated elements transparent outside their visible content. "
+    "If a background exists, include it as a full-canvas base layer and naturally complete only areas hidden by "
+    "the separated elements where necessary. Do not invent extra elements or redesign the image."
 )
 
 
@@ -236,6 +237,9 @@ def _select_background_index(
         name = str(layer.get("name") or "").strip().lower()
         if name in ("background", "背景"):
             return index
+        # 单个透明元素也可能是 z_index=0 的全画布图，不能把它当成不透明背景。
+        if _to_rgba(raw).getchannel("A").getextrema()[0] < 255:
+            continue
         bbox = _layer_bbox(layer, width, height)
         try:
             z_index = int(layer.get("z_index", index))
@@ -246,7 +250,8 @@ def _select_background_index(
 
     if result_layers and result_layers[0].get("bytes"):
         bbox = _layer_bbox(result_layers[0], width, height)
-        if bbox is None or bbox == [0, 0, width, height]:
+        opaque = _to_rgba(result_layers[0]["bytes"]).getchannel("A").getextrema()[0] == 255
+        if opaque and (bbox is None or bbox == [0, 0, width, height]):
             return 0
     return None
 
@@ -438,53 +443,52 @@ def main() -> int:
     # 图层分离模型通常以 background 或 z_index=0 的全画布图作为底图
     source_size = (source_width, source_height)
     background_index = _select_background_index(result_layers, source_size)
-    if background_index is None and len(result_layers) <= 2:
-        _emit({
-            "ok": False,
-            "error": f"任务只返回 {len(result_layers)} 个图层，无法组成 PSD",
-            "background_status": "missing",
-            "decomposition_provider": provider,
-            "task_id": task_id,
-            "kie_task_id": task_id,
-        })
-        return 3
     background_layer = result_layers[background_index] if background_index is not None else {}
     background_bytes = background_layer.get("bytes")
     foreground_layers = [
         layer for index, layer in enumerate(result_layers)
         if index != background_index
     ]
-    # 限制总层数最多 7 层（包含背景层 1 层 + 前景最多 6 层），避免过度碎片化
-    if len(foreground_layers) > 6:
-        foreground_layers = foreground_layers[:6]
-
-    background_path = out_dir / "00-background.png"
-    background_status = _prepare_background(
-        background_bytes, source, source_width, source_height, background_path
-    )
-    try:
-        background_z_index = int(background_layer.get("z_index", 0)) if background_layer else 0
-    except (TypeError, ValueError):
-        background_z_index = 0
-    background_manifest_layer = {
-        "id": "background",
-        "name": str(background_layer.get("name") or "背景"),
-        "kind": f"{provider}-background" if background_index is not None else "source-background",
-        "index": 0,
-        "z_index": background_z_index,
-        "path": background_path.name,
-        "bbox": [0, 0, source_width, source_height],
-        "x": 0,
-        "y": 0,
-        "width": source_width,
-        "height": source_height,
-        "opacity": 1.0,
-        "visible": True,
-        "locked": False,
-        "is_background": True,
-        "source_layer_index": background_index,
-    }
-    layers: list[dict[str, Any]] = [background_manifest_layer]
+    layers: list[dict[str, Any]] = []
+    background_status = "not-returned"
+    background_manifest: dict[str, Any] = {"status": background_status, "provider": "none"}
+    if background_index is not None:
+        background_path = out_dir / "00-background.png"
+        background_status = _prepare_background(
+            background_bytes, source, source_width, source_height, background_path
+        )
+        try:
+            background_z_index = int(background_layer.get("z_index", 0))
+        except (TypeError, ValueError):
+            background_z_index = 0
+        background_manifest_layer = {
+            "id": "background",
+            "name": str(background_layer.get("name") or "背景"),
+            "kind": f"{provider}-background",
+            "index": 0,
+            "z_index": background_z_index,
+            "path": background_path.name,
+            "bbox": [0, 0, source_width, source_height],
+            "x": 0,
+            "y": 0,
+            "width": source_width,
+            "height": source_height,
+            "opacity": 1.0,
+            "visible": True,
+            "locked": False,
+            "is_background": True,
+            "source_layer_index": background_index,
+        }
+        layers.append(background_manifest_layer)
+        background_manifest = {
+            "path": background_path.name,
+            "completedPath": background_path.name,
+            "status": background_status,
+            "provider": provider,
+            "layer": background_manifest_layer,
+        }
+    # 背景可选：不把原图冒充拆出的背景；无背景时可保留最多 7 个前景。
+    foreground_layers = foreground_layers[:7 - len(layers)]
     coordinate_size = _image_size(background_bytes) or source_size
     for index, layer in enumerate(foreground_layers, start=1):
         raw = layer["bytes"]
@@ -514,17 +518,12 @@ def main() -> int:
             "height": source_height,
             "mimeType": "image/png",
         },
-        "background": {
-            "path": background_path.name,
-            "completedPath": background_path.name,
-            "status": background_status,
-            "provider": provider if background_index is not None else "source",
-            "layer": background_manifest_layer,
-        },
+        "background": background_manifest,
         "layers": layers,
         "layerExtraction": {
             "provider": provider,
             "model": model_name,
+            "prompt": LAYER_DECOMPOSITION_PROMPT,
             "taskId": task_id,
             "resultCount": len(result_layers),
             "resultLayers": serialized_result_layers,
@@ -537,6 +536,7 @@ def main() -> int:
         "task_id": task_id,
         "provider": provider,
         "model": model_name,
+        "prompt": LAYER_DECOMPOSITION_PROMPT,
         "result_count": len(result_layers),
         "result_layers": serialized_result_layers,
         "raw": remote.get("raw_result", {}),
@@ -563,6 +563,7 @@ def main() -> int:
         "source_size": [source_width, source_height],
         "background_status": background_status,
         "decomposition_provider": provider,
+        "decomposition_prompt": LAYER_DECOMPOSITION_PROMPT,
         "task_id": task_id,
         "kie_task_id": task_id,
         "result_layers": serialized_result_layers,

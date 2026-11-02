@@ -155,18 +155,6 @@
       return request('/inspiration/' + encodeURIComponent(postId) + '/describe', { method: 'POST' });
     },
     deleteAiChat: function(sessionId) { return request('/history/ai-chats/' + encodeURIComponent(sessionId), { method: 'DELETE' }); },
-    createLayeredPsd: function(prompt, imageFile, options) {
-      var form = new FormData();
-      form.append('prompt', prompt);
-      form.append('model', (options && options.model) || 'nano-banana-pro');
-      form.append('size', (options && options.size) || 'auto');
-      form.append('resolution', (options && options.resolution) || '');
-      form.append('image', imageFile);
-      return request('/psd/layered', { method: 'POST', body: form });
-    },
-    getLayeredPsd: function(jobId) {
-      return request('/psd/layered/' + encodeURIComponent(jobId));
-    },
     listAgentSkills: function() {
       return request('/agent-skills').then(function(res) { return res.skills || []; });
     },

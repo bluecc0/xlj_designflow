@@ -322,7 +322,9 @@ class ApimartLayerDecompositionClient:
             if state in {"completed", "succeeded", "success", "done"}:
                 layers = extract_result_layers(data)
                 if not layers:
-                    raise ApimartLayerDecompositionError("APIMart 任务成功但未返回有效图层结果")
+                    raise ApimartLayerDecompositionError(
+                        f"APIMart 任务成功但未返回有效图层结果（task_id={task_id}）"
+                    )
                 return layers, data
 
             if state in {"failed", "fail", "error", "cancelled", "canceled"}:

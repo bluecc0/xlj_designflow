@@ -57,7 +57,6 @@ from .ai_image import (
     format_generation_error,
     public_generation_error,
     generate_image,
-    generate_image_with_reference,
     generate_image_async,
     generate_image_with_reference_async,
     generate_sub2api_async,
@@ -81,7 +80,6 @@ from . import outfit_change
 from .bfl_vto import FLUX_VTO_MODEL, PROVIDER_BFL, generate_vto_async
 from .ai_job_recovery import execute_image_job
 from .task_checkpoint import checkpoint, execution_lock
-from .psd_layered import create_layered_psd_from_image
 from .matting_service import matting_service
 from .bfl_outpainting import (
     BFL_ALLOWED_MODES,
@@ -627,8 +625,6 @@ if _editor_canvas_dist.exists():
 # ─── 内存任务存储（PoC 阶段，后续换 Redis / DB）────────────────────────────────
 _jobs: dict[str, ComposeJob] = {}
 _jobs_lock = threading.Lock()
-_psd_jobs: dict[str, dict] = {}
-_psd_jobs_lock = threading.Lock()
 _SESSION_COOKIE = "designflow_session"
 _IMAGE_COPY_FORMATS = {
     "PNG": ("image/png", "png"), "JPEG": ("image/jpeg", "jpg"),
@@ -2008,6 +2004,7 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
             "layers_url_prefix": layers_url_prefix,
             "background_status": payload.get("background_status", ""),
             "decomposition_provider": payload.get("decomposition_provider", provider),
+            "decomposition_prompt": payload.get("decomposition_prompt", ""),
             "task_id": task_id,
             "kie_task_id": task_id,
             "model": model_name,
@@ -7090,105 +7087,6 @@ async def ai_image_outfit_change(
         response["job_ids"] = job_ids
         response["batch_id"] = batch_id
     return response
-
-
-@app.post("/psd/layered")
-async def layered_psd_endpoint(
-    request: Request,
-    prompt: str = Form(...),
-    model: str = Form("nano-banana-pro"),
-    size: str = Form("auto"),
-    resolution: str = Form(""),
-    image: UploadFile = File(...),
-):
-    user = _current_user(request)
-    layer_text = (prompt or "").strip()
-    if not layer_text:
-        raise HTTPException(400, "请描述要拆出的图层，例如：背景、产品、文字")
-    if not image.content_type or not image.content_type.startswith("image/"):
-        raise HTTPException(400, "请上传一张参考图片")
-    image_bytes, filename = await _aread_reference_upload(image, index=0)
-    job_id = uuid.uuid4().hex
-    with _psd_jobs_lock:
-        _psd_jobs[job_id] = {
-            "id": job_id,
-            "user_id": user["id"],
-            "status": "running",
-            "logs": ["已创建智能分层任务"],
-            "result": None,
-            "error": None,
-            "created_at": time.time(),
-        }
-    asyncio.create_task(_run_layered_psd_job(
-        job_id=job_id,
-        image_bytes=image_bytes,
-        filename=filename,
-        layer_text=layer_text,
-        user_id=user["id"],
-        model=model,
-        size=size,
-        resolution=resolution,
-    ))
-    return {"job_id": job_id, "status": "running", "logs": ["已创建智能分层任务"]}
-
-
-async def _run_layered_psd_job(
-    *,
-    job_id: str,
-    image_bytes: bytes,
-    filename: str,
-    layer_text: str,
-    user_id: str,
-    model: str,
-    size: str,
-    resolution: str,
-):
-    def add_log(message: str) -> None:
-        with _psd_jobs_lock:
-            job = _psd_jobs.get(job_id)
-            if job is not None:
-                job.setdefault("logs", []).append(message)
-
-    try:
-        result = await create_layered_psd_from_image(
-            image_bytes=image_bytes,
-            filename=filename,
-            layer_text=layer_text,
-            user_id=user_id,
-            model=model,
-            size=size,
-            resolution=resolution,
-            log=add_log,
-        )
-        with _psd_jobs_lock:
-            if job_id in _psd_jobs:
-                _psd_jobs[job_id]["status"] = "done"
-                _psd_jobs[job_id]["result"] = result
-                _psd_jobs[job_id]["logs"].append("任务完成")
-    except Exception as exc:
-        logger.exception("layered psd job failed: %s", job_id)
-        with _psd_jobs_lock:
-            if job_id in _psd_jobs:
-                _psd_jobs[job_id]["status"] = "failed"
-                _psd_jobs[job_id]["error"] = f"{type(exc).__name__}: {exc}"
-                _psd_jobs[job_id]["logs"].append(f"任务失败：{type(exc).__name__}: {exc}")
-
-
-@app.get("/psd/layered/{job_id}")
-def layered_psd_status(request: Request, job_id: str):
-    user = _current_user(request)
-    with _psd_jobs_lock:
-        job = dict(_psd_jobs.get(job_id) or {})
-    if not job:
-        raise HTTPException(404, "PSD 任务不存在")
-    _assert_job_owner(job.get("user_id"), user)
-    return {
-        "job_id": job_id,
-        "status": job.get("status"),
-        "logs": job.get("logs") or [],
-        "result": job.get("result"),
-        "error": job.get("error"),
-    }
 
 
 @app.post("/chat")
