@@ -114,6 +114,7 @@ from .agent2.memory import list_all_memories
 from .agent2.routes import router as agent2_router
 from .agent2.service import fail_stale_turns as agent2_fail_stale_turns
 from .agent2.tools import backfill_recovered_job as agent2_backfill_recovered_job
+from .agent2.tools import deliver_finished_jobs as agent2_deliver_finished_jobs
 from .agent2.store import init_tables as init_agent2_tables
 from .user_skill_store import (
     MAX_UPLOAD_BYTES as MAX_SKILL_UPLOAD_BYTES,
@@ -525,6 +526,11 @@ async def _job_recovery_loop():
             await _recover_background_jobs_once()
         except Exception:
             logger.exception("background job recovery scan failed")
+        try:
+            # Agent 任务已完成但结果没进会话（等待超时、重启打断登记、扩图自行恢复）：只补登结果，不重跑
+            await asyncio.to_thread(agent2_deliver_finished_jobs)
+        except Exception:
+            logger.exception("agent2 result delivery scan failed")
         await asyncio.sleep(15)
 
 

@@ -355,9 +355,25 @@ def list_call_artifacts(call_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-# 已出图但产物还没登记的任务也算待处理（后台恢复写完 done 到补登产物之间有空档）；
+# 已出图但产物还没登记的任务也算待处理（完成落库到登记产物之间有空档，由补交付扫描补上）；
 # 只看最近完成的，历史上没登记成功的任务不会让前端一直轮询
 UNDELIVERED_WINDOW_SECONDS = 600
+# 补交付扫描：完成超过宽限期仍未登记才补，避免和仍在等待结果的工具调用抢登记
+DELIVERY_GRACE_SECONDS = 30
+DELIVERY_MAX_AGE_SECONDS = 24 * 3600
+
+# Agent 发起、用户没有主动停止的任务（停止的轮次里后台完成的结果不再交付）
+_AGENT_JOB_SQL = """
+    json_valid(j.request_meta_json)
+    AND json_extract(j.request_meta_json, '$.source') = 'agent2'
+    AND COALESCE(json_extract(j.request_meta_json, '$.recovery.phase'), '') != 'cancelled'
+    AND NOT EXISTS (SELECT 1 FROM agent2_turns t WHERE t.id = json_extract(j.request_meta_json, '$.turn_id')
+                    AND t.status = 'cancelled')
+"""
+_UNDELIVERED_SQL = """
+    j.status = 'done' AND COALESCE(j.image_url, '') != ''
+    AND NOT EXISTS (SELECT 1 FROM agent2_artifacts a WHERE json_extract(a.meta_json, '$.job_id') = j.id)
+"""
 
 
 def count_pending_image_jobs(session_id: str) -> int:
@@ -369,19 +385,24 @@ def count_pending_image_jobs(session_id: str) -> int:
 def _count_pending_image_jobs(conn, session_id: str) -> int:
     row = conn.execute("""
         SELECT COUNT(*) FROM ai_image_jobs j
-        WHERE json_valid(j.request_meta_json)
-          AND json_extract(j.request_meta_json, '$.source') = 'agent2'
+        WHERE """ + _AGENT_JOB_SQL + """
           AND json_extract(j.request_meta_json, '$.session_id') = ?
-          AND COALESCE(json_extract(j.request_meta_json, '$.recovery.phase'), '') != 'cancelled'
-          -- 抠图、放大、扩图等处理任务随工具调用结束，不参与重启后的补图
-          AND COALESCE(json_extract(j.request_meta_json, '$.operation'), '') NOT IN
-              ('matting', 'upscale', 'vectorize', 'layer_extract', 'outpainting')
           AND (j.status IN ('pending', 'queued', 'processing', 'running')
-               OR (j.status = 'done' AND COALESCE(j.updated_at, j.created_at) > ?
-                   AND NOT EXISTS (SELECT 1 FROM agent2_artifacts a WHERE a.session_id = ?
-                                   AND json_extract(a.meta_json, '$.job_id') = j.id)))
-    """, (session_id, time.time() - UNDELIVERED_WINDOW_SECONDS, session_id)).fetchone()
+               OR (""" + _UNDELIVERED_SQL + """ AND COALESCE(j.updated_at, j.created_at) > ?))
+    """, (session_id, time.time() - UNDELIVERED_WINDOW_SECONDS)).fetchone()
     return int(row[0] or 0)
+
+
+def list_undelivered_job_ids() -> list[str]:
+    """已完成但结果还没进会话的 Agent 任务：工具等待超时、服务重启发生在完成落库和登记产物之间等。"""
+    now = time.time()
+    with _connect() as conn:
+        return [r[0] for r in conn.execute("""
+            SELECT j.id FROM ai_image_jobs j
+            WHERE """ + _AGENT_JOB_SQL + " AND " + _UNDELIVERED_SQL + """
+              AND COALESCE(j.updated_at, j.created_at) BETWEEN ? AND ?
+            ORDER BY j.updated_at LIMIT 50
+        """, (now - DELIVERY_MAX_AGE_SECONDS, now - DELIVERY_GRACE_SECONDS))]
 
 
 def take_unannounced_recovered(session_id: str) -> list[dict]:
@@ -399,9 +420,12 @@ def take_unannounced_recovered(session_id: str) -> list[dict]:
 
 def find_job_artifact(job_id: str) -> dict | None:
     with _connect() as conn:
-        return _row(conn.execute(
+        artifact = _row(conn.execute(
             "SELECT * FROM agent2_artifacts WHERE json_extract(meta_json, '$.job_id') = ? LIMIT 1", (job_id,),
         ).fetchone())
+    if artifact:
+        artifact["meta"] = json.loads(artifact.get("meta_json") or "{}")
+    return artifact
 
 
 def get_artifact(artifact_id: str, user_id: str) -> dict | None:

@@ -6,7 +6,6 @@ Agent 只负责找到图片、等任务结束、把结果登记为会话产物�
 from __future__ import annotations
 
 import asyncio
-import json
 import math
 import uuid
 from pathlib import Path
@@ -22,14 +21,14 @@ from . import store
 from .engine import Tool, ToolContext
 from .tools import (ASPECT_RATIOS, DEFAULT_IMAGE_MODEL, JOB_MAX_WAIT_SECONDS, JOB_POLL_SECONDS, MAX_IMAGES_PER_TURN,
                     _artifact_bytes,
-                    _artifact_event, _generate_one, _job_terminal, _main)
+                    _artifact_event, _generate_one, _job_terminal, _main, create_job_artifact)
 
-# 工具名 → (后台任务的 operation, 中文名, 结果类型)
+# 工具名 → (后台任务的 operation, 中文名)；结果是文件还是图片见 tools.FILE_OPERATIONS
 OPERATIONS = {
-    "remove_background": ("matting", "抠图", "image"),
-    "upscale_image": ("upscale", "高清放大", "image"),
-    "vectorize_image": ("vectorize", "转矢量图", "file"),
-    "split_layers": ("layer_extract", "拆分 PSD 图层", "file"),
+    "remove_background": ("matting", "抠图"),
+    "upscale_image": ("upscale", "高清放大"),
+    "vectorize_image": ("vectorize", "转矢量图"),
+    "split_layers": ("layer_extract", "拆分 PSD 图层"),
 }
 
 
@@ -42,8 +41,10 @@ def _source(ctx: ToolContext, image_id) -> dict:
     return artifact
 
 
-def _agent_meta(ctx: ToolContext) -> dict:
-    return {"source": "agent2", "session_id": ctx.session_id, "turn_id": ctx.turn_id, "tool_call_id": ctx.call_id}
+def _agent_meta(ctx: ToolContext, label: str) -> dict:
+    # 结果登记所需的信息都存在任务上：等待超时或服务重启后，补交付扫描据此把结果送回原会话
+    return {"source": "agent2", "session_id": ctx.session_id, "turn_id": ctx.turn_id, "tool_call_id": ctx.call_id,
+            "label": label}
 
 
 async def _wait(ctx: ToolContext, job_id: str, label: str) -> dict | None:
@@ -63,50 +64,41 @@ async def _wait(ctx: ToolContext, job_id: str, label: str) -> dict | None:
         waited += JOB_POLL_SECONDS
 
 
-async def _deliver(ctx: ToolContext, job: dict | None, *, label: str, kind: str, operation: str) -> dict:
+async def _deliver(ctx: ToolContext, job: dict | None, *, label: str) -> dict:
     if job is None:
-        return {"error": f"{label}超时，任务仍在后台处理，稍后可在任务记录里查看"}
+        return {"error": f"{label}超时，任务仍在后台处理，完成后会自动补回到这个对话里"}
     if job["status"] != "done":
         return {"error": str(job.get("error") or f"{label}失败")[:200]}
-    url = str(job.get("image_url") or "")
-    local = str(_main()._resolve_public_asset_path(url) or "")
-    if kind == "file":
-        # PSD、SVG 不在对话里当图片展示，只给下载
-        artifact = store.create_artifact(session_id=ctx.session_id, user_id=ctx.user["id"], kind="file", url=url,
-                                         path=local, label=label, source_tool_call_id=ctx.call_id,
-                                         meta={"job_id": job["id"], "operation": operation})
-        out = {"files": [{"id": artifact["id"], "url": url, "name": Path(local or url).name, "label": label}]}
-        if operation == "layer_extract":
-            try:
-                trace = json.loads(job.get("prompt_trace") or "{}")
-            except ValueError:
-                trace = {}
-            out["layer_count"] = len(trace.get("layers") or [])
-        return out
-    registered = store.register_job_artifact(
-        job["id"], ctx.turn_id, lambda a: _artifact_event(a), session_id=ctx.session_id, user_id=ctx.user["id"],
-        url=url, path=local, label=label, source_tool_call_id=ctx.call_id, meta={"operation": operation})
+    # 和补交付扫描共用同一个幂等登记：谁先登记都只有一份产物和一条事件
+    registered = create_job_artifact(job)
     if registered:
         artifact, event = registered
         if ctx.publish:
             await ctx.publish(event)
     else:
         artifact = store.find_job_artifact(job["id"])
-    return {"images": [{"id": artifact["id"], "url": url, "label": label}]}
+    if artifact["kind"] == "file":
+        # PSD、SVG 不在对话里当图片展示，只给下载
+        out = {"files": [{"id": artifact["id"], "url": artifact["url"], "name": Path(artifact["path"] or artifact["url"]).name,
+                          "label": label}]}
+        if "layer_count" in artifact["meta"]:
+            out["layer_count"] = artifact["meta"]["layer_count"]
+        return out
+    return {"images": [{"id": artifact["id"], "url": artifact["url"], "label": label}]}
 
 
 def _operation_tool(name: str):
-    operation, label, kind = OPERATIONS[name]
+    operation, label = OPERATIONS[name]
 
     async def handler(ctx: ToolContext, args: dict) -> dict:
         source = _source(ctx, args.get("image_id"))
         job_id = uuid.uuid4().hex
         try:
             _main().start_image_operation(ctx.user, operation, job_id, Path(source["path"]), source["url"],
-                                          scale=args.get("scale"), extra_meta=_agent_meta(ctx))
+                                          scale=args.get("scale"), extra_meta=_agent_meta(ctx, label))
         except HTTPException as exc:
             return {"error": str(exc.detail)}
-        return await _deliver(ctx, await _wait(ctx, job_id, label), label=label, kind=kind, operation=operation)
+        return await _deliver(ctx, await _wait(ctx, job_id, label), label=label)
     return handler
 
 
@@ -173,13 +165,13 @@ async def outpaint_image(ctx: ToolContext, args: dict) -> dict:
     try:
         submitted = await main.submit_outpainting_job(
             ctx.user, body, source=Path(source["path"]), source_kind="agent_artifact", source_image_url=source["url"],
-            client_request_id=str(uuid.uuid4()), mode=mode, extra_meta=_agent_meta(ctx))
+            client_request_id=str(uuid.uuid4()), mode=mode, extra_meta=_agent_meta(ctx, "扩图"))
     except HTTPException as exc:
         return {"error": str(exc.detail)}
     except Exception as exc:  # 几何校验等错误
         return {"error": str(exc)[:200]}
     job = await _wait(ctx, submitted["job_id"], "扩图")
-    out = await _deliver(ctx, job, label="扩图", kind="image", operation="outpainting")
+    out = await _deliver(ctx, job, label="扩图")
     if out.get("images"):  # 工具只支持比例，回复里要能说清实际输出尺寸
         out["size"] = f"{submitted.get('expected_width')}×{submitted.get('expected_height')}"
     return out

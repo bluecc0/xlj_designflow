@@ -3745,6 +3745,9 @@ const AgentToolCard = ({
   var running = m.status === 'running';
   var result = m.result || {};
   var images = m.images || [];
+  // 工具结果里的文件优先；等待超时后由后台补回的文件来自 artifact.created 事件
+  var files = Array.isArray(result.files) && result.files.length ? result.files : m.files || [];
+  var layerCount = result.layer_count || files[0] && files[0].layer_count || 0;
   var args = m.args || {};
   var label = m.tool === 'remember' ? {
     add: '记住',
@@ -3981,13 +3984,13 @@ const AgentToolCard = ({
         lineHeight: 1.45
       }
     }, (f.label || '第 ' + ((f.index || 0) + 1) + ' 张') + ' 失败：' + (f.error || ''));
-  }), Array.isArray(result.files) && result.files.length ? /*#__PURE__*/React.createElement("div", {
+  }), files.length ? /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexWrap: 'wrap',
       gap: 6
     }
-  }, result.files.map(function (f) {
+  }, files.map(function (f) {
     return /*#__PURE__*/React.createElement("a", {
       key: f.id || f.url,
       href: agent2AbsUrl(f.url),
@@ -4006,13 +4009,13 @@ const AgentToolCard = ({
     }, /*#__PURE__*/React.createElement(I.download, {
       size: 10
     }), "\u4E0B\u8F7D", f.name ? ' ' + f.name : '');
-  }), result.layer_count ? /*#__PURE__*/React.createElement("span", {
+  }), layerCount ? /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 11,
       color: 'var(--ink-3)',
       alignSelf: 'center'
     }
-  }, "\u5171 ", result.layer_count, " \u4E2A\u56FE\u5C42") : null) : null, result.zip_url ? /*#__PURE__*/React.createElement("div", {
+  }, "\u5171 ", layerCount, " \u4E2A\u56FE\u5C42") : null) : null, result.zip_url ? /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex'
     }
@@ -8293,16 +8296,22 @@ const agent2Reduce = function (msgs, ev) {
       });
     case 'artifact.created':
       return updateCard(p.call_id, function (m) {
-        var images = m.images.concat([p.artifact || {}]).sort(function (a, b) {
-          return (a.position || 0) - (b.position || 0);
-        });
-        // 服务重启后由后台补回：卡片从失败/中断转为完成
-        return Object.assign({}, m, {
-          images: images
-        }, p.recovered ? {
+        var art = p.artifact || {};
+        // 后台补回（服务重启、等待超时后完成）：卡片从失败/中断转为完成
+        var recovered = p.recovered ? {
           status: 'done',
           recovered: true
-        } : {});
+        } : {};
+        // PSD、SVG 等文件只给下载，不当图片展示
+        if (art.kind === 'file') return Object.assign({}, m, {
+          files: (m.files || []).concat([art])
+        }, recovered);
+        var images = m.images.concat([art]).sort(function (a, b) {
+          return (a.position || 0) - (b.position || 0);
+        });
+        return Object.assign({}, m, {
+          images: images
+        }, recovered);
       });
     case 'context.compacting':
       return list.concat([Object.assign({}, thinking, {
@@ -8544,7 +8553,7 @@ const Chat = ({
       pushAgentImagesToCanvas(p.result);
     }
     // 服务重启后由后台补回的图片：按图片 ID 交付一次
-    if (ev.type === 'artifact.created' && p.recovered && p.artifact && window.Agent2Cursor.deliverOnce(cursor, 'img:' + p.artifact.id)) {
+    if (ev.type === 'artifact.created' && p.recovered && p.artifact && p.artifact.kind !== 'file' && window.Agent2Cursor.deliverOnce(cursor, 'img:' + p.artifact.id)) {
       pushAgentImagesToCanvas({
         images: [p.artifact]
       });

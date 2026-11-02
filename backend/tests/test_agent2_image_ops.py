@@ -99,10 +99,71 @@ class Agent2ImageOpsTest(unittest.TestCase):
             [("text", "拆好了。")],
         ], "转成分层 PSD")
         self.assertEqual(self.started[0]["operation"], "layer_extract")
-        self.assertFalse([e for e in events if e["type"] == "artifact.created"])
+        created = [e["payload"]["artifact"] for e in events if e["type"] == "artifact.created"]
+        self.assertEqual([a["kind"] for a in created], ["file"])
         result = next(e for e in events if e["type"] == "tool.finished")["payload"]["result"]
         self.assertEqual(result["files"][0]["url"], "/ai-images/u1/layer.psd")
         self.assertEqual(result["layer_count"], 3)
+
+    def _agent_job(self, job_id, *, operation="", status="done", url="/ai-images/u1/result.png", turn_id="t1",
+                   phase="done", trace=""):
+        meta = {"source": "agent2", "session_id": self.session["id"], "turn_id": turn_id, "tool_call_id": "call_x",
+                "label": "结果", "recovery": {"phase": phase}}
+        if operation:
+            meta["operation"] = operation
+        job_store.save_ai_image_job(job_id=job_id, user_id="u1", status=status, model="m", prompt="p", size="",
+                                    image_url=url if status == "done" else "", request_meta=meta, prompt_trace=trace)
+
+    def test_finished_but_unregistered_jobs_are_delivered_once(self):
+        # 完成落库后、登记产物前服务重启：普通恢复扫描不会再管 phase=done 的任务，由补交付扫描补上
+        self._agent_job("gen1")
+        self._agent_job("out1", operation="outpainting")
+        self._agent_job("psd1", operation="layer_extract", url="/ai-images/u1/layer.psd", trace='{"layers": [1, 2]}')
+        self.assertEqual(job_store.load_recoverable_image_jobs(), [])
+        self.assertEqual(store.count_pending_image_jobs(self.session["id"]), 3)
+        # 宽限期内不补：工具调用可能还在等结果
+        self.assertEqual(a2tools.deliver_finished_jobs(), 0)
+        with patch.object(store, "DELIVERY_GRACE_SECONDS", -1):
+            self.assertEqual(a2tools.deliver_finished_jobs(), 3)
+            self.assertEqual(a2tools.deliver_finished_jobs(), 0)
+        self.assertEqual(store.count_pending_image_jobs(self.session["id"]), 0)
+        kinds = {store.find_job_artifact(j)["kind"] for j in ("gen1", "out1")}
+        self.assertEqual(kinds, {"image"})
+        psd = store.find_job_artifact("psd1")
+        self.assertEqual((psd["kind"], psd["meta"]["layer_count"], psd["meta"]["recovered"]), ("file", 2, True))
+        events = [e for e in store.session_snapshot(self.session["id"], 0)["events"] if e["type"] == "artifact.created"]
+        self.assertEqual(len(events), 3)
+        self.assertTrue(all(e["payload"]["recovered"] and e["payload"]["call_id"] == "call_x" for e in events))
+
+    def test_processing_result_after_tool_timeout_is_delivered(self):
+        def slow(user, operation, job_id, src_path, image_url, *, scale=None, extra_meta=None):
+            self.started.append(job_id)
+            job_store.save_ai_image_job(job_id=job_id, user_id="u1", status="processing", model="local-matting",
+                                        prompt="matting", size="", request_meta={"operation": operation, **extra_meta})
+        self.main.start_image_operation.side_effect = slow
+        with patch.object(image_ops, "JOB_MAX_WAIT_SECONDS", 0.02):
+            events, _ = self._run([[("call", "remove_background", {"image_id": self.source["id"]})], [("text", "还在处理")]])
+        finished = next(e for e in events if e["type"] == "tool.finished")["payload"]
+        self.assertFalse(finished["ok"])
+        self.assertIn("自动补回", finished["result"]["error"])
+        # 后台仍在处理：前端据此继续轮询
+        self.assertEqual(store.count_pending_image_jobs(self.session["id"]), 1)
+        job = job_store.load_ai_image_job(self.started[0])
+        job_store.save_ai_image_job(job_id=job["id"], user_id="u1", status="done", model=job["model"], prompt="matting",
+                                    size="", image_url="/ai-images/u1/result.png", request_meta=job["request_meta"])
+        with patch.object(store, "DELIVERY_GRACE_SECONDS", -1):
+            self.assertEqual(a2tools.deliver_finished_jobs(), 1)
+        artifact = store.find_job_artifact(job["id"])
+        self.assertEqual((artifact["label"], artifact["source_tool_call_id"]), ("抠图", finished["call_id"]))
+        self.assertEqual(store.count_pending_image_jobs(self.session["id"]), 0)
+
+    def test_results_of_user_stopped_turns_are_not_delivered(self):
+        turn = store.claim_turn(self.session["id"], "u1", "抠图")
+        store.update_turn(turn["id"], status="cancelled")
+        self._agent_job("stopped1", operation="matting", turn_id=turn["id"])
+        self.assertEqual(store.count_pending_image_jobs(self.session["id"]), 0)
+        with patch.object(store, "DELIVERY_GRACE_SECONDS", -1):
+            self.assertEqual(a2tools.deliver_finished_jobs(), 0)
 
     def test_failed_job_and_unknown_image_are_reported(self):
         def failing(user, operation, job_id, *a, **k):

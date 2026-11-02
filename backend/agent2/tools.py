@@ -53,28 +53,45 @@ def _artifact_bytes(ctx: ToolContext, artifact_id: str) -> tuple[bytes, str]:
 
 # ── generate_image ────────────────────────────────────────────────────────────
 
+# 结果是文件（只给下载、不进画布）的处理任务
+FILE_OPERATIONS = {"vectorize", "layer_extract"}
+
+
 def create_job_artifact(job: dict, recovered: bool = False) -> tuple[dict, dict] | None:
-    """把完成的生图任务登记为会话产物，并在同一事务里写入 artifact.created 事件；
-    同一任务只登记一次（实时完成和重启恢复共用），已登记过返回 None。"""
+    """把完成的 Agent 任务（生图、抠图、放大、扩图、转矢量、拆 PSD 等）登记为会话产物，
+    并在同一事务里写入 artifact.created 事件；同一任务只登记一次（实时完成、重启恢复、补交付扫描共用），
+    已登记过返回 None。"""
     meta = job.get("request_meta") or {}
     url = str(job.get("image_url") or "")
     if job.get("status") != "done" or not url or meta.get("source") != "agent2":
         return None
-    local = _main()._resolve_public_asset_path(url)
+    local = str(_main()._resolve_public_asset_path(url) or "")
+    operation = str(meta.get("operation") or "")
+    extra: dict = {"prompt": job.get("prompt"), "provider": job.get("provider"), "operation": operation}
+    if operation == "layer_extract":
+        try:
+            extra["layer_count"] = len(json.loads(job.get("prompt_trace") or "{}").get("layers") or [])
+        except (ValueError, AttributeError):
+            pass
+    if recovered:
+        extra.update(recovered=True, announced=False)
     return store.register_job_artifact(
         job["id"], meta.get("turn_id") or "", lambda artifact: _artifact_event(artifact, recovered),
-        session_id=meta["session_id"], user_id=job["user_id"], url=url, path=str(local or ""),
+        kind="file" if operation in FILE_OPERATIONS else "image",
+        session_id=meta["session_id"], user_id=job["user_id"], url=url, path=local,
         label=meta.get("label") or "", group_id=meta.get("group_id"), group_type=meta.get("group_type"),
-        position=int(meta.get("position") or 0), source_tool_call_id=meta.get("tool_call_id"),
-        meta={"prompt": job.get("prompt"), "provider": job.get("provider"),
-              **({"recovered": True, "announced": False} if recovered else {})},
+        position=int(meta.get("position") or 0), source_tool_call_id=meta.get("tool_call_id"), meta=extra,
     )
 
 
 def _artifact_event(artifact: dict, recovered: bool = False) -> dict:
-    return {"call_id": artifact["source_tool_call_id"], "recovered": recovered, "artifact": {
-        "id": artifact["id"], "url": artifact["url"], "label": artifact["label"], "group_id": artifact["group_id"],
-        "group_type": artifact["group_type"], "position": artifact["position"]}}
+    out = {"id": artifact["id"], "url": artifact["url"], "label": artifact["label"], "group_id": artifact["group_id"],
+           "group_type": artifact["group_type"], "position": artifact["position"], "kind": artifact.get("kind") or "image"}
+    if out["kind"] == "file":
+        out["name"] = Path(artifact.get("path") or artifact["url"]).name
+        if (artifact.get("meta") or {}).get("layer_count"):
+            out["layer_count"] = artifact["meta"]["layer_count"]
+    return {"call_id": artifact["source_tool_call_id"], "recovered": recovered, "artifact": out}
 
 
 async def backfill_recovered_job(job_id: str) -> None:
@@ -83,6 +100,17 @@ async def backfill_recovered_job(job_id: str) -> None:
     job = load_ai_image_job(job_id)
     if job:
         create_job_artifact(job, recovered=True)
+
+
+def deliver_finished_jobs() -> int:
+    """补交付扫描：已完成但结果还没进会话的 Agent 任务，只补登产物和事件，不重新发起任务。
+    覆盖工具等待超时后才完成、完成落库与登记产物之间服务重启、扩图由自己的恢复流程完成等情况。"""
+    delivered = 0
+    for job_id in store.list_undelivered_job_ids():
+        job = load_ai_image_job(job_id)
+        if job and create_job_artifact(job, recovered=True):
+            delivered += 1
+    return delivered
 
 
 def _job_terminal(job: dict | None) -> bool:

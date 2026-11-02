@@ -887,6 +887,9 @@ const AgentToolCard = ({ m, openImage }) => {
   var running = m.status === 'running';
   var result = m.result || {};
   var images = m.images || [];
+  // 工具结果里的文件优先；等待超时后由后台补回的文件来自 artifact.created 事件
+  var files = (Array.isArray(result.files) && result.files.length) ? result.files : (m.files || []);
+  var layerCount = result.layer_count || (files[0] && files[0].layer_count) || 0;
   var args = m.args || {};
   var label = m.tool === 'remember'
     ? ({ add: '记住', update: '更新记忆', 'delete': '删除记忆' }[args.action] || '记忆')
@@ -977,16 +980,16 @@ const AgentToolCard = ({ m, openImage }) => {
       {failedItems.map(function(f, fi) {
         return <div key={'f' + fi} style={{ fontSize: 11, color: 'var(--warn)', lineHeight: 1.45 }}>{(f.label || ('第 ' + ((f.index || 0) + 1) + ' 张')) + ' 失败：' + (f.error || '')}</div>;
       })}
-      {Array.isArray(result.files) && result.files.length ? (
+      {files.length ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {result.files.map(function(f) {
+          {files.map(function(f) {
             return (
               <a key={f.id || f.url} href={agent2AbsUrl(f.url)} download style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'var(--ink)', color: 'white', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 <I.download size={10}/>下载{f.name ? ' ' + f.name : ''}
               </a>
             );
           })}
-          {result.layer_count ? <span style={{ fontSize: 11, color: 'var(--ink-3)', alignSelf: 'center' }}>共 {result.layer_count} 个图层</span> : null}
+          {layerCount ? <span style={{ fontSize: 11, color: 'var(--ink-3)', alignSelf: 'center' }}>共 {layerCount} 个图层</span> : null}
         </div>
       ) : null}
       {result.zip_url ? (
@@ -4197,9 +4200,13 @@ const agent2Reduce = function(msgs, ev) {
       });
     case 'artifact.created':
       return updateCard(p.call_id, function(m) {
-        var images = m.images.concat([p.artifact || {}]).sort(function(a, b) { return (a.position || 0) - (b.position || 0); });
-        // 服务重启后由后台补回：卡片从失败/中断转为完成
-        return Object.assign({}, m, { images: images }, p.recovered ? { status: 'done', recovered: true } : {});
+        var art = p.artifact || {};
+        // 后台补回（服务重启、等待超时后完成）：卡片从失败/中断转为完成
+        var recovered = p.recovered ? { status: 'done', recovered: true } : {};
+        // PSD、SVG 等文件只给下载，不当图片展示
+        if (art.kind === 'file') return Object.assign({}, m, { files: (m.files || []).concat([art]) }, recovered);
+        var images = m.images.concat([art]).sort(function(a, b) { return (a.position || 0) - (b.position || 0); });
+        return Object.assign({}, m, { images: images }, recovered);
       });
     case 'context.compacting':
       return list.concat([Object.assign({}, thinking, { text: '对话较长，正在整理较早的内容…' })]);
@@ -4358,7 +4365,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       pushAgentImagesToCanvas(p.result);
     }
     // 服务重启后由后台补回的图片：按图片 ID 交付一次
-    if (ev.type === 'artifact.created' && p.recovered && p.artifact && window.Agent2Cursor.deliverOnce(cursor, 'img:' + p.artifact.id)) {
+    if (ev.type === 'artifact.created' && p.recovered && p.artifact && p.artifact.kind !== 'file' && window.Agent2Cursor.deliverOnce(cursor, 'img:' + p.artifact.id)) {
       pushAgentImagesToCanvas({ images: [p.artifact] });
     }
     return !!AGENT2_TERMINAL[ev.type];
