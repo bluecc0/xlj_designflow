@@ -16,7 +16,6 @@ from pathlib import Path
 from ..agent_skill_loader import build_skill_context, load_agent_skill, load_reference_text
 from ..ai_image import compress_image_to_data_url, save_user_refs
 from ..ai_job_recovery import execute_image_job
-from ..common_helpers import _extract_first_json_object
 from ..config import settings
 from ..job_store import load_ai_image_job, save_ai_image_job, save_image_checkpoint
 from ..model_routing import routed_chat_completion
@@ -123,7 +122,7 @@ def _job_terminal(job: dict | None) -> bool:
 
 async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str, variant: str,
                         size: str, resolution: str, refs: list[tuple[bytes, str]], group_id: str | None, group_type: str | None,
-                        extra_meta: dict | None = None, total: int = 1) -> dict:
+                        extra_meta: dict | None = None) -> dict:
     prompt = str(item.get("prompt") or "").strip()
     label = str(item.get("label") or "").strip()
     # 单张指定的参考图优先：修改多张已有图时，每张只参考它自己的原图
@@ -185,55 +184,7 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str,
             await ctx.publish(event)
     else:  # 已由其它途径登记过
         artifact = store.find_job_artifact(job_id)
-    out = {"index": index, "label": label, "id": artifact["id"], "url": artifact["url"], "model": model}
-    check = await _self_check(ctx, artifact.get("path") or "", prompt=prompt, label=label, index=index, total=total)
-    if check:
-        out["check"] = check
-        await ctx.emit("image.checked", {"call_id": ctx.call_id, "image_id": artifact["id"], **check})
-    return out
-
-
-SELF_CHECK_PROMPT = """你是出图质检。对照用户的需求，检查这张生成图是否满足要求。
-【用户需求】{request}
-【这张图的计划】{plan}
-【这张图的位置】这一批共 {total} 张，这是第 {position} 张，你只看到这一张。
-
-只检查这一张图本身的客观问题，不评价审美偏好。张数、整组图之间的分工或差异这类针对整批的要求不在检查范围内，不要因为"只有一张""和别的图重复"判为问题：
-1. 主体和内容是否符合需求（要求的元素是否出现、有没有画错对象）
-2. 画面里的文字是否有错别字、乱码，或者和用户给的文案不一致
-3. 明显的生成缺陷：肢体或手指畸形、商品变形、主体被截断
-4. 用户明确要求的比例、风格、颜色是否满足
-
-只返回 JSON：{{"ok": true 或 false, "summary": "不超过 20 字的结论", "problems": ["具体问题，没有就留空"]}}"""
-
-
-async def _self_check(ctx: ToolContext, local, *, prompt: str, label: str, index: int = 0, total: int = 1) -> dict | None:
-    """出图后自检：拿生成图对照用户原话检查。失败时返回 None，不影响出图结果。"""
-    request = str(ctx.state.get("request") or "").strip()
-    if not request or not local or not Path(local).is_file():
-        return None
-    plan = (label + "：" if label else "") + prompt
-    payload = {
-        "messages": [{"role": "user", "content": [
-            {"type": "text", "text": SELF_CHECK_PROMPT.format(request=request[:500], plan=plan[:500],
-                                                                      total=total, position=index + 1)},
-            {"type": "image_url", "image_url": {"url": compress_image_to_data_url(Path(local).read_bytes(), 1024)}},
-        ]}],
-        "max_tokens": 300, "temperature": 0.1,
-    }
-    try:
-        resp = await routed_chat_completion("agent_vlm", payload, timeout=settings.agent_vlm_timeout_seconds,
-                                            validate=lambda text: bool(_extract_first_json_object(text)))
-        content = (((resp.json() or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        parsed = _extract_first_json_object(content) or {}
-    except Exception:
-        logger.warning("[agent2] self check failed for %s", local, exc_info=True)
-        return None
-    if "ok" not in parsed:
-        return None
-    problems = [str(x).strip() for x in (parsed.get("problems") or []) if str(x).strip()][:3]
-    return {"ok": bool(parsed["ok"]) and not problems, "summary": str(parsed.get("summary") or "").strip()[:40],
-            "problems": problems}
+    return {"index": index, "label": label, "id": artifact["id"], "url": artifact["url"], "model": model}
 
 
 async def generate_image(ctx: ToolContext, args: dict) -> dict:
@@ -265,7 +216,7 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
     group_id = ("grp_" + uuid.uuid4().hex[:8]) if group_type else None
     results = await asyncio.gather(*[
         _generate_one(ctx, i, item, model=models[i], variant=variant, size=ratio, resolution=resolution, refs=refs,
-                      group_id=group_id, group_type=group_type, total=len(items))
+                      group_id=group_id, group_type=group_type)
         for i, item in enumerate(items)
     ])
     ok = [r for r in results if r.get("id")]

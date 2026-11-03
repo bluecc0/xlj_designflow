@@ -323,7 +323,7 @@ def build_image_op_tools() -> list[Tool]:
              {"type": "object", "properties": {"image_id": image_id}, "required": ["image_id"]},
              _operation_tool("split_layers")),
         Tool("outpaint_image", "扩图：在原图四周或某一边补画内容，原图内容不变。给目标比例，"
-             "或给 expand_percent 让画面往外扩；用户说只往某一边扩时填 direction。只能按比例扩，不能指定精确像素，结果里的 size 是实际输出尺寸。用户说扩图、画面不够大、改成横版/竖版但保留原图时使用。",
+             "或给 expand_percent 让画面往外扩；用户说只往某一边扩时填 direction。只能按比例扩，不能指定精确像素，结果里的 size 是实际输出尺寸。只在用户明确说要扩图（扩图、往外扩、补画四周、空出来的地方补上）时使用；只说“改个竖版”“换成横版”时，改用 generate_image 按新比例重新生成。",
              {"type": "object", "properties": {
                  "image_id": image_id,
                  "aspect_ratio": {"type": "string", "enum": ASPECT_RATIOS, "description": "目标比例；不改比例时用 auto"},

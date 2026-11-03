@@ -2824,12 +2824,11 @@ const Bubble = ({
     alignItems: who === 'user' ? 'flex-end' : 'flex-start'
   }
 }, meta && /*#__PURE__*/React.createElement("div", {
-  className: "mono",
   style: {
-    fontSize: 11,
-    color: 'var(--ink-3)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.06em'
+    fontSize: 12,
+    fontWeight: 600,
+    color: 'var(--ink-2)',
+    lineHeight: 1.3
   }
 }, meta), children));
 
@@ -3753,8 +3752,6 @@ const AgentToolCard = ({
   m,
   openImage
 }) => {
-  // 自检没通过的图，点红叉才展开问题说明
-  const [openChecks, setOpenChecks] = React.useState({});
   var running = m.status === 'running';
   var result = m.result || {};
   var images = m.images || [];
@@ -3927,60 +3924,7 @@ const AgentToolCard = ({
           whiteSpace: 'nowrap'
         }
       }, text) : null;
-    }(), im.check ? im.check.ok ? /*#__PURE__*/React.createElement("span", {
-      title: '自检通过' + (im.check.summary ? '：' + im.check.summary : ''),
-      "aria-label": "\u81EA\u68C0\u901A\u8FC7",
-      style: {
-        color: 'var(--ok)',
-        display: 'inline-flex',
-        alignItems: 'center',
-        flexShrink: 0
-      }
-    }, /*#__PURE__*/React.createElement(I.check, {
-      size: 12,
-      stroke: 2
-    })) : /*#__PURE__*/React.createElement("button", {
-      type: "button",
-      onClick: function () {
-        setOpenChecks(function (prev) {
-          var next = Object.assign({}, prev);
-          next[im.id] = !prev[im.id];
-          return next;
-        });
-      },
-      title: openChecks[im.id] ? '收起自检问题' : '自检未通过，点击查看问题',
-      "aria-label": "\u81EA\u68C0\u672A\u901A\u8FC7\uFF0C\u67E5\u770B\u95EE\u9898",
-      "aria-expanded": !!openChecks[im.id],
-      style: {
-        width: 18,
-        height: 18,
-        padding: 0,
-        display: 'inline-grid',
-        placeItems: 'center',
-        flexShrink: 0,
-        borderRadius: 4,
-        border: 0,
-        color: 'var(--danger)',
-        background: openChecks[im.id] ? 'var(--panel-2)' : 'transparent',
-        cursor: 'pointer'
-      }
-    }, /*#__PURE__*/React.createElement(I.close, {
-      size: 12,
-      stroke: 2
-    })) : running && m.tool === 'generate_image' ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        color: 'var(--ink-3)',
-        flexShrink: 0
-      }
-    }, "\u81EA\u68C0\u4E2D\u2026") : m.tool === 'generate_image' && m.status === 'done' ? /*#__PURE__*/React.createElement("span", {
-      title: "\u770B\u56FE\u670D\u52A1\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C\u8FD9\u5F20\u6CA1\u6709\u5B8C\u6210\u81EA\u68C0",
-      style: {
-        fontSize: 11,
-        color: 'var(--ink-4, var(--ink-3))',
-        flexShrink: 0
-      }
-    }, "\u672A\u81EA\u68C0") : null, /*#__PURE__*/React.createElement("a", {
+    }(), /*#__PURE__*/React.createElement("a", {
       href: src,
       download: true,
       title: "\u4E0B\u8F7D",
@@ -3993,14 +3937,7 @@ const AgentToolCard = ({
       }
     }, /*#__PURE__*/React.createElement(I.download, {
       size: 11
-    }))), im.check && !im.check.ok && openChecks[im.id] ? /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: 'var(--danger)',
-        lineHeight: 1.45,
-        wordBreak: 'break-word'
-      }
-    }, (im.check.problems.length ? im.check.problems.join('；') : im.check.summary) || '自检未通过') : null);
+    }))));
   }), pendingSlots.map(function (slot) {
     return /*#__PURE__*/React.createElement("div", {
       key: 'p' + slot.idx,
@@ -8383,20 +8320,6 @@ const agent2Reduce = function (msgs, ev) {
       return list.concat([Object.assign({}, thinking, {
         text: '对话较长，正在整理较早的内容…'
       })]);
-    case 'image.checked':
-      return updateCard(p.call_id, function (m) {
-        return Object.assign({}, m, {
-          images: m.images.map(function (im) {
-            return im.id === p.image_id ? Object.assign({}, im, {
-              check: {
-                ok: p.ok,
-                summary: p.summary || '',
-                problems: p.problems || []
-              }
-            }) : im;
-          })
-        });
-      });
     case 'tool.finished':
       {
         var done = updateCard(p.call_id, function (m) {

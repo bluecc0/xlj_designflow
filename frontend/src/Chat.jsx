@@ -274,7 +274,8 @@ const Bubble = ({ who, children, meta, user }) => (
   }}>
     <Avatar who={who} user={user}/>
     <div style={{ maxWidth: 'calc(100% - 38px)', display: 'flex', flexDirection: 'column', gap: 6, alignItems: who === 'user' ? 'flex-end' : 'flex-start' }}>
-      {meta && <div className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{meta}</div>}
+      {/* 发送者名字和顶部模式名同一写法（例如 Agent），不再用等宽全大写 */}
+      {meta && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-2)', lineHeight: 1.3 }}>{meta}</div>}
       {children}
     </div>
   </div>
@@ -882,8 +883,6 @@ const agent2Spinner = function(size) {
 
 // Agent 调用工具的过程卡片：样式与生图卡片一致，结果逐张出现
 const AgentToolCard = ({ m, openImage }) => {
-  // 自检没通过的图，点红叉才展开问题说明
-  const [openChecks, setOpenChecks] = React.useState({});
   var running = m.status === 'running';
   var result = m.result || {};
   var images = m.images || [];
@@ -956,31 +955,8 @@ const AgentToolCard = ({ m, openImage }) => {
                     var text = [im.label, modelName && !(im.label || '').includes(modelName) ? modelName : ''].filter(Boolean).join(' · ');
                     return text ? <span title={modelName ? '实际使用模型：' + modelName : undefined} style={{ fontSize: 11, color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{text}</span> : null;
                   })()}
-                  {im.check ? (im.check.ok ? (
-                    <span title={'自检通过' + (im.check.summary ? '：' + im.check.summary : '')} aria-label="自检通过"
-                      style={{ color: 'var(--ok)', display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
-                      <I.check size={12} stroke={2}/>
-                    </span>
-                  ) : (
-                    <button type="button"
-                      onClick={function() { setOpenChecks(function(prev) { var next = Object.assign({}, prev); next[im.id] = !prev[im.id]; return next; }); }}
-                      title={openChecks[im.id] ? '收起自检问题' : '自检未通过，点击查看问题'} aria-label="自检未通过，查看问题" aria-expanded={!!openChecks[im.id]}
-                      style={{ width: 18, height: 18, padding: 0, display: 'inline-grid', placeItems: 'center', flexShrink: 0, borderRadius: 4, border: 0,
-                        color: 'var(--danger)', background: openChecks[im.id] ? 'var(--panel-2)' : 'transparent', cursor: 'pointer' }}>
-                      <I.close size={12} stroke={2}/>
-                    </button>
-                  )) : running && m.tool === 'generate_image' ? (
-                    <span style={{ fontSize: 11, color: 'var(--ink-3)', flexShrink: 0 }}>自检中…</span>
-                  ) : m.tool === 'generate_image' && m.status === 'done' ? (
-                    <span title="看图服务暂时不可用，这张没有完成自检" style={{ fontSize: 11, color: 'var(--ink-4, var(--ink-3))', flexShrink: 0 }}>未自检</span>
-                  ) : null}
                   <a href={src} download title="下载" style={{ marginLeft: 'auto', color: 'var(--ink-3)', display: 'inline-flex', padding: 2, flexShrink: 0 }}><I.download size={11}/></a>
                 </div>
-                {im.check && !im.check.ok && openChecks[im.id] ? (
-                  <div style={{ fontSize: 11, color: 'var(--danger)', lineHeight: 1.45, wordBreak: 'break-word' }}>
-                    {(im.check.problems.length ? im.check.problems.join('；') : im.check.summary) || '自检未通过'}
-                  </div>
-                ) : null}
               </div>
             );
           })}
@@ -4234,12 +4210,6 @@ const agent2Reduce = function(msgs, ev) {
       });
     case 'context.compacting':
       return list.concat([Object.assign({}, thinking, { text: '对话较长，正在整理较早的内容…' })]);
-    case 'image.checked':
-      return updateCard(p.call_id, function(m) {
-        return Object.assign({}, m, { images: m.images.map(function(im) {
-          return im.id === p.image_id ? Object.assign({}, im, { check: { ok: p.ok, summary: p.summary || '', problems: p.problems || [] } }) : im;
-        }) });
-      });
     case 'tool.finished': {
       var done = updateCard(p.call_id, function(m) {
         return Object.assign({}, m, { status: p.ok ? 'done' : 'failed', result: p.result || {}, durationMs: p.duration_ms });

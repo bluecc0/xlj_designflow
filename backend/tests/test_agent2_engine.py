@@ -245,62 +245,37 @@ class Agent2EngineTest(unittest.TestCase):
                    patch.object(a2tools, "JOB_POLL_SECONDS", 0.01)]
         return patches, executed
 
-    def test_generate_image_self_checks_against_user_request(self):
-        from unittest.mock import MagicMock
+    def test_generate_image_uses_durable_job_without_self_check(self):
         from backend.agent2 import tools as a2tools
 
         img = Path(self.tmp.name) / "out.png"
         img.write_bytes(b"png")
-        seen_prompts = []
 
-        async def fake_vlm(purpose, payload, **kwargs):
-            seen_prompts.append(payload["messages"][0]["content"][0]["text"])
-            resp = MagicMock()
-            resp.json.return_value = {"choices": [{"message": {"content": json.dumps(
-                {"ok": False, "summary": "标题有错别字", "problems": ["标题\u201c跑步\u201d写成了\u201c跑不\u201d"]},
-                ensure_ascii=False)}}]}
-            return resp
+        async def no_vlm(*args, **kwargs):
+            raise AssertionError("出图后不应再调用看图模型自检")
 
         patches, executed = self._durable_image_tools(img)
         model = FakeModel([
             [("call", "generate_image", {"images": [{"prompt": "小红书风格，跑步海报"}], "aspect_ratio": "3:4"})],
-            [("text", "好了，标题有个错字。")],
+            [("text", "好了。")],
         ])
-        with patches[0], patches[1], patches[2], \
-                patch.object(a2tools, "routed_chat_completion", fake_vlm), \
-                patch.object(a2tools, "compress_image_to_data_url", lambda data, size: "data:image/png;base64,"):
+        with patches[0], patches[1], patches[2], patch.object(a2tools, "routed_chat_completion", no_vlm):
             events = self._run(model)
-        self.assertIn("生成 3 张小红书风格的跑步海报图", seen_prompts[0])
-        # 自检只看这一张：告诉质检这是第几张、共几张，整批的张数要求不算这张的问题
-        self.assertIn("这一批共 1 张，这是第 1 张", seen_prompts[0])
-        self.assertIn("张数", seen_prompts[0])
         # 走可恢复任务：默认 GPT Image 2.5 快速模式、1K，带恢复断点
         job = executed[0]
         self.assertEqual((job["model"], job["request_meta"]["variant"], job["resolution"]), ("gpt-image-2.5", "flare", "1K"))
         self.assertEqual(job["request_meta"]["recovery"]["phase"], "queued")
         self.assertEqual(job["request_meta"]["source"], "agent2")
-        created = [e for e in events if e["type"] == "artifact.created"]
-        self.assertEqual(len(created), 1)
-        checked = [e for e in events if e["type"] == "image.checked"]
-        self.assertEqual(len(checked), 1)
-        self.assertFalse(checked[0]["payload"]["ok"])
+        self.assertEqual(len([e for e in events if e["type"] == "artifact.created"]), 1)
+        self.assertNotIn("image.checked", [e["type"] for e in events])
         tool_msg = [m for m in model.seen[1] if m["role"] == "tool"][0]
-        self.assertIn("跑不", tool_msg["content"])
+        self.assertNotIn("check", json.loads(tool_msg["content"])["images"][0])
 
     def test_each_image_can_use_its_own_model(self):
-        from unittest.mock import MagicMock
         from backend.agent2 import tools as a2tools
 
         img = Path(self.tmp.name) / "out.png"
         img.write_bytes(b"png")
-
-        checked = []
-
-        async def fake_vlm(purpose, payload, **kwargs):
-            checked.append(payload["messages"][0]["content"][0]["text"])
-            resp = MagicMock()
-            resp.json.return_value = {"choices": [{"message": {"content": '{"ok": true, "summary": "", "problems": []}'}}]}
-            return resp
 
         patches, executed = self._durable_image_tools(img)
         model = FakeModel([
@@ -311,9 +286,7 @@ class Agent2EngineTest(unittest.TestCase):
             [("call", "generate_image", {"images": [{"prompt": "猫", "model": "midjourney"}]})],
             [("text", "好了")],
         ])
-        with patches[0], patches[1], patches[2], \
-                patch.object(a2tools, "routed_chat_completion", fake_vlm), \
-                patch.object(a2tools, "compress_image_to_data_url", lambda data, size: "data:image/png;base64,"):
+        with patches[0], patches[1], patches[2]:
             events = self._run(model)
         # 实际提交的任务各用各的模型，而不是只改了名称
         self.assertEqual(sorted(j["model"] for j in executed), ["gpt-image-2.5", "nano-banana-pro", "seedream-5.0-pro"])
@@ -327,9 +300,6 @@ class Agent2EngineTest(unittest.TestCase):
         # 不支持的模型整批拒绝，不会偷偷换成默认模型
         self.assertIn("midjourney", finished[1]["result"]["error"])
         self.assertEqual(len(executed), 3)
-        # 每张自检都知道自己是一批 3 张里的第几张
-        self.assertEqual(sorted(t.split("这是第 ")[1][0] for t in checked), ["1", "2", "3"])
-        self.assertTrue(all("这一批共 3 张" in t for t in checked))
 
     def test_failed_image_job_is_reported_to_model(self):
         img = Path(self.tmp.name) / "out.png"
@@ -357,22 +327,6 @@ class Agent2EngineTest(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["payload"]["call_id"], "c1")
         self.assertEqual(store.list_call_artifacts("c1")[0]["label"], "首屏")
-
-    def test_self_check_failure_does_not_block_images(self):
-        from unittest.mock import MagicMock
-        from backend.agent2 import tools as a2tools
-
-        img = Path(self.tmp.name) / "out.png"
-        img.write_bytes(b"png")
-
-        async def broken_vlm(purpose, payload, **kwargs):
-            raise RuntimeError("vlm down")
-
-        ctx = MagicMock()
-        ctx.state = {"request": "画一张"}
-        with patch.object(a2tools, "routed_chat_completion", broken_vlm), \
-                patch.object(a2tools, "compress_image_to_data_url", lambda data, size: ""):
-            self.assertIsNone(asyncio.run(a2tools._self_check(ctx, img, prompt="x", label="")))
 
     def _stored(self):
         return store.load_session_messages(store.get_session(self.session["id"], "u1"))
