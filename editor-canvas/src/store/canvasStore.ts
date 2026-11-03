@@ -108,7 +108,7 @@ interface CanvasState {
   recalcFrameAttachment: (type: 'image' | 'text', ids: string[]) => void
 
   // 自动排版与流式重排
-  insertImagesAuto: (items: (string | { url: string; name?: string; [key: string]: any })[], mode?: string, name?: string) => CanvasImage[]
+  insertImagesAuto: (items: (string | { url: string; name?: string; [key: string]: any })[], mode?: string, name?: string, select?: boolean) => CanvasImage[]
   reflowSequentialImages: (pageId?: string, order?: 'stored' | 'visual') => void
 
   // 快照与保存
@@ -1343,7 +1343,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     )
   },
 
-  insertImagesAuto: (items, mode, name) => {
+  insertImagesAuto: (items, mode, name, select = true) => {
     const { activePageId, frames, images, reflowSequentialImages } = get()
     const context = getSequentialLayoutContext(images, frames, activePageId)
 
@@ -1451,8 +1451,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set((s) =>
       withMutation(s, {
         images: [...s.images, ...createdImages],
-        selectedIds: createdImages.map((im) => im.id),
-        selectedType: 'image',
+        // 选中会同步成输入框的参考图；Agent 放图时不选中，避免每轮自动带上上一批图
+        selectedIds: select ? createdImages.map((im) => im.id) : [],
+        selectedType: select ? 'image' : null,
       })
     )
 

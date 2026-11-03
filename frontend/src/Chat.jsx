@@ -4335,9 +4335,10 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
   const pushAgentImagesToCanvas = React.useCallback(function(result) {
     var items = (result && Array.isArray(result.images)) ? result.images : [];
     if (!items.length || !onComposeComplete) return;
+    // Agent 是多轮对话，结果放进画布但不自动选中，避免每轮把上一批图带成参考图；用户在画布上手动点选仍会带上
     onComposeComplete(null, null, items.map(function(im) {
       return { url: im.url, prompt: im.label || '', originalPrompt: im.label || '', model: 'agent', jobId: im.id || '', createdAt: Date.now() };
-    }), null);
+    }), null, { select: false });
   }, [onComposeComplete]);
 
   // 切换会话身份（新建、删除、加载、首次创建）时换新游标：每个会话的 seq 都从 1 开始

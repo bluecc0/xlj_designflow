@@ -2437,7 +2437,8 @@ const Canvas = ({
             return Boolean(x.url);
           }),
           mode: editorCommand.mode,
-          name: editorCommand.name
+          name: editorCommand.name,
+          select: editorCommand.select !== false
         };
         inserting = true;
       } else if (editorCommand.type === 'auth-restored') {
@@ -8509,6 +8510,7 @@ const Chat = ({
   const pushAgentImagesToCanvas = React.useCallback(function (result) {
     var items = result && Array.isArray(result.images) ? result.images : [];
     if (!items.length || !onComposeComplete) return;
+    // Agent 是多轮对话，结果放进画布但不自动选中，避免每轮把上一批图带成参考图；用户在画布上手动点选仍会带上
     onComposeComplete(null, null, items.map(function (im) {
       return {
         url: im.url,
@@ -8518,7 +8520,9 @@ const Chat = ({
         jobId: im.id || '',
         createdAt: Date.now()
       };
-    }), null);
+    }), null, {
+      select: false
+    });
   }, [onComposeComplete]);
 
   // 切换会话身份（新建、删除、加载、首次创建）时换新游标：每个会话的 seq 都从 1 开始
@@ -15059,7 +15063,7 @@ const App = () => {
       localStorage.setItem(LAST_USERNAME_KEY, username);
     } catch (e) {}
   }, []);
-  const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl, sourceUserId) => {
+  const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl, sourceUserId, options) => {
     if (sourceUserId && currentUserIdRef.current && String(sourceUserId) !== currentUserIdRef.current) return;
     const explicitClear = !jobId && !resultTpl && Array.isArray(directImageUrls) && directImageUrls.length === 0;
     const rawItems = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : directImageUrls ? [directImageUrls] : [];
@@ -15129,7 +15133,9 @@ const App = () => {
             url: u
           };
         }),
-        name: resultTpl && resultTpl.name || '生成结果'
+        name: resultTpl && resultTpl.name || '生成结果',
+        // 默认插入后选中（会自动带成参考图）；Agent 放图传 select:false
+        select: !(options && options.select === false)
       });
     }
     if (penpotEditUrl) {
@@ -15473,8 +15479,8 @@ const App = () => {
   }), /*#__PURE__*/React.createElement(Chat, {
     key: 'chat:' + currentUser.id,
     template: activeTemplate,
-    onComposeComplete: function (jobId, penpotEditUrl, directImageUrls, resultTpl) {
-      handleComposeComplete(jobId, penpotEditUrl, directImageUrls, resultTpl, currentUser.id);
+    onComposeComplete: function (jobId, penpotEditUrl, directImageUrls, resultTpl, options) {
+      handleComposeComplete(jobId, penpotEditUrl, directImageUrls, resultTpl, currentUser.id, options);
     },
     user: currentUser,
     onRequestSpecialTemplate: handleRequestSpecialTemplate,

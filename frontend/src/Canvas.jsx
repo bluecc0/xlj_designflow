@@ -163,6 +163,7 @@ const Canvas = ({ template, resultTemplate, editorCommands, onUseReferenceImages
           }).filter(function(x) { return Boolean(x.url); }),
           mode: editorCommand.mode,
           name: editorCommand.name,
+          select: editorCommand.select !== false,
         };
         inserting = true;
       } else if (editorCommand.type === 'auth-restored') {

@@ -329,7 +329,7 @@ const App = () => {
     } catch (e) {}
   }, []);
 
-  const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl, sourceUserId) => {
+  const handleComposeComplete = React.useCallback((jobId, penpotEditUrl, directImageUrls, resultTpl, sourceUserId, options) => {
     if (sourceUserId && currentUserIdRef.current && String(sourceUserId) !== currentUserIdRef.current) return;
     const explicitClear = !jobId && !resultTpl && Array.isArray(directImageUrls) && directImageUrls.length === 0;
     const rawItems = Array.isArray(directImageUrls) ? directImageUrls.filter(Boolean) : (directImageUrls ? [directImageUrls] : []);
@@ -393,6 +393,8 @@ const App = () => {
         urls,
         images: normalizedItems.length > 0 ? normalizedItems : urls.map(function(u) { return { url: u }; }),
         name: (resultTpl && resultTpl.name) || '生成结果',
+        // 默认插入后选中（会自动带成参考图）；Agent 放图传 select:false
+        select: !(options && options.select === false),
       });
     }
     if (penpotEditUrl) {
@@ -713,8 +715,8 @@ const App = () => {
             <Chat
               key={'chat:' + currentUser.id}
               template={activeTemplate}
-              onComposeComplete={function(jobId, penpotEditUrl, directImageUrls, resultTpl) {
-                handleComposeComplete(jobId, penpotEditUrl, directImageUrls, resultTpl, currentUser.id);
+              onComposeComplete={function(jobId, penpotEditUrl, directImageUrls, resultTpl, options) {
+                handleComposeComplete(jobId, penpotEditUrl, directImageUrls, resultTpl, currentUser.id, options);
               }}
               user={currentUser}
               onRequestSpecialTemplate={handleRequestSpecialTemplate}

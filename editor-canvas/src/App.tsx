@@ -1168,7 +1168,7 @@ export function App() {
             ? [cmd.url]
             : []
           if (items.length > 0) {
-            insertImagesAuto(items, cmd.mode, cmd.name)
+            insertImagesAuto(items, cmd.mode, cmd.name, cmd.select !== false)
             const insertedUrls = items.map((it) => (typeof it === 'string' ? it : it?.url || ''))
             window.parent.postMessage({ type: 'designflow:editor-inserted', urls: insertedUrls, mode: cmd.mode }, '*')
           }
@@ -1463,7 +1463,7 @@ export function App() {
           ? [data.url]
           : []
         if (items.length > 0) {
-          insertImagesAuto(items, data.mode, data.name)
+          insertImagesAuto(items, data.mode, data.name, data.select !== false)
           const insertedUrls = items.map((it) => (typeof it === 'string' ? it : it?.url || ''))
           window.parent.postMessage({ type: 'designflow:editor-inserted', urls: insertedUrls, mode: data.mode }, '*')
         }
