@@ -126,13 +126,13 @@ class Agent2EngineTest(unittest.TestCase):
         # 纠正提示发给了模型，编出来的那段话没有留在历史里
         second = model.seen[1]
         self.assertEqual(second[-1]["role"], "system")
-        self.assertIn("还没有调用任何工具", second[-1]["content"])
+        self.assertIn("没有调用任何工具", second[-1]["content"])
         self.assertFalse(any(m.get("content", "") and "未来都市广场的街头" in str(m.get("content")) and m["role"] == "assistant"
                              for m in second))
         self.assertEqual(events[-1]["payload"]["text"], "已生成这张街头时尚大片。")
         # 纠正提示不留在会话历史里
         saved = store.get_session(self.session["id"], "u1")
-        self.assertNotIn("还没有调用任何工具", json.dumps(store.load_session_messages(saved), ensure_ascii=False))
+        self.assertNotIn("系统检查", json.dumps(store.load_session_messages(saved), ensure_ascii=False))
 
     def test_fake_done_correction_does_not_loop_and_skips_normal_replies(self):
         model = FakeModel([[("text", "已生成。")], [("text", "抱歉，这次没能生成图片。")]])
@@ -145,6 +145,34 @@ class Agent2EngineTest(unittest.TestCase):
         # 普通问答、工具调用之后的"已生成"都不拦
         events = self._run(FakeModel([[("text", "你好，我可以帮你做海报和抠图。")]]), "你好")
         self.assertNotIn("message.reset", [e["type"] for e in events])
+
+    def test_answering_about_earlier_results_is_not_treated_as_fake(self):
+        # 审核复现：上一轮已出图，用户问"刚才的图在哪里下载"，如实回答"已生成的图片在上方卡片里"不能被拦
+        self._run(FakeModel([[("call", "generate_image", {"images": [{"prompt": "跑鞋海报"}]})], [("text", "已生成跑鞋海报。")]]))
+        model = FakeModel([[("text", "已生成的图片在上方卡片里，点下载按钮就行，不需要重新生成。")]])
+        events = self._run(model, "刚才的图在哪里下载？不要重新做")
+        self.assertNotIn("message.reset", [e["type"] for e in events])
+        self.assertEqual(len(model.seen), 1)  # 没有额外再调一次模型
+        self.assertEqual(events[-1]["payload"]["text"], "已生成的图片在上方卡片里，点下载按钮就行，不需要重新生成。")
+        # 确认之前的结果也不拦
+        model = FakeModel([[("text", "对，之前已经生成好了 1 张，就是上面那张。")]])
+        events = self._run(model, "之前是不是已经做好了？")
+        self.assertNotIn("message.reset", [e["type"] for e in events])
+        # 但有历史结果时，说了"正在为你生成"却不调工具，仍然要纠正
+        model = FakeModel([[("text", "好的，正在为你生成一张竖版的。已生成。")],
+                           [("call", "generate_image", {"images": [{"prompt": "竖版跑鞋海报"}], "aspect_ratio": "3:4"})],
+                           [("text", "竖版做好了。")]])
+        events = self._run(model, "再来一张竖版的")
+        self.assertEqual([e["type"] for e in events].count("message.reset"), 1)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_recovered_results_reply_is_not_treated_as_fake(self):
+        # 后台补回的图：用户消息里带补回说明，回复"已经生成好了"是如实转告
+        self.session = store.create_session("u1")
+        model = FakeModel([[("text", "刚才那张已经生成好了，服务重启后已补回到上方卡片里。")]])
+        events = self._run(model, "刚才不是做好了吗？\n\n[服务重启后，之前没完成的生图已在后台补回：img_rec1（春季海报）]")
+        self.assertNotIn("message.reset", [e["type"] for e in events])
+        self.assertEqual(len(model.seen), 1)
 
     def test_ask_user_suspends_and_resume_continues(self):
         model = FakeModel([[("call", "ask_user", {"question": "货号是多少？", "options": []})]])

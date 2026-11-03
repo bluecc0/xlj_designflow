@@ -35,10 +35,32 @@ Emit = Callable[[str, dict], Awaitable[None]]
 
 MAX_STEPS = 12
 
-# 模型没调用任何工具却声称做完了（例如"已生成这张海报"），说明它在编结果
+# 模型没调用任何工具却在编结果（线上出现过："好的，正在为你生成……已生成……"，实际什么都没做）。
+# 只认两种信号，避免误伤"之前生成的图在上方卡片里"这类正常回答：
+# 1. 说了"正在为你生成/处理"这种出图前的开场白，却没有调用工具；
+# 2. 对话里从来没有出过图，却声称"已生成"。
+_ANNOUNCES_WORK = re.compile(r"正在(为你|帮你|给你)?(生成|制作|绘制|画|处理|抠|放大|扩|拆|转|换|合成)")
 _CLAIMS_DONE = re.compile(r"(已经?|已为你|已帮你)(生成|做好|画好|完成|抠|放大|扩|拆|转成|换成|换好|铺|放入|放到|处理)|(生成|做|画|处理)好了")
-FAKE_DONE_NOTE = ("系统检查：这一轮你还没有调用任何工具，回复里却说已经完成，用户实际什么也没收到。"
-                  "需要出图或处理图片就现在调用对应工具；做不到就如实说明。不要再声称已完成。")
+FAKE_DONE_NOTE = ("系统检查：这一轮你没有调用任何工具，回复里却像是刚完成或正在执行出图、处理图片的操作。"
+                  "如果用户这一轮需要出图或处理图片，现在调用对应工具；如果用户只是在问之前的结果，就如实说明结果在对话里的哪张卡片上，"
+                  "不要说这一轮完成了新的操作，也不要重新生成。")
+
+
+def _has_prior_results(messages: list[dict]) -> bool:
+    """对话里之前是否已有图片或文件结果（工具返回过图片 ID，或后台补回过结果）。"""
+    for m in messages:
+        content = str(m.get("content") or "")
+        if m.get("role") == "tool" and "img_" in content:
+            return True
+        if m.get("role") == "user" and "已在后台补回" in content:
+            return True
+    return False
+
+
+def _looks_fake_done(text: str, messages: list[dict]) -> bool:
+    if _ANNOUNCES_WORK.search(text):
+        return True
+    return bool(_CLAIMS_DONE.search(text)) and not _has_prior_results(messages)
 _OVERFLOW_HINTS = ("context_length", "context length", "maximum context", "too many tokens",
                    "prompt is too long", "input is too long", "context window")
 
@@ -250,7 +272,7 @@ async def run_loop(
             messages.remove(note)
         logger.info("[agent2] turn %s step via %s tools=%s", ctx_base.get("turn_id"), step.route,
                     [c["name"] for c in step.tool_calls])
-        if not step.tool_calls and not used_tools and not corrected and _CLAIMS_DONE.search(step.text or ""):
+        if not step.tool_calls and not used_tools and not corrected and _looks_fake_done(step.text or "", messages):
             # 只纠正一次：清掉前端已显示的这段文字，提醒模型去真正调用工具或如实说明
             corrected = True
             logger.warning("[agent2] turn %s claimed done without tools via %s: %s",
