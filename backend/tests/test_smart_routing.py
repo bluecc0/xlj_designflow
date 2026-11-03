@@ -766,6 +766,49 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("quality", captured["json"])
         self.assertEqual(captured["json"]["model"], "gpt-image-2.5-flare")
 
+    async def test_sub2api_prompt_states_requested_aspect(self) -> None:
+        """订阅线路只把 size 当参考：prompt 里要写明比例和横竖，否则构图描述会带偏画幅。"""
+        captured = []
+
+        class FakeResponse:
+            is_success = True
+            status_code = 200
+            text = '{"data":[{"url":"http://sub2api/img.png"}]}'
+
+            def json(self):
+                return {"data": [{"url": "http://sub2api/img.png"}]}
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, *args, **kwargs):
+                captured.append(kwargs)
+                return FakeResponse()
+
+        with patch.object(ai_image.settings, "cliproxy_base_url", "http://sub2api/v1"), \
+             patch.object(ai_image.settings, "cliproxy_api_key", "sk-test"), \
+             patch("backend.ai_image.httpx.AsyncClient", FakeClient), \
+             patch("backend.ai_image._save_cliproxy_response_image", return_value=("/local.png", {})):
+            for size in ("3:4", "16:9", "auto"):
+                await ai_image.generate_sub2api_async(model="gpt-image-2.5", prompt="从左向右奔跑的女孩",
+                                                      size=size, resolution="1K")
+            await ai_image.generate_sub2api_async(model="gpt-image-2.5", prompt="换成白底", size="3:4",
+                                                  resolution="1K", images=[(b"png", "ref.png")])
+
+        portrait, landscape, auto, edit = captured
+        self.assertEqual(portrait["json"]["size"], "1152x1536")
+        self.assertIn("画面比例 3:4，竖版构图", portrait["json"]["prompt"])
+        self.assertIn("画面比例 16:9，横版构图", landscape["json"]["prompt"])
+        self.assertEqual(auto["json"]["prompt"], "从左向右奔跑的女孩")
+        self.assertIn("画面比例 3:4，竖版构图", edit["data"]["prompt"])
+
     async def test_sub2api_http_500_does_not_generate_again(self) -> None:
         """POST 后明确 HTTP 500：用户无感切线，不抛 ambiguous。"""
         adobe_calls = 0

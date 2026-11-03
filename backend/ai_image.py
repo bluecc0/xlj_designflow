@@ -1574,6 +1574,22 @@ def _cliproxy_size(size: str, resolution: str = "") -> str:
     return _CLIPROXY_SIZE_MAP[raw_resolution]["auto"]
 
 
+def _with_aspect_hint(prompt: str, mapped_size: str) -> str:
+    """订阅线路的上游只把 size 当参考，画幅主要跟着 prompt 的构图走（例如"从左向右奔跑"会出横图）。
+    在 prompt 末尾写明比例和横竖，让成图比例和请求一致。"""
+    m = re.match(r"^(\d+)x(\d+)$", mapped_size or "")
+    if not m:
+        return prompt
+    w, h = int(m.group(1)), int(m.group(2))
+    if w == h:
+        orientation = "正方形构图"
+    else:
+        orientation = "竖版构图，高大于宽" if h > w else "横版构图，宽大于高"
+    ratio = next((r for r, px in _CLIPROXY_SIZE_MAP["1K"].items() if r != "auto"
+                  and abs(int(px.split("x")[0]) / int(px.split("x")[1]) - w / h) < 0.02), f"{w}:{h}")
+    return f"{prompt}\n画面比例 {ratio}，{orientation}，主体完整位于画面内。"
+
+
 def _cliproxy_headers(api_key: str, *, json_request: bool = False) -> dict[str, str]:
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -1703,6 +1719,8 @@ async def generate_sub2api_async(
     timeout = httpx.Timeout(float(request_timeout), connect=min(10.0, float(request_timeout)))
 
     final_prompt = normalize_reference_prompt(prompt) if refs else prompt
+    if str(size or "auto").strip().lower() != "auto":
+        final_prompt = _with_aspect_hint(final_prompt, mapped_size)
 
     if on_progress and _sub2api_slots.locked():
         on_progress(0, "queued")
@@ -1733,7 +1751,7 @@ async def generate_sub2api_async(
                 else:
                     payload = {
                         "model": model_name,
-                        "prompt": prompt,
+                        "prompt": final_prompt,
                         "size": mapped_size,
                         "n": 1,
                         "output_format": "png",
