@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Awaitable, Callable, Protocol
@@ -33,6 +34,11 @@ logger = logging.getLogger(__name__)
 Emit = Callable[[str, dict], Awaitable[None]]
 
 MAX_STEPS = 12
+
+# 模型没调用任何工具却声称做完了（例如"已生成这张海报"），说明它在编结果
+_CLAIMS_DONE = re.compile(r"(已经?|已为你|已帮你)(生成|做好|画好|完成|抠|放大|扩|拆|转成|换成|换好|铺|放入|放到|处理)|(生成|做|画|处理)好了")
+FAKE_DONE_NOTE = ("系统检查：这一轮你还没有调用任何工具，回复里却说已经完成，用户实际什么也没收到。"
+                  "需要出图或处理图片就现在调用对应工具；做不到就如实说明。不要再声称已完成。")
 _OVERFLOW_HINTS = ("context_length", "context length", "maximum context", "too many tokens",
                    "prompt is too long", "input is too long", "context window")
 
@@ -219,6 +225,9 @@ async def run_loop(
     """
     specs = [t.spec() for t in tools.values()]
     final_text = ""
+    used_tools = False
+    corrected = False
+    note: dict | None = None
     for _ in range(max_steps):
         step: ModelStep | None = None
         for attempt in range(2):
@@ -237,6 +246,19 @@ async def run_loop(
                     raise
                 logger.warning("[agent2] context overflow, forcing compaction")
         assert step is not None
+        if note in messages:  # 纠正提示只给模型看这一次，不进会话历史
+            messages.remove(note)
+        logger.info("[agent2] turn %s step via %s tools=%s", ctx_base.get("turn_id"), step.route,
+                    [c["name"] for c in step.tool_calls])
+        if not step.tool_calls and not used_tools and not corrected and _CLAIMS_DONE.search(step.text or ""):
+            # 只纠正一次：清掉前端已显示的这段文字，提醒模型去真正调用工具或如实说明
+            corrected = True
+            logger.warning("[agent2] turn %s claimed done without tools via %s: %s",
+                           ctx_base.get("turn_id"), step.route, (step.text or "")[:80])
+            await emit("message.reset", {})
+            note = {"role": "system", "content": FAKE_DONE_NOTE}
+            messages.append(note)
+            continue
         assistant: dict[str, Any] = {"role": "assistant", "content": step.text or None}
         if step.tool_calls:
             assistant["tool_calls"] = [
@@ -251,6 +273,7 @@ async def run_loop(
         if not step.tool_calls:
             return TurnResult(status="done", messages=messages, text=final_text)
 
+        used_tools = True
         suspending = [c for c in step.tool_calls if tools.get(c["name"]) and tools[c["name"]].suspends]
         normal = [c for c in step.tool_calls if c not in suspending]
         results = await asyncio.gather(*[

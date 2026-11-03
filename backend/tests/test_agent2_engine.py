@@ -111,6 +111,41 @@ class Agent2EngineTest(unittest.TestCase):
         self.assertEqual([e["seq"] for e in stored], list(range(1, len(stored) + 1)))
         self.assertEqual(len(stored), len(events))
 
+    def test_claiming_done_without_any_tool_is_corrected_once(self):
+        # 线上出现过：模型只写了"正在生成……已生成……"，没调用生图工具，用户什么也没收到
+        model = FakeModel([
+            [("text", "好的，正在为你生成这张海报。已生成这张未来都市广场的街头时尚大片。")],
+            [("call", "generate_image", {"images": [{"prompt": "未来都市广场街头时尚大片"}]})],
+            [("text", "已生成这张街头时尚大片。")],
+        ])
+        events = self._run(model, "生成图片：街头时尚大片")
+        types = [e["type"] for e in events]
+        self.assertIn("message.reset", types)
+        self.assertLess(types.index("message.reset"), types.index("tool.started"))
+        self.assertEqual(len(self.calls), 1)
+        # 纠正提示发给了模型，编出来的那段话没有留在历史里
+        second = model.seen[1]
+        self.assertEqual(second[-1]["role"], "system")
+        self.assertIn("还没有调用任何工具", second[-1]["content"])
+        self.assertFalse(any(m.get("content", "") and "未来都市广场的街头" in str(m.get("content")) and m["role"] == "assistant"
+                             for m in second))
+        self.assertEqual(events[-1]["payload"]["text"], "已生成这张街头时尚大片。")
+        # 纠正提示不留在会话历史里
+        saved = store.get_session(self.session["id"], "u1")
+        self.assertNotIn("还没有调用任何工具", json.dumps(store.load_session_messages(saved), ensure_ascii=False))
+
+    def test_fake_done_correction_does_not_loop_and_skips_normal_replies(self):
+        model = FakeModel([[("text", "已生成。")], [("text", "抱歉，这次没能生成图片。")]])
+        events = self._run(model)
+        self.assertEqual([e["type"] for e in events].count("message.reset"), 1)
+        self.assertEqual(events[-1]["payload"]["text"], "抱歉，这次没能生成图片。")
+        # 只纠正一次：第二次仍然声称完成也不再拦
+        events = self._run(FakeModel([[("text", "已生成。")], [("text", "已生成好了。")]]))
+        self.assertEqual([e["type"] for e in events].count("message.reset"), 1)
+        # 普通问答、工具调用之后的"已生成"都不拦
+        events = self._run(FakeModel([[("text", "你好，我可以帮你做海报和抠图。")]]), "你好")
+        self.assertNotIn("message.reset", [e["type"] for e in events])
+
     def test_ask_user_suspends_and_resume_continues(self):
         model = FakeModel([[("call", "ask_user", {"question": "货号是多少？", "options": []})]])
         events = self._run(model, "做一个特殊品")
