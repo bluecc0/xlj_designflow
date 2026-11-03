@@ -882,6 +882,8 @@ const agent2Spinner = function(size) {
 
 // Agent 调用工具的过程卡片：样式与生图卡片一致，结果逐张出现
 const AgentToolCard = ({ m, openImage }) => {
+  // 自检没通过的图，点红叉才展开问题说明
+  const [openChecks, setOpenChecks] = React.useState({});
   var running = m.status === 'running';
   var result = m.result || {};
   var images = m.images || [];
@@ -954,17 +956,30 @@ const AgentToolCard = ({ m, openImage }) => {
                     var text = [im.label, modelName && !(im.label || '').includes(modelName) ? modelName : ''].filter(Boolean).join(' · ');
                     return text ? <span title={modelName ? '实际使用模型：' + modelName : undefined} style={{ fontSize: 11, color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{text}</span> : null;
                   })()}
-                  {im.check ? (
-                    <span title={im.check.summary} style={{ fontSize: 11, color: im.check.ok ? 'var(--ok)' : 'var(--warn)', display: 'inline-flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
-                      {im.check.ok ? <I.check size={10}/> : <I.eye size={10}/>}{im.check.ok ? '自检通过' : '有问题'}
+                  {im.check ? (im.check.ok ? (
+                    <span title={'自检通过' + (im.check.summary ? '：' + im.check.summary : '')} aria-label="自检通过"
+                      style={{ color: 'var(--ok)', display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
+                      <I.check size={12} stroke={2}/>
                     </span>
-                  ) : running && m.tool === 'generate_image' ? (
+                  ) : (
+                    <button type="button"
+                      onClick={function() { setOpenChecks(function(prev) { var next = Object.assign({}, prev); next[im.id] = !prev[im.id]; return next; }); }}
+                      title={openChecks[im.id] ? '收起自检问题' : '自检未通过，点击查看问题'} aria-label="自检未通过，查看问题" aria-expanded={!!openChecks[im.id]}
+                      style={{ width: 18, height: 18, padding: 0, display: 'inline-grid', placeItems: 'center', flexShrink: 0, borderRadius: 4, border: 0,
+                        color: 'var(--danger)', background: openChecks[im.id] ? 'var(--panel-2)' : 'transparent', cursor: 'pointer' }}>
+                      <I.close size={12} stroke={2}/>
+                    </button>
+                  )) : running && m.tool === 'generate_image' ? (
                     <span style={{ fontSize: 11, color: 'var(--ink-3)', flexShrink: 0 }}>自检中…</span>
+                  ) : m.tool === 'generate_image' && m.status === 'done' ? (
+                    <span title="看图服务暂时不可用，这张没有完成自检" style={{ fontSize: 11, color: 'var(--ink-4, var(--ink-3))', flexShrink: 0 }}>未自检</span>
                   ) : null}
                   <a href={src} download title="下载" style={{ marginLeft: 'auto', color: 'var(--ink-3)', display: 'inline-flex', padding: 2, flexShrink: 0 }}><I.download size={11}/></a>
                 </div>
-                {im.check && !im.check.ok && im.check.problems.length ? (
-                  <div style={{ fontSize: 11, color: 'var(--warn)', lineHeight: 1.45, wordBreak: 'break-word' }}>{im.check.problems.join('；')}</div>
+                {im.check && !im.check.ok && openChecks[im.id] ? (
+                  <div style={{ fontSize: 11, color: 'var(--danger)', lineHeight: 1.45, wordBreak: 'break-word' }}>
+                    {(im.check.problems.length ? im.check.problems.join('；') : im.check.summary) || '自检未通过'}
+                  </div>
                 ) : null}
               </div>
             );

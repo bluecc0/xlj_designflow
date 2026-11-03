@@ -271,6 +271,9 @@ class Agent2EngineTest(unittest.TestCase):
                 patch.object(a2tools, "compress_image_to_data_url", lambda data, size: "data:image/png;base64,"):
             events = self._run(model)
         self.assertIn("生成 3 张小红书风格的跑步海报图", seen_prompts[0])
+        # 自检只看这一张：告诉质检这是第几张、共几张，整批的张数要求不算这张的问题
+        self.assertIn("这一批共 1 张，这是第 1 张", seen_prompts[0])
+        self.assertIn("张数", seen_prompts[0])
         # 走可恢复任务：默认 GPT Image 2.5 快速模式、1K，带恢复断点
         job = executed[0]
         self.assertEqual((job["model"], job["request_meta"]["variant"], job["resolution"]), ("gpt-image-2.5", "flare", "1K"))
@@ -291,7 +294,10 @@ class Agent2EngineTest(unittest.TestCase):
         img = Path(self.tmp.name) / "out.png"
         img.write_bytes(b"png")
 
+        checked = []
+
         async def fake_vlm(purpose, payload, **kwargs):
+            checked.append(payload["messages"][0]["content"][0]["text"])
             resp = MagicMock()
             resp.json.return_value = {"choices": [{"message": {"content": '{"ok": true, "summary": "", "problems": []}'}}]}
             return resp
@@ -321,6 +327,9 @@ class Agent2EngineTest(unittest.TestCase):
         # 不支持的模型整批拒绝，不会偷偷换成默认模型
         self.assertIn("midjourney", finished[1]["result"]["error"])
         self.assertEqual(len(executed), 3)
+        # 每张自检都知道自己是一批 3 张里的第几张
+        self.assertEqual(sorted(t.split("这是第 ")[1][0] for t in checked), ["1", "2", "3"])
+        self.assertTrue(all("这一批共 3 张" in t for t in checked))
 
     def test_failed_image_job_is_reported_to_model(self):
         img = Path(self.tmp.name) / "out.png"
