@@ -2772,7 +2772,8 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
               : selectedWorkflow === 'download'
               ? '输入花瓣项目 ID 或链接，格式会自动识别'
               : '忘了怎么用？试试直接提问吧';
-  const statusBarVisible = Boolean(
+  // Agent 模式只在选了技能时显示状态栏（用来展示和取消技能），其余信息不需要
+  const statusBarVisible = agentEnabled ? Boolean(activeSkillInfo) : Boolean(
     text.trim() ||
     selectedMode ||
     modeParamLabel ||
