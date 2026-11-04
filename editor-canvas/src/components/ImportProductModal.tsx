@@ -348,6 +348,23 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
     ? !folderLoading && folderResultQuery === folderQuery && selectedImageIds.size > 0
     : parsedSkus.length > 0 && selectedAssetTypes.length > 0)
 
+  // 勾选/取消一组图片（单个文件夹或全部）
+  const toggleImages = (ids: string[]) => setSelectedImageIds((previous) => {
+    const next = new Set(previous)
+    const allSelected = ids.every((id) => next.has(id))
+    ids.forEach((id) => (allSelected ? next.delete(id) : next.add(id)))
+    return next
+  })
+  const allFolderImageIds = folderImages.map((image) => image.id)
+  const allImagesSelected = allFolderImageIds.length > 0 && selectedImageIds.size === allFolderImageIds.length
+
+  const emptyState = (icon: React.ReactNode, text: string) => (
+    <div className="ipm-empty">
+      {icon}
+      <span>{text}</span>
+    </div>
+  )
+
   return (
     <div
       data-modal="import-product"
@@ -365,12 +382,46 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
       }}
       onClick={loading ? undefined : onClose}
     >
+      <style>{`
+        [data-modal="import-product"] button { font-family: inherit; }
+        [data-modal="import-product"] :focus-visible { outline: 2px solid #0f172a; outline-offset: 2px; }
+        [data-modal="import-product"] .ipm-icon-btn:hover:not(:disabled) { background: #f1f5f9; color: #334155; }
+        [data-modal="import-product"] .ipm-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 12px; background: #f1f5f9; }
+        [data-modal="import-product"] .ipm-seg-btn { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 0; border-radius: 9px; background: transparent; color: #64748b; cursor: pointer; text-align: left; transition: background-color 150ms ease, color 150ms ease, box-shadow 150ms ease; }
+        [data-modal="import-product"] .ipm-seg-btn:hover:not(:disabled):not([aria-pressed="true"]) { color: #0f172a; }
+        [data-modal="import-product"] .ipm-seg-btn[aria-pressed="true"] { background: #ffffff; color: #0f172a; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1), 0 0 0 1px rgba(226, 232, 240, 0.8); }
+        [data-modal="import-product"] .ipm-seg-title { font-size: 13px; font-weight: 600; line-height: 1.3; }
+        [data-modal="import-product"] .ipm-seg-desc { font-size: 11px; color: #94a3b8; line-height: 1.3; margin-top: 1px; }
+        [data-modal="import-product"] .ipm-label { font-size: 12px; font-weight: 600; color: #334155; }
+        [data-modal="import-product"] .ipm-hint { font-size: 11px; color: #94a3b8; }
+        [data-modal="import-product"] .ipm-textarea { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #cbd5e1; background: #ffffff; font-size: 13px; line-height: 1.5; color: #0f172a; outline: none; box-sizing: border-box; resize: none; font-family: inherit; transition: border-color 150ms ease, box-shadow 150ms ease; }
+        [data-modal="import-product"] .ipm-textarea:focus { border-color: #0f172a; box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.08); }
+        [data-modal="import-product"] .ipm-chip { font-size: 11px; font-weight: 600; background: #f1f5f9; color: #475569; padding: 2px 8px; border-radius: 6px; letter-spacing: 0.02em; }
+        [data-modal="import-product"] .ipm-type { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid #e2e8f0; background: #ffffff; color: #475569; cursor: pointer; text-align: left; transition: border-color 120ms ease, background-color 120ms ease; }
+        [data-modal="import-product"] .ipm-type:hover:not(:disabled) { border-color: #cbd5e1; background: #f8fafc; }
+        [data-modal="import-product"] .ipm-type[aria-pressed="true"] { border-color: #0f172a; background: #f8fafc; color: #0f172a; box-shadow: inset 0 0 0 0.5px #0f172a; }
+        [data-modal="import-product"] .ipm-check { width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid #cbd5e1; background: #ffffff; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 120ms ease; }
+        [data-modal="import-product"] [aria-pressed="true"] > .ipm-check, [data-modal="import-product"] .ipm-check.is-on { border-color: #0f172a; background: #0f172a; }
+        [data-modal="import-product"] .ipm-link { border: 0; background: none; padding: 2px 4px; border-radius: 6px; color: #475569; cursor: pointer; font-size: 12px; }
+        [data-modal="import-product"] .ipm-link:hover:not(:disabled) { color: #0f172a; background: #f1f5f9; }
+        [data-modal="import-product"] .ipm-tile { position: relative; display: block; cursor: pointer; min-width: 0; }
+        [data-modal="import-product"] .ipm-tile-img { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: #f8fafc; }
+        [data-modal="import-product"] .ipm-tile-img::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px #e2e8f0; pointer-events: none; transition: box-shadow 120ms ease; }
+        [data-modal="import-product"] .ipm-tile:hover .ipm-tile-img::after { box-shadow: inset 0 0 0 1px #94a3b8; }
+        [data-modal="import-product"] .ipm-tile.is-on .ipm-tile-img::after { box-shadow: inset 0 0 0 2px #0f172a; }
+        [data-modal="import-product"] .ipm-tile .ipm-check { position: absolute; top: 7px; right: 7px; opacity: 0; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.15); }
+        [data-modal="import-product"] .ipm-tile:hover .ipm-check, [data-modal="import-product"] .ipm-tile.is-on .ipm-check, [data-modal="import-product"] .ipm-tile:focus-within .ipm-check { opacity: 1; }
+        [data-modal="import-product"] .ipm-tile input { position: absolute; opacity: 0; width: 0; height: 0; }
+        [data-modal="import-product"] .ipm-tile:focus-within .ipm-tile-img { outline: 2px solid #0f172a; outline-offset: 2px; }
+        [data-modal="import-product"] .ipm-empty { flex: 1; min-height: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed #e2e8f0; border-radius: 12px; font-size: 12px; color: #94a3b8; text-align: center; padding: 24px; }
+        [data-modal="import-product"] .ipm-note { font-size: 12px; color: #64748b; padding: 8px 12px; border-radius: 8px; background: #f8fafc; }
+      `}</style>
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: mode === 'folders' ? 660 : 480,
+          width: 640,
           maxWidth: 'calc(100vw - 32px)',
-          maxHeight: 'min(88vh, 900px)',
+          height: 'min(88vh, 640px)',
           backgroundColor: '#ffffff',
           borderRadius: 16,
           boxShadow: '0 24px 48px -12px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(226, 232, 240, 0.9)',
@@ -382,16 +433,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
         }}
       >
         {/* 标题栏 */}
-        <div
-          style={{
-            padding: '16px 20px',
-            borderBottom: '1px solid #f1f5f9',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            background: 'linear-gradient(to bottom, #ffffff, #fbfcfe)',
-          }}
-        >
+        <div style={{ padding: '16px 20px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div
               style={{
@@ -407,13 +449,10 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
             >
               <Package size={18} strokeWidth={2.2} />
             </div>
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: '#0f172a' }}>
-                批量导入产品图
-              </div>
-            </div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: '#0f172a' }}>批量导入产品图</div>
           </div>
           <button
+            className="ipm-icon-btn"
             onClick={onClose}
             disabled={loading}
             aria-label="关闭导入产品图"
@@ -429,44 +468,40 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
               justifyContent: 'center',
               transition: 'all 120ms ease',
             }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#f1f5f9'
-              e.currentTarget.style.color = '#334155'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'transparent'
-              e.currentTarget.style.color = '#94a3b8'
-            }}
           >
             <X size={16} />
           </button>
         </div>
 
-        {/* 内容区 */}
-        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 16, overflowY: 'auto', minHeight: 0 }}>
-          <div style={{ display: 'flex', gap: 18 }}>
-            {([{ key: 'types', label: '按类型导入' }, { key: 'folders', label: '按文件夹选图' }] as const).map((tab) => (
-              <button key={tab.key} type="button" disabled={loading}
+        {/* 模式切换 */}
+        <div style={{ padding: '0 20px 16px', borderBottom: '1px solid #f1f5f9' }}>
+          <div className="ipm-seg" role="group" aria-label="导入方式">
+            {([
+              { key: 'types', label: '按类型导入', desc: '每个货号按素材类型各取一张', icon: <Layers size={16} /> },
+              { key: 'folders', label: '按文件夹选图', desc: '浏览色号文件夹，挑选具体图片', icon: <FolderOpen size={16} /> },
+            ] as const).map((tab) => (
+              <button key={tab.key} type="button" className="ipm-seg-btn" disabled={loading}
                 onClick={() => { setMode(tab.key); setErrorMsg(null); setNotFoundInfo(null) }}
-                aria-pressed={mode === tab.key}
-                style={{ border: 0, background: 'none', padding: '0 0 8px', cursor: 'pointer', fontSize: 12,
-                  color: mode === tab.key ? '#0f172a' : '#94a3b8', fontWeight: mode === tab.key ? 600 : 400,
-                  borderBottom: mode === tab.key ? '2px solid #0f172a' : '2px solid transparent' }}>
-                {tab.label}
+                aria-pressed={mode === tab.key}>
+                {tab.icon}
+                <span style={{ minWidth: 0 }}>
+                  <div className="ipm-seg-title">{tab.label}</div>
+                  <div className="ipm-seg-desc">{tab.desc}</div>
+                </span>
               </button>
             ))}
           </div>
+        </div>
+
+        {/* 内容区 */}
+        <div style={{ flex: 1, padding: 20, display: 'flex', flexDirection: 'column', gap: 18, overflowY: 'auto', minHeight: 0 }}>
           {/* 输入框（多 SKU 支持，中英文逗号、换行、空格） */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#334155' }}>
-                商品货号 (SKU)
-              </label>
-              <span style={{ fontSize: 11, color: '#64748b' }}>
+              <label className="ipm-label">{mode === 'folders' ? '款号 / 色号' : '商品货号 (SKU)'}</label>
+              <span className="ipm-hint">
                 {parsedSkus.length > 0 ? (
-                  <span style={{ color: '#0f172a', fontWeight: 600 }}>
-                    已识别 {parsedSkus.length} 个货号
-                  </span>
+                  <span style={{ color: '#0f172a', fontWeight: 600 }}>已识别 {parsedSkus.length} 个货号</span>
                 ) : (
                   '支持以逗号、换行或空格分隔'
                 )}
@@ -475,7 +510,8 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
 
             <textarea
               ref={textareaRef}
-              rows={3}
+              className="ipm-textarea"
+              rows={2}
               value={skuInput}
               disabled={loading}
               onChange={(e) => {
@@ -493,213 +529,38 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
               placeholder={mode === 'folders'
                 ? '输入款号或完整色号，支持多个货号\n例如：YKCW196, YKLW120-4'
                 : '输入一个或多个货号，以逗号、空格或换行分隔\n例如：C24B1201, C24B1202, C24B1203'}
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                borderRadius: 10,
-                border: '1px solid #cbd5e1',
-                backgroundColor: '#ffffff',
-                fontSize: 13,
-                lineHeight: 1.5,
-                color: '#0f172a',
-                outline: 'none',
-                boxSizing: 'border-box',
-                boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
-                resize: 'none',
-                fontFamily: 'inherit',
-                transition: 'border-color 150ms ease, box-shadow 150ms ease',
-              }}
-              onFocus={(e) => {
-                e.target.style.borderColor = '#0f172a'
-                e.target.style.boxShadow = '0 0 0 3px rgba(15, 23, 42, 0.12)'
-              }}
-              onBlur={(e) => {
-                e.target.style.borderColor = '#cbd5e1'
-                e.target.style.boxShadow = '0 1px 2px rgba(0, 0, 0, 0.04)'
-              }}
             />
 
             {/* 解析出的 SKU 标签预览 */}
             {parsedSkus.length > 0 && (
-              <div
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: 6,
-                  maxHeight: 64,
-                  overflowY: 'auto',
-                  padding: '4px 2px',
-                }}
-              >
-                {parsedSkus.map((sku) => (
-                  <span
-                    key={sku}
-                    style={{
-                      fontSize: 11,
-                      fontWeight: 600,
-                      backgroundColor: '#f1f5f9',
-                      color: '#475569',
-                      padding: '2px 8px',
-                      borderRadius: 6,
-                      border: '1px solid #e2e8f0',
-                      letterSpacing: '0.02em',
-                    }}
-                  >
-                    {sku}
-                  </span>
-                ))}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 52, overflowY: 'auto' }}>
+                {parsedSkus.map((sku) => <span key={sku} className="ipm-chip">{sku}</span>)}
               </div>
             )}
           </div>
 
           {/* 素材类型多选（默认勾选白底图） */}
-          {mode === 'types' && <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#334155' }}>
-                素材类型（可勾选多个）
-              </label>
-              <span style={{ fontSize: 11, color: '#64748b' }}>
-                已勾选 {selectedAssetTypes.length} 项（默认白底图）
-              </span>
-            </div>
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
-                gap: 8,
-              }}
-            >
-              {AVAILABLE_ASSET_TYPES.map((item) => {
-                const checked = selectedAssetTypes.includes(item.key)
-                return (
-                  <button
-                    key={item.key}
-                    type="button"
-                    disabled={loading}
-                    onClick={() => toggleAssetType(item.key)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: '8px 10px',
-                      borderRadius: 9,
-                      border: checked ? '1.5px solid #0f172a' : '1px solid #e2e8f0',
-                      backgroundColor: checked ? '#f1f5f9' : '#ffffff',
-                      color: checked ? '#0f172a' : '#475569',
-                      cursor: 'pointer',
-                      fontSize: 12,
-                      fontWeight: checked ? 600 : 500,
-                      transition: 'all 120ms ease',
-                      textAlign: 'left',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!checked) e.currentTarget.style.backgroundColor = '#f8fafc'
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!checked) e.currentTarget.style.backgroundColor = '#ffffff'
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: 16,
-                        height: 16,
-                        borderRadius: 4,
-                        border: checked ? 'none' : '1.5px solid #94a3b8',
-                        backgroundColor: checked ? '#0f172a' : 'transparent',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        flexShrink: 0,
-                      }}
-                    >
-                      {checked && <Check size={12} color="#ffffff" strokeWidth={3} />}
-                    </div>
-                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {item.label}
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          </div>}
-
-          {mode === 'folders' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minHeight: 140 }}>
-              {folderLoading ? (
-                <div role="status" style={{ padding: 30, textAlign: 'center', fontSize: 12, color: '#64748b' }}>
-                  <Loader2 size={18} className="animate-spin" style={{ margin: '0 auto 8px' }} />正在查找商品文件夹…
-                </div>
-              ) : !folderResult ? (
-                <div style={{ padding: 30, textAlign: 'center', fontSize: 12, color: '#94a3b8' }}>输入款号查看各色号图片，也可直接输入完整色号</div>
-              ) : (
-                <>
-                  {folderImages.length > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: '#64748b' }}>
-                    <span>共 {folderImages.length} 张 · 已选 {selectedImageIds.size} 张</span>
-                    <button type="button" disabled={loading} onClick={() => setSelectedImageIds(
-                      selectedImageIds.size === folderImages.length ? new Set() : new Set(folderImages.map((image) => image.id))
-                    )} style={{ border: 0, background: 'none', color: '#475569', cursor: 'pointer', fontSize: 12 }}>
-                      {selectedImageIds.size === folderImages.length ? '取消全选' : '全选'}
+          {mode === 'types' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <label className="ipm-label">素材类型</label>
+                <span className="ipm-hint">可多选，至少保留一项</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(176px, 1fr))', gap: 8 }}>
+                {AVAILABLE_ASSET_TYPES.map((item) => {
+                  const checked = selectedAssetTypes.includes(item.key)
+                  return (
+                    <button key={item.key} type="button" className="ipm-type" disabled={loading}
+                      aria-pressed={checked} onClick={() => toggleAssetType(item.key)}>
+                      <span className="ipm-check">{checked && <Check size={11} color="#ffffff" strokeWidth={3} />}</span>
+                      <span style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: checked ? 600 : 500 }}>{item.label}</div>
+                        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.desc}</div>
+                      </span>
                     </button>
-                  </div>}
-                  {!folderResult.library_exists && <div style={{ fontSize: 12, color: '#64748b' }}>商品素材库暂未连接，请联系管理员。</div>}
-                  {folderResult.library_exists && folderResult.missing_skus.length > 0 && <div style={{ fontSize: 12, color: '#64748b' }}>未找到同名文件夹：{folderResult.missing_skus.join('、')}</div>}
-                  {folderResult.folders.map((folder) => (
-                    <div key={folder.id}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 9, fontSize: 12, color: '#475569' }}>
-                        <FolderOpen size={14} /><span>{folder.name}</span><span style={{ color: '#94a3b8' }}>({folder.images.length})</span>
-                      </div>
-                      {folder.images.length === 0 ? <div style={{ fontSize: 12, color: '#94a3b8', padding: '8px 0' }}>文件夹内暂无图片</div> : (
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))', gap: 10 }}>
-                          {folder.images.map((image) => {
-                            const checked = selectedImageIds.has(image.id)
-                            return <label key={image.id} title={image.filename} style={{ cursor: loading ? 'wait' : 'pointer', minWidth: 0 }}>
-                              <div style={{ position: 'relative', aspectRatio: '1', borderRadius: 7, overflow: 'hidden', background: '#f8fafc',
-                                border: checked ? '2px solid #334155' : '2px solid transparent' }}>
-                                <img src={image.preview_url} alt={image.filename} loading="lazy" decoding="async"
-                                  style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }} />
-                                <input type="checkbox" checked={checked} disabled={loading} aria-label={`${folder.name} ${image.filename}`}
-                                  onChange={() => setSelectedImageIds((previous) => {
-                                    const next = new Set(previous)
-                                    if (next.has(image.id)) next.delete(image.id)
-                                    else next.add(image.id)
-                                    return next
-                                  })}
-                                  style={{ position: 'absolute', top: 6, right: 6, width: 15, height: 15, margin: 0, accentColor: '#334155' }} />
-                              </div>
-                              <div style={{ fontSize: 10, color: '#64748b', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{image.filename}</div>
-                            </label>
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-          )}
-
-          {/* 导入预览摘要 */}
-          {mode === 'types' && parsedSkus.length > 0 && selectedAssetTypes.length > 0 && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '8px 12px',
-                borderRadius: 8,
-                backgroundColor: '#f8fafc',
-                border: '1px solid #e2e8f0',
-                fontSize: 12,
-                color: '#64748b',
-              }}
-            >
-              <Layers size={14} color="#0f172a" />
-              <span>
-                预计生成{' '}
-                <strong style={{ color: '#0f172a' }}>{totalToImport}</strong> 张素材（
-                {parsedSkus.length} 个 SKU × {selectedAssetTypes.length} 种类型），将整齐网格排布入画布
-              </span>
+                  )
+                })}
+              </div>
             </div>
           )}
 
@@ -727,6 +588,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
 
               <button
                 type="button"
+                className="ipm-link"
                 onClick={() => handleImport(true)}
                 style={{
                   display: 'flex',
@@ -734,27 +596,82 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
                   justifyContent: 'center',
                   gap: 6,
                   height: 34,
-                  padding: '0 12px',
-                  borderRadius: 8,
-                  backgroundColor: '#f1f5f9',
                   border: '1px solid #e2e8f0',
+                  background: '#ffffff',
                   color: '#0f172a',
-                  fontSize: 12,
                   fontWeight: 600,
-                  cursor: 'pointer',
-                  transition: 'background-color 150ms ease',
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
-                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#f1f5f9')}
               >
                 <Sparkles size={13} />
                 <span>载入开发模拟图测试排版 ({totalToImport} 张)</span>
               </button>
             </div>
           )}
+
+          {mode === 'folders' && (
+            folderLoading ? (
+              <div role="status" className="ipm-empty">
+                <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
+                <span>正在查找商品文件夹…</span>
+              </div>
+            ) : !folderResult ? (
+              emptyState(<FolderOpen size={22} strokeWidth={1.6} />, '输入款号后会列出各色号文件夹的图片，也可直接输入完整色号')
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                {!folderResult.library_exists && <div className="ipm-note">商品素材库暂未连接，请联系管理员。</div>}
+                {folderResult.library_exists && folderResult.missing_skus.length > 0 && (
+                  <div className="ipm-note">未找到同名文件夹：{folderResult.missing_skus.join('、')}</div>
+                )}
+                {folderResult.library_exists && folderResult.folders.length === 0 && folderResult.missing_skus.length === 0 &&
+                  emptyState(<FolderOpen size={22} strokeWidth={1.6} />, '没有找到可选的图片')}
+                {folderResult.folders.map((folder) => {
+                  const ids = folder.images.map((image) => image.id)
+                  const folderAllSelected = ids.length > 0 && ids.every((id) => selectedImageIds.has(id))
+                  return (
+                    <div key={folder.id}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#334155' }}>
+                          <FolderOpen size={14} color="#64748b" />
+                          <span>{folder.name}</span>
+                          <span style={{ color: '#94a3b8', fontWeight: 400 }}>{folder.images.length} 张</span>
+                        </div>
+                        {ids.length > 0 && (
+                          <button type="button" className="ipm-link" disabled={loading} onClick={() => toggleImages(ids)}>
+                            {folderAllSelected ? '取消本组' : '选本组'}
+                          </button>
+                        )}
+                      </div>
+                      {folder.images.length === 0 ? <div className="ipm-hint" style={{ padding: '4px 0' }}>文件夹内暂无图片</div> : (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))', gap: 10 }}>
+                          {folder.images.map((image) => {
+                            const checked = selectedImageIds.has(image.id)
+                            return (
+                              <label key={image.id} title={image.filename} className={`ipm-tile${checked ? ' is-on' : ''}`}
+                                style={{ cursor: loading ? 'wait' : 'pointer' }}>
+                                <div className="ipm-tile-img">
+                                  <img src={image.preview_url} alt={image.filename} loading="lazy" decoding="async"
+                                    style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }} />
+                                  <input type="checkbox" checked={checked} disabled={loading} aria-label={`${folder.name} ${image.filename}`}
+                                    onChange={() => toggleImages([image.id])} />
+                                  <span className={`ipm-check${checked ? ' is-on' : ''}`}>
+                                    {checked && <Check size={11} color="#ffffff" strokeWidth={3} />}
+                                  </span>
+                                </div>
+                                <div style={{ fontSize: 10, color: checked ? '#334155' : '#94a3b8', marginTop: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{image.filename}</div>
+                              </label>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          )}
         </div>
 
-        {/* 底部按钮栏 */}
+        {/* 底部按钮栏：左侧统一显示本次导入的数量 */}
         <div
           style={{
             padding: '14px 20px',
@@ -762,27 +679,40 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
             borderTop: '1px solid #f1f5f9',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'flex-end',
             gap: 10,
           }}
         >
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#64748b' }}>
+            {mode === 'types' ? (
+              parsedSkus.length > 0 ? (
+                <span>
+                  {parsedSkus.length} 个货号 × {selectedAssetTypes.length} 种类型，共 <strong style={{ color: '#0f172a' }}>{totalToImport}</strong> 张
+                </span>
+              ) : <span>导入后按网格排入画布</span>
+            ) : folderImages.length > 0 ? (
+              <>
+                <span>已选 <strong style={{ color: '#0f172a' }}>{selectedImageIds.size}</strong> / {folderImages.length} 张</span>
+                <button type="button" className="ipm-link" disabled={loading} onClick={() => toggleImages(allFolderImageIds)}>
+                  {allImagesSelected ? '取消全选' : '全选'}
+                </button>
+              </>
+            ) : <span>导入后按网格排入画布</span>}
+          </div>
+
           <button
             type="button"
             onClick={onClose}
             disabled={loading}
+            className="ipm-link"
             style={{
               height: 36,
               padding: '0 16px',
               borderRadius: 8,
               border: '1px solid #e2e8f0',
               backgroundColor: '#ffffff',
-              color: '#475569',
               fontSize: 13,
               fontWeight: 500,
-              cursor: 'pointer',
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f5f9')}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#ffffff')}
           >
             取消
           </button>
@@ -800,34 +730,24 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
               color: '#ffffff',
               fontSize: 13,
               fontWeight: 600,
-              cursor:
-                !canImport
-                  ? 'not-allowed'
-                  : 'pointer',
-              opacity:
-                !canImport ? 0.6 : 1,
+              cursor: !canImport ? 'not-allowed' : 'pointer',
+              opacity: !canImport ? 0.45 : 1,
               display: 'flex',
               alignItems: 'center',
               gap: 6,
               boxShadow: '0 2px 4px rgba(15, 23, 42, 0.15)',
               transition: 'opacity 150ms ease',
+              whiteSpace: 'nowrap',
             }}
           >
             {loading ? (
               <>
-                <Loader2
-                  size={14}
-                  className="animate-spin"
-                  style={{ animation: 'spin 1s linear infinite' }}
-                />
+                <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
                 <span>正在检索与置入…</span>
               </>
             ) : (
               <>
-                <span>
-                  导入到画布
-                  {totalToImport > 0 ? ` (${totalToImport} 张)` : ''}
-                </span>
+                <span>导入到画布</span>
                 <ArrowRight size={14} />
               </>
             )}
