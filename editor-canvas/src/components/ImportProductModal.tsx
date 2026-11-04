@@ -3,15 +3,19 @@ import React, { useState, useEffect, useRef, useMemo } from 'react'
 import {
   Package,
   Check,
-  AlertCircle,
   Loader2,
   X,
   Sparkles,
   ArrowRight,
   Layers,
+  FolderOpen,
 } from 'lucide-react'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
+import {
+  searchSkuFolders, importSkuFolderImages,
+  type SkuFolderSearchResult, type ImportedProductImage,
+} from '../services/productImportService'
 
 interface Props {
   visible: boolean
@@ -38,6 +42,11 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
   // 默认勾选白底图
   const [selectedAssetTypes, setSelectedAssetTypes] = useState<string[]>(['white'])
   const [loading, setLoading] = useState(false)
+  const [mode, setMode] = useState<'types' | 'folders'>('types')
+  const [folderLoading, setFolderLoading] = useState(false)
+  const [folderResult, setFolderResult] = useState<SkuFolderSearchResult | null>(null)
+  const [folderResultQuery, setFolderResultQuery] = useState('')
+  const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(new Set())
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   useEffect(() => { if (visible && errorMsg) notifyError(errorMsg, '商品素材未能导入，请稍后再试。', { key: 'product-import' }); else feedback.resolve('product-import'); }, [errorMsg, visible]);
   useEffect(() => () => feedback.resolve('product-import'), []);
@@ -64,6 +73,33 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
     const tokens = raw.split(/[,，\s\n\r]+/).map((s) => s.trim()).filter(Boolean)
     return Array.from(new Set(tokens))
   }, [skuInput])
+  const folderQuery = parsedSkus.join(',')
+  const folderImages = useMemo(() => folderResult?.folders.flatMap((folder) => folder.images) || [], [folderResult])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setFolderResult(null)
+    setFolderResultQuery('')
+    setSelectedImageIds(new Set())
+    if (!visible || mode !== 'folders' || !folderQuery) {
+      setFolderLoading(false)
+      return () => controller.abort()
+    }
+    setFolderLoading(true)
+    const timer = setTimeout(async () => {
+      try {
+        const result = await searchSkuFolders(folderQuery.split(','), controller.signal)
+        if (controller.signal.aborted) return
+        setFolderResult(result)
+        setFolderResultQuery(folderQuery)
+      } catch (error) {
+        if (!controller.signal.aborted) setErrorMsg(feedback.message(error, '商品文件夹暂时无法读取，请稍后再试。'))
+      } finally {
+        if (!controller.signal.aborted) setFolderLoading(false)
+      }
+    }, 450)
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [visible, mode, folderQuery])
 
   useEffect(() => {
     if (visible) {
@@ -72,6 +108,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
       setErrorMsg(null)
       setNotFoundInfo(null)
       setLoading(false)
+      setMode('types')
       setTimeout(() => {
         textareaRef.current?.focus()
       }, 50)
@@ -82,11 +119,11 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
   useEffect(() => {
     if (!visible) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape' && !loading) onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [visible, onClose])
+  }, [visible, onClose, loading])
 
   if (!visible) return null
 
@@ -104,7 +141,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
 
   // 批量加载图片元数据并按网格流式计算坐标
   const batchInsertToCanvas = async (
-    items: { url: string; name: string; sku: string; assetType: string }[]
+    items: ImportedProductImage[]
   ) => {
     if (items.length === 0) return
 
@@ -118,6 +155,10 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
             naturalW: number
             naturalH: number
           }>((resolve) => {
+            if (it.naturalWidth && it.naturalHeight) {
+              resolve({ url: it.url, name: it.name, naturalW: it.naturalWidth, naturalH: it.naturalHeight })
+              return
+            }
             const img = new Image()
             img.onload = () => {
               resolve({
@@ -282,7 +323,30 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
     }
   }
 
-  const totalToImport = parsedSkus.length * selectedAssetTypes.length
+  const handleFolderImport = async () => {
+    if (loading || folderLoading || folderResultQuery !== folderQuery || !selectedImageIds.size) return
+    if (selectedImageIds.size > 200) {
+      setErrorMsg('一次最多导入 200 张图片，请分批导入。')
+      return
+    }
+    setLoading(true)
+    setErrorMsg(null)
+    try {
+      const selected = folderImages.filter((image) => selectedImageIds.has(image.id))
+      const originals = await importSkuFolderImages(selected)
+      await batchInsertToCanvas(originals)
+      onClose()
+    } catch (error) {
+      setErrorMsg(feedback.message(error, '图片暂时无法导入，请稍后再试。'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const totalToImport = mode === 'folders' ? selectedImageIds.size : parsedSkus.length * selectedAssetTypes.length
+  const canImport = !loading && (mode === 'folders'
+    ? !folderLoading && folderResultQuery === folderQuery && selectedImageIds.size > 0
+    : parsedSkus.length > 0 && selectedAssetTypes.length > 0)
 
   return (
     <div
@@ -299,12 +363,14 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
         WebkitBackdropFilter: 'blur(8px)',
         animation: 'fadeIn 150ms ease-out',
       }}
-      onClick={onClose}
+      onClick={loading ? undefined : onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 480,
+          width: mode === 'folders' ? 660 : 480,
+          maxWidth: 'calc(100vw - 32px)',
+          maxHeight: 'min(88vh, 900px)',
           backgroundColor: '#ffffff',
           borderRadius: 16,
           boxShadow: '0 24px 48px -12px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(226, 232, 240, 0.9)',
@@ -345,13 +411,12 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
               <div style={{ fontSize: 15, fontWeight: 600, color: '#0f172a' }}>
                 批量导入产品图
               </div>
-              <div style={{ fontSize: 11, color: '#64748b' }}>
-                支持多个 SKU 逗号分割，勾选素材类型批量网格平铺置入
-              </div>
             </div>
           </div>
           <button
             onClick={onClose}
+            disabled={loading}
+            aria-label="关闭导入产品图"
             style={{
               background: 'transparent',
               border: 'none',
@@ -378,7 +443,19 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
         </div>
 
         {/* 内容区 */}
-        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 16, overflowY: 'auto', minHeight: 0 }}>
+          <div style={{ display: 'flex', gap: 18 }}>
+            {([{ key: 'types', label: '按类型导入' }, { key: 'folders', label: '按文件夹选图' }] as const).map((tab) => (
+              <button key={tab.key} type="button" disabled={loading}
+                onClick={() => { setMode(tab.key); setErrorMsg(null); setNotFoundInfo(null) }}
+                aria-pressed={mode === tab.key}
+                style={{ border: 0, background: 'none', padding: '0 0 8px', cursor: 'pointer', fontSize: 12,
+                  color: mode === tab.key ? '#0f172a' : '#94a3b8', fontWeight: mode === tab.key ? 600 : 400,
+                  borderBottom: mode === tab.key ? '2px solid #0f172a' : '2px solid transparent' }}>
+                {tab.label}
+              </button>
+            ))}
+          </div>
           {/* 输入框（多 SKU 支持，中英文逗号、换行、空格） */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -400,6 +477,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
               ref={textareaRef}
               rows={3}
               value={skuInput}
+              disabled={loading}
               onChange={(e) => {
                 setSkuInput(e.target.value)
                 if (errorMsg) setErrorMsg(null)
@@ -408,10 +486,13 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault()
-                  handleImport()
+                  if (mode === 'folders') handleFolderImport()
+                  else handleImport()
                 }
               }}
-              placeholder="输入一个或多个货号，以逗号、空格或换行分隔&#10;例如：C24B1201, C24B1202, C24B1203"
+              placeholder={mode === 'folders'
+                ? '输入款号或完整色号，支持多个货号\n例如：YKCW196, YKLW120-4'
+                : '输入一个或多个货号，以逗号、空格或换行分隔\n例如：C24B1201, C24B1202, C24B1203'}
               style={{
                 width: '100%',
                 padding: '10px 12px',
@@ -472,7 +553,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
           </div>
 
           {/* 素材类型多选（默认勾选白底图） */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {mode === 'types' && <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: '#334155' }}>
                 素材类型（可勾选多个）
@@ -495,6 +576,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
                   <button
                     key={item.key}
                     type="button"
+                    disabled={loading}
                     onClick={() => toggleAssetType(item.key)}
                     style={{
                       display: 'flex',
@@ -540,10 +622,65 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
                 )
               })}
             </div>
-          </div>
+          </div>}
+
+          {mode === 'folders' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minHeight: 140 }}>
+              {folderLoading ? (
+                <div role="status" style={{ padding: 30, textAlign: 'center', fontSize: 12, color: '#64748b' }}>
+                  <Loader2 size={18} className="animate-spin" style={{ margin: '0 auto 8px' }} />正在查找商品文件夹…
+                </div>
+              ) : !folderResult ? (
+                <div style={{ padding: 30, textAlign: 'center', fontSize: 12, color: '#94a3b8' }}>输入款号查看各色号图片，也可直接输入完整色号</div>
+              ) : (
+                <>
+                  {folderImages.length > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: '#64748b' }}>
+                    <span>共 {folderImages.length} 张 · 已选 {selectedImageIds.size} 张</span>
+                    <button type="button" disabled={loading} onClick={() => setSelectedImageIds(
+                      selectedImageIds.size === folderImages.length ? new Set() : new Set(folderImages.map((image) => image.id))
+                    )} style={{ border: 0, background: 'none', color: '#475569', cursor: 'pointer', fontSize: 12 }}>
+                      {selectedImageIds.size === folderImages.length ? '取消全选' : '全选'}
+                    </button>
+                  </div>}
+                  {!folderResult.library_exists && <div style={{ fontSize: 12, color: '#64748b' }}>商品素材库暂未连接，请联系管理员。</div>}
+                  {folderResult.library_exists && folderResult.missing_skus.length > 0 && <div style={{ fontSize: 12, color: '#64748b' }}>未找到同名文件夹：{folderResult.missing_skus.join('、')}</div>}
+                  {folderResult.folders.map((folder) => (
+                    <div key={folder.id}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 9, fontSize: 12, color: '#475569' }}>
+                        <FolderOpen size={14} /><span>{folder.name}</span><span style={{ color: '#94a3b8' }}>({folder.images.length})</span>
+                      </div>
+                      {folder.images.length === 0 ? <div style={{ fontSize: 12, color: '#94a3b8', padding: '8px 0' }}>文件夹内暂无图片</div> : (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))', gap: 10 }}>
+                          {folder.images.map((image) => {
+                            const checked = selectedImageIds.has(image.id)
+                            return <label key={image.id} title={image.filename} style={{ cursor: loading ? 'wait' : 'pointer', minWidth: 0 }}>
+                              <div style={{ position: 'relative', aspectRatio: '1', borderRadius: 7, overflow: 'hidden', background: '#f8fafc',
+                                border: checked ? '2px solid #334155' : '2px solid transparent' }}>
+                                <img src={image.preview_url} alt={image.filename} loading="lazy" decoding="async"
+                                  style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }} />
+                                <input type="checkbox" checked={checked} disabled={loading} aria-label={`${folder.name} ${image.filename}`}
+                                  onChange={() => setSelectedImageIds((previous) => {
+                                    const next = new Set(previous)
+                                    if (next.has(image.id)) next.delete(image.id)
+                                    else next.add(image.id)
+                                    return next
+                                  })}
+                                  style={{ position: 'absolute', top: 6, right: 6, width: 15, height: 15, margin: 0, accentColor: '#334155' }} />
+                              </div>
+                              <div style={{ fontSize: 10, color: '#64748b', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{image.filename}</div>
+                            </label>
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
 
           {/* 导入预览摘要 */}
-          {parsedSkus.length > 0 && selectedAssetTypes.length > 0 && (
+          {mode === 'types' && parsedSkus.length > 0 && selectedAssetTypes.length > 0 && (
             <div
               style={{
                 display: 'flex',
@@ -567,7 +704,7 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
           )}
 
           {/* 未在素材库找到时的反馈与开发模拟图置入 */}
-          {import.meta.env.DEV && notFoundInfo && (
+          {mode === 'types' && import.meta.env.DEV && notFoundInfo && (
             <div
               style={{
                 padding: '12px 14px',
@@ -652,8 +789,8 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
 
           <button
             type="button"
-            onClick={() => handleImport(false)}
-            disabled={loading || parsedSkus.length === 0 || selectedAssetTypes.length === 0}
+            onClick={() => mode === 'folders' ? handleFolderImport() : handleImport(false)}
+            disabled={!canImport}
             style={{
               height: 36,
               padding: '0 18px',
@@ -664,11 +801,11 @@ export const ImportProductModal: React.FC<Props> = ({ visible, targetPos, onClos
               fontSize: 13,
               fontWeight: 600,
               cursor:
-                loading || parsedSkus.length === 0 || selectedAssetTypes.length === 0
+                !canImport
                   ? 'not-allowed'
                   : 'pointer',
               opacity:
-                loading || parsedSkus.length === 0 || selectedAssetTypes.length === 0 ? 0.6 : 1,
+                !canImport ? 0.6 : 1,
               display: 'flex',
               alignItems: 'center',
               gap: 6,

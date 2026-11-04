@@ -76,6 +76,7 @@ from .ai_image import (
     normalize_model_name,
 )
 from .common_helpers import _extract_first_json_object, _resolve_image_data_url, make_sse
+from .product_sku_library import SkuFolderLibrary
 from . import outfit_change
 from .bfl_vto import FLUX_VTO_MODEL, PROVIDER_BFL, generate_vto_async
 from .ai_job_recovery import execute_image_job
@@ -3803,6 +3804,59 @@ def search_product_sku(sku: str):
         "library_path": str(settings.product_library_path),
         "items": all_results,
     }
+
+
+def _sku_folder_library() -> SkuFolderLibrary:
+    return SkuFolderLibrary(settings.product_library_path, settings.product_sku_library_path)
+
+
+@app.get("/products/sku-folders")
+def product_sku_folders(request: Request, sku: str):
+    _current_user(request)
+    try:
+        return _sku_folder_library().search(sku)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except OSError:
+        logger.warning("SKU folder lookup failed", exc_info=True)
+        raise HTTPException(503, "商品素材库暂时无法读取，请稍后再试。")
+
+
+@app.get("/products/sku-folder-image")
+def product_sku_folder_image(request: Request, library: str, sku: str, path: str, thumb: int = 0):
+    _current_user(request)
+    try:
+        image = _sku_folder_library().resolve_image(library, sku, path)
+        if thumb:
+            try:
+                image = outfit_change.library_thumbnail(image)
+            except (OSError, ValueError):
+                logger.warning("SKU image thumbnail failed", exc_info=True)
+        return FileResponse(str(image), media_type=mimetypes.guess_type(image.name)[0],
+                            headers={"Cache-Control": "private, max-age=3600"})
+    except FileNotFoundError:
+        raise HTTPException(404, "素材图片已不存在，请重新查询。")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except OSError:
+        raise HTTPException(503, "这张素材图暂时无法读取，请稍后再试。")
+
+
+@app.post("/products/import-sku-images")
+def import_product_sku_images(request: Request, body: dict):
+    user = _current_user(request)
+    items = body.get("items")
+    if not isinstance(items, list):
+        raise HTTPException(400, "请选择需要导入的图片。")
+    try:
+        return {"items": _sku_folder_library().import_images(items, settings.output_path, user["id"])}
+    except FileNotFoundError:
+        raise HTTPException(404, "素材图片已不存在，请重新查询。")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except OSError:
+        logger.warning("SKU image import failed", exc_info=True)
+        raise HTTPException(503, "图片暂时无法导入，请稍后再试。")
 
 
 @app.get("/products/mock-image")

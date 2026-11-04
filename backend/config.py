@@ -34,6 +34,9 @@ class Settings:
     product_library_path: Path = Path(
         os.getenv("PRODUCT_LIBRARY_PATH", "./product-library")
     )
+    # 可额外指向“根目录 / SKU / 图片”或“根目录 / 02 产品库 / 款号 / 色号 / 图片”。
+    _sku_library_path = os.getenv("PRODUCT_SKU_LIBRARY_PATH", "").strip()
+    product_sku_library_path: Path | None = Path(_sku_library_path) if _sku_library_path else None
 
     # 图片类型子文件夹映射（类型key → 实际文件夹名）
     # 前端传 image_type="white" → 在 product_library_path/White_Base/ 下查找
@@ -246,6 +249,8 @@ class Settings:
         # 解析相对路径（相对于项目根目录）
         if not self.product_library_path.is_absolute():
             self.product_library_path = self.root_dir / self.product_library_path
+        if self.product_sku_library_path is not None and not self.product_sku_library_path.is_absolute():
+            self.product_sku_library_path = self.root_dir / self.product_sku_library_path
         if not self.output_path.is_absolute():
             self.output_path = self.root_dir / self.output_path
         if not self.login_users_path.is_absolute():
