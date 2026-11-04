@@ -454,6 +454,18 @@ var CopyButton2 = function(props) {
   }, React.createElement(copied ? I.check : I.copy, { size: 10 }), copyFailed ? '复制失败' : (copied ? ('已复制 ' + (props.label || '')) : ('复制 ' + (props.label || 'JSON'))));
 };
 
+// 聊天里的图片拖到画布：画布 iframe 同源，按这个类型读出图片地址再自动置入
+const CANVAS_IMAGE_DRAG_TYPE = 'application/x-designflow-image';
+const canvasDragProps = (url) => url ? {
+  draggable: true,
+  onDragStart: function(e) {
+    try {
+      e.dataTransfer.setData(CANVAS_IMAGE_DRAG_TYPE, new URL(url, window.location.origin).toString());
+      e.dataTransfer.effectAllowed = 'copy';
+    } catch (err) {}
+  },
+} : {};
+
 const InlineRefStrip = ({ items, compact }) => {
   if (!Array.isArray(items) || items.length === 0) return null;
   return (
@@ -463,6 +475,7 @@ const InlineRefStrip = ({ items, compact }) => {
           key={idx}
           src={src}
           alt={'参考图 ' + (idx + 1)}
+          {...canvasDragProps(src)}
           style={{
             width: compact ? 44 : 48,
             height: compact ? 44 : 48,
@@ -946,6 +959,7 @@ const AgentToolCard = ({ m, openImage }) => {
                 <img
                   src={src}
                   alt={im.label || label}
+                  {...canvasDragProps(src)}
                   onClick={function() { openImage(src, src, im.label || label); }}
                   style={{ width: '100%', borderRadius: 8, display: 'block', border: '1px solid var(--line-2)', cursor: 'zoom-in', background: 'var(--panel-2)' }}
                 />
@@ -1174,12 +1188,12 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
               ),
               m.status === 'done' && fullImageUrl && !batchImages && (function() {
                 return React.createElement('div', null,
-                  React.createElement('img', {
+                  React.createElement('img', Object.assign(canvasDragProps(fullImageUrl), {
                     src: displayImageUrl || fullImageUrl,
                     alt: m.prompt,
                     style: { width: '100%', borderRadius: 10, display: 'block', border: '1px solid var(--line-2)', cursor: 'zoom-in' },
                     onClick: () => openImage(displayImageUrl, fullImageUrl, m.prompt),
-                  }),
+                  })),
                   React.createElement('div', { style: { marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
                     React.createElement('a', {
                       href: fullImageUrl, download: true,
@@ -1207,12 +1221,12 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     : imShownRaw;
                   if (im.status === 'done' && imFull) {
                     return React.createElement('div', { key: im.jobId || bi, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-                      React.createElement('img', {
+                      React.createElement('img', Object.assign(canvasDragProps(imFull), {
                         src: imShown || imFull,
                         alt: (m.prompt || '') + ' #' + (bi + 1),
                         style: { width: '100%', borderRadius: 8, display: 'block', border: '1px solid var(--line-2)', cursor: 'zoom-in' },
                         onClick: function() { openImage(imShown, imFull, m.prompt); },
-                      }),
+                      })),
                       React.createElement('div', { style: { display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' } },
                         React.createElement('a', {
                           href: imFull, download: true,

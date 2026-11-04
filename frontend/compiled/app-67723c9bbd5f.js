@@ -2508,6 +2508,7 @@ const Canvas = ({
 window.Canvas = Canvas;
 
 // src/Chat.jsx
+function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
 // AI chat column: message list (ChatReturned) + composer.
 // Rich message types: text, option chips, file cards, action buttons, thinking trace, image results.
 
@@ -3026,6 +3027,18 @@ var CopyButton2 = function (props) {
     size: 10
   }), copyFailed ? '复制失败' : copied ? '已复制 ' + (props.label || '') : '复制 ' + (props.label || 'JSON'));
 };
+
+// 聊天里的图片拖到画布：画布 iframe 同源，按这个类型读出图片地址再自动置入
+const CANVAS_IMAGE_DRAG_TYPE = 'application/x-designflow-image';
+const canvasDragProps = url => url ? {
+  draggable: true,
+  onDragStart: function (e) {
+    try {
+      e.dataTransfer.setData(CANVAS_IMAGE_DRAG_TYPE, new URL(url, window.location.origin).toString());
+      e.dataTransfer.effectAllowed = 'copy';
+    } catch (err) {}
+  }
+} : {};
 const InlineRefStrip = ({
   items,
   compact
@@ -3037,10 +3050,11 @@ const InlineRefStrip = ({
       gap: 6,
       flexWrap: 'wrap'
     }
-  }, items.map((src, idx) => /*#__PURE__*/React.createElement("img", {
+  }, items.map((src, idx) => /*#__PURE__*/React.createElement("img", _extends({
     key: idx,
     src: src,
-    alt: '参考图 ' + (idx + 1),
+    alt: '参考图 ' + (idx + 1)
+  }, canvasDragProps(src), {
     style: {
       width: compact ? 44 : 48,
       height: compact ? 44 : 48,
@@ -3049,7 +3063,7 @@ const InlineRefStrip = ({
       border: '1px solid var(--line-2)',
       background: 'white'
     }
-  })));
+  }))));
 };
 const actionBtnPrimaryStyle = {
   fontSize: 12,
@@ -3890,9 +3904,10 @@ const AgentToolCard = ({
         gap: 4,
         minWidth: 0
       }
-    }, /*#__PURE__*/React.createElement("img", {
+    }, /*#__PURE__*/React.createElement("img", _extends({
       src: src,
-      alt: im.label || label,
+      alt: im.label || label
+    }, canvasDragProps(src), {
       onClick: function () {
         openImage(src, src, im.label || label);
       },
@@ -3904,7 +3919,7 @@ const AgentToolCard = ({
         cursor: 'zoom-in',
         background: 'var(--panel-2)'
       }
-    }), /*#__PURE__*/React.createElement("div", {
+    })), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -4336,7 +4351,7 @@ const ChatReturned = ({
         color: 'var(--ink-3)'
       }
     }, 'ratio=', promptParams.aspectRatio || promptParams.size || 'auto', ' · size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认') : null), m.status === 'done' && fullImageUrl && !batchImages && function () {
-      return React.createElement('div', null, React.createElement('img', {
+      return React.createElement('div', null, React.createElement('img', Object.assign(canvasDragProps(fullImageUrl), {
         src: displayImageUrl || fullImageUrl,
         alt: m.prompt,
         style: {
@@ -4347,7 +4362,7 @@ const ChatReturned = ({
           cursor: 'zoom-in'
         },
         onClick: () => openImage(displayImageUrl, fullImageUrl, m.prompt)
-      }), React.createElement('div', {
+      })), React.createElement('div', {
         style: {
           marginTop: 6,
           display: 'flex',
@@ -4428,7 +4443,7 @@ const ChatReturned = ({
             flexDirection: 'column',
             gap: 4
           }
-        }, React.createElement('img', {
+        }, React.createElement('img', Object.assign(canvasDragProps(imFull), {
           src: imShown || imFull,
           alt: (m.prompt || '') + ' #' + (bi + 1),
           style: {
@@ -4441,7 +4456,7 @@ const ChatReturned = ({
           onClick: function () {
             openImage(imShown, imFull, m.prompt);
           }
-        }), React.createElement('div', {
+        })), React.createElement('div', {
           style: {
             display: 'flex',
             gap: 4,

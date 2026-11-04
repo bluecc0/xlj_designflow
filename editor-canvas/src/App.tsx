@@ -42,6 +42,7 @@ import { loadImagesFromFiles } from './utils/imageLoader'
 import { DEFAULT_OUTPAINTING_LIMITS, getOutpaintingPlan } from './utils/outpainting'
 import { buildSnapshotSavePayload, isStaleSnapshotConflict, requestSnapshot } from './utils/snapshotSave'
 
+const HOST_IMAGE_DRAG_TYPE = 'application/x-designflow-image'
 const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
 const editorSnapshotUrl = `/editor/snapshot?user_id=${encodeURIComponent(editorUserId)}`
 
@@ -918,41 +919,66 @@ export function App() {
 
   // 1.1 外部多图片文件拖拽置入画布 (Drag & Drop)
   useEffect(() => {
+    // dragenter/dragleave 计数在跨 iframe、拖到画布外松手、Esc 取消时会漏掉 dragleave，
+    // 浮层就一直挂着。文件悬停期间浏览器会持续触发 dragover，超时没收到就视为拖拽已结束。
+    let hideTimer: ReturnType<typeof setTimeout> | undefined
+    const resetDrag = () => {
+      clearTimeout(hideTimer)
+      dragDepthRef.current = 0
+      setIsDraggingFiles(false)
+    }
+    const armHideTimer = () => {
+      clearTimeout(hideTimer)
+      hideTimer = setTimeout(resetDrag, 800)
+    }
+
+    // 外部文件，或从右侧聊天框拖来的图片（同源宿主页按自定义类型带上图片地址）
+    const isImageDrag = (e: DragEvent) => {
+      const types = e.dataTransfer?.types
+      return Boolean(types && (types.includes('Files') || types.includes(HOST_IMAGE_DRAG_TYPE)))
+    }
+
     const onDragEnter = (e: DragEvent) => {
       if (!snapshotHydratedRef.current) return
-      if (e.dataTransfer?.types?.includes('Files')) {
+      if (isImageDrag(e)) {
         dragDepthRef.current++
         e.preventDefault()
         setIsDraggingFiles(true)
+        armHideTimer()
       }
     }
 
     const onDragOver = (e: DragEvent) => {
       if (!snapshotHydratedRef.current) return
-      if (e.dataTransfer?.types?.includes('Files')) {
+      if (isImageDrag(e)) {
         e.preventDefault()
         if (e.dataTransfer) {
           e.dataTransfer.dropEffect = 'copy'
         }
+        armHideTimer()
       }
     }
 
     const onDragLeave = (e: DragEvent) => {
-      if (e.dataTransfer?.types?.includes('Files')) {
+      if (isImageDrag(e)) {
         dragDepthRef.current--
-        if (dragDepthRef.current <= 0) {
-          dragDepthRef.current = 0
-          setIsDraggingFiles(false)
-        }
+        if (dragDepthRef.current <= 0) resetDrag()
       }
     }
 
     const onDrop = async (e: DragEvent) => {
       if (!snapshotHydratedRef.current) return
-      dragDepthRef.current = 0
-      setIsDraggingFiles(false)
+      resetDrag()
       // 弹窗（如 AI 换装的本地上传区）自行处理拖入的文件
       if ((e.target as HTMLElement | null)?.closest?.('[data-modal]')) return
+
+      const hostImageUrl = e.dataTransfer?.getData(HOST_IMAGE_DRAG_TYPE)
+      if (hostImageUrl) {
+        e.preventDefault()
+        e.stopPropagation()
+        insertImagesAuto([hostImageUrl])
+        return
+      }
 
       const files = e.dataTransfer?.files
       if (!files || files.length === 0) return
@@ -967,15 +993,21 @@ export function App() {
     }
 
     window.addEventListener('dragenter', onDragEnter)
-    window.addEventListener('dragover', onDragOver)
+    // 捕获阶段监听 dragover，避免子元素 stopPropagation 后误判拖拽结束
+    window.addEventListener('dragover', onDragOver, true)
     window.addEventListener('dragleave', onDragLeave)
     window.addEventListener('drop', onDrop)
+    window.addEventListener('dragend', resetDrag)
+    window.addEventListener('blur', resetDrag)
 
     return () => {
+      clearTimeout(hideTimer)
       window.removeEventListener('dragenter', onDragEnter)
-      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragover', onDragOver, true)
       window.removeEventListener('dragleave', onDragLeave)
       window.removeEventListener('drop', onDrop)
+      window.removeEventListener('dragend', resetDrag)
+      window.removeEventListener('blur', resetDrag)
     }
   }, [insertImagesAuto])
 
