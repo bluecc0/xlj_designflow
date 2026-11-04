@@ -13,7 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
-from ..agent_skill_loader import build_skill_context, load_agent_skill, load_reference_text
+from ..agent_skill_loader import SKILL_CONTEXT_MAX_CHARS, build_skill_context, load_agent_skill, load_reference_text
 from ..ai_image import compress_image_to_data_url, save_user_refs
 from ..ai_job_recovery import execute_image_job
 from ..config import settings
@@ -257,9 +257,26 @@ def _load_skill(ctx: ToolContext, name: str):
     return skill
 
 
+# 技能原文常为别的 Agent 环境写成（写文件、跑脚本、自评迭代），加载时附上本平台的执行方式
+SKILL_PLATFORM_NOTE = """
+
+# 在 DesignFlow 里执行技能
+技能原文可能是为别的 Agent 环境写的，和下面的规定冲突时以这里为准；技能里的审美规律、默认值、检查清单、prompt 写法和硬规则照常使用。
+- 技能要求动手前或拼 prompt 时要读的参考文件、示例，先用 read_skill_file 读完再出图，不要凭技能主文件自己发挥。
+- 技能里提到的生图工具（MCP、API、命令行）都换成 generate_image：画幅传 aspect_ratio，参考图传对话里的图片 ID，用户没指定模型时不传 model。一次调用只有一个画幅，画幅不同的几张按画幅分几次调用；互不依赖的几张放进同一次调用。
+- 技能规定了 prompt 写法时按技能写，可以写成完整的英文 prompt，不受"以用户原话为主体"的限制；label 写中文的镜头名或内容名。
+- 技能要用产品图、用户给了货号却没给图时，先用 find_product_images 取图再作参考图。
+- 不写文件：技能要求保存到输出目录、写 prompt 记录、日志或结果表文件时都跳过。平台会把每张图的 prompt 和参数记在卡片上，图片自动放进画布。
+- 不运行脚本，也不改写技能文件。技能要求运行脚本时，先用 read_skill_file 读脚本，读得到就按脚本逻辑自己完成（例如按脚本里的选项随机抽取）；读不到就告诉用户这个功能在这里用不了。
+- 不自评打分，不自动重新生成：技能要求出图后打分迭代时，出完图就交给用户，请用户指出不满意的地方；用户反馈后，按技能的评分表或排错说明找到对应部分，在上一张的 prompt 原文上只替换那部分的句子，其余一字不改，重新生成；不要把上一张图当参考图（会把旧的姿势、构图和光线带过来），除非用户要保持同一个人物或技能要求这样做。技能要求先定调再批量出（例如套图先出主视觉）时，先出定调图，请用户确认后再出其余几张。
+- 出图后的回复仍按平台规则保持简短，不贴 prompt 和评分表；按默认值补了什么、因检查改了什么，一句话说明。技能列了已知局限且这次画面涉及时，提醒一句并给出技能里写的办法。用户要 prompt 时再给。
+"""
+
+
 async def load_skill(ctx: ToolContext, args: dict) -> dict:
     skill = _load_skill(ctx, args.get("name"))
-    return {"name": skill.name, "content": build_skill_context(skill), "references": skill.references}
+    return {"name": skill.name, "content": build_skill_context(skill) + SKILL_PLATFORM_NOTE,
+            "references": skill.references}
 
 
 async def read_skill_file(ctx: ToolContext, args: dict) -> dict:
@@ -267,7 +284,7 @@ async def read_skill_file(ctx: ToolContext, args: dict) -> dict:
     text = load_reference_text(skill, str(args.get("path") or ""))
     if text is None:
         return {"error": "文件不存在或不在技能目录内"}
-    return {"path": args.get("path"), "content": text[:20000]}
+    return {"path": args.get("path"), "content": text[:SKILL_CONTEXT_MAX_CHARS]}
 
 
 # ── special_compose（特殊品，编排逻辑从前端下沉到这里）──────────────────────

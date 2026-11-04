@@ -82,6 +82,14 @@ class MemoryTest(unittest.TestCase):
         asyncio.run(tools.remember(ctx, {"action": "delete", "memory_id": mid}))
         self.assertEqual(memory.list_memories("u1"), [])
 
+    def test_skill_catalog_comes_before_general_rules(self) -> None:
+        skill = {"name": "sports-photo", "title": "运动大片", "description": "运动服饰户外场景大片"}
+        with patch.object(prompts, "list_agent_skills", lambda *a: [skill]):
+            prompt = prompts.build_system_prompt(None, "")
+        self.assertIn("sports-photo", prompt)
+        self.assertLess(prompt.index("## 可用技能"), prompt.index("## 核心原则"))
+        self.assertEqual(prompt.count("## 核心原则"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
