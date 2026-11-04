@@ -60,6 +60,8 @@ def main() -> int:
     ]
     if args.model:
         cmd[1:1] = ["-m", args.model]
+        if args.model.strip().lower() in {"standard", "std"}:
+            cmd[1:1] = ["--mv", "2"]
 
     started = time.time()
     try:

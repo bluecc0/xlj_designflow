@@ -22,6 +22,7 @@ import uuid
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 import httpx
 from PIL import Image, ImageOps
@@ -904,7 +905,8 @@ async def _upload_reference_image(
     except Exception:
         pass
 
-    files = {"file": (filename, image_bytes, content_type)}
+    upload_name = f"reference_{uuid.uuid4().hex}{_extension_from_mime(content_type)}"
+    files = {"file": (upload_name, image_bytes, content_type)}
     resp = await client.post(endpoint, headers={"Authorization": headers["Authorization"]}, files=files)
     if (
         not normalized
@@ -927,7 +929,8 @@ async def _upload_reference_image(
     url = _extract_upload_url(resp.json())
     if not url:
         raise RuntimeError(f"上传参考图成功，但响应中没有可用 URL: {resp.text[:160]}")
-    return url
+    # Keep existing escapes and signed query delimiters intact.
+    return quote(url, safe=":/?#[]@!$&'()*+,;=%")
 
 
 async def _submit_generation_task(
