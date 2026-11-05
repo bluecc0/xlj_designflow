@@ -150,6 +150,7 @@ export function useTeamCanvasSync(options: Options) {
       try {
         await waitForSaved(options)
         snapshotHydratedRef.current = false
+        const editSequence = useCanvasStore.getState().editSequence
         const url = target.kind === 'team' ? teamSnapshotUrl(target.id) : options.personalSnapshotUrl
         const res = await requestSnapshot(url)
         if (!res.ok) {
@@ -159,6 +160,10 @@ export function useTeamCanvasSync(options: Options) {
         const raw = typeof res.body?.snapshot === 'string' ? JSON.parse(res.body.snapshot) : res.body?.snapshot
         const doc = raw ? convertLegacyTldrawSnapshot(raw) : { version: 2, pages: [], frames: [], images: [], texts: [] }
         if (!doc) throw new Error('无法识别画布格式')
+        // 等待期间画布又被改动（例如键盘操作）：保留修改，放弃这次切换
+        if (useCanvasStore.getState().editSequence !== editSequence) {
+          throw new Error('切换时画布有新的修改，已保留在当前画布，请保存后再切换')
+        }
 
         useHistoryStore.getState().clear()
         setViewportNamespace(target.kind === 'team' ? `team_${target.id}` : '')
@@ -186,6 +191,10 @@ export function useTeamCanvasSync(options: Options) {
       } finally {
         snapshotHydratedRef.current = true
         useTeamStore.setState({ switching: false })
+        // 切换被放弃时，暂停存盘期间的修改要重新触发一次保存
+        if (useCanvasStore.getState().isDirty) {
+          useCanvasStore.setState((s) => ({ editSequence: s.editSequence + 1 }))
+        }
         options.onSwitched()
         // 切换期间又收到的请求，在这里接着处理
         const next = useTeamStore.getState().pendingTarget

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import unittest
 from unittest.mock import patch
 
@@ -96,6 +98,30 @@ class EditorSnapshotIsolationTest(unittest.TestCase):
             main._editor_snapshot_foreign_asset_urls(snapshot, "operator_a"),
             ["/ai-images/operator_b/private.png"],
         )
+
+    def test_previously_saved_url_only_counts_when_it_was_an_image_record(self) -> None:
+        secret = "/ai-images/operator_b/private.png"
+        saved_as_text = json.dumps({"version": 2, "pages": [{"id": "p1"}], "images": [],
+                                    "texts": [{"id": "t1", "pageId": "p1", "text": secret}]})
+        saved_as_image = json.dumps({"designflowCanvasDocument": {"version": 2, "pages": [{"id": "p1"}],
+                                     "images": [{"id": "i1", "url": "http://host/ai-images/operator_b/private.png"}]}})
+        self.assertEqual(main._editor_snapshot_saved_image_paths(saved_as_text), set())
+        self.assertEqual(main._editor_snapshot_saved_image_paths(saved_as_image), {secret})
+
+        async def body():
+            return {"snapshot": json.dumps({"version": 2, "pages": [{"id": "p1"}],
+                                            "images": [{"id": "i2", "url": secret}]}), "base_revision": 1}
+
+        req = _request("operator_a")
+        req.scope["headers"] = [(b"content-type", b"application/json")]
+        with (patch.object(main, "_current_user", return_value={"id": "operator_a"}),
+              patch.object(main, "load_editor_snapshot", return_value=(saved_as_text, 1)),
+              patch.object(main, "save_editor_snapshot") as persist,
+              patch.object(req, "json", side_effect=body)):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(main.editor_save_snapshot(req))
+        self.assertEqual(raised.exception.status_code, 409)
+        persist.assert_not_called()
 
     def test_normalizes_canvas_document_asset_urls(self) -> None:
         snapshot = {

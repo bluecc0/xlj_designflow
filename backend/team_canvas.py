@@ -441,10 +441,16 @@ def save_canvas(
 
         # 新增的图片只能是自己的、或已经在某个共享画布里的，避免借共享画布读取任意他人素材
         old_urls = {_asset_path(im.get("url")) for im in old_doc.get("images") or []}
+        history_urls: set[str] | None = None
         for image in new_doc["images"]:
             path = _asset_path(image.get("url"))
             owner = _asset_owner(path)
-            if owner and owner != str(user["id"]) and path not in old_urls and not is_shared_canvas_asset(path):
+            if not owner or owner == str(user["id"]) or path in old_urls or is_shared_canvas_asset(path):
+                continue
+            # 从动态里“恢复”被删的图片：该画布自己曾经有过的图片记录也认可
+            if history_urls is None:
+                history_urls = _canvas_history_image_paths(conn, canvas_id)
+            if path not in history_urls:
                 return False, old_revision, "foreign_asset_rejected"
 
         if _shape_count(old_doc) >= 3 and _shape_count(new_doc) == 0 and intent != "user_delete":
@@ -470,6 +476,28 @@ def save_canvas(
     if any(action in {"generate", "add", "delete"} for action, _, _ in activity):
         _invalidate_asset_index()
     return True, new_revision, None
+
+
+def _canvas_history_image_paths(conn, canvas_id: str) -> set[str]:
+    """该画布删除记录和历史版本中出现过的图片记录地址（只读图片记录，不读文字等字段）。"""
+    paths: set[str] = set()
+    rows = conn.execute(
+        "SELECT payload FROM team_canvas_activity WHERE canvas_id = ? AND action = 'delete'", (canvas_id,)
+    ).fetchall()
+    for row in rows:
+        try:
+            images = json.loads(row["payload"] or "{}").get("images") or []
+        except Exception:
+            continue
+        paths.update(_asset_path(im.get("url")) for im in images if isinstance(im, dict))
+    for row in conn.execute("SELECT doc_json FROM team_canvas_versions WHERE canvas_id = ?", (canvas_id,)).fetchall():
+        try:
+            images = json.loads(row["doc_json"]).get("images") or []
+        except Exception:
+            continue
+        paths.update(_asset_path(im.get("url")) for im in images if isinstance(im, dict))
+    paths.discard("")
+    return paths
 
 
 def _first_page(snapshot: dict, page_id: str) -> dict:

@@ -104,6 +104,27 @@ class TeamCanvasTest(unittest.TestCase):
         summaries = [summary for _, summary, _ in team_canvas.diff_activity(old, new)]
         self.assertEqual(summaries, ["用抠图生成了 1 张图片", "用AI 换装生成了 1 张图片", "添加了 1 张图片"])
 
+    def test_member_can_restore_image_deleted_from_this_canvas(self) -> None:
+        canvas_id = self._share()
+        doc = team_canvas.load_canvas(canvas_id)["snapshot"]
+        deleted = doc["images"][0]
+        doc["images"] = []
+        team_canvas.save_canvas(MEMBER, canvas_id, doc, 1, "user_delete")
+        self.assertFalse(team_canvas.is_shared_canvas_asset(deleted["url"]))
+        doc["images"] = [deleted]
+        self.assertEqual(team_canvas.save_canvas(MEMBER, canvas_id, doc, 2, "update"), (True, 3, None))
+
+    def test_text_mentioning_a_url_does_not_authorize_restoring_it(self) -> None:
+        canvas_id = self._share()
+        doc = team_canvas.load_canvas(canvas_id)["snapshot"]
+        secret = "/ai-images/stranger/secret.png"
+        doc["texts"] = [{"id": "t1", "pageId": "p1", "text": secret, "x": 0, "y": 0, "width": 1, "height": 1}]
+        team_canvas.save_canvas(MEMBER, canvas_id, doc, 1, "update")
+        doc["texts"] = []
+        team_canvas.save_canvas(MEMBER, canvas_id, doc, 2, "user_delete")
+        doc["images"].append({"id": "x", "pageId": "p1", "url": secret, "x": 0, "y": 0, "width": 1, "height": 1})
+        self.assertEqual(team_canvas.save_canvas(MEMBER, canvas_id, doc, 3, "update")[2], "foreign_asset_rejected")
+
     def test_foreign_asset_must_come_from_a_shared_canvas(self) -> None:
         canvas_id = self._share()
         doc = team_canvas.load_canvas(canvas_id)["snapshot"]

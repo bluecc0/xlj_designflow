@@ -6258,7 +6258,8 @@ async def editor_save_snapshot(request: Request):
     foreign_assets = [url for url in foreign_assets if not is_shared_canvas_asset(url)]
     if foreign_assets:
         saved_raw, _ = load_editor_snapshot(user["id"])
-        foreign_assets = [url for url in foreign_assets if url not in (saved_raw or "")]
+        saved_paths = _editor_snapshot_saved_image_paths(saved_raw)
+        foreign_assets = [url for url in foreign_assets if _editor_asset_path(url) not in saved_paths]
     if foreign_assets:
         raise HTTPException(409, "画板包含其他用户的图片，已拒绝保存，请刷新页面")
     base_revision = body.get("base_revision") if isinstance(body, dict) else None
@@ -6338,6 +6339,25 @@ def editor_load_snapshot(request: Request):
         }
     except Exception:
         return {"snapshot": None, "revision": 0}
+
+
+def _editor_asset_path(raw_url: str) -> str:
+    try:
+        return unquote(urlsplit(raw_url).path if "://" in raw_url else raw_url.split("?", 1)[0])
+    except Exception:
+        return raw_url
+
+
+def _editor_snapshot_saved_image_paths(saved_raw: str | None) -> set[str]:
+    """之前已保存为图片记录的站内图片路径；只看图片记录，文字等字段里出现的 URL 不算授权。"""
+    try:
+        snapshot = json.loads(saved_raw) if saved_raw else None
+    except Exception:
+        return set()
+    if isinstance(snapshot, dict) and isinstance(snapshot.get("designflowCanvasDocument"), dict):
+        snapshot = snapshot["designflowCanvasDocument"]
+    # 传入不可能匹配的用户 id，取出全部带归属的图片地址
+    return {_editor_asset_path(url) for url in _editor_snapshot_foreign_asset_urls(snapshot, "\0")}
 
 
 def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[str]:

@@ -138,6 +138,7 @@ export function App() {
   useEffect(() => () => { feedback.resolve('canvas-save'); feedback.resolve('canvas-load'); }, []);
 
 
+  const teamSwitching = useTeamStore((s) => s.switching)
   const claimOperation = useAIOperationStore((s) => s.claimOperation)
   const updateOperation = useAIOperationStore((s) => s.updateOperation)
   const releaseOperation = useAIOperationStore((s) => s.releaseOperation)
@@ -1316,6 +1317,8 @@ export function App() {
               isResolvingConflictRef.current = false
               clearTimeout(conflictRetryTimerRef.current)
               mergeConflictDocument(converted, Number(data.revision || useCanvasStore.getState().revision + 1))
+              // 团队画布合并了别人的修改：撤销记录是整份快照，保留会在撤销时抹掉别人的修改
+              if (useTeamStore.getState().source.kind === 'team') useHistoryStore.getState().clear()
               setSaveStatus(useCanvasStore.getState().isDirty ? 'saving' : 'saved')
               return
             }
@@ -1498,7 +1501,7 @@ export function App() {
       return null
     },
     onSwitched: () => {
-      setSaveStatus('saved')
+      setSaveStatus(useCanvasStore.getState().isDirty ? 'saving' : 'saved')
       const queued = pendingHostCommandsRef.current
       pendingHostCommandsRef.current = []
       for (const cmd of queued) window.dispatchEvent(new MessageEvent('message', { data: cmd }))
@@ -1713,6 +1716,18 @@ export function App() {
         }} />
         <TeamActivityPanel />
       </div>
+
+      {/* 切换画布期间锁住画布，避免新修改被即将加载的文档覆盖 */}
+      {teamSwitching && (
+        <div
+          aria-hidden
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation() }}
+          style={{ position: 'absolute', inset: 0, zIndex: 9000, cursor: 'progress' }}
+        />
+      )}
 
       {/* 点阵网格背景 */}
       <CanvasGrid zoom={zoom} panX={panX} panY={panY} />
