@@ -144,9 +144,24 @@ def _shape_count(doc: dict) -> int:
     return sum(len(doc.get(key) or []) for key in _RECORD_KEYS)
 
 
-def _is_generated(image: dict) -> bool:
+# 画布内 AI 操作的结果图会在 meta.operation 标明来源
+_OPERATION_LABELS = {
+    "outpainting": "扩图",
+    "matting": "抠图",
+    "upscale": "高清放大",
+    "vectorize": "矢量化",
+    "quick-edit": "快捷编辑",
+    "outfit-change": "AI 换装",
+}
+
+
+def _image_operation(image: dict) -> str:
+    """返回新增图片的来源：画布内 AI 操作名、generate（生图）或空字符串（普通导入）。"""
     meta = image.get("meta") if isinstance(image.get("meta"), dict) else {}
-    return bool(meta.get("model") or meta.get("jobId") or meta.get("prompt"))
+    operation = str(meta.get("operation") or "")
+    if operation in _OPERATION_LABELS:
+        return operation
+    return "generate" if meta.get("model") or meta.get("jobId") or meta.get("prompt") else ""
 
 
 def _image_brief(image: dict) -> dict:
@@ -156,7 +171,8 @@ def _image_brief(image: dict) -> dict:
         "name": image.get("name") or "",
         "url": image.get("url") or "",
         "model": meta.get("model") or "",
-        "prompt": str(meta.get("prompt") or meta.get("originalPrompt") or "")[:300],
+        "prompt": str(meta.get("prompt") or meta.get("originalPrompt") or meta.get("resolvedPrompt") or "")[:300],
+        "operation": _image_operation(image),
     }
 
 
@@ -165,12 +181,17 @@ def diff_activity(old: dict, new: dict) -> list[tuple[str, str, dict]]:
     entries: list[tuple[str, str, dict]] = []
     old_images, new_images = _records_by_id(old, "images"), _records_by_id(new, "images")
     added = [new_images[i] for i in new_images if i not in old_images]
-    generated = [im for im in added if _is_generated(im)]
-    imported = [im for im in added if not _is_generated(im)]
+    generated = [im for im in added if _image_operation(im) == "generate"]
+    imported = [im for im in added if not _image_operation(im)]
     if generated:
         models = sorted({_image_brief(im)["model"] for im in generated if _image_brief(im)["model"]})
         summary = f"生成了 {len(generated)} 张图片" + (f"（{'、'.join(models)}）" if models else "")
         entries.append(("generate", summary, {"images": [_image_brief(im) for im in generated]}))
+    for operation, label in _OPERATION_LABELS.items():
+        results = [im for im in added if _image_operation(im) == operation]
+        if results:
+            entries.append(("generate", f"用{label}生成了 {len(results)} 张图片",
+                            {"operation": operation, "images": [_image_brief(im) for im in results]}))
     if imported:
         entries.append(("add", f"添加了 {len(imported)} 张图片", {"images": [_image_brief(im) for im in imported]}))
 

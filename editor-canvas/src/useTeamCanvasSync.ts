@@ -1,8 +1,9 @@
 import { useEffect, type MutableRefObject } from 'react'
 import { feedback, notifyError } from './utils/feedback'
 import { useCanvasStore } from './store/canvasStore'
+import { setViewportNamespace } from './store/viewportStore'
 import { useHistoryStore } from './store/historyStore'
-import { useTeamStore, type OpenTarget, type TeamCanvasMeta } from './store/teamStore'
+import { useTeamStore, type CanvasSource, type OpenTarget, type TeamCanvasMeta } from './store/teamStore'
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 import { requestSnapshot } from './utils/snapshotSave'
 import { listTeamCanvases, teamHeartbeat, teamSnapshotUrl, TeamCanvasGoneError } from './services/teamCanvasService'
@@ -10,6 +11,23 @@ import { listTeamCanvases, teamHeartbeat, teamSnapshotUrl, TeamCanvasGoneError }
 const POLL_INTERVAL = 4000
 const LIST_INTERVAL = 15000
 const SAVE_WAIT_TIMEOUT = 15000
+const LAST_SOURCE_KEY = `designflow_canvas_last_source_${new URLSearchParams(window.location.search).get('user_id') || 'default'}`
+
+// 记住上次打开的是个人画布还是哪个团队画布，刷新或重新打开时回到那里
+function readLastTeamCanvas(): string | null {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAST_SOURCE_KEY) || 'null')
+    return saved?.kind === 'team' && typeof saved.id === 'string' ? saved.id : null
+  } catch {
+    return null
+  }
+}
+
+function writeLastSource(source: CanvasSource) {
+  try {
+    localStorage.setItem(LAST_SOURCE_KEY, JSON.stringify(source))
+  } catch {}
+}
 
 interface SyncRefs {
   snapshotHydratedRef: MutableRefObject<boolean>
@@ -86,6 +104,26 @@ export function useTeamCanvasSync(options: Options) {
     return () => clearInterval(timer)
   }, [])
 
+  // 个人画布加载完成后，如果上次停在团队画布，直接切回去
+  useEffect(() => {
+    const lastTeamId = readLastTeamCanvas()
+    if (!lastTeamId) return
+    const started = Date.now()
+    const timer = setInterval(() => {
+      if (snapshotHydratedRef.current) {
+        clearInterval(timer)
+        useTeamStore.getState().requestOpen({ kind: 'team', id: lastTeamId, restore: true })
+      } else if (Date.now() - started > 30000) {
+        clearInterval(timer)
+      }
+    }, 50)
+    return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => useTeamStore.subscribe((s, prev) => {
+    if (s.source !== prev.source) writeLastSource(s.source)
+  }), [])
+
   // 处理切换请求：先等当前文档保存完成，再加载目标文档
   useEffect(() => {
     if (!pendingTarget || useTeamStore.getState().switching) return
@@ -123,6 +161,7 @@ export function useTeamCanvasSync(options: Options) {
         if (!doc) throw new Error('无法识别画布格式')
 
         useHistoryStore.getState().clear()
+        setViewportNamespace(target.kind === 'team' ? `team_${target.id}` : '')
         // 先切换来源再加载文档，避免团队画布的页面被记成个人画布结构
         useTeamStore.setState((s) => ({
           source: target.kind === 'team' ? { kind: 'team', id: target.id } : { kind: 'personal' },
@@ -138,8 +177,12 @@ export function useTeamCanvasSync(options: Options) {
       } catch (error) {
         if (error instanceof TeamCanvasGoneError) {
           useTeamStore.setState((s) => ({ canvases: s.canvases.filter((c) => target.kind !== 'team' || c.id !== target.id) }))
+          // 恢复上次的团队画布时它已取消分享：安静地留在个人画布
+          if (target.kind === 'team' && target.restore) writeLastSource({ kind: 'personal' })
         }
-        notifyError(error, '画布暂时无法切换，请稍后再试。', { key: 'team-canvas-switch' })
+        if (!(error instanceof TeamCanvasGoneError && target.kind === 'team' && target.restore)) {
+          notifyError(error, '画布暂时无法切换，请稍后再试。', { key: 'team-canvas-switch' })
+        }
       } finally {
         snapshotHydratedRef.current = true
         useTeamStore.setState({ switching: false })

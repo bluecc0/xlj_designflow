@@ -94,6 +94,16 @@ class TeamCanvasTest(unittest.TestCase):
         self.assertTrue(team_canvas.list_versions(canvas_id))
         self.assertEqual(revision, 2)
 
+    def test_canvas_ai_operations_are_recorded_by_type(self) -> None:
+        old = {"pages": [{"id": "p1", "name": "画布"}], "images": []}
+        new = {"pages": [{"id": "p1", "name": "画布"}], "images": [
+            {"id": "m1", "url": "/ai-images/member/m.png", "meta": {"operation": "matting", "sourceImageId": "i1"}},
+            {"id": "o1", "url": "/ai-images/member/o.png", "meta": {"operation": "outfit-change", "model": "gpt-image-2"}},
+            {"id": "u1", "url": "/ai-images/member/u.png"},
+        ]}
+        summaries = [summary for _, summary, _ in team_canvas.diff_activity(old, new)]
+        self.assertEqual(summaries, ["用抠图生成了 1 张图片", "用AI 换装生成了 1 张图片", "添加了 1 张图片"])
+
     def test_foreign_asset_must_come_from_a_shared_canvas(self) -> None:
         canvas_id = self._share()
         doc = team_canvas.load_canvas(canvas_id)["snapshot"]

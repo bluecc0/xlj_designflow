@@ -377,6 +377,7 @@ export function App() {
         naturalHeight: result.height,
         locked: false,
         opacity: 1,
+        meta: { operation: 'outpainting', sourceImageId: target.id },
       })
 
       setOutpaintingImageId(null)
@@ -493,6 +494,7 @@ export function App() {
             naturalHeight: result.height,
             locked: false,
             opacity: 1,
+            meta: { operation: 'quick-edit', prompt: prompt.trim(), sourceImageId: targetImage.id },
           })
           setSelected([newImg.id], 'image')
           setQuickEditToast('快捷编辑生图完成')

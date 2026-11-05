@@ -7,7 +7,7 @@ export type CanvasSource = { kind: 'personal' } | { kind: 'team'; id: string }
 // 切换请求：由下拉菜单等发起，App 负责保存当前文档后再加载目标文档
 export type OpenTarget =
   | { kind: 'personal'; pageId?: string; createPage?: boolean; reload?: boolean }
-  | { kind: 'team'; id: string }
+  | { kind: 'team'; id: string; restore?: boolean }
 
 export interface TeamCanvasMeta {
   id: string

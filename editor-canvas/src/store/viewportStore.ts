@@ -37,9 +37,12 @@ function getGlobalStorageKey(): string {
   return `designflow_canvas_viewport_${getUserId()}`
 }
 
+// 团队画布的视口单独存，避免与个人画布中同 id 的页面互相覆盖
+let viewportNamespace = ''
+
 function getPageStorageKey(pageId?: string): string {
   const pid = pageId || 'default'
-  return `designflow_canvas_page_viewport_${getUserId()}_${pid}`
+  return `designflow_canvas_page_viewport_${getUserId()}_${viewportNamespace ? `${viewportNamespace}_` : ''}${pid}`
 }
 
 function getInitialViewport() {
@@ -74,7 +77,7 @@ let saveTimer: any = null
 function saveViewportToStorage(zoom: number, panX: number, panY: number) {
   try {
     const payload = JSON.stringify({ zoom, panX, panY, updatedAt: Date.now() })
-    localStorage.setItem(getGlobalStorageKey(), payload)
+    if (!viewportNamespace) localStorage.setItem(getGlobalStorageKey(), payload)
     if (activePageIdRef) {
       localStorage.setItem(getPageStorageKey(activePageIdRef), payload)
     }
@@ -103,6 +106,15 @@ export function hasLocalStoredViewport(): boolean {
   } catch {
     return false
   }
+}
+
+// 切换个人画布 / 团队画布前调用：先把当前视口存到旧的命名空间，再切换
+export function setViewportNamespace(namespace: string) {
+  if (namespace === viewportNamespace) return
+  clearTimeout(saveTimer)
+  const { zoom, panX, panY } = useViewportStore.getState()
+  saveViewportToStorage(zoom, panX, panY)
+  viewportNamespace = namespace
 }
 
 export function setActivePageForViewport(pageId: string) {
