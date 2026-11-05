@@ -6,6 +6,8 @@ import unittest
 import zipfile
 from pathlib import Path
 
+from PIL import Image
+
 from backend.agent_skill_loader import list_agent_skills, load_agent_skill
 from backend.user_skill_store import (
     SkillUploadError,
@@ -114,32 +116,41 @@ class UserSkillStoreTest(unittest.TestCase):
         self.assertIn("新规则", (self.alice / "poster-main" / "SKILL.md").read_text(encoding="utf-8"))
         self.assertEqual([p.name for p in self.alice.iterdir()], ["poster-main"])
 
-    def test_standard_skill_with_scripts_passes_and_skips_non_text(self) -> None:
+    def test_keeps_scripts_data_and_images_skips_other_files(self) -> None:
+        png = io.BytesIO()
+        Image.new("RGB", (4, 4)).save(png, format="PNG")
         name, warnings = self._install(_zip({
             "pdf/SKILL.md": SKILL_MD,
             "pdf/scripts/run.py": "print(1)",
-            "pdf/assets/logo.png": b"\x89PNG",
+            "pdf/scripts/__pycache__/run.cpython-313.pyc": b"\x00",
+            "pdf/references/index.jsonl": '{"id": "01"}',
+            "pdf/assets/pose/0001.png": png.getvalue(),
+            "pdf/tool.exe": b"MZ",
             "pdf/LICENSE.txt": "MIT",
         }))
         skill_dir = self.alice / name
-        self.assertTrue((skill_dir / "LICENSE.txt").exists())
-        self.assertFalse((skill_dir / "scripts").exists())
-        self.assertFalse((skill_dir / "assets").exists())
-        self.assertTrue(any("已跳过" in w for w in warnings))
+        self.assertEqual((skill_dir / "scripts" / "run.py").read_text(encoding="utf-8"), "print(1)")
+        self.assertFalse((skill_dir / "scripts" / "__pycache__").exists())
+        self.assertTrue((skill_dir / "references" / "index.jsonl").exists())
+        self.assertEqual((skill_dir / "assets" / "pose" / "0001.png").read_bytes(), png.getvalue())
+        self.assertFalse((skill_dir / "tool.exe").exists())
+        self.assertTrue(any("tool.exe" in w and "已跳过" in w for w in warnings))
+        with self.assertRaises(SkillUploadError):
+            self._install(_zip({"SKILL.md": SKILL_MD, "assets/fake.png": b"\x89PNG"}), overwrite=True)
 
     def test_overlong_content_warns_instead_of_rejecting(self) -> None:
         _, warnings = self._install(_zip({"SKILL.md": SKILL_MD + "字" * 30000}))
         self.assertTrue(any("不会被使用" in w for w in warnings))
 
     def test_admin_listing_and_detail_show_upload_record(self) -> None:
-        self._install(_zip({"poster/SKILL.md": SKILL_MD, "poster/run.sh": "echo"}), filename="poster.zip")
+        self._install(_zip({"poster/SKILL.md": SKILL_MD, "poster/run.exe": b"MZ"}), filename="poster.zip")
         self._install(_zip({"SKILL.md": SKILL_MD}), user_dir=self.bob)
         items = list_all_user_skills(self.base)
         self.assertEqual(sorted(item["user_id"] for item in items), ["alice", "bob"])
         alice_item = next(item for item in items if item["user_id"] == "alice")
         self.assertEqual(alice_item["title"], "电商主图")
         self.assertEqual(alice_item["original_filename"], "poster.zip")
-        self.assertEqual(alice_item["skipped_files"], ["run.sh"])
+        self.assertEqual(alice_item["skipped_files"], ["run.exe"])
         self.assertEqual(alice_item["file_count"], 1)
         detail = read_user_skill_detail(self.alice, "poster-main")
         self.assertEqual([f["path"] for f in detail["files"]], ["SKILL.md"])

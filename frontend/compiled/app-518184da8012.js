@@ -3792,12 +3792,12 @@ const AgentToolCard = ({
     summary = count + ' 张' + (args.aspect_ratio && args.aspect_ratio !== 'auto' ? ' · ' + args.aspect_ratio : '') + (args.group_type === 'set' ? ' · 套图' : args.group_type === 'variant' ? ' · 多方案' : '');
   } else if (m.tool === 'special_compose') {
     summary = [args.sku, args.name].filter(Boolean).join(' · ');
-  } else if (m.tool === 'load_skill' || m.tool === 'read_skill_file') {
+  } else if (m.tool === 'load_skill' || m.tool === 'read_skill_file' || m.tool === 'use_skill_image') {
     summary = args.name || '';
   } else if (m.tool === 'remember') {
     summary = args.content || '';
   }
-  var compact = m.tool === 'analyze_image' || m.tool === 'load_skill' || m.tool === 'read_skill_file' || m.tool === 'remember';
+  var compact = m.tool === 'analyze_image' || m.tool === 'load_skill' || m.tool === 'read_skill_file' || m.tool === 'use_skill_image' || m.tool === 'remember';
   var doneIdx = {};
   images.forEach(function (im) {
     doneIdx[im.position || 0] = true;
@@ -8191,6 +8191,7 @@ const AGENT2_TOOL_LABELS = {
   analyze_image: '看图',
   load_skill: '加载技能',
   read_skill_file: '读取技能资料',
+  use_skill_image: '读取技能参考图',
   special_compose: '特殊品合成',
   remember: '记忆',
   remove_background: '抠图',

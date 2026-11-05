@@ -12,6 +12,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 from ..agent_skill_loader import SKILL_CONTEXT_MAX_CHARS, build_skill_context, load_agent_skill, load_reference_text
 from ..ai_image import compress_image_to_data_url, save_user_refs
@@ -211,7 +212,22 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
     if bad:
         return {"error": f"model 只能是 {', '.join(IMAGE_MODELS)}（收到 {', '.join(bad)}）"}
     variant = "sunburst" if args.get("variant") == "sunburst" else "flare"
-    refs = [_artifact_bytes(ctx, rid) for rid in (args.get("reference_image_ids") or [])]
+    shared_ids = [str(rid) for rid in (args.get("reference_image_ids") or [])]
+    # 技能参考图（动作包等）通常一张图配一张，放在整批共用参考里时模型往往只登记了一张就让所有图共用
+    if len(items) > 1 and any((store.get_artifact(rid, ctx.user["id"]) or {}).get("kind") == "skill_ref"
+                              for rid in shared_ids):
+        ctx.state["images"] = used
+        return {"error": "技能参考图不能放在整批共用的 reference_image_ids 里：请写进每一项自己的 reference_image_ids，"
+                         "每张放它自己要用的那张（连同人物、产品、场景图）；确实每张都用同一张时，也在每一项里分别填"}
+    registered = set(ctx.state.get("skill_refs") or [])
+    used_ids = set(shared_ids) | {str(rid) for item in items for rid in (item.get("reference_image_ids") or [])}
+    if ctx.state.get("skill_ref_attempted") and not registered & used_ids:
+        ctx.state["images"] = used
+        if not registered:
+            return {"error": "这一轮要用技能参考图，但还没有登记成功：按 use_skill_image 返回的 nearby 或技能数据里的真实路径重新登记"}
+        return {"error": "这一轮登记了技能参考图（" + "、".join(sorted(registered)) + "）却没有传进任何一张："
+                         "把每张要用的那张写进它自己的 reference_image_ids"}
+    refs = [_artifact_bytes(ctx, rid) for rid in shared_ids]
     group_type = args.get("group_type") if args.get("group_type") in {"set", "variant"} else None
     group_id = ("grp_" + uuid.uuid4().hex[:8]) if group_type else None
     results = await asyncio.gather(*[
@@ -266,9 +282,13 @@ SKILL_PLATFORM_NOTE = """
 - 技能里提到的生图工具（MCP、API、命令行）都换成 generate_image：画幅传 aspect_ratio，参考图传对话里的图片 ID，用户没指定模型时不传 model。一次调用只有一个画幅，画幅不同的几张按画幅分几次调用；互不依赖的几张放进同一次调用。
 - 技能规定了 prompt 写法时按技能写，可以写成完整的英文 prompt，不受"以用户原话为主体"的限制；label 写中文的镜头名或内容名。
 - 技能要用产品图、用户给了货号却没给图时，先用 find_product_images 取图再作参考图。
+- 技能要用自己目录里的图片（动作参考、示例图等）作参考或要求打开查看时，先用 use_skill_image 登记成图片 ID，再传给 generate_image 的 reference_image_ids 或 analyze_image；技能规定每张图都要用某张参考图（例如每张一个动作包原图）时，每一张都要真的把那张图登记并传进去，不能只用文字描述代替；技能参考图不够每张一张时，按技能规则跨分类挑整体兼容的，或者重复使用，并在回复里一句话说明；每张图只传它自己要用的那几张参考图（用每一项的 reference_image_ids），同时要把用户给的人物图、产品图、场景图一起放进去。在 prompt 里写清每张参考图的职责（第几张参考图只取动作和机位、第几张只取人物身份等），编号严格按这一张的 reference_image_ids 顺序；同一张图承担几个职责（例如人物图里穿的就是要展示的衣服）时只传一次，在同一个编号下写明它的几个职责。
+- 技能要求首次生图前确认生图方式、模型、分辨率等并保存设置时：本平台没有外部 API，直接用平台模型和技能建议的比例，不要用 ask_user 确认生图方式、模型、分辨率、格式，直接生成；用户主动指定的模型、比例、分辨率，用 remember 记成偏好，代替写设置文件。
+- 技能里要在用户本机运行、写入本机路径或修改技能文件的维护流程（同步素材库、重建索引等），这里做不了：告诉用户需要在自己电脑上运行，完成后重新上传技能。
 - 不写文件：技能要求保存到输出目录、写 prompt 记录、日志或结果表文件时都跳过。平台会把每张图的 prompt 和参数记在卡片上，图片自动放进画布。
-- 不运行脚本，也不改写技能文件。技能要求运行脚本时，先用 read_skill_file 读脚本，读得到就按脚本逻辑自己完成（例如按脚本里的选项随机抽取）；读不到就告诉用户这个功能在这里用不了。
+- 不运行脚本，也不改写技能文件。技能要求运行脚本时，先用 read_skill_file 读脚本，读得到就按脚本逻辑自己完成（例如按脚本里的选项随机抽取；查询脚本就用 read_skill_file 读它查的数据文件，按同样的条件自己筛选）；读不到就告诉用户这个功能在这里用不了。
 - 不自评打分，不自动重新生成：技能要求出图后打分迭代时，出完图就交给用户，请用户指出不满意的地方；用户反馈后，按技能的评分表或排错说明找到对应部分，在上一张的 prompt 原文上只替换那部分的句子，其余一字不改，重新生成；不要把上一张图当参考图（会把旧的姿势、构图和光线带过来），除非用户要保持同一个人物或技能要求这样做。技能要求先定调再批量出（例如套图先出主视觉）时，先出定调图，请用户确认后再出其余几张。
+- 用户只要提示词、不要出图时，不调用 generate_image，按技能要求的格式（例如中英文各一版）直接在回复里给出完整提示词。
 - 出图后的回复仍按平台规则保持简短，不贴 prompt 和评分表；按默认值补了什么、因检查改了什么，一句话说明。技能列了已知局限且这次画面涉及时，提醒一句并给出技能里写的办法。用户要 prompt 时再给。
 """
 
@@ -285,6 +305,49 @@ async def read_skill_file(ctx: ToolContext, args: dict) -> dict:
     if text is None:
         return {"error": "文件不存在或不在技能目录内"}
     return {"path": args.get("path"), "content": text[:SKILL_CONTEXT_MAX_CHARS]}
+
+
+SKILL_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+MAX_SKILL_IMAGES_PER_CALL = 12
+
+
+def _nearby_skill_images(root: Path, target: Path, limit: int = 20) -> list[str]:
+    """路径写错时，列出最近一级存在的目录下的图片，方便模型改用真实路径。"""
+    folder = target if target.is_dir() else target.parent
+    while not folder.is_dir() and folder != root:
+        folder = folder.parent
+    if not folder.is_relative_to(root):
+        folder = root
+    found = sorted(p for p in folder.rglob("*") if p.suffix.lower() in SKILL_IMAGE_SUFFIXES and p.is_file())
+    return [p.relative_to(root).as_posix() for p in found[:limit]]
+
+
+async def use_skill_image(ctx: ToolContext, args: dict) -> dict:
+    """把技能目录里的图片（动作参考、示例图等）登记成对话图片 ID，供参考图和看图使用。
+    不发事件：不进对话卡片，也不放进画布。"""
+    skill = _load_skill(ctx, args.get("name"))
+    root = skill.source_path.resolve()
+    paths = [str(p or "").strip().lstrip("/") for p in (args.get("paths") or [])][:MAX_SKILL_IMAGES_PER_CALL]
+    ctx.state["skill_ref_attempted"] = True
+    images, errors = [], []
+    for rel in paths:
+        src = (root / rel).resolve()
+        if not rel or not src.is_relative_to(root) or src.suffix.lower() not in SKILL_IMAGE_SUFFIXES or not src.is_file():
+            errors.append({"path": rel, "error": "不是技能目录里的图片", "nearby": _nearby_skill_images(root, src)})
+            continue
+        # 复制一份：技能被删除或重新上传后，会话里的图片 ID 仍然可用
+        name = f"{uuid.uuid4().hex}{src.suffix.lower()}"
+        out = settings.output_path / "ai-images" / ctx.user["id"] / "skill-refs" / name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(out.write_bytes, await asyncio.to_thread(src.read_bytes))
+        artifact = store.create_artifact(
+            session_id=ctx.session_id, user_id=ctx.user["id"], kind="skill_ref",
+            url=f"/ai-images/{quote(ctx.user['id'])}/skill-refs/{name}", path=str(out),
+            label=f"{skill.name} {rel}", source_tool_call_id=ctx.call_id,
+            meta={"operation": "skill_ref", "skill": skill.name, "path": rel})
+        images.append({"id": artifact["id"], "path": rel})
+    ctx.state.setdefault("skill_refs", []).extend(i["id"] for i in images)
+    return {"images": images, "failed": errors}
 
 
 # ── special_compose（特殊品，编排逻辑从前端下沉到这里）──────────────────────
@@ -436,6 +499,15 @@ def build_tools() -> dict[str, Tool]:
              {"type": "object", "properties": {"name": {"type": "string"}, "path": {"type": "string"}},
               "required": ["name", "path"]},
              read_skill_file),
+        Tool("use_skill_image",
+             "把技能目录里的图片（例如动作参考图、示例图）登记成图片 ID，之后可以作为 generate_image 的参考图，"
+             "或用 analyze_image 查看。只登记，不会显示给用户，也不放进画布。",
+             {"type": "object", "properties": {
+                 "name": {"type": "string", "description": "技能名"},
+                 "paths": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_SKILL_IMAGES_PER_CALL,
+                           "description": "技能目录里的图片相对路径，例如 assets/xxx/0007.jpg"}},
+              "required": ["name", "paths"]},
+             use_skill_image),
         Tool("remember",
              "管理用户的长期记忆（跨会话生效）。add 新增；update 修改已有的一条（填 memory_id）；"
              "delete 删除（填 memory_id）。只记长期偏好和用户提供的店铺、商品信息，不记一次性的需求。",

@@ -1,7 +1,8 @@
 """用户上传 Skill：校验压缩包 / SKILL.md，按用户目录安装和删除。
 
 只要符合标准 Skill 协议（一个带 name / description 的 SKILL.md）就放行。
-只保存 .md / .txt 文本并统一转存为 UTF-8，脚本等其它文件跳过不存、从不执行；
+文本（文档、数据、脚本源码）统一转存为 UTF-8，脚本只供 Agent 阅读、从不执行；
+参考图片原样保存（校验确实是图片），其它文件跳过不存；
 安装先写临时目录、校验通过后再整体替换，避免出现半个 Skill。
 每个 Skill 目录里的 .designflow.json 记录上传人、时间和提示，供管理员排查。
 """
@@ -17,16 +18,20 @@ import uuid
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
+from PIL import Image
+
 from .agent_skill_loader import SKILL_CONTEXT_MAX_CHARS, _SAFE_NAME_RE, parse_frontmatter
 
 
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-MAX_EXTRACTED_BYTES = 30 * 1024 * 1024
+MAX_UPLOAD_BYTES = 30 * 1024 * 1024
+MAX_EXTRACTED_BYTES = 60 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES = 500
-MAX_FILES = 50
+MAX_FILES = 300
 MANIFEST_NAME = ".designflow.json"
 MAX_SKILLS_PER_USER = 20
-ALLOWED_SUFFIXES = {".md", ".txt"}
+TEXT_SUFFIXES = {".md", ".txt", ".json", ".jsonl", ".yaml", ".yml", ".csv", ".py", ".sh", ".js"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+ALLOWED_SUFFIXES = TEXT_SUFFIXES | IMAGE_SUFFIXES
 _JUNK_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 _SCRIPT_HINT_RE = re.compile(r"scripts?/|\.py\b|\.sh\b|```(?:bash|sh|shell|python|zsh)", re.I)
 
@@ -65,12 +70,21 @@ def _decode_text(data: bytes, rel: str) -> str:
     raise SkillUploadError(f"{rel} 不是 UTF-8 或 GBK 编码的文本")
 
 
+def _check_image(data: bytes, rel: str) -> None:
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im.verify()
+    except Exception as exc:
+        raise SkillUploadError(f"{rel} 不是有效的图片") from exc
+
+
 def _is_junk(parts: tuple[str, ...]) -> bool:
-    return "__MACOSX" in parts or parts[-1] in _JUNK_NAMES or parts[-1].startswith("._")
+    return ("__MACOSX" in parts or "__pycache__" in parts or parts[-1] in _JUNK_NAMES
+            or parts[-1].startswith("._"))
 
 
 def _read_zip(data: bytes) -> tuple[dict[str, bytes], list[str]]:
-    """返回 (要保存的文本文件, 跳过的文件)。"""
+    """返回 (要保存的文件, 跳过的文件)。"""
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile as exc:
@@ -109,7 +123,7 @@ def _read_zip(data: bytes) -> tuple[dict[str, bytes], list[str]]:
     kept = [(rel, info) for rel, info in in_root if PurePosixPath(rel[-1]).suffix.lower() in ALLOWED_SUFFIXES]
     skipped = sorted("/".join(rel) for rel, info in in_root if PurePosixPath(rel[-1]).suffix.lower() not in ALLOWED_SUFFIXES)
     if len(kept) > MAX_FILES:
-        raise SkillUploadError(f"文本文件太多（{len(kept)} 个），最多 {MAX_FILES} 个")
+        raise SkillUploadError(f"文件太多（{len(kept)} 个），最多 {MAX_FILES} 个")
     files: dict[str, bytes] = {}
     for rel, info in kept:
         key = "SKILL.md" if rel == (rel[-1],) and rel[-1].lower() == "skill.md" else "/".join(rel)
@@ -147,7 +161,14 @@ def install_user_skill(
     else:
         raise SkillUploadError("只支持上传 .zip 压缩包或 SKILL.md 文件")
 
-    texts = {rel: _decode_text(content, rel) for rel, content in raw_files.items()}
+    texts: dict[str, str] = {}
+    images: dict[str, bytes] = {}
+    for rel, content in raw_files.items():
+        if PurePosixPath(rel).suffix.lower() in IMAGE_SUFFIXES:
+            _check_image(content, rel)
+            images[rel] = content
+        else:
+            texts[rel] = _decode_text(content, rel)
     meta, _body = parse_frontmatter(texts["SKILL.md"])
     raw_name = str(meta.get("name") or "").strip()
     if not raw_name:
@@ -171,7 +192,7 @@ def install_user_skill(
     warnings: list[str] = []
     if skipped:
         sample = "、".join(skipped[:3]) + (f" 等 {len(skipped)} 个文件" if len(skipped) > 3 else "")
-        warnings.append(f"{sample} 不是文本文件，已跳过；DesignFlow 只读取 .md / .txt，脚本不会执行")
+        warnings.append(f"{sample} 不是文本或图片文件，已跳过")
     declared = meta.get("references_with_image") or []
     if isinstance(declared, str):
         declared = [declared]
@@ -183,7 +204,7 @@ def install_user_skill(
     if context_chars > SKILL_CONTEXT_MAX_CHARS:
         warnings.append(f"技能内容约 {context_chars} 字，超过 {SKILL_CONTEXT_MAX_CHARS} 字的部分不会被使用")
     if _SCRIPT_HINT_RE.search(texts["SKILL.md"]):
-        warnings.append("技能里提到了脚本或命令，这些步骤在 DesignFlow 中不会执行")
+        warnings.append("技能里提到了脚本或命令，DesignFlow 不会执行脚本，只会按脚本内容由 Agent 自己完成")
 
     user_dir.mkdir(parents=True, exist_ok=True)
     tmp = user_dir / f".tmp-{uuid.uuid4().hex}"
@@ -192,6 +213,10 @@ def install_user_skill(
             target = _safe_target(tmp, rel)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
+        for rel, content in images.items():
+            target = _safe_target(tmp, rel)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
         (tmp / MANIFEST_NAME).write_text(json.dumps({
             "user_id": str(uploader.get("id") or ""),
             "username": str(uploader.get("username") or ""),
@@ -282,7 +307,7 @@ def read_user_skill_detail(user_dir: Path, name: str) -> dict | None:
         {
             "path": path.relative_to(skill_dir).as_posix(),
             "size": path.stat().st_size,
-            "content": path.read_text(encoding="utf-8", errors="replace"),
+            "content": "" if path.suffix.lower() in IMAGE_SUFFIXES else path.read_text(encoding="utf-8", errors="replace"),
         }
         for path in _skill_files(skill_dir)
     ]
