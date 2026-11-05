@@ -11,13 +11,48 @@ import {
   Archive,
   RotateCcw,
   Layers,
+  Share2,
+  Link2Off,
+  Users,
+  Loader2,
 } from 'lucide-react'
+import { feedback, notifyError } from '../utils/feedback'
+import { confirmAction } from '../utils/confirm'
 import { useCanvasStore } from '../store/canvasStore'
+import { useAIOperationStore } from '../store/aiOperationStore'
+import { useTeamStore, type TeamCanvasMeta } from '../store/teamStore'
+import { shareCanvasPage, unshareTeamCanvas } from '../services/teamCanvasService'
+import { refreshTeamCanvases } from '../useTeamCanvasSync'
 import type { CanvasPage } from '../types'
 
+const currentUserId = new URLSearchParams(window.location.search).get('user_id') || ''
+
+// 分享前等本地修改落盘，服务端才能拿到这页的最新内容
+function waitUntilSaved(timeoutMs = 10000) {
+  const started = Date.now()
+  return new Promise<void>((resolve, reject) => {
+    const check = () => {
+      if (!useCanvasStore.getState().isDirty) return resolve()
+      if (Date.now() - started > timeoutMs) return reject(new Error('画布还没保存完成，请稍后再分享'))
+      setTimeout(check, 100)
+    }
+    check()
+  })
+}
+
 export function PageDropdown() {
-  const pages = useCanvasStore((s) => s.pages)
-  const groups = useCanvasStore((s) => s.groups) || []
+  const storePages = useCanvasStore((s) => s.pages)
+  const storeGroups = useCanvasStore((s) => s.groups) || []
+  const source = useTeamStore((s) => s.source)
+  const personalPages = useTeamStore((s) => s.personalPages)
+  const personalGroups = useTeamStore((s) => s.personalGroups)
+  const teamCanvases = useTeamStore((s) => s.canvases)
+  const requestOpen = useTeamStore((s) => s.requestOpen)
+  // 打开团队画布时，store 里只有这一页；个人画布列表取自切换前保留的结构，只做跳转
+  const inTeam = source.kind === 'team'
+  const pages = inTeam ? personalPages : storePages
+  const groups = inTeam ? personalGroups : storeGroups
+  const [teamBusyId, setTeamBusyId] = useState<string | null>(null)
   const activePageId = useCanvasStore((s) => s.activePageId)
   const switchPage = useCanvasStore((s) => s.switchPage)
   const createPage = useCanvasStore((s) => s.createPage)
@@ -49,7 +84,12 @@ export function PageDropdown() {
 
   useEffect(() => cancelPendingPageSwitch, [isOpen])
 
-  const activePage = pages.find((p) => p.id === activePageId) || pages[0] || { id: 'page-1', name: '画布 1' }
+  useEffect(() => {
+    if (isOpen) refreshTeamCanvases()
+  }, [isOpen])
+
+  const activePage = (inTeam ? storePages[0] : pages.find((p) => p.id === activePageId))
+    || pages[0] || { id: 'page-1', name: '画布 1' }
 
   // 页面分类
   const unarchivedPages = pages.filter((p) => !p.archived)
@@ -108,8 +148,139 @@ export function PageDropdown() {
   }
 
   // 渲染单个画布行
+  const handleShare = async (page: CanvasPage) => {
+    if (useAIOperationStore.getState().state.status === 'running') {
+      feedback.show('有 AI 任务正在进行，完成后再分享', { tone: 'warn', key: 'team-share' })
+      return
+    }
+    if (!(await confirmAction({
+      title: `把「${page.name}」分享到团队？`,
+      message: '分享后它会移到「团队」文件夹，所有人都能查看和编辑，你可以随时取消分享。',
+      confirmText: '分享',
+    }))) return
+    setTeamBusyId(page.id)
+    try {
+      await waitUntilSaved()
+      const { canvas } = await shareCanvasPage(page.id)
+      useTeamStore.setState((s) => ({
+        canvases: [...s.canvases.filter((c) => c.id !== canvas.id), canvas],
+        personalPages: s.personalPages.filter((p) => p.id !== page.id),
+      }))
+      requestOpen({ kind: 'team', id: canvas.id })
+      feedback.show(`已把「${page.name}」分享到团队`, { tone: 'ok', key: 'team-share' })
+      setIsOpen(false)
+    } catch (error) {
+      notifyError(error, '暂时无法分享，请稍后再试。', { key: 'team-share' })
+    } finally {
+      setTeamBusyId(null)
+    }
+  }
+
+  const handleUnshare = async (canvas: TeamCanvasMeta) => {
+    if (!(await confirmAction({
+      title: `取消分享「${canvas.name}」？`,
+      message: '所有人的修改都会保留并回到你的个人画布，其他人将无法再打开它。',
+      confirmText: '取消分享',
+      cancelText: '保留分享',
+      danger: true,
+    }))) return
+    setTeamBusyId(canvas.id)
+    try {
+      const isOpenNow = source.kind === 'team' && source.id === canvas.id
+      if (isOpenNow) await waitUntilSaved()
+      const { page_id } = await unshareTeamCanvas(canvas.id)
+      if (isOpenNow) useCanvasStore.setState({ isDirty: false })
+      useTeamStore.setState((s) => ({ canvases: s.canvases.filter((c) => c.id !== canvas.id) }))
+      // 服务端已把这页写回个人画布，重新加载个人画布才能看到
+      requestOpen({ kind: 'personal', pageId: page_id, reload: true })
+      feedback.show(`已取消分享「${canvas.name}」，画布已回到你的个人画布`, { tone: 'ok', key: 'team-share' })
+      setIsOpen(false)
+    } catch (error) {
+      notifyError(error, '暂时无法取消分享，请稍后再试。', { key: 'team-share' })
+    } finally {
+      setTeamBusyId(null)
+    }
+  }
+
+  const renderTeamItem = (canvas: TeamCanvasMeta) => {
+    const isActive = source.kind === 'team' && source.id === canvas.id
+    const isEditing = editingPageId === canvas.page_id
+    const isOwner = canvas.owner_id === currentUserId
+    return (
+      <div
+        key={canvas.id}
+        className={`canvas-page-item ${isActive ? 'is-selected' : ''}`}
+        onClick={() => {
+          if (isEditing) return
+          cancelPendingPageSwitch()
+          pendingPageSwitch.current = window.setTimeout(() => {
+            pendingPageSwitch.current = null
+            requestOpen({ kind: 'team', id: canvas.id })
+            setIsOpen(false)
+          }, isActive ? 500 : 0)
+        }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, height: 30, padding: '0 8px 0 26px', borderRadius: 8,
+          color: isActive ? '#0f172a' : '#334155', fontSize: 12, fontWeight: isActive ? 600 : 500, cursor: 'pointer',
+        }}
+      >
+        <div style={{ width: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          {isActive ? <Check size={12} strokeWidth={2.4} color="#0f172a" />
+            : <div style={{ width: 3, height: 3, borderRadius: '50%', backgroundColor: '#cbd5e1', opacity: 0.5 }} />}
+        </div>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 5 }}>
+          {isEditing ? (
+            <input
+              autoFocus
+              aria-label="画布名称"
+              value={editingPageName}
+              onChange={(e) => setEditingPageName(e.target.value)}
+              onBlur={() => handleFinishRenamePage(canvas.page_id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleFinishRenamePage(canvas.page_id)
+                if (e.key === 'Escape') setEditingPageId(null)
+              }}
+              onClick={(e) => e.stopPropagation()}
+              style={renameInputStyle}
+            />
+          ) : (
+            <>
+              <span
+                onDoubleClick={(e) => isActive && handleStartRenamePage(canvas.page_id, activePage.name, e)}
+                title={isActive ? '双击重命名' : canvas.name}
+                style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', letterSpacing: '-0.01em' }}
+              >
+                {isActive ? activePage.name : canvas.name}
+              </span>
+              <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 500, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                {isOwner ? '我' : canvas.owner_name}
+              </span>
+            </>
+          )}
+        </div>
+        {isOwner && !isEditing && (
+          <div className="canvas-item-actions" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              disabled={teamBusyId !== null}
+              onClick={() => handleUnshare(canvas)}
+              style={iconButtonStyle}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              title="取消分享，画布回到我的个人画布"
+            >
+              {teamBusyId === canvas.id
+                ? <Loader2 size={12} color="#64748b" style={{ animation: 'spin 1s linear infinite' }} />
+                : <Link2Off size={12} strokeWidth={1.8} color="#64748b" />}
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const renderPageItem = (page: CanvasPage, isArchived = false, isIndented = false) => {
-    const isActive = page.id === activePageId
+    const isActive = !inTeam && page.id === activePageId
     const isEditing = editingPageId === page.id
 
     return (
@@ -122,9 +293,10 @@ export function PageDropdown() {
             cancelPendingPageSwitch()
             pendingPageSwitch.current = window.setTimeout(() => {
               pendingPageSwitch.current = null
-              switchPage(page.id)
+              if (inTeam) requestOpen({ kind: 'personal', pageId: page.id })
+              else switchPage(page.id)
               setIsOpen(false)
-            }, 500)
+            }, inTeam ? 0 : 500)
           }
         }}
         style={{
@@ -180,8 +352,8 @@ export function PageDropdown() {
             />
           ) : (
             <span
-              onDoubleClick={(e) => handleStartRenamePage(page.id, page.name, e)}
-              title="双击重命名"
+              onDoubleClick={(e) => !inTeam && handleStartRenamePage(page.id, page.name, e)}
+              title={inTeam ? page.name : '双击重命名'}
               style={{
                 display: 'block',
                 overflow: 'hidden',
@@ -197,10 +369,31 @@ export function PageDropdown() {
         </div>
 
         {/* 仅在悬浮或重命名时展示操作项（通过 CSS 纯净淡入） */}
+        {!inTeam && (
         <div
           className={`canvas-item-actions ${isEditing ? 'force-visible' : ''}`}
           onClick={(e) => e.stopPropagation()}
         >
+          {/* 分享到团队 */}
+          {!isArchived && !isEditing && (
+            <button
+              type="button"
+              disabled={teamBusyId !== null}
+              onClick={(e) => {
+                e.stopPropagation()
+                handleShare(page)
+              }}
+              style={iconButtonStyle}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              title="分享到团队，所有人都能查看和编辑"
+            >
+              {teamBusyId === page.id
+                ? <Loader2 size={12} color="#64748b" style={{ animation: 'spin 1s linear infinite' }} />
+                : <Share2 size={12} strokeWidth={1.8} color="#64748b" />}
+            </button>
+          )}
+
           {!isEditing && (
             <button
               type="button"
@@ -280,6 +473,7 @@ export function PageDropdown() {
             </button>
           )}
         </div>
+        )}
       </div>
     )
   }
@@ -413,6 +607,19 @@ export function PageDropdown() {
               gap: 1,
             }}
           >
+            {/* 0. 团队文件夹：所有人分享的画布 */}
+            {teamCanvases.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 1, paddingBottom: 4, marginBottom: 3, borderBottom: '1px solid #f1f5f9' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, height: 30, padding: '0 8px', color: '#334155', fontSize: 12, fontWeight: 600 }}>
+                  <div style={{ width: 14, flexShrink: 0 }} />
+                  <Users size={13} strokeWidth={1.8} color="#4f46e5" style={{ flexShrink: 0 }} />
+                  <span style={{ letterSpacing: '-0.01em' }}>团队</span>
+                  <span style={{ fontSize: 10, fontWeight: 500, color: '#94a3b8' }}>({teamCanvases.length})</span>
+                </div>
+                {teamCanvases.map(renderTeamItem)}
+              </div>
+            )}
+
             {/* 1. 未分组的活跃画布 */}
             {rootPages.map((page) => renderPageItem(page, false, false))}
 
@@ -428,7 +635,7 @@ export function PageDropdown() {
                   <div
                     className="canvas-group-item"
                     onClick={() => {
-                      if (!isGroupEditing) {
+                      if (!isGroupEditing && !inTeam) {
                         toggleGroupCollapse(group.id)
                       }
                     }}
@@ -510,7 +717,7 @@ export function PageDropdown() {
                     </div>
 
                     {/* 分组悬浮操作项 */}
-                    <div
+                    {!inTeam && <div
                       className={`canvas-item-actions ${isGroupEditing ? 'force-visible' : ''}`}
                       onClick={(e) => e.stopPropagation()}
                     >
@@ -565,7 +772,7 @@ export function PageDropdown() {
                       >
                         <Trash2 size={12} strokeWidth={1.8} color="#64748b" />
                       </button>
-                    </div>
+                    </div>}
                   </div>
 
                   {/* 展开展示组内画板 */}
@@ -685,7 +892,12 @@ export function PageDropdown() {
               type="button"
               onClick={(e) => {
                 e.stopPropagation()
-                createPage()
+                if (inTeam) {
+                  requestOpen({ kind: 'personal', createPage: true })
+                  setIsOpen(false)
+                } else {
+                  createPage()
+                }
               }}
               style={{
                 flex: 1,
@@ -713,7 +925,7 @@ export function PageDropdown() {
             </button>
 
             {/* 新建组 (次要行动点) */}
-            <button
+            {!inTeam && <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation()
@@ -749,7 +961,7 @@ export function PageDropdown() {
             >
               <FolderPlus size={12} strokeWidth={1.8} color="#475569" />
               <span>新建组</span>
-            </button>
+            </button>}
           </div>
         </div>
       )}
@@ -767,4 +979,18 @@ const iconButtonStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   transition: 'background-color 120ms ease',
+}
+
+const renameInputStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 500,
+  padding: '1px 6px',
+  height: 22,
+  borderRadius: 4,
+  border: '1px solid #0f172a',
+  outline: 'none',
+  width: '100%',
+  color: '#0f172a',
+  backgroundColor: '#ffffff',
+  boxSizing: 'border-box',
 }

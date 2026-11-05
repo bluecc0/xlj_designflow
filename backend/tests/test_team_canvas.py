@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from fastapi import HTTPException
+
+from backend import job_store, team_canvas
+
+OWNER = {"id": "owner", "username": "小王"}
+MEMBER = {"id": "member", "username": "小李"}
+
+
+def _personal_doc() -> dict:
+    return {
+        "version": 2,
+        "pages": [{"id": "p1", "name": "春季主图", "order": 0}, {"id": "p2", "name": "草稿", "order": 1}],
+        "groups": [],
+        "activePageId": "p1",
+        "frames": [{"id": "f1", "pageId": "p1", "name": "画板 1", "x": 0, "y": 0, "width": 100, "height": 100}],
+        "images": [
+            {"id": "i1", "pageId": "p1", "url": "/ai-images/owner/a.png", "x": 0, "y": 0, "width": 10, "height": 10},
+            {"id": "i2", "pageId": "p2", "url": "/ai-images/owner/b.png", "x": 0, "y": 0, "width": 10, "height": 10},
+        ],
+        "texts": [],
+    }
+
+
+class TeamCanvasTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.patches = [
+            patch.object(job_store, "_DB_PATH", root / "jobs.db"),
+            patch.object(team_canvas.settings, "output_path", root / "output"),
+        ]
+        for p in self.patches:
+            p.start()
+        job_store.init_db()
+        team_canvas.init_team_canvas_tables()
+        team_canvas._invalidate_asset_index()
+        job_store.save_editor_snapshot("owner", json.dumps(_personal_doc()))
+
+    def tearDown(self) -> None:
+        for p in self.patches:
+            p.stop()
+        team_canvas._invalidate_asset_index()
+        self.tmp.cleanup()
+
+    def _personal(self, user_id: str = "owner") -> dict:
+        raw, _ = job_store.load_editor_snapshot(user_id)
+        return team_canvas._personal_v2(raw)
+
+    def _share(self) -> str:
+        return team_canvas.share_page(OWNER, "p1")["canvas"]["id"]
+
+    def test_share_moves_page_out_of_personal_canvas(self) -> None:
+        canvas_id = self._share()
+        personal = self._personal()
+        self.assertEqual([p["id"] for p in personal["pages"]], ["p2"])
+        self.assertEqual([im["id"] for im in personal["images"]], ["i2"])
+        loaded = team_canvas.load_canvas(canvas_id)
+        self.assertEqual([im["id"] for im in loaded["snapshot"]["images"]], ["i1"])
+        self.assertEqual(loaded["canvas"]["name"], "春季主图")
+        self.assertEqual([c["id"] for c in team_canvas.list_canvases()], [canvas_id])
+
+    def test_sharing_only_page_leaves_an_empty_personal_page(self) -> None:
+        team_canvas.share_page(OWNER, "p1")
+        team_canvas.share_page(OWNER, "p2")
+        personal = self._personal()
+        self.assertEqual(len(personal["pages"]), 1)
+        self.assertNotIn(personal["pages"][0]["id"], {"p1", "p2"})
+
+    def test_stale_revision_is_rejected_for_client_merge(self) -> None:
+        canvas_id = self._share()
+        doc = team_canvas.load_canvas(canvas_id)["snapshot"]
+        self.assertEqual(team_canvas.save_canvas(MEMBER, canvas_id, doc, 1, "update")[0], True)
+        self.assertEqual(team_canvas.save_canvas(OWNER, canvas_id, doc, 1, "update"), (False, 2, "stale_revision"))
+
+    def test_save_records_generation_and_deletion_with_restorable_payload(self) -> None:
+        canvas_id = self._share()
+        doc = team_canvas.load_canvas(canvas_id)["snapshot"]
+        doc["images"] = [{"id": "g1", "pageId": "p1", "url": "/ai-images/member/g.png", "x": 0, "y": 0,
+                          "width": 10, "height": 10, "meta": {"model": "gpt-image-2", "prompt": "海边"}}]
+        ok, revision, _ = team_canvas.save_canvas(MEMBER, canvas_id, doc, 1, "user_delete")
+        self.assertTrue(ok)
+        actions = {item["action"]: item for item in team_canvas.list_activity(canvas_id)}
+        self.assertIn("gpt-image-2", actions["generate"]["summary"])
+        self.assertEqual(actions["generate"]["username"], "小李")
+        self.assertEqual(actions["delete"]["payload"]["images"][0]["id"], "i1")
+        self.assertTrue(team_canvas.list_versions(canvas_id))
+        self.assertEqual(revision, 2)
+
+    def test_foreign_asset_must_come_from_a_shared_canvas(self) -> None:
+        canvas_id = self._share()
+        doc = team_canvas.load_canvas(canvas_id)["snapshot"]
+        doc["images"].append({"id": "x", "pageId": "p1", "url": "/ai-images/stranger/secret.png",
+                              "x": 0, "y": 0, "width": 1, "height": 1})
+        self.assertEqual(team_canvas.save_canvas(MEMBER, canvas_id, doc, 1, "update")[2], "foreign_asset_rejected")
+        self.assertTrue(team_canvas.is_shared_canvas_asset("/ai-images/owner/a.png"))
+
+    def test_only_owner_can_unshare_and_content_returns_with_member_images_copied(self) -> None:
+        canvas_id = self._share()
+        source = Path(team_canvas.settings.output_path) / "ai-images" / "member" / "g.png"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"png")
+        doc = team_canvas.load_canvas(canvas_id)["snapshot"]
+        doc["images"].append({"id": "g1", "pageId": "p1", "url": "/ai-images/member/g.png",
+                              "x": 0, "y": 0, "width": 1, "height": 1})
+        team_canvas.save_canvas(MEMBER, canvas_id, doc, 1, "update")
+        with self.assertRaises(HTTPException) as raised:
+            team_canvas.unshare_canvas(MEMBER, canvas_id)
+        self.assertEqual(raised.exception.status_code, 403)
+
+        team_canvas.unshare_canvas(OWNER, canvas_id)
+        personal = self._personal()
+        self.assertIn("p1", [p["id"] for p in personal["pages"]])
+        urls = {im["id"]: im["url"] for im in personal["images"]}
+        self.assertEqual(urls["g1"], "/ai-images/owner/team-imports/member/g.png")
+        self.assertTrue((Path(team_canvas.settings.output_path) / "ai-images/owner/team-imports/member/g.png").is_file())
+        self.assertEqual(team_canvas.list_canvases(), [])
+        self.assertFalse(team_canvas.is_shared_canvas_asset("/ai-images/owner/a.png"))
+        with self.assertRaises(HTTPException):
+            team_canvas.load_canvas(canvas_id)
+
+    def test_restore_version_bumps_revision(self) -> None:
+        canvas_id = self._share()
+        doc = team_canvas.load_canvas(canvas_id)["snapshot"]
+        doc["images"] = []
+        team_canvas.save_canvas(MEMBER, canvas_id, doc, 1, "user_delete")
+        version_id = team_canvas.list_versions(canvas_id)[0]["id"]
+        self.assertEqual(team_canvas.restore_version(OWNER, canvas_id, version_id), 3)
+        self.assertEqual([im["id"] for im in team_canvas.load_canvas(canvas_id)["snapshot"]["images"]], ["i1"])
+
+
+if __name__ == "__main__":
+    unittest.main()

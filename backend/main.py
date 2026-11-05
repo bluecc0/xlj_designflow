@@ -115,6 +115,8 @@ from .agent2.service import fail_stale_turns as agent2_fail_stale_turns
 from .agent2.tools import backfill_recovered_job as agent2_backfill_recovered_job
 from .agent2.tools import deliver_finished_jobs as agent2_deliver_finished_jobs
 from .agent2.store import init_tables as init_agent2_tables
+from .team_canvas import init_team_canvas_tables, is_shared_canvas_asset
+from .team_canvas import router as team_canvas_router
 from .user_skill_store import (
     MAX_UPLOAD_BYTES as MAX_SKILL_UPLOAD_BYTES,
     SkillUploadError,
@@ -378,6 +380,7 @@ def _ensure_ui_build() -> None:
 async def lifespan(app: FastAPI):
     init_db()
     init_agent2_tables()
+    init_team_canvas_tables()
     agent2_fail_stale_turns()
     app.state.outpainting_semaphore = asyncio.Semaphore(
         max(1, int(settings.bfl_outpainting_max_concurrency or 2))
@@ -554,6 +557,7 @@ app.add_middleware(
 )
 
 app.include_router(agent2_router)
+app.include_router(team_canvas_router)
 
 # 产品图库静态文件（前端预览用）
 if settings.product_library_path.exists():
@@ -823,8 +827,10 @@ def _safe_asset_owner_id(user_id: str) -> str:
     return safe or "anonymous"
 
 
-def _assert_strict_asset_owner(owner_id: str | None, user: dict) -> None:
+def _assert_strict_asset_owner(owner_id: str | None, user: dict, path: str | None = None) -> None:
     if _is_admin(user):
+        return
+    if path and is_shared_canvas_asset(path):
         return
     if not owner_id or owner_id != user.get("id"):
         # Match polling's non-enumerating behavior for another user's assets.
@@ -866,7 +872,7 @@ def _outpainting_internal_path(raw_url: str, request: Request, user: dict) -> tu
         job = load_job(job_id)
         if not job:
             raise HTTPException(404, "图片文件不存在")
-        _assert_strict_asset_owner(job.user_id, user)
+        _assert_strict_asset_owner(job.user_id, user, path)
         candidate = (settings.output_path / f"{job_id}_grid_{int(grid_match.group(2)):02d}.png").resolve()
         output_root = settings.output_path.resolve()
         if output_root not in candidate.parents or not candidate.is_file():
@@ -880,7 +886,7 @@ def _outpainting_internal_path(raw_url: str, request: Request, user: dict) -> tu
             raise HTTPException(400, "图片地址无效")
         owner_id = parts[0]
         expected_owner = _safe_asset_owner_id(str(user.get("id") or ""))
-        if not _is_admin(user) and owner_id != expected_owner:
+        if not _is_admin(user) and owner_id != expected_owner and not is_shared_canvas_asset(path):
             raise HTTPException(404, "图片文件不存在")
         root = (settings.output_path / "ai-images").resolve()
         owner_root = (root / owner_id).resolve()
@@ -901,7 +907,7 @@ def _outpainting_internal_path(raw_url: str, request: Request, user: dict) -> tu
         if not owner_id:
             special_job = load_special_job(job_id)
             owner_id = special_job.get("user_id") if special_job else None
-        _assert_strict_asset_owner(owner_id, user)
+        _assert_strict_asset_owner(owner_id, user, path)
         root = (settings.output_path / "results").resolve()
         job_root = (root / job_id).resolve()
         rel = path.removeprefix("/results/").lstrip("/")
@@ -918,7 +924,7 @@ def _outpainting_internal_path(raw_url: str, request: Request, user: dict) -> tu
         job = load_job(job_id)
         if not job:
             raise HTTPException(404, "图片文件不存在")
-        _assert_strict_asset_owner(job.user_id, user)
+        _assert_strict_asset_owner(job.user_id, user, path)
         candidate = (settings.output_path / f"{filename_stem}.png").resolve()
         output_root = settings.output_path.resolve()
         if output_root not in candidate.parents or not candidate.is_file():
@@ -2166,6 +2172,7 @@ async def attach_user_context(request: Request, call_next):
         and request.state.user is not None
         and not _is_admin(request.state.user)
         and str(request.state.user.get("id") or "") != outpainting_owner
+        and not is_shared_canvas_asset(path)
     ):
         return JSONResponse({"detail": "图片不存在"}, status_code=404)
     try:
@@ -2233,7 +2240,7 @@ def image_copy_link(body: ImageCopyLinkRequest, request: Request):
     if ai_root in candidate.parents:
         parts = candidate.relative_to(ai_root).parts
         if len(parts) >= 2 and any(part.startswith("outpainting_") for part in parts[1:]):
-            _assert_strict_asset_owner(parts[0], user)
+            _assert_strict_asset_owner(parts[0], user, path)
     media_type = _image_copy_media_type(candidate)
     extension = next(ext for mime, ext in _IMAGE_COPY_FORMATS.values() if mime == media_type)
     token, expires_at = create_image_copy_link(path)
@@ -6247,6 +6254,11 @@ async def editor_save_snapshot(request: Request):
     if not snapshot:
         raise HTTPException(400, "snapshot 不能为空")
     foreign_assets = _editor_snapshot_foreign_asset_urls(snapshot, str(user["id"]))
+    # 从团队画布复制过来的图片允许保存；已经保存过的图片在取消分享后也继续保留
+    foreign_assets = [url for url in foreign_assets if not is_shared_canvas_asset(url)]
+    if foreign_assets:
+        saved_raw, _ = load_editor_snapshot(user["id"])
+        foreign_assets = [url for url in foreign_assets if url not in (saved_raw or "")]
     if foreign_assets:
         raise HTTPException(409, "画板包含其他用户的图片，已拒绝保存，请刷新页面")
     base_revision = body.get("base_revision") if isinstance(body, dict) else None

@@ -41,10 +41,25 @@ import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 import { loadImagesFromFiles } from './utils/imageLoader'
 import { DEFAULT_OUTPAINTING_LIMITS, getOutpaintingPlan } from './utils/outpainting'
 import { buildSnapshotSavePayload, isStaleSnapshotConflict, requestSnapshot } from './utils/snapshotSave'
+import { useTeamStore } from './store/teamStore'
+import { teamSnapshotSaveUrl, teamSnapshotUrl } from './services/teamCanvasService'
+import { handleTeamCanvasGone, useTeamCanvasSync } from './useTeamCanvasSync'
+import { TeamActivityPanel } from './components/TeamActivityPanel'
 
 const HOST_IMAGE_DRAG_TYPE = 'application/x-designflow-image'
 const editorUserId = new URLSearchParams(window.location.search).get('user_id') || ''
 const editorSnapshotUrl = `/editor/snapshot?user_id=${encodeURIComponent(editorUserId)}`
+
+// 当前打开的是团队画布时，读写都走该团队画布的接口
+function currentSnapshotUrl(forSave: boolean) {
+  const source = useTeamStore.getState().source
+  if (source.kind === 'team') return forSave ? teamSnapshotSaveUrl(source.id) : teamSnapshotUrl(source.id)
+  return editorSnapshotUrl
+}
+
+function isTeamCanvasGone(status: number) {
+  return status === 404 && useTeamStore.getState().source.kind === 'team'
+}
 
 export function App() {
   const {
@@ -1275,8 +1290,16 @@ export function App() {
 
     isResolvingConflictRef.current = true
 
-    requestSnapshot(editorSnapshotUrl)
-      .then((r) => (r.ok ? r.body : null))
+    requestSnapshot(currentSnapshotUrl(false))
+      .then((r) => {
+        if (isTeamCanvasGone(r.status)) {
+          isConflictRef.current = false
+          isResolvingConflictRef.current = false
+          handleTeamCanvasGone()
+          return null
+        }
+        return r.ok ? r.body : null
+      })
       .then((data) => {
         if (!isConflictRef.current) {
           isResolvingConflictRef.current = false
@@ -1358,7 +1381,7 @@ export function App() {
       saveInFlightRef.current = true
       dirtySinceRef.current = null
 
-      requestSnapshot(editorSnapshotUrl, {
+      requestSnapshot(currentSnapshotUrl(true), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildSnapshotSavePayload(doc, state.baseDocument, baseRev, saveIntent)),
@@ -1379,6 +1402,8 @@ export function App() {
             setSaveError('登录已过期，本地修改尚未保存，请重新登录')
             window.parent.postMessage({ type: 'designflow:auth-required' }, '*')
             clearTimeout(autoSaveRetryTimerRef.current)
+          } else if (isTeamCanvasGone(res.status)) {
+            handleTeamCanvasGone()
           } else if (res.status === 409) {
             const body = res.body
             if (isStaleSnapshotConflict(body)) {
@@ -1440,7 +1465,7 @@ export function App() {
         doc, state.baseDocument, state.revision, state.lastSaveIntent || 'update',
       ))
       try {
-        fetch(editorSnapshotUrl, {
+        fetch(currentSnapshotUrl(true), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: payload,
@@ -1457,6 +1482,26 @@ export function App() {
   const notifyReady = useCallback(() => {
     window.parent.postMessage({ type: 'designflow:editor-ready' }, '*')
   }, [])
+
+  useTeamCanvasSync({
+    snapshotHydratedRef,
+    saveInFlightRef,
+    isConflictRef,
+    personalSnapshotUrl: editorSnapshotUrl,
+    getBusyReason: () => {
+      // 生成结果会写回发起时的画布，任务未完成前不能换到另一份文档
+      if (aiState.status === 'running' || outfitTasks.some((t) => t.status === 'running')) {
+        return '有 AI 任务正在进行，完成后再切换画布'
+      }
+      return null
+    },
+    onSwitched: () => {
+      setSaveStatus('saved')
+      const queued = pendingHostCommandsRef.current
+      pendingHostCommandsRef.current = []
+      for (const cmd of queued) window.dispatchEvent(new MessageEvent('message', { data: cmd }))
+    },
+  })
 
   useEffect(() => {
     const handleHostMessage = (e: MessageEvent) => {
@@ -1499,6 +1544,14 @@ export function App() {
           const insertedUrls = items.map((it) => (typeof it === 'string' ? it : it?.url || ''))
           window.parent.postMessage({ type: 'designflow:editor-inserted', urls: insertedUrls, mode: data.mode }, '*')
         }
+        return
+      }
+
+      // 新建/命名画布只作用于个人画布；打开团队画布时先回到个人画布再执行
+      if ((data.type === 'designflow:new-canvas' || data.type === 'designflow:set-page-name')
+        && snapshotHydratedRef.current && useTeamStore.getState().source.kind === 'team') {
+        pendingHostCommandsRef.current.push(data)
+        useTeamStore.getState().requestOpen({ kind: 'personal' })
         return
       }
 
@@ -1656,6 +1709,7 @@ export function App() {
             useCanvasStore.setState((s) => ({ editSequence: s.editSequence + 1 }))
           }
         }} />
+        <TeamActivityPanel />
       </div>
 
       {/* 点阵网格背景 */}
