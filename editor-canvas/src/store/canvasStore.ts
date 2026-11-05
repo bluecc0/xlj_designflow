@@ -117,6 +117,7 @@ interface CanvasState {
   restoreHistoryDocument: (doc: any) => void
   mergeConflictDocument: (serverDoc: any, serverRev: number) => void
   restoreRecords: (records: { frames?: CanvasFrame[]; images?: CanvasImage[]; texts?: CanvasText[] }) => number
+  replaceImageUrls: (mapping: Record<string, string>) => void
   getDocument: () => CanvasDocument
   markSaved: (rev: number, savedSequence?: number, savedDoc?: CanvasDocument) => void
 }
@@ -1856,6 +1857,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       selectedType: nextImages.length ? 'image' : null,
     }))
     return total
+  },
+
+  // 服务端把图片复制到了自己的目录：同步改写当前文档、保存基线和撤销记录里的地址，不产生新的修改
+  replaceImageUrls: (mapping) => {
+    const swap = <T extends { url: string }>(im: T): T => (mapping[im.url] ? { ...im, url: mapping[im.url] } : im)
+    const swapDoc = (doc: CanvasDocument) => ({ ...doc, images: (doc.images || []).map(swap) })
+    set((s) => ({
+      images: s.images.map(swap),
+      baseDocument: s.baseDocument ? swapDoc(s.baseDocument) : s.baseDocument,
+    }))
+    useHistoryStore.setState((h) => ({ past: h.past.map(swapDoc), future: h.future.map(swapDoc) }))
   },
 
   getDocument: () => {

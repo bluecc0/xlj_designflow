@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import unittest
@@ -8,7 +9,9 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from backend import job_store, team_canvas
+from starlette.requests import Request
+
+from backend import job_store, main, team_canvas
 
 OWNER = {"id": "owner", "username": "小王"}
 MEMBER = {"id": "member", "username": "小李"}
@@ -29,7 +32,7 @@ def _personal_doc() -> dict:
     }
 
 
-class TeamCanvasTest(unittest.TestCase):
+class _TeamCanvasBase(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
@@ -56,6 +59,9 @@ class TeamCanvasTest(unittest.TestCase):
 
     def _share(self) -> str:
         return team_canvas.share_page(OWNER, "p1")["canvas"]["id"]
+
+
+class TeamCanvasTest(_TeamCanvasBase):
 
     def test_share_moves_page_out_of_personal_canvas(self) -> None:
         canvas_id = self._share()
@@ -165,6 +171,53 @@ class TeamCanvasTest(unittest.TestCase):
         version_id = team_canvas.list_versions(canvas_id)[0]["id"]
         self.assertEqual(team_canvas.restore_version(OWNER, canvas_id, version_id), 3)
         self.assertEqual([im["id"] for im in team_canvas.load_canvas(canvas_id)["snapshot"]["images"]], ["i1"])
+
+
+class SharedImageCopiedToPersonalTest(_TeamCanvasBase):
+    """成员把团队画布里别人的扩图存进个人画布，原画布取消分享后图片仍可用。"""
+
+    OUTPAINT = "/ai-images/owner/outpainting_example/result.png"
+
+    def _save_personal(self, user: dict, doc: dict) -> dict:
+        async def body():
+            return {"snapshot": json.dumps(doc), "base_revision": None}
+
+        req = Request({"type": "http", "method": "POST", "path": "/editor/snapshot",
+                       "query_string": f"user_id={user['id']}".encode(),
+                       "headers": [(b"content-type", b"application/json")]})
+        with patch.object(main, "_current_user", return_value=user), patch.object(req, "json", side_effect=body):
+            return asyncio.run(main.editor_save_snapshot(req))
+
+    def test_personal_copy_survives_unshare(self) -> None:
+        source = Path(team_canvas.settings.output_path) / "ai-images/owner/outpainting_example/result.png"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"png")
+        canvas_id = self._share()
+        doc = team_canvas.load_canvas(canvas_id)["snapshot"]
+        doc["images"].append({"id": "o1", "pageId": "p1", "url": self.OUTPAINT, "x": 0, "y": 0, "width": 1, "height": 1})
+        team_canvas.save_canvas(OWNER, canvas_id, doc, 1, "update")
+
+        personal = {"version": 2, "pages": [{"id": "m1", "name": "我的"}], "activePageId": "m1", "frames": [], "texts": [],
+                    "images": [{"id": "c1", "pageId": "m1", "url": self.OUTPAINT, "x": 0, "y": 0, "width": 1, "height": 1}]}
+        result = self._save_personal(MEMBER, personal)
+        copied = "/ai-images/member/team-imports/owner/outpainting_example/result.png"
+        self.assertEqual(result["rewritten_urls"], {self.OUTPAINT: copied})
+        raw, _ = job_store.load_editor_snapshot("member")
+        self.assertEqual([im["url"] for im in team_canvas._personal_v2(raw)["images"]], [copied])
+
+        team_canvas.unshare_canvas(OWNER, canvas_id)
+        self.assertFalse(team_canvas.is_shared_canvas_asset(self.OUTPAINT))
+        # 查看：中间件只放行图片所有者本人，复制后的地址属于成员自己
+        self.assertEqual(main._outpainting_asset_owner(copied), "member")
+        self.assertEqual(main._outpainting_asset_owner(self.OUTPAINT), "owner")
+        # 用作扩图/参考图：按成员身份解析到成员自己的文件
+        path, _ = main._outpainting_internal_path(copied, None, MEMBER)
+        self.assertTrue(path.is_file())
+        with self.assertRaises(HTTPException):
+            main._outpainting_internal_path(self.OUTPAINT, None, MEMBER)
+        # 之后继续保存个人画布不会再被拒绝
+        personal["images"][0]["url"] = copied
+        self.assertTrue(self._save_personal(MEMBER, personal)["saved"])
 
 
 if __name__ == "__main__":

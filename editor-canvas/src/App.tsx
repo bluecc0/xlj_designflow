@@ -1400,6 +1400,9 @@ export function App() {
               throw new Error('服务端未确认保存成功')
             }
             markSaved(d.revision, saveSeq, doc)
+            if (d.rewritten_urls && Object.keys(d.rewritten_urls).length) {
+              useCanvasStore.getState().replaceImageUrls(d.rewritten_urls)
+            }
             setSaveStatus(useCanvasStore.getState().isDirty ? 'saving' : 'saved')
           } else if (res.status === 401) {
             console.warn('[Canvas] 会话未认证或已过期 (401)，保存未执行，保留本地修改')

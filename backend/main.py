@@ -115,7 +115,7 @@ from .agent2.service import fail_stale_turns as agent2_fail_stale_turns
 from .agent2.tools import backfill_recovered_job as agent2_backfill_recovered_job
 from .agent2.tools import deliver_finished_jobs as agent2_deliver_finished_jobs
 from .agent2.store import init_tables as init_agent2_tables
-from .team_canvas import init_team_canvas_tables, is_shared_canvas_asset
+from .team_canvas import copy_asset_to_user, init_team_canvas_tables, is_shared_canvas_asset
 from .team_canvas import router as team_canvas_router
 from .user_skill_store import (
     MAX_UPLOAD_BYTES as MAX_SKILL_UPLOAD_BYTES,
@@ -6254,8 +6254,14 @@ async def editor_save_snapshot(request: Request):
     if not snapshot:
         raise HTTPException(400, "snapshot 不能为空")
     foreign_assets = _editor_snapshot_foreign_asset_urls(snapshot, str(user["id"]))
-    # 从团队画布复制过来的图片允许保存；已经保存过的图片在取消分享后也继续保留
-    foreign_assets = [url for url in foreign_assets if not is_shared_canvas_asset(url)]
+    # 从团队画布复制过来的他人图片：复制到自己的目录并改写地址，原画布取消分享后图片仍可用
+    rewritten_urls: dict[str, str] = {}
+    shared_urls = [url for url in foreign_assets if is_shared_canvas_asset(url)]
+    if shared_urls:
+        snapshot, rewritten_urls = await asyncio.to_thread(
+            _import_shared_assets_into_snapshot, snapshot, shared_urls, str(user["id"]),
+        )
+    foreign_assets = [url for url in foreign_assets if url not in shared_urls]
     if foreign_assets:
         saved_raw, _ = load_editor_snapshot(user["id"])
         saved_paths = _editor_snapshot_saved_image_paths(saved_raw)
@@ -6282,7 +6288,31 @@ async def editor_save_snapshot(request: Request):
             status_code=409,
             detail={"saved": False, "reason": reason or "snapshot_rejected", "current_revision": rev},
         )
-    return {"saved": True, "revision": rev}
+    return {"saved": True, "revision": rev, "rewritten_urls": rewritten_urls}
+
+
+def _import_shared_assets_into_snapshot(
+    snapshot: object, shared_urls: list[str], user_id: str,
+) -> tuple[object, dict[str, str]]:
+    """把快照里来自共享画布的他人图片复制到用户目录，返回改写后的快照和 {原地址: 新地址}。"""
+    try:
+        doc = json.loads(snapshot) if isinstance(snapshot, str) else snapshot
+    except Exception:
+        return snapshot, {}
+    if not isinstance(doc, dict) or not isinstance(doc.get("images"), list):
+        return snapshot, {}
+    mapping: dict[str, str] = {}
+    for url in shared_urls:
+        new_url = copy_asset_to_user(url, user_id)
+        if new_url:
+            mapping[url] = new_url
+    for image in doc["images"]:
+        if not isinstance(image, dict):
+            continue
+        for key in ("url", "src"):
+            if image.get(key) in mapping:
+                image[key] = mapping[image[key]]
+    return (json.dumps(doc, ensure_ascii=False) if isinstance(snapshot, str) else doc), mapping
 
 
 _EDITOR_ASSET_SUFFIXES = {

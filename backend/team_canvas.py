@@ -280,24 +280,31 @@ def is_shared_canvas_asset(raw_url: object) -> bool:
         return path in _asset_index
 
 
+def copy_asset_to_user(raw_url: object, user_id: str) -> str | None:
+    """把他人的站内图片复制到 user_id 自己的 team-imports 目录，返回新地址；不是他人图片或文件不存在时返回 None。"""
+    path = _asset_path(raw_url)
+    source_owner = _asset_owner(path)
+    if not source_owner or source_owner == user_id:
+        return None
+    root = (settings.output_path / "ai-images").resolve()
+    safe_user = "".join(ch for ch in user_id if ch.isalnum() or ch in "-_")
+    rel = path[len("/ai-images/"):]
+    source = (root / rel).resolve()
+    dest = (root / safe_user / "team-imports" / rel).resolve()
+    if not safe_user or root not in source.parents or (root / safe_user) not in dest.parents or not source.is_file():
+        return None
+    if not dest.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, dest)
+    return "/ai-images/" + quote(str(dest.relative_to(root)).replace("\\", "/"))
+
+
 def _copy_foreign_assets(doc: dict, owner_id: str) -> None:
     """取消分享时把其他人贡献的图片复制到分享者目录，回到个人画布后不依赖别人的文件。"""
-    root = (settings.output_path / "ai-images").resolve()
-    safe_owner = "".join(ch for ch in owner_id if ch.isalnum() or ch in "-_")
     for image in doc.get("images") or []:
-        path = _asset_path(image.get("url"))
-        source_owner = _asset_owner(path)
-        if not source_owner or source_owner == owner_id:
-            continue
-        rel = path[len("/ai-images/"):]
-        source = (root / rel).resolve()
-        dest = (root / safe_owner / "team-imports" / rel).resolve()
-        if root not in source.parents or (root / safe_owner) not in dest.parents or not source.is_file():
-            continue
-        if not dest.exists():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, dest)
-        image["url"] = "/ai-images/" + quote(str(dest.relative_to(root)).replace("\\", "/"))
+        new_url = copy_asset_to_user(image.get("url"), owner_id)
+        if new_url:
+            image["url"] = new_url
 
 
 # ─── 业务操作 ──────────────────────────────────────────────────────────────────

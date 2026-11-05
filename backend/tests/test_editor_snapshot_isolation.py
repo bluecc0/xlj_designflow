@@ -45,7 +45,7 @@ class EditorSnapshotIsolationTest(unittest.TestCase):
         with (patch.object(main, "_current_user", return_value={"id": "admin"}),
               patch.object(main, "save_editor_snapshot", side_effect=persist),
               patch.object(req, "json", side_effect=body)):
-            self.assertEqual(asyncio.run(main.editor_save_snapshot(req)), {"saved": True, "revision": 2})
+            self.assertEqual(asyncio.run(main.editor_save_snapshot(req)), {"saved": True, "revision": 2, "rewritten_urls": {}})
         self.assertEqual(len(worker_threads), 1)
         self.assertNotEqual(worker_threads[0], loop_thread)
 
