@@ -111,6 +111,24 @@ class Agent2EngineTest(unittest.TestCase):
         self.assertEqual([e["seq"] for e in stored], list(range(1, len(stored) + 1)))
         self.assertEqual(len(stored), len(events))
 
+    def test_preparation_beyond_twelve_steps_still_generates(self):
+        async def prepare(ctx, args):
+            return {"ready": True}
+
+        self.tools["read_skill_file"] = Tool("read_skill_file", "read", {"type": "object"}, prepare)
+        model = FakeModel(
+            [[("call", "read_skill_file", {"index": i})] for i in range(20)]
+            + [[("call", "generate_image", {"images": [{"prompt": "lookbook"}]})],
+               [("text", "Lookbook ready.")]]
+        )
+        events = self._run(model)
+        self.assertEqual(len(model.seen), 22)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(events[-1]["type"], "turn.finished")
+        self.assertEqual(events[-1]["payload"]["text"], "Lookbook ready.")
+        saved = store.get_session(self.session["id"], "u1")
+        self.assertEqual(store.load_session_messages(saved)[-1]["content"], "Lookbook ready.")
+
     def test_claiming_done_without_any_tool_is_corrected_once(self):
         # 线上出现过：模型只写了"正在生成……已生成……"，没调用生图工具，用户什么也没收到
         model = FakeModel([

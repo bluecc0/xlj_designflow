@@ -4248,7 +4248,10 @@ const agent2Reduce = function(msgs, ev) {
     }
     case 'turn.finished': {
       var fi = lastTextIdx();
-      if (fi < 0 || p.text == null) return list;
+      if (fi < 0) return list;
+      if (p.text == null || !String(p.text).trim()) {
+        return list.map(function(m, i) { return i === fi ? Object.assign({}, m, { a2Closed: true }) : m; });
+      }
       return list.map(function(m, i) { return i === fi ? Object.assign({}, m, { text: p.text, a2Closed: true }) : m; });
     }
     case 'turn.failed':

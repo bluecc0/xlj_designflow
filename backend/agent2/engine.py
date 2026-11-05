@@ -33,8 +33,6 @@ logger = logging.getLogger(__name__)
 
 Emit = Callable[[str, dict], Awaitable[None]]
 
-MAX_STEPS = 12
-
 # 模型没调用任何工具却在编结果（线上出现过："好的，正在为你生成……已生成……"，实际什么都没做）。
 # 只认两种信号，避免误伤"之前生成的图在上方卡片里"这类正常回答：
 # 1. 说了"正在为你生成/处理"这种出图前的开场白，却没有调用工具；
@@ -236,7 +234,6 @@ async def run_loop(
     messages: list[dict],
     emit: Emit,
     ctx_base: dict,
-    max_steps: int = MAX_STEPS,
     prepare: Callable[[list[dict], bool], Awaitable[list[dict]]] | None = None,
     checkpoint: Callable[[list[dict]], None] | None = None,
 ) -> TurnResult:
@@ -250,7 +247,7 @@ async def run_loop(
     used_tools = False
     corrected = False
     note: dict | None = None
-    for _ in range(max_steps):
+    while True:
         step: ModelStep | None = None
         for attempt in range(2):
             view = await prepare(messages, attempt > 0) if prepare else messages
@@ -318,5 +315,3 @@ async def run_loop(
             pending = {"call_id": call["id"], "tool": call["name"], **(args if isinstance(args, dict) else {})}
             await emit("input.required", pending)
             return TurnResult(status="waiting_user", messages=messages, text=final_text, pending=pending)
-    await emit("message.delta", {"text": "\n（本轮步骤已达上限，先停在这里。）"})
-    return TurnResult(status="done", messages=messages, text=final_text)
