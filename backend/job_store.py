@@ -2834,24 +2834,49 @@ _SKILL_SQL = (
 
 
 def load_skill_usage_stats() -> dict[tuple[str, str], dict]:
-    """按 (用户, 技能名) 统计生图任务次数、失败次数和最近使用时间。"""
+    """按 (用户, 技能名) 统计使用次数、失败次数和最近使用时间，每次交互算一次。
+
+    - 聊天框直接用技能生图：一次提交算一次，批量出多张也只算一次；整批都失败才算失败
+    - Agent：一轮对话里用户选了该技能，或 Agent 加载、读取了该技能的文件或参考图，算一次；该轮失败才算失败
+    """
+    uses: dict[tuple[str, str, str], tuple[bool, float]] = {}
     with _connect() as conn:
-        rows = conn.execute(
+        for row in conn.execute(
             f"""
-            SELECT user_id, {_SKILL_SQL} AS skill, COUNT(*) AS total,
-                   SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
-                   MAX(created_at) AS last_used_at
+            SELECT user_id, {_SKILL_SQL} AS skill,
+                   MIN(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                   MAX(created_at) AS used_at,
+                   COALESCE(NULLIF(CASE WHEN json_valid(request_meta_json)
+                       THEN json_extract(request_meta_json, '$.batch_id') END, ''), id) AS interaction
             FROM ai_image_jobs
-            GROUP BY user_id, skill
-            HAVING skill != ''
+            WHERE {_SKILL_SQL} != ''
+            GROUP BY user_id, skill, interaction
             """
-        ).fetchall()
-    return {
-        (row["user_id"], row["skill"]): {
-            "total": row["total"], "failed": row["failed"] or 0, "last_used_at": row["last_used_at"],
-        }
-        for row in rows
-    }
+        ):
+            uses[(row["user_id"], row["skill"], "job:" + row["interaction"])] = (bool(row["failed"]), row["used_at"])
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent2_turns'").fetchone():
+            for row in conn.execute(
+                """
+                SELECT t.user_id, t.id AS turn_id, t.status, t.started_at,
+                       json_extract(c.args_json, '$.name') AS skill
+                FROM agent2_tool_calls c JOIN agent2_turns t ON t.id = c.turn_id
+                WHERE c.tool IN ('load_skill', 'read_skill_file', 'use_skill_image') AND json_valid(c.args_json)
+                UNION
+                SELECT t.user_id, t.id, t.status, t.started_at, json_extract(e.payload_json, '$.skill')
+                FROM agent2_events e JOIN agent2_turns t ON t.id = e.turn_id
+                WHERE e.type = 'turn.started' AND json_valid(e.payload_json)
+                """
+            ):
+                if row["skill"]:
+                    uses[(row["user_id"], row["skill"], "turn:" + row["turn_id"])] = (
+                        row["status"] == "failed", row["started_at"])
+    stats: dict[tuple[str, str], dict] = {}
+    for (user_id, skill, _interaction), (failed, used_at) in uses.items():
+        item = stats.setdefault((user_id, skill), {"total": 0, "failed": 0, "last_used_at": None})
+        item["total"] += 1
+        item["failed"] += int(failed)
+        item["last_used_at"] = max(item["last_used_at"] or 0, used_at or 0) or None
+    return stats
 
 
 def load_admin_tasks(

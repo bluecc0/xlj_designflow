@@ -665,6 +665,52 @@ class AdminSkillUsageTest(unittest.TestCase):
         self.assertEqual(stats[("alice", "poster-main")]["total"], 2)
         self.assertEqual(stats[("alice", "poster-main")]["failed"], 1)
 
+    def test_usage_counts_each_interaction_including_agent_turns(self) -> None:
+        from backend.agent2 import store as agent2_store
+
+        agent2_store.init_tables()
+        now = time.time()
+        with job_store._connect() as conn:
+            # 一次提交批量出 3 张，只算一次交互
+            conn.executemany(
+                """
+                INSERT INTO ai_image_jobs
+                  (id, user_id, status, model, prompt, size, progress, created_at, request_meta_json)
+                VALUES (?, 'carol', ?, 'gpt-image-2.6', 'p', 'auto', 0, ?, ?)
+                """,
+                [(f"b{i}", "failed" if i else "done", now - 100, '{"skill": "kids", "batch_id": "batch1"}')
+                 for i in range(3)],
+            )
+            conn.executemany(
+                "INSERT INTO agent2_turns (id, session_id, user_id, status, user_input, started_at) VALUES (?, 's', 'carol', ?, '', ?)",
+                [("t1", "done", now - 50), ("t2", "failed", now - 40), ("t3", "done", now - 30), ("t4", "done", now - 20)],
+            )
+            conn.executemany(
+                "INSERT INTO agent2_tool_calls (id, turn_id, tool, args_json, status, created_at) VALUES (?, ?, ?, ?, 'done', ?)",
+                [
+                    # 同一轮里加载、读文件、读参考图只算一次
+                    ("c1", "t1", "load_skill", '{"name": "kids"}', now - 50),
+                    ("c2", "t1", "read_skill_file", '{"name": "kids", "path": "a.md"}', now - 49),
+                    ("c3", "t1", "use_skill_image", '{"name": "kids", "path": "a.png"}', now - 48),
+                    ("c4", "t2", "load_skill", '{"name": "kids"}', now - 40),
+                    ("c5", "t4", "generate_image", '{"images": []}', now - 20),
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO agent2_events (session_id, turn_id, seq, type, payload_json, created_at) VALUES ('s', ?, ?, 'turn.started', ?, ?)",
+                [
+                    ("t1", 1, '{"text": "x", "skill": "kids"}', now - 50),
+                    # 用户选了技能但 Agent 没重新加载，也算一次
+                    ("t3", 2, '{"text": "x", "skill": "kids"}', now - 30),
+                    ("t4", 3, '{"text": "x"}', now - 20),
+                ],
+            )
+            conn.commit()
+        usage = job_store.load_skill_usage_stats()[("carol", "kids")]
+        self.assertEqual(usage["total"], 4)  # 批量提交 1 + Agent 轮次 t1、t2、t3
+        self.assertEqual(usage["failed"], 1)  # 只有 t2 失败；批量里有成功的不算失败
+        self.assertAlmostEqual(usage["last_used_at"], now - 30)
+
     def test_admin_tasks_filter_by_skill_and_user(self) -> None:
         tasks, total = job_store.load_admin_tasks(skill="poster-main", user_id="alice")
         self.assertEqual(total, 2)

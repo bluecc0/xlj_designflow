@@ -163,6 +163,7 @@ from .job_store import (
     load_active_compose_jobs,
     load_ai_image_job_by_image_url,
     load_job,
+    mark_ai_image_job_provider_switched,
     count_operation_logs,
     load_operation_logs,
     load_recent_jobs,

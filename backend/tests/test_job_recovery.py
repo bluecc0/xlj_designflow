@@ -93,6 +93,14 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.job()["status"], "done")
         self.assertEqual(self.job()["created_at"], 123456.0)
 
+    async def test_provider_switch_is_saved(self):
+        self.seed(provider="auto")
+        smart = AsyncMock(return_value={"url": "/result.png", "provider": "apimart", "provider_switched": True})
+        with patch.object(main, "smart_generate_image_async", smart):
+            await self.execute()
+        self.assertEqual(self.job()["status"], "done")
+        self.assertTrue(self.job()["provider_switched"])
+
     async def test_gif_retry_keeps_gif_output_through_executor_and_recovery(self):
         job_store.save_ai_image_job(
             job_id="gif-job", user_id="owner", status="failed", model="gpt-image-2.6",

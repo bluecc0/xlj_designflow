@@ -88,6 +88,16 @@ class Agent2EngineTest(unittest.TestCase):
             session = store.get_session(self.session["id"], "u1")
             return _events(asyncio.run(_collect(service.start_turn(self.user, session, text, []))))
 
+    def test_selected_skill_is_recorded_on_turn_started(self):
+        model = FakeModel([[("text", "好的。")]])
+        with patch.object(service, "model_factory", lambda: model):
+            session = store.get_session(self.session["id"], "u1")
+            events = _events(asyncio.run(_collect(service.start_turn(self.user, session, "出一张", [], skill="kids"))))
+        self.assertEqual(events[0]["type"], "turn.started")
+        self.assertEqual(events[0]["payload"]["skill"], "kids")
+        # 没选技能时不带这个字段
+        self.assertNotIn("skill", self._run(FakeModel([[("text", "好的。")]]))[0]["payload"])
+
     def test_act_first_tool_call_then_reply_with_next_steps(self):
         model = FakeModel([
             [("text", "好的，正在生成 3 张。"), ("call", "generate_image", {"images": [{"prompt": "小红书风格，跑步海报"}] * 3, "aspect_ratio": "3:4"})],
