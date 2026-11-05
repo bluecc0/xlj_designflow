@@ -2509,9 +2509,14 @@ def get_smart_route_candidates(
             primary.append(PROVIDER_SUB2API)
         if settings.ai_image_api_key:
             primary.append(PROVIDER_APIMART)
-        if filter_frozen:
-            primary = [p for p in primary if not is_provider_frozen(p, model=model_name, now=now)]
-        return primary + [p for p in fallback if p not in primary]
+        # 执行时这两条线路收到 2.6 一律发 2.6，所以只能经主路由（按 2.6 的冻结状态）进入，
+        # 不能再从按 2.5 冻结状态生成的兜底列表里加回来
+        fallback = [p for p in fallback if p not in (PROVIDER_SUB2API, PROVIDER_APIMART)]
+        active = [p for p in primary if not (filter_frozen and is_provider_frozen(p, model=model_name, now=now))]
+        if not active and not fallback:
+            # 全部冻结时与通用规则一致：不过滤，避免完全不可用
+            active = primary
+        return active + fallback
 
     # 1. 根据模型与画质分辨率选择匹配规则（环境 JSON 显式规则优先）
     if custom_rules and model_name in custom_rules:

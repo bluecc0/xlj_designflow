@@ -5776,6 +5776,8 @@ async def ai_image_retry(request: Request):
             "reference_storage_job_id": reference_storage_job_id,
             "variant": variant,
             "quality": quality,
+            # 执行器按库里的 request_meta 执行，动图格式必须随重试任务落库
+            "output_format": str(request_meta.get("output_format") or ""),
             "manual_reference_count": (
                 int(request_meta["manual_reference_count"])
                 if "manual_reference_count" in request_meta
@@ -5818,7 +5820,6 @@ async def ai_image_retry(request: Request):
                 "reference_storage_job_id": reference_storage_job_id,
                 "variant": variant,
                 "quality": quality,
-                "output_format": str(request_meta.get("output_format") or ""),
                 "manual_reference_count": (
                     int(request_meta["manual_reference_count"])
                     if "manual_reference_count" in request_meta

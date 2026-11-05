@@ -93,6 +93,49 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.job()["status"], "done")
         self.assertEqual(self.job()["created_at"], 123456.0)
 
+    async def test_gif_retry_keeps_gif_output_through_executor_and_recovery(self):
+        job_store.save_ai_image_job(
+            job_id="gif-job", user_id="owner", status="failed", model="gpt-image-2.6",
+            prompt="生成 gif 图：跑鞋旋转", resolved_prompt="生成 gif 图：跑鞋旋转", size="auto",
+            provider="auto", resolution="1K", created_at=123456.0,
+            request_meta={"chat_session_id": "session", "variant": "flare", "quality": "auto",
+                          "output_format": "gif", "manual_reference_count": 0, "context_reference_count": 0},
+        )
+
+        async def retry(started: list):
+            async def receive():
+                return {"type": "http.request", "body": json.dumps({"job_id": "gif-job"}).encode()}
+            request = Request({"type": "http", "method": "POST", "headers": []}, receive)
+            with patch.object(main, "_current_user", return_value={"id": "owner", "username": "owner"}), \
+                 patch.object(main, "_track_ai_image_task", side_effect=started.append):
+                return (await main.ai_image_retry(request))["job_id"]
+
+        calls = []
+
+        async def apimart(**kwargs):
+            calls.append((kwargs["model"], kwargs["output_format"]))
+            return {"url": "/result.gif", "task_id": "gif-task"}
+
+        sub2api = AsyncMock(side_effect=AssertionError("动图不能走 Sub2API"))
+        with patch.multiple(main.settings, ai_image_api_key="sk-apimart",
+                            cliproxy_base_url="http://sub2api", cliproxy_api_key="sk-sub2api"), \
+             patch.object(ai_image, "generate_image_async", side_effect=apimart), \
+             patch.object(ai_image, "generate_sub2api_async", sub2api):
+            # 1. 重试后直接启动执行器
+            started = []
+            new_job_id = await retry(started)
+            await started[0]
+            self.assertEqual(job_store.load_ai_image_job(new_job_id)["request_meta"]["output_format"], "gif")
+            self.assertEqual(job_store.load_ai_image_job(new_job_id)["status"], "done")
+            # 2. 重试任务还没执行就重启：后台恢复只能从库里读到参数
+            started = []
+            restored_job_id = await retry(started)
+            started[0].close()
+            await ai_job_recovery.execute_image_job(main._execute_ai_image_background, restored_job_id)
+            self.assertEqual(job_store.load_ai_image_job(restored_job_id)["status"], "done")
+        self.assertEqual(calls, [("gpt-image-2.6", "gif"), ("gpt-image-2.6", "gif")])
+        sub2api.assert_not_called()
+
     async def test_shutdown_after_acceptance_polls_original_without_post(self):
         self.seed()
         accepted = asyncio.Event()

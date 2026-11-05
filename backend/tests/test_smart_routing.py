@@ -254,6 +254,41 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                     ["apimart", "tuzi", "apimart-ext"],
                 )
 
+    def test_gpt_image_26_frozen_provider_is_not_readded_by_25_fallback(self) -> None:
+        def freeze(provider: str, model: str) -> None:
+            for _ in range(ai_image.PROVIDER_FAILURE_THRESHOLD):
+                ai_image.record_provider_failure(provider, model=model)
+
+        with patch.multiple(
+            ai_image.settings,
+            cliproxy_base_url="http://sub2api:8080", cliproxy_api_key="sk-sub2api",
+            tuzi_base_url="http://tuzi", tuzi_api_key="sk-tuzi",
+            adobe2api_base_url="", adobe2api_api_key="",
+            ai_image_api_key="sk-apimart", smart_routing_rules_json="",
+        ):
+            for frozen, resolution, expected in (
+                # Sub2API 的 2.6 冻结：2.5 兜底里的 Sub2API 不能再加回来（执行时仍会发 2.6）
+                ([("sub2api", "gpt-image-2.6")], "1K", ["apimart", "tuzi", "apimart-ext"]),
+                ([("apimart", "gpt-image-2.6")], "1K", ["sub2api", "tuzi", "apimart-ext"]),
+                # 只冻结了 2.5，不影响 2.6 的主路由
+                ([("sub2api", "gpt-image-2.5")], "1K", ["sub2api", "apimart", "tuzi", "apimart-ext"]),
+                ([("sub2api", "gpt-image-2.6"), ("apimart", "gpt-image-2.6")], "1K", ["tuzi", "apimart-ext"]),
+                ([("apimart", "gpt-image-2.6")], "2K", ["apimart-ext"]),
+            ):
+                with self.subTest(frozen=frozen, resolution=resolution):
+                    ai_image.reset_provider_freeze()
+                    for provider, model in frozen:
+                        freeze(provider, model)
+                    self.assertEqual(
+                        ai_image.get_smart_route_candidates("gpt-image-2.6", resolution=resolution),
+                        expected,
+                    )
+            # 只有 Sub2API 可用且已冻结、没有任何兜底时，与通用规则一致不过滤，避免完全不可用
+            ai_image.reset_provider_freeze()
+            freeze("sub2api", "gpt-image-2.6")
+            with patch.multiple(ai_image.settings, tuzi_api_key="", ai_image_api_key=""):
+                self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="1K"), ["sub2api"])
+
     async def test_gpt_image_26_provider_models(self) -> None:
         calls = []
 
