@@ -983,7 +983,7 @@ const AgentToolCard = ({ m, openImage }) => {
   var images = m.images || [];
   // 卡片里用了多个模型，或用的不是默认模型时，标出每张实际请求的模型（来自任务记录，不是模型写的名称）
   var imageModels = images.map(function(im) { return im.model || ''; }).filter(Boolean);
-  var showModel = imageModels.some(function(x) { return x !== imageModels[0] || x !== 'gpt-image-2.5'; });
+  var showModel = imageModels.some(function(x) { return x !== imageModels[0] || x !== 'gpt-image-2.6'; });
   // 工具结果里的文件优先；等待超时后由后台补回的文件来自 artifact.created 事件
   var files = (Array.isArray(result.files) && result.files.length) ? result.files : (m.files || []);
   var layerCount = result.layer_count || (files[0] && files[0].layer_count) || 0;

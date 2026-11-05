@@ -307,15 +307,30 @@ class Agent2EngineTest(unittest.TestCase):
         ])
         with patches[0], patches[1], patches[2], patch.object(a2tools, "routed_chat_completion", no_vlm):
             events = self._run(model)
-        # 走可恢复任务：默认 GPT Image 2.5 快速模式、1K，带恢复断点
+        # 走可恢复任务：默认 GPT Image 2.6 快速模式、1K，带恢复断点
         job = executed[0]
-        self.assertEqual((job["model"], job["request_meta"]["variant"], job["resolution"]), ("gpt-image-2.5", "flare", "1K"))
+        self.assertEqual((job["model"], job["request_meta"]["variant"], job["resolution"]), ("gpt-image-2.6", "flare", "1K"))
         self.assertEqual(job["request_meta"]["recovery"]["phase"], "queued")
         self.assertEqual(job["request_meta"]["source"], "agent2")
         self.assertEqual(len([e for e in events if e["type"] == "artifact.created"]), 1)
         self.assertNotIn("image.checked", [e["type"] for e in events])
         tool_msg = [m for m in model.seen[1] if m["role"] == "tool"][0]
         self.assertNotIn("check", json.loads(tool_msg["content"])["images"][0])
+        self.assertEqual(job["request_meta"].get("output_format", ""), "")
+
+    def test_gif_prompt_requests_gif_output(self):
+        img = Path(self.tmp.name) / "out.gif"
+        img.write_bytes(b"gif")
+
+        patches, executed = self._durable_image_tools(img)
+        model = FakeModel([
+            [("call", "generate_image", {"images": [{"prompt": "生成 gif 动图：跑鞋旋转"}]})],
+            [("text", "好了。")],
+        ])
+        with patches[0], patches[1], patches[2]:
+            self._run(model)
+        self.assertEqual(executed[0]["model"], "gpt-image-2.6")
+        self.assertEqual(executed[0]["request_meta"]["output_format"], "gif")
 
     def test_each_image_can_use_its_own_model(self):
         from backend.agent2 import tools as a2tools
@@ -326,7 +341,7 @@ class Agent2EngineTest(unittest.TestCase):
         patches, executed = self._durable_image_tools(img)
         model = FakeModel([
             [("call", "generate_image", {"images": [
-                {"prompt": "猫", "label": "GPT Image 2.5"},
+                {"prompt": "猫", "label": "GPT Image 2.6"},
                 {"prompt": "猫", "label": "Nano Banana Pro", "model": "nano-banana-pro"},
                 {"prompt": "猫", "label": "Seedream", "model": "seedream-5.0-pro"}]})],
             [("call", "generate_image", {"images": [{"prompt": "猫", "model": "midjourney"}]})],
@@ -335,14 +350,14 @@ class Agent2EngineTest(unittest.TestCase):
         with patches[0], patches[1], patches[2]:
             events = self._run(model)
         # 实际提交的任务各用各的模型，而不是只改了名称
-        self.assertEqual(sorted(j["model"] for j in executed), ["gpt-image-2.5", "nano-banana-pro", "seedream-5.0-pro"])
+        self.assertEqual(sorted(j["model"] for j in executed), ["gpt-image-2.6", "nano-banana-pro", "seedream-5.0-pro"])
         created = {e["payload"]["artifact"]["label"]: e["payload"]["artifact"]["model"]
                    for e in events if e["type"] == "artifact.created"}
-        self.assertEqual(created, {"GPT Image 2.5": "gpt-image-2.5", "Nano Banana Pro": "nano-banana-pro",
+        self.assertEqual(created, {"GPT Image 2.6": "gpt-image-2.6", "Nano Banana Pro": "nano-banana-pro",
                                    "Seedream": "seedream-5.0-pro"})
         finished = [e["payload"] for e in events if e["type"] == "tool.finished"]
         self.assertEqual(sorted(i["model"] for i in finished[0]["result"]["images"]),
-                         ["gpt-image-2.5", "nano-banana-pro", "seedream-5.0-pro"])
+                         ["gpt-image-2.6", "nano-banana-pro", "seedream-5.0-pro"])
         # 不支持的模型整批拒绝，不会偷偷换成默认模型
         self.assertIn("midjourney", finished[1]["result"]["error"])
         self.assertEqual(len(executed), 3)

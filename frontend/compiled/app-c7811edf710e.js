@@ -3983,7 +3983,7 @@ const AgentToolCard = ({
     return im.model || '';
   }).filter(Boolean);
   var showModel = imageModels.some(function (x) {
-    return x !== imageModels[0] || x !== 'gpt-image-2.5';
+    return x !== imageModels[0] || x !== 'gpt-image-2.6';
   });
   // 工具结果里的文件优先；等待超时后由后台补回的文件来自 artifact.created 事件
   var files = Array.isArray(result.files) && result.files.length ? result.files : m.files || [];

@@ -6859,7 +6859,7 @@ async def ai_image_endpoint(
 # ─── AI 换装：参考图生图 ─────────────────────────────────────────────────────
 
 OUTFIT_MAX_SOURCE_BYTES = 20 * 1024 * 1024
-OUTFIT_MODELS = {"gpt-image-2.5", FLUX_VTO_MODEL}
+OUTFIT_MODELS = {"gpt-image-2.6", "gpt-image-2.5", FLUX_VTO_MODEL}
 
 
 async def _read_outfit_upload(upload: UploadFile, *, label: str) -> bytes:
@@ -6915,7 +6915,7 @@ async def ai_image_outfit_change(
         (client_request_id or "").strip() or (request.headers.get("x-client-request-id") or "").strip() or "-",
         64,
     )
-    model_key = (model or settings.outfit_default_model or "gpt-image-2.5").strip().lower()
+    model_key = (model or settings.outfit_default_model or "gpt-image-2.6").strip().lower()
     if model_key not in OUTFIT_MODELS:
         raise HTTPException(400, f"AI 换装不支持模型: {model}")
     # FLUX 走 BFL 官方虚拟试穿接口（人物图 + 单张服装拼图），其余模型走通用参考图生图
@@ -6929,7 +6929,7 @@ async def ai_image_outfit_change(
         resolution = "1K"
     if is_flux and resolution == "4K":
         # vto-v2 输出尺寸跟随人物图，官方上限约 4MP，达不到 4K
-        raise HTTPException(400, "FLUX 换装最高支持 2K（约 4MP），4K 请使用 GPT Image 2.5")
+        raise HTTPException(400, "FLUX 换装最高支持 2K（约 4MP），4K 请使用 GPT Image 2.6")
     batch_count = max(1, min(int(batch_count or 1), 4))
 
     asset_list = _parse_json_form(assets, [], field="assets")
