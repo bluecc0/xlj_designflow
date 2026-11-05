@@ -20,6 +20,7 @@ from ..ai_job_recovery import execute_image_job
 from ..config import settings
 from ..job_store import load_ai_image_job, save_ai_image_job, save_image_checkpoint
 from ..model_routing import routed_chat_completion
+from ..user_skill_store import IMAGE_SUFFIXES
 from . import memory, store
 from .engine import Tool, ToolContext, user_cancelled
 
@@ -220,13 +221,17 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
         return {"error": "技能参考图不能放在整批共用的 reference_image_ids 里：请写进每一项自己的 reference_image_ids，"
                          "每张放它自己要用的那张（连同人物、产品、场景图）；确实每张都用同一张时，也在每一项里分别填"}
     registered = set(ctx.state.get("skill_refs") or [])
-    used_ids = set(shared_ids) | {str(rid) for item in items for rid in (item.get("reference_image_ids") or [])}
-    if ctx.state.get("skill_ref_attempted") and not registered & used_ids:
-        ctx.state["images"] = used
+    if ctx.state.get("skill_ref_attempted"):
         if not registered:
+            ctx.state["images"] = used
             return {"error": "这一轮要用技能参考图，但还没有登记成功：按 use_skill_image 返回的 nearby 或技能数据里的真实路径重新登记"}
-        return {"error": "这一轮登记了技能参考图（" + "、".join(sorted(registered)) + "）却没有传进任何一张："
-                         "把每张要用的那张写进它自己的 reference_image_ids"}
+        # 逐张检查：每一项自己的参考图会替换整批共用的，所以按实际生效的那组判断
+        missing = [i + 1 for i, item in enumerate(items)
+                   if not registered & {str(rid) for rid in (item.get("reference_image_ids") or shared_ids)}]
+        if missing:
+            ctx.state["images"] = used
+            return {"error": "第 " + "、".join(map(str, missing)) + " 张没有传技能参考图（这一轮登记的是 "
+                             + "、".join(sorted(registered)) + "）：把它要用的那张写进它自己的 reference_image_ids"}
     refs = [_artifact_bytes(ctx, rid) for rid in shared_ids]
     group_type = args.get("group_type") if args.get("group_type") in {"set", "variant"} else None
     group_id = ("grp_" + uuid.uuid4().hex[:8]) if group_type else None
@@ -307,7 +312,7 @@ async def read_skill_file(ctx: ToolContext, args: dict) -> dict:
     return {"path": args.get("path"), "content": text[:SKILL_CONTEXT_MAX_CHARS]}
 
 
-SKILL_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+SKILL_IMAGE_SUFFIXES = IMAGE_SUFFIXES  # 和上传保存的图片格式保持一致
 MAX_SKILL_IMAGES_PER_CALL = 12
 
 

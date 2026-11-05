@@ -80,7 +80,10 @@ class UseSkillImageTest(unittest.TestCase):
         shared = asyncio.run(a2tools.generate_image(self.ctx, {"images": two, "reference_image_ids": [ref_id]}))
         self.assertIn("每一项自己的", shared["error"])
         unused = asyncio.run(a2tools.generate_image(self.ctx, {"images": two}))
-        self.assertIn("没有传进任何一张", unused["error"])
+        self.assertIn("第 1、2 张", unused["error"])
+        partial = asyncio.run(a2tools.generate_image(self.ctx, {"images": [
+            {"prompt": "a", "reference_image_ids": [ref_id]}, {"prompt": "b"}]}))
+        self.assertIn("第 2 张", partial["error"])
         self.assertEqual(self.ctx.state["images"], 0)
         fresh = ToolContext(user={"id": "u1"}, session_id=self.ctx.session_id, turn_id="t2", call_id="c2",
                             emit=self.ctx.emit, state={})

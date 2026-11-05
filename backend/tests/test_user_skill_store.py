@@ -126,6 +126,7 @@ class UserSkillStoreTest(unittest.TestCase):
             "pdf/references/index.jsonl": '{"id": "01"}',
             "pdf/assets/pose/0001.png": png.getvalue(),
             "pdf/tool.exe": b"MZ",
+            "pdf/assets/demo.gif": b"GIF89a",
             "pdf/LICENSE.txt": "MIT",
         }))
         skill_dir = self.alice / name
@@ -134,6 +135,7 @@ class UserSkillStoreTest(unittest.TestCase):
         self.assertTrue((skill_dir / "references" / "index.jsonl").exists())
         self.assertEqual((skill_dir / "assets" / "pose" / "0001.png").read_bytes(), png.getvalue())
         self.assertFalse((skill_dir / "tool.exe").exists())
+        self.assertFalse((skill_dir / "assets" / "demo.gif").exists())
         self.assertTrue(any("tool.exe" in w and "已跳过" in w for w in warnings))
         with self.assertRaises(SkillUploadError):
             self._install(_zip({"SKILL.md": SKILL_MD, "assets/fake.png": b"\x89PNG"}), overwrite=True)
