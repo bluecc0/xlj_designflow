@@ -173,8 +173,10 @@ async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], 
                      turn: dict | None = None) -> AsyncIterator[str]:
     turn = turn or claim_turn(user, session, text)
     session = store.get_session(session["id"], user["id"]) or session  # 占用后读最新历史
+    # skill 记下用户选择的技能，用于技能使用统计
     first = store.append_event(session["id"], turn["id"], "turn.started", {
-        "text": text, "uploads": [{"id": u["id"], "url": u["url"]} for u in uploads]})
+        "text": text, "uploads": [{"id": u["id"], "url": u["url"]} for u in uploads],
+        **({"skill": skill} if skill else {})})
     yield sse(first)
     session = {**session, "title": session.get("title") or (text or "参考图")[:30]}
     content = text

@@ -73,7 +73,7 @@ const pieceCount = (p: Piece) => (p.upload ? 1 : p.assets.length)
 const assetKey = (a: OutfitAsset) => `${a.id}|${a.sku}`
 
 // 记住全局模型配置
-let lastModel: OutfitChangeRequest['model'] = 'gpt-image-2.5'
+let lastModel: OutfitChangeRequest['model'] = 'gpt-image-2.6'
 let lastResolution: OutfitChangeRequest['resolution'] = '1K'
 
 const RESOLUTIONS: OutfitChangeRequest['resolution'][] = ['1K', '2K', '4K']
@@ -85,7 +85,7 @@ const MODEL_OPTIONS: {
   desc: string
   resolutions: OutfitChangeRequest['resolution'][]
 }[] = [
-  { key: 'gpt-image-2.5', label: 'GPT Image 2.5', desc: '中文理解强，智能路由', resolutions: RESOLUTIONS },
+  { key: 'gpt-image-2.6', label: 'GPT Image 2.6', desc: '中文理解强，智能路由', resolutions: RESOLUTIONS },
   { key: 'flux-vto', label: 'FLUX Try-On', desc: 'BFL 官方虚拟试穿，保持脸部与姿势', resolutions: ['1K', '2K'] },
 ]
 

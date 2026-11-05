@@ -12,7 +12,17 @@ from urllib.parse import unquote
 import httpx
 from PIL import Image, JpegImagePlugin
 
-from backend import special_export
+from backend import job_store, special_export
+
+
+def setUpModule() -> None:
+    # 用临时库代替仓库根目录的 jobs.db，测试不依赖本机是否启动过后端
+    temp = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(temp.cleanup)
+    patcher = patch.object(job_store, "_DB_PATH", Path(temp.name) / "jobs.db")
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+    job_store.init_db()
 
 
 def save_noise(path: Path) -> bytes:

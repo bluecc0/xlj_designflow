@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from ..agent_skill_loader import SKILL_CONTEXT_MAX_CHARS, build_skill_context, load_agent_skill, load_reference_text
-from ..ai_image import compress_image_to_data_url, save_user_refs
+from ..ai_image import GPT_IMAGE_26_MODELS, compress_image_to_data_url, save_user_refs, wants_gif_output
 from ..ai_job_recovery import execute_image_job
 from ..config import settings
 from ..job_store import load_ai_image_job, save_ai_image_job, save_image_checkpoint
@@ -24,8 +24,8 @@ from ..user_skill_store import IMAGE_SUFFIXES
 from . import memory, store
 from .engine import Tool, ToolContext, user_cancelled
 
-DEFAULT_IMAGE_MODEL = "gpt-image-2.5"
-IMAGE_MODELS = ["gpt-image-2.5", "gpt-image-2", "nano-banana-pro", "nano-banana-2.1",
+DEFAULT_IMAGE_MODEL = "gpt-image-2.6"
+IMAGE_MODELS = ["gpt-image-2.6", "gpt-image-2.5", "gpt-image-2", "nano-banana-pro", "nano-banana-2.1",
                 "seedream-5.0-pro", "seedream-5.0-flash"]
 RESOLUTIONS = ["1K", "2K", "4K"]
 ASPECT_RATIOS = ["auto", "1:1", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "2:3", "3:2"]
@@ -138,6 +138,9 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str,
             "recovery": {"version": 1, "phase": "queued"}, "execution_prompt": prompt, "chat_session_id": "",
             "variant": variant, "quality": "auto", "reference_storage_job_id": job_id,
             "reference_names": [name for _data, name in refs], **(extra_meta or {})}
+    # 和普通生图一致：2.6 文生图且提示词要动图时出 GIF
+    if model in GPT_IMAGE_26_MODELS and not refs and wants_gif_output(prompt):
+        meta["output_format"] = "gif"
     if refs:
         save_user_refs(uid, job_id, refs)
     save_ai_image_job(job_id=job_id, user_id=uid, status="processing", model=model, prompt=prompt, size=size,
@@ -479,9 +482,9 @@ def build_tools() -> dict[str, Tool]:
                  "resolution": {"type": "string", "enum": RESOLUTIONS,
                                 "description": "默认 1K；只有用户指定分辨率时才改"},
                  "model": {"type": "string", "enum": IMAGE_MODELS,
-                           "description": "默认 gpt-image-2.5；只有用户指定模型时才改"},
+                           "description": "默认 gpt-image-2.6；只有用户指定模型时才改"},
                  "variant": {"type": "string", "enum": ["flare", "sunburst"],
-                             "description": "gpt-image-2.5 的模式：flare 快速（默认），sunburst 优质；只有用户要求优质模式时才用 sunburst"},
+                             "description": "gpt-image-2.6 / 2.5 的模式：flare 快速（默认），sunburst 优质；只有用户要求优质模式时才用 sunburst"},
                  "reference_image_ids": {"type": "array", "items": {"type": "string"}},
                  "group_type": {"type": "string", "enum": ["set", "variant"]}},
               "required": ["images"]},

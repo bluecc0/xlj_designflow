@@ -458,7 +458,7 @@ export function App() {
           )
           const toastMsg = markers && markers.length > 0
             ? `已提交生图任务，包含 ${markers.length} 处精准坐标标记...`
-            : '已提交生图任务，正在使用 gpt-image-2.5 智能路由生成...'
+            : '已提交生图任务，正在使用 gpt-image-2.6 智能路由生成...'
           setQuickEditToast(toastMsg)
           setTimeout(() => {
             setQuickEditToast(null)
@@ -469,8 +469,8 @@ export function App() {
           // 独立运行时的直接调用
           claimOperation('quick-edit', '正在提交快捷编辑任务...')
           const toastMsg = markers && markers.length > 0
-            ? `正在使用 gpt-image-2.5 结合 ${markers.length} 处坐标精准生图...`
-            : '正在使用 gpt-image-2.5 生成图片...'
+            ? `正在使用 gpt-image-2.6 结合 ${markers.length} 处坐标精准生图...`
+            : '正在使用 gpt-image-2.6 生成图片...'
           setQuickEditToast(toastMsg)
           const result = await runQuickEdit(
             targetImage.url,
