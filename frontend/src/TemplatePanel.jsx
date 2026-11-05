@@ -3,6 +3,7 @@
   var map = {
     'gpt-image-2': 'GPT Image 2',
     'gpt-image-2.5': 'GPT Image 2.5',
+    'gpt-image-2.6': 'GPT Image 2.6',
     'nano-banana-pro': 'Nano Banana Pro',
     'gemini-3-pro-image-preview': 'Nano Banana Pro',
     'nano-banana-2.1': 'Nano Banana 2.1',

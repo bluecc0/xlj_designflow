@@ -91,6 +91,9 @@ SUPPORTED_MODELS: dict[str, str] = {
     "gpt-image-2.5": "gpt-image-2.5",
     "gpt-image-2.5-flare": "gpt-image-2.5-flare",
     "gpt-image-2.5-sunburst": "gpt-image-2.5-sunburst",
+    "gpt-image-2.6": "gpt-image-2.6",
+    "gpt-image-2.6-flare": "gpt-image-2.6-flare",
+    "gpt-image-2.6-sunburst": "gpt-image-2.6-sunburst",
 }
 SLASH_MODEL_MAP = SUPPORTED_MODELS
 
@@ -285,6 +288,9 @@ def generate_inspiration_thumb(image_url: str, user_id: str, job_id: str, max_wi
             pass
     try:
         with Image.open(src_path) as im:
+            # 动图（如 GIF）直接用原图预览，静态 webp 只会留下第一帧
+            if getattr(im, "is_animated", False):
+                return image_url, im.width, im.height
             im = im.convert("RGB")
             ratio = max_width / im.width if im.width > max_width else 1
             new_size = (int(im.width * ratio), int(im.height * ratio))
@@ -647,6 +653,7 @@ def _extract_b64_or_image_url(payload: Any) -> str | None:
                             "jpeg": "image/jpeg",
                             "jpg": "image/jpeg",
                             "webp": "image/webp",
+                            "gif": "image/gif",
                         }.get(output_format, "image/png")
                         return f"data:{mime_type};base64,{b64_json.strip()}"
                     url = _extract_result_url(item.get("url") or item.get("image_url"))
@@ -667,7 +674,23 @@ def _extension_from_mime(mime_type: str) -> str:
         return ".jpg"
     if clean == "image/webp":
         return ".webp"
+    if clean == "image/gif":
+        return ".gif"
     return ".png"
+
+
+def _result_image_suffix(content: bytes, fallback: str = ".png") -> str:
+    """按文件头判断结果图真实格式，上游声明的格式不可靠（如 GIF 也可能标成 png）。"""
+    head = bytes(content[:12])
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return ".gif"
+    if head.startswith(b"\x89PNG"):
+        return ".png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return ".webp"
+    return fallback
 
 
 def _mime_from_filename(filename: str) -> str:
@@ -701,7 +724,7 @@ def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "ai_image
     if not content:
         raise RuntimeError("图片内容为空")
     out_dir = _ensure_user_dated_output_dir(user_id)
-    filename = f"{prefix}_{uuid.uuid4().hex}{_extension_from_mime(mime_type)}"
+    filename = f"{prefix}_{uuid.uuid4().hex}{_result_image_suffix(content, _extension_from_mime(mime_type))}"
     out_path = out_dir / filename
     atomic_write(out_path, content)
     local_url = _ai_image_public_url(out_path)
@@ -1195,7 +1218,7 @@ async def _download_final_image(
             f"下载结果图片失败：{last_error or '未知错误'}",
             task_id=task_id,
         )
-    filename = f"{uuid.uuid4().hex}.png"
+    filename = f"{uuid.uuid4().hex}{_result_image_suffix(resp.content)}"
     out_dir = _ensure_user_dated_output_dir(user_id)
     out_path = out_dir / filename
     atomic_write(out_path, resp.content)
@@ -1615,7 +1638,7 @@ def _save_base64_image(b64_value: str, *, user_id: str) -> str:
         raise RuntimeError(f"CLIProxyAPI 图片 base64 解码失败: {exc}") from exc
     if not image_bytes:
         raise RuntimeError("CLIProxyAPI 返回的 base64 图片为空")
-    filename = f"{uuid.uuid4().hex}.png"
+    filename = f"{uuid.uuid4().hex}{_result_image_suffix(image_bytes)}"
     out_dir = _ensure_user_dated_output_dir(user_id)
     out_path = out_dir / filename
     atomic_write(out_path, image_bytes)
@@ -1641,7 +1664,7 @@ async def _download_cliproxy_image(
             resp = await client.get(image_url, headers=_cliproxy_headers(api_key))
         if not resp.is_success:
             raise RuntimeError(f"下载 CLIProxyAPI 结果图片失败：HTTP {resp.status_code}")
-        filename = f"{uuid.uuid4().hex}.png"
+        filename = f"{uuid.uuid4().hex}{_result_image_suffix(resp.content)}"
         out_dir = _ensure_user_dated_output_dir(user_id)
         out_path = out_dir / filename
         atomic_write(out_path, resp.content)
@@ -1669,14 +1692,20 @@ async def _save_cliproxy_response_image(data: dict[str, Any], *, user_id: str, a
 
 
 _SUB2API_GPT_IMAGE_25_MODELS = {"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
-_SUB2API_ALLOWED_MODELS = {"gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
+# GPT Image 2.6 目前只有 Sub2API 提供，且只支持 1K
+GPT_IMAGE_26_MODELS = {"gpt-image-2.6", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"}
+_SUB2API_GPT_IMAGE_26_MODELS = {"gpt-image-2.6-flare", "gpt-image-2.6-sunburst"}
+_SUB2API_ALLOWED_MODELS = {"gpt-image-2", *_SUB2API_GPT_IMAGE_25_MODELS, *_SUB2API_GPT_IMAGE_26_MODELS}
 
 
 def _sub2api_model_name(model: str, variant: str = "") -> str:
     """将逻辑模型和变体映射为 Sub2API/CLIProxyAPI 实际模型名。"""
     model_name = _normalize_model_name(model)
-    if model_name in _SUB2API_GPT_IMAGE_25_MODELS:
+    if model_name in _SUB2API_GPT_IMAGE_25_MODELS or model_name in _SUB2API_GPT_IMAGE_26_MODELS:
         return model_name
+    if model_name == "gpt-image-2.6":
+        requested_variant = (variant or "").strip().lower()
+        return f"gpt-image-2.6-{requested_variant if requested_variant in {'flare', 'sunburst'} else 'flare'}"
     if model_name == "gpt-image-2.5":
         requested_variant = (variant or "").strip().lower()
         if requested_variant in {"flare", "sunburst"}:
@@ -1831,7 +1860,7 @@ async def _download_tuzi_image(image_url: str, *, user_id: str, api_key: str) ->
         if not resp.is_success:
             raise RuntimeError(f"下载 Tuzi 结果图片失败：HTTP {resp.status_code}")
         out_dir = _ensure_user_dated_output_dir(user_id)
-        out_path = out_dir / f"{uuid.uuid4().hex}.png"
+        out_path = out_dir / f"{uuid.uuid4().hex}{_result_image_suffix(resp.content)}"
         atomic_write(out_path, resp.content)
         local_url = _ai_image_public_url(out_path)
         checkpoint("downloaded", local_url=local_url)
@@ -2229,7 +2258,7 @@ DEFAULT_MODEL_ROUTING_RULES: dict[str, list[str]] = {
 
 # 服务商能力集合：定义各线路真正支持的模型 (None/空集代表支持全量模型)
 PROVIDER_MODEL_CAPABILITIES: dict[str, set[str] | None] = {
-    PROVIDER_SUB2API: {"gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"},
+    PROVIDER_SUB2API: {"gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", *GPT_IMAGE_26_MODELS},
     PROVIDER_TUZI: {"gpt-image-2.5", "gpt-image-2.5-flare"},
     PROVIDER_ADOBE2API: {"gemini-3-pro-image-preview", "gpt-image-2"},
     PROVIDER_APIMART_EXT: {"gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", _APIMART_NANO_BANANA_21_MODEL},
@@ -2256,6 +2285,8 @@ def _circuit_key(provider: str, model: str = "") -> str:
         clean_model = str(model).strip().lower()
     if clean_model in ("gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"):
         clean_model = "gpt-image-2.5"
+    elif clean_model in GPT_IMAGE_26_MODELS:
+        clean_model = "gpt-image-2.6"
     return f"{clean_provider}:{clean_model}"
 
 
@@ -2418,6 +2449,11 @@ def _get_custom_rules() -> dict[str, list[str]]:
     return rules
 
 
+def gpt_image_26_on_sub2api(resolution: str, quality: str = "") -> bool:
+    """GPT Image 2.6 只在 1K、非高画质（自动/低/中）时可用。"""
+    return (resolution or "1K").strip().upper() == "1K" and (quality or "").strip().lower() in ("", "auto", "low", "medium")
+
+
 def get_smart_route_candidates(
     model: str,
     resolution: str = "",
@@ -2441,6 +2477,21 @@ def get_smart_route_candidates(
     if not res_upper:
         _ratio, res_clean = _normalize_size(size, resolution)
         res_upper = res_clean.upper() if res_clean else "1K"
+
+    # GPT Image 2.6 只有 Sub2API 的 1K：1K 且非高画质时先走 Sub2API，
+    # 其余请求以及 Sub2API 失败后的兜底，都改用其他线路的 GPT Image 2.5
+    if model_name in GPT_IMAGE_26_MODELS:
+        fallback = get_smart_route_candidates(
+            "gpt-image-2.5", resolution=res_upper, size=size, variant=variant, quality=quality,
+            filter_frozen=filter_frozen, now=now,
+        )
+        if not gpt_image_26_on_sub2api(res_upper, quality_clean):
+            return fallback
+        if not (settings.cliproxy_base_url and settings.cliproxy_api_key):
+            return fallback
+        if filter_frozen and fallback and is_provider_frozen(PROVIDER_SUB2API, model=model_name, now=now):
+            return fallback
+        return [PROVIDER_SUB2API] + [p for p in fallback if p != PROVIDER_SUB2API]
 
     # 1. 根据模型与画质分辨率选择匹配规则（环境 JSON 显式规则优先）
     if custom_rules and model_name in custom_rules:
@@ -2634,7 +2685,10 @@ async def smart_generate_image_async(
                 on_attempt(provider)
             attempt_count += 1
             canonical_model = _normalize_model_name(model).lower()
-            if canonical_model == "gpt-image-2.5":
+            if canonical_model in GPT_IMAGE_26_MODELS:
+                # 只有 Sub2API 有 2.6，其他线路一律降级为 2.5
+                provider_model = _sub2api_model_name(model, variant) if provider == PROVIDER_SUB2API else "gpt-image-2.5"
+            elif canonical_model == "gpt-image-2.5":
                 if provider == PROVIDER_ADOBE2API:
                     provider_model = "gpt-image-2"
                 elif provider == PROVIDER_SUB2API:

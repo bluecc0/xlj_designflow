@@ -222,7 +222,84 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result.get("provider_switched"))
             self.assertEqual(attempts, ["sub2api", "adobe2api"])
 
+    def test_gpt_image_26_routes_1k_to_sub2api_else_falls_back_to_25(self) -> None:
+        with patch.multiple(
+            ai_image.settings,
+            cliproxy_base_url="http://sub2api:8080", cliproxy_api_key="sk-sub2api",
+            tuzi_base_url="http://tuzi", tuzi_api_key="sk-tuzi",
+            adobe2api_base_url="", adobe2api_api_key="",
+            ai_image_api_key="sk-apimart", smart_routing_rules_json="",
+        ):
+            # 1K 非高画质：先 Sub2API 的 2.6，失败后按 2.5 的其余线路兜底
+            for quality, expected in (
+                ("", ["sub2api", "tuzi", "apimart-ext", "apimart"]),
+                ("auto", ["sub2api", "tuzi", "apimart-ext", "apimart"]),
+                ("medium", ["sub2api", "apimart-ext", "apimart"]),
+            ):
+                with self.subTest(quality=quality):
+                    self.assertEqual(
+                        ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="1K", quality=quality),
+                        expected,
+                    )
+            for resolution, quality in (("2K", "auto"), ("4K", "auto"), ("1K", "xhigh"), ("1K", "max")):
+                with self.subTest(resolution=resolution, quality=quality):
+                    self.assertEqual(
+                        ai_image.get_smart_route_candidates("gpt-image-2.6", resolution=resolution, quality=quality),
+                        ai_image.get_smart_route_candidates("gpt-image-2.5", resolution=resolution, quality=quality),
+                    )
+                    self.assertNotIn("sub2api", ai_image.get_smart_route_candidates(
+                        "gpt-image-2.6", resolution=resolution, quality=quality))
+            with patch.object(ai_image.settings, "cliproxy_api_key", ""):
+                self.assertEqual(
+                    ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="1K"),
+                    ["tuzi", "apimart-ext", "apimart"],
+                )
+
+    async def test_gpt_image_26_uses_26_on_sub2api_and_25_elsewhere(self) -> None:
+        calls = []
+
+        async def mock_sub2api(*args, **kwargs):
+            calls.append(("sub2api", kwargs["model"]))
+            raise RuntimeError("CLIProxyAPI 生图失败：HTTP 400")
+
+        async def mock_apimart(*args, **kwargs):
+            calls.append(("apimart", kwargs["model"]))
+            return {"url": "/x.png", "provider": "apimart", "model": kwargs["model"]}
+
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
+             patch.object(ai_image, "generate_image_async", side_effect=mock_apimart), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "apimart"]):
+            result = await ai_image.smart_generate_image_async(
+                model="gpt-image-2.6", prompt="test prompt", user_id="test_user", variant="sunburst",
+            )
+
+        self.assertEqual(result["provider"], "apimart")
+        self.assertEqual(calls, [("sub2api", "gpt-image-2.6-sunburst"), ("apimart", "gpt-image-2.5")])
+
+    def test_result_image_saved_with_real_format(self) -> None:
+        import io
+        from PIL import Image
+
+        frames = [Image.new("RGB", (8, 8), color) for color in ("red", "blue")]
+        buf = io.BytesIO()
+        frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:], duration=100, loop=0)
+        gif = buf.getvalue()
+        with patch.object(ai_image, "_OUTPUT_DIR", Path(self.temp_dir.name)):
+            saved = ai_image._save_base64_image(base64.b64encode(gif).decode(), user_id="u1")
+            self.assertTrue(saved.endswith(".gif"))
+            # 上游把 GIF 标成 png 时也按真实格式保存
+            saved = ai_image._save_data_url_image(
+                "data:image/png;base64," + base64.b64encode(gif).decode(), user_id="u1")
+            self.assertTrue(saved.endswith(".gif"))
+            # 动图不生成静态 webp 预览，直接用原图
+            preview, width, height = ai_image.generate_inspiration_thumb(saved, "u1", "job1")
+            self.assertEqual((preview, width, height), (saved, 8, 8))
+            self.assertEqual(ai_image.get_inspiration_thumb_url_if_exists(saved, "u1", "job1"), saved)
+
     def test_sub2api_model_name_resolution(self) -> None:
+        self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.6"), "gpt-image-2.6-flare")
+        self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.6", "sunburst"), "gpt-image-2.6-sunburst")
+        self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.6-sunburst"), "gpt-image-2.6-sunburst")
         self.assertEqual(ai_image._sub2api_model_name("gpt-image-2"), "gpt-image-2")
         self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.5", "flare"), "gpt-image-2.5-flare")
         self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.5", "sunburst"), "gpt-image-2.5-sunburst")

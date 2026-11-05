@@ -768,7 +768,7 @@ const LogBox = ({ logs, running }) => {
 
 const GREETINGS = [
   { title: '今天想设计点什么？', sub: '上传产品图、参考图、品牌素材，或者直接输入描述。' },
-  { title: '想要生成一张海报吗？', sub: '使用 GPT Image 2.5，直接描述你想要的画面。' },
+  { title: '想要生成一张海报吗？', sub: '使用 GPT Image 2.6，直接描述你想要的画面。' },
   { title: '需要编辑图像？', sub: '使用 Nano Banana Pro，上传图片后描述修改需求。' },
   { title: '来合成特殊品吧', sub: '在功能里选择「特殊品」，输入货号和文案即可一键合成。' },
   { title: '忘了怎么用？', sub: '在功能里选择「问答」，直接提问就能找到答案。' },
@@ -1213,7 +1213,7 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   m.status === 'done' ? (batchImages && batchOkCount < batchImages.length ? '生图完成（' + batchOkCount + '/' + batchImages.length + ' 成功）' : '生图完成')
                   : m.status === 'failed' ? '生图失败'
                   : m.status === 'skill-planning' ? '正在执行 Skill：$' + m.activeSkill + '…'
-                  : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 GPT Image 2.5…'
+                  : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 GPT Image 2.6…'
                   : m.status === 'queued' ? '正在提交到「' + (m.model || 'AI') + '」…'
                   : m.activeSkill && !m.promptTrace && (m.progress || 0) < 20 ? '正在解读需求并整理生图 Prompt…'
                   : (m.progress || 0) < 20 ? '「' + (m.model || 'AI') + '」正在处理…'
@@ -1867,7 +1867,7 @@ const CHAT_INSPIRATION_CATEGORIES = [
 
 // ---------- Composer ----------
 
-const DEFAULT_COMPOSER_MODE = 'gpt-image-2.5';
+const DEFAULT_COMPOSER_MODE = 'gpt-image-2.6';
 
 const NO_SKILLS = [];
 
@@ -1912,7 +1912,7 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
   const MAX_COMPOSER_HEIGHT = 500;
   const minComposerHeightRef = React.useRef(COLLAPSED_COMPOSER_HEIGHT);
   const isSeedreamMode = selectedMode === 'seedream-5-0-flash' || selectedMode === 'seedream-5-0-pro';
-  const selectedWorkflowMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' || isSeedreamMode
+  const selectedWorkflowMode = selectedMode === 'gpt-image-2.6' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' || isSeedreamMode
     ? 'ai-image'
     : selectedMode === 'special' || selectedMode === 'special_full'
       ? selectedMode
@@ -2138,7 +2138,7 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
   }, [prototypePanel, skillMenuOpen]);
 
   // 外部触发：从灵感页“生成同款”传过来，自动选择生图模式并填入 prompt
-  // seedPrompt 可以是字符串，或 { text, mode }（mode 缺省为 gpt-image-2.5，'' 表示默认问答）
+  // seedPrompt 可以是字符串，或 { text, mode }（mode 缺省为 gpt-image-2.6，'' 表示默认问答）
   React.useEffect(() => {
     if (!seedPrompt) return;
     const seed = typeof seedPrompt === 'object' ? seedPrompt : { text: seedPrompt };
@@ -2147,7 +2147,7 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
       setSelectedSkill(seed.skill);
       setSkillMenuDismissed(true);
     } else {
-      const mode = typeof seed.mode === 'string' ? seed.mode : 'gpt-image-2.5';
+      const mode = typeof seed.mode === 'string' ? seed.mode : 'gpt-image-2.6';
       setSelectedMode(mode);
       if (mode === 'special_full') setSpecialRouteMode('full');
       else if (mode === 'special') setSpecialRouteMode('auto');
@@ -2222,12 +2222,12 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
     '9:16':{ label: '9:16', qualities: ['1K', '2K', '4K'], preview: '864×1536', px: { '1K': '864×1536', '2K': '1152×2048', '4K': '2160×3840' } },
   };
 
-  const activeAiModel = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2'
+  const activeAiModel = selectedMode === 'gpt-image-2.6' || selectedMode === 'gpt-image-2'
     ? selectedMode
     : selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' || isSeedreamMode
       ? selectedMode
       : '';
-  const activeMode = selectedMode === 'gpt-image-2.5' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' || isSeedreamMode
+  const activeMode = selectedMode === 'gpt-image-2.6' || selectedMode === 'gpt-image-2' || selectedMode === 'nano-banana-pro' || selectedMode === 'nano-banana-2.1' || isSeedreamMode
     ? 'ai-image'
     : selectedMode === 'special_full' || selectedMode === 'special'
       ? selectedMode
@@ -2785,7 +2785,7 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
   const getTaskDefinitions = React.useCallback(function() {
     return [
       { id: 'chat', label: '问答', iconKey: 'sparkles', workflow: 'chat', mode: '' },
-      { id: 'gpt-image', label: 'GPT Image 2.5', iconKey: 'image', iconSrc: 'src/icon/openai.png', workflow: 'chat', mode: 'gpt-image-2.5' },
+      { id: 'gpt-image', label: 'GPT Image 2.6', iconKey: 'image', iconSrc: 'src/icon/openai.png', workflow: 'chat', mode: 'gpt-image-2.6' },
       { id: 'gpt-image-2', label: 'GPT Image 2', iconKey: 'image', iconSrc: 'src/icon/openai.png', workflow: 'chat', mode: 'gpt-image-2' },
       { id: 'nano-banana', label: 'Nano Banana Pro', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', workflow: 'chat', mode: 'nano-banana-pro' },
       { id: 'nano-banana-2.1', label: 'Nano Banana 2.1', iconKey: 'image', iconSrc: 'src/icon/gemini-color.png', workflow: 'chat', mode: 'nano-banana-2.1' },
@@ -2798,7 +2798,7 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
     return I[iconKey] || I.sparkles;
   }, []);
   const activeTaskLabel = activeMode === 'ai-image'
-    ? (isSeedreamMode ? 'Seedream 5.0' : activeAiModel === 'nano-banana-2.1' ? 'Nano Banana 2.1' : activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.5')
+    ? (isSeedreamMode ? 'Seedream 5.0' : activeAiModel === 'nano-banana-2.1' ? 'Nano Banana 2.1' : activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.6')
     : activeMode === 'special_full'
       ? '完整特殊品'
       : activeMode === 'special'
@@ -2824,9 +2824,9 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
     ? (isSeedreamMode ? 'src/icon/doubao.svg' : activeAiModel.indexOf('nano-banana') === 0 ? 'src/icon/gemini-color.png' : 'src/icon/openai.png')
     : null;
   const qualityMap = { auto: '自动', medium: '中等', xhigh: '高', max: '最高' };
-  const qualityTag = (activeAiModel === 'gpt-image-2.5' && aiQualityTier && aiQualityTier !== 'auto') ? (' · ' + (qualityMap[aiQualityTier] || aiQualityTier)) : '';
+  const qualityTag = (activeAiModel === 'gpt-image-2.6' && aiQualityTier && aiQualityTier !== 'auto') ? (' · ' + (qualityMap[aiQualityTier] || aiQualityTier)) : '';
   const modeParamLabel = activeMode === 'ai-image'
-    ? (aiRatio + ' · ' + aiQuality + (isSeedreamMode ? (' · ' + (activeAiModel === 'seedream-5-0-pro' ? 'Pro' : 'Flash')) : activeAiModel === 'gpt-image-2.5' ? (' · ' + ({ flare: '快速', sunburst: '优质' }[aiVariant] || aiVariant) + qualityTag) : ''))
+    ? (aiRatio + ' · ' + aiQuality + (isSeedreamMode ? (' · ' + (activeAiModel === 'seedream-5-0-pro' ? 'Pro' : 'Flash')) : activeAiModel === 'gpt-image-2.6' ? (' · ' + ({ flare: '快速', sunburst: '优质' }[aiVariant] || aiVariant) + qualityTag) : ''))
     : activeMode === 'special_full'
       ? '线路 完整'
       : activeMode === 'special'
@@ -2840,9 +2840,9 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
     aiProvider === 'sub2api' ||
     (
       aiProvider === 'auto' &&
-      (activeAiModel === 'gpt-image-2.5' || activeAiModel === 'gpt-image-2') &&
+      (activeAiModel === 'gpt-image-2.6' || activeAiModel === 'gpt-image-2') &&
       (aiQuality === '1K' || !aiQuality) &&
-      !(activeAiModel === 'gpt-image-2.5' && (aiQualityTier === 'max' || aiQualityTier === 'xhigh'))
+      !(activeAiModel === 'gpt-image-2.6' && (aiQualityTier === 'max' || aiQualityTier === 'xhigh'))
     )
   );
   const selectedSettingBits = [
@@ -3221,7 +3221,7 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
               );
             })
           ),
-          (activeAiModel === 'gpt-image-2.5' || isSeedreamMode) && React.createElement('div', {
+          (activeAiModel === 'gpt-image-2.6' || isSeedreamMode) && React.createElement('div', {
             style: {
               display: 'grid',
               gridTemplateColumns: isSeedreamMode ? '1fr' : '1fr 1fr',
@@ -4246,7 +4246,7 @@ const AGENT2_TOOL_LABELS = {
 // 回复末尾的 [[NEXT: ...]] 由界面渲染成快捷按钮；流式过程中先把它隐藏
 const agent2StripNext = function(text) { return String(text || '').replace(/\[\[[\s\S]*$/, '').trimEnd(); };
 const AGENT2_MODEL_NAMES = {
-  'gpt-image-2.5': 'GPT Image 2.5', 'gpt-image-2': 'GPT Image 2', 'nano-banana-pro': 'Nano Banana Pro',
+  'gpt-image-2.6': 'GPT Image 2.6', 'gpt-image-2.5': 'GPT Image 2.5', 'gpt-image-2': 'GPT Image 2', 'nano-banana-pro': 'Nano Banana Pro',
   'nano-banana-2.1': 'Nano Banana 2.1', 'seedream-5.0-pro': 'Seedream 5.0 Pro', 'seedream-5.0-flash': 'Seedream 5.0 Flash',
 };
 const AGENT2_TERMINAL = { 'turn.finished': true, 'turn.failed': true, 'turn.cancelled': true, 'input.required': true };
@@ -4760,7 +4760,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     if (value === 'nano-banana-2.1' || value === 'gemini-nano-banana-2.1' || value === 'gemini-nano-banana-2.1-ext') return 'nano-banana-2.1';
     if (value.includes('nano') || value.includes('banana') || value.includes('gemini')) return 'nano-banana-pro';
     if (/^gpt[\s_-]*image[\s_-]*2$/.test(value)) return 'gpt-image-2';
-    if (value.includes('gpt') || value.includes('image')) return 'gpt-image-2.5';
+    if (value.includes('gpt') || value.includes('image')) return 'gpt-image-2.6';
     return value;
   }, []);
 
@@ -5589,7 +5589,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       });
       setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta, activeSkill: activeSkill }]);
       await runAiImageGeneration(
-        aiOptions.model || 'gpt-image-2.5',
+        aiOptions.model || 'gpt-image-2.6',
         executionText,
         text.trim(),
         refImages,
@@ -5768,7 +5768,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
 
     // ── AI 生图指令匹配 ────────────────────────────────────────────────────────
     // 用户通过 UI 功能面板选择模型，输入框仅作为图片描述。
-    const targetAiModel = aiOptions.model || ((aiOptions.mode === 'nano-banana-pro' || aiOptions.mode === 'nano-banana-2.1') ? aiOptions.mode : (aiOptions.workflow === 'ai-image' ? 'gpt-image-2.5' : ''));
+    const targetAiModel = aiOptions.model || ((aiOptions.mode === 'nano-banana-pro' || aiOptions.mode === 'nano-banana-2.1') ? aiOptions.mode : (aiOptions.workflow === 'ai-image' ? 'gpt-image-2.6' : ''));
     const isAiImageMode = Boolean(targetAiModel) || aiOptions.workflow === 'ai-image';
 
     // 继承上一张图修改、沿用需求重新生成还是全新需求，由后端 VLM 判断。
@@ -5782,7 +5782,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         return;
       }
       setMessages(msgs => [...msgs, { who: 'user', text: plainText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
-      await runAiImageGeneration(targetAiModel || 'gpt-image-2.5', aiOptions.quickEditPrompt || plainText, plainText, refImages, aiOptions);
+      await runAiImageGeneration(targetAiModel || 'gpt-image-2.6', aiOptions.quickEditPrompt || plainText, plainText, refImages, aiOptions);
       return;
     }
 
@@ -5791,7 +5791,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     // 后端会结合 chat_session_id 的历史 prompt，并自动把上一张结果图作为参考图。
     if (currentAiChatId && hasDoneAiImageInCurrentThread() && isLikelyAiImageFollowup(text)) {
       const lastOpts = getLastAiImageOptions();
-      const model = normalizeAiImageModel(lastOpts?.model) || 'gpt-image-2.5';
+      const model = normalizeAiImageModel(lastOpts?.model) || 'gpt-image-2.6';
       const opts = {
         ...aiOptions,
         size: lastOpts?.size || aiOptions.size,
@@ -6006,7 +6006,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     const args = msg && msg.retryArgs;
     const text = (args && (args[2] || args[1])) || (msg && msg.prompt) || '';
     const model = (args && args[0]) || (msg && msg.model) || '';
-    if (text) setLocalSeed({ text: String(text), mode: normalizeAiImageModel(model) || 'gpt-image-2.5' });
+    if (text) setLocalSeed({ text: String(text), mode: normalizeAiImageModel(model) || 'gpt-image-2.6' });
   }, [normalizeAiImageModel]);
   const handlePickSkill = React.useCallback(function(skill) {
     if (!skill || !skill.name) return;
@@ -6095,7 +6095,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       workflow: 'ai-image',
       // 带坐标标记的完整提示词只用于生图，不显示在聊天框
       quickEditPrompt: promptText,
-      model: 'gpt-image-2.5',
+      model: 'gpt-image-2.6',
       provider: 'auto',
       quality: 'auto',
       size: 'auto',

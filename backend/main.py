@@ -74,6 +74,8 @@ from .ai_image import (
     _ai_image_public_url,
     compress_image_to_data_url,
     normalize_model_name,
+    GPT_IMAGE_26_MODELS,
+    gpt_image_26_on_sub2api,
 )
 from .common_helpers import _extract_first_json_object, _resolve_image_data_url, make_sse
 from .product_sku_library import SkuFolderLibrary
@@ -6557,6 +6559,13 @@ async def ai_image_endpoint(
         resolved_provider = normalize_provider(provider)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    # 指定线路时不走智能路由：2.6 只有 Sub2API 的 1K 非高画质可用，其余情况改用 2.5
+    if (
+        resolved in GPT_IMAGE_26_MODELS
+        and resolved_provider != PROVIDER_AUTO
+        and not (resolved_provider == PROVIDER_SUB2API and gpt_image_26_on_sub2api(resolution or "1K", quality))
+    ):
+        resolved = "gpt-image-2.5"
     active_skill_name = (skill or "").strip()
     active_skill_context = ""
     active_skill_meta = None
@@ -7172,7 +7181,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
     system_prompt = """你是 DesignFlow（鑫乐纪AI视觉创作平台）的 AI 设计助手，用户正在使用「问答」功能向你提问。DesignFlow 是 AI 驱动的电商设计工作台。
 
 平台主要用法：
-1. 在输入框左下角「选择功能」里选择要做的事：问答、AI 生图（GPT Image 2.5 / GPT Image 2 / Nano Banana Pro / Nano Banana 2.1 / Seedream 5.0）、智能铺货、特殊品
+1. 在输入框左下角「选择功能」里选择要做的事：问答、AI 生图（GPT Image 2.6 / GPT Image 2 / Nano Banana Pro / Nano Banana 2.1 / Seedream 5.0）、智能铺货、特殊品
 2. 在「参数设置」里选比例、清晰度、并发数等，输入描述、SKU 或上传参考图/表格后发送
 3. 结果出现在对话区，可放入中间的无限画布继续排版，并在画布上扩图、抠图、高清放大、换装等"""
 
