@@ -21,6 +21,16 @@ from backend import main as app_main
 from backend import bfl_outpainting as bfl
 
 
+def setUpModule() -> None:
+    # 用临时库代替仓库根目录的 jobs.db，测试不依赖本机是否启动过后端
+    temp = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(temp.cleanup)
+    patcher = patch.object(job_store, "_DB_PATH", Path(temp.name) / "jobs.db")
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+    job_store.init_db()
+
+
 def png_bytes(size: tuple[int, int] = (64, 64), color=(20, 80, 140, 255)) -> bytes:
     output = io.BytesIO()
     Image.new("RGBA", size, color).save(output, format="PNG")

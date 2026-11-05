@@ -74,6 +74,9 @@ from .ai_image import (
     _ai_image_public_url,
     compress_image_to_data_url,
     normalize_model_name,
+    GPT_IMAGE_26_MODELS,
+    gpt_image_26_on_sub2api,
+    wants_gif_output,
 )
 from .common_helpers import _extract_first_json_object, _resolve_image_data_url, make_sse
 from .product_sku_library import SkuFolderLibrary
@@ -160,6 +163,7 @@ from .job_store import (
     load_active_compose_jobs,
     load_ai_image_job_by_image_url,
     load_job,
+    mark_ai_image_job_provider_switched,
     count_operation_logs,
     load_operation_logs,
     load_recent_jobs,
@@ -4721,6 +4725,7 @@ async def _execute_ai_image_background(
                     size=size, resolution=resolution, user_id=user_id,
                     variant=variant, quality=quality,
                     on_progress=on_progress, on_attempt=on_attempt, on_accepted=on_accepted,
+                    output_format=str((request_meta or {}).get("output_format") or ""),
                 ),
                 timeout=max(60, int(settings.ai_image_smart_route_timeout_seconds or 360)),
             )
@@ -5772,6 +5777,8 @@ async def ai_image_retry(request: Request):
             "reference_storage_job_id": reference_storage_job_id,
             "variant": variant,
             "quality": quality,
+            # 执行器按库里的 request_meta 执行，动图格式必须随重试任务落库
+            "output_format": str(request_meta.get("output_format") or ""),
             "manual_reference_count": (
                 int(request_meta["manual_reference_count"])
                 if "manual_reference_count" in request_meta
@@ -6557,6 +6564,17 @@ async def ai_image_endpoint(
         resolved_provider = normalize_provider(provider)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    # 要动图时只能用 APIMart 的 GPT Image 2.6 文生图，交给智能路由处理
+    gif_output = resolved in GPT_IMAGE_26_MODELS and not image and wants_gif_output(prompt)
+    if gif_output:
+        resolved_provider = PROVIDER_AUTO
+    # 指定线路时不走智能路由：2.6 只有 APIMart 和 Sub2API 的 1K 非高画质可用，其余情况改用 2.5
+    if (
+        resolved in GPT_IMAGE_26_MODELS
+        and resolved_provider not in (PROVIDER_AUTO, PROVIDER_APIMART)
+        and not (resolved_provider == PROVIDER_SUB2API and gpt_image_26_on_sub2api(resolution or "1K", quality))
+    ):
+        resolved = "gpt-image-2.5"
     active_skill_name = (skill or "").strip()
     active_skill_context = ""
     active_skill_meta = None
@@ -6635,7 +6653,8 @@ async def ai_image_endpoint(
 
         # 3. 只有在上一张图基础上修改时，才把它作为参考图
         context_ref_url = ""
-        if context_intent["mode"] == "edit" and prev_image_path:
+        # 动图只支持文生图，不带上一张图作参考
+        if context_intent["mode"] == "edit" and prev_image_path and not gif_output:
             try:
                 context_ref_bytes.append((prev_image_path.read_bytes(), prev_image_path.name))
                 context_ref_url = prev_image_url
@@ -6712,6 +6731,7 @@ async def ai_image_endpoint(
                 "context_reference_url": context_ref_url if context_ref_bytes else "",
                 "context_image_url": context_ref_url if context_ref_bytes else "",
                 "context_intent": context_intent,
+                "output_format": "gif" if gif_output else "",
                 "reference_names": [name for _content, name in all_refs_batch],
                 "reference_images": reference_images,
                 # data URL 缩略图体积很大，不写入任务库；站内 URL 可以安全保留用于排障。
@@ -6841,7 +6861,7 @@ async def ai_image_endpoint(
 # ─── AI 换装：参考图生图 ─────────────────────────────────────────────────────
 
 OUTFIT_MAX_SOURCE_BYTES = 20 * 1024 * 1024
-OUTFIT_MODELS = {"gpt-image-2.5", FLUX_VTO_MODEL}
+OUTFIT_MODELS = {"gpt-image-2.6", "gpt-image-2.5", FLUX_VTO_MODEL}
 
 
 async def _read_outfit_upload(upload: UploadFile, *, label: str) -> bytes:
@@ -6897,7 +6917,7 @@ async def ai_image_outfit_change(
         (client_request_id or "").strip() or (request.headers.get("x-client-request-id") or "").strip() or "-",
         64,
     )
-    model_key = (model or settings.outfit_default_model or "gpt-image-2.5").strip().lower()
+    model_key = (model or settings.outfit_default_model or "gpt-image-2.6").strip().lower()
     if model_key not in OUTFIT_MODELS:
         raise HTTPException(400, f"AI 换装不支持模型: {model}")
     # FLUX 走 BFL 官方虚拟试穿接口（人物图 + 单张服装拼图），其余模型走通用参考图生图
@@ -6911,7 +6931,7 @@ async def ai_image_outfit_change(
         resolution = "1K"
     if is_flux and resolution == "4K":
         # vto-v2 输出尺寸跟随人物图，官方上限约 4MP，达不到 4K
-        raise HTTPException(400, "FLUX 换装最高支持 2K（约 4MP），4K 请使用 GPT Image 2.5")
+        raise HTTPException(400, "FLUX 换装最高支持 2K（约 4MP），4K 请使用 GPT Image 2.6")
     batch_count = max(1, min(int(batch_count or 1), 4))
 
     asset_list = _parse_json_form(assets, [], field="assets")
@@ -7172,7 +7192,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
     system_prompt = """你是 DesignFlow（鑫乐纪AI视觉创作平台）的 AI 设计助手，用户正在使用「问答」功能向你提问。DesignFlow 是 AI 驱动的电商设计工作台。
 
 平台主要用法：
-1. 在输入框左下角「选择功能」里选择要做的事：问答、AI 生图（GPT Image 2.5 / GPT Image 2 / Nano Banana Pro / Nano Banana 2.1 / Seedream 5.0）、智能铺货、特殊品
+1. 在输入框左下角「选择功能」里选择要做的事：问答、AI 生图（GPT Image 2.6 / GPT Image 2 / Nano Banana Pro / Nano Banana 2.1 / Seedream 5.0）、智能铺货、特殊品
 2. 在「参数设置」里选比例、清晰度、并发数等，输入描述、SKU 或上传参考图/表格后发送
 3. 结果出现在对话区，可放入中间的无限画布继续排版，并在画布上扩图、抠图、高清放大、换装等"""
 

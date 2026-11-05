@@ -91,6 +91,9 @@ SUPPORTED_MODELS: dict[str, str] = {
     "gpt-image-2.5": "gpt-image-2.5",
     "gpt-image-2.5-flare": "gpt-image-2.5-flare",
     "gpt-image-2.5-sunburst": "gpt-image-2.5-sunburst",
+    "gpt-image-2.6": "gpt-image-2.6",
+    "gpt-image-2.6-flare": "gpt-image-2.6-flare",
+    "gpt-image-2.6-sunburst": "gpt-image-2.6-sunburst",
 }
 SLASH_MODEL_MAP = SUPPORTED_MODELS
 
@@ -285,6 +288,9 @@ def generate_inspiration_thumb(image_url: str, user_id: str, job_id: str, max_wi
             pass
     try:
         with Image.open(src_path) as im:
+            # 动图（如 GIF）直接用原图预览，静态 webp 只会留下第一帧
+            if getattr(im, "is_animated", False):
+                return image_url, im.width, im.height
             im = im.convert("RGB")
             ratio = max_width / im.width if im.width > max_width else 1
             new_size = (int(im.width * ratio), int(im.height * ratio))
@@ -431,6 +437,7 @@ _normalize_model_name = normalize_model_name
 
 
 _APIMART_GPT_IMAGE_25_MODELS = {"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
+_GPT_IMAGE_26_VARIANT_MODELS = {"gpt-image-2.6-flare", "gpt-image-2.6-sunburst"}
 _APIMART_NANO_BANANA_21_MODEL = "gemini-nano-banana-2.1"
 _NANO_BANANA_21_EXTRA_RATIOS = {"4:5", "1:4", "4:1", "1:8", "8:1", "21:9"}
 _SEEDREAM_5_MODELS = {"seedream-5-0-pro", "seedream-5-0-flash"}
@@ -462,6 +469,9 @@ def _normalize_seedream_size(size: str, resolution: str) -> tuple[str, str]:
 def _apimart_model_name(model: str, variant: str = "") -> str:
     """将逻辑模型和类型映射为 APIMart 文档要求的实际模型名。"""
     model_name = _normalize_model_name(model)
+    if model_name == "gpt-image-2.6":
+        requested_variant = (variant or "").strip().lower()
+        return f"gpt-image-2.6-{requested_variant if requested_variant in {'flare', 'sunburst'} else 'flare'}"
     if model_name != "gpt-image-2.5":
         return model_name
     requested_variant = (variant or "").strip().lower()
@@ -647,6 +657,7 @@ def _extract_b64_or_image_url(payload: Any) -> str | None:
                             "jpeg": "image/jpeg",
                             "jpg": "image/jpeg",
                             "webp": "image/webp",
+                            "gif": "image/gif",
                         }.get(output_format, "image/png")
                         return f"data:{mime_type};base64,{b64_json.strip()}"
                     url = _extract_result_url(item.get("url") or item.get("image_url"))
@@ -667,7 +678,23 @@ def _extension_from_mime(mime_type: str) -> str:
         return ".jpg"
     if clean == "image/webp":
         return ".webp"
+    if clean == "image/gif":
+        return ".gif"
     return ".png"
+
+
+def _result_image_suffix(content: bytes, fallback: str = ".png") -> str:
+    """按文件头判断结果图真实格式，上游声明的格式不可靠（如 GIF 也可能标成 png）。"""
+    head = bytes(content[:12])
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return ".gif"
+    if head.startswith(b"\x89PNG"):
+        return ".png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return ".webp"
+    return fallback
 
 
 def _mime_from_filename(filename: str) -> str:
@@ -701,7 +728,7 @@ def _save_data_url_image(data_url: str, *, user_id: str, prefix: str = "ai_image
     if not content:
         raise RuntimeError("图片内容为空")
     out_dir = _ensure_user_dated_output_dir(user_id)
-    filename = f"{prefix}_{uuid.uuid4().hex}{_extension_from_mime(mime_type)}"
+    filename = f"{prefix}_{uuid.uuid4().hex}{_result_image_suffix(content, _extension_from_mime(mime_type))}"
     out_path = out_dir / filename
     atomic_write(out_path, content)
     local_url = _ai_image_public_url(out_path)
@@ -946,6 +973,7 @@ async def _submit_generation_task(
     quality: str = "",
     reference_urls: list[str] | None = None,
     apimart_ext: bool = False,
+    output_format: str = "",
 ) -> str:
     model_name = _apimart_model_name(model, variant)
     is_seedream_5 = model_name in _SEEDREAM_5_MODELS
@@ -954,7 +982,7 @@ async def _submit_generation_task(
     if is_nano_banana_21 and size.strip() in _NANO_BANANA_21_EXTRA_RATIOS:
         ratio = size.strip()
     # APIMart 文档要求 GPT Image 2/2.5 的 resolution 使用小写。
-    if model_name == "gpt-image-2" or model_name in _APIMART_GPT_IMAGE_25_MODELS:
+    if model_name == "gpt-image-2" or model_name in _APIMART_GPT_IMAGE_25_MODELS or model_name in _GPT_IMAGE_26_VARIANT_MODELS:
         resolution = resolution.lower()
     final_prompt = normalize_reference_prompt(prompt) if reference_urls else prompt
     if is_seedream_5:
@@ -1000,11 +1028,18 @@ async def _submit_generation_task(
         }
     if not apimart_ext and model_name == "gpt-image-2":
         payload["official_fallback"] = True
-    elif not apimart_ext and model_name in _APIMART_GPT_IMAGE_25_MODELS:
+    elif not apimart_ext and (model_name in _APIMART_GPT_IMAGE_25_MODELS or model_name in _GPT_IMAGE_26_VARIANT_MODELS):
         clean_quality = (quality or getattr(settings, "ai_image_gpt_25_quality", "auto") or "auto").strip().lower()
         if clean_quality not in {"auto", "low", "medium", "high", "xhigh", "max"}:
             clean_quality = "auto"
         payload["quality"] = clean_quality
+    if output_format == "gif":
+        if model_name not in _GPT_IMAGE_26_VARIANT_MODELS or reference_urls:
+            raise ValueError("GIF 动图仅支持 GPT Image 2.6 文生图")
+        # GIF 只支持文生图；尺寸为单帧像素，省略时上游默认 512×512，不能用比例
+        payload.pop("size", None)
+        payload.pop("resolution", None)
+        payload["output_format"] = "gif"
     if reference_urls:
         payload["image_urls"] = reference_urls
     endpoint = f"{base_url}/v1/images/generations"
@@ -1195,7 +1230,7 @@ async def _download_final_image(
             f"下载结果图片失败：{last_error or '未知错误'}",
             task_id=task_id,
         )
-    filename = f"{uuid.uuid4().hex}.png"
+    filename = f"{uuid.uuid4().hex}{_result_image_suffix(resp.content)}"
     out_dir = _ensure_user_dated_output_dir(user_id)
     out_path = out_dir / filename
     atomic_write(out_path, resp.content)
@@ -1326,6 +1361,7 @@ async def generate_image_async(
     on_progress: Callable[[int, str], Any] | None = None,
     on_accepted: Callable[[str], Any] | None = None,
     apimart_ext: bool = False,
+    output_format: str = "",
 ) -> dict:
     """异步生图：提交任务 → 轮询进度 → 下载结果。
 
@@ -1350,6 +1386,7 @@ async def generate_image_async(
             variant=variant,
             quality=quality,
             apimart_ext=apimart_ext,
+            output_format=output_format,
         )
         if on_accepted:
             on_accepted(str(task_id))
@@ -1615,7 +1652,7 @@ def _save_base64_image(b64_value: str, *, user_id: str) -> str:
         raise RuntimeError(f"CLIProxyAPI 图片 base64 解码失败: {exc}") from exc
     if not image_bytes:
         raise RuntimeError("CLIProxyAPI 返回的 base64 图片为空")
-    filename = f"{uuid.uuid4().hex}.png"
+    filename = f"{uuid.uuid4().hex}{_result_image_suffix(image_bytes)}"
     out_dir = _ensure_user_dated_output_dir(user_id)
     out_path = out_dir / filename
     atomic_write(out_path, image_bytes)
@@ -1641,7 +1678,7 @@ async def _download_cliproxy_image(
             resp = await client.get(image_url, headers=_cliproxy_headers(api_key))
         if not resp.is_success:
             raise RuntimeError(f"下载 CLIProxyAPI 结果图片失败：HTTP {resp.status_code}")
-        filename = f"{uuid.uuid4().hex}.png"
+        filename = f"{uuid.uuid4().hex}{_result_image_suffix(resp.content)}"
         out_dir = _ensure_user_dated_output_dir(user_id)
         out_path = out_dir / filename
         atomic_write(out_path, resp.content)
@@ -1669,14 +1706,20 @@ async def _save_cliproxy_response_image(data: dict[str, Any], *, user_id: str, a
 
 
 _SUB2API_GPT_IMAGE_25_MODELS = {"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
-_SUB2API_ALLOWED_MODELS = {"gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
+# GPT Image 2.6 目前只有 Sub2API 提供，且只支持 1K
+GPT_IMAGE_26_MODELS = {"gpt-image-2.6", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"}
+_SUB2API_GPT_IMAGE_26_MODELS = _GPT_IMAGE_26_VARIANT_MODELS
+_SUB2API_ALLOWED_MODELS = {"gpt-image-2", *_SUB2API_GPT_IMAGE_25_MODELS, *_SUB2API_GPT_IMAGE_26_MODELS}
 
 
 def _sub2api_model_name(model: str, variant: str = "") -> str:
     """将逻辑模型和变体映射为 Sub2API/CLIProxyAPI 实际模型名。"""
     model_name = _normalize_model_name(model)
-    if model_name in _SUB2API_GPT_IMAGE_25_MODELS:
+    if model_name in _SUB2API_GPT_IMAGE_25_MODELS or model_name in _SUB2API_GPT_IMAGE_26_MODELS:
         return model_name
+    if model_name == "gpt-image-2.6":
+        requested_variant = (variant or "").strip().lower()
+        return f"gpt-image-2.6-{requested_variant if requested_variant in {'flare', 'sunburst'} else 'flare'}"
     if model_name == "gpt-image-2.5":
         requested_variant = (variant or "").strip().lower()
         if requested_variant in {"flare", "sunburst"}:
@@ -1831,7 +1874,7 @@ async def _download_tuzi_image(image_url: str, *, user_id: str, api_key: str) ->
         if not resp.is_success:
             raise RuntimeError(f"下载 Tuzi 结果图片失败：HTTP {resp.status_code}")
         out_dir = _ensure_user_dated_output_dir(user_id)
-        out_path = out_dir / f"{uuid.uuid4().hex}.png"
+        out_path = out_dir / f"{uuid.uuid4().hex}{_result_image_suffix(resp.content)}"
         atomic_write(out_path, resp.content)
         local_url = _ai_image_public_url(out_path)
         checkpoint("downloaded", local_url=local_url)
@@ -2229,7 +2272,7 @@ DEFAULT_MODEL_ROUTING_RULES: dict[str, list[str]] = {
 
 # 服务商能力集合：定义各线路真正支持的模型 (None/空集代表支持全量模型)
 PROVIDER_MODEL_CAPABILITIES: dict[str, set[str] | None] = {
-    PROVIDER_SUB2API: {"gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"},
+    PROVIDER_SUB2API: {"gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", *GPT_IMAGE_26_MODELS},
     PROVIDER_TUZI: {"gpt-image-2.5", "gpt-image-2.5-flare"},
     PROVIDER_ADOBE2API: {"gemini-3-pro-image-preview", "gpt-image-2"},
     PROVIDER_APIMART_EXT: {"gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", _APIMART_NANO_BANANA_21_MODEL},
@@ -2256,6 +2299,8 @@ def _circuit_key(provider: str, model: str = "") -> str:
         clean_model = str(model).strip().lower()
     if clean_model in ("gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"):
         clean_model = "gpt-image-2.5"
+    elif clean_model in GPT_IMAGE_26_MODELS:
+        clean_model = "gpt-image-2.6"
     return f"{clean_provider}:{clean_model}"
 
 
@@ -2418,6 +2463,16 @@ def _get_custom_rules() -> dict[str, list[str]]:
     return rules
 
 
+def wants_gif_output(prompt: str) -> bool:
+    """提示词里要动图（gif / 动图 / 动态图）时出 GIF。"""
+    return bool(re.search(r"gif|动图|动态图", prompt or "", re.I))
+
+
+def gpt_image_26_on_sub2api(resolution: str, quality: str = "") -> bool:
+    """GPT Image 2.6 只在 1K、非高画质（自动/低/中）时可用。"""
+    return (resolution or "1K").strip().upper() == "1K" and (quality or "").strip().lower() in ("", "auto", "low", "medium")
+
+
 def get_smart_route_candidates(
     model: str,
     resolution: str = "",
@@ -2441,6 +2496,27 @@ def get_smart_route_candidates(
     if not res_upper:
         _ratio, res_clean = _normalize_size(size, resolution)
         res_upper = res_clean.upper() if res_clean else "1K"
+
+    # GPT Image 2.6：Sub2API 只有 1K 非高画质，APIMart 全档位都有。
+    # 顺序为 Sub2API 2.6（满足条件时）→ APIMart 2.6 → 其他线路的 GPT Image 2.5 兜底
+    if model_name in GPT_IMAGE_26_MODELS:
+        fallback = get_smart_route_candidates(
+            "gpt-image-2.5", resolution=res_upper, size=size, variant=variant, quality=quality,
+            filter_frozen=filter_frozen, now=now,
+        )
+        primary: list[str] = []
+        if gpt_image_26_on_sub2api(res_upper, quality_clean) and settings.cliproxy_base_url and settings.cliproxy_api_key:
+            primary.append(PROVIDER_SUB2API)
+        if settings.ai_image_api_key:
+            primary.append(PROVIDER_APIMART)
+        # 执行时这两条线路收到 2.6 一律发 2.6，所以只能经主路由（按 2.6 的冻结状态）进入，
+        # 不能再从按 2.5 冻结状态生成的兜底列表里加回来
+        fallback = [p for p in fallback if p not in (PROVIDER_SUB2API, PROVIDER_APIMART)]
+        active = [p for p in primary if not (filter_frozen and is_provider_frozen(p, model=model_name, now=now))]
+        if not active and not fallback:
+            # 全部冻结时与通用规则一致：不过滤，避免完全不可用
+            active = primary
+        return active + fallback
 
     # 1. 根据模型与画质分辨率选择匹配规则（环境 JSON 显式规则优先）
     if custom_rules and model_name in custom_rules:
@@ -2571,6 +2647,7 @@ async def smart_generate_image_async(
     on_progress: Callable[[int, str], Any] | None = None,
     on_attempt: Callable[[str], Any] | None = None,
     on_accepted: Callable[[str, str], Any] | None = None,
+    output_format: str = "",
 ) -> dict:
     """智能路由生图：按模型与配置选路，暂态错误自动 Failover 并循环两轮。
 
@@ -2580,13 +2657,18 @@ async def smart_generate_image_async(
     前端只有两个失败出口：明确的上游安全审核拦截，或全部线路完成两轮后仍失败。
     已受理且状态不确定时恢复原任务；明确终态失败才允许继续两轮线路尝试。
     """
-    candidates = get_smart_route_candidates(
-        model,
-        resolution=resolution,
-        size=size,
-        variant=variant,
-        quality=quality,
-    )
+    gif_output = output_format == "gif" and _normalize_model_name(model).lower() in GPT_IMAGE_26_MODELS and not images
+    if gif_output:
+        # 动图只有 APIMart 的 GPT Image 2.6 支持，不降级到其他线路
+        candidates = [PROVIDER_APIMART] if settings.ai_image_api_key else []
+    else:
+        candidates = get_smart_route_candidates(
+            model,
+            resolution=resolution,
+            size=size,
+            variant=variant,
+            quality=quality,
+        )
     logger.info("[smart-routing] Candidate providers for model=%s variant=%s res=%s size=%s quality=%s: %s",
                 model, variant, resolution, size, quality, candidates)
     if not candidates:
@@ -2629,12 +2711,24 @@ async def smart_generate_image_async(
             continue
 
         provider_on_accepted = _make_on_accepted(provider)
+        # 熔断按实际发送的模型记录：2.6 降级到其他线路时发的是 2.5，要与选路时查询的 2.5 冻结状态一致
+        circuit_model = model
+        if _normalize_model_name(model).lower() in GPT_IMAGE_26_MODELS and provider not in (PROVIDER_SUB2API, PROVIDER_APIMART):
+            circuit_model = "gpt-image-2.5"
         try:
             if on_attempt:
                 on_attempt(provider)
             attempt_count += 1
             canonical_model = _normalize_model_name(model).lower()
-            if canonical_model == "gpt-image-2.5":
+            if canonical_model in GPT_IMAGE_26_MODELS:
+                # Sub2API 和 APIMart 有 2.6，其他线路一律降级为 2.5
+                if provider == PROVIDER_SUB2API:
+                    provider_model = _sub2api_model_name(model, variant)
+                elif provider == PROVIDER_APIMART:
+                    provider_model = model
+                else:
+                    provider_model = "gpt-image-2.5"
+            elif canonical_model == "gpt-image-2.5":
                 if provider == PROVIDER_ADOBE2API:
                     provider_model = "gpt-image-2"
                 elif provider == PROVIDER_SUB2API:
@@ -2682,9 +2776,10 @@ async def smart_generate_image_async(
                         variant=variant, quality=quality,
                         apimart_ext=provider == PROVIDER_APIMART_EXT,
                         on_progress=on_progress, on_accepted=provider_on_accepted,
+                        output_format="gif" if gif_output else "",
                     )
 
-            record_provider_success(provider, model=model)
+            record_provider_success(provider, model=circuit_model)
             result["provider"] = provider
             accepted_tid = (accepted.get(provider) or "").strip()
             if accepted_tid and not result.get("task_id"):
@@ -2718,7 +2813,7 @@ async def smart_generate_image_async(
             errors.append(f"R{round_no}/{provider}: {err_msg}")
 
             if is_freezable_provider_error(exc):
-                record_provider_failure(provider, model=model)
+                record_provider_failure(provider, model=circuit_model)
 
             if is_safety_review_error(exc):
                 logger.warning(

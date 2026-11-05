@@ -222,7 +222,193 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result.get("provider_switched"))
             self.assertEqual(attempts, ["sub2api", "adobe2api"])
 
+    def test_gpt_image_26_route_order(self) -> None:
+        with patch.multiple(
+            ai_image.settings,
+            cliproxy_base_url="http://sub2api:8080", cliproxy_api_key="sk-sub2api",
+            tuzi_base_url="http://tuzi", tuzi_api_key="sk-tuzi",
+            adobe2api_base_url="", adobe2api_api_key="",
+            ai_image_api_key="sk-apimart", smart_routing_rules_json="",
+        ):
+            # 1K 非高画质：Sub2API 2.6 → APIMart 2.6 → 其余线路的 2.5
+            for quality, expected in (
+                ("", ["sub2api", "apimart", "tuzi", "apimart-ext"]),
+                ("auto", ["sub2api", "apimart", "tuzi", "apimart-ext"]),
+                ("medium", ["sub2api", "apimart", "apimart-ext"]),
+            ):
+                with self.subTest(quality=quality):
+                    self.assertEqual(
+                        ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="1K", quality=quality),
+                        expected,
+                    )
+            # 2K/4K/高画质：APIMart 2.6 → APIMart Ext 的 2.5
+            for resolution, quality in (("2K", "auto"), ("4K", "auto"), ("1K", "xhigh"), ("1K", "max")):
+                with self.subTest(resolution=resolution, quality=quality):
+                    self.assertEqual(
+                        ai_image.get_smart_route_candidates("gpt-image-2.6", resolution=resolution, quality=quality),
+                        ["apimart", "apimart-ext"],
+                    )
+            with patch.object(ai_image.settings, "cliproxy_api_key", ""):
+                self.assertEqual(
+                    ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="1K"),
+                    ["apimart", "tuzi", "apimart-ext"],
+                )
+
+    def test_gpt_image_26_frozen_provider_is_not_readded_by_25_fallback(self) -> None:
+        def freeze(provider: str, model: str) -> None:
+            for _ in range(ai_image.PROVIDER_FAILURE_THRESHOLD):
+                ai_image.record_provider_failure(provider, model=model)
+
+        with patch.multiple(
+            ai_image.settings,
+            cliproxy_base_url="http://sub2api:8080", cliproxy_api_key="sk-sub2api",
+            tuzi_base_url="http://tuzi", tuzi_api_key="sk-tuzi",
+            adobe2api_base_url="", adobe2api_api_key="",
+            ai_image_api_key="sk-apimart", smart_routing_rules_json="",
+        ):
+            for frozen, resolution, expected in (
+                # Sub2API 的 2.6 冻结：2.5 兜底里的 Sub2API 不能再加回来（执行时仍会发 2.6）
+                ([("sub2api", "gpt-image-2.6")], "1K", ["apimart", "tuzi", "apimart-ext"]),
+                ([("apimart", "gpt-image-2.6")], "1K", ["sub2api", "tuzi", "apimart-ext"]),
+                # 只冻结了 2.5，不影响 2.6 的主路由
+                ([("sub2api", "gpt-image-2.5")], "1K", ["sub2api", "apimart", "tuzi", "apimart-ext"]),
+                ([("sub2api", "gpt-image-2.6"), ("apimart", "gpt-image-2.6")], "1K", ["tuzi", "apimart-ext"]),
+                ([("apimart", "gpt-image-2.6")], "2K", ["apimart-ext"]),
+            ):
+                with self.subTest(frozen=frozen, resolution=resolution):
+                    ai_image.reset_provider_freeze()
+                    for provider, model in frozen:
+                        freeze(provider, model)
+                    self.assertEqual(
+                        ai_image.get_smart_route_candidates("gpt-image-2.6", resolution=resolution),
+                        expected,
+                    )
+            # 只有 Sub2API 可用且已冻结、没有任何兜底时，与通用规则一致不过滤，避免完全不可用
+            ai_image.reset_provider_freeze()
+            freeze("sub2api", "gpt-image-2.6")
+            with patch.multiple(ai_image.settings, tuzi_api_key="", ai_image_api_key=""):
+                self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="1K"), ["sub2api"])
+
+    async def test_gpt_image_26_fallback_failures_freeze_the_25_route(self) -> None:
+        calls = []
+
+        async def mock_apimart(*args, **kwargs):
+            provider = "apimart-ext" if kwargs["apimart_ext"] else "apimart"
+            calls.append((provider, kwargs["model"]))
+            if provider == "apimart":
+                raise ai_image.UpstreamTaskFailed("生图任务失败")
+            raise httpx.ConnectError("connection refused")
+
+        with patch.multiple(
+            ai_image.settings,
+            cliproxy_base_url="http://sub2api:8080", cliproxy_api_key="sk-sub2api",
+            tuzi_base_url="", tuzi_api_key="", adobe2api_base_url="", adobe2api_api_key="",
+            ai_image_api_key="sk-apimart", smart_routing_rules_json="",
+        ), patch.object(ai_image, "generate_image_async", side_effect=mock_apimart):
+            self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="2K"),
+                             ["apimart", "apimart-ext"])
+            # 真实走一次智能路由：两轮里 apimart-ext 的 2.5 连接失败两次
+            with self.assertRaises(ai_image.AllProvidersFailedError):
+                await ai_image.smart_generate_image_async(
+                    model="gpt-image-2.6", prompt="p", user_id="u", resolution="2K")
+            self.assertEqual(calls.count(("apimart-ext", "gpt-image-2.5")), 2)
+            # 失败按实际发送的 2.5 记录，下次选路时 apimart-ext 已冻结
+            self.assertTrue(ai_image.is_provider_frozen("apimart-ext", model="gpt-image-2.5"))
+            self.assertFalse(ai_image.is_provider_frozen("apimart-ext", model="gpt-image-2.6"))
+            self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="2K"), ["apimart"])
+
+    async def test_gpt_image_26_provider_models(self) -> None:
+        calls = []
+
+        async def mock_sub2api(*args, **kwargs):
+            calls.append(("sub2api", kwargs["model"]))
+            raise RuntimeError("CLIProxyAPI 生图失败：HTTP 400")
+
+        async def mock_apimart(*args, **kwargs):
+            calls.append((("apimart-ext" if kwargs["apimart_ext"] else "apimart"), kwargs["model"]))
+            if not kwargs["apimart_ext"]:
+                raise ai_image.UpstreamTaskFailed("任务失败")
+            return {"url": "/x.png", "model": kwargs["model"]}
+
+        with patch.object(ai_image, "generate_sub2api_async", side_effect=mock_sub2api), \
+             patch.object(ai_image, "generate_image_async", side_effect=mock_apimart), \
+             patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "apimart", "apimart-ext"]):
+            result = await ai_image.smart_generate_image_async(
+                model="gpt-image-2.6", prompt="test prompt", user_id="test_user", variant="sunburst",
+            )
+
+        self.assertEqual(result["provider"], "apimart-ext")
+        self.assertEqual(calls, [
+            ("sub2api", "gpt-image-2.6-sunburst"),
+            ("apimart", "gpt-image-2.6"),
+            ("apimart-ext", "gpt-image-2.5"),
+        ])
+
+    async def test_gif_output_routes_only_to_apimart_26(self) -> None:
+        calls = []
+
+        async def mock_apimart(*args, **kwargs):
+            calls.append((kwargs["model"], kwargs["output_format"]))
+            return {"url": "/x.gif", "model": kwargs["model"]}
+
+        with patch.multiple(
+            ai_image.settings,
+            cliproxy_base_url="http://sub2api:8080", cliproxy_api_key="sk-sub2api",
+            ai_image_api_key="sk-apimart",
+        ), patch.object(ai_image, "generate_image_async", side_effect=mock_apimart):
+            result = await ai_image.smart_generate_image_async(
+                model="gpt-image-2.6", prompt="生成 gif 图", user_id="test_user", resolution="2K",
+                output_format="gif",
+            )
+        self.assertEqual(result["provider"], "apimart")
+        self.assertEqual(calls, [("gpt-image-2.6", "gif")])
+        self.assertTrue(ai_image.wants_gif_output("生成 GIF 图"))
+        self.assertTrue(ai_image.wants_gif_output("做一个动图"))
+        self.assertFalse(ai_image.wants_gif_output("白色跑鞋电商主图"))
+
+    async def test_apimart_26_gif_payload(self) -> None:
+        sent = {}
+
+        async def fake_post(url, json=None, headers=None):
+            sent.update(json)
+            return httpx.Response(200, json={"code": 200, "data": [{"status": "submitted", "task_id": "task_1"}]},
+                                  request=httpx.Request("POST", url))
+
+        client = httpx.AsyncClient()
+        with patch.object(client, "post", side_effect=fake_post):
+            task_id = await ai_image._submit_generation_task(
+                client, base_url="https://apimart", headers={}, model="gpt-image-2.6", prompt="生成 gif 图",
+                size="1:1", resolution="2K", variant="sunburst", quality="auto", output_format="gif",
+            )
+        await client.aclose()
+        self.assertEqual(task_id, "task_1")
+        self.assertEqual(sent, {"model": "gpt-image-2.6-sunburst", "prompt": "生成 gif 图",
+                                "quality": "auto", "output_format": "gif"})
+
+    def test_result_image_saved_with_real_format(self) -> None:
+        import io
+        from PIL import Image
+
+        frames = [Image.new("RGB", (8, 8), color) for color in ("red", "blue")]
+        buf = io.BytesIO()
+        frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:], duration=100, loop=0)
+        gif = buf.getvalue()
+        with patch.object(ai_image, "_OUTPUT_DIR", Path(self.temp_dir.name)):
+            saved = ai_image._save_base64_image(base64.b64encode(gif).decode(), user_id="u1")
+            self.assertTrue(saved.endswith(".gif"))
+            # 上游把 GIF 标成 png 时也按真实格式保存
+            saved = ai_image._save_data_url_image(
+                "data:image/png;base64," + base64.b64encode(gif).decode(), user_id="u1")
+            self.assertTrue(saved.endswith(".gif"))
+            # 动图不生成静态 webp 预览，直接用原图
+            preview, width, height = ai_image.generate_inspiration_thumb(saved, "u1", "job1")
+            self.assertEqual((preview, width, height), (saved, 8, 8))
+            self.assertEqual(ai_image.get_inspiration_thumb_url_if_exists(saved, "u1", "job1"), saved)
+
     def test_sub2api_model_name_resolution(self) -> None:
+        self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.6"), "gpt-image-2.6-flare")
+        self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.6", "sunburst"), "gpt-image-2.6-sunburst")
+        self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.6-sunburst"), "gpt-image-2.6-sunburst")
         self.assertEqual(ai_image._sub2api_model_name("gpt-image-2"), "gpt-image-2")
         self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.5", "flare"), "gpt-image-2.5-flare")
         self.assertEqual(ai_image._sub2api_model_name("gpt-image-2.5", "sunburst"), "gpt-image-2.5-sunburst")
@@ -934,7 +1120,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertLess(skill_start, agent_start)
         skill_branch = chat_source[skill_start:agent_start]
         self.assertIn("runAiImageGeneration", skill_branch)
-        self.assertIn("aiOptions.model || 'gpt-image-2.5'", skill_branch)
+        self.assertIn("aiOptions.model || 'gpt-image-2.6'", skill_branch)
         self.assertIn("skill: activeSkill", skill_branch)
         self.assertIn("batchCount: aiOptions.batchCount || 1", skill_branch)
         self.assertNotIn("batchCount: 1", skill_branch)

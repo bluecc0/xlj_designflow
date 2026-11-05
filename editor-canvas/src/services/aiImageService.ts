@@ -447,7 +447,7 @@ export async function fetchImageMetadata(imageUrl: string): Promise<ImageMetadat
 }
 
 /**
- * 快捷编辑生图（模型 gpt-image-2.5，默认智能路由 auto，单参考图）
+ * 快捷编辑生图（模型 gpt-image-2.6，默认智能路由 auto，单参考图）
  */
 export async function runQuickEdit(
   imageUrl: string,
@@ -467,7 +467,7 @@ export async function runQuickEdit(
 
   const clientRequestId = generateUUID()
   const fd = new FormData()
-  fd.append('model', 'gpt-image-2.5')
+  fd.append('model', 'gpt-image-2.6')
   fd.append('provider', 'auto')
   fd.append('prompt', cleanPrompt)
   fd.append('size', 'auto')
@@ -478,7 +478,7 @@ export async function runQuickEdit(
   fd.append('client_request_id', clientRequestId)
   fd.append('image', file)
 
-  onProgress?.('正在提交 gpt-image-2.5 任务...')
+  onProgress?.('正在提交 gpt-image-2.6 任务...')
   const resp = await fetch('/ai-image', {
     method: 'POST',
     credentials: 'include',
@@ -497,7 +497,7 @@ export async function runQuickEdit(
   const jobId = data.job_id || (Array.isArray(data.job_ids) ? data.job_ids[0] : null)
   if (!jobId) throw new Error('没有返回任务编号')
 
-  onProgress?.('gpt-image-2.5 正在生图...')
+  onProgress?.('gpt-image-2.6 正在生图...')
   const result = await pollJob(jobId, 300, onProgress)
   const finalUrl = normalizeAssetUrl(result.image_url)
   const dims = await getImageDimensions(finalUrl)
@@ -624,7 +624,7 @@ export interface OutfitChangeRequest {
   uploadItems?: string[]
   targetSlots?: string[]
   extraPrompt: string
-  model: 'gpt-image-2.5' | 'flux-vto'
+  model: 'gpt-image-2.6' | 'flux-vto'
   resolution: '1K' | '2K' | '4K'
   batchCount: number
 }
