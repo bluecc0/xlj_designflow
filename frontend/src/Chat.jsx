@@ -267,15 +267,17 @@ const Avatar = ({ who, user }) => {
   );
 };
 
-const Bubble = ({ who, children, meta, user }) => (
+// continued：紧跟在同一发送者后面的消息，不再重复头像和名字，并收紧上方间距
+const Bubble = ({ who, children, meta, user, continued }) => (
   <div style={{
     display: 'flex', gap: 10, alignItems: 'flex-start',
     flexDirection: who === 'user' ? 'row-reverse' : 'row',
+    marginTop: continued ? -8 : 0,
   }}>
-    <Avatar who={who} user={user}/>
+    {continued ? <div style={{ width: 24, flexShrink: 0 }}/> : <Avatar who={who} user={user}/>}
     <div style={{ maxWidth: 'calc(100% - 38px)', display: 'flex', flexDirection: 'column', gap: 6, alignItems: who === 'user' ? 'flex-end' : 'flex-start' }}>
       {/* 发送者名字和顶部模式名同一写法（例如 Agent），不再用等宽全大写 */}
-      {meta && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-2)', lineHeight: 1.3 }}>{meta}</div>}
+      {meta && !continued && <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-2)', lineHeight: 1.3 }}>{meta}</div>}
       {children}
     </div>
   </div>
@@ -894,6 +896,86 @@ const agent2Spinner = function(size) {
   return <div style={{ width: size, height: size, borderRadius: 99, border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', animation: 'spin 0.8s linear infinite', flexShrink: 0 }}/>;
 };
 
+// 准备类工具（加载技能、读资料、看图、记忆）连续出现时合并成一张步骤卡，避免一步占一行
+const AGENT2_STEP_TOOLS = { analyze_image: true, load_skill: true, read_skill_file: true, use_skill_image: true, remember: true };
+const groupAgentSteps = function(messages) {
+  var out = [];
+  messages.forEach(function(m) {
+    var last = out[out.length - 1];
+    if (m.type === 'agent2-tool' && AGENT2_STEP_TOOLS[m.tool]) {
+      if (last && last.type === 'agent2-steps') { last.steps.push(m); return; }
+      out.push({ who: 'ai', meta: 'Agent', type: 'agent2-steps', steps: [m] });
+      return;
+    }
+    out.push(m);
+  });
+  return out.map(function(g) { return g.type === 'agent2-steps' && g.steps.length === 1 ? g.steps[0] : g; });
+};
+
+const agent2StepLabel = function(m) {
+  var args = m.args || {};
+  if (m.tool === 'remember') return ({ add: '记住', update: '更新记忆', 'delete': '删除记忆' }[args.action] || '记忆');
+  return AGENT2_TOOL_LABELS[m.tool] || m.tool;
+};
+
+const agent2StepDetail = function(m) {
+  var args = m.args || {};
+  if (m.tool === 'read_skill_file') return args.path || '';
+  if (m.tool === 'use_skill_image') return (args.paths || []).length + ' 张';
+  if (m.tool === 'remember') return args.content || '';
+  return args.name || '';
+};
+
+const agent2StepDot = function(status) {
+  return status === 'running' ? agent2Spinner(12) : (
+    <span style={{ width: 7, height: 7, borderRadius: 99, flexShrink: 0, background: status === 'failed' ? 'var(--warn)' : status === 'stopped' ? 'var(--ink-3)' : 'var(--ok)' }}/>
+  );
+};
+
+const AgentStepsCard = ({ steps }) => {
+  const [open, setOpen] = React.useState(false);
+  var running = steps.some(function(s) { return s.status === 'running'; });
+  var failed = steps.some(function(s) { return s.status === 'failed'; });
+  var status = running ? 'running' : failed ? 'failed' : steps[steps.length - 1].status;
+  // 按出现顺序统计同类步骤：加载技能 · 读取技能资料 ×4 · 看图 ×3
+  var counts = [];
+  steps.forEach(function(s) {
+    var label = agent2StepLabel(s);
+    var hit = counts.find(function(c) { return c.label === label; });
+    if (hit) hit.n += 1; else counts.push({ label: label, n: 1 });
+  });
+  var summary = counts.map(function(c) { return c.label + (c.n > 1 ? ' ×' + c.n : ''); }).join(' · ');
+  var totalMs = steps.reduce(function(sum, s) { return sum + (s.durationMs || 0); }, 0);
+  var seconds = totalMs ? Math.max(1, Math.round(totalMs / 1000)) : 0;
+  var Chevron = open ? I.chevronDown : I.chevronRight;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px', borderRadius: 10, background: 'var(--panel)', border: '1px solid var(--line-2)', maxWidth: '100%', boxSizing: 'border-box' }}>
+      <button type="button" onClick={function() { setOpen(!open); }} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, padding: 0, border: 0, background: 'none', cursor: 'pointer', textAlign: 'left', color: 'inherit' }}>
+        {agent2StepDot(status)}
+        <span style={{ fontSize: 12, color: 'var(--ink)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>
+        {seconds && !running ? <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', flexShrink: 0 }}>{seconds}s</span> : null}
+        <span style={{ marginLeft: 'auto', color: 'var(--ink-3)', display: 'inline-flex', flexShrink: 0 }}><Chevron size={12}/></span>
+      </button>
+      {open ? steps.map(function(s) {
+        var detail = agent2StepDetail(s);
+        var secs = s.durationMs ? Math.max(1, Math.round(s.durationMs / 1000)) : 0;
+        var error = s.status === 'failed' && s.result && s.result.error;
+        return (
+          <div key={s.callId} style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 15 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              {agent2StepDot(s.status)}
+              <span style={{ fontSize: 11, color: 'var(--ink-2)', flexShrink: 0 }}>{agent2StepLabel(s)}</span>
+              {detail ? <span className="mono" style={{ fontSize: 11, color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{detail}</span> : null}
+              {secs ? <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--ink-3)', flexShrink: 0 }}>{secs}s</span> : null}
+            </div>
+            {error ? <div style={{ fontSize: 11, color: 'var(--warn)', lineHeight: 1.45, wordBreak: 'break-word', paddingLeft: 15 }}>{error}</div> : null}
+          </div>
+        );
+      }) : null}
+    </div>
+  );
+};
+
 // Agent 调用工具的过程卡片：样式与生图卡片一致，结果逐张出现
 const AgentToolCard = ({ m, openImage }) => {
   var running = m.status === 'running';
@@ -1099,8 +1181,9 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
           </div>
         )
       ) : (
-        messages.map((m, i) => (
-          <Bubble key={i} who={m.who} meta={m.meta} user={user}>
+        groupAgentSteps(messages).map((m, i, list) => (
+          <Bubble key={m.type === 'agent2-steps' ? 'steps-' + m.steps[0].callId : i} who={m.who} meta={m.meta} user={user}
+            continued={i > 0 && m.meta === 'Agent' && list[i - 1].who === 'ai' && list[i - 1].meta === 'Agent'}>
             {m.type === 'ai-image-generating' ? (() => {
             const fmtSecs = s => { const mm = Math.floor(s/60), ss = s%60; return mm > 0 ? mm+'m '+String(ss).padStart(2,'0')+'s' : ss+'s'; };
             const promptPayload = m.promptPayload || null;
@@ -1609,6 +1692,8 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
               </div>
             ) : m.type === 'agent2-tool' ? (
               <AgentToolCard m={m} openImage={openImage}/>
+            ) : m.type === 'agent2-steps' ? (
+              <AgentStepsCard steps={m.steps}/>
             ) : m.type === 'thinking' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
