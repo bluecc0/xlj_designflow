@@ -76,6 +76,7 @@ from .ai_image import (
     normalize_model_name,
     GPT_IMAGE_26_MODELS,
     gpt_image_26_on_sub2api,
+    wants_gif_output,
 )
 from .common_helpers import _extract_first_json_object, _resolve_image_data_url, make_sse
 from .product_sku_library import SkuFolderLibrary
@@ -4723,6 +4724,7 @@ async def _execute_ai_image_background(
                     size=size, resolution=resolution, user_id=user_id,
                     variant=variant, quality=quality,
                     on_progress=on_progress, on_attempt=on_attempt, on_accepted=on_accepted,
+                    output_format=str((request_meta or {}).get("output_format") or ""),
                 ),
                 timeout=max(60, int(settings.ai_image_smart_route_timeout_seconds or 360)),
             )
@@ -5816,6 +5818,7 @@ async def ai_image_retry(request: Request):
                 "reference_storage_job_id": reference_storage_job_id,
                 "variant": variant,
                 "quality": quality,
+                "output_format": str(request_meta.get("output_format") or ""),
                 "manual_reference_count": (
                     int(request_meta["manual_reference_count"])
                     if "manual_reference_count" in request_meta
@@ -6559,10 +6562,14 @@ async def ai_image_endpoint(
         resolved_provider = normalize_provider(provider)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    # 指定线路时不走智能路由：2.6 只有 Sub2API 的 1K 非高画质可用，其余情况改用 2.5
+    # 要动图时只能用 APIMart 的 GPT Image 2.6 文生图，交给智能路由处理
+    gif_output = resolved in GPT_IMAGE_26_MODELS and not image and wants_gif_output(prompt)
+    if gif_output:
+        resolved_provider = PROVIDER_AUTO
+    # 指定线路时不走智能路由：2.6 只有 APIMart 和 Sub2API 的 1K 非高画质可用，其余情况改用 2.5
     if (
         resolved in GPT_IMAGE_26_MODELS
-        and resolved_provider != PROVIDER_AUTO
+        and resolved_provider not in (PROVIDER_AUTO, PROVIDER_APIMART)
         and not (resolved_provider == PROVIDER_SUB2API and gpt_image_26_on_sub2api(resolution or "1K", quality))
     ):
         resolved = "gpt-image-2.5"
@@ -6644,7 +6651,8 @@ async def ai_image_endpoint(
 
         # 3. 只有在上一张图基础上修改时，才把它作为参考图
         context_ref_url = ""
-        if context_intent["mode"] == "edit" and prev_image_path:
+        # 动图只支持文生图，不带上一张图作参考
+        if context_intent["mode"] == "edit" and prev_image_path and not gif_output:
             try:
                 context_ref_bytes.append((prev_image_path.read_bytes(), prev_image_path.name))
                 context_ref_url = prev_image_url
@@ -6721,6 +6729,7 @@ async def ai_image_endpoint(
                 "context_reference_url": context_ref_url if context_ref_bytes else "",
                 "context_image_url": context_ref_url if context_ref_bytes else "",
                 "context_intent": context_intent,
+                "output_format": "gif" if gif_output else "",
                 "reference_names": [name for _content, name in all_refs_batch],
                 "reference_images": reference_images,
                 # data URL 缩略图体积很大，不写入任务库；站内 URL 可以安全保留用于排障。
