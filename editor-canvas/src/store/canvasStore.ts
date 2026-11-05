@@ -113,9 +113,11 @@ interface CanvasState {
 
   // 快照与保存
   recordHistory: (snapshot?: CanvasDocument) => void
-  loadDocument: (doc: any, rev?: number) => void
+  loadDocument: (doc: any, rev?: number, preferredPageId?: string) => void
   restoreHistoryDocument: (doc: any) => void
   mergeConflictDocument: (serverDoc: any, serverRev: number) => void
+  restoreRecords: (records: { frames?: CanvasFrame[]; images?: CanvasImage[]; texts?: CanvasText[] }) => number
+  replaceImageUrls: (mapping: Record<string, string>) => void
   getDocument: () => CanvasDocument
   markSaved: (rev: number, savedSequence?: number, savedDoc?: CanvasDocument) => void
 }
@@ -1512,7 +1514,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   // ─── 快照水合与持久化 ─────────────────────────────────────
-  loadDocument: (doc, rev = 1) => {
+  loadDocument: (doc, rev = 1, preferredPageId) => {
     if (!doc || typeof doc !== 'object') return
 
     // 页面水合与兼容
@@ -1521,6 +1523,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       pages = [DEFAULT_PAGE]
     }
     const groups: CanvasPageGroup[] = Array.isArray(doc.groups) ? doc.groups : []
+    if (preferredPageId && pages.some((p) => p.id === preferredPageId && !p.archived)) {
+      persistActivePageId(preferredPageId)
+    }
     const storedPageId = getStoredActivePageId()
     let activePageId =
       storedPageId && pages.some((p) => p.id === storedPageId && !p.archived)
@@ -1827,6 +1832,42 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       editSequence: (current.editSequence || 0) + 1,
       lastSaveIntent: nextIntent,
     })
+  },
+
+  // 把已删除的元素按原样放回当前页面（团队画布动态里的“恢复”），已存在的不会重复添加
+  restoreRecords: (records) => {
+    const { activePageId, frames, images, texts } = get()
+    const pick = <T extends { id: string; pageId: string }>(items: T[] | undefined, existing: T[]) => {
+      const ids = new Set(existing.map((x) => x.id))
+      return (items || []).filter((x) => x && x.id && !ids.has(x.id)).map((x) => ({ ...x, pageId: activePageId }))
+    }
+    const nextFrames = pick(records.frames, frames)
+    const nextImages = pick(records.images, images)
+    const nextTexts = pick(records.texts, texts)
+    const total = nextFrames.length + nextImages.length + nextTexts.length
+    if (!total) return 0
+    recordHistory(get)
+    const frameIds = new Set([...frames, ...nextFrames].map((f) => f.id))
+    const detach = <T extends { frameId?: string | null }>(x: T) => (x.frameId && !frameIds.has(x.frameId) ? { ...x, frameId: null } : x)
+    set((s) => withMutation(s, {
+      frames: [...s.frames, ...nextFrames],
+      images: [...s.images, ...nextImages.map(detach)],
+      texts: [...s.texts, ...nextTexts.map(detach)],
+      selectedIds: nextImages.map((im) => im.id),
+      selectedType: nextImages.length ? 'image' : null,
+    }))
+    return total
+  },
+
+  // 服务端把图片复制到了自己的目录：同步改写当前文档、保存基线和撤销记录里的地址，不产生新的修改
+  replaceImageUrls: (mapping) => {
+    const swap = <T extends { url: string }>(im: T): T => (mapping[im.url] ? { ...im, url: mapping[im.url] } : im)
+    const swapDoc = (doc: CanvasDocument) => ({ ...doc, images: (doc.images || []).map(swap) })
+    set((s) => ({
+      images: s.images.map(swap),
+      baseDocument: s.baseDocument ? swapDoc(s.baseDocument) : s.baseDocument,
+    }))
+    useHistoryStore.setState((h) => ({ past: h.past.map(swapDoc), future: h.future.map(swapDoc) }))
   },
 
   getDocument: () => {

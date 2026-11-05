@@ -258,6 +258,7 @@ export function ContextualToolbar({
         rotation: 0,
         url: res.imageUrl,
         name: `${target.name}-抠图`,
+        meta: { operation: 'matting', sourceImageId: target.id },
         naturalWidth: res.width,
         naturalHeight: res.height,
         locked: false,
@@ -298,6 +299,7 @@ export function ContextualToolbar({
         rotation: 0,
         url: res.imageUrl,
         name: `${target.name}-2x高清`,
+        meta: { operation: 'upscale', sourceImageId: target.id },
         naturalWidth: res.width,
         naturalHeight: res.height,
         locked: false,
@@ -338,6 +340,7 @@ export function ContextualToolbar({
         rotation: 0,
         url: res.svgUrl,
         name: `${target.name}-矢量`,
+        meta: { operation: 'vectorize', sourceImageId: target.id },
         locked: false,
         opacity: 1,
       })

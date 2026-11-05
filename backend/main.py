@@ -118,6 +118,8 @@ from .agent2.service import fail_stale_turns as agent2_fail_stale_turns
 from .agent2.tools import backfill_recovered_job as agent2_backfill_recovered_job
 from .agent2.tools import deliver_finished_jobs as agent2_deliver_finished_jobs
 from .agent2.store import init_tables as init_agent2_tables
+from .team_canvas import copy_asset_to_user, init_team_canvas_tables, is_shared_canvas_asset
+from .team_canvas import router as team_canvas_router
 from .user_skill_store import (
     MAX_UPLOAD_BYTES as MAX_SKILL_UPLOAD_BYTES,
     SkillUploadError,
@@ -382,6 +384,7 @@ def _ensure_ui_build() -> None:
 async def lifespan(app: FastAPI):
     init_db()
     init_agent2_tables()
+    init_team_canvas_tables()
     agent2_fail_stale_turns()
     app.state.outpainting_semaphore = asyncio.Semaphore(
         max(1, int(settings.bfl_outpainting_max_concurrency or 2))
@@ -558,6 +561,7 @@ app.add_middleware(
 )
 
 app.include_router(agent2_router)
+app.include_router(team_canvas_router)
 
 # 产品图库静态文件（前端预览用）
 if settings.product_library_path.exists():
@@ -827,8 +831,10 @@ def _safe_asset_owner_id(user_id: str) -> str:
     return safe or "anonymous"
 
 
-def _assert_strict_asset_owner(owner_id: str | None, user: dict) -> None:
+def _assert_strict_asset_owner(owner_id: str | None, user: dict, path: str | None = None) -> None:
     if _is_admin(user):
+        return
+    if path and is_shared_canvas_asset(path):
         return
     if not owner_id or owner_id != user.get("id"):
         # Match polling's non-enumerating behavior for another user's assets.
@@ -870,7 +876,7 @@ def _outpainting_internal_path(raw_url: str, request: Request, user: dict) -> tu
         job = load_job(job_id)
         if not job:
             raise HTTPException(404, "图片文件不存在")
-        _assert_strict_asset_owner(job.user_id, user)
+        _assert_strict_asset_owner(job.user_id, user, path)
         candidate = (settings.output_path / f"{job_id}_grid_{int(grid_match.group(2)):02d}.png").resolve()
         output_root = settings.output_path.resolve()
         if output_root not in candidate.parents or not candidate.is_file():
@@ -884,7 +890,7 @@ def _outpainting_internal_path(raw_url: str, request: Request, user: dict) -> tu
             raise HTTPException(400, "图片地址无效")
         owner_id = parts[0]
         expected_owner = _safe_asset_owner_id(str(user.get("id") or ""))
-        if not _is_admin(user) and owner_id != expected_owner:
+        if not _is_admin(user) and owner_id != expected_owner and not is_shared_canvas_asset(path):
             raise HTTPException(404, "图片文件不存在")
         root = (settings.output_path / "ai-images").resolve()
         owner_root = (root / owner_id).resolve()
@@ -905,7 +911,7 @@ def _outpainting_internal_path(raw_url: str, request: Request, user: dict) -> tu
         if not owner_id:
             special_job = load_special_job(job_id)
             owner_id = special_job.get("user_id") if special_job else None
-        _assert_strict_asset_owner(owner_id, user)
+        _assert_strict_asset_owner(owner_id, user, path)
         root = (settings.output_path / "results").resolve()
         job_root = (root / job_id).resolve()
         rel = path.removeprefix("/results/").lstrip("/")
@@ -922,7 +928,7 @@ def _outpainting_internal_path(raw_url: str, request: Request, user: dict) -> tu
         job = load_job(job_id)
         if not job:
             raise HTTPException(404, "图片文件不存在")
-        _assert_strict_asset_owner(job.user_id, user)
+        _assert_strict_asset_owner(job.user_id, user, path)
         candidate = (settings.output_path / f"{filename_stem}.png").resolve()
         output_root = settings.output_path.resolve()
         if output_root not in candidate.parents or not candidate.is_file():
@@ -2170,6 +2176,7 @@ async def attach_user_context(request: Request, call_next):
         and request.state.user is not None
         and not _is_admin(request.state.user)
         and str(request.state.user.get("id") or "") != outpainting_owner
+        and not is_shared_canvas_asset(path)
     ):
         return JSONResponse({"detail": "图片不存在"}, status_code=404)
     try:
@@ -2237,7 +2244,7 @@ def image_copy_link(body: ImageCopyLinkRequest, request: Request):
     if ai_root in candidate.parents:
         parts = candidate.relative_to(ai_root).parts
         if len(parts) >= 2 and any(part.startswith("outpainting_") for part in parts[1:]):
-            _assert_strict_asset_owner(parts[0], user)
+            _assert_strict_asset_owner(parts[0], user, path)
     media_type = _image_copy_media_type(candidate)
     extension = next(ext for mime, ext in _IMAGE_COPY_FORMATS.values() if mime == media_type)
     token, expires_at = create_image_copy_link(path)
@@ -6254,6 +6261,18 @@ async def editor_save_snapshot(request: Request):
     if not snapshot:
         raise HTTPException(400, "snapshot 不能为空")
     foreign_assets = _editor_snapshot_foreign_asset_urls(snapshot, str(user["id"]))
+    # 从团队画布复制过来的他人图片：复制到自己的目录并改写地址，原画布取消分享后图片仍可用
+    rewritten_urls: dict[str, str] = {}
+    shared_urls = [url for url in foreign_assets if is_shared_canvas_asset(url)]
+    if shared_urls:
+        snapshot, rewritten_urls = await asyncio.to_thread(
+            _import_shared_assets_into_snapshot, snapshot, shared_urls, str(user["id"]),
+        )
+    foreign_assets = [url for url in foreign_assets if url not in shared_urls]
+    if foreign_assets:
+        saved_raw, _ = load_editor_snapshot(user["id"])
+        saved_paths = _editor_snapshot_saved_image_paths(saved_raw)
+        foreign_assets = [url for url in foreign_assets if _editor_asset_path(url) not in saved_paths]
     if foreign_assets:
         raise HTTPException(409, "画板包含其他用户的图片，已拒绝保存，请刷新页面")
     base_revision = body.get("base_revision") if isinstance(body, dict) else None
@@ -6276,7 +6295,31 @@ async def editor_save_snapshot(request: Request):
             status_code=409,
             detail={"saved": False, "reason": reason or "snapshot_rejected", "current_revision": rev},
         )
-    return {"saved": True, "revision": rev}
+    return {"saved": True, "revision": rev, "rewritten_urls": rewritten_urls}
+
+
+def _import_shared_assets_into_snapshot(
+    snapshot: object, shared_urls: list[str], user_id: str,
+) -> tuple[object, dict[str, str]]:
+    """把快照里来自共享画布的他人图片复制到用户目录，返回改写后的快照和 {原地址: 新地址}。"""
+    try:
+        doc = json.loads(snapshot) if isinstance(snapshot, str) else snapshot
+    except Exception:
+        return snapshot, {}
+    if not isinstance(doc, dict) or not isinstance(doc.get("images"), list):
+        return snapshot, {}
+    mapping: dict[str, str] = {}
+    for url in shared_urls:
+        new_url = copy_asset_to_user(url, user_id)
+        if new_url:
+            mapping[url] = new_url
+    for image in doc["images"]:
+        if not isinstance(image, dict):
+            continue
+        for key in ("url", "src"):
+            if image.get(key) in mapping:
+                image[key] = mapping[image[key]]
+    return (json.dumps(doc, ensure_ascii=False) if isinstance(snapshot, str) else doc), mapping
 
 
 _EDITOR_ASSET_SUFFIXES = {
@@ -6333,6 +6376,25 @@ def editor_load_snapshot(request: Request):
         }
     except Exception:
         return {"snapshot": None, "revision": 0}
+
+
+def _editor_asset_path(raw_url: str) -> str:
+    try:
+        return unquote(urlsplit(raw_url).path if "://" in raw_url else raw_url.split("?", 1)[0])
+    except Exception:
+        return raw_url
+
+
+def _editor_snapshot_saved_image_paths(saved_raw: str | None) -> set[str]:
+    """之前已保存为图片记录的站内图片路径；只看图片记录，文字等字段里出现的 URL 不算授权。"""
+    try:
+        snapshot = json.loads(saved_raw) if saved_raw else None
+    except Exception:
+        return set()
+    if isinstance(snapshot, dict) and isinstance(snapshot.get("designflowCanvasDocument"), dict):
+        snapshot = snapshot["designflowCanvasDocument"]
+    # 传入不可能匹配的用户 id，取出全部带归属的图片地址
+    return {_editor_asset_path(url) for url in _editor_snapshot_foreign_asset_urls(snapshot, "\0")}
 
 
 def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[str]:
