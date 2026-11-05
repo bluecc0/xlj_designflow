@@ -59,8 +59,9 @@ export function TopBar({ saveStatus, saveError, onRetrySave }: Props) {
               {viewers.slice(0, 4).map((viewer, index) => (
                 <span key={viewer.id} style={{ width: 20, height: 20, borderRadius: '50%', display: 'grid', placeItems: 'center',
                   marginLeft: index ? -5 : 0, border: '1.5px solid #ffffff', backgroundColor: VIEWER_COLORS[index % VIEWER_COLORS.length],
-                  color: '#ffffff', fontSize: 10, fontWeight: 600 }}>
-                  {viewer.name.slice(0, 1)}
+                  color: '#ffffff', fontSize: 10, fontWeight: 600, lineHeight: 1 }}>
+                  {/* 小写字母没有上半部分，会显得偏低，统一用大写 */}
+                  {viewer.name.slice(0, 1).toUpperCase()}
                 </span>
               ))}
               {viewers.length > 4 && <span style={{ fontSize: 10, color: '#64748b', marginLeft: 3 }}>+{viewers.length - 4}</span>}
