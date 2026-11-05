@@ -289,6 +289,34 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             with patch.multiple(ai_image.settings, tuzi_api_key="", ai_image_api_key=""):
                 self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="1K"), ["sub2api"])
 
+    async def test_gpt_image_26_fallback_failures_freeze_the_25_route(self) -> None:
+        calls = []
+
+        async def mock_apimart(*args, **kwargs):
+            provider = "apimart-ext" if kwargs["apimart_ext"] else "apimart"
+            calls.append((provider, kwargs["model"]))
+            if provider == "apimart":
+                raise ai_image.UpstreamTaskFailed("生图任务失败")
+            raise httpx.ConnectError("connection refused")
+
+        with patch.multiple(
+            ai_image.settings,
+            cliproxy_base_url="http://sub2api:8080", cliproxy_api_key="sk-sub2api",
+            tuzi_base_url="", tuzi_api_key="", adobe2api_base_url="", adobe2api_api_key="",
+            ai_image_api_key="sk-apimart", smart_routing_rules_json="",
+        ), patch.object(ai_image, "generate_image_async", side_effect=mock_apimart):
+            self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="2K"),
+                             ["apimart", "apimart-ext"])
+            # 真实走一次智能路由：两轮里 apimart-ext 的 2.5 连接失败两次
+            with self.assertRaises(ai_image.AllProvidersFailedError):
+                await ai_image.smart_generate_image_async(
+                    model="gpt-image-2.6", prompt="p", user_id="u", resolution="2K")
+            self.assertEqual(calls.count(("apimart-ext", "gpt-image-2.5")), 2)
+            # 失败按实际发送的 2.5 记录，下次选路时 apimart-ext 已冻结
+            self.assertTrue(ai_image.is_provider_frozen("apimart-ext", model="gpt-image-2.5"))
+            self.assertFalse(ai_image.is_provider_frozen("apimart-ext", model="gpt-image-2.6"))
+            self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="2K"), ["apimart"])
+
     async def test_gpt_image_26_provider_models(self) -> None:
         calls = []
 

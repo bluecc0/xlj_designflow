@@ -2711,6 +2711,10 @@ async def smart_generate_image_async(
             continue
 
         provider_on_accepted = _make_on_accepted(provider)
+        # 熔断按实际发送的模型记录：2.6 降级到其他线路时发的是 2.5，要与选路时查询的 2.5 冻结状态一致
+        circuit_model = model
+        if _normalize_model_name(model).lower() in GPT_IMAGE_26_MODELS and provider not in (PROVIDER_SUB2API, PROVIDER_APIMART):
+            circuit_model = "gpt-image-2.5"
         try:
             if on_attempt:
                 on_attempt(provider)
@@ -2775,7 +2779,7 @@ async def smart_generate_image_async(
                         output_format="gif" if gif_output else "",
                     )
 
-            record_provider_success(provider, model=model)
+            record_provider_success(provider, model=circuit_model)
             result["provider"] = provider
             accepted_tid = (accepted.get(provider) or "").strip()
             if accepted_tid and not result.get("task_id"):
@@ -2809,7 +2813,7 @@ async def smart_generate_image_async(
             errors.append(f"R{round_no}/{provider}: {err_msg}")
 
             if is_freezable_provider_error(exc):
-                record_provider_failure(provider, model=model)
+                record_provider_failure(provider, model=circuit_model)
 
             if is_safety_review_error(exc):
                 logger.warning(
