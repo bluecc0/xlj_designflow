@@ -107,13 +107,18 @@ def _user_name(user: dict) -> str:
     return str(user.get("display_name") or user.get("username") or user.get("id") or "")
 
 
+def _canonical_asset_path(path: str) -> str:
+    """/output/ai-images/... 和 /ai-images/... 是同一批文件，归属、共享索引和复制都按后者判断。"""
+    return path[len("/output"):] if path.startswith("/output/ai-images/") else path
+
+
 def _asset_path(raw_url: object) -> str:
     value = str(raw_url or "").strip()
     if not value:
         return ""
     try:
         path = urlsplit(value).path if "://" in value else value.split("?", 1)[0]
-        return unquote(path)
+        return _canonical_asset_path(unquote(path))
     except Exception:
         return value
 
@@ -127,6 +132,7 @@ def _asset_owner(path: str) -> str:
 
 def is_foreign_asset(path: str, user_id: str) -> bool:
     """这个地址是否指向别人的站内文件。画布里的图片会放行给所有成员，所以合成图、上传文件也要算归属。"""
+    path = _canonical_asset_path(path)
     owner = _asset_owner(path)
     if owner:
         return owner != user_id

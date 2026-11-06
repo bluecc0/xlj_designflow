@@ -221,12 +221,48 @@ class OutputAccessTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/ai-images/owner/team-imports/agent2-uploads/member/s/m.png", urls)
         self.assertEqual(await self.status(OWNER, "/output/agent2-uploads/member/s/m.png"), 404)
 
+    async def test_output_alias_of_ai_image_is_treated_as_the_same_file(self) -> None:
+        self.write_file("ai-images/owner/d/a.png")
+        canonical, alias = "/ai-images/owner/d/a.png", "/output/ai-images/owner/d/a.png"
+        copied = "/ai-images/member/team-imports/owner/d/a.png"
+        self.assertTrue(team_canvas.is_foreign_asset(alias, "member"))
+        self.assertFalse(team_canvas.is_foreign_asset(alias, "owner"))
+        self.assertEqual((await self.save_personal(OUTSIDER, (alias,))).status_code, 409)
+
+        canvas_id = self.share_with_member(alias)
+        for url in (canonical, alias):
+            with self.subTest(url=url):
+                self.assertEqual(await self.status(MEMBER, url), 200)
+                self.assertEqual(await self.status(OUTSIDER, url), 404)
+
+        for url in (canonical, alias):
+            with self.subTest(url=url, saved=True):
+                response = await self.save_personal(MEMBER, (url,))
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["rewritten_urls"], {url: copied})
+
+        doc = team_canvas.load_canvas(MEMBER, canvas_id)["snapshot"]
+        doc["images"].append({**doc["images"][0], "id": "i2", "url": canonical})
+        self.assertTrue(team_canvas.save_canvas(MEMBER, canvas_id, doc, 1, "update")[0])
+
+        job_store.save_editor_snapshot("member", json.dumps({
+            "version": 2, "pages": [{"id": "m1", "name": "我的", "order": 0}], "groups": [],
+            "activePageId": "m1", "frames": [], "texts": [], "images": [],
+        }))
+        team_canvas.copy_to_personal(MEMBER, canvas_id)
+        raw, _ = job_store.load_editor_snapshot("member")
+        self.assertEqual({im["url"] for im in team_canvas._personal_v2(raw)["images"]}, {copied})
+
+        team_canvas.unshare_canvas(OWNER, canvas_id)
+        self.assertEqual(await self.status(MEMBER, alias), 404)
+        self.assertEqual(await self.status(MEMBER, copied), 200)
+
     async def test_saving_foreign_file_into_canvas_does_not_grant_access(self) -> None:
         canvas_id = self.share_with_member("/ai-images/flat.png")
         doc = team_canvas.load_canvas(MEMBER, canvas_id)["snapshot"]
         revision = 1
         for url in (RESULT, f"/output/results/{SPECIAL}/frame_0.png", f"/results/orphan/../{SPECIAL}/frame_0.png",
-                    f"https://evil.test{RESULT}", ROOT_FILE, UPLOAD, "/output/.task-locks/lock",
+                    f"https://evil.test{RESULT}", "/output/ai-images/owner/d/a.png", ROOT_FILE, UPLOAD, "/output/.task-locks/lock",
                     f"/compose/{JOB}/image", f"/export/grid/{JOB}/00"):
             with self.subTest(url=url):
                 doc["images"][0]["url"] = url
