@@ -39,6 +39,8 @@ _presence: dict[str, dict[str, tuple[str, float]]] = {}
 _presence_lock = threading.Lock()
 # 图片路径 -> 可访问的用户 id；None 表示全团队
 _asset_index: dict[str, set[str] | None] | None = None
+# 同样的结构，记录动态里出现过的图片（包括已从画布删除的），只用于查看
+_activity_asset_index: dict[str, set[str] | None] = {}
 _asset_index_lock = threading.Lock()
 
 
@@ -267,44 +269,81 @@ def _invalidate_asset_index() -> None:
         _asset_index = None
 
 
+def _add_asset_viewers(index: dict[str, set[str] | None], raw_url: object, viewers: set[str] | None) -> None:
+    path = _asset_path(raw_url)
+    if not path:
+        return
+    if path not in index:
+        index[path] = None if viewers is None else set(viewers)
+    elif viewers is None or index[path] is None:
+        index[path] = None
+    else:
+        index[path] |= viewers
+
+
+def _load_asset_indexes() -> None:
+    global _asset_index, _activity_asset_index
+    shared: dict[str, set[str] | None] = {}
+    activity: dict[str, set[str] | None] = {}
+    canvas_viewers: dict[str, set[str] | None] = {}
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT id, owner_id, member_ids, doc_json FROM team_canvases WHERE status = 'active'"
+            ).fetchall()
+            activity_rows = conn.execute(
+                "SELECT canvas_id, payload FROM team_canvas_activity WHERE action IN ('generate', 'delete')"
+            ).fetchall()
+    except Exception:
+        rows, activity_rows = [], []
+    for row in rows:
+        member_ids = _member_ids(row)
+        viewers = None if member_ids is None else {row["owner_id"], *member_ids}
+        canvas_viewers[row["id"]] = viewers
+        try:
+            doc = json.loads(row["doc_json"])
+        except Exception:
+            continue
+        for image in doc.get("images") or []:
+            if isinstance(image, dict):
+                _add_asset_viewers(shared, image.get("url"), viewers)
+    for row in activity_rows:
+        if row["canvas_id"] not in canvas_viewers:
+            continue
+        try:
+            images = json.loads(row["payload"] or "{}").get("images") or []
+        except Exception:
+            continue
+        for image in images:
+            if isinstance(image, dict):
+                _add_asset_viewers(activity, image.get("url"), canvas_viewers[row["canvas_id"]])
+    _asset_index, _activity_asset_index = shared, activity
+
+
+def _asset_allowed(index: dict[str, set[str] | None], path: str, user: dict) -> bool:
+    if path not in index:
+        return False
+    allowed = index[path]
+    return allowed is None or is_super_admin(user) or str(user.get("id")) in allowed
+
+
 def is_shared_canvas_asset(raw_url: object, user: dict) -> bool:
     """图片出现在该用户能访问的任一共享画布里时，该用户可以查看和用作参考图。"""
-    global _asset_index
     path = _asset_path(raw_url)
     if not path:
         return False
     with _asset_index_lock:
         if _asset_index is None:
-            index: dict[str, set[str] | None] = {}
-            try:
-                with _connect() as conn:
-                    rows = conn.execute(
-                        "SELECT owner_id, member_ids, doc_json FROM team_canvases WHERE status = 'active'"
-                    ).fetchall()
-            except Exception:
-                rows = []
-            for row in rows:
-                try:
-                    doc = json.loads(row["doc_json"])
-                except Exception:
-                    continue
-                member_ids = _member_ids(row)
-                viewers = None if member_ids is None else {row["owner_id"], *member_ids}
-                for image in doc.get("images") or []:
-                    image_path = _asset_path(image.get("url")) if isinstance(image, dict) else ""
-                    if not image_path:
-                        continue
-                    if image_path not in index:
-                        index[image_path] = None if viewers is None else set(viewers)
-                    elif viewers is None or index[image_path] is None:
-                        index[image_path] = None
-                    else:
-                        index[image_path] |= viewers
-            _asset_index = index
-        if path not in _asset_index:
-            return False
-        allowed = _asset_index[path]
-    return allowed is None or _is_super_admin(user) or str(user.get("id")) in allowed
+            _load_asset_indexes()
+        return _asset_allowed(_asset_index, path, user)
+
+
+def can_view_shared_asset(raw_url: object, user: dict) -> bool:
+    """比 is_shared_canvas_asset 多放行动态里的图片，让成员能看到已删除图片的缩略图并恢复，但不能拿去复用。"""
+    if is_shared_canvas_asset(raw_url, user):
+        return True
+    with _asset_index_lock:
+        return _asset_allowed(_activity_asset_index, _asset_path(raw_url), user)
 
 
 def copy_asset_to_user(raw_url: object, user_id: str) -> str | None:
@@ -377,13 +416,13 @@ def _member_ids(row) -> list[str] | None:
     return [str(item) for item in parsed] if isinstance(parsed, list) else []
 
 
-def _is_super_admin(user: dict) -> bool:
+def is_super_admin(user: dict) -> bool:
     """只有 admin 这个账号能看到和管理全部画布，其他管理员账号和普通用户一样按名单。"""
     return user.get("id") == "admin" and user.get("role") == "admin"
 
 
 def _can_access(row, user: dict) -> bool:
-    if _is_super_admin(user) or row["owner_id"] == str(user["id"]):
+    if is_super_admin(user) or row["owner_id"] == str(user["id"]):
         return True
     member_ids = _member_ids(row)
     return member_ids is None or str(user["id"]) in member_ids
@@ -507,7 +546,7 @@ def set_members(user: dict, canvas_id: str, member_ids: object) -> dict:
     """修改共享范围；被移出的人下一次心跳或保存时收到 404，由前端退回个人画布。"""
     with _lock, _connect() as conn:
         row = _active_row(conn, canvas_id, user)
-        if row["owner_id"] != str(user["id"]) and not _is_super_admin(user):
+        if row["owner_id"] != str(user["id"]) and not is_super_admin(user):
             raise HTTPException(403, "只有分享者可以修改成员")
         clean_members = _clean_member_ids(member_ids, row["owner_id"])
         conn.execute(
@@ -528,7 +567,7 @@ def unshare_canvas(user: dict, canvas_id: str) -> dict:
     user_id = str(user["id"])
     with _lock, _connect() as conn:
         row = _active_row(conn, canvas_id, user)
-        if row["owner_id"] != user_id and not _is_super_admin(user):
+        if row["owner_id"] != user_id and not is_super_admin(user):
             raise HTTPException(403, "只有分享者可以取消分享")
         owner_id = row["owner_id"]
         team_doc = json.loads(row["doc_json"])

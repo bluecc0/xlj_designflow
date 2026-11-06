@@ -209,8 +209,8 @@ class SharedImageCopiedToPersonalTest(_TeamCanvasBase):
         team_canvas.unshare_canvas(OWNER, canvas_id)
         self.assertFalse(team_canvas.is_shared_canvas_asset(self.OUTPAINT, OWNER))
         # 查看：中间件只放行图片所有者本人，复制后的地址属于成员自己
-        self.assertEqual(main._outpainting_asset_owner(copied), "member")
-        self.assertEqual(main._outpainting_asset_owner(self.OUTPAINT), "owner")
+        self.assertEqual(main._ai_image_asset_parts(copied)[0], "member")
+        self.assertEqual(main._ai_image_asset_parts(self.OUTPAINT)[0], "owner")
         # 用作扩图/参考图：按成员身份解析到成员自己的文件
         path, _ = main._outpainting_internal_path(copied, None, MEMBER)
         self.assertTrue(path.is_file())
@@ -300,7 +300,7 @@ class CopyToPersonalTest(_TeamCanvasBase):
         # 原图已不能访问，复制后的扩图地址属于成员自己
         with self.assertRaises(HTTPException):
             main._outpainting_internal_path("/ai-images/owner/a.png", None, MEMBER)
-        self.assertEqual(main._outpainting_asset_owner(urls[2]), "member")
+        self.assertEqual(main._ai_image_asset_parts(urls[2])[0], "member")
 
     def test_owner_copy_and_unshare_keep_both_pages_complete(self) -> None:
         page = team_canvas.copy_to_personal(OWNER, self.canvas_id)["page"]

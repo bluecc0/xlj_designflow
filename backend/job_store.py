@@ -3307,6 +3307,16 @@ def find_inspiration_vlm_cache(job_id: str | None = None, image_url: str | None 
     return dict(row) if row else None
 
 
+def is_inspiration_asset(path: str) -> bool:
+    """这张图是否已发布到灵感广场（原图或缩略图）。库里的地址可能带 URL 编码，两种写法都查。"""
+    encoded = quote(path, safe="/")
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT 1 FROM inspiration_posts WHERE image_url IN (?, ?) OR thumb_url IN (?, ?) LIMIT 1",
+            (path, encoded, path, encoded),
+        ).fetchone() is not None
+
+
 def get_inspiration_post_by_job(job_id: str) -> dict | None:
     """根据 job_id 查找已发布的灵感（用于检测同 job 是否已发布）。"""
     with _connect() as conn:
