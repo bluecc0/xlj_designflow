@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Loader2 } from 'lucide-react'
+import { isolateDialogInput } from '../utils/dialogIsolation'
 import { notifyError } from '../utils/feedback'
 import { listShareTargets } from '../services/teamCanvasService'
 import type { TeamViewer } from '../store/teamStore'
@@ -35,11 +36,14 @@ export function ShareCanvasDialog({ title, confirmText, ownerId, initialMemberId
     return () => { active = false }
   }, [ownerId])
 
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const onCancelRef = useRef(onCancel)
+  onCancelRef.current = onCancel
+
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel() }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onCancel])
+    if (!dialogRef.current) return
+    return isolateDialogInput(dialogRef.current, () => onCancelRef.current())
+  }, [])
 
   const visibleUsers = useMemo(() => {
     const query = keyword.trim().toLowerCase()
@@ -69,7 +73,7 @@ export function ShareCanvasDialog({ title, confirmText, ownerId, initialMemberId
 
   return createPortal(
     <div style={overlayStyle} onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel() }}>
-      <div role="dialog" aria-modal="true" aria-label={title} style={dialogStyle}>
+      <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title} style={dialogStyle}>
         <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{title}</div>
         <div role="radiogroup" aria-label="共享范围" style={{ display: 'flex', gap: 2, padding: 2, borderRadius: 8, backgroundColor: '#f1f5f9' }}>
           {[{ team: false, label: '指定用户' }, { team: true, label: '全团队' }].map((item) => (
@@ -143,7 +147,7 @@ const overlayStyle: React.CSSProperties = {
 }
 
 const dialogStyle: React.CSSProperties = {
-  width: 360, maxWidth: 'calc(100vw - 32px)', borderRadius: 14, padding: 18, backgroundColor: '#ffffff',
+  outline: 'none', width: 360, maxWidth: 'calc(100vw - 32px)', borderRadius: 14, padding: 18, backgroundColor: '#ffffff',
   border: '1px solid #e2e8f0', boxShadow: '0 18px 50px rgba(15, 23, 42, 0.18)', display: 'flex', flexDirection: 'column', gap: 10,
   fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', boxSizing: 'border-box',
 }
