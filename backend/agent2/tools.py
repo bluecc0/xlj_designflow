@@ -12,11 +12,13 @@ import logging
 import time
 import uuid
 from pathlib import Path
+from typing import Sequence
 from urllib.parse import quote
 
 from ..agent_skill_loader import SKILL_CONTEXT_MAX_CHARS, build_skill_context, load_agent_skill, load_reference_text
 from ..ai_image import GPT_IMAGE_26_MODELS, compress_image_to_data_url, save_user_refs, wants_gif_output
 from ..ai_job_recovery import execute_image_job
+from ..character_cards import build_character_prompt
 from ..config import settings
 from ..job_store import load_ai_image_job, save_ai_image_job, save_image_checkpoint
 from ..model_routing import routed_chat_completion
@@ -31,6 +33,7 @@ RESOLUTIONS = ["1K", "2K", "4K"]
 ASPECT_RATIOS = ["auto", "1:1", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "2:3", "3:2"]
 MAX_IMAGES_PER_CALL = 6
 MAX_IMAGES_PER_TURN = 12
+MAX_REFERENCES_PER_IMAGE = 9
 JOB_POLL_SECONDS = 1.5
 JOB_MAX_WAIT_SECONDS = 15 * 60
 
@@ -122,14 +125,41 @@ def _job_terminal(job: dict | None) -> bool:
     return bool(job) and (job["status"] == "failed" or (job["status"] == "done" and bool(job.get("image_url"))))
 
 
+def _character_artifact(ctx: ToolContext, artifact_id: str) -> dict | None:
+    artifact = store.get_artifact(artifact_id, ctx.user["id"])
+    return artifact if artifact and artifact["kind"] == "character_ref" else None
+
+
+def _with_character_prompt(ctx: ToolContext, prompt: str, ref_ids: Sequence[str]) -> str:
+    """这一张用了角色图时，由后端按实际参考图顺序追加人物段，不依赖模型自己写。"""
+    current = {person["id"]: person for person in store.turn_characters(ctx.turn_id)}
+    people: dict[str, dict] = {}
+    others: list[int] = []
+    for index, ref_id in enumerate(ref_ids, 1):
+        artifact = _character_artifact(ctx, ref_id)
+        if not artifact:
+            others.append(index)
+            continue
+        meta = json.loads(artifact.get("meta_json") or "{}")
+        card_id = str(meta.get("card_id") or artifact["id"])
+        # 这一轮选中的以最新资料为准；模型沿用之前轮次的角色图时用登记时的快照
+        person = people.setdefault(card_id, {**(current.get(card_id) or meta.get("person") or {
+            "name": artifact["label"], "gender": "", "description": ""}), "indexes": []})
+        person["indexes"].append(index)
+    return f"{prompt}\n\n{build_character_prompt(list(people.values()), others)}" if people else prompt
+
+
 async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str, variant: str,
                         size: str, resolution: str, refs: list[tuple[bytes, str]], group_id: str | None, group_type: str | None,
-                        extra_meta: dict | None = None) -> dict:
-    prompt = str(item.get("prompt") or "").strip()
+                        extra_meta: dict | None = None, shared_ids: Sequence[str] = ()) -> dict:
+    written_prompt = str(item.get("prompt") or "").strip()
     label = str(item.get("label") or "").strip()
     # 单张指定的参考图优先：修改多张已有图时，每张只参考它自己的原图
-    if item.get("reference_image_ids"):
-        refs = [_artifact_bytes(ctx, rid) for rid in item["reference_image_ids"]]
+    ref_ids = [str(rid) for rid in item.get("reference_image_ids") or shared_ids]
+    kept = [rid for rid in ref_ids if not _character_artifact(ctx, rid)] if item.get("no_character") else ref_ids
+    if item.get("reference_image_ids") or kept != ref_ids:
+        ref_ids, refs = kept, [_artifact_bytes(ctx, rid) for rid in kept]
+    prompt = _with_character_prompt(ctx, written_prompt, ref_ids)
     uid = ctx.user["id"]
     job_id = uuid.uuid4().hex
     # 和普通生图一样建成可恢复任务：执行锁防重复执行，断点记录上游 task_id，重启后由后台续跑
@@ -144,7 +174,7 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str,
     if refs:
         save_user_refs(uid, job_id, refs)
     save_ai_image_job(job_id=job_id, user_id=uid, status="processing", model=model, prompt=prompt, size=size,
-                      provider="auto", resolution=resolution, original_prompt=prompt, resolved_prompt=prompt,
+                      provider="auto", resolution=resolution, original_prompt=written_prompt, resolved_prompt=prompt,
                       has_reference=bool(refs), reference_count=len(refs), request_meta=meta, created_at=time.time())
     worker = asyncio.create_task(execute_image_job(
         _main()._execute_ai_image_background, job_id,
@@ -235,12 +265,24 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
             ctx.state["images"] = used
             return {"error": "第 " + "、".join(map(str, missing)) + " 张没有传技能参考图（这一轮登记的是 "
                              + "、".join(sorted(registered)) + "）：把它要用的那张写进它自己的 reference_image_ids"}
+    # 这一轮选了人物时，每一张都要真的带上全部人物参考图；用户明确说不要人物的那一张除外
+    character_ids = [rid for person in store.turn_characters(ctx.turn_id) for rid in person["artifact_ids"]]
+    if character_ids:
+        effective = [[str(rid) for rid in (item.get("reference_image_ids") or shared_ids)]
+                     for item in items if not item.get("no_character")]
+        if any(not set(character_ids) <= set(ids) for ids in effective):
+            ctx.state["images"] = used
+            return {"error": "这一轮指定了人物，每一张都要把这些人物参考图全部放进 reference_image_ids：" + "、".join(character_ids)
+                             + "。修改已有图时和原图一起放；用户明确说某张不要人物时，给那一项设 no_character=true"}
+        if any(len(ids) > MAX_REFERENCES_PER_IMAGE for ids in effective):
+            ctx.state["images"] = used
+            return {"error": f"一张图最多 {MAX_REFERENCES_PER_IMAGE} 张参考图，人物参考图不能去掉，请减少其他参考图"}
     refs = [_artifact_bytes(ctx, rid) for rid in shared_ids]
     group_type = args.get("group_type") if args.get("group_type") in {"set", "variant"} else None
     group_id = ("grp_" + uuid.uuid4().hex[:8]) if group_type else None
     results = await asyncio.gather(*[
         _generate_one(ctx, i, item, model=models[i], variant=variant, size=ratio, resolution=resolution, refs=refs,
-                      group_id=group_id, group_type=group_type)
+                      group_id=group_id, group_type=group_type, shared_ids=shared_ids)
         for i, item in enumerate(items)
     ])
     ok = [r for r in results if r.get("id")]
@@ -476,7 +518,9 @@ def build_tools() -> dict[str, Tool]:
                      "model": {"type": "string", "enum": IMAGE_MODELS,
                                "description": "可选，只用于这一张的模型；用户要用几个模型分别出图对比时，每张填一个"},
                      "reference_image_ids": {"type": "array", "items": {"type": "string"},
-                                             "description": "可选，只用于这一张的参考图；修改多张已有图时，每张填它自己的原图 ID"}},
+                                             "description": "可选，只用于这一张的参考图；修改多张已有图时，每张填它自己的原图 ID"},
+                     "no_character": {"type": "boolean",
+                                      "description": "只有用户指定了人物、又明确说这张不要人物时才设为 true"}},
                      "required": ["prompt"]}},
                  "aspect_ratio": {"type": "string", "enum": ASPECT_RATIOS},
                  "resolution": {"type": "string", "enum": RESOLUTIONS,

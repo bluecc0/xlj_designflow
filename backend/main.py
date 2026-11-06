@@ -119,6 +119,17 @@ from .agent2.service import fail_stale_turns as agent2_fail_stale_turns
 from .agent2.tools import backfill_recovered_job as agent2_backfill_recovered_job
 from .agent2.tools import deliver_finished_jobs as agent2_deliver_finished_jobs
 from .agent2.store import init_tables as init_agent2_tables
+from .character_cards import (
+    build_character_prompt,
+    build_planner_note,
+    card_snapshot,
+    init_character_card_tables,
+    is_shared_character_asset,
+    load_card_refs,
+    people_from_cards,
+    resolve_cards,
+    router as character_cards_router,
+)
 from .output_access import (
     is_output_asset_owner,
     output_asset_parts,
@@ -400,6 +411,7 @@ async def lifespan(app: FastAPI):
     init_db()
     init_agent2_tables()
     init_team_canvas_tables()
+    init_character_card_tables()
     agent2_fail_stale_turns()
     app.state.outpainting_semaphore = asyncio.Semaphore(
         max(1, int(settings.bfl_outpainting_max_concurrency or 2))
@@ -577,6 +589,7 @@ app.add_middleware(
 
 app.include_router(agent2_router)
 app.include_router(team_canvas_router)
+app.include_router(character_cards_router)
 
 # 产品图库静态文件（前端预览用）
 if settings.product_library_path.exists():
@@ -883,7 +896,7 @@ def _can_read_ai_image(parts: Sequence[str], user: dict) -> bool:
     if parts[0].rstrip(" .").casefold() == expected_owner.casefold() or is_super_admin(user):
         return True
     path = "/ai-images/" + "/".join(parts)
-    return can_view_shared_asset(path, user) or is_inspiration_asset(path)
+    return can_view_shared_asset(path, user) or is_inspiration_asset(path) or is_shared_character_asset(parts)
 
 
 def _can_read_output_asset(parts: Sequence[str], user: dict) -> bool:
@@ -4328,6 +4341,7 @@ async def agent_skill_plan_stream_endpoint(
     skill_name: str,
     prompt: str = Form(...),
     image: list[UploadFile] = File(default=[]),
+    character_ids: str = Form(""),
 ):
     """Stream Skill planner output so the UI can show live reasoning/progress.
 
@@ -4338,6 +4352,7 @@ async def agent_skill_plan_stream_endpoint(
     user_prompt = (prompt or "").strip()
     if not user_prompt:
         raise HTTPException(400, "prompt 不能为空")
+    planner_note = build_planner_note(resolve_cards(user, character_ids))
 
     # 取前 3 张参考图，压成长边 1024 的 webp data_url
     ref_data_urls: list[str] = []
@@ -4364,7 +4379,7 @@ async def agent_skill_plan_stream_endpoint(
             yield make_sse("done", {"final_prompt": final_prompt, "prompt_trace": json.dumps(trace, ensure_ascii=False), "trace": trace})
             return
 
-        planner_prompt = _build_skill_planner_prompt(user_prompt, skill_label, skill_context, has_reference=has_reference)
+        planner_prompt = _build_skill_planner_prompt(user_prompt + planner_note, skill_label, skill_context, has_reference=has_reference)
         if has_reference:
             user_content: Any = [{"type": "text", "text": planner_prompt}]
             for url in ref_data_urls:
@@ -6634,6 +6649,7 @@ async def ai_image_endpoint(
     ref_previews: str = Form(""),
     batch_count: int = Form(1),
     client_request_id: str = Form(""),
+    character_ids: str = Form(""),
 ):
     """
     AI 生图接口（异步）。支持文生图（无 image）和图生图（最多 9 张参考图）。
@@ -6689,8 +6705,14 @@ async def ai_image_endpoint(
         resolved_provider = normalize_provider(provider)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    user = _current_user(request)
+    # 建会话、写消息之前先校验角色：选了却用不了时直接报错，不留下半条记录
+    character_cards = resolve_cards(user, character_ids)
+    character_refs = await asyncio.to_thread(load_card_refs, character_cards)
+    if len(image or []) + len(character_refs) > 9:
+        raise HTTPException(400, f"参考图和角色图加起来不能超过 9 张（当前 {len(image or [])} + {len(character_refs)}），请减少后再发送")
     # 要动图时只能用 APIMart 的 GPT Image 2.6 文生图，交给智能路由处理
-    gif_output = resolved in GPT_IMAGE_26_MODELS and not image and wants_gif_output(prompt)
+    gif_output = resolved in GPT_IMAGE_26_MODELS and not image and not character_refs and wants_gif_output(prompt)
     if gif_output:
         resolved_provider = PROVIDER_AUTO
     # 指定线路时不走智能路由：2.6 只有 APIMart 和 Sub2API 的 1K 非高画质可用，其余情况改用 2.5
@@ -6703,7 +6725,6 @@ async def ai_image_endpoint(
     active_skill_name = (skill or "").strip()
     active_skill_context = ""
     active_skill_meta = None
-    user = _current_user(request)
     if active_skill_name:
         active_skill_context, active_skill_meta = _load_active_skill_context(active_skill_name, user)
     job_id = uuid.uuid4().hex
@@ -6721,7 +6742,7 @@ async def ai_image_endpoint(
         role="user",
         type="user_text",
         text=display_prompt,
-        meta={"model": resolved, "size": size, "resolution": resolution, "variant": variant, "quality": quality, "refPreviews": ref_previews_list, "batchCount": batch_count, "skill": active_skill_name},
+        meta={"model": resolved, "size": size, "resolution": resolution, "variant": variant, "quality": quality, "refPreviews": ref_previews_list, "batchCount": batch_count, "skill": active_skill_name, "characters": card_snapshot(character_cards)},
         created_at=created_at,
     )
     try:
@@ -6771,7 +6792,7 @@ async def ai_image_endpoint(
         elif active_skill_context:
             skill_label = (active_skill_meta or {}).get("name") or active_skill_name
             enriched_prompt, prompt_trace_payload = await _plan_skill_image_prompt(
-                enriched_prompt,
+                enriched_prompt + build_planner_note(character_cards),
                 skill_label,
                 active_skill_context,
             )
@@ -6792,7 +6813,17 @@ async def ai_image_endpoint(
         for i, f in enumerate(images):
             user_refs.append(await _aread_reference_upload(f, index=i))
 
-        has_reference = bool(images) or bool(context_ref_bytes)
+        # 改写和技能规划都结束后才追加人物段，否则会被改写掉
+        if character_cards:
+            first_character_index = len(user_refs) + 1
+            other_indexes = list(range(1, first_character_index))
+            context_index = first_character_index + len(character_refs)
+            if context_ref_bytes and context_index <= 9:  # 超过 9 张时上下文图会被截掉，不能写进提示词
+                other_indexes.append(context_index)
+            enriched_prompt = enriched_prompt + "\n\n" + build_character_prompt(
+                people_from_cards(character_cards, first_character_index), other_indexes)
+
+        has_reference = bool(images) or bool(character_refs) or bool(context_ref_bytes)
         # 批次模式：N 个独立 job 共享同样的 session/参数；batch_id 用于把 N 条结果聚合成一张多图卡
         batch_id = uuid.uuid4().hex if batch_count > 1 else ""
         job_ids: list[str] = []
@@ -6802,12 +6833,13 @@ async def ai_image_endpoint(
             jid = uuid.uuid4().hex
             job_ids.append(jid)
             # 用户可见参考图在前，保持 @图片N 与前端编号一致；
-            # 会话续图的隐藏上下文图追加在后。
-            all_refs_batch: list[tuple[bytes, str]] = user_refs + context_ref_bytes
+            # 角色图紧随其后，人物段按这个位置写序号；会话续图的隐藏上下文图追加在后。
+            all_refs_batch: list[tuple[bytes, str]] = user_refs + character_refs + context_ref_bytes
             all_refs_batch = all_refs_batch[:9]  # 总共最多 9 张
             # 截断后记录实际参与本任务的分类数量，避免重试把截断前数量当成完整性要求。
             actual_manual_count = min(len(user_refs), len(all_refs_batch))
-            actual_context_count = max(0, len(all_refs_batch) - actual_manual_count)
+            actual_character_count = min(len(character_refs), len(all_refs_batch) - actual_manual_count)
+            actual_context_count = max(0, len(all_refs_batch) - actual_manual_count - actual_character_count)
             # 同一批任务共享参考图目录，避免为每个 job 重复保存大文件。
             reference_storage_id = batch_id or jid
             if all_refs_batch and reference_storage_id != saved_reference_storage_id:
@@ -6832,6 +6864,16 @@ async def ai_image_endpoint(
                     "url": stored_reference_urls[i] if i < len(stored_reference_urls) else "",
                     "label": f"用户参考图 {i + 1}",
                 })
+            character_offset = actual_manual_count
+            for card in character_cards:
+                for _image in card["images"]:
+                    reference_images.append({
+                        "type": "character",
+                        "name": all_refs_batch[character_offset][1],
+                        "url": stored_reference_urls[character_offset] if character_offset < len(stored_reference_urls) else "",
+                        "label": f"角色 {card['name']}",
+                    })
+                    character_offset += 1
             if actual_context_count and context_ref_url:
                 reference_images.append({
                     "type": "context",
@@ -6852,6 +6894,8 @@ async def ai_image_endpoint(
                 "batch_count": batch_count,
                 "reference_storage_job_id": reference_storage_id,
                 "manual_reference_count": actual_manual_count,
+                "character_reference_count": actual_character_count,
+                "characters": card_snapshot(character_cards),
                 "context_reference_count": actual_context_count,
                 "context_reference_url": context_ref_url if context_ref_bytes else "",
                 "context_image_url": context_ref_url if context_ref_bytes else "",

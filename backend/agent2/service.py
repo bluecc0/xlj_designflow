@@ -9,6 +9,8 @@ import uuid
 from pathlib import Path
 from typing import AsyncIterator
 
+from ..ai_image import _safe_user_id
+from ..character_cards import build_agent_note, load_card_refs
 from ..config import settings
 from . import memory, store
 from .context import ContextManager
@@ -169,14 +171,40 @@ def claim_turn(user: dict, session: dict, text: str) -> dict:
     return turn
 
 
+def register_characters(user: dict, session_id: str, cards: list[dict]) -> list[dict]:
+    """把角色图登记成本会话的图片 ID，返回带 artifact_ids 的人物列表。同一张图只登记一次，连续几轮选同一个角色不会重复复制。
+    复制一份：卡片之后被修改、删除或取消共享，会话里的图片 ID 仍然可用。不进对话卡片，也不放进画布。"""
+    registered = store.character_artifact_ids(session_id)
+    people = []
+    for card in cards:
+        person = {"id": card["id"], "name": card["name"], "gender": card["gender"], "description": card["description"]}
+        ids = []
+        for image, (data, name) in zip(card["images"], load_card_refs([card])):
+            artifact_id = registered.get(image["id"])
+            if not artifact_id:
+                file_name = f"{uuid.uuid4().hex}{Path(name).suffix}"
+                out = settings.output_path / "ai-images" / _safe_user_id(user["id"]) / "character-refs" / file_name
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(data)
+                artifact_id = store.create_artifact(
+                    session_id=session_id, user_id=user["id"], kind="character_ref",
+                    url=f"/ai-images/{_safe_user_id(user['id'])}/character-refs/{file_name}", path=str(out),
+                    label=card["name"], meta={"operation": "character_ref", "card_id": card["id"], "image_id": image["id"], "person": person},
+                )["id"]
+            ids.append(artifact_id)
+        people.append({**person, "artifact_ids": ids})
+    return people
+
+
 async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], skill: str = "",
-                     turn: dict | None = None) -> AsyncIterator[str]:
+                     turn: dict | None = None, characters: list[dict] | None = None) -> AsyncIterator[str]:
     turn = turn or claim_turn(user, session, text)
     session = store.get_session(session["id"], user["id"]) or session  # 占用后读最新历史
     # skill 记下用户选择的技能，用于技能使用统计
     first = store.append_event(session["id"], turn["id"], "turn.started", {
         "text": text, "uploads": [{"id": u["id"], "url": u["url"]} for u in uploads],
-        **({"skill": skill} if skill else {})})
+        **({"skill": skill} if skill else {}),
+        **({"characters": characters} if characters else {})})
     yield sse(first)
     session = {**session, "title": session.get("title") or (text or "参考图")[:30]}
     content = text
@@ -184,6 +212,8 @@ async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], 
         content = f"[用户选择了技能：{skill}，请先用 load_skill 加载它再执行]\n{content}"
     if uploads:
         content += "\n\n[用户上传了图片：" + "、".join(u["id"] for u in uploads) + "]"
+    if characters:
+        content += build_agent_note(characters)
     recovered = store.take_unannounced_recovered(session["id"])
     if recovered:
         content += "\n\n[服务重启后，之前没完成的生图已在后台补回：" + "、".join(
