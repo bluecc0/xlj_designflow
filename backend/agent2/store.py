@@ -347,6 +347,24 @@ def list_artifacts(session_id: str, limit: int = 30) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def character_artifact_ids(session_id: str) -> dict[str, str]:
+    """本会话已登记的角色图：卡片里的图片 ID -> 会话图片 ID。"""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, meta_json FROM agent2_artifacts WHERE session_id = ? AND kind = 'character_ref'", (session_id,),
+        ).fetchall()
+    return {json.loads(r["meta_json"] or "{}").get("image_id"): r["id"] for r in rows}
+
+
+def turn_characters(turn_id: str) -> list[dict]:
+    """这一轮用户选的人物，记在 turn.started 事件里，所以等待用户回答后继续时也能读到。"""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT payload_json FROM agent2_events WHERE turn_id = ? AND type = 'turn.started' LIMIT 1", (turn_id,),
+        ).fetchone()
+    return json.loads(row["payload_json"]).get("characters") or [] if row else []
+
+
 def list_call_artifacts(call_id: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(

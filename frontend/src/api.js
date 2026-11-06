@@ -19,6 +19,18 @@
     });
   }
 
+  function characterCardForm(payload) {
+    var form = new FormData();
+    form.append('name', payload.name || '');
+    form.append('description', payload.description || '');
+    form.append('gender', payload.gender || '');
+    if (payload.avatar) form.append('avatar', payload.avatar);
+    if (payload.remove_avatar) form.append('remove_avatar', 'true');
+    form.append('is_shared', payload.is_shared ? 'true' : 'false');
+    (payload.files || []).forEach(function(file) { form.append('images', file); });
+    return form;
+  }
+
   function getTemplateThumbnailUrl(templateId, pageId, fileId, refresh) {
     var qs = 'page_id=' + encodeURIComponent(pageId);
     if (fileId) qs += '&file_id=' + encodeURIComponent(fileId);
@@ -155,6 +167,18 @@
       return request('/inspiration/' + encodeURIComponent(postId) + '/describe', { method: 'POST' });
     },
     deleteAiChat: function(sessionId) { return request('/history/ai-chats/' + encodeURIComponent(sessionId), { method: 'DELETE' }); },
+    listCharacterCards: function() { return request('/character-cards'); },
+    createCharacterCard: function(payload) {
+      return request('/character-cards', { method: 'POST', body: characterCardForm(payload) }).then(function(res) { return res.card; });
+    },
+    updateCharacterCard: function(id, payload) {
+      var form = characterCardForm(payload);
+      form.append('keep_image_ids', JSON.stringify(payload.keep_image_ids || []));
+      return request('/character-cards/' + encodeURIComponent(id), { method: 'PUT', body: form }).then(function(res) { return res.card; });
+    },
+    deleteCharacterCard: function(id) {
+      return request('/character-cards/' + encodeURIComponent(id), { method: 'DELETE' });
+    },
     listAgentSkills: function() {
       return request('/agent-skills').then(function(res) { return res.skills || []; });
     },
@@ -178,6 +202,7 @@
       handlers = handlers || {};
       var form = new FormData();
       form.append('prompt', prompt || '');
+      if (handlers.characterIds && handlers.characterIds.length) form.append('character_ids', JSON.stringify(handlers.characterIds));
       (refImages || []).slice(0, 3).forEach(function(f) { form.append('image', f); });
       return fetch(BASE + '/agent-skills/' + encodeURIComponent(skillName) + '/plan/stream', {
         method: 'POST',
@@ -318,10 +343,11 @@
         return pump();
       });
     },
-    sendAgent2Message: function(sessionId, message, refImages, onEvent, skill) {
+    sendAgent2Message: function(sessionId, message, refImages, onEvent, skill, characterIds) {
       var form = new FormData();
       form.append('message', message || '');
       if (skill) form.append('skill', skill);
+      if (characterIds && characterIds.length) form.append('character_ids', JSON.stringify(characterIds));
       (refImages || []).forEach(function(item) { if (item && item.file) form.append('images', item.file); });
       return this.streamAgent2('/agent2/sessions/' + encodeURIComponent(sessionId) + '/messages', form, onEvent);
     },

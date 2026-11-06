@@ -1560,6 +1560,7 @@ def load_ai_chat_messages(session_id: str, user_id: Optional[str] = None) -> lis
             result.append({
                 "who": "user",
                 "text": row["text"] or "",
+                "characters": meta.get("characters") or [],
                 "createdAt": row["created_at"],
             })
         elif row["type"] == "ai_image_result":

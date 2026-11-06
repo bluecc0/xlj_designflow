@@ -2508,6 +2508,805 @@ const Canvas = ({
 };
 window.Canvas = Canvas;
 
+// src/CharacterCards.jsx
+// 角色卡：输入框里的选择面板和新建/编辑弹窗。选中后生图时只传卡片 ID，图片和描述由后端读取。
+
+const characterInputStyle = {
+  width: '100%',
+  boxSizing: 'border-box',
+  padding: '8px 10px',
+  borderRadius: 8,
+  border: '1px solid var(--line-2)',
+  background: 'var(--panel)',
+  color: 'var(--ink)',
+  fontSize: 13,
+  outline: 'none'
+};
+const CHARACTER_GENDERS = [['adult_male', '成人男'], ['adult_female', '成人女'], ['boy', '男童'], ['girl', '女童']];
+const characterGenderLabel = function (gender) {
+  const match = CHARACTER_GENDERS.find(function (item) {
+    return item[0] === gender;
+  });
+  return match ? match[1] : '';
+};
+
+// 所有头像都走这里，保证卡片、弹窗和标签裁出来的是同一块。竖图从顶部裁，半身照才不会切掉头顶。
+const CharacterAvatar = ({
+  src,
+  size,
+  alt = ''
+}) => /*#__PURE__*/React.createElement("img", {
+  src: src,
+  alt: alt,
+  loading: "lazy",
+  style: {
+    display: 'block',
+    width: size,
+    height: size,
+    flexShrink: 0,
+    borderRadius: 99,
+    objectFit: 'cover',
+    objectPosition: 'center top',
+    background: 'var(--panel-2)'
+  }
+});
+const CharacterTile = ({
+  card,
+  selected,
+  onToggle,
+  onEdit
+}) => {
+  const genderLabel = characterGenderLabel(card.gender);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'relative',
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: function () {
+      onToggle(card);
+    },
+    "aria-pressed": selected,
+    title: card.description || card.name,
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 10,
+      width: '100%',
+      boxSizing: 'border-box',
+      padding: '10px 34px 10px 10px',
+      cursor: 'pointer',
+      textAlign: 'left',
+      background: selected ? 'var(--panel-2)' : 'var(--panel)',
+      borderRadius: 12,
+      border: '1px solid ' + (selected ? 'var(--ink)' : 'var(--line-2)')
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      position: 'relative',
+      width: 48,
+      height: 48,
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement(CharacterAvatar, {
+    src: card.avatar_url,
+    size: 48
+  }), selected && /*#__PURE__*/React.createElement("span", {
+    style: {
+      position: 'absolute',
+      right: -2,
+      bottom: -2,
+      width: 18,
+      height: 18,
+      borderRadius: 99,
+      background: 'var(--ink)',
+      color: 'white',
+      border: '2px solid var(--panel)',
+      boxSizing: 'border-box',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement(I.check, {
+    size: 9,
+    stroke: 3
+  }))), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 3
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, card.name), genderLabel && /*#__PURE__*/React.createElement("span", {
+    style: {
+      flexShrink: 0,
+      padding: '0 6px',
+      borderRadius: 99,
+      background: 'var(--panel-2)',
+      color: 'var(--ink-2)',
+      fontSize: 11,
+      lineHeight: '17px'
+    }
+  }, genderLabel)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      lineHeight: 1.45,
+      color: card.description ? 'var(--ink-2)' : 'var(--ink-3)',
+      overflow: 'hidden',
+      display: '-webkit-box',
+      WebkitLineClamp: 2,
+      WebkitBoxOrient: 'vertical',
+      wordBreak: 'break-word'
+    }
+  }, card.description || '暂无简介'), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-3)',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, card.can_edit ? card.is_shared ? '已共享' : '仅自己' : card.owner_name, " \xB7 ", card.images.length, " \u5F20\u53C2\u8003\u56FE"))), card.can_edit && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: function () {
+      onEdit(card);
+    },
+    title: "\u7F16\u8F91\u89D2\u8272",
+    "aria-label": '编辑角色 ' + card.name,
+    style: {
+      position: 'absolute',
+      top: 8,
+      right: 8,
+      width: 24,
+      height: 24,
+      padding: 0,
+      borderRadius: 6,
+      border: 'none',
+      background: 'transparent',
+      color: 'var(--ink-3)',
+      display: 'grid',
+      placeItems: 'center',
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement(I.edit, {
+    size: 12
+  })));
+};
+const CharacterPickerPanel = ({
+  cards,
+  loading,
+  selectedIds,
+  onToggle,
+  onEdit,
+  onCreate
+}) => {
+  const [search, setSearch] = React.useState('');
+  const keyword = search.trim().toLowerCase();
+  const matched = cards.filter(function (card) {
+    return !keyword || (card.name + ' ' + card.description + ' ' + card.owner_name).toLowerCase().indexOf(keyword) !== -1;
+  });
+  const mine = matched.filter(function (card) {
+    return card.can_edit;
+  });
+  const team = matched.filter(function (card) {
+    return !card.can_edit;
+  });
+  const section = function (title, items) {
+    if (!items.length) return null;
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--ink-3)'
+      }
+    }, title), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
+        gap: 8
+      }
+    }, items.map(function (card) {
+      return /*#__PURE__*/React.createElement(CharacterTile, {
+        key: card.id,
+        card: card,
+        selected: selectedIds.indexOf(card.id) !== -1,
+        onToggle: onToggle,
+        onEdit: onEdit
+      });
+    })));
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10,
+      minHeight: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      flexShrink: 0
+    }
+  }, "\u9009\u62E9\u89D2\u8272"), /*#__PURE__*/React.createElement("input", {
+    value: search,
+    onChange: function (e) {
+      setSearch(e.target.value);
+    },
+    placeholder: "\u641C\u7D22\u59D3\u540D\u3001\u7B80\u4ECB\u6216\u521B\u5EFA\u4EBA",
+    style: Object.assign({}, characterInputStyle, {
+      flex: 1,
+      minWidth: 0,
+      padding: '5px 9px',
+      fontSize: 12
+    })
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onCreate,
+    style: {
+      flexShrink: 0,
+      height: 28,
+      padding: '0 10px',
+      borderRadius: 8,
+      border: 'none',
+      background: 'var(--ink)',
+      color: 'white',
+      fontSize: 12,
+      fontWeight: 600,
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 4,
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement(I.plus, {
+    size: 12
+  }), "\u65B0\u5EFA")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12,
+      maxHeight: 340,
+      overflowY: 'auto',
+      paddingRight: 2
+    }
+  }, section('我的角色', mine), section('团队共享', team), !matched.length && /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '24px 8px',
+      textAlign: 'center',
+      fontSize: 12,
+      color: 'var(--ink-3)'
+    }
+  }, loading ? '加载中…' : cards.length ? '没有找到相关角色' : '还没有角色。新建一个，生图时就能指定这个人物。')));
+};
+const CharacterEditorModal = ({
+  card,
+  limits,
+  onClose,
+  onSaved,
+  onDeleted
+}) => {
+  const editing = Boolean(card && card.id);
+  const maxImages = limits && limits.max_images_per_card || 4;
+  const [name, setName] = React.useState(editing ? card.name : '');
+  const [description, setDescription] = React.useState(editing ? card.description : '');
+  const [gender, setGender] = React.useState(editing ? card.gender : '');
+  const [avatarFile, setAvatarFile] = React.useState(null);
+  const [avatarPreview, setAvatarPreview] = React.useState(editing && card.has_avatar ? card.avatar_url : '');
+  const [isShared, setIsShared] = React.useState(editing ? card.is_shared : false);
+  const [kept, setKept] = React.useState(editing ? card.images : []);
+  const [added, setAdded] = React.useState([]);
+  const [saving, setSaving] = React.useState(false);
+  const fileRef = React.useRef(null);
+  const avatarRef = React.useRef(null);
+  const addedRef = React.useRef(added);
+  addedRef.current = added;
+  const avatarPreviewRef = React.useRef(avatarPreview);
+  avatarPreviewRef.current = avatarPreview;
+  const revokeAvatarPreview = function () {
+    if (avatarPreviewRef.current.indexOf('blob:') === 0) URL.revokeObjectURL(avatarPreviewRef.current);
+  };
+  React.useEffect(function () {
+    return function () {
+      addedRef.current.forEach(function (item) {
+        URL.revokeObjectURL(item.previewUrl);
+      });
+      revokeAvatarPreview();
+    };
+  }, []);
+  const imageCount = kept.length + added.length;
+  const pickFiles = function (e) {
+    const picked = Array.from(e.target.files || []).filter(function (file) {
+      return /^image\//.test(file.type);
+    });
+    e.target.value = '';
+    const room = maxImages - imageCount;
+    if (picked.length > room) window.dfToast('每个角色最多 ' + maxImages + ' 张参考图', {
+      tone: 'warn'
+    });
+    setAdded(function (prev) {
+      return prev.concat(picked.slice(0, Math.max(0, room)).map(function (file) {
+        return {
+          file: file,
+          previewUrl: URL.createObjectURL(file)
+        };
+      }));
+    });
+  };
+  const pickAvatar = function (e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file || !/^image\//.test(file.type)) return;
+    revokeAvatarPreview();
+    setAvatarFile(file);
+    setAvatarPreview(URL.createObjectURL(file));
+  };
+  const clearAvatar = function () {
+    revokeAvatarPreview();
+    setAvatarFile(null);
+    setAvatarPreview('');
+  };
+  const removeAdded = function (item) {
+    URL.revokeObjectURL(item.previewUrl);
+    setAdded(function (prev) {
+      return prev.filter(function (entry) {
+        return entry !== item;
+      });
+    });
+  };
+  const save = async function () {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const payload = {
+        name: name.trim(),
+        description: description.trim(),
+        gender: gender,
+        is_shared: isShared,
+        avatar: avatarFile,
+        remove_avatar: editing && card.has_avatar && !avatarPreview,
+        files: added.map(function (item) {
+          return item.file;
+        })
+      };
+      const saved = editing ? await window.API.updateCharacterCard(card.id, Object.assign(payload, {
+        keep_image_ids: kept.map(function (image) {
+          return image.id;
+        })
+      })) : await window.API.createCharacterCard(payload);
+      onSaved(saved);
+    } catch (err) {
+      window.dfError(err, '角色保存失败，请稍后重试。');
+    } finally {
+      setSaving(false);
+    }
+  };
+  const remove = async function () {
+    const ok = await window.dfConfirm({
+      title: '删除角色？',
+      message: card.is_shared ? '这个角色已共享，删除后同事也无法再选用。已经生成的图不受影响。' : '已经生成的图不受影响。',
+      confirmText: '删除',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      await window.API.deleteCharacterCard(card.id);
+      onDeleted(card);
+    } catch (err) {
+      window.dfError(err, '角色删除失败，请稍后重试。');
+    }
+  };
+  const thumb = function (key, src, onRemove, label) {
+    return /*#__PURE__*/React.createElement("div", {
+      key: key,
+      style: {
+        position: 'relative',
+        width: 72,
+        height: 72
+      }
+    }, /*#__PURE__*/React.createElement("img", {
+      src: src,
+      alt: label,
+      style: {
+        width: 72,
+        height: 72,
+        objectFit: 'cover',
+        borderRadius: 8,
+        border: '1px solid var(--line)',
+        display: 'block'
+      }
+    }), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: onRemove,
+      "aria-label": '移除' + label,
+      style: {
+        position: 'absolute',
+        top: -6,
+        right: -6,
+        width: 18,
+        height: 18,
+        padding: 0,
+        borderRadius: 99,
+        border: 'none',
+        background: 'var(--ink)',
+        color: 'white',
+        display: 'grid',
+        placeItems: 'center',
+        cursor: 'pointer'
+      }
+    }, /*#__PURE__*/React.createElement(I.close, {
+      size: 9,
+      stroke: 2.4
+    })));
+  };
+  const canSave = name.trim() && imageCount > 0 && !saving;
+  return ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+    onMouseDown: function (e) {
+      if (e.target === e.currentTarget) onClose();
+    },
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 1200,
+      background: 'rgba(15, 18, 30, 0.42)',
+      display: 'grid',
+      placeItems: 'center',
+      padding: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": editing ? '编辑角色' : '新建角色',
+    style: {
+      width: 'min(480px, 100%)',
+      maxHeight: '90vh',
+      overflowY: 'auto',
+      boxSizing: 'border-box',
+      background: 'var(--panel)',
+      borderRadius: 14,
+      padding: 18,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14,
+      boxShadow: '0 24px 60px rgba(15, 23, 42, 0.22)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, editing ? '编辑角色' : '新建角色'), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onClose,
+    "aria-label": "\u5173\u95ED",
+    style: {
+      width: 26,
+      height: 26,
+      padding: 0,
+      border: 'none',
+      background: 'transparent',
+      color: 'var(--ink-2)',
+      display: 'grid',
+      placeItems: 'center',
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement(I.close, {
+    size: 13
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flexShrink: 0,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: 4
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: function () {
+      avatarRef.current && avatarRef.current.click();
+    },
+    "aria-label": avatarPreview ? '更换头像' : '上传头像',
+    title: avatarPreview ? '更换头像' : '上传头像',
+    style: {
+      width: 76,
+      height: 76,
+      padding: 0,
+      borderRadius: 99,
+      overflow: 'hidden',
+      border: avatarPreview ? '1px solid var(--line)' : '1px dashed var(--line-2)',
+      background: 'var(--panel-2)',
+      color: 'var(--ink-3)',
+      display: 'grid',
+      placeItems: 'center',
+      cursor: 'pointer'
+    }
+  }, avatarPreview ? /*#__PURE__*/React.createElement(CharacterAvatar, {
+    src: avatarPreview,
+    size: 74,
+    alt: "\u5934\u50CF\u9884\u89C8"
+  }) : /*#__PURE__*/React.createElement(I.user, {
+    size: 24
+  })), avatarPreview ? /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: clearAvatar,
+    style: {
+      padding: 0,
+      border: 'none',
+      background: 'transparent',
+      color: 'var(--ink-3)',
+      fontSize: 11,
+      cursor: 'pointer'
+    }
+  }, "\u79FB\u9664\u5934\u50CF") : /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-3)'
+    }
+  }, "\u5934\u50CF\uFF08\u9009\u586B\uFF09"), /*#__PURE__*/React.createElement("input", {
+    ref: avatarRef,
+    type: "file",
+    accept: "image/*",
+    onChange: pickAvatar,
+    style: {
+      display: 'none'
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      fontSize: 12,
+      color: 'var(--ink-2)'
+    }
+  }, "\u59D3\u540D", /*#__PURE__*/React.createElement("input", {
+    value: name,
+    maxLength: 30,
+    autoFocus: true,
+    onChange: function (e) {
+      setName(e.target.value);
+    },
+    placeholder: "\u6BD4\u5982\uFF1A\u5C0F\u9E7F",
+    style: characterInputStyle
+  })), /*#__PURE__*/React.createElement("div", {
+    role: "radiogroup",
+    "aria-label": "\u6027\u522B",
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      color: 'var(--ink-2)',
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginRight: 4
+    }
+  }, "\u6027\u522B"), CHARACTER_GENDERS.map(function (item) {
+    const active = gender === item[0];
+    return /*#__PURE__*/React.createElement("button", {
+      key: item[0],
+      type: "button",
+      role: "radio",
+      "aria-checked": active,
+      onClick: function () {
+        setGender(active ? '' : item[0]);
+      },
+      style: {
+        height: 26,
+        padding: '0 10px',
+        borderRadius: 99,
+        border: '1px solid ' + (active ? 'var(--ink)' : 'var(--line-2)'),
+        background: active ? 'var(--ink)' : 'transparent',
+        color: active ? 'white' : 'var(--ink-2)',
+        fontSize: 12,
+        cursor: 'pointer'
+      }
+    }, item[1]);
+  })))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--ink-2)'
+    }
+  }, "\u4EBA\u7269\u53C2\u8003\u56FE\uFF08", imageCount, "/", maxImages, "\uFF09"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 10
+    }
+  }, kept.map(function (image) {
+    return thumb(image.id, image.url, function () {
+      setKept(function (prev) {
+        return prev.filter(function (entry) {
+          return entry !== image;
+        });
+      });
+    }, '参考图');
+  }), added.map(function (item) {
+    return thumb(item.previewUrl, item.previewUrl, function () {
+      removeAdded(item);
+    }, '新参考图');
+  }), imageCount < maxImages && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: function () {
+      fileRef.current && fileRef.current.click();
+    },
+    "aria-label": "\u6DFB\u52A0\u53C2\u8003\u56FE",
+    style: {
+      width: 72,
+      height: 72,
+      borderRadius: 8,
+      border: '1px dashed var(--line-2)',
+      background: 'var(--panel-2)',
+      color: 'var(--ink-2)',
+      display: 'grid',
+      placeItems: 'center',
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement(I.plus, {
+    size: 16
+  }))), /*#__PURE__*/React.createElement("input", {
+    ref: fileRef,
+    type: "file",
+    accept: "image/*",
+    multiple: true,
+    onChange: pickFiles,
+    style: {
+      display: 'none'
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-3)',
+      lineHeight: 1.5
+    }
+  }, "\u53EF\u4EE5\u62FC\u5408\u6210\u4E00\u5F20\uFF0C\u4E5F\u53EF\u4EE5\u7528\u8138\u90E8\u6E05\u6670\u7684\u56FE\uFF0C\u6B63\u9762\u3001\u4FA7\u9762\u5404\u4E00\u5F20")), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      fontSize: 12,
+      color: 'var(--ink-2)'
+    }
+  }, "\u7B80\u4ECB\uFF08\u9009\u586B\uFF09", /*#__PURE__*/React.createElement("textarea", {
+    value: description,
+    maxLength: 500,
+    rows: 3,
+    onChange: function (e) {
+      setDescription(e.target.value);
+    },
+    placeholder: "\u8865\u5145\u4EBA\u7269\u7EC6\u8282\uFF0C\u4F8B\u5982 25 \u5C81\uFF0C180cm",
+    style: Object.assign({}, characterInputStyle, {
+      resize: 'vertical',
+      fontFamily: 'inherit',
+      lineHeight: 1.5
+    })
+  })), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      fontSize: 13,
+      color: 'var(--ink)',
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: isShared,
+    onChange: function (e) {
+      setIsShared(e.target.checked);
+    }
+  }), "\u5171\u4EAB\u7ED9\u56E2\u961F"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, editing && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: remove,
+    style: {
+      height: 32,
+      padding: '0 12px',
+      borderRadius: 8,
+      border: '1px solid var(--line)',
+      background: 'transparent',
+      color: 'var(--danger)',
+      fontSize: 12,
+      cursor: 'pointer'
+    }
+  }, "\u5220\u9664"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onClose,
+    style: {
+      height: 32,
+      padding: '0 14px',
+      borderRadius: 8,
+      border: '1px solid var(--line)',
+      background: 'var(--panel)',
+      color: 'var(--ink-2)',
+      fontSize: 12,
+      cursor: 'pointer'
+    }
+  }, "\u53D6\u6D88"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: save,
+    disabled: !canSave,
+    style: {
+      height: 32,
+      padding: '0 16px',
+      borderRadius: 8,
+      border: 'none',
+      background: canSave ? 'var(--ink)' : 'var(--line)',
+      color: canSave ? 'white' : 'var(--ink-3)',
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: canSave ? 'pointer' : 'default'
+    }
+  }, saving ? '保存中…' : '保存')))), document.body);
+};
+window.CharacterAvatar = CharacterAvatar;
+window.CharacterPickerPanel = CharacterPickerPanel;
+window.CharacterEditorModal = CharacterEditorModal;
+
 // src/Chat.jsx
 function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
 // AI chat column: message list (ChatReturned) + composer.
@@ -5551,7 +6350,20 @@ const ChatReturned = ({
         opacity: isGenerating ? 0.5 : 1
       }
     }, opt.label);
-  })) : null, m.who === 'user' && Array.isArray(m.refPreviews) && m.refPreviews.length > 0 ? /*#__PURE__*/React.createElement("div", {
+  })) : null, m.who === 'user' && Array.isArray(m.characters) && m.characters.length > 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      alignSelf: 'flex-end',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      fontSize: 11,
+      color: 'var(--ink-3)'
+    }
+  }, /*#__PURE__*/React.createElement(I.user, {
+    size: 11
+  }), m.characters.map(function (card) {
+    return card.name;
+  }).join('、')) : null, m.who === 'user' && Array.isArray(m.refPreviews) && m.refPreviews.length > 0 ? /*#__PURE__*/React.createElement("div", {
     style: {
       alignSelf: 'stretch',
       padding: '8px 10px',
@@ -5766,6 +6578,11 @@ const Composer = ({
   const [quickPromptSaving, setQuickPromptSaving] = React.useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = React.useState('chat');
   const [selectedSkill, setSelectedSkill] = React.useState('');
+  const [characterCards, setCharacterCards] = React.useState([]);
+  const [characterLimits, setCharacterLimits] = React.useState(null);
+  const [characterLoading, setCharacterLoading] = React.useState(false);
+  const [selectedCharacterIds, setSelectedCharacterIds] = React.useState([]);
+  const [characterEditing, setCharacterEditing] = React.useState(null);
   const [skillMenuDismissed, setSkillMenuDismissed] = React.useState(false);
   const taRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
@@ -5877,6 +6694,7 @@ const Composer = ({
     if (!resetKey) return;
     setText('');
     setSelectedSkill('');
+    setSelectedCharacterIds([]);
     setSelectedWorkflow('chat');
     setFiles([]);
     clearRefImages();
@@ -5960,6 +6778,74 @@ const Composer = ({
     return canvasRefImages.concat(manualRefImages).slice(0, MAX_REFERENCE_IMAGES);
   }, [canvasRefImages, manualRefImages]);
 
+  // —— 角色卡 ——
+  const selectedCharacters = React.useMemo(function () {
+    return selectedCharacterIds.map(function (id) {
+      return characterCards.find(function (card) {
+        return card.id === id;
+      });
+    }).filter(Boolean);
+  }, [characterCards, selectedCharacterIds]);
+  const characterImageCount = selectedCharacters.reduce(function (sum, card) {
+    return sum + card.images.length;
+  }, 0);
+  const refreshCharacterCards = React.useCallback(function () {
+    if (!window.API) return Promise.resolve();
+    setCharacterLoading(true);
+    return window.API.listCharacterCards().then(function (res) {
+      const cards = res.cards || [];
+      setCharacterCards(cards);
+      setCharacterLimits(res.limits || null);
+      // 同事删除或取消共享后，把已选的卡片也去掉，避免发送时才报错
+      setSelectedCharacterIds(function (prev) {
+        const next = prev.filter(function (id) {
+          return cards.some(function (card) {
+            return card.id === id;
+          });
+        });
+        if (next.length === prev.length) return prev;
+        window.dfToast('有角色已被删除或取消共享，已从选择中移除', {
+          tone: 'warn'
+        });
+        return next;
+      });
+    }).catch(function (err) {
+      console.error('Load character cards failed:', err);
+    }).finally(function () {
+      setCharacterLoading(false);
+    });
+  }, []);
+  React.useEffect(function () {
+    refreshCharacterCards();
+  }, [refreshCharacterCards]);
+  React.useEffect(function () {
+    if (prototypePanel === 'characters') refreshCharacterCards();
+  }, [prototypePanel, refreshCharacterCards]);
+  const toggleCharacter = React.useCallback(function (card) {
+    // 返回是否新选中了这张卡片
+    if (selectedCharacterIds.indexOf(card.id) !== -1) {
+      setSelectedCharacterIds(selectedCharacterIds.filter(function (id) {
+        return id !== card.id;
+      }));
+      return false;
+    }
+    const maxCards = characterLimits && characterLimits.max_cards_per_request || 3;
+    if (selectedCharacterIds.length >= maxCards) {
+      window.dfToast('一次最多选 ' + maxCards + ' 个角色', {
+        tone: 'warn'
+      });
+      return false;
+    }
+    if (refImages.length + characterImageCount + card.images.length > MAX_REFERENCE_IMAGES) {
+      window.dfToast('参考图和角色图加起来不能超过 ' + MAX_REFERENCE_IMAGES + ' 张', {
+        tone: 'warn'
+      });
+      return false;
+    }
+    setSelectedCharacterIds(selectedCharacterIds.concat([card.id]));
+    return true;
+  }, [characterImageCount, characterLimits, refImages.length, selectedCharacterIds]);
+
   // —— Composer 拖拽调整高度 ——
   const handleDragStart = React.useCallback(e => {
     e.preventDefault();
@@ -6026,6 +6912,7 @@ const Composer = ({
       if (mode === 'special_full') setSpecialRouteMode('full');else if (mode === 'special') setSpecialRouteMode('auto');
       setSelectedSkill('');
     }
+    if (Array.isArray(seed.characterIds)) setSelectedCharacterIds(seed.characterIds);
     setSelectedWorkflow('chat');
     setPrototypePanel('');
     // 只挂技能时保留输入框里已有的文字，光标放到末尾
@@ -6295,6 +7182,13 @@ const Composer = ({
       });
       return;
     }
+    if (characterAvailable && refImages.length + characterImageCount > MAX_REFERENCE_IMAGES) {
+      window.dfToast('参考图和角色图加起来不能超过 ' + MAX_REFERENCE_IMAGES + ' 张，请减少后再发送', {
+        tone: 'warn',
+        duration: 6000
+      });
+      return;
+    }
     const imagesToSend = [...refImages];
     const normalizedBatchCount = normalizeBatchCount(aiBatchCount);
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
@@ -6310,7 +7204,16 @@ const Composer = ({
       specialRouteMode: specialRouteMode,
       batchCount: activeMode === 'ai-image' || Boolean(skillInvocation.skill) ? normalizedBatchCount : 1,
       skill: skillInvocation.skill || '',
-      skillPrompt: executionMessage
+      skillPrompt: executionMessage,
+      characterIds: characterAvailable ? selectedCharacters.map(function (card) {
+        return card.id;
+      }) : [],
+      characters: characterAvailable ? selectedCharacters.map(function (card) {
+        return {
+          id: card.id,
+          name: card.name
+        };
+      }) : []
     });
     setAiBatchCount(String(normalizedBatchCount));
     setText('');
@@ -6699,6 +7602,7 @@ const Composer = ({
   const clearComposer = React.useCallback(() => {
     setText('');
     setSelectedSkill('');
+    setSelectedCharacterIds([]);
     setSelectedWorkflow('chat');
     setFiles([]);
     clearRefImages();
@@ -6790,6 +7694,7 @@ const Composer = ({
   const getTaskIcon = React.useCallback(function (iconKey) {
     return I[iconKey] || I.sparkles;
   }, []);
+  const characterAvailable = agentEnabled || activeMode === 'ai-image' || Boolean(activeSkillInfo);
   const activeTaskLabel = activeMode === 'ai-image' ? isSeedreamMode ? 'Seedream 5.0' : activeAiModel === 'nano-banana-2.1' ? 'Nano Banana 2.1' : activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.6' : activeMode === 'special_full' ? '完整特殊品' : activeMode === 'special' ? '特殊品' : selectedWorkflow === 'compose' ? '智能铺品' : selectedWorkflow === 'distribute' ? '智能铺货' : selectedWorkflow === 'download' ? '花瓣下载' : '问答';
   const activeTaskIconKey = activeMode === 'ai-image' ? 'image' : activeMode === 'special' || activeMode === 'special_full' ? 'layers' : selectedWorkflow === 'compose' || selectedWorkflow === 'distribute' ? 'grid' : selectedWorkflow === 'download' ? 'download' : 'sparkles';
   const activeTaskIcon = getTaskIcon(activeTaskIconKey);
@@ -6819,6 +7724,10 @@ const Composer = ({
       onClick: function () {
         setPrototypePanel(open ? '' : panel);
       },
+      onMouseDown: function (e) {
+        e.preventDefault();
+      },
+      // 鼠标点击不抢焦点，避免按钮上出现浏览器的蓝色焦点框；键盘操作不受影响
       title: title,
       style: Object.assign({
         height: 36,
@@ -6844,6 +7753,10 @@ const Composer = ({
         whiteSpace: 'nowrap'
       }
     }, label) : null);
+  };
+  const closeCharacterPanel = function () {
+    setPrototypePanel('');
+    if (taRef.current) taRef.current.focus();
   };
   const renderSkillMenu = function () {
     if (!skillMenuOpen || !agentSkills.length) return null;
@@ -7525,6 +8438,22 @@ const Composer = ({
         style: protoChipStyle(false)
       }, '自动匹配素材')))), isImageParams ? 'fill' : 'fluid');
     }
+    if (prototypePanel === 'characters') {
+      return protoPanelShell(React.createElement(window.CharacterPickerPanel, {
+        cards: characterCards,
+        loading: characterLoading,
+        selectedIds: selectedCharacterIds,
+        onToggle: function (card) {
+          if (toggleCharacter(card)) closeCharacterPanel();
+        },
+        onEdit: function (card) {
+          setCharacterEditing(card);
+        },
+        onCreate: function () {
+          setCharacterEditing({});
+        }
+      }), 'fill');
+    }
     if (prototypePanel === 'quick_prompts') {
       const filtered = quickPrompts.filter(function (p) {
         if (!quickPromptsSearch.trim()) return true;
@@ -8076,7 +9005,40 @@ const Composer = ({
       transition: 'box-shadow 150ms, border-color 150ms, transform 150ms',
       position: 'relative'
     }
-  }, renderPrototypePanel(), renderSkillMenu(), /*#__PURE__*/React.createElement("div", {
+  }, renderPrototypePanel(), characterEditing && React.createElement(window.CharacterEditorModal, {
+    card: characterEditing,
+    limits: characterLimits,
+    onClose: function () {
+      setCharacterEditing(null);
+    },
+    onSaved: function (card) {
+      const isNew = !characterEditing.id;
+      setCharacterEditing(null);
+      // 先合入列表再选中，标签才能立刻显示
+      setCharacterCards(function (prev) {
+        return isNew ? [card].concat(prev) : prev.map(function (entry) {
+          return entry.id === card.id ? card : entry;
+        });
+      });
+      if (isNew && toggleCharacter(card)) closeCharacterPanel();
+      window.dfToast('角色已保存', {
+        tone: 'ok'
+      });
+    },
+    onDeleted: function (card) {
+      setCharacterEditing(null);
+      setCharacterCards(function (prev) {
+        return prev.filter(function (entry) {
+          return entry.id !== card.id;
+        });
+      });
+      setSelectedCharacterIds(function (prev) {
+        return prev.filter(function (id) {
+          return id !== card.id;
+        });
+      });
+    }
+  }), renderSkillMenu(), /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'relative',
       width: '100%',
@@ -8153,7 +9115,68 @@ const Composer = ({
     style: {
       display: 'none'
     }
-  }), refImages.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }), characterAvailable && selectedCharacters.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      flexWrap: 'wrap'
+    }
+  }, selectedCharacters.map(function (card) {
+    return /*#__PURE__*/React.createElement("span", {
+      key: card.id,
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        height: 28,
+        padding: '0 6px 0 3px',
+        borderRadius: 99,
+        border: '1px solid var(--line-2)',
+        background: 'var(--panel-2)',
+        maxWidth: 170
+      }
+    }, /*#__PURE__*/React.createElement(window.CharacterAvatar, {
+      src: card.avatar_url,
+      size: 22
+    }), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        color: 'var(--ink)',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, card.name), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: function () {
+        toggleCharacter(card);
+      },
+      "aria-label": '取消选择 ' + card.name,
+      style: {
+        width: 16,
+        height: 16,
+        padding: 0,
+        borderRadius: 99,
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--ink-3)',
+        display: 'grid',
+        placeItems: 'center',
+        cursor: 'pointer',
+        flexShrink: 0
+      }
+    }, /*#__PURE__*/React.createElement(I.close, {
+      size: 9,
+      stroke: 2.4
+    })));
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-3)'
+    }
+  }, "\u53C2\u8003\u56FE ", refImages.length, " + \u89D2\u8272\u56FE ", characterImageCount, " / ", MAX_REFERENCE_IMAGES)), refImages.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -8351,7 +9374,15 @@ const Composer = ({
     title: refImages.length > 0 ? `已附加 ${refImages.length} 张参考图` : agentEnabled ? '附加参考图给 Agent' : '附加图片或文件'
   }, /*#__PURE__*/React.createElement(I.paperclip, {
     size: 14
-  })), /*#__PURE__*/React.createElement("div", {
+  })), characterAvailable && prototypeToolButton('characters', selectedCharacters.length ? '已选 ' + selectedCharacters.length + ' 个角色' : '选择角色', React.createElement(I.user, {
+    size: 14
+  }), null, Object.assign({
+    width: 34,
+    minWidth: 34,
+    height: 34
+  }, selectedCharacters.length ? {
+    color: 'var(--ink)'
+  } : {})), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1
     }
@@ -8474,7 +9505,8 @@ const agent2Reduce = function (msgs, ev) {
         text: p.text || '',
         refPreviews: (p.uploads || []).map(function (u) {
           return agent2AbsUrl(u.url);
-        })
+        }),
+        characters: p.characters || []
       }, thinking]);
     case 'message.delta':
       {
@@ -9372,6 +10404,7 @@ const Chat = ({
       }).filter(Boolean);
       try {
         await window.API.streamSkillPlan(activeSkill, finalPrompt, plannerRefImages, {
+          characterIds: aiOptions.characterIds,
           onEvent: function (eventName) {
             if (eventName !== 'reset') return;
             streamedTrace = '';
@@ -9447,6 +10480,7 @@ const Chat = ({
         fd.append('variant', aiOptions.variant || 'flare');
         fd.append('quality', quality);
         if (activeSkill) fd.append('skill', activeSkill);
+        if (aiOptions.characterIds && aiOptions.characterIds.length) fd.append('character_ids', JSON.stringify(aiOptions.characterIds));
         if (plannedPrompt) fd.append('planned_prompt', plannedPrompt);
         if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
         if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
@@ -9690,6 +10724,7 @@ const Chat = ({
         fd.append('variant', aiOptions.variant || 'flare');
         fd.append('quality', quality);
         if (activeSkill) fd.append('skill', activeSkill);
+        if (aiOptions.characterIds && aiOptions.characterIds.length) fd.append('character_ids', JSON.stringify(aiOptions.characterIds));
         if (plannedPrompt) fd.append('planned_prompt', plannedPrompt);
         if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
         if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
@@ -10042,7 +11077,8 @@ const Chat = ({
         text,
         refPreviews: userRefPreviews,
         refMeta: userRefMeta,
-        activeSkill: activeSkill
+        activeSkill: activeSkill,
+        characters: aiOptions.characters
       }]);
       await runAiImageGeneration(aiOptions.model || 'gpt-image-2.6', executionText, text.trim(), refImages, skillImageOptions);
       return;
@@ -10065,7 +11101,7 @@ const Chat = ({
         } else {
           sessionId = await ensureAgentSession();
           if (agentStreamRef.current.cursor.sessionId !== sessionId) resetAgentCursor(sessionId);
-          await window.API.sendAgent2Message(sessionId, executionText, refImages, onAgentEvent, activeSkill);
+          await window.API.sendAgent2Message(sessionId, executionText, refImages, onAgentEvent, activeSkill, aiOptions.characterIds);
         }
       } catch (e) {
         streamError = e;
@@ -10300,7 +11336,8 @@ const Chat = ({
         who: 'user',
         text: plainText,
         refPreviews: userRefPreviews,
-        refMeta: userRefMeta
+        refMeta: userRefMeta,
+        characters: aiOptions.characters
       }]);
       await runAiImageGeneration(targetAiModel || 'gpt-image-2.6', aiOptions.quickEditPrompt || plainText, plainText, refImages, aiOptions);
       return;
@@ -10324,7 +11361,8 @@ const Chat = ({
         who: 'user',
         text,
         refPreviews: userRefPreviews,
-        refMeta: userRefMeta
+        refMeta: userRefMeta,
+        characters: aiOptions.characters
       }]);
       await runAiImageGeneration(model, text.trim(), text.trim(), refImages, opts);
       return;
@@ -10590,7 +11628,8 @@ const Chat = ({
     const model = args && args[0] || msg && msg.model || '';
     if (text) setLocalSeed({
       text: String(text),
-      mode: normalizeAiImageModel(model) || 'gpt-image-2.6'
+      mode: normalizeAiImageModel(model) || 'gpt-image-2.6',
+      characterIds: args && args[4] && args[4].characterIds || []
     });
   }, [normalizeAiImageModel]);
   const handlePickSkill = React.useCallback(function (skill) {

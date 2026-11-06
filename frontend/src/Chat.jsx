@@ -1737,6 +1737,12 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                     })}
                   </div>
                 ) : null}
+                {m.who === 'user' && Array.isArray(m.characters) && m.characters.length > 0 ? (
+                  <div style={{ alignSelf: 'flex-end', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)' }}>
+                    <I.user size={11}/>
+                    {m.characters.map(function(card) { return card.name; }).join('、')}
+                  </div>
+                ) : null}
                 {m.who === 'user' && Array.isArray(m.refPreviews) && m.refPreviews.length > 0 ? (
                   <div style={{
                     alignSelf: 'stretch',
@@ -1896,6 +1902,11 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
   const [quickPromptSaving, setQuickPromptSaving] = React.useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = React.useState('chat');
   const [selectedSkill, setSelectedSkill] = React.useState('');
+  const [characterCards, setCharacterCards] = React.useState([]);
+  const [characterLimits, setCharacterLimits] = React.useState(null);
+  const [characterLoading, setCharacterLoading] = React.useState(false);
+  const [selectedCharacterIds, setSelectedCharacterIds] = React.useState([]);
+  const [characterEditing, setCharacterEditing] = React.useState(null);
   const [skillMenuDismissed, setSkillMenuDismissed] = React.useState(false);
   const taRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
@@ -2013,6 +2024,7 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
     if (!resetKey) return;
     setText('');
     setSelectedSkill('');
+    setSelectedCharacterIds([]);
     setSelectedWorkflow('chat');
     setFiles([]);
     clearRefImages();
@@ -2091,6 +2103,58 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
     return canvasRefImages.concat(manualRefImages).slice(0, MAX_REFERENCE_IMAGES);
   }, [canvasRefImages, manualRefImages]);
 
+  // —— 角色卡 ——
+  const selectedCharacters = React.useMemo(function() {
+    return selectedCharacterIds.map(function(id) {
+      return characterCards.find(function(card) { return card.id === id; });
+    }).filter(Boolean);
+  }, [characterCards, selectedCharacterIds]);
+  const characterImageCount = selectedCharacters.reduce(function(sum, card) { return sum + card.images.length; }, 0);
+  const refreshCharacterCards = React.useCallback(function() {
+    if (!window.API) return Promise.resolve();
+    setCharacterLoading(true);
+    return window.API.listCharacterCards().then(function(res) {
+      const cards = res.cards || [];
+      setCharacterCards(cards);
+      setCharacterLimits(res.limits || null);
+      // 同事删除或取消共享后，把已选的卡片也去掉，避免发送时才报错
+      setSelectedCharacterIds(function(prev) {
+        const next = prev.filter(function(id) { return cards.some(function(card) { return card.id === id; }); });
+        if (next.length === prev.length) return prev;
+        window.dfToast('有角色已被删除或取消共享，已从选择中移除', { tone: 'warn' });
+        return next;
+      });
+    }).catch(function(err) {
+      console.error('Load character cards failed:', err);
+    }).finally(function() {
+      setCharacterLoading(false);
+    });
+  }, []);
+  React.useEffect(function() {
+    refreshCharacterCards();
+  }, [refreshCharacterCards]);
+  React.useEffect(function() {
+    if (prototypePanel === 'characters') refreshCharacterCards();
+  }, [prototypePanel, refreshCharacterCards]);
+  const toggleCharacter = React.useCallback(function(card) {
+    // 返回是否新选中了这张卡片
+    if (selectedCharacterIds.indexOf(card.id) !== -1) {
+      setSelectedCharacterIds(selectedCharacterIds.filter(function(id) { return id !== card.id; }));
+      return false;
+    }
+    const maxCards = (characterLimits && characterLimits.max_cards_per_request) || 3;
+    if (selectedCharacterIds.length >= maxCards) {
+      window.dfToast('一次最多选 ' + maxCards + ' 个角色', { tone: 'warn' });
+      return false;
+    }
+    if (refImages.length + characterImageCount + card.images.length > MAX_REFERENCE_IMAGES) {
+      window.dfToast('参考图和角色图加起来不能超过 ' + MAX_REFERENCE_IMAGES + ' 张', { tone: 'warn' });
+      return false;
+    }
+    setSelectedCharacterIds(selectedCharacterIds.concat([card.id]));
+    return true;
+  }, [characterImageCount, characterLimits, refImages.length, selectedCharacterIds]);
+
   // —— Composer 拖拽调整高度 ——
   const handleDragStart = React.useCallback((e) => {
     e.preventDefault();
@@ -2153,6 +2217,7 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
       else if (mode === 'special') setSpecialRouteMode('auto');
       setSelectedSkill('');
     }
+    if (Array.isArray(seed.characterIds)) setSelectedCharacterIds(seed.characterIds);
     setSelectedWorkflow('chat');
     setPrototypePanel('');
     // 只挂技能时保留输入框里已有的文字，光标放到末尾
@@ -2332,6 +2397,10 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
       window.dfToast(formatOversizedReferenceAlert(oversizedRefs), { tone: 'warn', duration: 6000 });
       return;
     }
+    if (characterAvailable && refImages.length + characterImageCount > MAX_REFERENCE_IMAGES) {
+      window.dfToast('参考图和角色图加起来不能超过 ' + MAX_REFERENCE_IMAGES + ' 张，请减少后再发送', { tone: 'warn', duration: 6000 });
+      return;
+    }
     const imagesToSend = [...refImages];
     const normalizedBatchCount = normalizeBatchCount(aiBatchCount);
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
@@ -2348,6 +2417,8 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
       batchCount: (activeMode === 'ai-image' || Boolean(skillInvocation.skill)) ? normalizedBatchCount : 1,
       skill: skillInvocation.skill || '',
       skillPrompt: executionMessage,
+      characterIds: characterAvailable ? selectedCharacters.map(function(card) { return card.id; }) : [],
+      characters: characterAvailable ? selectedCharacters.map(function(card) { return { id: card.id, name: card.name }; }) : [],
     });
     setAiBatchCount(String(normalizedBatchCount));
     setText('');
@@ -2756,6 +2827,7 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
   const clearComposer = React.useCallback(() => {
     setText('');
     setSelectedSkill('');
+    setSelectedCharacterIds([]);
     setSelectedWorkflow('chat');
     setFiles([]);
     clearRefImages();
@@ -2797,6 +2869,7 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
   const getTaskIcon = React.useCallback(function(iconKey) {
     return I[iconKey] || I.sparkles;
   }, []);
+  const characterAvailable = agentEnabled || activeMode === 'ai-image' || Boolean(activeSkillInfo);
   const activeTaskLabel = activeMode === 'ai-image'
     ? (isSeedreamMode ? 'Seedream 5.0' : activeAiModel === 'nano-banana-2.1' ? 'Nano Banana 2.1' : activeAiModel === 'nano-banana-pro' ? 'Nano Banana Pro' : activeAiModel === 'gpt-image-2' ? 'GPT Image 2' : 'GPT Image 2.6')
     : activeMode === 'special_full'
@@ -2889,6 +2962,7 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
     return React.createElement('button', Object.assign({
       type: 'button',
       onClick: function() { setPrototypePanel(open ? '' : panel); },
+      onMouseDown: function(e) { e.preventDefault(); },  // 鼠标点击不抢焦点，避免按钮上出现浏览器的蓝色焦点框；键盘操作不受影响
       title: title,
       style: Object.assign({
         height: 36,
@@ -2908,6 +2982,10 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
         flexShrink: 0,
       }, options || {})
     }), icon, label ? React.createElement('span', { style: { fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' } }, label) : null);
+  };
+  const closeCharacterPanel = function() {
+    setPrototypePanel('');
+    if (taRef.current) taRef.current.focus();
   };
   const renderSkillMenu = function() {
     if (!skillMenuOpen || !agentSkills.length) return null;
@@ -3532,6 +3610,16 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
         )
       ), isImageParams ? 'fill' : 'fluid');
     }
+    if (prototypePanel === 'characters') {
+      return protoPanelShell(React.createElement(window.CharacterPickerPanel, {
+        cards: characterCards,
+        loading: characterLoading,
+        selectedIds: selectedCharacterIds,
+        onToggle: function(card) { if (toggleCharacter(card)) closeCharacterPanel(); },
+        onEdit: function(card) { setCharacterEditing(card); },
+        onCreate: function() { setCharacterEditing({}); },
+      }), 'fill');
+    }
     if (prototypePanel === 'quick_prompts') {
       const filtered = quickPrompts.filter(function(p) {
         if (!quickPromptsSearch.trim()) return true;
@@ -3984,6 +4072,26 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
         position: 'relative',
       }}>
         {renderPrototypePanel()}
+        {characterEditing && React.createElement(window.CharacterEditorModal, {
+          card: characterEditing,
+          limits: characterLimits,
+          onClose: function() { setCharacterEditing(null); },
+          onSaved: function(card) {
+            const isNew = !characterEditing.id;
+            setCharacterEditing(null);
+            // 先合入列表再选中，标签才能立刻显示
+            setCharacterCards(function(prev) {
+              return isNew ? [card].concat(prev) : prev.map(function(entry) { return entry.id === card.id ? card : entry; });
+            });
+            if (isNew && toggleCharacter(card)) closeCharacterPanel();
+            window.dfToast('角色已保存', { tone: 'ok' });
+          },
+          onDeleted: function(card) {
+            setCharacterEditing(null);
+            setCharacterCards(function(prev) { return prev.filter(function(entry) { return entry.id !== card.id; }); });
+            setSelectedCharacterIds(function(prev) { return prev.filter(function(id) { return id !== card.id; }); });
+          },
+        })}
         {renderSkillMenu()}
 
         <div style={{
@@ -4070,6 +4178,23 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
           multiple
           style={{ display: 'none' }}
         />
+
+        {characterAvailable && selectedCharacters.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            {selectedCharacters.map(function(card) {
+              return (
+                <span key={card.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, height: 28, padding: '0 6px 0 3px', borderRadius: 99, border: '1px solid var(--line-2)', background: 'var(--panel-2)', maxWidth: 170 }}>
+                  <window.CharacterAvatar src={card.avatar_url} size={22}/>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.name}</span>
+                  <button type="button" onClick={function() { toggleCharacter(card); }} aria-label={'取消选择 ' + card.name} style={{ width: 16, height: 16, padding: 0, borderRadius: 99, border: 'none', background: 'transparent', color: 'var(--ink-3)', display: 'grid', placeItems: 'center', cursor: 'pointer', flexShrink: 0 }}>
+                    <I.close size={9} stroke={2.4}/>
+                  </button>
+                </span>
+              );
+            })}
+            <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>参考图 {refImages.length} + 角色图 {characterImageCount} / {MAX_REFERENCE_IMAGES}</span>
+          </div>
+        )}
 
         {/* Reference images preview */ }
         {refImages.length > 0 && (
@@ -4199,6 +4324,11 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
           >
             <I.paperclip size={14}/>
           </button>
+          {characterAvailable && prototypeToolButton('characters', selectedCharacters.length ? ('已选 ' + selectedCharacters.length + ' 个角色') : '选择角色', React.createElement(I.user, { size: 14 }), null, Object.assign({
+            width: 34,
+            minWidth: 34,
+            height: 34,
+          }, selectedCharacters.length ? { color: 'var(--ink)' } : {}))}
           <div style={{ flex: 1 }}/>
           {prototypeToolButton('quick_prompts', '常用语', React.createElement(I.bookmark, { size: 14 }), null, {
             width: 34,
@@ -4273,6 +4403,7 @@ const agent2Reduce = function(msgs, ev) {
       return list.concat([{
         who: 'user', text: p.text || '',
         refPreviews: (p.uploads || []).map(function(u) { return agent2AbsUrl(u.url); }),
+        characters: p.characters || [],
       }, thinking]);
     case 'message.delta': {
       var last = list[list.length - 1];
@@ -4937,6 +5068,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       var plannerRefImages = (Array.isArray(finalRefImages) ? finalRefImages : []).slice(0, 3).map(function(r) { return r && r.file; }).filter(Boolean);
       try {
         await window.API.streamSkillPlan(activeSkill, finalPrompt, plannerRefImages, {
+          characterIds: aiOptions.characterIds,
           onEvent: function(eventName) {
             if (eventName !== 'reset') return;
             streamedTrace = '';
@@ -5029,6 +5161,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         fd.append('variant', aiOptions.variant || 'flare');
         fd.append('quality', quality);
         if (activeSkill) fd.append('skill', activeSkill);
+        if (aiOptions.characterIds && aiOptions.characterIds.length) fd.append('character_ids', JSON.stringify(aiOptions.characterIds));
         if (plannedPrompt) fd.append('planned_prompt', plannedPrompt);
         if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
         if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
@@ -5277,6 +5410,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         fd.append('variant', aiOptions.variant || 'flare');
         fd.append('quality', quality);
         if (activeSkill) fd.append('skill', activeSkill);
+        if (aiOptions.characterIds && aiOptions.characterIds.length) fd.append('character_ids', JSON.stringify(aiOptions.characterIds));
         if (plannedPrompt) fd.append('planned_prompt', plannedPrompt);
         if (plannedPromptTrace) fd.append('prompt_trace', plannedPromptTrace);
         if (currentAiChatId && !aiOptions.skipContext) fd.append('chat_session_id', currentAiChatId);
@@ -5587,7 +5721,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         batchCount: aiOptions.batchCount || 1,
         skill: activeSkill,
       });
-      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta, activeSkill: activeSkill }]);
+      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta, activeSkill: activeSkill, characters: aiOptions.characters }]);
       await runAiImageGeneration(
         aiOptions.model || 'gpt-image-2.6',
         executionText,
@@ -5614,7 +5748,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         } else {
           sessionId = await ensureAgentSession();
           if (agentStreamRef.current.cursor.sessionId !== sessionId) resetAgentCursor(sessionId);
-          await window.API.sendAgent2Message(sessionId, executionText, refImages, onAgentEvent, activeSkill);
+          await window.API.sendAgent2Message(sessionId, executionText, refImages, onAgentEvent, activeSkill, aiOptions.characterIds);
         }
       } catch (e) {
         streamError = e;
@@ -5781,7 +5915,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         ]);
         return;
       }
-      setMessages(msgs => [...msgs, { who: 'user', text: plainText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
+      setMessages(msgs => [...msgs, { who: 'user', text: plainText, refPreviews: userRefPreviews, refMeta: userRefMeta, characters: aiOptions.characters }]);
       await runAiImageGeneration(targetAiModel || 'gpt-image-2.6', aiOptions.quickEditPrompt || plainText, plainText, refImages, aiOptions);
       return;
     }
@@ -5800,7 +5934,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         quality: lastOpts?.quality || aiOptions.quality || 'auto',
         provider: aiOptions.provider,
       };
-      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
+      setMessages(msgs => [...msgs, { who: 'user', text, refPreviews: userRefPreviews, refMeta: userRefMeta, characters: aiOptions.characters }]);
       await runAiImageGeneration(model, text.trim(), text.trim(), refImages, opts);
       return;
     }
@@ -6006,7 +6140,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     const args = msg && msg.retryArgs;
     const text = (args && (args[2] || args[1])) || (msg && msg.prompt) || '';
     const model = (args && args[0]) || (msg && msg.model) || '';
-    if (text) setLocalSeed({ text: String(text), mode: normalizeAiImageModel(model) || 'gpt-image-2.6' });
+    if (text) setLocalSeed({ text: String(text), mode: normalizeAiImageModel(model) || 'gpt-image-2.6', characterIds: (args && args[4] && args[4].characterIds) || [] });
   }, [normalizeAiImageModel]);
   const handlePickSkill = React.useCallback(function(skill) {
     if (!skill || !skill.name) return;

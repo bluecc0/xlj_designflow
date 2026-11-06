@@ -22,6 +22,7 @@ BABEL_FILES = [
     "src/TopBar.jsx",
     "src/TemplatePanel.jsx",
     "src/Canvas.jsx",
+    "src/CharacterCards.jsx",
     "src/Chat.jsx",
     "src/AdminPage.jsx",
     "src/InspirationPanel.jsx",

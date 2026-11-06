@@ -1,12 +1,14 @@
 """新版 Agent 的 HTTP 接口。鉴权沿用全局中间件（request.state.user）。"""
 from __future__ import annotations
 
+import asyncio
 import io
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from PIL import Image
 
+from ..character_cards import resolve_cards
 from . import service, store
 
 router = APIRouter(prefix="/agent2")
@@ -73,9 +75,10 @@ def delete_session(request: Request, session_id: str):
 
 @router.post("/sessions/{session_id}/messages")
 async def send_message(request: Request, session_id: str, message: str = Form(""), skill: str = Form(""),
-                       images: list[UploadFile] = File(default=[])):
+                       images: list[UploadFile] = File(default=[]), character_ids: str = Form("")):
     user, session = _session(request, session_id)
     text = message.strip()
+    cards = resolve_cards(user, character_ids)
     if not text and not images:
         raise HTTPException(400, "消息不能为空")
     if len(images or []) > MAX_UPLOADS:
@@ -89,13 +92,15 @@ async def send_message(request: Request, session_id: str, message: str = Form(""
             raise HTTPException(400, f"{upload.filename or '文件'} 不是图片；Agent 目前只支持上传图片")
         if data:
             files.append((data, upload.filename or ""))
+    characters = await asyncio.to_thread(service.register_characters, user, session_id, cards)
     # 校验通过后再占用会话，避免报错留下一直"运行中"的轮次
     try:
         turn = service.claim_turn(user, session, text)
     except service.TurnBusy as exc:
         raise HTTPException(409, str(exc))
     uploads = [service.save_upload(user, session_id, data, name) for data, name in files]
-    return _stream(service.start_turn(user, session, text, uploads, skill=skill.strip(), turn=turn))
+    return _stream(service.start_turn(user, session, text, uploads, skill=skill.strip(), turn=turn,
+                                            characters=characters))
 
 
 @router.post("/turns/{turn_id}/answer")
