@@ -11,6 +11,7 @@ import httpx
 from PIL import Image
 
 from backend import job_store, main
+from backend.models import ComposeJob, ComposeRequest
 
 
 class ImageCopyTest(unittest.IsolatedAsyncioTestCase):
@@ -34,6 +35,10 @@ class ImageCopyTest(unittest.IsolatedAsyncioTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         job_store.init_db()
+        job_store.save_job(ComposeJob(
+            id="job-a", user_id="operator_a",
+            request=ComposeRequest(template_frame_id="t", page_id="p", file_id="f"),
+        ))
 
     def client(self, logged_in=False):
         return httpx.AsyncClient(

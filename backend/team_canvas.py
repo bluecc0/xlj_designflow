@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import threading
 import time
@@ -23,9 +24,11 @@ from .job_store import (
     _legacy_compatible_editor_snapshot,
     _lock,
     load_editor_snapshot,
+    load_job_owner_id,
     log_operation,
     save_editor_snapshot,
 )
+from .output_access import is_output_asset_owner, output_asset_parts
 
 router = APIRouter(prefix="/team-canvases")
 
@@ -118,6 +121,18 @@ def _asset_owner(path: str) -> str:
         return ""
     rest = path[len("/ai-images/"):]
     return rest.split("/", 1)[0] if "/" in rest else ""
+
+
+def _is_foreign_asset(path: str, user_id: str) -> bool:
+    """这个地址是否指向别人的站内文件。画布里的图片会放行给所有成员，所以合成图、上传文件也要算归属。"""
+    owner = _asset_owner(path)
+    if owner:
+        return owner != user_id
+    job_route = re.fullmatch(r"/(?:export/grid|compose)/([^/]+)/.+", path)
+    if job_route:
+        return load_job_owner_id(job_route.group(1)) != user_id
+    parts = output_asset_parts(path)
+    return parts is not None and not is_output_asset_owner(parts, user_id)
 
 
 def _personal_v2(stored_json: str | None) -> dict | None:
@@ -511,6 +526,11 @@ def share_page(user: dict, page_id: str, member_ids: object = None) -> dict:
              for key in _RECORD_KEYS},
             page,
         )
+        # ai-images 在保存个人画布时已校验；其他站内文件在这里挡住，避免分享后放行给成员
+        for image in team_doc["images"]:
+            path = _asset_path(image.get("url"))
+            if not _asset_owner(path) and _is_foreign_asset(path, user_id) and not is_shared_canvas_asset(path, user):
+                raise HTTPException(409, "画布包含其他用户的文件，无法分享，请先移除后重试")
         remaining_pages = [p for p in doc["pages"] if p.get("id") != page_id]
         if not any(not p.get("archived") for p in remaining_pages):
             remaining_pages.append({"id": "page-" + uuid.uuid4().hex[:7], "name": "画布 1",
@@ -658,8 +678,7 @@ def save_canvas(
         history_urls: set[str] | None = None
         for image in new_doc["images"]:
             path = _asset_path(image.get("url"))
-            owner = _asset_owner(path)
-            if not owner or owner == str(user["id"]) or path in old_urls or is_shared_canvas_asset(path, user):
+            if not _is_foreign_asset(path, str(user["id"])) or path in old_urls or is_shared_canvas_asset(path, user):
                 continue
             # 从动态里“恢复”被删的图片：该画布自己曾经有过的图片记录也认可
             if history_urls is None:
