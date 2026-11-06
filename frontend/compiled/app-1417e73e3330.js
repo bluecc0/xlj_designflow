@@ -2812,7 +2812,8 @@ const CharacterEditorModal = ({
   limits,
   onClose,
   onSaved,
-  onDeleted
+  onDeleted,
+  onStale
 }) => {
   const editing = Boolean(card && card.id);
   const maxImages = limits && limits.max_images_per_card || 4;
@@ -2898,6 +2899,7 @@ const CharacterEditorModal = ({
         })
       };
       const saved = editing ? await window.API.updateCharacterCard(card.id, Object.assign(payload, {
+        version: card.version,
         keep_image_ids: kept.map(function (image) {
           return image.id;
         })
@@ -2905,6 +2907,7 @@ const CharacterEditorModal = ({
       onSaved(saved);
     } catch (err) {
       window.dfError(err, '角色保存失败，请稍后重试。');
+      if (err && (err.httpStatus === 409 || err.httpStatus === 404)) onStale();
     } finally {
       setSaving(false);
     }
@@ -2918,10 +2921,11 @@ const CharacterEditorModal = ({
     });
     if (!ok) return;
     try {
-      await window.API.deleteCharacterCard(card.id);
+      await window.API.deleteCharacterCard(card.id, card.version);
       onDeleted(card);
     } catch (err) {
       window.dfError(err, '角色删除失败，请稍后重试。');
+      if (err && (err.httpStatus === 409 || err.httpStatus === 404)) onStale();
     }
   };
   const thumb = function (key, src, onRemove, label) {
@@ -9010,6 +9014,11 @@ const Composer = ({
     limits: characterLimits,
     onClose: function () {
       setCharacterEditing(null);
+    },
+    // 卡片已被别处改过或删掉：手里的版本作废，关掉弹窗并重新拉列表
+    onStale: function () {
+      setCharacterEditing(null);
+      refreshCharacterCards();
     },
     onSaved: function (card) {
       const isNew = !characterEditing.id;

@@ -174,10 +174,11 @@
     updateCharacterCard: function(id, payload) {
       var form = characterCardForm(payload);
       form.append('keep_image_ids', JSON.stringify(payload.keep_image_ids || []));
+      form.append('version', payload.version);
       return request('/character-cards/' + encodeURIComponent(id), { method: 'PUT', body: form }).then(function(res) { return res.card; });
     },
-    deleteCharacterCard: function(id) {
-      return request('/character-cards/' + encodeURIComponent(id), { method: 'DELETE' });
+    deleteCharacterCard: function(id, version) {
+      return request('/character-cards/' + encodeURIComponent(id) + '?version=' + encodeURIComponent(version), { method: 'DELETE' });
     },
     listAgentSkills: function() {
       return request('/agent-skills').then(function(res) { return res.skills || []; });

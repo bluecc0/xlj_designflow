@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import re
@@ -34,6 +35,7 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_EDGE = 2048
 MAX_STORED_BYTES = 5 * 1024 * 1024  # 与单张参考图上限一致
 MAX_AVATAR_EDGE = 512
+STALE_CARD_MESSAGE = "这个角色刚被修改过，已为你刷新，请重新打开后再操作"
 GENDER_LABELS = {"adult_male": "成年男性", "adult_female": "成年女性", "boy": "男童", "girl": "女童"}
 
 
@@ -57,6 +59,8 @@ def init_character_card_tables() -> None:
             conn.execute("ALTER TABLE character_cards ADD COLUMN gender TEXT NOT NULL DEFAULT ''")
         if "avatar_file" not in columns:
             conn.execute("ALTER TABLE character_cards ADD COLUMN avatar_file TEXT NOT NULL DEFAULT ''")
+        if "version" not in columns:
+            conn.execute("ALTER TABLE character_cards ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_character_cards_owner ON character_cards(owner_id, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_character_cards_shared ON character_cards(is_shared, updated_at)")
 
@@ -96,6 +100,7 @@ def _public_card(card: dict, user: dict) -> dict:
         "can_edit": _can_edit(card, user),
         "images": images,
         "updated_at": card["updated_at"],
+        "version": card["version"],
     }
 
 
@@ -184,6 +189,16 @@ def _save_avatar(card: dict, prepared: tuple[bytes, str]) -> str:
     file_name = f"avatar_{uuid.uuid4().hex[:12]}{suffix}"
     (folder / file_name).write_bytes(data)
     return file_name
+
+
+def _remove_files(card: dict, file_names: Sequence[str]) -> None:
+    """删掉不再需要的文件；卡片已被删除时目录也一起收掉。"""
+    folder = _card_dir(card["owner_id"], card["id"])
+    for file_name in file_names:
+        (folder / file_name).unlink(missing_ok=True)
+    if file_names and not _load_card(card["id"]):
+        with contextlib.suppress(OSError):
+            folder.rmdir()
 
 
 def _save_images(card: dict, prepared: list[tuple[bytes, str]]) -> list[dict]:
@@ -336,6 +351,11 @@ def _user(request: Request) -> dict:
     return user
 
 
+def _check_version(card: dict, version: int) -> None:
+    if card["version"] != version:
+        raise HTTPException(409, STALE_CARD_MESSAGE)
+
+
 def _editable_card(card_id: str, user: dict) -> dict:
     card = _load_card(card_id)
     if not card or not _can_use(card, user):
@@ -372,7 +392,7 @@ async def api_create(request: Request, name: str = Form(...), description: str =
     now = time.time()
     card = {"id": "char_" + uuid.uuid4().hex[:12], "owner_id": uid, "owner_name": _user_name(user),
             "name": clean_name, "description": clean_description, "gender": clean_gender, "is_shared": bool(is_shared),
-            "created_at": now, "updated_at": now}
+            "created_at": now, "updated_at": now, "version": 1}
     card["images"] = _save_images(card, prepared)
     card["avatar_file"] = _save_avatar(card, prepared_avatar) if prepared_avatar else ""
     with _connect() as conn:
@@ -386,52 +406,65 @@ async def api_create(request: Request, name: str = Form(...), description: str =
 
 
 @router.put("/{card_id}")
-async def api_update(request: Request, card_id: str, name: str = Form(...), description: str = Form(""), gender: str = Form(""),
-                     is_shared: bool = Form(False), keep_image_ids: str = Form("[]"),
+async def api_update(request: Request, card_id: str, version: int = Form(...), name: str = Form(...), description: str = Form(""),
+                     gender: str = Form(""), is_shared: bool = Form(False), keep_image_ids: str = Form("[]"),
                      images: list[UploadFile] = File(default=[]), avatar: UploadFile | None = File(default=None),
                      remove_avatar: bool = Form(False)):
-    """keep_image_ids 是要保留的旧图 ID（决定顺序），新上传的图排在后面。头像不传也不要求移除时保持原样。"""
+    """keep_image_ids 是要保留的旧图 ID（决定顺序），新上传的图排在后面。头像不传也不要求移除时保持原样。
+    version 是打开编辑时的卡片版本，已被别处保存过就拒绝，只有赢得条件更新的请求才能清理旧文件。"""
     user = _user(request)
-    card = _editable_card(card_id, user)
+    _check_version(_editable_card(card_id, user), version)
     clean_name, clean_description = _clean_fields(name, description)
     clean_gender = _clean_gender(gender)
     try:
         keep_ids = json.loads(keep_image_ids or "[]")
     except json.JSONDecodeError as exc:
         raise HTTPException(400, "keep_image_ids 格式不正确") from exc
-    by_id = {image["id"]: image for image in card["images"]}
-    kept = [by_id[image_id] for image_id in dict.fromkeys(keep_ids) if image_id in by_id]
     prepared = await _read_uploads(images)
     prepared_avatar = await _read_avatar(avatar)
+    # 读上传时可能已有别的请求改过或删过，后面都以这次读到的为准
+    card = _editable_card(card_id, user)
+    _check_version(card, version)
+    by_id = {image["id"]: image for image in card["images"]}
+    kept = [by_id[image_id] for image_id in dict.fromkeys(keep_ids) if image_id in by_id]
     if not kept and not prepared:
         raise HTTPException(400, "请至少保留 1 张人物参考图")
     if len(kept) + len(prepared) > MAX_IMAGES_PER_CARD:
         raise HTTPException(400, f"每个角色最多 {MAX_IMAGES_PER_CARD} 张参考图")
-    next_images = kept + _save_images(card, prepared)
+    new_images = _save_images(card, prepared)
     old_avatar = card["avatar_file"]
-    next_avatar = _save_avatar(card, prepared_avatar) if prepared_avatar else "" if remove_avatar else old_avatar
+    new_avatar = _save_avatar(card, prepared_avatar) if prepared_avatar else ""
+    next_images = kept + new_images
+    next_avatar = new_avatar or ("" if remove_avatar else old_avatar)
     now = time.time()
     with _connect() as conn:
-        conn.execute(
-            "UPDATE character_cards SET name = ?, description = ?, gender = ?, avatar_file = ?, images_json = ?, is_shared = ?, updated_at = ? WHERE id = ?",
-            (clean_name, clean_description, clean_gender, next_avatar, json.dumps(next_images), int(is_shared), now, card_id),
-        )
+        updated = conn.execute(
+            "UPDATE character_cards SET name = ?, description = ?, gender = ?, avatar_file = ?, images_json = ?, is_shared = ?, "
+            "updated_at = ?, version = version + 1 WHERE id = ? AND version = ?",
+            (clean_name, clean_description, clean_gender, next_avatar, json.dumps(next_images), int(is_shared), now, card_id, version),
+        ).rowcount
+    if not updated:
+        _remove_files(card, [image["file"] for image in new_images] + ([new_avatar] if new_avatar else []))
+        raise HTTPException(409, STALE_CARD_MESSAGE)
+    # 条件更新成功，说明 card 就是被替换的那个版本，这些旧文件不会再被任何记录引用
     kept_files = {image["file"] for image in next_images}
-    for image in card["images"]:
-        if image["file"] not in kept_files:
-            _image_path(card, image).unlink(missing_ok=True)
+    dropped = [image["file"] for image in card["images"] if image["file"] not in kept_files]
     if old_avatar and old_avatar != next_avatar:
-        (_card_dir(card["owner_id"], card_id) / old_avatar).unlink(missing_ok=True)
+        dropped.append(old_avatar)
+    _remove_files(card, dropped)
     card.update(name=clean_name, description=clean_description, gender=clean_gender, avatar_file=next_avatar,
-                images=next_images, is_shared=bool(is_shared), updated_at=now)
+                images=next_images, is_shared=bool(is_shared), updated_at=now, version=version + 1)
     return {"card": _public_card(card, user)}
 
 
 @router.delete("/{card_id}")
-def api_delete(request: Request, card_id: str):
+def api_delete(request: Request, card_id: str, version: int):
     card = _editable_card(card_id, _user(request))
+    _check_version(card, version)
     with _connect() as conn:
-        conn.execute("DELETE FROM character_cards WHERE id = ?", (card_id,))
+        deleted = conn.execute("DELETE FROM character_cards WHERE id = ? AND version = ?", (card_id, version)).rowcount
+    if not deleted:
+        raise HTTPException(409, STALE_CARD_MESSAGE)
     # 已提交任务的参考图各存一份，这里删除不影响它们重试
     shutil.rmtree(_card_dir(card["owner_id"], card_id), ignore_errors=True)
     return {"ok": True}

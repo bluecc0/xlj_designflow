@@ -107,7 +107,7 @@ const CharacterPickerPanel = ({ cards, loading, selectedIds, onToggle, onEdit, o
   );
 };
 
-const CharacterEditorModal = ({ card, limits, onClose, onSaved, onDeleted }) => {
+const CharacterEditorModal = ({ card, limits, onClose, onSaved, onDeleted, onStale }) => {
   const editing = Boolean(card && card.id);
   const maxImages = (limits && limits.max_images_per_card) || 4;
   const [name, setName] = React.useState(editing ? card.name : '');
@@ -171,11 +171,12 @@ const CharacterEditorModal = ({ card, limits, onClose, onSaved, onDeleted }) => 
     try {
       const payload = { name: name.trim(), description: description.trim(), gender: gender, is_shared: isShared, avatar: avatarFile, remove_avatar: editing && card.has_avatar && !avatarPreview, files: added.map(function(item) { return item.file; }) };
       const saved = editing
-        ? await window.API.updateCharacterCard(card.id, Object.assign(payload, { keep_image_ids: kept.map(function(image) { return image.id; }) }))
+        ? await window.API.updateCharacterCard(card.id, Object.assign(payload, { version: card.version, keep_image_ids: kept.map(function(image) { return image.id; }) }))
         : await window.API.createCharacterCard(payload);
       onSaved(saved);
     } catch (err) {
       window.dfError(err, '角色保存失败，请稍后重试。');
+      if (err && (err.httpStatus === 409 || err.httpStatus === 404)) onStale();
     } finally {
       setSaving(false);
     }
@@ -188,10 +189,11 @@ const CharacterEditorModal = ({ card, limits, onClose, onSaved, onDeleted }) => 
     });
     if (!ok) return;
     try {
-      await window.API.deleteCharacterCard(card.id);
+      await window.API.deleteCharacterCard(card.id, card.version);
       onDeleted(card);
     } catch (err) {
       window.dfError(err, '角色删除失败，请稍后重试。');
+      if (err && (err.httpStatus === 409 || err.httpStatus === 404)) onStale();
     }
   };
   const thumb = function(key, src, onRemove, label) {

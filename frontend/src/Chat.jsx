@@ -4076,6 +4076,8 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
           card: characterEditing,
           limits: characterLimits,
           onClose: function() { setCharacterEditing(null); },
+          // 卡片已被别处改过或删掉：手里的版本作废，关掉弹窗并重新拉列表
+          onStale: function() { setCharacterEditing(null); refreshCharacterCards(); },
           onSaved: function(card) {
             const isNew = !characterEditing.id;
             setCharacterEditing(null);

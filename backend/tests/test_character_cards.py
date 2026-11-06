@@ -102,7 +102,7 @@ class CharacterCardApiTest(unittest.IsolatedAsyncioTestCase):
         card = await self._create()
         self.assertFalse(card["has_avatar"])
         self.assertEqual(card["avatar_url"], card["images"][0]["url"])
-        keep = {"name": "小鹿", "gender": "adult_female", "keep_image_ids": json.dumps([card["images"][0]["id"]])}
+        keep = {"name": "小鹿", "gender": "adult_female", "keep_image_ids": json.dumps([card["images"][0]["id"]]), "version": 1}
         folder = self.output / "ai-images" / "owner" / "characters" / card["id"]
         async with self._client(OWNER) as client:
             first = (await client.put(f"/character-cards/{card['id']}", data=keep,
@@ -112,13 +112,13 @@ class CharacterCardApiTest(unittest.IsolatedAsyncioTestCase):
             avatar = Image.open(io.BytesIO((await client.get(first["avatar_url"])).content))
             self.assertLessEqual(max(avatar.size), 512)
             # 只改其他字段时头像不变
-            same = (await client.put(f"/character-cards/{card['id']}", data=keep)).json()["card"]
+            same = (await client.put(f"/character-cards/{card['id']}", data={**keep, "version": first["version"]})).json()["card"]
             self.assertEqual(same["avatar_url"], first["avatar_url"])
-            replaced = (await client.put(f"/character-cards/{card['id']}", data=keep,
+            replaced = (await client.put(f"/character-cards/{card['id']}", data={**keep, "version": same["version"]},
                                          files=[("avatar", ("b.png", _png("blue"), "image/png"))])).json()["card"]
             self.assertNotEqual(replaced["avatar_url"], first["avatar_url"])
             self.assertFalse((folder / first["avatar_url"].rsplit("/", 1)[1]).exists())
-            removed = (await client.put(f"/character-cards/{card['id']}", data={**keep, "remove_avatar": "true"})).json()["card"]
+            removed = (await client.put(f"/character-cards/{card['id']}", data={**keep, "version": replaced["version"], "remove_avatar": "true"})).json()["card"]
         self.assertFalse(removed["has_avatar"])
         self.assertEqual(removed["avatar_url"], card["images"][0]["url"])
         self.assertEqual(len(list(folder.iterdir())), 1)
@@ -138,7 +138,7 @@ class CharacterCardApiTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await client.get(card["avatar_url"])).status_code, 200)
         async with self._client(OWNER) as client:
             await client.put(f"/character-cards/{card['id']}", data={
-                "name": "小鹿", "is_shared": "false", "keep_image_ids": json.dumps([card["images"][0]["id"]])})
+                "name": "小鹿", "is_shared": "false", "version": card["version"], "keep_image_ids": json.dumps([card["images"][0]["id"]])})
         async with self._client(MEMBER) as client:
             self.assertEqual((await client.get(card["avatar_url"])).status_code, 404)
 
@@ -161,7 +161,7 @@ class CharacterCardApiTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await client.get(card["images"][0]["url"])).status_code, 404)
             resp = await client.post("/ai-image", data={"model": "gpt-image-2.6", "prompt": "海报", "character_ids": json.dumps([card["id"]])})
             self.assertEqual(resp.status_code, 400)
-            self.assertEqual((await client.delete(f"/character-cards/{card['id']}")).status_code, 404)
+            self.assertEqual((await client.delete(f"/character-cards/{card['id']}", params={"version": card["version"]})).status_code, 404)
 
     async def test_shared_card_can_be_used_but_only_owner_or_admin_can_edit(self) -> None:
         card = await self._create(shared=True)
@@ -170,9 +170,9 @@ class CharacterCardApiTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([c["id"] for c in listed], [card["id"]])
             self.assertFalse(listed[0]["can_edit"])
             self.assertEqual((await client.get(card["images"][0]["url"])).status_code, 200)
-            resp = await client.put(f"/character-cards/{card['id']}", data={"name": "改名", "keep_image_ids": "[]"})
+            resp = await client.put(f"/character-cards/{card['id']}", data={"name": "改名", "keep_image_ids": "[]", "version": card["version"]})
             self.assertEqual(resp.status_code, 403)
-            self.assertEqual((await client.delete(f"/character-cards/{card['id']}")).status_code, 403)
+            self.assertEqual((await client.delete(f"/character-cards/{card['id']}", params={"version": card["version"]})).status_code, 403)
         async with self._client(ADMIN) as client:
             self.assertTrue((await client.get("/character-cards")).json()["cards"][0]["can_edit"])
 
@@ -180,7 +180,7 @@ class CharacterCardApiTest(unittest.IsolatedAsyncioTestCase):
         card = await self._create(shared=True)
         async with self._client(OWNER) as client:
             resp = await client.put(f"/character-cards/{card['id']}", data={
-                "name": "小鹿", "is_shared": "false", "keep_image_ids": json.dumps([card["images"][0]["id"]])})
+                "name": "小鹿", "is_shared": "false", "version": card["version"], "keep_image_ids": json.dumps([card["images"][0]["id"]])})
             self.assertEqual(resp.status_code, 200, resp.text)
         async with self._client(MEMBER) as client:
             self.assertEqual((await client.get(card["images"][0]["url"])).status_code, 404)
@@ -200,10 +200,125 @@ class CharacterCardApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(list(folder.iterdir())), 2)
         async with self._client(OWNER) as client:
             resp = await client.put(f"/character-cards/{card['id']}", data={
-                "name": "小鹿", "keep_image_ids": json.dumps([card["images"][1]["id"]])})
+                "name": "小鹿", "version": card["version"], "keep_image_ids": json.dumps([card["images"][1]["id"]])})
             self.assertEqual([i["id"] for i in resp.json()["card"]["images"]], [card["images"][1]["id"]])
             self.assertEqual(len(list(folder.iterdir())), 1)
-            self.assertEqual((await client.delete(f"/character-cards/{card['id']}")).status_code, 200)
+            self.assertEqual((await client.delete(f"/character-cards/{card['id']}", params={"version": resp.json()["card"]["version"]})).status_code, 200)
+        self.assertFalse(folder.exists())
+
+    def _form(self, card: dict, keep: list[int], **extra) -> dict:
+        return {"name": "小鹿", "version": card["version"], **extra,
+                "keep_image_ids": json.dumps([card["images"][i]["id"] for i in keep])}
+
+    def _files(self, card: dict) -> set[str]:
+        return {path.name for path in (self.output / "ai-images" / "owner" / "characters" / card["id"]).iterdir()}
+
+    def _db_files(self, card_id: str) -> set[str]:
+        stored = character_cards._load_card(card_id)
+        return {image["file"] for image in stored["images"]} | ({stored["avatar_file"]} if stored["avatar_file"] else set())
+
+    async def _hold_uploads(self, count: int):
+        """让 count 个请求都读完旧卡片后停在读上传这一步，再一起放行，复现并发交错。"""
+        arrived, release = asyncio.Event(), asyncio.Event()
+        waiting = {"n": 0}
+        original = character_cards._read_uploads
+
+        async def held(uploads):
+            result = await original(uploads)
+            waiting["n"] += 1
+            if waiting["n"] >= count:
+                arrived.set()
+            await release.wait()
+            return result
+
+        return patch.object(character_cards, "_read_uploads", held), arrived, release
+
+    async def test_concurrent_saves_of_same_version_keep_every_stored_image(self) -> None:
+        card = await self._create(images=2)
+        patcher, arrived, release = await self._hold_uploads(2)
+        with patcher:
+            async with self._client(OWNER) as client:
+                first = asyncio.create_task(client.put(f"/character-cards/{card['id']}", data=self._form(card, [0]),
+                                                       files=[("images", ("c.png", _png("green"), "image/png"))]))
+                second = asyncio.create_task(client.put(f"/character-cards/{card['id']}", data=self._form(card, [1]),
+                                                        files=[("images", ("d.png", _png("blue"), "image/png"))]))
+                await asyncio.wait_for(arrived.wait(), 5)
+                release.set()
+                responses = await asyncio.gather(first, second)
+        self.assertEqual(sorted(r.status_code for r in responses), [200, 409])
+        # 输家没有删任何东西，也没留下多余文件；最终记录的图都还在，角色能继续生图
+        self.assertEqual(self._files(card), self._db_files(card["id"]))
+        refs = character_cards.load_card_refs(character_cards.resolve_cards(OWNER, json.dumps([card["id"]])))
+        self.assertEqual(len(refs), 2)
+        winner = next(r for r in responses if r.status_code == 200)
+        self.assertEqual(winner.json()["card"]["version"], 2)
+
+    async def test_stale_version_is_rejected_for_update_and_delete(self) -> None:
+        card = await self._create()
+        async with self._client(OWNER) as client:
+            saved = await client.put(f"/character-cards/{card['id']}", data=self._form(card, [0]))
+            self.assertEqual(saved.json()["card"]["version"], 2)
+            files = self._files(card)
+            self.assertEqual((await client.put(f"/character-cards/{card['id']}", data=self._form(card, [0]))).status_code, 409)
+            self.assertEqual((await client.delete(f"/character-cards/{card['id']}", params={"version": 1})).status_code, 409)
+            self.assertEqual(self._files(card), files)
+            self.assertEqual((await client.delete(f"/character-cards/{card['id']}", params={"version": 2})).status_code, 200)
+
+    async def test_delete_during_update_wins_and_leaves_nothing_behind(self) -> None:
+        card = await self._create()
+        folder = self.output / "ai-images" / "owner" / "characters" / card["id"]
+        patcher, arrived, release = await self._hold_uploads(1)
+        with patcher:
+            async with self._client(OWNER) as client:
+                update = asyncio.create_task(client.put(f"/character-cards/{card['id']}", data=self._form(card, [0]),
+                                                        files=[("images", ("c.png", _png("green"), "image/png"))]))
+                await asyncio.wait_for(arrived.wait(), 5)
+                deleted = await client.delete(f"/character-cards/{card['id']}", params={"version": 1})
+                release.set()
+                response = await update
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(folder.exists())
+
+    async def test_losing_conditional_update_after_saving_files_cleans_them_up(self) -> None:
+        """版本检查通过后、写库之前被别的请求抢先：不能动旧文件，自己刚存的文件要收回。"""
+        card = await self._create(images=2)
+        before = self._files(card)
+        original = character_cards._save_images
+
+        def save_then_lose_race(target, prepared):
+            saved = original(target, prepared)
+            with job_store._connect() as conn:
+                conn.execute("UPDATE character_cards SET version = version + 1 WHERE id = ?", (card["id"],))
+            return saved
+
+        with patch.object(character_cards, "_save_images", save_then_lose_race):
+            async with self._client(OWNER) as client:
+                response = await client.put(f"/character-cards/{card['id']}", data=self._form(card, [0]),
+                                            files=[("images", ("c.png", _png("green"), "image/png")),
+                                                   ("images", ("d.png", _png("blue"), "image/png"))])
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self._files(card), before)
+
+    async def test_card_deleted_while_losing_race_removes_its_folder(self) -> None:
+        card = await self._create()
+        folder = self.output / "ai-images" / "owner" / "characters" / card["id"]
+        original = character_cards._save_images
+
+        def save_then_card_deleted(target, prepared):
+            saved = original(target, prepared)
+            with job_store._connect() as conn:
+                conn.execute("DELETE FROM character_cards WHERE id = ?", (card["id"],))
+            for path in folder.iterdir():
+                if path.name not in {image["file"] for image in saved}:
+                    path.unlink()
+            return saved
+
+        with patch.object(character_cards, "_save_images", save_then_card_deleted):
+            async with self._client(OWNER) as client:
+                response = await client.put(f"/character-cards/{card['id']}", data=self._form(card, [0]),
+                                            files=[("images", ("c.png", _png("green"), "image/png"))])
+        self.assertEqual(response.status_code, 409)
         self.assertFalse(folder.exists())
 
     async def _submit(self, card: dict, *, user: dict = OWNER, uploads: int = 1, prompt: str = "穿红裙的海报") -> dict:
@@ -274,7 +389,7 @@ class CharacterCardApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(ids[0], note)
         # 卡片删除后会话里的图片 ID 仍然可用
         async with self._client(OWNER) as client:
-            await client.delete(f"/character-cards/{card['id']}")
+            await client.delete(f"/character-cards/{card['id']}", params={"version": card["version"]})
         artifact = store.get_artifact(ids[0], OWNER["id"])
         self.assertEqual(artifact["kind"], "character_ref")
         self.assertTrue(Path(artifact["path"]).is_file())
