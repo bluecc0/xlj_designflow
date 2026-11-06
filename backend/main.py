@@ -20,6 +20,7 @@ import io
 import json
 import logging
 import mimetypes
+import posixpath
 import re
 import shutil
 import sqlite3
@@ -34,7 +35,7 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import httpx
 import pydantic
@@ -118,7 +119,13 @@ from .agent2.service import fail_stale_turns as agent2_fail_stale_turns
 from .agent2.tools import backfill_recovered_job as agent2_backfill_recovered_job
 from .agent2.tools import deliver_finished_jobs as agent2_deliver_finished_jobs
 from .agent2.store import init_tables as init_agent2_tables
-from .team_canvas import copy_asset_to_user, init_team_canvas_tables, is_shared_canvas_asset
+from .team_canvas import (
+    can_view_shared_asset,
+    copy_asset_to_user,
+    init_team_canvas_tables,
+    is_shared_canvas_asset,
+    is_super_admin,
+)
 from .team_canvas import router as team_canvas_router
 from .user_skill_store import (
     MAX_UPLOAD_BYTES as MAX_SKILL_UPLOAD_BYTES,
@@ -163,6 +170,7 @@ from .job_store import (
     load_active_outpainting_jobs,
     load_recoverable_image_jobs,
     load_active_compose_jobs,
+    is_inspiration_asset,
     load_ai_image_job_by_image_url,
     load_job,
     mark_ai_image_job_provider_switched,
@@ -819,6 +827,11 @@ def _resolve_public_asset_path(
             raise HTTPException(400, "图片路径不合法")
         if not candidate.exists() or not candidate.is_file():
             raise HTTPException(404, "图片文件不存在")
+        # 按解析后的文件校验，/output/ai-images 这类别名也算；不带 user 的是内部调用或已验证的临时链接
+        ai_root = (settings.output_path / "ai-images").resolve()
+        if user is not None and ai_root in candidate.parents:
+            if not _can_read_ai_image(candidate.relative_to(ai_root).parts, user):
+                raise HTTPException(404, "图片文件不存在")
         return candidate
     raise HTTPException(400, "只支持站内图片资源放大")
 
@@ -831,10 +844,22 @@ def _safe_asset_owner_id(user_id: str) -> str:
     return safe or "anonymous"
 
 
+def _can_read_ai_image(parts: Sequence[str], user: dict) -> bool:
+    """parts 是 ai-images 目录下的相对路径。本人、admin 账号、所在共享画布的成员、灵感广场的图可以读。"""
+    # 早期直接放在根目录的文件没有归属
+    if len(parts) < 2:
+        return True
+    expected_owner = _safe_asset_owner_id(str(user.get("id") or ""))
+    if parts[0].rstrip(" .").casefold() == expected_owner.casefold() or is_super_admin(user):
+        return True
+    path = "/ai-images/" + "/".join(parts)
+    return can_view_shared_asset(path, user) or is_inspiration_asset(path)
+
+
 def _assert_strict_asset_owner(owner_id: str | None, user: dict, path: str | None = None) -> None:
-    if _is_admin(user):
+    if is_super_admin(user):
         return
-    if path and is_shared_canvas_asset(path):
+    if path and can_view_shared_asset(path, user):
         return
     if not owner_id or owner_id != user.get("id"):
         # Match polling's non-enumerating behavior for another user's assets.
@@ -890,7 +915,7 @@ def _outpainting_internal_path(raw_url: str, request: Request, user: dict) -> tu
             raise HTTPException(400, "图片地址无效")
         owner_id = parts[0]
         expected_owner = _safe_asset_owner_id(str(user.get("id") or ""))
-        if not _is_admin(user) and owner_id != expected_owner and not is_shared_canvas_asset(path):
+        if not is_super_admin(user) and owner_id != expected_owner and not is_shared_canvas_asset(path, user):
             raise HTTPException(404, "图片文件不存在")
         root = (settings.output_path / "ai-images").resolve()
         owner_root = (root / owner_id).resolve()
@@ -2125,17 +2150,18 @@ def _assert_job_owner(job_user_id: Optional[str], user: dict) -> None:
         raise HTTPException(403, "无权访问其他人的任务")
 
 
-def _outpainting_asset_owner(path: str) -> str | None:
-    try:
-        decoded = unquote(path).replace("\\", "/")
-    except Exception:
+def _ai_image_asset_parts(path: str) -> list[str] | None:
+    """把请求路径按静态文件服务的解析方式归一化，返回 ai-images 目录下的相对路径；其他路径返回 None。
+
+    /output 挂载的是整个输出目录，/output/ai-images/... 是同一批文件；
+    Windows 和 macOS 的文件系统不区分大小写，Windows 还会忽略目录名末尾的点和空格。
+    """
+    parts = [part for part in posixpath.normpath(path.replace("\\", "/")).split("/") if part]
+    if parts and parts[0] == "output":
+        parts = parts[1:]
+    if not parts or parts[0].rstrip(" .").casefold() != "ai-images":
         return None
-    parts = [part for part in decoded.split("/") if part]
-    if len(parts) < 3 or parts[0] != "ai-images":
-        return None
-    if not any(part.startswith("outpainting_") for part in parts[2:]):
-        return None
-    return parts[1]
+    return parts[1:]
 
 
 @app.middleware("http")
@@ -2170,13 +2196,12 @@ async def attach_user_context(request: Request, call_next):
                     request.method, path, client_req_id or "-", (time.monotonic() - t0) * 1000,
                 )
             return JSONResponse({"detail": "请先输入名字进入系统"}, status_code=401)
-    outpainting_owner = _outpainting_asset_owner(path)
+    # 用 scope 里的路径：静态文件服务按它取文件，request.url.path 遇到 %3F 这类字符会被截断
+    ai_image_parts = _ai_image_asset_parts(request.scope.get("path") or path)
     if (
-        outpainting_owner
+        ai_image_parts is not None
         and request.state.user is not None
-        and not _is_admin(request.state.user)
-        and str(request.state.user.get("id") or "") != outpainting_owner
-        and not is_shared_canvas_asset(path)
+        and not _can_read_ai_image(ai_image_parts, request.state.user)
     ):
         return JSONResponse({"detail": "图片不存在"}, status_code=404)
     try:
@@ -2238,13 +2263,8 @@ def image_copy_link(body: ImageCopyLinkRequest, request: Request):
         raise HTTPException(400, "仅支持站内图片地址") from exc
     if not path.startswith("/") or path.startswith("//") or "\\" in path or "\x00" in path:
         raise HTTPException(400, "图片地址无效")
+    # 解析时已按最终文件校验权限，别名和 .. 都绕不过去
     candidate = _resolve_public_asset_path(path, user, decoded_path=True)
-    # Check the resolved file so aliases and dot segments cannot bypass outpainting isolation.
-    ai_root = (settings.output_path / "ai-images").resolve()
-    if ai_root in candidate.parents:
-        parts = candidate.relative_to(ai_root).parts
-        if len(parts) >= 2 and any(part.startswith("outpainting_") for part in parts[1:]):
-            _assert_strict_asset_owner(parts[0], user, path)
     media_type = _image_copy_media_type(candidate)
     extension = next(ext for mime, ext in _IMAGE_COPY_FORMATS.values() if mime == media_type)
     token, expires_at = create_image_copy_link(path)
@@ -5420,11 +5440,11 @@ def ai_image_metadata(request: Request, url: str):
     path = split.path or clean_url
 
     # 1. 尝试反查 AI 生图任务 (ai_image_jobs 或 agent_images)
-    if not _is_admin(user):
+    if not is_super_admin(user):
         owner_match = re.match(r"^/ai-images/([^/]+)/", path)
         if owner_match and unquote(owner_match.group(1)) != str(user["id"]):
             raise HTTPException(404, "图片文件不存在")
-    job = load_ai_image_job_by_image_url(path, None if _is_admin(user) else user["id"])
+    job = load_ai_image_job_by_image_url(path, None if is_super_admin(user) else user["id"])
 
     # 2. 尝试解析本地磁盘文件以获取物理大小与 MIME
     file_size = None
@@ -6263,7 +6283,7 @@ async def editor_save_snapshot(request: Request):
     foreign_assets = _editor_snapshot_foreign_asset_urls(snapshot, str(user["id"]))
     # 从团队画布复制过来的他人图片：复制到自己的目录并改写地址，原画布取消分享后图片仍可用
     rewritten_urls: dict[str, str] = {}
-    shared_urls = [url for url in foreign_assets if is_shared_canvas_asset(url)]
+    shared_urls = [url for url in foreign_assets if is_shared_canvas_asset(url, user)]
     if shared_urls:
         snapshot, rewritten_urls = await asyncio.to_thread(
             _import_shared_assets_into_snapshot, snapshot, shared_urls, str(user["id"]),

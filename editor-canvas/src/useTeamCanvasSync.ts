@@ -55,13 +55,13 @@ export function refreshTeamCanvases() {
     .catch(() => {})
 }
 
-// 当前打开的团队画布被取消分享：丢弃未保存的修改并回到个人画布
+// 当前打开的团队画布被取消分享或自己被移出名单：丢弃未保存的修改并回到个人画布
 export function handleTeamCanvasGone() {
   const { source, canvases, switching, pendingTarget } = useTeamStore.getState()
   // 已经在切走（例如分享者自己刚取消分享），不用再提示
   if (source.kind !== 'team' || switching || pendingTarget) return
   const name = canvases.find((c) => c.id === source.id)?.name
-  feedback.show(`${name ? `「${name}」` : '该团队画布'}已被取消分享，已回到你的画布`, { tone: 'warn', key: 'team-canvas-gone' })
+  feedback.show(`${name ? `「${name}」` : '该团队画布'}已取消分享或你已被移出名单，已回到你的画布`, { tone: 'warn', key: 'team-canvas-gone' })
   useCanvasStore.setState({ isDirty: false })
   useTeamStore.setState((s) => ({ canvases: s.canvases.filter((c) => c.id !== source.id) }))
   useTeamStore.getState().requestOpen({ kind: 'personal' })
@@ -154,7 +154,7 @@ export function useTeamCanvasSync(options: Options) {
         const url = target.kind === 'team' ? teamSnapshotUrl(target.id) : options.personalSnapshotUrl
         const res = await requestSnapshot(url)
         if (!res.ok) {
-          if (target.kind === 'team' && res.status === 404) throw new TeamCanvasGoneError('该团队画布已取消分享')
+          if (target.kind === 'team' && res.status === 404) throw new TeamCanvasGoneError('该团队画布已取消分享，或你不在共享名单中')
           throw new Error(`画布加载失败 (${res.status})`)
         }
         const raw = typeof res.body?.snapshot === 'string' ? JSON.parse(res.body.snapshot) : res.body?.snapshot
@@ -220,7 +220,7 @@ export function useTeamCanvasSync(options: Options) {
         if (hb.revision <= useCanvasStore.getState().revision || !idle()) return
         const res = await requestSnapshot(teamSnapshotUrl(canvasId))
         if (stopped) return
-        if (res.status === 404) throw new TeamCanvasGoneError('该团队画布已取消分享')
+        if (res.status === 404) throw new TeamCanvasGoneError('该团队画布已取消分享，或你不在共享名单中')
         const revision = Number(res.body?.revision || 0)
         if (!res.ok || revision <= useCanvasStore.getState().revision || !idle()) return
         const doc = convertLegacyTldrawSnapshot(res.body.snapshot)

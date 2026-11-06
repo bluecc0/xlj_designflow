@@ -1324,25 +1324,6 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(external_error.exception.status_code, 400)
 
-    def test_outpainting_result_path_identifies_owning_user(self) -> None:
-        self.assertEqual(
-            app_main._outpainting_asset_owner(
-                "/ai-images/operator_a/2026-01-01/outpainting_job.png"
-            ),
-            "operator_a",
-        )
-        self.assertEqual(
-            app_main._outpainting_asset_owner(
-                "/ai-images/operator_a/2026-01-01/%6futpainting_job.png"
-            ),
-            "operator_a",
-        )
-        self.assertIsNone(
-            app_main._outpainting_asset_owner(
-                "/ai-images/operator_a/2026-01-01/generated_job.png"
-            )
-        )
-
     async def test_worker_persists_cost_and_polling_projects_outpainting_metadata(self) -> None:
         prepared = bfl.prepare_outpainting_image(
             png_data_uri(),
