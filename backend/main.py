@@ -808,7 +808,7 @@ def _resolve_public_asset_path(
         if not job:
             raise HTTPException(404, "图片文件不存在")
         if user is not None:
-            _assert_job_owner(job.user_id, user)
+            _assert_job_file_access(job.user_id, user, _compose_image_url(job_id))
         if job.status != ComposeStatus.done or not job.result_path:
             raise HTTPException(400, "合成任务尚未完成")
         candidate = Path(job.result_path).resolve()
@@ -827,7 +827,7 @@ def _resolve_public_asset_path(
             job = load_job(job_id)
             if not job:
                 raise HTTPException(404, "图片文件不存在")
-            _assert_job_owner(job.user_id, user)
+            _assert_job_file_access(job.user_id, user, *_grid_image_urls(job_id, index))
         candidate = (settings.output_path / f"{job_id}_grid_{index:02d}.png").resolve()
         output_root = settings.output_path.resolve()
         if output_root not in candidate.parents and candidate != output_root:
@@ -2186,6 +2186,21 @@ def _assert_job_owner(job_user_id: Optional[str], user: dict) -> None:
         raise HTTPException(403, "无权访问其他人的任务")
 
 
+def _assert_job_file_access(job_user_id: Optional[str], user: dict, *canvas_urls: str) -> None:
+    """任务所有者和管理员可以读；文件在共享画布上时，画布成员也可以读。"""
+    if not any(can_view_shared_asset(url, user) for url in canvas_urls):
+        _assert_job_owner(job_user_id, user)
+
+
+def _compose_image_url(job_id: str) -> str:
+    return f"/compose/{job_id}/image"
+
+
+def _grid_image_urls(job_id: str, index: int) -> tuple[str, str]:
+    """前端写的是补零的序号，接口两种写法都接受。"""
+    return f"/export/grid/{job_id}/{index:02d}", f"/export/grid/{job_id}/{index}"
+
+
 def _ai_image_asset_parts(path: str) -> list[str] | None:
     """把请求路径按静态文件服务的解析方式归一化，返回 ai-images 目录下的相对路径；其他路径返回 None。
 
@@ -3175,7 +3190,7 @@ def download_image(job_id: str, request: Request):
         job = load_job(job_id)
     if not job:
         raise HTTPException(404, f"任务不存在: {job_id}")
-    _assert_job_owner(job.user_id, user)
+    _assert_job_file_access(job.user_id, user, _compose_image_url(job_id))
     if job.status != ComposeStatus.done or not job.result_path:
         raise HTTPException(400, f"任务尚未完成: {job.status}")
     path = Path(job.result_path)
@@ -3283,7 +3298,7 @@ def download_grid_cell(job_id: str, index: int, request: Request):
         job = load_job(job_id)
     if not job:
         raise HTTPException(404, "格子图片不存在，请先调用 /export/grid")
-    _assert_job_owner(job.user_id, user)
+    _assert_job_file_access(job.user_id, user, *_grid_image_urls(job_id, index))
     path = settings.output_path / f"{job_id}_grid_{index:02d}.png"
     if not path.exists():
         raise HTTPException(404, "格子图片不存在，请先调用 /export/grid")

@@ -85,12 +85,13 @@ class OutputAccessTest(unittest.IsolatedAsyncioTestCase):
         async with self.client(user) as client:
             return (await client.get(url)).status_code
 
-    def share_with_member(self, url: str) -> str:
+    def share_with_member(self, *urls: str) -> str:
         job_store.save_editor_snapshot("owner", json.dumps({
             "version": 2,
             "pages": [{"id": "p1", "name": "主图", "order": 0}, {"id": "p2", "name": "草稿", "order": 1}],
             "groups": [], "activePageId": "p1", "frames": [], "texts": [],
-            "images": [{"id": "i1", "pageId": "p1", "url": url, "x": 0, "y": 0, "width": 4, "height": 4}],
+            "images": [{"id": f"i{index}", "pageId": "p1", "url": url, "x": 0, "y": 0, "width": 4, "height": 4}
+                       for index, url in enumerate(urls)],
         }))
         return team_canvas.share_page(OWNER, "p1", ["member"])["canvas"]["id"]
 
@@ -147,6 +148,24 @@ class OutputAccessTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await self.status(OUTSIDER, url), 404)
         team_canvas.unshare_canvas(OWNER, canvas_id)
         self.assertEqual(await self.status(MEMBER, RESULT), 404)
+
+    async def test_canvas_member_can_open_every_kind_of_image_on_the_canvas(self) -> None:
+        self.write_file("proxy-downloads/owner/a.png")
+        urls = (RESULT, ROOT_FILE, UPLOAD, "/output/proxy-downloads/owner/a.png", "/output/psd/owner/a.png",
+                f"/compose/{JOB}/image", f"/export/grid/{JOB}/00")
+        canvas_id = self.share_with_member(*urls)
+        for url in (*urls, f"/export/grid/{JOB}/0"):
+            with self.subTest(url=url):
+                self.assertEqual(await self.status(MEMBER, url), 200)
+                self.assertIn(await self.status(OUTSIDER, url), (403, 404))
+                async with self.client(MEMBER) as client:
+                    link = await client.post("/image-copy/link", json={"src": url})
+                self.assertEqual(link.status_code, 200, link.text)
+                self.assertEqual(await self.status(None, link.json()["url"]), 200)
+        team_canvas.unshare_canvas(OWNER, canvas_id)
+        for url in urls:
+            with self.subTest(url=url, unshared=True):
+                self.assertIn(await self.status(MEMBER, url), (403, 404))
 
     async def test_saving_foreign_file_into_canvas_does_not_grant_access(self) -> None:
         canvas_id = self.share_with_member("/ai-images/flat.png")

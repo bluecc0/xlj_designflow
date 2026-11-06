@@ -51,6 +51,6 @@ def shareable_asset_urls(parts: Sequence[str]) -> list[str]:
         return [f"/results/{'/'.join(parts[1:])}", f"/output/{rel}"]
     if len(parts) == 1 and _JOB_FILE_RE.fullmatch(parts[0]):
         return [f"/output/{rel}"]
-    if len(parts) >= 3 and parts[0] == "agent2-uploads":
+    if len(parts) >= 3 and parts[0] in _USER_DIRECTORIES:
         return [f"/output/{rel}"]
     return []
