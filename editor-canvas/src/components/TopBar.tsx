@@ -47,7 +47,7 @@ export function TopBar({ saveStatus, saveError, onRetrySave }: Props) {
         <>
           <div style={{ width: 1, height: 12, backgroundColor: '#e2e8f0', margin: '0 1px' }} />
           <span
-            title={teamCanvas ? `${teamCanvas.owner_name} 分享的团队画布，所有人都可以编辑` : '团队画布'}
+            title={teamCanvas ? `${teamCanvas.owner_name} 分享的团队画布，${teamCanvas.member_ids ? '共享成员' : '所有人'}都可以编辑` : '团队画布'}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 18, padding: '0 6px', borderRadius: 5,
               backgroundColor: '#eef2ff', color: '#4338ca', fontSize: 10.5, fontWeight: 600, whiteSpace: 'nowrap' }}
           >

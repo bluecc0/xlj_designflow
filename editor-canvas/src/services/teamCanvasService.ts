@@ -31,7 +31,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: init?.body ? { 'Content-Type': 'application/json', ...(init.headers || {}) } : init?.headers,
   })
-  if (response.status === 404) throw new TeamCanvasGoneError('该团队画布已取消分享')
+  if (response.status === 404) throw new TeamCanvasGoneError('该团队画布已取消分享，或你不在共享名单中')
   if (!response.ok) throw feedback.responseError(response.status, await response.text())
   return response.json()
 }
@@ -43,10 +43,22 @@ export function listTeamCanvases() {
   return request<{ canvases: TeamCanvasMeta[] }>('/team-canvases').then((d) => d.canvases)
 }
 
-export function shareCanvasPage(pageId: string) {
+export function listShareTargets() {
+  return request<{ users: TeamViewer[] }>('/team-canvases/share-targets').then((d) => d.users)
+}
+
+// memberIds 为 null 表示分享给全团队
+export function shareCanvasPage(pageId: string, memberIds: string[] | null) {
   return request<{ canvas: TeamCanvasMeta; personal_revision: number }>('/team-canvases', {
     method: 'POST',
-    body: JSON.stringify({ page_id: pageId }),
+    body: JSON.stringify({ page_id: pageId, member_ids: memberIds }),
+  })
+}
+
+export function setTeamCanvasMembers(id: string, memberIds: string[] | null) {
+  return request<{ canvas: TeamCanvasMeta }>(`/team-canvases/${encodeURIComponent(id)}/members`, {
+    method: 'POST',
+    body: JSON.stringify({ member_ids: memberIds }),
   })
 }
 

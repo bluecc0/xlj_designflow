@@ -22,7 +22,8 @@ import { confirmAction } from '../utils/confirm'
 import { useCanvasStore } from '../store/canvasStore'
 import { useAIOperationStore } from '../store/aiOperationStore'
 import { useTeamStore, type TeamCanvasMeta } from '../store/teamStore'
-import { copyTeamCanvas, shareCanvasPage, unshareTeamCanvas } from '../services/teamCanvasService'
+import { copyTeamCanvas, setTeamCanvasMembers, shareCanvasPage, unshareTeamCanvas } from '../services/teamCanvasService'
+import { ShareCanvasDialog } from './ShareCanvasDialog'
 import { refreshTeamCanvases } from '../useTeamCanvasSync'
 import type { CanvasPage } from '../types'
 
@@ -54,6 +55,7 @@ export function PageDropdown() {
   const pages = inTeam ? personalPages : storePages
   const groups = inTeam ? personalGroups : storeGroups
   const [teamBusyId, setTeamBusyId] = useState<string | null>(null)
+  const [shareDialog, setShareDialog] = useState<{ page: CanvasPage } | { canvas: TeamCanvasMeta } | null>(null)
   const activePageId = useCanvasStore((s) => s.activePageId)
   const switchPage = useCanvasStore((s) => s.switchPage)
   const createPage = useCanvasStore((s) => s.createPage)
@@ -149,32 +151,38 @@ export function PageDropdown() {
   }
 
   // 渲染单个画布行
-  const handleShare = async (page: CanvasPage) => {
+  const handleShare = (page: CanvasPage) => {
     if (useAIOperationStore.getState().state.status === 'running') {
       feedback.show('有 AI 任务正在进行，完成后再分享', { tone: 'warn', key: 'team-share' })
       return
     }
-    if (!(await confirmAction({
-      title: `把「${page.name}」分享到团队？`,
-      message: '分享后它会移到「团队」文件夹，所有人都能查看和编辑，你可以随时取消分享。',
-      confirmText: '分享',
-    }))) return
-    setTeamBusyId(page.id)
-    try {
-      await waitUntilSaved()
-      const { canvas } = await shareCanvasPage(page.id)
-      useTeamStore.setState((s) => ({
-        canvases: [...s.canvases.filter((c) => c.id !== canvas.id), canvas],
-        personalPages: s.personalPages.filter((p) => p.id !== page.id),
-      }))
-      requestOpen({ kind: 'team', id: canvas.id })
-      feedback.show(`已把「${page.name}」分享到团队`, { tone: 'ok', key: 'team-share' })
-      setIsOpen(false)
-    } catch (error) {
-      notifyError(error, '暂时无法分享，请稍后再试。', { key: 'team-share' })
-    } finally {
-      setTeamBusyId(null)
-    }
+    setShareDialog({ page })
+    setIsOpen(false)
+  }
+
+  const submitShare = async (page: CanvasPage, memberIds: string[] | null) => {
+    await waitUntilSaved()
+    const { canvas } = await shareCanvasPage(page.id, memberIds)
+    useTeamStore.setState((s) => ({
+      canvases: [...s.canvases.filter((c) => c.id !== canvas.id), canvas],
+      personalPages: s.personalPages.filter((p) => p.id !== page.id),
+    }))
+    requestOpen({ kind: 'team', id: canvas.id })
+    feedback.show(
+      memberIds ? `已把「${page.name}」分享给 ${memberIds.length} 位同事` : `已把「${page.name}」分享到团队`,
+      { tone: 'ok', key: 'team-share' },
+    )
+    setShareDialog(null)
+  }
+
+  const submitMembers = async (target: TeamCanvasMeta, memberIds: string[] | null) => {
+    const { canvas } = await setTeamCanvasMembers(target.id, memberIds)
+    useTeamStore.setState((s) => ({ canvases: s.canvases.map((c) => (c.id === canvas.id ? canvas : c)) }))
+    feedback.show(
+      memberIds ? `已把共享范围改为 ${memberIds.length} 位同事` : '已把共享范围改为全团队',
+      { tone: 'ok', key: 'team-share' },
+    )
+    setShareDialog(null)
   }
 
   const handleUnshare = async (canvas: TeamCanvasMeta) => {
@@ -278,7 +286,7 @@ export function PageDropdown() {
                 {isActive ? activePage.name : canvas.name}
               </span>
               <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 500, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                {isOwner ? '我' : canvas.owner_name}
+                {isOwner ? '我' : canvas.owner_name}{canvas.member_ids ? ` · ${canvas.member_ids.length + 1}人` : ''}
               </span>
             </>
           )}
@@ -298,6 +306,22 @@ export function PageDropdown() {
                 ? <Loader2 size={12} color="#64748b" style={{ animation: 'spin 1s linear infinite' }} />
                 : <Copy size={12} strokeWidth={1.8} color="#64748b" />}
             </button>
+            {isOwner && (
+              <button
+                type="button"
+                disabled={teamBusyId !== null}
+                onClick={() => {
+                  setShareDialog({ canvas })
+                  setIsOpen(false)
+                }}
+                style={iconButtonStyle}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                title="修改共享成员"
+              >
+                <Users size={12} strokeWidth={1.8} color="#64748b" />
+              </button>
+            )}
             {isOwner && (
               <button
                 type="button"
@@ -414,7 +438,7 @@ export function PageDropdown() {
           className={`canvas-item-actions ${isEditing ? 'force-visible' : ''}`}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* 分享到团队 */}
+          {/* 分享 */}
           {!isArchived && !isEditing && (
             <button
               type="button"
@@ -426,7 +450,7 @@ export function PageDropdown() {
               style={iconButtonStyle}
               onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
               onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-              title="分享到团队，所有人都能查看和编辑"
+              title="分享给指定同事或全团队"
             >
               {teamBusyId === page.id
                 ? <Loader2 size={12} color="#64748b" style={{ animation: 'spin 1s linear infinite' }} />
@@ -647,7 +671,7 @@ export function PageDropdown() {
               gap: 1,
             }}
           >
-            {/* 0. 团队文件夹：所有人分享的画布 */}
+            {/* 0. 团队文件夹：我能访问的共享画布 */}
             {teamCanvases.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 1, paddingBottom: 4, marginBottom: 3, borderBottom: '1px solid #f1f5f9' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, height: 30, padding: '0 8px', color: '#334155', fontSize: 12, fontWeight: 600 }}>
@@ -1004,6 +1028,27 @@ export function PageDropdown() {
             </button>}
           </div>
         </div>
+      )}
+
+      {shareDialog && 'page' in shareDialog && (
+        <ShareCanvasDialog
+          title={`分享「${shareDialog.page.name}」`}
+          confirmText="分享"
+          ownerId={currentUserId}
+          initialMemberIds={[]}
+          onCancel={() => setShareDialog(null)}
+          onSubmit={(memberIds) => submitShare(shareDialog.page, memberIds)}
+        />
+      )}
+      {shareDialog && 'canvas' in shareDialog && (
+        <ShareCanvasDialog
+          title={`修改「${shareDialog.canvas.name}」的共享范围`}
+          confirmText="保存"
+          ownerId={shareDialog.canvas.owner_id}
+          initialMemberIds={shareDialog.canvas.member_ids}
+          onCancel={() => setShareDialog(null)}
+          onSubmit={(memberIds) => submitMembers(shareDialog.canvas, memberIds)}
+        />
       )}
     </div>
   )

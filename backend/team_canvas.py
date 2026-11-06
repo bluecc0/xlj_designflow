@@ -1,6 +1,7 @@
-"""团队画布：把个人画布中的一页分享给全员共同编辑。
+"""团队画布：把个人画布中的一页分享给全员或指定成员共同编辑。
 
-共享画布单独存一份 V2 文档（只含一页），所有人（包括分享者）都编辑这一份；
+共享画布单独存一份 V2 文档（只含一页），有权限的人（包括分享者）都编辑这一份；
+member_ids 为 NULL 表示全团队可见，否则是 JSON 成员 id 列表，分享者和 admin 账号始终可见；
 保存沿用个人画布的 revision 乐观锁，冲突由前端按元素三方合并后重试。
 每次保存由服务端对比新旧文档，自动记录新增/生成/删除/改名等动态，删除记录保留原始元素以便恢复。
 """
@@ -36,7 +37,8 @@ _RECORD_ID_PREFIXES = {"frames": "frame-", "images": "img-", "texts": "txt-"}
 
 _presence: dict[str, dict[str, tuple[str, float]]] = {}
 _presence_lock = threading.Lock()
-_asset_index: set[str] | None = None
+# 图片路径 -> 可访问的用户 id；None 表示全团队
+_asset_index: dict[str, set[str] | None] | None = None
 _asset_index_lock = threading.Lock()
 
 
@@ -57,6 +59,9 @@ def init_team_canvas_tables() -> None:
                 unshared_at     REAL
             )
         """)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(team_canvases)").fetchall()}
+        if "member_ids" not in columns:
+            conn.execute("ALTER TABLE team_canvases ADD COLUMN member_ids TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS team_canvas_activity (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -262,18 +267,20 @@ def _invalidate_asset_index() -> None:
         _asset_index = None
 
 
-def is_shared_canvas_asset(raw_url: object) -> bool:
-    """图片出现在任一正在共享的画布里时，所有登录用户都可以查看和用作参考图。"""
+def is_shared_canvas_asset(raw_url: object, user: dict) -> bool:
+    """图片出现在该用户能访问的任一共享画布里时，该用户可以查看和用作参考图。"""
     global _asset_index
     path = _asset_path(raw_url)
     if not path:
         return False
     with _asset_index_lock:
         if _asset_index is None:
-            index: set[str] = set()
+            index: dict[str, set[str] | None] = {}
             try:
                 with _connect() as conn:
-                    rows = conn.execute("SELECT doc_json FROM team_canvases WHERE status = 'active'").fetchall()
+                    rows = conn.execute(
+                        "SELECT owner_id, member_ids, doc_json FROM team_canvases WHERE status = 'active'"
+                    ).fetchall()
             except Exception:
                 rows = []
             for row in rows:
@@ -281,11 +288,23 @@ def is_shared_canvas_asset(raw_url: object) -> bool:
                     doc = json.loads(row["doc_json"])
                 except Exception:
                     continue
+                member_ids = _member_ids(row)
+                viewers = None if member_ids is None else {row["owner_id"], *member_ids}
                 for image in doc.get("images") or []:
-                    if isinstance(image, dict) and _asset_path(image.get("url")):
-                        index.add(_asset_path(image.get("url")))
+                    image_path = _asset_path(image.get("url")) if isinstance(image, dict) else ""
+                    if not image_path:
+                        continue
+                    if image_path not in index:
+                        index[image_path] = None if viewers is None else set(viewers)
+                    elif viewers is None or index[image_path] is None:
+                        index[image_path] = None
+                    else:
+                        index[image_path] |= viewers
             _asset_index = index
-        return path in _asset_index
+        if path not in _asset_index:
+            return False
+        allowed = _asset_index[path]
+    return allowed is None or _is_super_admin(user) or str(user.get("id")) in allowed
 
 
 def copy_asset_to_user(raw_url: object, user_id: str) -> str | None:
@@ -347,6 +366,55 @@ def _copy_page_name(name: str, pages: list[dict]) -> str:
 
 # ─── 业务操作 ──────────────────────────────────────────────────────────────────
 
+def _member_ids(row) -> list[str] | None:
+    raw = row["member_ids"]
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
+
+
+def _is_super_admin(user: dict) -> bool:
+    """只有 admin 这个账号能看到和管理全部画布，其他管理员账号和普通用户一样按名单。"""
+    return user.get("id") == "admin" and user.get("role") == "admin"
+
+
+def _can_access(row, user: dict) -> bool:
+    if _is_super_admin(user) or row["owner_id"] == str(user["id"]):
+        return True
+    member_ids = _member_ids(row)
+    return member_ids is None or str(user["id"]) in member_ids
+
+
+def list_share_targets() -> list[dict]:
+    """可以被指定的同事：以 login_users.json 为准，排除测试账号；名字优先用登录后实际显示的名字。"""
+    with _connect() as conn:
+        db_names = {row["id"]: row["username"] for row in conn.execute("SELECT id, username FROM users").fetchall()}
+    return [
+        {"id": u["id"], "name": u.get("display_name") or db_names.get(u["id"]) or u["username"]}
+        for u in settings.allowed_login_users
+        if not u.get("is_test")
+    ]
+
+
+def _clean_member_ids(raw: object, owner_id: str) -> list[str] | None:
+    """None 表示全团队；否则校验成员并去掉分享者本人，至少要留一位。"""
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise HTTPException(400, "成员名单格式不正确")
+    known = {t["id"] for t in list_share_targets()}
+    member_ids = sorted({str(item) for item in raw} - {owner_id})
+    if any(item not in known for item in member_ids):
+        raise HTTPException(400, "所选成员不存在，请刷新后重试")
+    if not member_ids:
+        raise HTTPException(400, "请至少选择一位成员")
+    return member_ids
+
+
 def _canvas_meta(row) -> dict:
     try:
         doc = json.loads(row["doc_json"])
@@ -363,28 +431,31 @@ def _canvas_meta(row) -> dict:
         "updated_at": row["updated_at"],
         "updated_by_name": row["updated_by_name"],
         "image_count": len(doc.get("images") or []),
+        "member_ids": _member_ids(row),
     }
 
 
-def _active_row(conn, canvas_id: str):
+def _active_row(conn, canvas_id: str, user: dict):
     row = conn.execute(
         "SELECT * FROM team_canvases WHERE id = ? AND status = 'active'", (canvas_id,)
     ).fetchone()
-    if not row:
+    # 没有权限也回 404，不暴露画布是否存在；打开中被移出名单时前端按画布已失效处理
+    if not row or not _can_access(row, user):
         raise HTTPException(404, "该团队画布已取消分享或不存在")
     return row
 
 
-def list_canvases() -> list[dict]:
+def list_canvases(user: dict) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             "SELECT * FROM team_canvases WHERE status = 'active' ORDER BY created_at ASC"
         ).fetchall()
-    return [_canvas_meta(row) for row in rows]
+    return [_canvas_meta(row) for row in rows if _can_access(row, user)]
 
 
-def share_page(user: dict, page_id: str) -> dict:
+def share_page(user: dict, page_id: str, member_ids: object = None) -> dict:
     user_id = str(user["id"])
+    clean_members = _clean_member_ids(member_ids, user_id)
     with _lock, _connect() as conn:
         personal = conn.execute(
             "SELECT snapshot_json, revision FROM editor_snapshots WHERE user_id = ?", (user_id,)
@@ -418,11 +489,12 @@ def share_page(user: dict, page_id: str) -> dict:
         now = time.time()
         conn.execute(
             "INSERT INTO team_canvases (id, owner_id, owner_name, page_id, doc_json, revision, status, "
-            "created_at, updated_at, updated_by_name) VALUES (?, ?, ?, ?, ?, 1, 'active', ?, ?, ?)",
+            "created_at, updated_at, updated_by_name, member_ids) VALUES (?, ?, ?, ?, ?, 1, 'active', ?, ?, ?, ?)",
             (canvas_id, user_id, _user_name(user), page_id, json.dumps(team_doc, ensure_ascii=False),
-             now, now, _user_name(user)),
+             now, now, _user_name(user), None if clean_members is None else json.dumps(clean_members)),
         )
-        _insert_activity(conn, canvas_id, user, "share", f"把「{page.get('name') or '画布'}」分享到团队")
+        scope_text = "分享到团队" if clean_members is None else f"分享给 {len(clean_members)} 位成员"
+        _insert_activity(conn, canvas_id, user, "share", f"把「{page.get('name') or '画布'}」{scope_text}")
         conn.commit()
         row = conn.execute("SELECT * FROM team_canvases WHERE id = ?", (canvas_id,)).fetchone()
     _invalidate_asset_index()
@@ -431,11 +503,32 @@ def share_page(user: dict, page_id: str) -> dict:
     return {"canvas": _canvas_meta(row), "personal_revision": personal_revision}
 
 
+def set_members(user: dict, canvas_id: str, member_ids: object) -> dict:
+    """修改共享范围；被移出的人下一次心跳或保存时收到 404，由前端退回个人画布。"""
+    with _lock, _connect() as conn:
+        row = _active_row(conn, canvas_id, user)
+        if row["owner_id"] != str(user["id"]) and not _is_super_admin(user):
+            raise HTTPException(403, "只有分享者可以修改成员")
+        clean_members = _clean_member_ids(member_ids, row["owner_id"])
+        conn.execute(
+            "UPDATE team_canvases SET member_ids = ? WHERE id = ?",
+            (None if clean_members is None else json.dumps(clean_members), canvas_id),
+        )
+        scope_text = "全团队" if clean_members is None else f"{len(clean_members)} 位成员"
+        _insert_activity(conn, canvas_id, user, "members", f"把共享范围改为{scope_text}", {"member_ids": clean_members})
+        conn.commit()
+        row = conn.execute("SELECT * FROM team_canvases WHERE id = ?", (canvas_id,)).fetchone()
+    _invalidate_asset_index()
+    log_operation(user_id=str(user["id"]), username=_user_name(user), action="team_canvas_members",
+                  detail=scope_text, payload=json.dumps({"canvas_id": canvas_id}, ensure_ascii=False))
+    return {"canvas": _canvas_meta(row)}
+
+
 def unshare_canvas(user: dict, canvas_id: str) -> dict:
     user_id = str(user["id"])
     with _lock, _connect() as conn:
-        row = _active_row(conn, canvas_id)
-        if row["owner_id"] != user_id and user.get("role") != "admin":
+        row = _active_row(conn, canvas_id, user)
+        if row["owner_id"] != user_id and not _is_super_admin(user):
             raise HTTPException(403, "只有分享者可以取消分享")
         owner_id = row["owner_id"]
         team_doc = json.loads(row["doc_json"])
@@ -471,7 +564,7 @@ def copy_to_personal(user: dict, canvas_id: str) -> dict:
     """把团队画布复制成自己的一页个人画布；副本与原画布完全独立，图片也复制到自己的目录。"""
     user_id = str(user["id"])
     with _connect() as conn:
-        row = _active_row(conn, canvas_id)
+        row = _active_row(conn, canvas_id, user)
     team_doc = json.loads(row["doc_json"])
     # 复制文件可能较慢，放在写库锁之外
     _copy_foreign_assets(team_doc, user_id)
@@ -504,9 +597,9 @@ def copy_to_personal(user: dict, canvas_id: str) -> dict:
     return {"page": page, "personal_revision": personal_revision}
 
 
-def load_canvas(canvas_id: str) -> dict:
+def load_canvas(user: dict, canvas_id: str) -> dict:
     with _connect() as conn:
-        row = _active_row(conn, canvas_id)
+        row = _active_row(conn, canvas_id, user)
     return {"canvas": _canvas_meta(row), "snapshot": json.loads(row["doc_json"]), "revision": int(row["revision"])}
 
 
@@ -514,7 +607,7 @@ def save_canvas(
     user: dict, canvas_id: str, snapshot: dict, base_revision: object, intent: str | None,
 ) -> tuple[bool, int, str | None]:
     with _lock, _connect() as conn:
-        row = _active_row(conn, canvas_id)
+        row = _active_row(conn, canvas_id, user)
         old_revision = int(row["revision"])
         if base_revision is None or int(base_revision) != old_revision:
             return False, old_revision, "stale_revision"
@@ -527,7 +620,7 @@ def save_canvas(
         for image in new_doc["images"]:
             path = _asset_path(image.get("url"))
             owner = _asset_owner(path)
-            if not owner or owner == str(user["id"]) or path in old_urls or is_shared_canvas_asset(path):
+            if not owner or owner == str(user["id"]) or path in old_urls or is_shared_canvas_asset(path, user):
                 continue
             # 从动态里“恢复”被删的图片：该画布自己曾经有过的图片记录也认可
             if history_urls is None:
@@ -590,7 +683,7 @@ def _first_page(snapshot: dict, page_id: str) -> dict:
 
 def heartbeat(user: dict, canvas_id: str) -> dict:
     with _connect() as conn:
-        row = _active_row(conn, canvas_id)
+        row = _active_row(conn, canvas_id, user)
     now = time.time()
     with _presence_lock:
         viewers = _presence.setdefault(canvas_id, {})
@@ -601,9 +694,9 @@ def heartbeat(user: dict, canvas_id: str) -> dict:
     return {"revision": int(row["revision"]), "canvas": _canvas_meta(row), "viewers": viewer_list}
 
 
-def list_activity(canvas_id: str, limit: int = 100) -> list[dict]:
+def list_activity(user: dict, canvas_id: str, limit: int = 100) -> list[dict]:
     with _connect() as conn:
-        _active_row(conn, canvas_id)
+        _active_row(conn, canvas_id, user)
         rows = conn.execute(
             "SELECT * FROM team_canvas_activity WHERE canvas_id = ? ORDER BY id DESC LIMIT ?",
             (canvas_id, max(1, min(300, limit))),
@@ -621,9 +714,9 @@ def list_activity(canvas_id: str, limit: int = 100) -> list[dict]:
     return items
 
 
-def list_versions(canvas_id: str) -> list[dict]:
+def list_versions(user: dict, canvas_id: str) -> list[dict]:
     with _connect() as conn:
-        _active_row(conn, canvas_id)
+        _active_row(conn, canvas_id, user)
         rows = conn.execute(
             "SELECT * FROM team_canvas_versions WHERE canvas_id = ? ORDER BY id DESC", (canvas_id,)
         ).fetchall()
@@ -643,7 +736,7 @@ def list_versions(canvas_id: str) -> list[dict]:
 
 def restore_version(user: dict, canvas_id: str, version_id: int) -> int:
     with _lock, _connect() as conn:
-        row = _active_row(conn, canvas_id)
+        row = _active_row(conn, canvas_id, user)
         version = conn.execute(
             "SELECT * FROM team_canvas_versions WHERE id = ? AND canvas_id = ?", (version_id, canvas_id)
         ).fetchone()
@@ -675,8 +768,13 @@ def _user(request: Request) -> dict:
 
 @router.get("")
 def api_list(request: Request):
+    return {"canvases": list_canvases(_user(request))}
+
+
+@router.get("/share-targets")
+def api_share_targets(request: Request):
     _user(request)
-    return {"canvases": list_canvases()}
+    return {"users": list_share_targets()}
 
 
 @router.post("")
@@ -686,13 +784,12 @@ async def api_share(request: Request):
     page_id = str((body or {}).get("page_id") or "").strip()
     if not page_id:
         raise HTTPException(400, "缺少要分享的画布")
-    return share_page(user, page_id)
+    return share_page(user, page_id, body.get("member_ids"))
 
 
 @router.get("/{canvas_id}")
 def api_load(canvas_id: str, request: Request):
-    _user(request)
-    return load_canvas(canvas_id)
+    return load_canvas(_user(request), canvas_id)
 
 
 @router.post("/{canvas_id}/snapshot")
@@ -719,6 +816,12 @@ def api_unshare(canvas_id: str, request: Request):
     return unshare_canvas(_user(request), canvas_id)
 
 
+@router.post("/{canvas_id}/members")
+async def api_members(canvas_id: str, request: Request):
+    body = await request.json()
+    return set_members(_user(request), canvas_id, (body or {}).get("member_ids"))
+
+
 @router.post("/{canvas_id}/copy")
 def api_copy(canvas_id: str, request: Request):
     return copy_to_personal(_user(request), canvas_id)
@@ -731,14 +834,12 @@ def api_heartbeat(canvas_id: str, request: Request):
 
 @router.get("/{canvas_id}/activity")
 def api_activity(canvas_id: str, request: Request):
-    _user(request)
-    return {"items": list_activity(canvas_id)}
+    return {"items": list_activity(_user(request), canvas_id)}
 
 
 @router.get("/{canvas_id}/versions")
 def api_versions(canvas_id: str, request: Request):
-    _user(request)
-    return {"items": list_versions(canvas_id)}
+    return {"items": list_versions(_user(request), canvas_id)}
 
 
 @router.post("/{canvas_id}/versions/{version_id}/restore")

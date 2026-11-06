@@ -834,7 +834,7 @@ def _safe_asset_owner_id(user_id: str) -> str:
 def _assert_strict_asset_owner(owner_id: str | None, user: dict, path: str | None = None) -> None:
     if _is_admin(user):
         return
-    if path and is_shared_canvas_asset(path):
+    if path and is_shared_canvas_asset(path, user):
         return
     if not owner_id or owner_id != user.get("id"):
         # Match polling's non-enumerating behavior for another user's assets.
@@ -890,7 +890,7 @@ def _outpainting_internal_path(raw_url: str, request: Request, user: dict) -> tu
             raise HTTPException(400, "图片地址无效")
         owner_id = parts[0]
         expected_owner = _safe_asset_owner_id(str(user.get("id") or ""))
-        if not _is_admin(user) and owner_id != expected_owner and not is_shared_canvas_asset(path):
+        if not _is_admin(user) and owner_id != expected_owner and not is_shared_canvas_asset(path, user):
             raise HTTPException(404, "图片文件不存在")
         root = (settings.output_path / "ai-images").resolve()
         owner_root = (root / owner_id).resolve()
@@ -2176,7 +2176,7 @@ async def attach_user_context(request: Request, call_next):
         and request.state.user is not None
         and not _is_admin(request.state.user)
         and str(request.state.user.get("id") or "") != outpainting_owner
-        and not is_shared_canvas_asset(path)
+        and not is_shared_canvas_asset(path, request.state.user)
     ):
         return JSONResponse({"detail": "图片不存在"}, status_code=404)
     try:
@@ -6263,7 +6263,7 @@ async def editor_save_snapshot(request: Request):
     foreign_assets = _editor_snapshot_foreign_asset_urls(snapshot, str(user["id"]))
     # 从团队画布复制过来的他人图片：复制到自己的目录并改写地址，原画布取消分享后图片仍可用
     rewritten_urls: dict[str, str] = {}
-    shared_urls = [url for url in foreign_assets if is_shared_canvas_asset(url)]
+    shared_urls = [url for url in foreign_assets if is_shared_canvas_asset(url, user)]
     if shared_urls:
         snapshot, rewritten_urls = await asyncio.to_thread(
             _import_shared_assets_into_snapshot, snapshot, shared_urls, str(user["id"]),

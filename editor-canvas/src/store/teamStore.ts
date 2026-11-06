@@ -19,6 +19,8 @@ export interface TeamCanvasMeta {
   updated_at: number
   updated_by_name: string
   image_count: number
+  // null 表示全团队可见
+  member_ids: string[] | null
 }
 
 export interface TeamViewer {
