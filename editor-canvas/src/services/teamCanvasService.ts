@@ -1,5 +1,6 @@
 import { feedback } from '../utils/feedback'
 import type { TeamCanvasMeta, TeamViewer } from '../store/teamStore'
+import type { CanvasPage } from '../types'
 
 export interface TeamActivityItem {
   id: number
@@ -51,6 +52,13 @@ export function shareCanvasPage(pageId: string) {
 
 export function unshareTeamCanvas(id: string) {
   return request<{ page_id: string }>(`/team-canvases/${encodeURIComponent(id)}/unshare`, { method: 'POST' })
+}
+
+export function copyTeamCanvas(id: string) {
+  return request<{ page: CanvasPage; personal_revision: number }>(
+    `/team-canvases/${encodeURIComponent(id)}/copy`,
+    { method: 'POST' },
+  )
 }
 
 export function teamHeartbeat(id: string) {

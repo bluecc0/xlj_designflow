@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -218,6 +219,140 @@ class SharedImageCopiedToPersonalTest(_TeamCanvasBase):
         # 之后继续保存个人画布不会再被拒绝
         personal["images"][0]["url"] = copied
         self.assertTrue(self._save_personal(MEMBER, personal)["saved"])
+
+
+class CopyToPersonalTest(_TeamCanvasBase):
+    """团队成员和分享者都能把团队画布复制成个人画布，原画布取消分享后副本不受影响。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.ai_root = Path(team_canvas.settings.output_path) / "ai-images"
+        for rel in ("owner/a.png", "owner/outpainting_example/result.png", "member/g.png"):
+            (self.ai_root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.ai_root / rel).write_bytes(b"png")
+        self.canvas_id = self._share()
+        doc = team_canvas.load_canvas(self.canvas_id)["snapshot"]
+        doc["images"][0]["frameId"] = "f1"
+        doc["images"].append({"id": "o1", "pageId": "p1", "url": "/ai-images/owner/outpainting_example/result.png",
+                              "x": 0, "y": 0, "width": 1, "height": 1})
+        doc["texts"] = [{"id": "t1", "pageId": "p1", "frameId": "f1", "text": "标题", "x": 0, "y": 0,
+                         "width": 1, "height": 1}]
+        self.assertTrue(team_canvas.save_canvas(OWNER, self.canvas_id, doc, 1, "update")[0])
+        doc["images"].insert(1, {"id": "g1", "pageId": "p1", "url": "/ai-images/member/g.png", "x": 0, "y": 0,
+                                 "width": 1, "height": 1, "meta": {"operation": "matting", "sourceImageId": "i1"}})
+        self.assertTrue(team_canvas.save_canvas(MEMBER, self.canvas_id, doc, 2, "update")[0])
+        job_store.save_editor_snapshot("member", json.dumps({
+            "version": 2, "pages": [{"id": "m1", "name": "我的", "order": 0}], "groups": [], "activePageId": "m1",
+            "frames": [], "texts": [],
+            "images": [{"id": "mine", "pageId": "m1", "url": "/ai-images/member/g.png", "x": 0, "y": 0,
+                        "width": 1, "height": 1}],
+        }))
+
+    def _page_records(self, user_id: str, page_id: str) -> dict[str, list[dict]]:
+        personal = self._personal(user_id)
+        return {key: [r for r in personal[key] if r["pageId"] == page_id] for key in ("frames", "images", "texts")}
+
+    def test_member_gets_new_personal_page_with_all_layers(self) -> None:
+        before = team_canvas.load_canvas(self.canvas_id)
+        result = team_canvas.copy_to_personal(MEMBER, self.canvas_id)
+        page = result["page"]
+        self.assertEqual(page["name"], "春季主图 副本")
+        self.assertEqual(result["personal_revision"], job_store.load_editor_snapshot("member")[1])
+
+        personal = self._personal("member")
+        self.assertEqual([p["id"] for p in personal["pages"]], ["m1", page["id"]])
+        self.assertEqual(personal["activePageId"], "m1")
+        self.assertEqual([im["id"] for im in personal["images"] if im["pageId"] == "m1"], ["mine"])
+        records = self._page_records("member", page["id"])
+        self.assertEqual({key: len(value) for key, value in records.items()}, {"frames": 1, "images": 3, "texts": 1})
+        self.assertEqual(records["texts"][0]["text"], "标题")
+
+        # 图层都换了新 id，图层之间的引用指向副本里的新图层
+        team_ids = {r["id"] for key in ("frames", "images", "texts") for r in before["snapshot"][key]}
+        copied_ids = {r["id"] for value in records.values() for r in value}
+        self.assertFalse(team_ids & copied_ids)
+        frame_id = records["frames"][0]["id"]
+        self.assertEqual(records["images"][0]["frameId"], frame_id)
+        self.assertEqual(records["texts"][0]["frameId"], frame_id)
+        self.assertEqual(records["images"][1]["meta"]["sourceImageId"], records["images"][0]["id"])
+
+        # 复制不影响原画布，也不会把副本加入共享
+        after = team_canvas.load_canvas(self.canvas_id)
+        self.assertEqual(after["snapshot"], before["snapshot"])
+        self.assertEqual(after["revision"], before["revision"])
+        self.assertEqual([c["id"] for c in team_canvas.list_canvases()], [self.canvas_id])
+
+    def test_copied_images_survive_unshare(self) -> None:
+        page = team_canvas.copy_to_personal(MEMBER, self.canvas_id)["page"]
+        urls = [im["url"] for im in self._page_records("member", page["id"])["images"]]
+        self.assertEqual(urls, [
+            "/ai-images/member/team-imports/owner/a.png",
+            "/ai-images/member/g.png",
+            "/ai-images/member/team-imports/owner/outpainting_example/result.png",
+        ])
+
+        team_canvas.unshare_canvas(OWNER, self.canvas_id)
+        self.assertEqual(self._page_records("member", page["id"])["images"][0]["url"], urls[0])
+        for url in urls:
+            self.assertTrue((self.ai_root / url.removeprefix("/ai-images/")).is_file())
+            path, _ = main._outpainting_internal_path(url, None, MEMBER)
+            self.assertTrue(path.is_file())
+        # 原图已不能访问，复制后的扩图地址属于成员自己
+        with self.assertRaises(HTTPException):
+            main._outpainting_internal_path("/ai-images/owner/a.png", None, MEMBER)
+        self.assertEqual(main._outpainting_asset_owner(urls[2]), "member")
+
+    def test_owner_copy_and_unshare_keep_both_pages_complete(self) -> None:
+        page = team_canvas.copy_to_personal(OWNER, self.canvas_id)["page"]
+        team_canvas.unshare_canvas(OWNER, self.canvas_id)
+        personal = self._personal()
+        self.assertEqual(sorted(p["name"] for p in personal["pages"]), ["春季主图", "春季主图 副本", "草稿"])
+        for page_id in ("p1", page["id"]):
+            records = self._page_records("owner", page_id)
+            self.assertEqual({key: len(value) for key, value in records.items()}, {"frames": 1, "images": 3, "texts": 1})
+        # 分享者自己的图片不需要复制，他人的图片复制到分享者目录
+        urls = {im["url"] for im in self._page_records("owner", page["id"])["images"]}
+        self.assertIn("/ai-images/owner/a.png", urls)
+        self.assertIn("/ai-images/owner/team-imports/member/g.png", urls)
+
+    def test_repeated_copies_get_numbered_names_and_distinct_ids(self) -> None:
+        first = team_canvas.copy_to_personal(MEMBER, self.canvas_id)["page"]
+        second = team_canvas.copy_to_personal(MEMBER, self.canvas_id)["page"]
+        third = team_canvas.copy_to_personal(MEMBER, self.canvas_id)["page"]
+        self.assertEqual([first["name"], second["name"], third["name"]],
+                         ["春季主图 副本", "春季主图 副本 2", "春季主图 副本 3"])
+        ids = [im["id"] for im in self._personal("member")["images"]]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_member_without_personal_canvas_can_copy(self) -> None:
+        newcomer = {"id": "newcomer", "username": "小张"}
+        page = team_canvas.copy_to_personal(newcomer, self.canvas_id)["page"]
+        personal = self._personal("newcomer")
+        self.assertEqual([p["id"] for p in personal["pages"]], [page["id"]])
+        self.assertEqual(personal["activePageId"], page["id"])
+        self.assertEqual(len(personal["images"]), 3)
+
+    def test_copied_page_can_keep_saving_after_unshare(self) -> None:
+        team_canvas.copy_to_personal(MEMBER, self.canvas_id)
+        team_canvas.unshare_canvas(OWNER, self.canvas_id)
+        raw, revision = job_store.load_editor_snapshot("member")
+        async def body():
+            return {"snapshot": raw, "base_revision": revision}
+        req = Request({"type": "http", "method": "POST", "path": "/editor/snapshot",
+                       "query_string": b"user_id=member", "headers": [(b"content-type", b"application/json")]})
+        with patch.object(main, "_current_user", return_value=MEMBER), patch.object(req, "json", side_effect=body):
+            self.assertTrue(asyncio.run(main.editor_save_snapshot(req))["saved"])
+
+    def test_unshared_canvas_cannot_be_copied(self) -> None:
+        team_canvas.unshare_canvas(OWNER, self.canvas_id)
+        with self.assertRaises(HTTPException) as raised:
+            team_canvas.copy_to_personal(MEMBER, self.canvas_id)
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_copy_route_uses_current_user(self) -> None:
+        request = SimpleNamespace(state=SimpleNamespace(user=MEMBER))
+        result = team_canvas.api_copy(self.canvas_id, request)
+        self.assertIn(result["page"]["id"], [p["id"] for p in self._personal("member")["pages"]])
 
 
 if __name__ == "__main__":

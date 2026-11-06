@@ -27,13 +27,13 @@ import type { CanvasPage } from '../types'
 
 const currentUserId = new URLSearchParams(window.location.search).get('user_id') || ''
 
-// 分享前等本地修改落盘，服务端才能拿到这页的最新内容
-function waitUntilSaved(timeoutMs = 10000) {
+// 分享、复制前等本地修改落盘，服务端才能拿到这页的最新内容
+export function waitUntilSaved(action = '分享', timeoutMs = 10000) {
   const started = Date.now()
   return new Promise<void>((resolve, reject) => {
     const check = () => {
       if (!useCanvasStore.getState().isDirty) return resolve()
-      if (Date.now() - started > timeoutMs) return reject(new Error('画布还没保存完成，请稍后再分享'))
+      if (Date.now() - started > timeoutMs) return reject(new Error(`画布还没保存完成，请稍后再${action}`))
       setTimeout(check, 100)
     }
     check()

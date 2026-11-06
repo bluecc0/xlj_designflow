@@ -1,7 +1,9 @@
-import React from 'react'
-import { History, RotateCw, Users } from 'lucide-react'
-import { PageDropdown } from './PageDropdown'
+import React, { useState } from 'react'
+import { Copy, History, Loader2, RotateCw, Users } from 'lucide-react'
+import { PageDropdown, waitUntilSaved } from './PageDropdown'
 import { useTeamStore } from '../store/teamStore'
+import { copyTeamCanvas } from '../services/teamCanvasService'
+import { feedback, notifyError } from '../utils/feedback'
 
 interface Props {
   saveStatus: 'saved' | 'saving' | 'error'
@@ -17,6 +19,23 @@ export function TopBar({ saveStatus, saveError, onRetrySave }: Props) {
   const activityOpen = useTeamStore((s) => s.activityOpen)
   const setActivityOpen = useTeamStore((s) => s.setActivityOpen)
   const teamCanvas = source.kind === 'team' ? canvases.find((c) => c.id === source.id) : null
+  const [copying, setCopying] = useState(false)
+
+  // 副本写入服务端的个人画布；切回个人画布时会重新加载，这里只更新下拉菜单的列表
+  const handleCopy = async () => {
+    if (source.kind !== 'team') return
+    setCopying(true)
+    try {
+      await waitUntilSaved('复制')
+      const { page } = await copyTeamCanvas(source.id)
+      useTeamStore.setState((s) => ({ personalPages: [...s.personalPages, page] }))
+      feedback.show(`已复制到个人画布「${page.name}」`, { tone: 'ok', key: 'team-copy' })
+    } catch (error) {
+      notifyError(error, '暂时无法复制，请稍后再试。', { key: 'team-copy' })
+    } finally {
+      setCopying(false)
+    }
+  }
 
   return (
     <div
@@ -67,6 +86,17 @@ export function TopBar({ saveStatus, saveError, onRetrySave }: Props) {
               {viewers.length > 4 && <span style={{ fontSize: 10, color: '#64748b', marginLeft: 3 }}>+{viewers.length - 4}</span>}
             </div>
           )}
+          <button
+            type="button"
+            title="复制到我的个人画布，取消分享后副本仍然保留"
+            aria-label="复制到个人画布"
+            disabled={copying || switching}
+            onClick={handleCopy}
+            style={{ width: 24, height: 24, display: 'grid', placeItems: 'center', padding: 0, border: 0, borderRadius: 6,
+              background: 'transparent', color: '#64748b', cursor: copying || switching ? 'default' : 'pointer' }}
+          >
+            {copying ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Copy size={13} />}
+          </button>
           <button
             type="button"
             title="画布动态：操作记录与历史版本"

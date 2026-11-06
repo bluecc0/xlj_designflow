@@ -17,7 +17,14 @@ from urllib.parse import quote, unquote, urlsplit
 from fastapi import APIRouter, HTTPException, Request
 
 from .config import settings
-from .job_store import _connect, _legacy_compatible_editor_snapshot, _lock, log_operation
+from .job_store import (
+    _connect,
+    _legacy_compatible_editor_snapshot,
+    _lock,
+    load_editor_snapshot,
+    log_operation,
+    save_editor_snapshot,
+)
 
 router = APIRouter(prefix="/team-canvases")
 
@@ -25,6 +32,7 @@ _VERSION_INTERVAL_SECONDS = 10 * 60
 _VERSION_KEEP = 60
 _PRESENCE_TTL_SECONDS = 15
 _RECORD_KEYS = ("frames", "images", "texts")
+_RECORD_ID_PREFIXES = {"frames": "frame-", "images": "img-", "texts": "txt-"}
 
 _presence: dict[str, dict[str, tuple[str, float]]] = {}
 _presence_lock = threading.Lock()
@@ -307,6 +315,36 @@ def _copy_foreign_assets(doc: dict, owner_id: str) -> None:
             image["url"] = new_url
 
 
+def _records_for_new_page(doc: dict, page_id: str) -> dict[str, list[dict]]:
+    """给复制出的图层换新 id 并改写相互引用，避免分享者取消分享时与原图层 id 相撞被丢弃。"""
+    id_maps = {
+        key: {str(r["id"]): _RECORD_ID_PREFIXES[key] + uuid.uuid4().hex[:8] for r in doc.get(key) or []}
+        for key in _RECORD_KEYS
+    }
+    records: dict[str, list[dict]] = {}
+    for key in _RECORD_KEYS:
+        records[key] = []
+        for record in doc.get(key) or []:
+            copied = {**record, "id": id_maps[key][str(record["id"])], "pageId": page_id}
+            if record.get("frameId"):
+                copied["frameId"] = id_maps["frames"].get(str(record["frameId"]))
+            meta = record.get("meta")
+            if isinstance(meta, dict) and meta.get("sourceImageId"):
+                copied["meta"] = {**meta, "sourceImageId": id_maps["images"].get(str(meta["sourceImageId"]))}
+            records[key].append(copied)
+    return records
+
+
+def _copy_page_name(name: str, pages: list[dict]) -> str:
+    taken = {p.get("name") for p in pages}
+    candidate = f"{name} 副本"
+    index = 2
+    while candidate in taken:
+        candidate = f"{name} 副本 {index}"
+        index += 1
+    return candidate
+
+
 # ─── 业务操作 ──────────────────────────────────────────────────────────────────
 
 def _canvas_meta(row) -> dict:
@@ -427,6 +465,43 @@ def unshare_canvas(user: dict, canvas_id: str) -> dict:
     log_operation(user_id=user_id, username=_user_name(user), action="team_canvas_unshare",
                   detail=page.get("name") or "", payload=json.dumps({"canvas_id": canvas_id}, ensure_ascii=False))
     return {"page_id": page["id"], "personal_revision": personal_revision if owner_id == user_id else None}
+
+
+def copy_to_personal(user: dict, canvas_id: str) -> dict:
+    """把团队画布复制成自己的一页个人画布；副本与原画布完全独立，图片也复制到自己的目录。"""
+    user_id = str(user["id"])
+    with _connect() as conn:
+        row = _active_row(conn, canvas_id)
+    team_doc = json.loads(row["doc_json"])
+    # 复制文件可能较慢，放在写库锁之外
+    _copy_foreign_assets(team_doc, user_id)
+    page_id = "page-" + uuid.uuid4().hex[:7]
+    records = _records_for_new_page(team_doc, page_id)
+    # 还没保存过个人画布的成员，先建一份空文档
+    if load_editor_snapshot(user_id)[0] is None:
+        save_editor_snapshot(user_id, json.dumps(
+            {"version": 2, "pages": [], "groups": [], "activePageId": page_id, "frames": [], "images": [], "texts": []}
+        ))
+    with _lock, _connect() as conn:
+        personal = conn.execute(
+            "SELECT snapshot_json, revision FROM editor_snapshots WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        doc = _personal_v2(personal["snapshot_json"]) if personal else None
+        if doc is None:
+            raise HTTPException(409, "个人画布暂时无法读取，请稍后再试")
+        name = team_doc["pages"][0].get("name") or "未命名画布"
+        page = {"id": page_id, "name": _copy_page_name(name, doc["pages"]),
+                "order": len(doc["pages"]), "groupId": None, "archived": False}
+        doc["pages"] = doc["pages"] + [page]
+        for key in _RECORD_KEYS:
+            doc[key] = list(doc.get(key) or []) + records[key]
+        personal_revision = _write_personal(
+            conn, user_id, personal["snapshot_json"], doc, int(personal["revision"] or 1)
+        )
+        conn.commit()
+    log_operation(user_id=user_id, username=_user_name(user), action="team_canvas_copy",
+                  detail=page["name"], payload=json.dumps({"canvas_id": canvas_id}, ensure_ascii=False))
+    return {"page": page, "personal_revision": personal_revision}
 
 
 def load_canvas(canvas_id: str) -> dict:
@@ -642,6 +717,11 @@ async def api_save(canvas_id: str, request: Request):
 @router.post("/{canvas_id}/unshare")
 def api_unshare(canvas_id: str, request: Request):
     return unshare_canvas(_user(request), canvas_id)
+
+
+@router.post("/{canvas_id}/copy")
+def api_copy(canvas_id: str, request: Request):
+    return copy_to_personal(_user(request), canvas_id)
 
 
 @router.post("/{canvas_id}/heartbeat")
