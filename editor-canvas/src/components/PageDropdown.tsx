@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   Check,
+  Copy,
   Plus,
   Trash2,
   Edit2,
@@ -21,14 +22,14 @@ import { confirmAction } from '../utils/confirm'
 import { useCanvasStore } from '../store/canvasStore'
 import { useAIOperationStore } from '../store/aiOperationStore'
 import { useTeamStore, type TeamCanvasMeta } from '../store/teamStore'
-import { shareCanvasPage, unshareTeamCanvas } from '../services/teamCanvasService'
+import { copyTeamCanvas, shareCanvasPage, unshareTeamCanvas } from '../services/teamCanvasService'
 import { refreshTeamCanvases } from '../useTeamCanvasSync'
 import type { CanvasPage } from '../types'
 
 const currentUserId = new URLSearchParams(window.location.search).get('user_id') || ''
 
 // 分享、复制前等本地修改落盘，服务端才能拿到这页的最新内容
-export function waitUntilSaved(action = '分享', timeoutMs = 10000) {
+function waitUntilSaved(action = '分享', timeoutMs = 10000) {
   const started = Date.now()
   return new Promise<void>((resolve, reject) => {
     const check = () => {
@@ -202,6 +203,30 @@ export function PageDropdown() {
     }
   }
 
+  const handleCopy = async (canvas: TeamCanvasMeta) => {
+    if (useAIOperationStore.getState().state.status === 'running') {
+      feedback.show('有 AI 任务正在进行，完成后再复制', { tone: 'warn', key: 'team-copy' })
+      return
+    }
+    setTeamBusyId(`copy:${canvas.id}`)
+    try {
+      await waitUntilSaved('复制')
+      const { page } = await copyTeamCanvas(canvas.id)
+      // 服务端已把副本写入个人画布：正打开个人画布时重新加载并留在当前页，否则切回时才会加载，这里只更新列表
+      if (useTeamStore.getState().source.kind === 'personal') {
+        requestOpen({ kind: 'personal', pageId: useCanvasStore.getState().activePageId, reload: true })
+      } else {
+        useTeamStore.setState((s) => ({ personalPages: [...s.personalPages, page] }))
+      }
+      feedback.show(`已复制到个人画布「${page.name}」`, { tone: 'ok', key: 'team-copy' })
+      setIsOpen(false)
+    } catch (error) {
+      notifyError(error, '暂时无法复制，请稍后再试。', { key: 'team-copy' })
+    } finally {
+      setTeamBusyId(null)
+    }
+  }
+
   const renderTeamItem = (canvas: TeamCanvasMeta) => {
     const isActive = source.kind === 'team' && source.id === canvas.id
     const isEditing = editingPageId === canvas.page_id
@@ -258,21 +283,36 @@ export function PageDropdown() {
             </>
           )}
         </div>
-        {isOwner && !isEditing && (
+        {!isEditing && (
           <div className="canvas-item-actions" onClick={(e) => e.stopPropagation()}>
             <button
               type="button"
               disabled={teamBusyId !== null}
-              onClick={() => handleUnshare(canvas)}
+              onClick={() => handleCopy(canvas)}
               style={iconButtonStyle}
               onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
               onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-              title="取消分享，画布回到我的个人画布"
+              title="复制到我的个人画布，取消分享后副本仍然保留"
             >
-              {teamBusyId === canvas.id
+              {teamBusyId === `copy:${canvas.id}`
                 ? <Loader2 size={12} color="#64748b" style={{ animation: 'spin 1s linear infinite' }} />
-                : <Link2Off size={12} strokeWidth={1.8} color="#64748b" />}
+                : <Copy size={12} strokeWidth={1.8} color="#64748b" />}
             </button>
+            {isOwner && (
+              <button
+                type="button"
+                disabled={teamBusyId !== null}
+                onClick={() => handleUnshare(canvas)}
+                style={iconButtonStyle}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                title="取消分享，画布回到我的个人画布"
+              >
+                {teamBusyId === canvas.id
+                  ? <Loader2 size={12} color="#64748b" style={{ animation: 'spin 1s linear infinite' }} />
+                  : <Link2Off size={12} strokeWidth={1.8} color="#64748b" />}
+              </button>
+            )}
           </div>
         )}
       </div>
