@@ -129,6 +129,7 @@ from .team_canvas import (
     can_view_shared_asset,
     copy_asset_to_user,
     init_team_canvas_tables,
+    is_foreign_asset,
     is_shared_canvas_asset,
     is_super_admin,
 )
@@ -6489,7 +6490,6 @@ def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[
     if not isinstance(snapshot, dict):
         return []
 
-    prefix = "/ai-images/"
     foreign: list[str] = []
 
     # 兼容新版无限画布格式 (version 2)
@@ -6500,17 +6500,7 @@ def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[
             raw_url = str(im.get("url") or im.get("src") or "").strip()
             if not raw_url:
                 continue
-            try:
-                path = urlsplit(raw_url).path if "://" in raw_url else raw_url.split("?", 1)[0]
-            except Exception:
-                path = raw_url
-            if not path.startswith(prefix):
-                continue
-            after_prefix = path[len(prefix):]
-            if "/" not in after_prefix:
-                continue
-            owner = unquote(after_prefix.split("/", 1)[0])
-            if owner and owner != user_id:
+            if is_foreign_asset(_editor_asset_path(raw_url), user_id):
                 foreign.append(raw_url)
         return foreign
 
@@ -6526,17 +6516,7 @@ def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[
             continue
         props = record.get("props")
         src = str(props.get("src") or "") if isinstance(props, dict) else ""
-        try:
-            path = urlsplit(src).path if "://" in src else src.split("?", 1)[0]
-        except Exception:
-            path = src
-        if not path.startswith(prefix):
-            continue
-        after_prefix = path[len(prefix):]
-        if "/" not in after_prefix:
-            continue
-        owner = unquote(after_prefix.split("/", 1)[0])
-        if owner and owner != user_id:
+        if is_foreign_asset(_editor_asset_path(src), user_id):
             foreign.append(src)
     return foreign
 

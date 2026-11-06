@@ -37,13 +37,13 @@ class OutputAccessTest(unittest.IsolatedAsyncioTestCase):
         for rel in (f"results/{SPECIAL}/frame_0.png", f"{JOB}.png", f"{JOB}_grid_00.png",
                     "agent2-uploads/owner/session/a.png", "agent2-uploads/outsider/session/mine.png",
                     "proxy-downloads/old.png", "psd/owner/a.png", "thumbnails/t.png", "stray.png",
-                    "results/orphan/frame_0.png"):
+                    "results/orphan/frame_0.png", "ai-images/flat.png"):
             self.write_file(rel)
         for rel in (".task-locks/lock", "editor-snapshot-rejected/owner-1.json"):
             path = self.output / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("{}", encoding="utf-8")
-        mounts = {route.name: route.app for route in main.app.routes if getattr(route, "name", "") in ("results", "output")}
+        mounts = {route.name: route.app for route in main.app.routes if getattr(route, "name", "") in ("results", "output", "ai-images")}
         for patcher in (
             patch.object(job_store, "_DB_PATH", root / "jobs.db"),
             patch.object(main.settings, "output_path", self.output),
@@ -51,6 +51,7 @@ class OutputAccessTest(unittest.IsolatedAsyncioTestCase):
             patch.object(team_canvas.settings, "allowed_login_users", list(USERS.values())),
             patch.object(mounts["results"], "all_directories", [str(self.output / "results")]),
             patch.object(mounts["output"], "all_directories", [str(self.output)]),
+            patch.object(mounts["ai-images"], "all_directories", [str(self.output / "ai-images")]),
             patch.object(main, "_get_session_user", side_effect=lambda request: USERS.get(
                 request.cookies.get("designflow_session"))),
         ):
@@ -166,6 +167,59 @@ class OutputAccessTest(unittest.IsolatedAsyncioTestCase):
         for url in urls:
             with self.subTest(url=url, unshared=True):
                 self.assertIn(await self.status(MEMBER, url), (403, 404))
+
+    async def save_personal(self, user: dict, urls: tuple[str, ...]) -> httpx.Response:
+        doc = {"version": 2, "pages": [{"id": "m1", "name": "我的"}], "activePageId": "m1", "frames": [], "texts": [],
+               "groups": [], "images": [{"id": f"c{index}", "pageId": "m1", "url": url, "x": 0, "y": 0, "width": 4, "height": 4}
+                                        for index, url in enumerate(urls)]}
+        async with self.client(user) as client:
+            return await client.post(f"/editor/snapshot?user_id={user['id']}", json={"snapshot": doc})
+
+    async def test_foreign_file_saved_to_personal_canvas_survives_unshare_and_can_be_reshared(self) -> None:
+        urls = (RESULT, ROOT_FILE, UPLOAD, f"/compose/{JOB}/image", f"/export/grid/{JOB}/00")
+        canvas_id = self.share_with_member(*urls)
+        response = await self.save_personal(MEMBER, urls)
+        self.assertEqual(response.status_code, 200, response.text)
+        rewritten = response.json()["rewritten_urls"]
+        self.assertEqual(set(rewritten), set(urls))
+        for copied in rewritten.values():
+            self.assertTrue(copied.startswith("/ai-images/member/team-imports/"), copied)
+        raw, _ = job_store.load_editor_snapshot("member")
+        self.assertEqual({im["url"] for im in team_canvas._personal_v2(raw)["images"]}, set(rewritten.values()))
+
+        team_canvas.unshare_canvas(OWNER, canvas_id)
+        self.assertEqual(await self.status(MEMBER, RESULT), 404)
+        for copied in rewritten.values():
+            with self.subTest(copied=copied):
+                self.assertEqual(await self.status(MEMBER, copied), 200)
+                self.assertEqual(await self.status(OUTSIDER, copied), 404)
+        self.assertTrue(team_canvas.share_page(MEMBER, "m1", ["outsider"])["canvas"]["id"])
+        for copied in rewritten.values():
+            with self.subTest(copied=copied, reshared=True):
+                self.assertEqual(await self.status(OUTSIDER, copied), 200)
+
+    async def test_personal_canvas_rejects_foreign_file_that_is_not_shared(self) -> None:
+        for url in (RESULT, f"/output/results/{SPECIAL}/frame_0.png", ROOT_FILE, UPLOAD, f"/compose/{JOB}/image", f"/export/grid/{JOB}/00"):
+            with self.subTest(url=url):
+                self.assertEqual((await self.save_personal(OUTSIDER, (url,))).status_code, 409)
+        response = await self.save_personal(OWNER, (RESULT, ROOT_FILE, UPLOAD))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json().get("rewritten_urls", {}), {})
+
+    async def test_unsharing_and_copying_canvas_keep_other_members_files(self) -> None:
+        canvas_id = self.share_with_member("/ai-images/flat.png")
+        doc = team_canvas.load_canvas(MEMBER, canvas_id)["snapshot"]
+        doc["images"].append({**doc["images"][0], "id": "m1", "url": "/output/agent2-uploads/member/s/m.png"})
+        self.write_file("agent2-uploads/member/s/m.png")
+        self.assertTrue(team_canvas.save_canvas(MEMBER, canvas_id, doc, 1, "update")[0])
+        copied = "/ai-images/outsider/team-imports/agent2-uploads/member/s/m.png"
+        self.assertEqual(team_canvas.copy_asset_to_user("/output/agent2-uploads/member/s/m.png", "outsider"), copied)
+        self.assertEqual(team_canvas.copy_asset_to_user(UPLOAD, "owner"), None)
+        team_canvas.unshare_canvas(OWNER, canvas_id)
+        raw, _ = job_store.load_editor_snapshot("owner")
+        urls = {im["url"] for im in team_canvas._personal_v2(raw)["images"]}
+        self.assertIn("/ai-images/owner/team-imports/agent2-uploads/member/s/m.png", urls)
+        self.assertEqual(await self.status(OWNER, "/output/agent2-uploads/member/s/m.png"), 404)
 
     async def test_saving_foreign_file_into_canvas_does_not_grant_access(self) -> None:
         canvas_id = self.share_with_member("/ai-images/flat.png")
