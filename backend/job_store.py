@@ -686,6 +686,16 @@ def save_special_job(job) -> None:
         conn.commit()
 
 
+def load_job_owner_id(job_id: str) -> str | None:
+    """合成任务和特殊品任务的归属用户；查不到或没有归属时返回 None。"""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT user_id FROM jobs WHERE id = ? UNION ALL SELECT user_id FROM special_jobs WHERE id = ? LIMIT 1",
+            (job_id, job_id),
+        ).fetchone()
+    return row["user_id"] if row else None
+
+
 def load_special_job(job_id: str) -> dict | None:
     """Load the owner/status fields needed to authorize a persisted special result."""
     with _connect() as conn:

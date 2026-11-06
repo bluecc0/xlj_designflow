@@ -119,10 +119,17 @@ from .agent2.service import fail_stale_turns as agent2_fail_stale_turns
 from .agent2.tools import backfill_recovered_job as agent2_backfill_recovered_job
 from .agent2.tools import deliver_finished_jobs as agent2_deliver_finished_jobs
 from .agent2.store import init_tables as init_agent2_tables
+from .output_access import (
+    is_output_asset_owner,
+    output_asset_parts,
+    output_user_directory,
+    shareable_asset_urls,
+)
 from .team_canvas import (
     can_view_shared_asset,
     copy_asset_to_user,
     init_team_canvas_tables,
+    is_foreign_asset,
     is_shared_canvas_asset,
     is_super_admin,
 )
@@ -689,6 +696,20 @@ def _proxy_download_dir() -> Path:
     return path
 
 
+def _store_proxy_download(file_path: Path, filename: str, user_id: str) -> tuple[Path, str]:
+    """存到下载者自己的目录，返回文件路径和访问地址；直链按目录名校验归属。"""
+    owner_dir = output_user_directory(user_id)
+    target_dir = _proxy_download_dir() / owner_dir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    name = Path(filename)
+    target_path = target_dir / f"{uuid.uuid4().hex}_{name.stem}{name.suffix}"
+    if file_path.parent == _proxy_download_dir():
+        file_path.replace(target_path)
+    else:
+        target_path.write_bytes(file_path.read_bytes())
+    return target_path, f"/output/proxy-downloads/{quote(owner_dir)}/{quote(target_path.name)}"
+
+
 def _safe_download_filename(name: str) -> str:
     clean = "".join(ch if ch.isalnum() or ch in "._-()[] " else "_" for ch in (name or "download.bin")).strip()
     return clean or "download.bin"
@@ -788,7 +809,7 @@ def _resolve_public_asset_path(
         if not job:
             raise HTTPException(404, "图片文件不存在")
         if user is not None:
-            _assert_job_owner(job.user_id, user)
+            _assert_job_file_access(job.user_id, user, _compose_image_url(job_id))
         if job.status != ComposeStatus.done or not job.result_path:
             raise HTTPException(400, "合成任务尚未完成")
         candidate = Path(job.result_path).resolve()
@@ -803,6 +824,11 @@ def _resolve_public_asset_path(
     if grid_match:
         job_id = grid_match.group(1)
         index = int(grid_match.group(2))
+        if user is not None:
+            job = load_job(job_id)
+            if not job:
+                raise HTTPException(404, "图片文件不存在")
+            _assert_job_file_access(job.user_id, user, *_grid_image_urls(job_id, index))
         candidate = (settings.output_path / f"{job_id}_grid_{index:02d}.png").resolve()
         output_root = settings.output_path.resolve()
         if output_root not in candidate.parents and candidate != output_root:
@@ -829,8 +855,12 @@ def _resolve_public_asset_path(
             raise HTTPException(404, "图片文件不存在")
         # 按解析后的文件校验，/output/ai-images 这类别名也算；不带 user 的是内部调用或已验证的临时链接
         ai_root = (settings.output_path / "ai-images").resolve()
+        output_root = settings.output_path.resolve()
         if user is not None and ai_root in candidate.parents:
             if not _can_read_ai_image(candidate.relative_to(ai_root).parts, user):
+                raise HTTPException(404, "图片文件不存在")
+        elif user is not None and output_root in candidate.parents:
+            if not _can_read_output_asset(candidate.relative_to(output_root).parts, user):
                 raise HTTPException(404, "图片文件不存在")
         return candidate
     raise HTTPException(400, "只支持站内图片资源放大")
@@ -854,6 +884,13 @@ def _can_read_ai_image(parts: Sequence[str], user: dict) -> bool:
         return True
     path = "/ai-images/" + "/".join(parts)
     return can_view_shared_asset(path, user) or is_inspiration_asset(path)
+
+
+def _can_read_output_asset(parts: Sequence[str], user: dict) -> bool:
+    """parts 是输出目录下 ai-images 以外的相对路径。本人、admin 账号、所在共享画布的成员可以读，其余一律拒绝。"""
+    if is_super_admin(user) or is_output_asset_owner(parts, str(user.get("id") or "")):
+        return True
+    return any(can_view_shared_asset(url, user) for url in shareable_asset_urls(parts))
 
 
 def _assert_strict_asset_owner(owner_id: str | None, user: dict, path: str | None = None) -> None:
@@ -2150,6 +2187,21 @@ def _assert_job_owner(job_user_id: Optional[str], user: dict) -> None:
         raise HTTPException(403, "无权访问其他人的任务")
 
 
+def _assert_job_file_access(job_user_id: Optional[str], user: dict, *canvas_urls: str) -> None:
+    """任务所有者和管理员可以读；文件在共享画布上时，画布成员也可以读。"""
+    if not any(can_view_shared_asset(url, user) for url in canvas_urls):
+        _assert_job_owner(job_user_id, user)
+
+
+def _compose_image_url(job_id: str) -> str:
+    return f"/compose/{job_id}/image"
+
+
+def _grid_image_urls(job_id: str, index: int) -> tuple[str, str]:
+    """前端写的是补零的序号，接口两种写法都接受。"""
+    return f"/export/grid/{job_id}/{index:02d}", f"/export/grid/{job_id}/{index}"
+
+
 def _ai_image_asset_parts(path: str) -> list[str] | None:
     """把请求路径按静态文件服务的解析方式归一化，返回 ai-images 目录下的相对路径；其他路径返回 None。
 
@@ -2197,13 +2249,21 @@ async def attach_user_context(request: Request, call_next):
                 )
             return JSONResponse({"detail": "请先输入名字进入系统"}, status_code=401)
     # 用 scope 里的路径：静态文件服务按它取文件，request.url.path 遇到 %3F 这类字符会被截断
-    ai_image_parts = _ai_image_asset_parts(request.scope.get("path") or path)
+    scope_path = request.scope.get("path") or path
+    ai_image_parts = _ai_image_asset_parts(scope_path)
     if (
         ai_image_parts is not None
         and request.state.user is not None
         and not _can_read_ai_image(ai_image_parts, request.state.user)
     ):
         return JSONResponse({"detail": "图片不存在"}, status_code=404)
+    asset_parts = output_asset_parts(scope_path)
+    if (
+        asset_parts is not None
+        and request.state.user is not None
+        and not _can_read_output_asset(asset_parts, request.state.user)
+    ):
+        return JSONResponse({"detail": "文件不存在"}, status_code=404)
     try:
         response = await call_next(request)
     except Exception:
@@ -2676,15 +2736,7 @@ async def proxy_download_download(body: ProxyDownloadRequest, request: Request):
             meta,
         )
         raise HTTPException(502, f"下载格式不匹配：选择的是 {body.format}，但实际文件是 {filename}")
-    file_path = Path(path)
-    if file_path.parent != _proxy_download_dir():
-        stem = Path(filename).stem
-        ext = Path(filename).suffix
-        target_name = f"{uuid.uuid4().hex}_{stem}{ext}"
-        target_path = _proxy_download_dir() / target_name
-        target_path.write_bytes(file_path.read_bytes())
-    else:
-        target_path = file_path
+    target_path, file_url = _store_proxy_download(Path(path), filename, user["id"])
     logger.info(
         "[proxy-download:%s] download done elapsed=%.2fs filename=%s size=%s",
         request_id,
@@ -2698,8 +2750,8 @@ async def proxy_download_download(body: ProxyDownloadRequest, request: Request):
         "filename": filename,
         "size": target_path.stat().st_size,
         "format": body.format or "",
-        "file_url": f"/output/proxy-downloads/{quote(target_path.name)}",
-        "download_url": f"/output/proxy-downloads/{quote(target_path.name)}",
+        "file_url": file_url,
+        "download_url": file_url,
         "user_id": user["id"],
     }
 
@@ -3139,7 +3191,7 @@ def download_image(job_id: str, request: Request):
         job = load_job(job_id)
     if not job:
         raise HTTPException(404, f"任务不存在: {job_id}")
-    _assert_job_owner(job.user_id, user)
+    _assert_job_file_access(job.user_id, user, _compose_image_url(job_id))
     if job.status != ComposeStatus.done or not job.result_path:
         raise HTTPException(400, f"任务尚未完成: {job.status}")
     path = Path(job.result_path)
@@ -3216,14 +3268,16 @@ def mcp_status():
 
 
 @app.post("/export/grid")
-def export_grid(req: GridExportRequest):
+def export_grid(req: GridExportRequest, request: Request):
     """
     将合成结果图切成 rows × cols 的九宫格，返回各格子路径列表。
     """
+    user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(req.job_id)
     if not job:
         raise HTTPException(404, f"任务不存在: {req.job_id}")
+    _assert_job_owner(job.user_id, user)
     if job.status != ComposeStatus.done or not job.result_path:
         raise HTTPException(400, f"任务尚未完成: {job.status}")
 
@@ -3236,8 +3290,16 @@ def export_grid(req: GridExportRequest):
 
 
 @app.get("/export/grid/{job_id}/{index}")
-def download_grid_cell(job_id: str, index: int):
+def download_grid_cell(job_id: str, index: int, request: Request):
     """下载九宫格中某一格"""
+    user = _current_user(request)
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        job = load_job(job_id)
+    if not job:
+        raise HTTPException(404, "格子图片不存在，请先调用 /export/grid")
+    _assert_job_file_access(job.user_id, user, *_grid_image_urls(job_id, index))
     path = settings.output_path / f"{job_id}_grid_{index:02d}.png"
     if not path.exists():
         raise HTTPException(404, "格子图片不存在，请先调用 /export/grid")
@@ -3509,7 +3571,7 @@ def download_special_image(job_id: str, frame_file: str, request: Request):
 
 
 @app.get("/special-compose/{job_id}/download-zip")
-def download_special_zip(job_id: str, names: str = ""):
+def download_special_zip(job_id: str, request: Request, names: str = ""):
     """
     将特殊品合成所有图片打包成 zip 下载。
     新任务使用合成时从模板读取并保存的真实画板名；其中 sku 占位符替换为真实 SKU。
@@ -3517,11 +3579,13 @@ def download_special_zip(job_id: str, names: str = ""):
     """
     import zipfile, io
 
+    user = _current_user(request)
     with _jobs_lock:
         job = _jobs.get(job_id)
     job = load_special_job_model(job_id, legacy_kind="special") or job
     if not job or not isinstance(job, SpecialComposeJob):
         raise HTTPException(404, f"任务不存在: {job_id}")
+    _assert_job_owner(job.user_id, user)
     if job.status != ComposeStatus.done:
         raise HTTPException(400, f"任务尚未完成: {job.status}")
 
@@ -6426,7 +6490,6 @@ def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[
     if not isinstance(snapshot, dict):
         return []
 
-    prefix = "/ai-images/"
     foreign: list[str] = []
 
     # 兼容新版无限画布格式 (version 2)
@@ -6437,17 +6500,7 @@ def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[
             raw_url = str(im.get("url") or im.get("src") or "").strip()
             if not raw_url:
                 continue
-            try:
-                path = urlsplit(raw_url).path if "://" in raw_url else raw_url.split("?", 1)[0]
-            except Exception:
-                path = raw_url
-            if not path.startswith(prefix):
-                continue
-            after_prefix = path[len(prefix):]
-            if "/" not in after_prefix:
-                continue
-            owner = unquote(after_prefix.split("/", 1)[0])
-            if owner and owner != user_id:
+            if is_foreign_asset(_editor_asset_path(raw_url), user_id):
                 foreign.append(raw_url)
         return foreign
 
@@ -6463,17 +6516,7 @@ def _editor_snapshot_foreign_asset_urls(snapshot: object, user_id: str) -> list[
             continue
         props = record.get("props")
         src = str(props.get("src") or "") if isinstance(props, dict) else ""
-        try:
-            path = urlsplit(src).path if "://" in src else src.split("?", 1)[0]
-        except Exception:
-            path = src
-        if not path.startswith(prefix):
-            continue
-        after_prefix = path[len(prefix):]
-        if "/" not in after_prefix:
-            continue
-        owner = unquote(after_prefix.split("/", 1)[0])
-        if owner and owner != user_id:
+        if is_foreign_asset(_editor_asset_path(src), user_id):
             foreign.append(src)
     return foreign
 
