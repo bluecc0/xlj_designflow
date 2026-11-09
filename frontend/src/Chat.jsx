@@ -231,8 +231,10 @@ const ChatTimer = ({ startedAt }) => {
 
 const Avatar = ({ who, user }) => {
   const [imgFailed, setImgFailed] = React.useState(false);
-  const username = user && user.username ? user.username : '';
-  const avatarUrl = username ? (window.API_BASE || window.location.origin) + '/avatars/' + encodeURIComponent(username) + '.png' : '';
+  const username = user ? (user.nickname || user.username || '') : '';
+  // 头像地址带版本号，个人设置里换头像后立即生效
+  const avatarUrl = user && user.avatar_url ? user.avatar_url : '';
+  React.useEffect(function() { setImgFailed(false); }, [avatarUrl]);
 
   if (who === 'ai') {
     return (
@@ -261,7 +263,7 @@ const Avatar = ({ who, user }) => {
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
       ) : (
-        username ? username[0] : '我'
+        username ? username[0].toUpperCase() : '我'
       )}
     </div>
   );
@@ -871,7 +873,7 @@ const pickAgentGreeting = function(name, now) {
 
 const AgentWelcome = ({ skillProps, user }) => {
   // Agent 模式专属欢迎页 —— 简约版
-  var name = user ? String(user.display_name || user.username || '').trim() : '';
+  var name = user ? String(user.nickname || user.username || '').trim() : '';
   var title = React.useMemo(function() { return pickAgentGreeting(name, new Date()); }, [name]);
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1877,14 +1879,15 @@ const DEFAULT_COMPOSER_MODE = 'gpt-image-2.6';
 
 const NO_SKILLS = [];
 
-const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection, agentSkills: agentSkillsProp }) => {
+const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, template, lastSubmittedMessage, agentEnabled, onToggleAgent, resetKey, onRequestSpecialTemplate, seedPrompt, onSeedConsumed, canvasReferenceSelection, agentSkills: agentSkillsProp, preferences }) => {
   const agentSkills = agentSkillsProp || NO_SKILLS;
+  const prefs = preferences || {};
   const [text, setText] = React.useState('');
-  const [selectedMode, setSelectedMode] = React.useState(DEFAULT_COMPOSER_MODE);
+  const [selectedMode, setSelectedMode] = React.useState(prefs.default_model || DEFAULT_COMPOSER_MODE);
   const [files, setFiles] = React.useState([]);
   const [imageType, setImageType] = React.useState('png');
-  const [aiRatio, setAiRatio] = React.useState('auto');
-  const [aiQuality, setAiQuality] = React.useState('1K');
+  const [aiRatio, setAiRatio] = React.useState(prefs.default_ratio || 'auto');
+  const [aiQuality, setAiQuality] = React.useState(prefs.default_resolution || '1K');
   const [aiVariant, setAiVariant] = React.useState('flare');
   const [aiQualityTier, setAiQualityTier] = React.useState('auto');
   const [aiProvider, setAiProvider] = React.useState('auto');
@@ -2662,7 +2665,12 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
       restoreMessage(lastSubmittedMessage);
       return;
     }
+    // 输入法选词时按的 Enter 只是确认上屏，不能发送
+    if (e.key === 'Enter' && (e.nativeEvent.isComposing || e.keyCode === 229)) return;
     if (e.key === 'Enter' && !e.shiftKey) {
+      const modPressed = e.metaKey || e.ctrlKey;
+      // Ctrl/⌘+Enter 两种模式下都发送；选了 Ctrl+Enter 发送时，单按 Enter 交给输入框换行
+      if (prefs.send_shortcut === 'mod_enter' && !modPressed) return;
       e.preventDefault();
       handleSend();
     }
@@ -5787,7 +5795,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
           throw new Error(err.detail || '设置头像失败');
         }
         const data = await res.json();
-        setMessages(msgs => [...msgs, { who: 'ai', text: '头像设置成功！刷新页面后生效。' }]);
+        setMessages(msgs => [...msgs, { who: 'ai', text: '头像设置成功，刷新页面后生效。以后也可以在右上角菜单的「个人设置」里更换。' }]);
       } catch (e) {
         setMessages(msgs => [...msgs, { who: 'ai', feedbackAt: Date.now(), feedbackError: e.message, text: formatAiImageError(e.message) }]);
       }
@@ -6789,6 +6797,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         onSeedConsumed={handleComposerSeedConsumed}
         canvasReferenceSelection={canvasReferenceSelection}
         agentSkills={agentSkills}
+        preferences={user && user.preferences}
       />
     </div>
   );

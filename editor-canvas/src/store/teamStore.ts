@@ -26,6 +26,7 @@ export interface TeamCanvasMeta {
 export interface TeamViewer {
   id: string
   name: string
+  avatar_url?: string
 }
 
 interface TeamStore {

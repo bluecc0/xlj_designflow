@@ -19,6 +19,7 @@ BABEL_FILES = [
     "src/Icons.jsx",
     "src/Utils.jsx",
     "src/Overlays.jsx",
+    "src/PersonalSettings.jsx",
     "src/TopBar.jsx",
     "src/TemplatePanel.jsx",
     "src/Canvas.jsx",

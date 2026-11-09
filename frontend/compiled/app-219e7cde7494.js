@@ -756,6 +756,714 @@ const OverlayHost = ({
 };
 window.OverlayHost = OverlayHost;
 
+// src/PersonalSettings.jsx
+// Personal settings: avatar, nickname, send shortcut, default image options and password.
+// Usage: <UserAvatar user={user} size={22}/>, <PersonalSettingsModal user={user} onClose onUserChange/>
+
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || '');
+const MOD_KEY_LABEL = IS_MAC ? '⌘' : 'Ctrl';
+const DEFAULT_MODEL_OPTIONS = [['gpt-image-2.6', 'GPT Image 2.6'], ['gpt-image-2', 'GPT Image 2'], ['nano-banana-pro', 'Nano Banana Pro'], ['nano-banana-2.1', 'Nano Banana 2.1'], ['seedream-5-0-flash', 'Seedream 5.0']];
+const DEFAULT_RATIO_OPTIONS = [['auto', '自动'], ['1:1', '1:1'], ['3:4', '3:4'], ['4:3', '4:3'], ['2:3', '2:3'], ['3:2', '3:2'], ['9:16', '9:16'], ['16:9', '16:9'], ['5:4', '5:4']];
+const DEFAULT_RESOLUTION_OPTIONS = [['1K', '1K'], ['2K', '2K'], ['4K', '4K']];
+const userDisplayName = function (user) {
+  // 自己界面上显示昵称，没设置就用登录名；真实姓名只给同事和管理后台看
+  return user && (user.nickname || user.username) || '';
+};
+const UserAvatar = ({
+  user,
+  size,
+  radius
+}) => {
+  const [failed, setFailed] = React.useState(false);
+  const src = user && user.avatar_url ? user.avatar_url : '';
+  React.useEffect(function () {
+    setFailed(false);
+  }, [src]);
+  const dim = size || 22;
+  return /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: dim,
+      height: dim,
+      borderRadius: radius == null ? Math.round(dim * 0.28) : radius,
+      flexShrink: 0,
+      display: 'grid',
+      placeItems: 'center',
+      overflow: 'hidden',
+      fontSize: Math.max(10, Math.round(dim * 0.45)),
+      fontWeight: 600,
+      background: 'var(--accent-soft)',
+      color: 'var(--accent-ink)'
+    }
+  }, src && !failed ? /*#__PURE__*/React.createElement("img", {
+    src: src,
+    alt: "",
+    onError: function () {
+      setFailed(true);
+    },
+    style: {
+      width: '100%',
+      height: '100%',
+      objectFit: 'cover'
+    }
+  }) : userDisplayName(user).slice(0, 1).toUpperCase());
+};
+const settingsInputStyle = {
+  height: 32,
+  padding: '0 10px',
+  borderRadius: 8,
+  border: '1px solid var(--line)',
+  background: 'var(--panel)',
+  color: 'var(--ink)',
+  fontSize: 12,
+  outline: 'none',
+  boxSizing: 'border-box',
+  fontFamily: 'inherit'
+};
+const settingsButtonStyle = function (primary) {
+  return {
+    height: 32,
+    padding: '0 14px',
+    borderRadius: 8,
+    fontSize: 12,
+    fontWeight: primary ? 600 : 400,
+    cursor: 'pointer',
+    border: '1px solid ' + (primary ? 'var(--ink)' : 'var(--line)'),
+    background: primary ? 'var(--ink)' : 'var(--panel)',
+    color: primary ? 'white' : 'var(--ink-2)',
+    whiteSpace: 'nowrap'
+  };
+};
+const SettingsSection = ({
+  title,
+  children
+}) => /*#__PURE__*/React.createElement("section", {
+  style: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+    padding: '16px 0',
+    borderTop: '1px solid var(--line-2)'
+  }
+}, /*#__PURE__*/React.createElement("div", {
+  style: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: 'var(--ink-3)',
+    letterSpacing: '0.04em'
+  }
+}, title), children);
+const SettingsRow = ({
+  label,
+  hint,
+  children
+}) => /*#__PURE__*/React.createElement("div", {
+  style: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    minHeight: 32
+  }
+}, /*#__PURE__*/React.createElement("div", {
+  style: {
+    flex: 1,
+    minWidth: 0
+  }
+}, /*#__PURE__*/React.createElement("div", {
+  style: {
+    fontSize: 12,
+    color: 'var(--ink)'
+  }
+}, label), hint && /*#__PURE__*/React.createElement("div", {
+  style: {
+    fontSize: 11,
+    color: 'var(--ink-3)',
+    marginTop: 2,
+    lineHeight: 1.5
+  }
+}, hint)), children);
+const SettingsSegmented = ({
+  value,
+  options,
+  onChange,
+  disabled
+}) => /*#__PURE__*/React.createElement("div", {
+  role: "radiogroup",
+  style: {
+    display: 'flex',
+    padding: 2,
+    borderRadius: 8,
+    background: 'var(--panel-2)',
+    border: '1px solid var(--line-2)'
+  }
+}, options.map(function (item) {
+  const active = value === item[0];
+  return /*#__PURE__*/React.createElement("button", {
+    key: item[0],
+    type: "button",
+    role: "radio",
+    "aria-checked": active,
+    disabled: disabled,
+    onClick: function () {
+      if (!active) onChange(item[0]);
+    },
+    style: {
+      height: 26,
+      padding: '0 10px',
+      border: 0,
+      borderRadius: 6,
+      fontSize: 12,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      background: active ? 'var(--panel)' : 'transparent',
+      color: active ? 'var(--ink)' : 'var(--ink-3)',
+      fontWeight: active ? 600 : 400,
+      boxShadow: active ? '0 1px 2px rgba(0,0,0,0.08)' : 'none'
+    }
+  }, item[1]);
+}));
+const SettingsSelect = ({
+  value,
+  options,
+  onChange,
+  disabled,
+  label
+}) => /*#__PURE__*/React.createElement("select", {
+  "aria-label": label,
+  value: value,
+  disabled: disabled,
+  onChange: function (e) {
+    onChange(e.target.value);
+  },
+  style: Object.assign({}, settingsInputStyle, {
+    width: 150,
+    cursor: 'pointer'
+  })
+}, options.map(function (item) {
+  return /*#__PURE__*/React.createElement("option", {
+    key: item[0],
+    value: item[0]
+  }, item[1]);
+}));
+
+// 保存动作与 React 解耦：每次都从最新的用户对象合并，几个设置并行保存时，
+// 先返回的响应不会用旧快照覆盖别处刚保存的头像、昵称或偏好。
+// onUserChange 接收 updater(prev)；getUser 返回当前界面上的用户对象。
+const createPersonalSettingsActions = function ({
+  api,
+  getUser,
+  onUserChange
+}) {
+  const merge = function (patch) {
+    onUserChange(function (prev) {
+      return Object.assign({}, prev, patch);
+    });
+  };
+  // 只在这个设置项仍是本次请求写入的值时才改它，避免回写覆盖之后的新选择
+  const setPreferenceIf = function (key, expected, next) {
+    onUserChange(function (prev) {
+      const prefs = prev && prev.preferences || {};
+      if (prefs[key] !== expected) return prev;
+      return Object.assign({}, prev, {
+        preferences: Object.assign({}, prefs, {
+          [key]: next
+        })
+      });
+    });
+  };
+  return {
+    uploadAvatar: async function (file) {
+      merge({
+        avatar_url: await api.uploadAvatar(file)
+      });
+    },
+    removeAvatar: async function () {
+      await api.deleteAvatar();
+      merge({
+        avatar_url: ''
+      });
+    },
+    saveNickname: async function (nickname) {
+      const next = await api.saveProfile({
+        nickname: nickname
+      });
+      merge({
+        nickname: next.nickname || ''
+      });
+      return next.nickname || '';
+    },
+    savePreference: async function (key, value) {
+      const current = getUser();
+      const previous = (current && current.preferences || {})[key];
+      onUserChange(function (prev) {
+        const prefs = prev && prev.preferences || {};
+        return Object.assign({}, prev, {
+          preferences: Object.assign({}, prefs, {
+            [key]: value
+          })
+        });
+      });
+      try {
+        const saved = await api.savePreferences({
+          [key]: value
+        });
+        setPreferenceIf(key, value, saved && saved[key] !== undefined ? saved[key] : value);
+      } catch (err) {
+        setPreferenceIf(key, value, previous);
+        throw err;
+      }
+    }
+  };
+};
+const PersonalSettingsModal = ({
+  user,
+  onClose,
+  onUserChange
+}) => {
+  const prefs = user && user.preferences || {};
+  const [nickname, setNickname] = React.useState(user && user.nickname || '');
+  const [savingName, setSavingName] = React.useState(false);
+  const [avatarBusy, setAvatarBusy] = React.useState(false);
+  const [savingPrefs, setSavingPrefs] = React.useState({});
+  const [passwordOpen, setPasswordOpen] = React.useState(false);
+  const [oldPassword, setOldPassword] = React.useState('');
+  const [newPassword, setNewPassword] = React.useState('');
+  const [confirmPassword, setConfirmPassword] = React.useState('');
+  const [savingPassword, setSavingPassword] = React.useState(false);
+  const fileRef = React.useRef(null);
+  React.useEffect(function () {
+    const onKey = function (e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return function () {
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+  const userRef = React.useRef(user);
+  userRef.current = user;
+  const actions = React.useMemo(function () {
+    return createPersonalSettingsActions({
+      api: window.API,
+      getUser: function () {
+        return userRef.current;
+      },
+      onUserChange: onUserChange
+    });
+  }, [onUserChange]);
+  const pickAvatar = async function (e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    setAvatarBusy(true);
+    try {
+      await actions.uploadAvatar(file);
+      window.dfToast('头像已更新', {
+        tone: 'ok',
+        key: 'personal-settings'
+      });
+    } catch (err) {
+      window.dfError(err, '头像暂时无法上传，请换一张图片再试。', {
+        key: 'personal-settings'
+      });
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+  const removeAvatar = async function () {
+    setAvatarBusy(true);
+    try {
+      await actions.removeAvatar();
+    } catch (err) {
+      window.dfError(err, '头像暂时无法移除，请稍后再试。', {
+        key: 'personal-settings'
+      });
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+  const nameChanged = nickname.trim() !== (user && user.nickname || '');
+  const saveName = async function () {
+    setSavingName(true);
+    try {
+      setNickname(await actions.saveNickname(nickname));
+      window.dfToast('昵称已保存', {
+        tone: 'ok',
+        key: 'personal-settings'
+      });
+    } catch (err) {
+      window.dfError(err, '昵称暂时无法保存，请稍后再试。', {
+        key: 'personal-settings'
+      });
+    } finally {
+      setSavingName(false);
+    }
+  };
+  const savePref = async function (key, value) {
+    setSavingPrefs(function (prev) {
+      return Object.assign({}, prev, {
+        [key]: true
+      });
+    });
+    try {
+      await actions.savePreference(key, value);
+    } catch (err) {
+      window.dfError(err, '设置暂时无法保存，请稍后再试。', {
+        key: 'personal-settings'
+      });
+    } finally {
+      setSavingPrefs(function (prev) {
+        return Object.assign({}, prev, {
+          [key]: false
+        });
+      });
+    }
+  };
+  const passwordError = newPassword && newPassword !== newPassword.trim() ? '新密码首尾不能有空格' : newPassword && newPassword.length < 6 ? '新密码至少 6 位' : confirmPassword && confirmPassword !== newPassword ? '两次输入的新密码不一致' : '';
+  const canSavePassword = oldPassword && newPassword && confirmPassword && !passwordError && !savingPassword;
+  const savePassword = async function (e) {
+    e.preventDefault();
+    if (!canSavePassword) return;
+    setSavingPassword(true);
+    try {
+      await window.API.changePassword(oldPassword, newPassword);
+      setOldPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setPasswordOpen(false);
+      window.dfToast('密码已修改，其他设备需要重新登录', {
+        tone: 'ok',
+        key: 'personal-settings'
+      });
+    } catch (err) {
+      window.dfError(err, '密码暂时无法修改，请稍后再试。', {
+        key: 'personal-settings'
+      });
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+  const sendHint = prefs.send_shortcut === 'mod_enter' ? MOD_KEY_LABEL + '+Enter 发送，Enter 换行' : 'Enter 发送，Shift+Enter 换行';
+  return /*#__PURE__*/React.createElement("div", {
+    onMouseDown: function (e) {
+      if (e.target === e.currentTarget) onClose();
+    },
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 300,
+      background: 'rgba(15,23,42,0.24)',
+      display: 'grid',
+      placeItems: 'center',
+      padding: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": "\u4E2A\u4EBA\u8BBE\u7F6E",
+    style: {
+      width: 460,
+      maxWidth: '100%',
+      maxHeight: 'calc(100vh - 32px)',
+      overflowY: 'auto',
+      boxSizing: 'border-box',
+      borderRadius: 16,
+      padding: '18px 22px 6px',
+      background: 'var(--panel)',
+      border: '1px solid var(--line-2)',
+      boxShadow: '0 18px 50px rgba(15,23,42,0.18)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: 'var(--ink)'
+    }
+  }, "\u4E2A\u4EBA\u8BBE\u7F6E"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onClose,
+    "aria-label": "\u5173\u95ED\u4E2A\u4EBA\u8BBE\u7F6E",
+    style: {
+      width: 28,
+      height: 28,
+      borderRadius: 8,
+      border: 0,
+      background: 'transparent',
+      color: 'var(--ink-3)',
+      cursor: 'pointer',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement(I.close, {
+    size: 14
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14,
+      paddingBottom: 16
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    disabled: avatarBusy,
+    onClick: function () {
+      fileRef.current && fileRef.current.click();
+    },
+    title: "\u66F4\u6362\u5934\u50CF",
+    "aria-label": "\u66F4\u6362\u5934\u50CF",
+    style: {
+      padding: 0,
+      border: 0,
+      background: 'none',
+      cursor: avatarBusy ? 'wait' : 'pointer',
+      borderRadius: 18,
+      position: 'relative'
+    }
+  }, /*#__PURE__*/React.createElement(UserAvatar, {
+    user: user,
+    size: 56,
+    radius: 18
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      position: 'absolute',
+      right: -3,
+      bottom: -3,
+      width: 22,
+      height: 22,
+      borderRadius: 99,
+      display: 'grid',
+      placeItems: 'center',
+      background: 'var(--ink)',
+      color: 'white',
+      border: '2px solid var(--panel)'
+    }
+  }, /*#__PURE__*/React.createElement(I.image, {
+    size: 10
+  }))), /*#__PURE__*/React.createElement("input", {
+    ref: fileRef,
+    type: "file",
+    accept: "image/png,image/jpeg,image/webp",
+    onChange: pickAvatar,
+    style: {
+      display: 'none'
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: 'var(--ink)',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, userDisplayName(user)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-3)',
+      marginTop: 3
+    }
+  }, "\u767B\u5F55\u540D ", user && user.username, " \xB7 ", user && user.role === 'admin' ? '管理员' : '成员'), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      marginTop: 6,
+      fontSize: 11
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    disabled: avatarBusy,
+    onClick: function () {
+      fileRef.current && fileRef.current.click();
+    },
+    style: {
+      border: 0,
+      background: 'none',
+      padding: 0,
+      color: 'var(--accent-ink)',
+      cursor: 'pointer',
+      fontSize: 11
+    }
+  }, avatarBusy ? '处理中…' : user && user.avatar_url ? '更换头像' : '上传头像'), user && user.avatar_url && !avatarBusy && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: removeAvatar,
+    style: {
+      border: 0,
+      background: 'none',
+      padding: 0,
+      color: 'var(--ink-3)',
+      cursor: 'pointer',
+      fontSize: 11
+    }
+  }, "\u79FB\u9664")))), /*#__PURE__*/React.createElement(SettingsSection, {
+    title: "\u4E2A\u4EBA\u8D44\u6599"
+  }, /*#__PURE__*/React.createElement(SettingsRow, {
+    label: "\u6635\u79F0",
+    hint: "\u663E\u793A\u5728\u53F3\u4E0A\u89D2\u548C Agent \u6B22\u8FCE\u8BED\u4E2D"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: nickname,
+    maxLength: 40,
+    placeholder: user && user.username,
+    "aria-label": "\u6635\u79F0",
+    onChange: function (e) {
+      setNickname(e.target.value);
+    },
+    onKeyDown: function (e) {
+      if (e.key === 'Enter' && !e.nativeEvent.isComposing && nameChanged) saveName();
+    },
+    style: Object.assign({}, settingsInputStyle, {
+      width: 130
+    })
+  }), nameChanged && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    disabled: savingName,
+    onClick: saveName,
+    style: settingsButtonStyle(true)
+  }, savingName ? '保存中' : '保存')))), /*#__PURE__*/React.createElement(SettingsSection, {
+    title: "\u4F7F\u7528\u504F\u597D"
+  }, /*#__PURE__*/React.createElement(SettingsRow, {
+    label: "\u53D1\u9001\u65B9\u5F0F",
+    hint: sendHint
+  }, /*#__PURE__*/React.createElement(SettingsSegmented, {
+    value: prefs.send_shortcut || 'enter',
+    disabled: !!savingPrefs.send_shortcut,
+    options: [['enter', 'Enter'], ['mod_enter', MOD_KEY_LABEL + '+Enter']],
+    onChange: function (v) {
+      savePref('send_shortcut', v);
+    }
+  })), /*#__PURE__*/React.createElement(SettingsRow, {
+    label: "\u9ED8\u8BA4\u751F\u56FE\u6A21\u578B",
+    hint: "\u65B0\u6253\u5F00\u9875\u9762\u65F6 AI \u52A9\u624B\u9ED8\u8BA4\u9009\u4E2D\u7684\u6A21\u578B"
+  }, /*#__PURE__*/React.createElement(SettingsSelect, {
+    label: "\u9ED8\u8BA4\u751F\u56FE\u6A21\u578B",
+    value: prefs.default_model || 'gpt-image-2.6',
+    options: DEFAULT_MODEL_OPTIONS,
+    disabled: !!savingPrefs.default_model,
+    onChange: function (v) {
+      savePref('default_model', v);
+    }
+  })), /*#__PURE__*/React.createElement(SettingsRow, {
+    label: "\u9ED8\u8BA4\u753B\u9762\u6BD4\u4F8B"
+  }, /*#__PURE__*/React.createElement(SettingsSelect, {
+    label: "\u9ED8\u8BA4\u753B\u9762\u6BD4\u4F8B",
+    value: prefs.default_ratio || 'auto',
+    options: DEFAULT_RATIO_OPTIONS,
+    disabled: !!savingPrefs.default_ratio,
+    onChange: function (v) {
+      savePref('default_ratio', v);
+    }
+  })), /*#__PURE__*/React.createElement(SettingsRow, {
+    label: "\u9ED8\u8BA4\u6E05\u6670\u5EA6",
+    hint: "\u6A21\u578B\u4E0D\u652F\u6301\u65F6\u81EA\u52A8\u6362\u6210\u5B83\u652F\u6301\u7684\u6700\u63A5\u8FD1\u9009\u9879"
+  }, /*#__PURE__*/React.createElement(SettingsSegmented, {
+    value: prefs.default_resolution || '1K',
+    options: DEFAULT_RESOLUTION_OPTIONS,
+    disabled: !!savingPrefs.default_resolution,
+    onChange: function (v) {
+      savePref('default_resolution', v);
+    }
+  }))), /*#__PURE__*/React.createElement(SettingsSection, {
+    title: "\u8D26\u53F7\u5B89\u5168"
+  }, !passwordOpen ? /*#__PURE__*/React.createElement(SettingsRow, {
+    label: "\u767B\u5F55\u5BC6\u7801",
+    hint: "\u4FEE\u6539\u540E\uFF0C\u5176\u4ED6\u8BBE\u5907\u4E0A\u7684\u767B\u5F55\u4F1A\u5931\u6548"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: function () {
+      setPasswordOpen(true);
+    },
+    style: settingsButtonStyle(false)
+  }, "\u4FEE\u6539\u5BC6\u7801")) : /*#__PURE__*/React.createElement("form", {
+    onSubmit: savePassword,
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    autoComplete: "current-password",
+    placeholder: "\u5F53\u524D\u5BC6\u7801",
+    "aria-label": "\u5F53\u524D\u5BC6\u7801",
+    value: oldPassword,
+    onChange: function (e) {
+      setOldPassword(e.target.value);
+    },
+    style: settingsInputStyle,
+    autoFocus: true
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    autoComplete: "new-password",
+    placeholder: "\u65B0\u5BC6\u7801\uFF08\u81F3\u5C11 6 \u4F4D\uFF09",
+    "aria-label": "\u65B0\u5BC6\u7801",
+    value: newPassword,
+    onChange: function (e) {
+      setNewPassword(e.target.value);
+    },
+    style: settingsInputStyle
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    autoComplete: "new-password",
+    placeholder: "\u518D\u6B21\u8F93\u5165\u65B0\u5BC6\u7801",
+    "aria-label": "\u518D\u6B21\u8F93\u5165\u65B0\u5BC6\u7801",
+    value: confirmPassword,
+    onChange: function (e) {
+      setConfirmPassword(e.target.value);
+    },
+    style: settingsInputStyle
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 11,
+      color: 'var(--danger)'
+    }
+  }, passwordError), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: function () {
+      setPasswordOpen(false);
+      setOldPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    },
+    style: settingsButtonStyle(false)
+  }, "\u53D6\u6D88"), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    disabled: !canSavePassword,
+    style: Object.assign(settingsButtonStyle(true), {
+      opacity: canSavePassword ? 1 : 0.45
+    })
+  }, savingPassword ? '修改中' : '确认修改'))))));
+};
+window.UserAvatar = UserAvatar;
+window.PersonalSettingsModal = PersonalSettingsModal;
+window.userDisplayName = userDisplayName;
+window.DESIGNFLOW_MOD_KEY_LABEL = MOD_KEY_LABEL;
+window.createPersonalSettingsActions = createPersonalSettingsActions;
+
 // src/TopBar.jsx
 // Polls /health every 30s and renders compact status icons.
 
@@ -1024,9 +1732,11 @@ const InspirationCurveIcon = () => {
 const UserMenu = ({
   user,
   onSwitchUser,
-  onNavigate
+  onNavigate,
+  onUserChange
 }) => {
   const [open, setOpen] = React.useState(false);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const wrapRef = React.useRef(null);
   React.useEffect(() => {
     if (!open) return;
@@ -1043,7 +1753,7 @@ const UserMenu = ({
       window.removeEventListener('keydown', onKey);
     };
   }, [open]);
-  const name = user.display_name || user.username || '';
+  const name = user.nickname || user.username || '';
   const itemStyle = {
     width: '100%',
     height: 32,
@@ -1090,19 +1800,11 @@ const UserMenu = ({
       background: open ? 'var(--panel-2)' : 'transparent',
       border: '1px solid ' + (open ? 'var(--line)' : 'var(--line-2)')
     }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      width: 22,
-      height: 22,
-      borderRadius: 6,
-      display: 'grid',
-      placeItems: 'center',
-      fontSize: 11,
-      fontWeight: 600,
-      background: 'var(--accent-soft)',
-      color: 'var(--accent-ink)'
-    }
-  }, name.slice(0, 1).toUpperCase()), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement(UserAvatar, {
+    user: user,
+    size: 22,
+    radius: 6
+  }), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 12,
       color: 'var(--ink)',
@@ -1148,7 +1850,19 @@ const UserMenu = ({
       color: 'var(--ink-3)',
       marginTop: 2
     }
-  }, user.role === 'admin' ? '管理员' : '成员', user.display_name ? ' · ' + user.username : '')), user.role === 'admin' && onNavigate && /*#__PURE__*/React.createElement("button", {
+  }, user.role === 'admin' ? '管理员' : '成员', user.nickname ? ' · ' + user.username : '')), onUserChange && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    role: "menuitem",
+    style: itemStyle,
+    onMouseEnter: e => hover(e, true),
+    onMouseLeave: e => hover(e, false),
+    onClick: () => {
+      setOpen(false);
+      setSettingsOpen(true);
+    }
+  }, /*#__PURE__*/React.createElement(I.settings, {
+    size: 13
+  }), "\u4E2A\u4EBA\u8BBE\u7F6E"), user.role === 'admin' && onNavigate && /*#__PURE__*/React.createElement("button", {
     type: "button",
     role: "menuitem",
     style: itemStyle,
@@ -1178,11 +1892,16 @@ const UserMenu = ({
     onClick: logout
   }, /*#__PURE__*/React.createElement(I.user, {
     size: 13
-  }), "\u9000\u51FA\u767B\u5F55 / \u5207\u6362\u8D26\u53F7")));
+  }), "\u9000\u51FA\u767B\u5F55 / \u5207\u6362\u8D26\u53F7")), settingsOpen && /*#__PURE__*/React.createElement(PersonalSettingsModal, {
+    user: user,
+    onUserChange: onUserChange,
+    onClose: () => setSettingsOpen(false)
+  }));
 };
 const TopBar = ({
   user,
   onSwitchUser,
+  onUserChange,
   currentView,
   onNavigate,
   onOpenInspiration,
@@ -1380,7 +2099,8 @@ const TopBar = ({
   }, "\u7075\u611F"))), user && /*#__PURE__*/React.createElement(UserMenu, {
     user: user,
     onSwitchUser: onSwitchUser,
-    onNavigate: onNavigate
+    onNavigate: onNavigate,
+    onUserChange: onUserChange
   })));
 };
 window.TopBar = TopBar;
@@ -3562,8 +4282,12 @@ const Avatar = ({
   user
 }) => {
   const [imgFailed, setImgFailed] = React.useState(false);
-  const username = user && user.username ? user.username : '';
-  const avatarUrl = username ? (window.API_BASE || window.location.origin) + '/avatars/' + encodeURIComponent(username) + '.png' : '';
+  const username = user ? user.nickname || user.username || '' : '';
+  // 头像地址带版本号，个人设置里换头像后立即生效
+  const avatarUrl = user && user.avatar_url ? user.avatar_url : '';
+  React.useEffect(function () {
+    setImgFailed(false);
+  }, [avatarUrl]);
   if (who === 'ai') {
     return /*#__PURE__*/React.createElement("div", {
       style: {
@@ -3604,7 +4328,7 @@ const Avatar = ({
       height: '100%',
       objectFit: 'cover'
     }
-  }) : username ? username[0] : '我');
+  }) : username ? username[0].toUpperCase() : '我');
 };
 
 // continued：紧跟在同一发送者后面的消息，不再重复头像和名字，并收紧上方间距
@@ -4517,7 +5241,7 @@ const AgentWelcome = ({
   user
 }) => {
   // Agent 模式专属欢迎页 —— 简约版
-  var name = user ? String(user.display_name || user.username || '').trim() : '';
+  var name = user ? String(user.nickname || user.username || '').trim() : '';
   var title = React.useMemo(function () {
     return pickAgentGreeting(name, new Date());
   }, [name]);
@@ -6556,15 +7280,17 @@ const Composer = ({
   seedPrompt,
   onSeedConsumed,
   canvasReferenceSelection,
-  agentSkills: agentSkillsProp
+  agentSkills: agentSkillsProp,
+  preferences
 }) => {
   const agentSkills = agentSkillsProp || NO_SKILLS;
+  const prefs = preferences || {};
   const [text, setText] = React.useState('');
-  const [selectedMode, setSelectedMode] = React.useState(DEFAULT_COMPOSER_MODE);
+  const [selectedMode, setSelectedMode] = React.useState(prefs.default_model || DEFAULT_COMPOSER_MODE);
   const [files, setFiles] = React.useState([]);
   const [imageType, setImageType] = React.useState('png');
-  const [aiRatio, setAiRatio] = React.useState('auto');
-  const [aiQuality, setAiQuality] = React.useState('1K');
+  const [aiRatio, setAiRatio] = React.useState(prefs.default_ratio || 'auto');
+  const [aiQuality, setAiQuality] = React.useState(prefs.default_resolution || '1K');
   const [aiVariant, setAiVariant] = React.useState('flare');
   const [aiQualityTier, setAiQualityTier] = React.useState('auto');
   const [aiProvider, setAiProvider] = React.useState('auto');
@@ -7430,7 +8156,12 @@ const Composer = ({
       restoreMessage(lastSubmittedMessage);
       return;
     }
+    // 输入法选词时按的 Enter 只是确认上屏，不能发送
+    if (e.key === 'Enter' && (e.nativeEvent.isComposing || e.keyCode === 229)) return;
     if (e.key === 'Enter' && !e.shiftKey) {
+      const modPressed = e.metaKey || e.ctrlKey;
+      // Ctrl/⌘+Enter 两种模式下都发送；选了 Ctrl+Enter 发送时，单按 Enter 交给输入框换行
+      if (prefs.send_shortcut === 'mod_enter' && !modPressed) return;
       e.preventDefault();
       handleSend();
     }
@@ -11167,7 +11898,7 @@ const Chat = ({
         const data = await res.json();
         setMessages(msgs => [...msgs, {
           who: 'ai',
-          text: '头像设置成功！刷新页面后生效。'
+          text: '头像设置成功，刷新页面后生效。以后也可以在右上角菜单的「个人设置」里更换。'
         }]);
       } catch (e) {
         setMessages(msgs => [...msgs, {
@@ -12495,7 +13226,8 @@ const Chat = ({
     seedPrompt: localSeed || seedPrompt,
     onSeedConsumed: handleComposerSeedConsumed,
     canvasReferenceSelection: canvasReferenceSelection,
-    agentSkills: agentSkills
+    agentSkills: agentSkills,
+    preferences: user && user.preferences
   }));
 };
 window.Chat = Chat;
@@ -16635,6 +17367,7 @@ const App = () => {
   }), currentUser && !showAdmin && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TopBar, {
     user: currentUser,
     onSwitchUser: handleSwitchUser,
+    onUserChange: setCurrentUser,
     currentView: "workbench",
     onNavigate: navigateTo,
     onOpenInspiration: function () {

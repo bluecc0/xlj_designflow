@@ -88,6 +88,35 @@
     logout: function() {
       return request('/auth/logout', { method: 'POST' });
     },
+    savePreferences: function(patch) {
+      return request('/auth/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      }).then(function(res) { return res.preferences; });
+    },
+    saveProfile: function(profile) {
+      return request('/auth/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(profile),
+      }).then(function(res) { return res.user; });
+    },
+    changePassword: function(oldPassword, newPassword) {
+      return request('/auth/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+      });
+    },
+    uploadAvatar: function(file) {
+      var form = new FormData();
+      form.append('image', file);
+      return request('/auth/avatar', { method: 'POST', body: form }).then(function(res) { return res.url; });
+    },
+    deleteAvatar: function() {
+      return request('/auth/avatar', { method: 'DELETE' });
+    },
     fetchHealth: function() { return request('/health'); },
     fetchDeepHealth: function() { return request('/health/deep'); },
     fetchTemplates: function(fileId) {

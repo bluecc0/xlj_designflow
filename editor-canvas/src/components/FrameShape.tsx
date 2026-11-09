@@ -315,7 +315,7 @@ export function FrameShape({ frame, isSelected, onSelect, onContextMenu }: Props
             onChange={(e) => setNameVal(e.target.value)}
             onBlur={handleFinishRename}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') handleFinishRename()
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleFinishRename()
               if (e.key === 'Escape') {
                 setNameVal(frame.name)
                 setIsEditingName(false)

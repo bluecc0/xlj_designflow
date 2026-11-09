@@ -23,6 +23,7 @@ from .ai_image import _safe_user_id
 from .config import settings
 from .job_store import _connect
 from .team_canvas import is_super_admin
+from .user_profile import real_name
 
 router = APIRouter(prefix="/character-cards")
 
@@ -66,7 +67,8 @@ def init_character_card_tables() -> None:
 
 
 def _user_name(user: dict) -> str:
-    return str(user.get("display_name") or user.get("username") or user.get("id") or "")
+    # 共享角色卡上给别人看的名字用后台真实姓名；昵称只在用户自己的界面显示
+    return real_name(user)
 
 
 def _card_dir(owner_id: str, card_id: str) -> Path:

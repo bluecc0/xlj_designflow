@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 from starlette.requests import Request
 
-from backend import job_store, main, team_canvas
+from backend import job_store, main, team_canvas, user_profile
 
 OWNER = {"id": "owner", "username": "小王"}
 MEMBER = {"id": "member", "username": "小李"}
@@ -80,6 +80,33 @@ class TeamCanvasTest(_TeamCanvasBase):
         personal = self._personal()
         self.assertEqual(len(personal["pages"]), 1)
         self.assertNotIn(personal["pages"][0]["id"], {"p1", "p2"})
+
+    def test_viewers_and_activity_carry_avatar_urls(self) -> None:
+        canvas_id = self._share()
+        with patch.object(team_canvas.settings, "root_dir", Path(self.tmp.name)), \
+                patch.object(team_canvas.settings, "allowed_login_users",
+                             [{"id": "owner", "username": "小王"}, {"id": "member", "username": "小李"}]):
+            avatar = Path(self.tmp.name) / "avatars" / "小王.png"
+            avatar.parent.mkdir(parents=True)
+            avatar.write_bytes(b"png")
+            team_canvas.heartbeat(OWNER, canvas_id)
+            viewers = {v["id"]: v for v in team_canvas.heartbeat(MEMBER, canvas_id)["viewers"]}
+            self.assertTrue(viewers["owner"]["avatar_url"].startswith("/avatars/小王.png?v="))
+            self.assertEqual(viewers["member"]["avatar_url"], "")
+            share_item = team_canvas.list_activity(OWNER, canvas_id)[-1]
+            self.assertTrue(share_item["avatar_url"].startswith("/avatars/小王.png?v="))
+
+    def test_names_shown_to_others_use_admin_real_name_not_nickname(self) -> None:
+        with patch.object(team_canvas.settings, "allowed_login_users",
+                          [{"id": "owner", "username": "小王", "display_name": "王小明"},
+                           {"id": "member", "username": "小李"}]):
+            user_profile.set_nickname(OWNER, "阿明")
+            canvas_id = self._share()
+            self.assertEqual(team_canvas.load_canvas(OWNER, canvas_id)["canvas"]["owner_name"], "王小明")
+            names = {v["id"]: v["name"] for v in team_canvas.heartbeat(MEMBER, canvas_id)["viewers"]}
+            names.update({v["id"]: v["name"] for v in team_canvas.heartbeat(OWNER, canvas_id)["viewers"]})
+            self.assertEqual(names, {"owner": "王小明", "member": "小李"})
+            self.assertEqual(team_canvas.list_activity(OWNER, canvas_id)[-1]["username"], "王小明")
 
     def test_stale_revision_is_rejected_for_client_merge(self) -> None:
         canvas_id = self._share()

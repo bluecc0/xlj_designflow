@@ -270,7 +270,7 @@ export function PageDropdown() {
               onChange={(e) => setEditingPageName(e.target.value)}
               onBlur={() => handleFinishRenamePage(canvas.page_id)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') handleFinishRenamePage(canvas.page_id)
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleFinishRenamePage(canvas.page_id)
                 if (e.key === 'Escape') setEditingPageId(null)
               }}
               onClick={(e) => e.stopPropagation()}
@@ -396,7 +396,7 @@ export function PageDropdown() {
               onChange={(e) => setEditingPageName(e.target.value)}
               onBlur={() => handleFinishRenamePage(page.id)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') handleFinishRenamePage(page.id)
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleFinishRenamePage(page.id)
                 if (e.key === 'Escape') setEditingPageId(null)
               }}
               onClick={(e) => e.stopPropagation()}
@@ -741,7 +741,7 @@ export function PageDropdown() {
                           onChange={(e) => setEditingGroupName(e.target.value)}
                           onBlur={() => handleFinishRenameGroup(group.id)}
                           onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleFinishRenameGroup(group.id)
+                            if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleFinishRenameGroup(group.id)
                             if (e.key === 'Escape') setEditingGroupId(null)
                           }}
                           onClick={(e) => e.stopPropagation()}

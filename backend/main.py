@@ -145,6 +145,8 @@ from .team_canvas import (
     is_super_admin,
 )
 from .team_canvas import router as team_canvas_router
+from .user_profile import init_user_profile_tables, public_user
+from .user_profile import router as user_profile_router
 from .user_skill_store import (
     MAX_UPLOAD_BYTES as MAX_SKILL_UPLOAD_BYTES,
     SkillUploadError,
@@ -411,6 +413,7 @@ async def lifespan(app: FastAPI):
     init_db()
     init_agent2_tables()
     init_team_canvas_tables()
+    init_user_profile_tables()
     init_character_card_tables()
     agent2_fail_stale_turns()
     app.state.outpainting_semaphore = asyncio.Semaphore(
@@ -589,6 +592,7 @@ app.add_middleware(
 
 app.include_router(agent2_router)
 app.include_router(team_canvas_router)
+app.include_router(user_profile_router)
 app.include_router(character_cards_router)
 
 # 产品图库静态文件（前端预览用）
@@ -2631,7 +2635,7 @@ async def health_deep():
 @app.get("/auth/session")
 def auth_session(request: Request):
     user = getattr(request.state, "user", None)
-    return {"user": user}
+    return {"user": public_user(user) if user else None}
 
 
 @app.get("/proxy-download/login-status")
@@ -2797,7 +2801,7 @@ def auth_login_lite(body: LiteLoginRequest, response: Response):
         max_age=60 * 60 * 24 * 30,
         path="/",
     )
-    return {"user": user}
+    return {"user": public_user(user)}
 
 
 @app.post("/auth/logout")
@@ -2807,42 +2811,12 @@ def auth_logout(request: Request, response: Response):
     return {"ok": True}
 
 
-@app.post("/auth/avatar")
-async def auth_avatar(request: Request, image: UploadFile = File(...)):
-    """上传当前用户头像，保存到 avatars/{username}.png"""
-    user = _current_user(request)
-    if not user:
-        raise HTTPException(401, "请先登录")
-    username = str(user.get("username") or user.get("id", "unknown"))
-    safe_name = "".join(ch for ch in username if ch.isalnum() or ch in "._-") or "unknown"
-    _avatars_path = settings.root_dir / "avatars"
-    _avatars_path.mkdir(parents=True, exist_ok=True)
-    out_path = _avatars_path / f"{safe_name}.png"
-    content = await image.read()
-    if len(content) > 5 * 1024 * 1024:
-        raise HTTPException(400, "头像图片不能超过 5MB")
-    # 简单 resize 到 200x200 以内
-    try:
-        from PIL import Image
-        import io
-        img = Image.open(io.BytesIO(content))
-        img = img.convert("RGBA")
-        img.thumbnail((200, 200), Image.LANCZOS)
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        content = buf.getvalue()
-    except Exception:
-        pass  # 非图片或处理失败，保存原文件
-    out_path.write_bytes(content)
-    return {"ok": True, "url": f"/avatars/{safe_name}.png"}
-
-
 @app.get("/auth/me")
 def auth_me(request: Request):
     user = _current_user(request)
     if not user:
         raise HTTPException(401, "未登录")
-    return {"user": user}
+    return {"user": public_user(user)}
 
 
 @app.get("/auth/options")

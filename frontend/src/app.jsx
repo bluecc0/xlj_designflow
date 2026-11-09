@@ -614,7 +614,7 @@ const App = () => {
       )}
       {currentUser && !showAdmin && (
         <>
-          <TopBar user={currentUser} onSwitchUser={handleSwitchUser} currentView="workbench" onNavigate={navigateTo} onOpenInspiration={function() { setInspirationOpen(function(v) { return !v; }); }} inspirationOpen={inspirationOpen} />
+          <TopBar user={currentUser} onSwitchUser={handleSwitchUser} onUserChange={setCurrentUser} currentView="workbench" onNavigate={navigateTo} onOpenInspiration={function() { setInspirationOpen(function(v) { return !v; }); }} inspirationOpen={inspirationOpen} />
           <div style={{
             flex: 1,
             position: 'relative',
