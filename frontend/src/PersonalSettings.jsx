@@ -96,12 +96,58 @@ const SettingsSelect = ({ value, options, onChange, disabled, label }) => (
   </select>
 );
 
+// 保存动作与 React 解耦：每次都从最新的用户对象合并，几个设置并行保存时，
+// 先返回的响应不会用旧快照覆盖别处刚保存的头像、昵称或偏好。
+// onUserChange 接收 updater(prev)；getUser 返回当前界面上的用户对象。
+const createPersonalSettingsActions = function({ api, getUser, onUserChange }) {
+  const merge = function(patch) {
+    onUserChange(function(prev) { return Object.assign({}, prev, patch); });
+  };
+  // 只在这个设置项仍是本次请求写入的值时才改它，避免回写覆盖之后的新选择
+  const setPreferenceIf = function(key, expected, next) {
+    onUserChange(function(prev) {
+      const prefs = (prev && prev.preferences) || {};
+      if (prefs[key] !== expected) return prev;
+      return Object.assign({}, prev, { preferences: Object.assign({}, prefs, { [key]: next }) });
+    });
+  };
+  return {
+    uploadAvatar: async function(file) {
+      merge({ avatar_url: await api.uploadAvatar(file) });
+    },
+    removeAvatar: async function() {
+      await api.deleteAvatar();
+      merge({ avatar_url: '' });
+    },
+    saveNickname: async function(nickname) {
+      const next = await api.saveProfile({ nickname: nickname });
+      merge({ nickname: next.nickname || '' });
+      return next.nickname || '';
+    },
+    savePreference: async function(key, value) {
+      const current = getUser();
+      const previous = ((current && current.preferences) || {})[key];
+      onUserChange(function(prev) {
+        const prefs = (prev && prev.preferences) || {};
+        return Object.assign({}, prev, { preferences: Object.assign({}, prefs, { [key]: value }) });
+      });
+      try {
+        const saved = await api.savePreferences({ [key]: value });
+        setPreferenceIf(key, value, saved && saved[key] !== undefined ? saved[key] : value);
+      } catch (err) {
+        setPreferenceIf(key, value, previous);
+        throw err;
+      }
+    },
+  };
+};
+
 const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
   const prefs = (user && user.preferences) || {};
   const [nickname, setNickname] = React.useState((user && user.nickname) || '');
   const [savingName, setSavingName] = React.useState(false);
   const [avatarBusy, setAvatarBusy] = React.useState(false);
-  const [savingPref, setSavingPref] = React.useState('');
+  const [savingPrefs, setSavingPrefs] = React.useState({});
   const [passwordOpen, setPasswordOpen] = React.useState(false);
   const [oldPassword, setOldPassword] = React.useState('');
   const [newPassword, setNewPassword] = React.useState('');
@@ -115,7 +161,15 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
     return function() { window.removeEventListener('keydown', onKey); };
   }, [onClose]);
 
-  const update = function(patch) { onUserChange(Object.assign({}, user, patch)); };
+  const userRef = React.useRef(user);
+  userRef.current = user;
+  const actions = React.useMemo(function() {
+    return createPersonalSettingsActions({
+      api: window.API,
+      getUser: function() { return userRef.current; },
+      onUserChange: onUserChange,
+    });
+  }, [onUserChange]);
 
   const pickAvatar = async function(e) {
     const file = e.target.files && e.target.files[0];
@@ -123,7 +177,7 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
     if (!file) return;
     setAvatarBusy(true);
     try {
-      update({ avatar_url: await window.API.uploadAvatar(file) });
+      await actions.uploadAvatar(file);
       window.dfToast('头像已更新', { tone: 'ok', key: 'personal-settings' });
     } catch (err) {
       window.dfError(err, '头像暂时无法上传，请换一张图片再试。', { key: 'personal-settings' });
@@ -135,8 +189,7 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
   const removeAvatar = async function() {
     setAvatarBusy(true);
     try {
-      await window.API.deleteAvatar();
-      update({ avatar_url: '' });
+      await actions.removeAvatar();
     } catch (err) {
       window.dfError(err, '头像暂时无法移除，请稍后再试。', { key: 'personal-settings' });
     } finally {
@@ -148,9 +201,7 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
   const saveName = async function() {
     setSavingName(true);
     try {
-      const next = await window.API.saveProfile({ nickname: nickname });
-      setNickname(next.nickname || '');
-      update({ nickname: next.nickname || '' });
+      setNickname(await actions.saveNickname(nickname));
       window.dfToast('昵称已保存', { tone: 'ok', key: 'personal-settings' });
     } catch (err) {
       window.dfError(err, '昵称暂时无法保存，请稍后再试。', { key: 'personal-settings' });
@@ -160,20 +211,19 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
   };
 
   const savePref = async function(key, value) {
-    const previous = prefs;
-    setSavingPref(key);
-    update({ preferences: Object.assign({}, prefs, { [key]: value }) });
+    setSavingPrefs(function(prev) { return Object.assign({}, prev, { [key]: true }); });
     try {
-      update({ preferences: await window.API.savePreferences({ [key]: value }) });
+      await actions.savePreference(key, value);
     } catch (err) {
-      update({ preferences: previous });
       window.dfError(err, '设置暂时无法保存，请稍后再试。', { key: 'personal-settings' });
     } finally {
-      setSavingPref('');
+      setSavingPrefs(function(prev) { return Object.assign({}, prev, { [key]: false }); });
     }
   };
 
-  const passwordError = newPassword && newPassword.length < 6
+  const passwordError = newPassword && newPassword !== newPassword.trim()
+    ? '新密码首尾不能有空格'
+    : newPassword && newPassword.length < 6
     ? '新密码至少 6 位'
     : confirmPassword && confirmPassword !== newPassword ? '两次输入的新密码不一致' : '';
   const canSavePassword = oldPassword && newPassword && confirmPassword && !passwordError && !savingPassword;
@@ -261,21 +311,21 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
 
         <SettingsSection title="使用偏好">
           <SettingsRow label="发送方式" hint={sendHint}>
-            <SettingsSegmented value={prefs.send_shortcut || 'enter'} disabled={savingPref === 'send_shortcut'}
+            <SettingsSegmented value={prefs.send_shortcut || 'enter'} disabled={!!savingPrefs.send_shortcut}
               options={[['enter', 'Enter'], ['mod_enter', MOD_KEY_LABEL + '+Enter']]}
               onChange={function(v) { savePref('send_shortcut', v); }}/>
           </SettingsRow>
           <SettingsRow label="默认生图模型" hint="新打开页面时 AI 助手默认选中的模型">
             <SettingsSelect label="默认生图模型" value={prefs.default_model || 'gpt-image-2.6'} options={DEFAULT_MODEL_OPTIONS}
-              disabled={savingPref === 'default_model'} onChange={function(v) { savePref('default_model', v); }}/>
+              disabled={!!savingPrefs.default_model} onChange={function(v) { savePref('default_model', v); }}/>
           </SettingsRow>
           <SettingsRow label="默认画面比例">
             <SettingsSelect label="默认画面比例" value={prefs.default_ratio || 'auto'} options={DEFAULT_RATIO_OPTIONS}
-              disabled={savingPref === 'default_ratio'} onChange={function(v) { savePref('default_ratio', v); }}/>
+              disabled={!!savingPrefs.default_ratio} onChange={function(v) { savePref('default_ratio', v); }}/>
           </SettingsRow>
           <SettingsRow label="默认清晰度" hint="模型不支持时自动换成它支持的最接近选项">
             <SettingsSegmented value={prefs.default_resolution || '1K'} options={DEFAULT_RESOLUTION_OPTIONS}
-              disabled={savingPref === 'default_resolution'} onChange={function(v) { savePref('default_resolution', v); }}/>
+              disabled={!!savingPrefs.default_resolution} onChange={function(v) { savePref('default_resolution', v); }}/>
           </SettingsRow>
         </SettingsSection>
 
@@ -312,3 +362,4 @@ window.UserAvatar = UserAvatar;
 window.PersonalSettingsModal = PersonalSettingsModal;
 window.userDisplayName = userDisplayName;
 window.DESIGNFLOW_MOD_KEY_LABEL = MOD_KEY_LABEL;
+window.createPersonalSettingsActions = createPersonalSettingsActions;

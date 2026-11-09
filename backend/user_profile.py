@@ -232,9 +232,15 @@ def change_password(user: dict, old_password: str, new_password: str) -> None:
     entry = _login_entry(user["id"])
     if not entry:
         raise HTTPException(404, "账号不存在")
-    if not verify_password(old_password or "", str(entry.get("password_hash") or "")):
+    # 与登录入口一致：登录时会去掉密码首尾空格，这里按同样规则校验当前密码
+    old_password = (old_password or "").strip()
+    new_password = new_password or ""
+    if not verify_password(old_password, str(entry.get("password_hash") or "")):
         raise HTTPException(400, "当前密码输入有误，请重新输入")
-    if len(new_password or "") < PASSWORD_MIN:
+    # 首尾带空格的新密码登录时会被去掉，保存了就再也登不上，直接拒绝
+    if new_password != new_password.strip():
+        raise HTTPException(400, "新密码首尾不能有空格")
+    if len(new_password) < PASSWORD_MIN:
         raise HTTPException(400, f"新密码至少 {PASSWORD_MIN} 位")
     if new_password == old_password:
         raise HTTPException(400, "新密码不能与当前密码相同")

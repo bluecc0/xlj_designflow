@@ -97,6 +97,26 @@ class UserProfileTest(unittest.TestCase):
             job_store.get_or_create_user("小王", "old-pass")
         self.assertEqual(job_store.get_or_create_user("小王", "new-pass-1")["id"], "u1")
 
+    def test_new_password_round_trips_through_real_login_endpoint(self) -> None:
+        from fastapi import Response
+
+        from backend import main
+
+        # 首尾空格会在登录时被去掉，修改时直接拒绝，避免改完就登不上
+        for padded in (" new-pass-1 ", "new-pass-1 ", " new-pass-1"):
+            with self.assertRaises(HTTPException) as raised:
+                user_profile.change_password(self.user, "old-pass", padded)
+            self.assertIn("首尾", raised.exception.detail)
+        self.assertEqual(job_store.get_or_create_user("小王", "old-pass")["id"], "u1")
+
+        # 当前密码按登录的规则去掉首尾空格后校验
+        user_profile.change_password(self.user, "  old-pass ", "new-pass-1")
+        result = main.auth_login_lite(main.LiteLoginRequest(username="小王", password="new-pass-1"), Response())
+        self.assertEqual(result["user"]["id"], "u1")
+        with self.assertRaises(HTTPException) as raised:
+            main.auth_login_lite(main.LiteLoginRequest(username="小王", password="old-pass"), Response())
+        self.assertEqual(raised.exception.status_code, 401)
+
     def test_avatar_is_cropped_square_versioned_and_removable(self) -> None:
         buf = io.BytesIO()
         Image.new("RGB", (800, 400), (200, 80, 60)).save(buf, format="JPEG")
