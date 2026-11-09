@@ -117,7 +117,11 @@ export function TeamActivityPanel() {
         ) : tab === 'activity' ? (
           activity!.map((item) => (
             <div key={item.id} style={{ display: 'flex', gap: 9, padding: '9px 8px', borderRadius: 8 }}>
-              <div style={avatarStyle}>{(item.username || '?').slice(0, 1)}</div>
+              <div style={avatarStyle}>
+                {item.avatar_url
+                  ? <img src={item.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  : (item.username || '?').slice(0, 1).toUpperCase()}
+              </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 12, color: '#334155', lineHeight: 1.5 }}>
                   <strong style={{ color: '#0f172a', fontWeight: 600 }}>{item.username}</strong> {item.summary}
@@ -179,6 +183,7 @@ const panelStyle: React.CSSProperties = {
 }
 
 const avatarStyle: React.CSSProperties = {
+  overflow: 'hidden',
   width: 24,
   height: 24,
   borderRadius: '50%',

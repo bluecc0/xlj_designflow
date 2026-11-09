@@ -31,6 +31,7 @@ from .job_store import (
     save_editor_snapshot,
 )
 from .output_access import is_output_asset_owner, output_asset_parts
+from .user_profile import avatar_url, avatar_url_for_user_id, real_name
 
 router = APIRouter(prefix="/team-canvases")
 
@@ -40,7 +41,7 @@ _PRESENCE_TTL_SECONDS = 15
 _RECORD_KEYS = ("frames", "images", "texts")
 _RECORD_ID_PREFIXES = {"frames": "frame-", "images": "img-", "texts": "txt-"}
 
-_presence: dict[str, dict[str, tuple[str, float]]] = {}
+_presence: dict[str, dict[str, tuple[str, float, str]]] = {}
 _presence_lock = threading.Lock()
 # 图片路径 -> 可访问的用户 id；None 表示全团队
 _asset_index: dict[str, set[str] | None] | None = None
@@ -104,7 +105,8 @@ def init_team_canvas_tables() -> None:
 # ─── 文档工具 ──────────────────────────────────────────────────────────────────
 
 def _user_name(user: dict) -> str:
-    return str(user.get("display_name") or user.get("username") or user.get("id") or "")
+    # 给其他成员看的名字用后台真实姓名；昵称只在用户自己的界面显示
+    return real_name(user)
 
 
 def _canonical_asset_path(path: str) -> str:
@@ -781,10 +783,10 @@ def heartbeat(user: dict, canvas_id: str) -> dict:
     now = time.time()
     with _presence_lock:
         viewers = _presence.setdefault(canvas_id, {})
-        viewers[str(user["id"])] = (_user_name(user), now)
-        for uid in [uid for uid, (_, seen) in viewers.items() if now - seen > _PRESENCE_TTL_SECONDS]:
+        viewers[str(user["id"])] = (_user_name(user), now, avatar_url(str(user.get("username") or "")))
+        for uid in [uid for uid, (_, seen, _) in viewers.items() if now - seen > _PRESENCE_TTL_SECONDS]:
             viewers.pop(uid, None)
-        viewer_list = [{"id": uid, "name": name} for uid, (name, _) in viewers.items()]
+        viewer_list = [{"id": uid, "name": name, "avatar_url": avatar} for uid, (name, _, avatar) in viewers.items()]
     return {"revision": int(row["revision"]), "canvas": _canvas_meta(row), "viewers": viewer_list}
 
 
@@ -796,14 +798,18 @@ def list_activity(user: dict, canvas_id: str, limit: int = 100) -> list[dict]:
             (canvas_id, max(1, min(300, limit))),
         ).fetchall()
     items = []
+    avatars: dict[str, str] = {}
     for row in rows:
         try:
             payload = json.loads(row["payload"] or "{}")
         except Exception:
             payload = {}
+        if row["user_id"] not in avatars:
+            avatars[row["user_id"]] = avatar_url_for_user_id(row["user_id"])
         items.append({
             "id": row["id"], "user_id": row["user_id"], "username": row["username"], "action": row["action"],
             "summary": row["summary"], "payload": payload, "created_at": row["created_at"],
+            "avatar_url": avatars[row["user_id"]],
         })
     return items
 

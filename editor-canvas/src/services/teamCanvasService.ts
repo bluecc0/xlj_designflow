@@ -9,6 +9,7 @@ export interface TeamActivityItem {
   action: 'share' | 'unshare' | 'generate' | 'add' | 'delete' | 'rename' | 'restore_version' | string
   summary: string
   payload: Record<string, any>
+  avatar_url?: string
   created_at: number
 }
 

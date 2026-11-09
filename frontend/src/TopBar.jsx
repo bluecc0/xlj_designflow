@@ -245,8 +245,9 @@ const InspirationCurveIcon = () => {
   );
 };
 
-const UserMenu = ({ user, onSwitchUser, onNavigate }) => {
+const UserMenu = ({ user, onSwitchUser, onNavigate, onUserChange }) => {
   const [open, setOpen] = React.useState(false);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const wrapRef = React.useRef(null);
   React.useEffect(() => {
     if (!open) return;
@@ -256,7 +257,7 @@ const UserMenu = ({ user, onSwitchUser, onNavigate }) => {
     window.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
   }, [open]);
-  const name = user.display_name || user.username || '';
+  const name = user.nickname || user.username || '';
   const itemStyle = {
     width: '100%', height: 32, padding: '0 10px', borderRadius: 7, display: 'flex', alignItems: 'center', gap: 8,
     fontSize: 12, color: 'var(--ink-2)', textAlign: 'left',
@@ -280,10 +281,7 @@ const UserMenu = ({ user, onSwitchUser, onNavigate }) => {
           background: open ? 'var(--panel-2)' : 'transparent', border: '1px solid ' + (open ? 'var(--line)' : 'var(--line-2)'),
         }}
       >
-        <span style={{
-          width: 22, height: 22, borderRadius: 6, display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600,
-          background: 'var(--accent-soft)', color: 'var(--accent-ink)',
-        }}>{name.slice(0, 1).toUpperCase()}</span>
+        <UserAvatar user={user} size={22} radius={6}/>
         <span style={{ fontSize: 12, color: 'var(--ink)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
         <I.chevronDown size={11} style={{ color: 'var(--ink-3)' }}/>
       </button>
@@ -294,8 +292,15 @@ const UserMenu = ({ user, onSwitchUser, onNavigate }) => {
         }}>
           <div style={{ padding: '6px 10px 8px', borderBottom: '1px solid var(--line-2)', marginBottom: 4 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>{name}</div>
-            <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>{user.role === 'admin' ? '管理员' : '成员'}{user.display_name ? ' · ' + user.username : ''}</div>
+            <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>{user.role === 'admin' ? '管理员' : '成员'}{user.nickname ? ' · ' + user.username : ''}</div>
           </div>
+          {onUserChange && (
+            <button type="button" role="menuitem" style={itemStyle} onMouseEnter={e => hover(e, true)} onMouseLeave={e => hover(e, false)}
+              onClick={() => { setOpen(false); setSettingsOpen(true); }}>
+              <I.settings size={13}/>
+              个人设置
+            </button>
+          )}
           {user.role === 'admin' && onNavigate && (
             <button type="button" role="menuitem" style={itemStyle} onMouseEnter={e => hover(e, true)} onMouseLeave={e => hover(e, false)}
               onClick={() => { setOpen(false); onNavigate('#/admin'); }}>
@@ -311,11 +316,14 @@ const UserMenu = ({ user, onSwitchUser, onNavigate }) => {
           </button>
         </div>
       )}
+      {settingsOpen && (
+        <PersonalSettingsModal user={user} onUserChange={onUserChange} onClose={() => setSettingsOpen(false)}/>
+      )}
     </div>
   );
 };
 
-const TopBar = ({ user, onSwitchUser, currentView, onNavigate, onOpenInspiration, inspirationOpen }) => {
+const TopBar = ({ user, onSwitchUser, onUserChange, currentView, onNavigate, onOpenInspiration, inspirationOpen }) => {
   const isAgentPage = typeof window !== 'undefined' && /\/ui\/agent\.html(?:$|\?)/.test(window.location.href);
 
   React.useEffect(function() {
@@ -475,7 +483,7 @@ window.renderAiProviderDetail = renderAiProviderDetail;
             </button>
           </div>
         )}
-        {user && <UserMenu user={user} onSwitchUser={onSwitchUser} onNavigate={onNavigate}/>}
+        {user && <UserMenu user={user} onSwitchUser={onSwitchUser} onNavigate={onNavigate} onUserChange={onUserChange}/>}
       </div>
     </div>
   );
