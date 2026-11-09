@@ -927,7 +927,13 @@ const SettingsSelect = ({
   onChange,
   disabled,
   label
-}) => /*#__PURE__*/React.createElement("select", {
+}) => /*#__PURE__*/React.createElement("span", {
+  style: {
+    position: 'relative',
+    display: 'inline-flex',
+    flexShrink: 0
+  }
+}, /*#__PURE__*/React.createElement("select", {
   "aria-label": label,
   value: value,
   disabled: disabled,
@@ -936,14 +942,50 @@ const SettingsSelect = ({
   },
   style: Object.assign({}, settingsInputStyle, {
     width: 150,
-    cursor: 'pointer'
+    padding: '0 30px 0 10px',
+    cursor: 'pointer',
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    MozAppearance: 'none'
   })
 }, options.map(function (item) {
   return /*#__PURE__*/React.createElement("option", {
     key: item[0],
     value: item[0]
   }, item[1]);
+})), /*#__PURE__*/React.createElement(I.chevronDown, {
+  size: 12,
+  style: {
+    position: 'absolute',
+    right: 10,
+    top: '50%',
+    transform: 'translateY(-50%)',
+    color: 'var(--ink-3)',
+    pointerEvents: 'none'
+  }
 }));
+
+// 设置改完即保存，标题旁显示保存状态，让用户知道已经生效
+const SaveStatus = ({
+  state
+}) => {
+  const text = state === 'saving' ? '保存中…' : state === 'saved' ? '已保存' : '修改后自动保存';
+  const color = state === 'saved' ? 'var(--ok)' : 'var(--ink-3)';
+  return /*#__PURE__*/React.createElement("span", {
+    role: "status",
+    "aria-live": "polite",
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 4,
+      fontSize: 11,
+      color: color,
+      transition: 'color 150ms ease'
+    }
+  }, state === 'saved' && /*#__PURE__*/React.createElement(I.check, {
+    size: 11
+  }), text);
+};
 
 // 保存动作与 React 解耦：每次都从最新的用户对象合并，几个设置并行保存时，
 // 先返回的响应不会用旧快照覆盖别处刚保存的头像、昵称或偏好。
@@ -1042,6 +1084,34 @@ const PersonalSettingsModal = ({
       window.removeEventListener('keydown', onKey);
     };
   }, [onClose]);
+  const [pendingSaves, setPendingSaves] = React.useState(0);
+  const [savedFlash, setSavedFlash] = React.useState(false);
+  const savedTimerRef = React.useRef(null);
+  React.useEffect(function () {
+    return function () {
+      clearTimeout(savedTimerRef.current);
+    };
+  }, []);
+  const track = async function (run) {
+    setPendingSaves(function (n) {
+      return n + 1;
+    });
+    setSavedFlash(false);
+    try {
+      const result = await run();
+      clearTimeout(savedTimerRef.current);
+      setSavedFlash(true);
+      savedTimerRef.current = setTimeout(function () {
+        setSavedFlash(false);
+      }, 2000);
+      return result;
+    } finally {
+      setPendingSaves(function (n) {
+        return n - 1;
+      });
+    }
+  };
+  const saveState = pendingSaves > 0 ? 'saving' : savedFlash ? 'saved' : 'idle';
   const userRef = React.useRef(user);
   userRef.current = user;
   const actions = React.useMemo(function () {
@@ -1059,10 +1129,8 @@ const PersonalSettingsModal = ({
     if (!file) return;
     setAvatarBusy(true);
     try {
-      await actions.uploadAvatar(file);
-      window.dfToast('头像已更新', {
-        tone: 'ok',
-        key: 'personal-settings'
+      await track(function () {
+        return actions.uploadAvatar(file);
       });
     } catch (err) {
       window.dfError(err, '头像暂时无法上传，请换一张图片再试。', {
@@ -1075,7 +1143,9 @@ const PersonalSettingsModal = ({
   const removeAvatar = async function () {
     setAvatarBusy(true);
     try {
-      await actions.removeAvatar();
+      await track(function () {
+        return actions.removeAvatar();
+      });
     } catch (err) {
       window.dfError(err, '头像暂时无法移除，请稍后再试。', {
         key: 'personal-settings'
@@ -1088,11 +1158,9 @@ const PersonalSettingsModal = ({
   const saveName = async function () {
     setSavingName(true);
     try {
-      setNickname(await actions.saveNickname(nickname));
-      window.dfToast('昵称已保存', {
-        tone: 'ok',
-        key: 'personal-settings'
-      });
+      setNickname(await track(function () {
+        return actions.saveNickname(nickname);
+      }));
     } catch (err) {
       window.dfError(err, '昵称暂时无法保存，请稍后再试。', {
         key: 'personal-settings'
@@ -1108,7 +1176,9 @@ const PersonalSettingsModal = ({
       });
     });
     try {
-      await actions.savePreference(key, value);
+      await track(function () {
+        return actions.savePreference(key, value);
+      });
     } catch (err) {
       window.dfError(err, '设置暂时无法保存，请稍后再试。', {
         key: 'personal-settings'
@@ -1184,11 +1254,19 @@ const PersonalSettingsModal = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
       fontSize: 14,
       fontWeight: 600,
       color: 'var(--ink)'
     }
-  }, "\u4E2A\u4EBA\u8BBE\u7F6E"), /*#__PURE__*/React.createElement("button", {
+  }, "\u4E2A\u4EBA\u8BBE\u7F6E"), /*#__PURE__*/React.createElement(SaveStatus, {
+    state: saveState
+  })), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: onClose,
     "aria-label": "\u5173\u95ED\u4E2A\u4EBA\u8BBE\u7F6E",

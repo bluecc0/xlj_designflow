@@ -90,11 +90,30 @@ const SettingsSegmented = ({ value, options, onChange, disabled }) => (
 );
 
 const SettingsSelect = ({ value, options, onChange, disabled, label }) => (
-  <select aria-label={label} value={value} disabled={disabled} onChange={function(e) { onChange(e.target.value); }}
-    style={Object.assign({}, settingsInputStyle, { width: 150, cursor: 'pointer' })}>
-    {options.map(function(item) { return <option key={item[0]} value={item[0]}>{item[1]}</option>; })}
-  </select>
+  <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
+    <select aria-label={label} value={value} disabled={disabled} onChange={function(e) { onChange(e.target.value); }}
+      style={Object.assign({}, settingsInputStyle, {
+        width: 150, padding: '0 30px 0 10px', cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none', MozAppearance: 'none',
+      })}>
+      {options.map(function(item) { return <option key={item[0]} value={item[0]}>{item[1]}</option>; })}
+    </select>
+    <I.chevronDown size={12} style={{
+      position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-3)', pointerEvents: 'none',
+    }}/>
+  </span>
 );
+
+// 设置改完即保存，标题旁显示保存状态，让用户知道已经生效
+const SaveStatus = ({ state }) => {
+  const text = state === 'saving' ? '保存中…' : state === 'saved' ? '已保存' : '修改后自动保存';
+  const color = state === 'saved' ? 'var(--ok)' : 'var(--ink-3)';
+  return (
+    <span role="status" aria-live="polite" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: color, transition: 'color 150ms ease' }}>
+      {state === 'saved' && <I.check size={11}/>}
+      {text}
+    </span>
+  );
+};
 
 // 保存动作与 React 解耦：每次都从最新的用户对象合并，几个设置并行保存时，
 // 先返回的响应不会用旧快照覆盖别处刚保存的头像、昵称或偏好。
@@ -161,6 +180,25 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
     return function() { window.removeEventListener('keydown', onKey); };
   }, [onClose]);
 
+  const [pendingSaves, setPendingSaves] = React.useState(0);
+  const [savedFlash, setSavedFlash] = React.useState(false);
+  const savedTimerRef = React.useRef(null);
+  React.useEffect(function() { return function() { clearTimeout(savedTimerRef.current); }; }, []);
+  const track = async function(run) {
+    setPendingSaves(function(n) { return n + 1; });
+    setSavedFlash(false);
+    try {
+      const result = await run();
+      clearTimeout(savedTimerRef.current);
+      setSavedFlash(true);
+      savedTimerRef.current = setTimeout(function() { setSavedFlash(false); }, 2000);
+      return result;
+    } finally {
+      setPendingSaves(function(n) { return n - 1; });
+    }
+  };
+  const saveState = pendingSaves > 0 ? 'saving' : savedFlash ? 'saved' : 'idle';
+
   const userRef = React.useRef(user);
   userRef.current = user;
   const actions = React.useMemo(function() {
@@ -177,8 +215,7 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
     if (!file) return;
     setAvatarBusy(true);
     try {
-      await actions.uploadAvatar(file);
-      window.dfToast('头像已更新', { tone: 'ok', key: 'personal-settings' });
+      await track(function() { return actions.uploadAvatar(file); });
     } catch (err) {
       window.dfError(err, '头像暂时无法上传，请换一张图片再试。', { key: 'personal-settings' });
     } finally {
@@ -189,7 +226,7 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
   const removeAvatar = async function() {
     setAvatarBusy(true);
     try {
-      await actions.removeAvatar();
+      await track(function() { return actions.removeAvatar(); });
     } catch (err) {
       window.dfError(err, '头像暂时无法移除，请稍后再试。', { key: 'personal-settings' });
     } finally {
@@ -201,8 +238,7 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
   const saveName = async function() {
     setSavingName(true);
     try {
-      setNickname(await actions.saveNickname(nickname));
-      window.dfToast('昵称已保存', { tone: 'ok', key: 'personal-settings' });
+      setNickname(await track(function() { return actions.saveNickname(nickname); }));
     } catch (err) {
       window.dfError(err, '昵称暂时无法保存，请稍后再试。', { key: 'personal-settings' });
     } finally {
@@ -213,7 +249,7 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
   const savePref = async function(key, value) {
     setSavingPrefs(function(prev) { return Object.assign({}, prev, { [key]: true }); });
     try {
-      await actions.savePreference(key, value);
+      await track(function() { return actions.savePreference(key, value); });
     } catch (err) {
       window.dfError(err, '设置暂时无法保存，请稍后再试。', { key: 'personal-settings' });
     } finally {
@@ -256,7 +292,10 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
         boxShadow: '0 18px 50px rgba(15,23,42,0.18)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>个人设置</div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>个人设置</div>
+            <SaveStatus state={saveState}/>
+          </div>
           <button type="button" onClick={onClose} aria-label="关闭个人设置" style={{
             width: 28, height: 28, borderRadius: 8, border: 0, background: 'transparent', color: 'var(--ink-3)', cursor: 'pointer',
             display: 'grid', placeItems: 'center',
