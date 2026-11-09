@@ -244,7 +244,7 @@ const PersonalSettingsModal = ({ user, onClose, onUserChange }) => {
         </div>
 
         <SettingsSection title="个人资料">
-          <SettingsRow label="昵称" hint="只在你自己的界面显示，如右上角和 Agent 欢迎语；同事看到的仍是你的真实姓名">
+          <SettingsRow label="昵称" hint="显示在右上角和 Agent 欢迎语中">
             <div style={{ display: 'flex', gap: 6 }}>
               <input value={nickname} maxLength={40} placeholder={user && user.username} aria-label="昵称"
                 onChange={function(e) { setNickname(e.target.value); }}

@@ -1250,7 +1250,7 @@ const PersonalSettingsModal = ({
     title: "\u4E2A\u4EBA\u8D44\u6599"
   }, /*#__PURE__*/React.createElement(SettingsRow, {
     label: "\u6635\u79F0",
-    hint: "\u53EA\u5728\u4F60\u81EA\u5DF1\u7684\u754C\u9762\u663E\u793A\uFF0C\u5982\u53F3\u4E0A\u89D2\u548C Agent \u6B22\u8FCE\u8BED\uFF1B\u540C\u4E8B\u770B\u5230\u7684\u4ECD\u662F\u4F60\u7684\u771F\u5B9E\u59D3\u540D"
+    hint: "\u663E\u793A\u5728\u53F3\u4E0A\u89D2\u548C Agent \u6B22\u8FCE\u8BED\u4E2D"
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
