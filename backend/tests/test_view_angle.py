@@ -5,7 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -64,6 +64,23 @@ class ViewAnglePromptTest(unittest.TestCase):
         self.assertIn("自上而下俯视", subject)
         self.assertIn("补充要求：保留手里的包", subject)
 
+    def test_final_facing_is_source_facing_plus_camera_turn(self) -> None:
+        # 原图已斜朝画面右侧（315），机位向右转 90 → 最终斜朝画面左侧（45）
+        prompt = view_angle.build_view_prompt(azimuth=90, elevation=0, source_facing=315)
+        self.assertIn("斜朝画面左侧", prompt)
+        self.assertIn("与图1相比，主体的朝向要明显改变", prompt)
+        # 机位向右转 45 → 转为正对镜头
+        self.assertIn("正面：主体的脸和身体正面朝向镜头", view_angle.build_view_prompt(azimuth=45, elevation=0, source_facing=315))
+        # 方位不变时只要求保持原朝向
+        self.assertIn("保持图1中主体的朝向不变", view_angle.build_view_prompt(azimuth=0, elevation=30, source_facing=315))
+
+    def test_parse_facing(self) -> None:
+        self.assertEqual(view_angle.parse_facing("H"), 315)
+        self.assertEqual(view_angle.parse_facing(" b 身体斜朝左"), 45)
+        self.assertEqual(view_angle.parse_facing("**G**"), 270)
+        self.assertIsNone(view_angle.parse_facing("无法判断"))
+        self.assertIsNone(view_angle.parse_facing(""))
+
     def test_flatten_alpha_paints_transparent_area_white(self) -> None:
         flat = Image.open(io.BytesIO(view_angle.flatten_alpha(
             _image_bytes((8, 8), "RGBA", (0, 0, 0, 0), "PNG"))))
@@ -93,13 +110,15 @@ class ViewAngleEndpointTest(unittest.TestCase):
             p.stop()
         self.temp_dir.cleanup()
 
-    def _submit(self, views, **data):
+    def _submit(self, views, facing=None, **data):
         captured: list[dict] = []
 
         async def fake_background(**kwargs):
             captured.append(kwargs)
 
-        with patch.object(main, "_run_ai_image_background", new=fake_background):
+        self.detect = facing if isinstance(facing, AsyncMock) else AsyncMock(return_value=facing)
+        with patch.object(main, "_run_ai_image_background", new=fake_background), \
+                patch.object(main.view_angle, "detect_facing", self.detect):
             resp = self.client.post(
                 "/ai-image/view-angle",
                 files=[("image", ("src.png", _image_bytes((750, 1000), "RGBA", (200, 30, 30, 0), "PNG"), "image/png"))],
@@ -136,6 +155,26 @@ class ViewAngleEndpointTest(unittest.TestCase):
         self.assertEqual((job["model"], job["prompt"]), ("gpt-image-2.6", "切换视角：右侧 · 俯视"))
         # 服务重启后可以被后台恢复
         self.assertIn(body["job_ids"][0], {j["id"] for j in job_store.load_recoverable_image_jobs()})
+
+    def test_prompts_follow_detected_source_facing(self) -> None:
+        resp, captured = self._submit([{"azimuth": 90}, {"azimuth": 270}], facing=315)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.detect.assert_awaited_once()
+        self.assertIn("斜朝画面左侧", captured[0]["prompt"])    # 315 + 90 = 45
+        self.assertIn("朝向画面右后方", captured[1]["prompt"])  # 315 + 270 = 225
+        self.assertEqual(captured[0]["request_meta"]["view_angle"]["source_facing"], 315)
+
+    def test_facing_detection_failure_falls_back_to_front(self) -> None:
+        resp, captured = self._submit([{"azimuth": 90}], facing=AsyncMock(side_effect=RuntimeError("vlm down")))
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertIn("朝向画面左侧（看向画面的左边缘）", captured[0]["prompt"])
+        self.assertIsNone(captured[0]["request_meta"]["view_angle"]["source_facing"])
+
+    def test_elevation_only_views_skip_facing_detection(self) -> None:
+        resp, captured = self._submit([{"azimuth": 0, "elevation": 30}])
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.detect.assert_not_awaited()
+        self.assertIn("保持图1中主体的朝向不变", captured[0]["prompt"])
 
     def test_single_view_returns_job_id(self) -> None:
         resp, captured = self._submit([{"azimuth": 225}])

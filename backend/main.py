@@ -7348,6 +7348,13 @@ async def ai_image_view_angle(
     source_ref = await _prepare_outfit_image(raw, "source", label="原图")
     refs: list[tuple[bytes, str]] = [(source_ref[0], source_ref[1])]
     size = outfit_change.nearest_aspect_ratio(source_ref[2], source_ref[3])
+    # 按原图主体朝向换算最终朝向；判断失败时按正面处理，不影响提交
+    source_facing: int | None = None
+    if any(v["azimuth"] for v in view_list):
+        try:
+            source_facing = await view_angle.detect_facing(source_ref[0])
+        except Exception:
+            logger.warning("view-angle: facing detection failed", exc_info=True)
 
     labels = [view_angle.view_label(v["azimuth"], v["elevation"], v["distance"]) for v in view_list]
     display_prompt = f"切换视角：{'、'.join(labels)}"
@@ -7387,7 +7394,8 @@ async def ai_image_view_angle(
     for batch_index, (view, label) in enumerate(zip(view_list, labels)):
         jid = uuid.uuid4().hex
         job_ids.append(jid)
-        prompt = view_angle.build_view_prompt(**view, mode=mode, extra_prompt=extra_prompt)
+        prompt = view_angle.build_view_prompt(**view, mode=mode, extra_prompt=extra_prompt,
+                                             source_facing=source_facing or 0)
         job_display = f"切换视角：{label}"
         request_meta = {
             "operation": "view-angle",
@@ -7405,7 +7413,7 @@ async def ai_image_view_angle(
             "context_reference_count": 0,
             "reference_names": [name for _content, name in refs],
             "reference_images": reference_images,
-            "view_angle": {**view, "mode": mode, "label": label,
+            "view_angle": {**view, "mode": mode, "label": label, "source_facing": source_facing,
                            "source_name": (source_name or "")[:120], "extra_prompt": extra_prompt.strip()[:300]},
         }
         save_ai_image_job(

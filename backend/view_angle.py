@@ -11,24 +11,43 @@ from __future__ import annotations
 
 import io
 
-# 方位角：相机从原机位出发向画面右侧绕主体转动的角度（与前端机位控件一致）。
-# 实测只写「相机绕到画面右侧」时，人物常被画成朝相反方向，所以直接用画面方向写出结果，并明确否定反方向。
+# 方位角：相机从原机位出发向画面右侧绕主体转动的角度（与前端机位控件一致），label 是机位名
 AZIMUTHS: dict[int, dict[str, str]] = {
-    0: {"label": "正面", "desc": "保持原图的水平观察方向"},
-    45: {"label": "右前方", "desc": "3/4 侧面：主体原地向画面左侧转身约 45°，脸和身体正面斜朝画面左侧，"
-                                    "能看到主体正面和它自身左侧的一部分。注意是朝画面左侧，不要朝画面右侧"},
-    90: {"label": "右侧", "desc": "正侧面：主体的脸和身体正面朝向画面左侧（看向画面的左边缘），"
-                                  "镜头看到的是主体自身的左侧。注意是朝画面左侧，不要朝画面右侧"},
-    135: {"label": "右后方", "desc": "3/4 背面：主体大部分背对镜头，脸和身体正面朝向画面左后方，"
-                                     "能看到背面和主体自身的左侧。注意是朝画面左后方，不要朝画面右后方"},
-    180: {"label": "背面", "desc": "背面：主体完全背对镜头，看到原图中看不到的背面"},
-    225: {"label": "左后方", "desc": "3/4 背面：主体大部分背对镜头，脸和身体正面朝向画面右后方，"
-                                     "能看到背面和主体自身的右侧。注意是朝画面右后方，不要朝画面左后方"},
-    270: {"label": "左侧", "desc": "正侧面：主体的脸和身体正面朝向画面右侧（看向画面的右边缘），"
-                                   "镜头看到的是主体自身的右侧。注意是朝画面右侧，不要朝画面左侧"},
-    315: {"label": "左前方", "desc": "3/4 侧面：主体原地向画面右侧转身约 45°，脸和身体正面斜朝画面右侧，"
-                                     "能看到主体正面和它自身右侧的一部分。注意是朝画面右侧，不要朝画面左侧"},
+    0: {"label": "正面"},
+    45: {"label": "右前方"},
+    90: {"label": "右侧"},
+    135: {"label": "右后方"},
+    180: {"label": "背面"},
+    225: {"label": "左后方"},
+    270: {"label": "左侧"},
+    315: {"label": "左前方"},
 }
+
+# 主体在画面中的朝向，用「正面朝镜头时相机需要转到的方位」编码，与 AZIMUTHS 同一套角度。
+# 最终朝向 = 原图朝向 + 用户选的机位转角。实测只写「相机绕到画面右侧」时人物常被画成反方向，
+# 所以提示词直接用画面方向写出最终朝向，并明确否定反方向。
+FACINGS: dict[int, str] = {
+    0: "正面：主体的脸和身体正面朝向镜头",
+    45: "3/4 侧面：主体的脸和身体正面斜朝画面左侧，能看到主体正面和它自身左侧的一部分。注意是朝画面左侧，不要朝画面右侧",
+    90: "正侧面：主体的脸和身体正面朝向画面左侧（看向画面的左边缘），镜头看到的是主体自身的左侧。注意是朝画面左侧，不要朝画面右侧",
+    135: "3/4 背面：主体大部分背对镜头，脸和身体正面朝向画面左后方，能看到背面和主体自身的左侧。注意是朝画面左后方，不要朝画面右后方",
+    180: "背面：主体完全背对镜头，看到原图中看不到的背面",
+    225: "3/4 背面：主体大部分背对镜头，脸和身体正面朝向画面右后方，能看到背面和主体自身的右侧。注意是朝画面右后方，不要朝画面左后方",
+    270: "正侧面：主体的脸和身体正面朝向画面右侧（看向画面的右边缘），镜头看到的是主体自身的右侧。注意是朝画面右侧，不要朝画面左侧",
+    315: "3/4 侧面：主体的脸和身体正面斜朝画面右侧，能看到主体正面和它自身右侧的一部分。注意是朝画面右侧，不要朝画面左侧",
+}
+
+# 视觉模型判断原图朝向时的选项，字母对应 FACINGS 的角度
+FACING_QUESTION = """判断图中主要主体（人物看身体躯干，不看头和视线；物体看它的正面）朝向画面的哪个方向，只回答一个字母：
+A 正对镜头
+B 身体斜着朝向画面左侧（3/4 侧面，能看到大部分正面）
+C 正侧面，朝向画面左侧
+D 大部分背对镜头，朝向画面左后方
+E 背对镜头
+F 大部分背对镜头，朝向画面右后方
+G 正侧面，朝向画面右侧
+H 身体斜着朝向画面右侧（3/4 侧面，能看到大部分正面）"""
+FACING_CODES = {"A": 0, "B": 45, "C": 90, "D": 135, "E": 180, "F": 225, "G": 270, "H": 315}
 
 # 俯仰：相机高度相对原机位的变化
 ELEVATIONS: dict[int, dict[str, str]] = {
@@ -112,9 +131,36 @@ def normalize_views(raw_views: list) -> list[dict]:
     return views
 
 
+def parse_facing(answer: str) -> int | None:
+    """视觉模型的回答 → 原图朝向角度；回答不在选项里时返回 None。"""
+    letter = (answer or "").strip().lstrip("*「（(").upper()[:1]
+    return FACING_CODES.get(letter)
+
+
+async def detect_facing(image_bytes: bytes, *, timeout: float = 30) -> int | None:
+    """用视觉模型判断原图主体朝向；服务不可用或回答无法识别时返回 None，调用方按正面处理。"""
+    from .ai_image import compress_image_to_data_url
+    from .model_routing import routed_chat_completion
+
+    payload = {
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": FACING_QUESTION},
+            {"type": "image_url", "image_url": {"url": compress_image_to_data_url(image_bytes, 768)}},
+        ]}],
+        # 推理模型的思考也计入 max_tokens，给太少会返回空内容
+        "max_tokens": 600, "temperature": 0,
+    }
+    resp = await routed_chat_completion("vlm", payload, timeout=timeout)
+    content = (((resp.json() or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    return parse_facing(str(content))
+
+
 def build_view_prompt(*, azimuth: int, elevation: int, distance: str = "same",
-                      mode: str = "camera", extra_prompt: str = "") -> str:
-    """拼装切换视角的内置 prompt。图1 为原图，也是唯一参考图。"""
+                      mode: str = "camera", extra_prompt: str = "", source_facing: int = 0) -> str:
+    """拼装切换视角的内置 prompt。图1 为原图，也是唯一参考图。
+
+    source_facing 是原图主体的朝向（FACINGS 的角度），最终朝向 = 原图朝向 + 机位转角。
+    """
     lines = [
         "任务：多视角重绘。把图1中的同一个主体，换成从另一个机位观察到的样子，输出一张新的完整照片。",
         "",
@@ -122,7 +168,10 @@ def build_view_prompt(*, azimuth: int, elevation: int, distance: str = "same",
     ]
     if mode == "subject":
         lines.append("- 相机位置和背景保持与图1一致，让主体在原地转动，使镜头看到以下角度：")
-    lines.append(f"- 水平方位：{AZIMUTHS[azimuth]['desc']}。")
+    if azimuth == 0:
+        lines.append("- 水平方位：保持图1中主体的朝向不变。")
+    else:
+        lines.append(f"- 水平方位：{FACINGS[(source_facing + azimuth) % 360]}。与图1相比，主体的朝向要明显改变。")
     lines.append(f"- 俯仰：{ELEVATIONS[elevation]['desc']}。")
     lines.append(f"- 景别：{DISTANCES[distance]['desc']}。")
     lines += [
