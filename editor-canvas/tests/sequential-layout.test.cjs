@@ -12,7 +12,7 @@ require.extensions['.ts'] = (module, filename) => {
   })
   module._compile(outputText, filename)
 }
-const { useCanvasStore, getSortedSequentialImages } = require('../src/store/canvasStore.ts')
+const { useCanvasStore, getSortedSequentialImages, getNextGridSlot } = require('../src/store/canvasStore.ts')
 const { useHistoryStore } = require('../src/store/historyStore.ts')
 if (previousLoader) require.extensions['.ts'] = previousLoader
 else delete require.extensions['.ts']
@@ -126,3 +126,43 @@ test('an empty eligible set does not dirty the document or add undo history', ()
   assert.equal(state().isDirty, false)
   assert.equal(useHistoryStore.getState().past.length, 0)
 })
+
+// 网格格子：锚点 (100, 200)，格子 420×560，间距 40
+const cell = (col, row) => ({ x: 100 + col * 460, y: 200 + row * 600 })
+const gridImage = (id, order) => {
+  const { x, y } = cell((order - 1) % 4, Math.floor((order - 1) / 4))
+  return image(id, x, y, order)
+}
+
+test('生成结果排到网格最后：第 4 张放在第一行末尾，第 5 张换行', () => {
+  const three = [gridImage('A', 1), gridImage('B', 2), gridImage('C', 3)]
+  const fourth = getNextGridSlot(three, [], 'page-1', 420, 560)
+  assert.deepEqual({ x: fourth.x, y: fourth.y, order: fourth.order }, { ...cell(3, 0), order: 4 })
+
+  const four = [...three, gridImage('D', 4)]
+  const fifth = getNextGridSlot(four, [], 'page-1', 420, 560)
+  assert.deepEqual({ x: fifth.x, y: fifth.y, order: fifth.order }, { ...cell(0, 1), order: 5 })
+})
+
+test('生成结果只算新图位置，不移动已有图片；格子被拖过来的图占住时顺延', () => {
+  // 用户把 X 拖到了第 5 格的位置（没有排布序号）
+  const images = [gridImage('A', 1), gridImage('B', 2), gridImage('C', 3), gridImage('D', 4),
+    image('X', cell(0, 1).x + 30, cell(0, 1).y + 20, undefined, { meta: {} })]
+  const before = JSON.stringify(images)
+  const slot = getNextGridSlot(images, [], 'page-1', 420, 560)
+  assert.deepEqual({ x: slot.x, y: slot.y, order: slot.order }, { ...cell(1, 1), order: 6 })
+  assert.equal(JSON.stringify(images), before)
+})
+
+test('横图按格子等比缩小并水平居中，连续追加的视角依次排开', () => {
+  let images = [gridImage('A', 1)]
+  const slots = []
+  for (const id of ['L', 'R', 'B']) {
+    const slot = getNextGridSlot(images, [], 'page-1', 1536, 1024)
+    slots.push(slot)
+    images = [...images, image(id, slot.x, slot.y, slot.order, { width: slot.width, height: slot.height })]
+  }
+  assert.deepEqual(slots.map((s) => [s.order, s.width, s.height]), [[2, 420, 280], [3, 420, 280], [4, 420, 280]])
+  assert.deepEqual(slots.map((s) => s.x), [cell(1, 0).x, cell(2, 0).x, cell(3, 0).x])
+})
+

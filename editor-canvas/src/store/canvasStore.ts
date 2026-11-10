@@ -267,6 +267,45 @@ export const DESIGNFLOW_GRID_CELL_WIDTH = 420
 export const DESIGNFLOW_GRID_CELL_HEIGHT = 560
 export const DESIGNFLOW_GRID_GAP = 40
 
+/**
+ * 网格最后一个空格：生成结果（AI 换装、切换视角）按主画布的排序规则依次往后放，满 4 张换行。
+ * 只算新图的位置，不重排已有图片——用户可能手动摆过图，重排会让人找不到图；
+ * 这个格子已被拖过来的图或画板占住时，顺延到下一个空格。
+ */
+export function getNextGridSlot(
+  images: CanvasImage[],
+  frames: CanvasFrame[],
+  pageId: string,
+  rawWidth: number,
+  rawHeight: number
+): { x: number; y: number; width: number; height: number; order: number; anchorX: number; anchorY: number } {
+  const context = getSequentialLayoutContext(images, frames, pageId)
+  const scale = Math.min(1, DESIGNFLOW_GRID_CELL_WIDTH / Math.max(1, rawWidth), DESIGNFLOW_GRID_CELL_HEIGHT / Math.max(1, rawHeight))
+  const width = Math.max(1, Math.round(rawWidth * scale))
+  const height = Math.max(1, Math.round(rawHeight * scale))
+  const itemsPerBlock = DESIGNFLOW_GRID_COLUMNS * DESIGNFLOW_GRID_ROWS_PER_BLOCK
+  const blockWidth = DESIGNFLOW_GRID_COLUMNS * (DESIGNFLOW_GRID_CELL_WIDTH + DESIGNFLOW_GRID_GAP)
+  const occupied = [
+    ...images.filter((im) => im.pageId === pageId),
+    ...frames.filter((f) => f.pageId === pageId),
+  ]
+  for (let order = context.nextOrder; ; order++) {
+    const index = order - 1
+    const block = Math.floor(index / itemsPerBlock)
+    const indexInBlock = index % itemsPerBlock
+    const col = indexInBlock % DESIGNFLOW_GRID_COLUMNS
+    const row = Math.floor(indexInBlock / DESIGNFLOW_GRID_COLUMNS)
+    const x = context.anchorX + block * blockWidth + col * (DESIGNFLOW_GRID_CELL_WIDTH + DESIGNFLOW_GRID_GAP) +
+      Math.round((DESIGNFLOW_GRID_CELL_WIDTH - width) / 2)
+    const y = context.anchorY + row * (DESIGNFLOW_GRID_CELL_HEIGHT + DESIGNFLOW_GRID_GAP)
+    const taken = occupied.some((o) => x < o.x + o.width && x + width > o.x && y < o.y + o.height && y + height > o.y)
+    // 上限只是防御，正常几格之内就能找到空位
+    if (!taken || order - context.nextOrder > 400) {
+      return { x, y, width, height, order, anchorX: context.anchorX, anchorY: context.anchorY }
+    }
+  }
+}
+
 export function isSequentialLayoutImage(img: CanvasImage, pageId: string): boolean {
   if (img.pageId !== pageId) return false
   if (img.locked) return false

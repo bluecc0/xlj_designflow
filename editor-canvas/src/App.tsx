@@ -25,7 +25,7 @@ import { QuickEditMarkerOverlay } from './components/QuickEditMarkerOverlay'
 import { SnapGuides } from './components/SnapGuides'
 import type { OutpaintMargins, CanvasImage, QuickEditMarker } from './types'
 import { useViewportStore } from './store/viewportStore'
-import { useCanvasStore } from './store/canvasStore'
+import { getNextGridSlot, useCanvasStore } from './store/canvasStore'
 import { useHistoryStore } from './store/historyStore'
 import { useAIOperationStore } from './store/aiOperationStore'
 import {
@@ -518,7 +518,7 @@ export function App() {
     [claimOperation, updateOperation, releaseOperation, addImage, setSelected]
   )
 
-  // ─── AI 换装：提交后后台跟踪任务，结果按完成顺序放到原图右侧空位 ───
+  // ─── AI 换装：提交后后台跟踪任务，结果按完成顺序排到画布网格最后 ───
   const updateOutfitTask = useCallback((taskId: string, patch: Partial<OutfitTask>) => {
     setOutfitTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, ...patch } : t)))
   }, [])
@@ -539,34 +539,19 @@ export function App() {
       // 不能退回当前画布，否则结果会出现在另一份个人或团队画布里
       if (!sameCanvasSource(origin, useTeamStore.getState().source)) return false
       const state = useCanvasStore.getState()
-      // 原图可能已被移动，优先取最新位置
       const anchor = state.images.find((im) => im.id === source.id) || source
-      // 结果写回原图所在页面（用户可能在生成期间切换了画布）；原页面已删除/归档时才退回当前页面
+      // 结果写回原图所在页面（用户可能在生成期间切换了页面）；原页面已删除/归档时才退回当前页面
       const pageId = state.pages.some((p) => p.id === anchor.pageId && !p.archived) ? anchor.pageId : state.activePageId
-      const frameId =
-        anchor.frameId && state.frames.some((f) => f.id === anchor.frameId && f.pageId === pageId) ? anchor.frameId : null
-      const height = anchor.height
-      const width = Math.max(1, Math.round((height * (result.width || 1)) / (result.height || 1)))
-      const gap = 24
-      const pageImages = state.images.filter((im) => im.pageId === pageId)
-      let x = anchor.x + anchor.width + gap
-      const y = anchor.y
-      // 向右寻找不与已有图片重叠的位置（多次换装的结果依次排开）
-      for (let guard = 0; guard < 200; guard++) {
-        const hit = pageImages.find(
-          (im) => x < im.x + im.width && x + width > im.x && y < im.y + im.height && y + height > im.y
-        )
-        if (!hit) break
-        x = hit.x + hit.width + gap
-      }
+      // 按主画布的排序规则排到网格最后一个空格（满 4 张换行），已有图片一律不动
+      const slot = getNextGridSlot(state.images, state.frames, pageId, result.width || anchor.width, result.height || anchor.height)
       addImage({
         id: 'img-' + Math.random().toString(36).slice(2, 10),
         pageId,
-        frameId,
-        x,
-        y,
-        width,
-        height,
+        frameId: null,
+        x: slot.x,
+        y: slot.y,
+        width: slot.width,
+        height: slot.height,
         rotation: 0,
         url: result.imageUrl,
         name: `${anchor.name || 'image'}-${nameSuffix}`,
@@ -574,7 +559,14 @@ export function App() {
         naturalHeight: result.height,
         locked: false,
         opacity: 1,
-        meta,
+        meta: {
+          ...meta,
+          designflowLayoutOrder: slot.order,
+          designflowLayoutAnchorX: slot.anchorX,
+          designflowLayoutAnchorY: slot.anchorY,
+          designflowOriginalWidth: result.width,
+          designflowOriginalHeight: result.height,
+        },
       })
       return true
     },
@@ -650,14 +642,14 @@ export function App() {
           done > 0
             ? failed > 0
               ? `完成 ${done} 张，失败 ${failed} 张：${lastError}`
-              : `换装完成，已放到原图右侧`
+              : '换装完成，已放到画布末尾'
             : lastError || '生成失败',
       })
     },
     [outfitImage, placeOutfitResult, updateOutfitTask, dismissOutfitTask]
   )
 
-  // ─── 切换视角：与换装共用后台任务托盘，结果按视角顺序放到原图右侧 ───
+  // ─── 切换视角：与换装共用后台任务托盘，结果按视角顺序排到画布网格最后 ───
   const handleViewAngleSubmit = useCallback(
     async (req: ViewAngleRequest) => {
       const source = viewAngleImage
@@ -742,7 +734,7 @@ export function App() {
           done > 0
             ? failed > 0
               ? `完成 ${done} 张，失败 ${failed} 张：${lastError}`
-              : '已放到原图右侧，看不到的一面由 AI 推测'
+              : '已放到画布末尾，看不到的一面由 AI 推测'
             : lastError || '生成失败',
       })
     },
