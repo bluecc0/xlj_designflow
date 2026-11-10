@@ -81,7 +81,7 @@ from .ai_image import (
 )
 from .common_helpers import _extract_first_json_object, _resolve_image_data_url, make_sse
 from .product_sku_library import SkuFolderLibrary
-from . import outfit_change
+from . import outfit_change, view_angle
 from .bfl_vto import FLUX_VTO_MODEL, PROVIDER_BFL, generate_vto_async
 from .ai_job_recovery import execute_image_job
 from .task_checkpoint import checkpoint, execution_lock
@@ -7297,6 +7297,165 @@ async def ai_image_outfit_change(
         "resolved_prompt": prompt,
         "size": size,
         "model": resolved_model,
+    }
+    if batch_count == 1:
+        response["job_id"] = job_ids[0]
+    else:
+        response["job_ids"] = job_ids
+        response["batch_id"] = batch_id
+    return response
+
+
+VIEW_ANGLE_MODEL = "gpt-image-2.6"
+
+
+@app.post("/ai-image/view-angle")
+@_ai_image_submit_dedup
+async def ai_image_view_angle(
+    request: Request,
+    image: UploadFile = File(...),
+    views: str = Form("[]"),
+    mode: str = Form("camera"),
+    extra_prompt: str = Form(""),
+    resolution: str = Form("1K"),
+    source_name: str = Form(""),
+    client_request_id: str = Form(""),
+):
+    """切换视角：原图为唯一参考图，按机位控件选的每个视角各生成一张（内置保持主体不变的 prompt）。
+
+    views: [{"azimuth": 180, "elevation": 0, "distance": "same"}]，最多 4 个。
+    返回结构与 /ai-image 一致（job_id / job_ids），另附每个任务的视角名 labels。
+    """
+    user = _current_user(request)
+    client_req = _sanitize_log_field(
+        (client_request_id or "").strip() or (request.headers.get("x-client-request-id") or "").strip() or "-",
+        64,
+    )
+    try:
+        view_list = view_angle.normalize_views(_parse_json_form(views, [], field="views"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    mode = mode if mode in view_angle.MODES else "camera"
+    resolution = (resolution or "1K").strip().upper()
+    if resolution not in {"1K", "2K", "4K"}:
+        resolution = "1K"
+
+    raw = await _read_outfit_upload(image, label="原图")
+    try:
+        raw = await asyncio.to_thread(view_angle.flatten_alpha, raw)
+    except Exception as exc:
+        raise HTTPException(400, "原图无法解析，请确认是 PNG/JPG/WEBP 图片") from exc
+    source_ref = await _prepare_outfit_image(raw, "source", label="原图")
+    refs: list[tuple[bytes, str]] = [(source_ref[0], source_ref[1])]
+    size = outfit_change.nearest_aspect_ratio(source_ref[2], source_ref[3])
+    # 按原图主体朝向换算最终朝向；判断失败时按正面处理，不影响提交
+    source_facing: int | None = None
+    if any(v["azimuth"] and v["distance"] != "over_shoulder" for v in view_list):
+        try:
+            source_facing = await view_angle.detect_facing(source_ref[0])
+        except Exception:
+            logger.warning("view-angle: facing detection failed", exc_info=True)
+
+    labels = [view_angle.view_label(v["azimuth"], v["elevation"], v["distance"], v["dutch"]) for v in view_list]
+    display_prompt = f"切换视角：{'、'.join(labels)}"
+    if extra_prompt.strip():
+        display_prompt += f"（{extra_prompt.strip()[:60]}）"
+
+    created_at = time.time()
+    session = create_ai_chat_session(user_id=user["id"], title=_build_ai_chat_title(display_prompt), created_at=created_at)
+    session_id = session["id"]
+    append_ai_chat_message(
+        session_id=session_id,
+        user_id=user["id"],
+        role="user",
+        type="user_text",
+        text=display_prompt,
+        meta={"model": VIEW_ANGLE_MODEL, "size": size, "resolution": resolution,
+              "batchCount": len(view_list), "operation": "view-angle"},
+        created_at=created_at,
+    )
+
+    batch_count = len(view_list)
+    batch_id = uuid.uuid4().hex if batch_count > 1 else ""
+    reference_storage_id = batch_id or uuid.uuid4().hex
+    try:
+        stored_urls = [_ai_image_public_url(Path(p)) for p in save_user_refs(user["id"], reference_storage_id, refs)]
+    except Exception:
+        logger.warning("view-angle: failed to save refs for %s", reference_storage_id, exc_info=True)
+        raise HTTPException(503, "参考图暂时无法保存，请稍后重试")
+    reference_images = [{
+        "type": "manual",
+        "name": refs[0][1],
+        "url": stored_urls[0] if stored_urls else "",
+        "label": "图1 · 原图",
+    }]
+
+    job_ids: list[str] = []
+    for batch_index, (view, label) in enumerate(zip(view_list, labels)):
+        jid = uuid.uuid4().hex
+        job_ids.append(jid)
+        prompt = view_angle.build_view_prompt(**view, mode=mode, extra_prompt=extra_prompt,
+                                             source_facing=source_facing or 0)
+        job_display = f"切换视角：{label}"
+        request_meta = {
+            "operation": "view-angle",
+            "recovery": {"version": 1, "phase": "queued"},
+            "execution_prompt": prompt,
+            "client_request_id": client_req,
+            "chat_session_id": session_id,
+            "variant": "flare",
+            "quality": "auto",
+            "batch_id": batch_id,
+            "batch_index": batch_index,
+            "batch_count": batch_count,
+            "reference_storage_job_id": reference_storage_id,
+            "manual_reference_count": len(refs),
+            "context_reference_count": 0,
+            "reference_names": [name for _content, name in refs],
+            "reference_images": reference_images,
+            "view_angle": {**view, "mode": mode, "label": label, "source_facing": source_facing,
+                           "source_name": (source_name or "")[:120], "extra_prompt": extra_prompt.strip()[:300]},
+        }
+        save_ai_image_job(
+            job_id=jid, user_id=user["id"], status="processing",
+            model=VIEW_ANGLE_MODEL, prompt=job_display, size=size,
+            provider=PROVIDER_AUTO, resolution=resolution,
+            original_prompt=job_display, resolved_prompt=prompt,
+            has_reference=True, reference_count=len(refs),
+            request_meta=request_meta, created_at=created_at,
+        )
+        log_operation(
+            user_id=user["id"], username=user["username"],
+            action="ai_image",
+            detail=f"view-angle job={jid[:8]} client={client_req} view={label} mode={mode} size={size} res={resolution}",
+            payload=json.dumps({
+                "job_id": jid, "operation": "view-angle", "client_request_id": client_req,
+                "model": VIEW_ANGLE_MODEL, "size": size, "resolution": resolution,
+                "view": view, "mode": mode, "batch_count": batch_count,
+            }, ensure_ascii=False),
+        )
+        _track_ai_image_task(
+            _run_ai_image_background(
+                job_id=jid, user_id=user["id"], username=user["username"],
+                session_id=session_id,
+                provider=PROVIDER_AUTO,
+                model=VIEW_ANGLE_MODEL, prompt=prompt,
+                size=size, resolution=resolution,
+                variant="flare", quality="auto",
+                refs=refs, has_reference=True, created_at=created_at,
+                original_prompt=job_display, resolved_prompt=prompt,
+                request_meta=request_meta,
+                batch_id=batch_id, batch_index=batch_index, batch_count=batch_count,
+            )
+        )
+
+    response = {
+        "chat_session_id": session_id,
+        "status": "processing",
+        "client_request_id": client_req,
+        "size": size,
+        "model": VIEW_ANGLE_MODEL,
+        "labels": labels,
     }
     if batch_count == 1:
         response["job_id"] = job_ids[0]

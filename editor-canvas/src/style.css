@@ -269,29 +269,6 @@ button {
   z-index: 8;
 }
 
-.designflow-ai-dot {
-  position: absolute;
-  top: 3px;
-  right: 5px;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #f59e0b;
-  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.95);
-  animation: designflow-toolbar-pulse 2.6s ease-in-out infinite;
-}
-
-@keyframes designflow-toolbar-pulse {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.25);
-    opacity: 0.65;
-  }
-}
-
 .designflow-toolbar-divider {
   width: 1px;
   height: 14px;

@@ -20,11 +20,12 @@ import { ImageCompareModal } from './components/ImageCompareModal'
 import { QuickEditPopover } from './components/QuickEditPopover'
 import { OutfitChangeModal } from './components/OutfitChangeModal'
 import { OutfitTaskTray, type OutfitTask } from './components/OutfitTaskTray'
+import { ViewAnglePanel } from './components/ViewAnglePanel'
 import { QuickEditMarkerOverlay } from './components/QuickEditMarkerOverlay'
 import { SnapGuides } from './components/SnapGuides'
 import type { OutpaintMargins, CanvasImage, QuickEditMarker } from './types'
 import { useViewportStore } from './store/viewportStore'
-import { useCanvasStore } from './store/canvasStore'
+import { gridResultPlacement, useCanvasStore } from './store/canvasStore'
 import { useHistoryStore } from './store/historyStore'
 import { useAIOperationStore } from './store/aiOperationStore'
 import {
@@ -34,14 +35,17 @@ import {
   pollJob,
   normalizeAssetUrl,
   submitOutfitChange,
+  submitViewAngle,
   type OutfitChangeRequest,
+  type ViewAngleRequest,
   type OutpaintingMode,
 } from './services/aiImageService'
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 import { loadImagesFromFiles } from './utils/imageLoader'
 import { DEFAULT_OUTPAINTING_LIMITS, getOutpaintingPlan } from './utils/outpainting'
 import { buildSnapshotSavePayload, isStaleSnapshotConflict, requestSnapshot } from './utils/snapshotSave'
-import { useTeamStore } from './store/teamStore'
+import { useTeamStore, type CanvasSource } from './store/teamStore'
+import { NOT_PLACED_MESSAGE, sameCanvasSource, submitWithPlaceholder } from './utils/canvasTask'
 import { teamSnapshotSaveUrl, teamSnapshotUrl } from './services/teamCanvasService'
 import { handleTeamCanvasGone, useTeamCanvasSync } from './useTeamCanvasSync'
 import { TeamActivityPanel } from './components/TeamActivityPanel'
@@ -219,6 +223,7 @@ export function App() {
   const [quickEditToast, setQuickEditToast] = useState<string | null>(null)
   const [isQuickEditSubmitting, setIsQuickEditSubmitting] = useState(false)
   const [outfitImage, setOutfitImage] = useState<CanvasImage | null>(null)
+  const [viewAngleImage, setViewAngleImage] = useState<CanvasImage | null>(null)
   const [outfitTasks, setOutfitTasks] = useState<OutfitTask[]>([])
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const dragDepthRef = useRef(0)
@@ -472,6 +477,7 @@ export function App() {
             ? `正在使用 gpt-image-2.6 结合 ${markers.length} 处坐标精准生图...`
             : '正在使用 gpt-image-2.6 生成图片...'
           setQuickEditToast(toastMsg)
+          const origin = useTeamStore.getState().source
           const result = await runQuickEdit(
             targetImage.url,
             finalPrompt,
@@ -479,15 +485,14 @@ export function App() {
               updateOperation({ message: msg, progress })
             }
           )
-          const newX = targetImage.x + targetImage.width + 24
-          const newY = targetImage.y
+          // 只放回发起时的那份画布；排到网格最后一个空格（满 4 张换行），已有图片不动
+          if (!sameCanvasSource(origin, useTeamStore.getState().source)) throw new Error(NOT_PLACED_MESSAGE)
+          const { layoutMeta, ...place } = gridResultPlacement(
+            targetImage.pageId, result.width || targetImage.width, result.height || targetImage.height
+          )
           const newImg = addImage({
             id: 'img-' + Math.random().toString(36).slice(2, 10),
-            frameId: targetImage.frameId,
-            x: newX,
-            y: newY,
-            width: targetImage.width,
-            height: targetImage.height,
+            ...place,
             rotation: 0,
             url: result.imageUrl,
             name: `${targetImage.name || 'image'}-编辑`,
@@ -495,7 +500,7 @@ export function App() {
             naturalHeight: result.height,
             locked: false,
             opacity: 1,
-            meta: { operation: 'quick-edit', prompt: prompt.trim(), sourceImageId: targetImage.id },
+            meta: { operation: 'quick-edit', prompt: prompt.trim(), sourceImageId: targetImage.id, ...layoutMeta },
           })
           setSelected([newImg.id], 'image')
           setQuickEditToast('快捷编辑生图完成')
@@ -513,7 +518,7 @@ export function App() {
     [claimOperation, updateOperation, releaseOperation, addImage, setSelected]
   )
 
-  // ─── AI 换装：提交后后台跟踪任务，结果按完成顺序放到原图右侧空位 ───
+  // ─── AI 换装：提交后后台跟踪任务，结果按完成顺序排到画布网格最后 ───
   const updateOutfitTask = useCallback((taskId: string, patch: Partial<OutfitTask>) => {
     setOutfitTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, ...patch } : t)))
   }, [])
@@ -523,45 +528,33 @@ export function App() {
   }, [])
 
   const placeOutfitResult = useCallback(
-    (source: CanvasImage, result: { imageUrl: string; width: number; height: number }, meta: Record<string, any>) => {
+    (
+      source: CanvasImage,
+      result: { imageUrl: string; width: number; height: number },
+      meta: Record<string, any>,
+      origin: CanvasSource,
+      nameSuffix = '换装'
+    ): boolean => {
+      // 只放回发起任务时的那份画布；画布已经换了（例如团队画布被取消分享后自动回到个人画布）就不放，
+      // 不能退回当前画布，否则结果会出现在另一份个人或团队画布里
+      if (!sameCanvasSource(origin, useTeamStore.getState().source)) return false
       const state = useCanvasStore.getState()
-      // 原图可能已被移动，优先取最新位置
       const anchor = state.images.find((im) => im.id === source.id) || source
-      // 结果写回原图所在页面（用户可能在生成期间切换了画布）；原页面已删除/归档时才退回当前页面
-      const pageId = state.pages.some((p) => p.id === anchor.pageId && !p.archived) ? anchor.pageId : state.activePageId
-      const frameId =
-        anchor.frameId && state.frames.some((f) => f.id === anchor.frameId && f.pageId === pageId) ? anchor.frameId : null
-      const height = anchor.height
-      const width = Math.max(1, Math.round((height * (result.width || 1)) / (result.height || 1)))
-      const gap = 24
-      const pageImages = state.images.filter((im) => im.pageId === pageId)
-      let x = anchor.x + anchor.width + gap
-      const y = anchor.y
-      // 向右寻找不与已有图片重叠的位置（多次换装的结果依次排开）
-      for (let guard = 0; guard < 200; guard++) {
-        const hit = pageImages.find(
-          (im) => x < im.x + im.width && x + width > im.x && y < im.y + im.height && y + height > im.y
-        )
-        if (!hit) break
-        x = hit.x + hit.width + gap
-      }
+      // 写回原图所在页面（原页面已删除/归档时退回当前页面），按主画布的排序规则排到网格最后一个空格
+      const { layoutMeta, ...place } = gridResultPlacement(anchor.pageId, result.width || anchor.width, result.height || anchor.height)
       addImage({
         id: 'img-' + Math.random().toString(36).slice(2, 10),
-        pageId,
-        frameId,
-        x,
-        y,
-        width,
-        height,
+        ...place,
         rotation: 0,
         url: result.imageUrl,
-        name: `${anchor.name || 'image'}-换装`,
+        name: `${anchor.name || 'image'}-${nameSuffix}`,
         naturalWidth: result.width,
         naturalHeight: result.height,
         locked: false,
         opacity: 1,
-        meta,
+        meta: { ...meta, ...layoutMeta },
       })
+      return true
     },
     [addImage]
   )
@@ -570,24 +563,28 @@ export function App() {
     async (req: OutfitChangeRequest) => {
       const source = outfitImage
       if (!source) return
-      // 提交失败直接抛给弹窗展示，弹窗保持打开便于调整后重试
-      const submitted = await submitOutfitChange(req)
+      const origin = useTeamStore.getState().source
       const skus = Array.from(new Set(req.assets.map((a) => a.sku).filter(Boolean)))
       const taskId = 'outfit-' + Math.random().toString(36).slice(2, 10)
-      const total = submitted.jobIds.length
-      setOutfitTasks((prev) => [
-        ...prev,
-        {
-          id: taskId,
-          label: skus.length ? skus.join('、') : '本地素材',
-          thumbUrl: normalizeAssetUrl(source.url),
-          status: 'running',
-          total,
-          done: 0,
-          failed: 0,
-          message: '已提交，排队中…',
-        },
-      ])
+      // 提交前先登记任务，提交期间也不能切换画布；提交失败撤掉任务并抛给弹窗展示，弹窗保持打开便于调整后重试
+      const submitted = await submitWithPlaceholder(
+        () => setOutfitTasks((prev) => [
+          ...prev,
+          {
+            id: taskId,
+            label: skus.length ? skus.join('、') : '本地素材',
+            thumbUrl: normalizeAssetUrl(source.url),
+            status: 'running',
+            total: Math.max(1, req.batchCount),
+            done: 0,
+            failed: 0,
+            message: '正在提交…',
+          },
+        ]),
+        () => dismissOutfitTask(taskId),
+        () => submitOutfitChange(req),
+      )
+      updateOutfitTask(taskId, { total: submitted.jobIds.length, message: '已提交，排队中…' })
       setOutfitImage(null)
 
       let done = 0
@@ -607,14 +604,15 @@ export function App() {
               width: source.naturalWidth || source.width,
               height: source.naturalHeight || source.height,
             }))
-            placeOutfitResult(source, { imageUrl, ...dims }, {
+            const placed = placeOutfitResult(source, { imageUrl, ...dims }, {
               jobId,
               model: submitted.model,
               size: submitted.size,
               resolvedPrompt: submitted.resolvedPrompt,
               operation: 'outfit-change',
               skus,
-            })
+            }, origin)
+            if (!placed) throw new Error(NOT_PLACED_MESSAGE)
             done += 1
           } catch (err: any) {
             failed += 1
@@ -630,11 +628,103 @@ export function App() {
           done > 0
             ? failed > 0
               ? `完成 ${done} 张，失败 ${failed} 张：${lastError}`
-              : `换装完成，已放到原图右侧`
+              : '换装完成，已放到画布末尾'
             : lastError || '生成失败',
       })
     },
-    [outfitImage, placeOutfitResult, updateOutfitTask]
+    [outfitImage, placeOutfitResult, updateOutfitTask, dismissOutfitTask]
+  )
+
+  // ─── 切换视角：与换装共用后台任务托盘，结果按视角顺序排到画布网格最后 ───
+  const handleViewAngleSubmit = useCallback(
+    async (req: ViewAngleRequest) => {
+      const source = viewAngleImage
+      if (!source) return
+      const origin = useTeamStore.getState().source
+      const taskId = 'view-' + Math.random().toString(36).slice(2, 10)
+      // 提交（含原图上传和后端识别原图朝向）可能持续数秒：先登记任务，提交期间也不能切换画布；
+      // 提交失败撤掉任务并抛给弹窗展示，弹窗保持打开便于重试
+      const submitted = await submitWithPlaceholder(
+        () => setOutfitTasks((prev) => [
+          ...prev,
+          {
+            id: taskId,
+            kind: 'view-angle',
+            label: '新视角',
+            thumbUrl: normalizeAssetUrl(source.url),
+            status: 'running',
+            total: req.views.length,
+            done: 0,
+            failed: 0,
+            message: '正在提交…',
+          },
+        ]),
+        () => dismissOutfitTask(taskId),
+        () => submitViewAngle(req),
+      )
+      updateOutfitTask(taskId, {
+        label: submitted.labels.join('、') || '新视角',
+        total: submitted.jobIds.length,
+        message: '已提交，排队中…',
+      })
+      setViewAngleImage(null)
+
+      let done = 0
+      let failed = 0
+      let lastError = ''
+      // 先全部等完再按视角顺序放置，避免先完成的视角排到前面
+      const results = await Promise.all(
+        submitted.jobIds.map(async (jobId, index) => {
+          try {
+            const job = await pollJob(jobId, 660, (message, progress) => {
+              updateOutfitTask(taskId, {
+                message,
+                progress: typeof progress === 'number' ? progress : undefined,
+              })
+            })
+            const imageUrl = normalizeAssetUrl(job.image_url)
+            const dims = await getImageDimensions(imageUrl).catch(() => ({
+              width: source.naturalWidth || source.width,
+              height: source.naturalHeight || source.height,
+            }))
+            done += 1
+            updateOutfitTask(taskId, { done, failed })
+            return { jobId, label: submitted.labels[index] || '新视角', imageUrl, ...dims }
+          } catch (err: any) {
+            failed += 1
+            lastError = feedback.message(err) || '生成失败'
+            updateOutfitTask(taskId, { done, failed })
+            return null
+          }
+        })
+      )
+      for (const result of results) {
+        if (!result) continue
+        const placed = placeOutfitResult(source, result, {
+          jobId: result.jobId,
+          model: submitted.model,
+          size: submitted.size,
+          operation: 'view-angle',
+          viewAngle: result.label,
+        }, origin, result.label)
+        if (!placed) {
+          done -= 1
+          failed += 1
+          lastError = NOT_PLACED_MESSAGE
+        }
+      }
+      if (failed) notifyError(`完成 ${done} 张，${failed} 张未完成。${lastError}`, '切换视角未完成，请稍后查看任务记录。', { key: taskId });
+      updateOutfitTask(taskId, {
+        status: done > 0 ? 'done' : 'error',
+        message:
+          done > 0
+            ? failed > 0
+              ? `完成 ${done} 张，失败 ${failed} 张：${lastError}`
+              : '已放到画布末尾，看不到的一面由 AI 推测'
+            : lastError || '生成失败',
+      })
+    },
+    [viewAngleImage, placeOutfitResult, updateOutfitTask, dismissOutfitTask]
   )
 
   // 1. 快捷键监听
@@ -643,7 +733,7 @@ export function App() {
       if (!snapshotHydratedRef.current) return
       // 换装弹窗打开时只处理弹窗内的按键，避免按钮聚焦时误删、撤销或复制画布内容。
       // 不拦截事件本身，保留检索回车、部位方向键及输入框的正常行为。
-      if (outfitImage) return
+      if (outfitImage || viewAngleImage) return
       // 忽略在输入框内的快捷键
       const target = e.target as HTMLElement | null
       const isInput =
@@ -916,6 +1006,7 @@ export function App() {
     }
   }, [
     outfitImage,
+    viewAngleImage,
     selectedIds,
     selectedType,
     images,
@@ -1923,6 +2014,10 @@ export function App() {
           onExecuteOutpainting={handleExecuteOutpainting}
           onCancelOutpainting={handleCancelOutpainting}
           onOpenCompareModal={(imgA, imgB) => setCompareImages([imgA, imgB])}
+          onOpenViewAngle={(img) => {
+            setQuickEditImage(null)
+            setViewAngleImage(img)
+          }}
         />
       </div>
 
@@ -1945,6 +2040,11 @@ export function App() {
           setSelected([img.id], 'image')
           setQuickEditImage(null)
           setOutfitImage(img)
+        }}
+        onOpenViewAngle={(img) => {
+          setSelected([img.id], 'image')
+          setQuickEditImage(null)
+          setViewAngleImage(img)
         }}
       />
 
@@ -1997,7 +2097,16 @@ export function App() {
         />
       )}
 
-      {/* AI 换装后台任务进度 */}
+      {/* 切换视角弹窗 */}
+      {viewAngleImage && (
+        <ViewAnglePanel
+          image={viewAngleImage}
+          onClose={() => setViewAngleImage(null)}
+          onSubmit={handleViewAngleSubmit}
+        />
+      )}
+
+      {/* AI 换装 / 切换视角后台任务进度 */}
       <OutfitTaskTray
         tasks={outfitTasks}
         onDismiss={dismissOutfitTask}

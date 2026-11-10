@@ -1,8 +1,10 @@
 import React, { memo, useEffect } from 'react'
-import { AlertCircle, CheckCircle2, Loader2, Shirt, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Loader2, Rotate3d, Shirt, X } from 'lucide-react'
 
 export interface OutfitTask {
   id: string
+  /** 任务来源，默认 AI 换装 */
+  kind?: 'outfit' | 'view-angle'
   label: string
   thumbUrl: string
   status: 'running' | 'done' | 'error'
@@ -21,7 +23,7 @@ interface Props {
 const AUTO_DISMISS_MS = 6000
 
 /**
- * AI 换装后台任务托盘：提交后弹窗即关闭，用户可继续编辑画布，这里展示进度与结果。
+ * AI 换装 / 切换视角后台任务托盘：提交后弹窗即关闭，用户可继续编辑画布，这里展示进度与结果。
  */
 export const OutfitTaskTray = memo(function OutfitTaskTray({ tasks, onDismiss }: Props) {
   // 完成后收起进度；失败原因由统一提示条展示。
@@ -90,11 +92,13 @@ export const OutfitTaskTray = memo(function OutfitTaskTray({ tasks, onDismiss }:
                 )}
                 {task.status === 'done' && <CheckCircle2 size={13} color="#16a34a" style={{ flexShrink: 0 }} />}
                 {task.status === 'error' && <AlertCircle size={13} color="#ef4444" style={{ flexShrink: 0 }} />}
-                <Shirt size={12} color="#687083" style={{ flexShrink: 0 }} />
+                {task.kind === 'view-angle'
+                  ? <Rotate3d size={12} color="#687083" style={{ flexShrink: 0 }} />
+                  : <Shirt size={12} color="#687083" style={{ flexShrink: 0 }} />}
                 <span
                   style={{ fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                 >
-                  AI 换装 · {task.label}
+                  {task.kind === 'view-angle' ? '切换视角' : 'AI 换装'} · {task.label}
                 </span>
                 {task.total > 1 && (
                   <span style={{ color: '#94a3b8', flexShrink: 0 }}>
