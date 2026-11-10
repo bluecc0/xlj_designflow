@@ -37,6 +37,30 @@ FACINGS: dict[int, str] = {
     315: "3/4 侧面：主体的脸和身体正面斜朝画面右侧，能看到主体正面和它自身右侧的一部分。注意是朝画面右侧，不要朝画面左侧",
 }
 
+# 摄像头模式：人物不动，只是相机换了位置。这里写的是相机换位后「看起来」的朝向，
+# 用来防止左右反掉（只写相机绕到哪一侧时，方向常被画反），不能写成让人物转身
+CAMERA_VIEWS: dict[int, str] = {
+    0: "主体正对镜头",
+    45: "主体看起来斜朝画面左侧，能看到主体正面和它自身左侧的一部分（不是朝画面右侧）",
+    90: "主体呈正侧面、看起来朝向画面左侧，看到的是主体自身的左侧（不是朝画面右侧）",
+    135: "主体大部分背对镜头、看起来朝向画面左后方，能看到背面和主体自身的左侧（不是右后方）",
+    180: "看到的是主体的背面",
+    225: "主体大部分背对镜头、看起来朝向画面右后方，能看到背面和主体自身的右侧（不是左后方）",
+    270: "主体呈正侧面、看起来朝向画面右侧，看到的是主体自身的右侧（不是朝画面左侧）",
+    315: "主体看起来斜朝画面右侧，能看到主体正面和它自身右侧的一部分（不是朝画面左侧）",
+}
+CAMERA_FREEZE = ("主体在图1那一刻的姿势、动作、手脚位置、表情和站立朝向完全不变，没有转身也没有移动；"
+                 "就像同一瞬间另一台相机从新机位拍下的照片，变化的只有相机位置和随之改变的透视与背景")
+
+
+def camera_move(azimuth: int) -> str:
+    """机位转角 → 相机移动的描述（摄像头模式）。"""
+    if azimuth == 180:
+        return "相机绕到主体正后方（水平绕主体转 180°）"
+    side, angle = ("右", azimuth) if azimuth < 180 else ("左", 360 - azimuth)
+    return f"相机从图1的拍摄位置出发，水平向画面{side}侧绕主体移动约 {angle}°"
+
+
 # 视觉模型判断原图朝向时的选项，字母对应 FACINGS 的角度
 FACING_QUESTION = """判断图中主要主体（人物看身体躯干，不看头和视线；物体看它的正面）朝向画面的哪个方向，只回答一个字母：
 A 正对镜头
@@ -186,22 +210,27 @@ def build_view_prompt(*, azimuth: int, elevation: int, distance: str = "same", d
 
     source_facing 是原图主体的朝向（FACINGS 的角度），最终朝向 = 原图朝向 + 机位转角。
     """
-    lines = [
-        "任务：多视角重绘。把图1中的同一个主体，换成从另一个机位观察到的样子，输出一张新的完整照片。",
-        "",
-        "新视角：",
-    ]
-    if mode == "subject":
+    camera = mode != "subject"
+    task = ("任务：换机位重拍。想象另一台相机在同一瞬间、从另一个位置拍下了图1这一幕，输出这台相机拍到的完整照片。"
+            if camera else "任务：多视角重绘。把图1中的同一个主体，换成从另一个角度观察到的样子，输出一张新的完整照片。")
+    lines = [task, "", "新视角："]
+    if not camera:
         lines.append("- 相机位置和背景保持与图1一致，让主体在原地转动，使镜头看到以下角度：")
     if distance == "over_shoulder":
         lines.append(f"- 机位：{DISTANCES[distance]['desc']}。")
     else:
+        final = (source_facing + azimuth) % 360
         if elevation == 90:
             pass  # 正上方俯拍没有水平方位
+        elif camera and azimuth == 0:
+            lines.append("- 水平方位：相机的水平方向与图1一致。")
+        elif camera:
+            lines.append(f"- 水平方位：{camera_move(azimuth)}，镜头始终对准主体。")
+            lines.append(f"- 拍到的效果：因为相机换了位置，新画面中{CAMERA_VIEWS[final]}。这是相机位置变化带来的结果，主体本身没有转身。")
         elif azimuth == 0:
             lines.append("- 水平方位：保持图1中主体的朝向不变。")
         else:
-            lines.append(f"- 水平方位：{FACINGS[(source_facing + azimuth) % 360]}。与图1相比，主体的朝向要明显改变。")
+            lines.append(f"- 水平方位：{FACINGS[final]}。与图1相比，主体的朝向要明显改变。")
         lines.append(f"- 俯仰：{ELEVATIONS[elevation]['desc']}。")
         if distance == "same" and elevation in EXTREME_ELEVATIONS:
             lines.append(f"- 景别：{WHOLE_SUBJECT}。")
@@ -209,6 +238,8 @@ def build_view_prompt(*, azimuth: int, elevation: int, distance: str = "same", d
             lines.append(f"- 景别：{DISTANCES[distance]['desc']}。")
     if dutch:
         lines.append(f"- 镜头倾斜：{DUTCH_DESC}。")
+    if camera:
+        lines.append(f"- 主体不动：{CAMERA_FREEZE}。")
     lines += [
         "",
         "主体必须保持不变（最重要）：",

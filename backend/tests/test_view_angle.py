@@ -63,7 +63,7 @@ class ViewAnglePromptTest(unittest.TestCase):
         self.assertIn("八分之一", view_angle.build_view_prompt(azimuth=0, elevation=0, distance="extreme_far"))
         tilt = view_angle.build_view_prompt(azimuth=0, elevation=0, dutch=True)
         self.assertIn("荷兰角", tilt)
-        self.assertIn("保持图1中主体的朝向不变", tilt)
+        self.assertIn("相机的水平方向与图1一致", tilt)
 
     def test_views_validation(self) -> None:
         for raw, message in (
@@ -78,8 +78,12 @@ class ViewAnglePromptTest(unittest.TestCase):
 
     def test_prompt_states_result_direction_and_keeps_subject(self) -> None:
         prompt = view_angle.build_view_prompt(azimuth=90, elevation=0)
-        self.assertIn("朝向画面左侧", prompt)
-        self.assertIn("不要朝画面右侧", prompt)
+        # 摄像头模式：主句写相机移动，人物不动；朝向只作为换机位后的结果，防止左右反掉
+        self.assertIn("相机从图1的拍摄位置出发，水平向画面右侧绕主体移动约 90°", prompt)
+        self.assertIn("看起来朝向画面左侧", prompt)
+        self.assertIn("不是朝画面右侧", prompt)
+        self.assertIn("主体本身没有转身", prompt)
+        self.assertIn("姿势、动作、手脚位置、表情和站立朝向完全不变", prompt)
         self.assertIn("主体必须保持不变", prompt)
         self.assertIn("背景随相机移动同步变化", prompt)
         # 原景别保持图1的取景范围；不能要求「完整入镜」，否则半身图会被拉远成全身
@@ -98,11 +102,15 @@ class ViewAnglePromptTest(unittest.TestCase):
         # 原图已斜朝画面右侧（315），机位向右转 90 → 最终斜朝画面左侧（45）
         prompt = view_angle.build_view_prompt(azimuth=90, elevation=0, source_facing=315)
         self.assertIn("斜朝画面左侧", prompt)
-        self.assertIn("与图1相比，主体的朝向要明显改变", prompt)
-        # 机位向右转 45 → 转为正对镜头
-        self.assertIn("正面：主体的脸和身体正面朝向镜头", view_angle.build_view_prompt(azimuth=45, elevation=0, source_facing=315))
-        # 方位不变时只要求保持原朝向
-        self.assertIn("保持图1中主体的朝向不变", view_angle.build_view_prompt(azimuth=0, elevation=30, source_facing=315))
+        # 机位向右转 45 → 拍到正面
+        self.assertIn("新画面中主体正对镜头", view_angle.build_view_prompt(azimuth=45, elevation=0, source_facing=315))
+        # 方位不变时相机水平方向不变
+        self.assertIn("相机的水平方向与图1一致", view_angle.build_view_prompt(azimuth=0, elevation=30, source_facing=315))
+        # 主体模式才是让主体转身
+        subject = view_angle.build_view_prompt(azimuth=90, elevation=0, mode="subject", source_facing=315)
+        self.assertIn("让主体在原地转动", subject)
+        self.assertIn("与图1相比，主体的朝向要明显改变", subject)
+        self.assertNotIn("主体不动", subject)
 
     def test_parse_facing(self) -> None:
         self.assertEqual(view_angle.parse_facing("H"), 315)
@@ -197,7 +205,7 @@ class ViewAngleEndpointTest(unittest.TestCase):
     def test_facing_detection_failure_falls_back_to_front(self) -> None:
         resp, captured = self._submit([{"azimuth": 90}], facing=AsyncMock(side_effect=RuntimeError("vlm down")))
         self.assertEqual(resp.status_code, 200, resp.text)
-        self.assertIn("朝向画面左侧（看向画面的左边缘）", captured[0]["prompt"])
+        self.assertIn("主体呈正侧面、看起来朝向画面左侧", captured[0]["prompt"])
         self.assertIsNone(captured[0]["request_meta"]["view_angle"]["source_facing"])
 
     def test_extreme_views_submit_and_skip_unneeded_facing_detection(self) -> None:
@@ -211,7 +219,7 @@ class ViewAngleEndpointTest(unittest.TestCase):
         resp, captured = self._submit([{"azimuth": 0, "elevation": 30}])
         self.assertEqual(resp.status_code, 200, resp.text)
         self.detect.assert_not_awaited()
-        self.assertIn("保持图1中主体的朝向不变", captured[0]["prompt"])
+        self.assertIn("相机的水平方向与图1一致", captured[0]["prompt"])
 
     def test_single_view_returns_job_id(self) -> None:
         resp, captured = self._submit([{"azimuth": 225}])
