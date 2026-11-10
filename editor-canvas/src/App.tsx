@@ -44,7 +44,8 @@ import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
 import { loadImagesFromFiles } from './utils/imageLoader'
 import { DEFAULT_OUTPAINTING_LIMITS, getOutpaintingPlan } from './utils/outpainting'
 import { buildSnapshotSavePayload, isStaleSnapshotConflict, requestSnapshot } from './utils/snapshotSave'
-import { useTeamStore } from './store/teamStore'
+import { useTeamStore, type CanvasSource } from './store/teamStore'
+import { NOT_PLACED_MESSAGE, sameCanvasSource, submitWithPlaceholder } from './utils/canvasTask'
 import { teamSnapshotSaveUrl, teamSnapshotUrl } from './services/teamCanvasService'
 import { handleTeamCanvasGone, useTeamCanvasSync } from './useTeamCanvasSync'
 import { TeamActivityPanel } from './components/TeamActivityPanel'
@@ -531,8 +532,12 @@ export function App() {
       source: CanvasImage,
       result: { imageUrl: string; width: number; height: number },
       meta: Record<string, any>,
+      origin: CanvasSource,
       nameSuffix = '换装'
-    ) => {
+    ): boolean => {
+      // 只放回发起任务时的那份画布；画布已经换了（例如团队画布被取消分享后自动回到个人画布）就不放，
+      // 不能退回当前画布，否则结果会出现在另一份个人或团队画布里
+      if (!sameCanvasSource(origin, useTeamStore.getState().source)) return false
       const state = useCanvasStore.getState()
       // 原图可能已被移动，优先取最新位置
       const anchor = state.images.find((im) => im.id === source.id) || source
@@ -571,6 +576,7 @@ export function App() {
         opacity: 1,
         meta,
       })
+      return true
     },
     [addImage]
   )
@@ -579,24 +585,28 @@ export function App() {
     async (req: OutfitChangeRequest) => {
       const source = outfitImage
       if (!source) return
-      // 提交失败直接抛给弹窗展示，弹窗保持打开便于调整后重试
-      const submitted = await submitOutfitChange(req)
+      const origin = useTeamStore.getState().source
       const skus = Array.from(new Set(req.assets.map((a) => a.sku).filter(Boolean)))
       const taskId = 'outfit-' + Math.random().toString(36).slice(2, 10)
-      const total = submitted.jobIds.length
-      setOutfitTasks((prev) => [
-        ...prev,
-        {
-          id: taskId,
-          label: skus.length ? skus.join('、') : '本地素材',
-          thumbUrl: normalizeAssetUrl(source.url),
-          status: 'running',
-          total,
-          done: 0,
-          failed: 0,
-          message: '已提交，排队中…',
-        },
-      ])
+      // 提交前先登记任务，提交期间也不能切换画布；提交失败撤掉任务并抛给弹窗展示，弹窗保持打开便于调整后重试
+      const submitted = await submitWithPlaceholder(
+        () => setOutfitTasks((prev) => [
+          ...prev,
+          {
+            id: taskId,
+            label: skus.length ? skus.join('、') : '本地素材',
+            thumbUrl: normalizeAssetUrl(source.url),
+            status: 'running',
+            total: Math.max(1, req.batchCount),
+            done: 0,
+            failed: 0,
+            message: '正在提交…',
+          },
+        ]),
+        () => dismissOutfitTask(taskId),
+        () => submitOutfitChange(req),
+      )
+      updateOutfitTask(taskId, { total: submitted.jobIds.length, message: '已提交，排队中…' })
       setOutfitImage(null)
 
       let done = 0
@@ -616,14 +626,15 @@ export function App() {
               width: source.naturalWidth || source.width,
               height: source.naturalHeight || source.height,
             }))
-            placeOutfitResult(source, { imageUrl, ...dims }, {
+            const placed = placeOutfitResult(source, { imageUrl, ...dims }, {
               jobId,
               model: submitted.model,
               size: submitted.size,
               resolvedPrompt: submitted.resolvedPrompt,
               operation: 'outfit-change',
               skus,
-            })
+            }, origin)
+            if (!placed) throw new Error(NOT_PLACED_MESSAGE)
             done += 1
           } catch (err: any) {
             failed += 1
@@ -643,7 +654,7 @@ export function App() {
             : lastError || '生成失败',
       })
     },
-    [outfitImage, placeOutfitResult, updateOutfitTask]
+    [outfitImage, placeOutfitResult, updateOutfitTask, dismissOutfitTask]
   )
 
   // ─── 切换视角：与换装共用后台任务托盘，结果按视角顺序放到原图右侧 ───
@@ -651,24 +662,33 @@ export function App() {
     async (req: ViewAngleRequest) => {
       const source = viewAngleImage
       if (!source) return
-      // 提交失败直接抛给弹窗展示，弹窗保持打开便于重试
-      const submitted = await submitViewAngle(req)
+      const origin = useTeamStore.getState().source
       const taskId = 'view-' + Math.random().toString(36).slice(2, 10)
-      const total = submitted.jobIds.length
-      setOutfitTasks((prev) => [
-        ...prev,
-        {
-          id: taskId,
-          kind: 'view-angle',
-          label: submitted.labels.join('、') || '新视角',
-          thumbUrl: normalizeAssetUrl(source.url),
-          status: 'running',
-          total,
-          done: 0,
-          failed: 0,
-          message: '已提交，排队中…',
-        },
-      ])
+      // 提交（含原图上传和后端识别原图朝向）可能持续数秒：先登记任务，提交期间也不能切换画布；
+      // 提交失败撤掉任务并抛给弹窗展示，弹窗保持打开便于重试
+      const submitted = await submitWithPlaceholder(
+        () => setOutfitTasks((prev) => [
+          ...prev,
+          {
+            id: taskId,
+            kind: 'view-angle',
+            label: '新视角',
+            thumbUrl: normalizeAssetUrl(source.url),
+            status: 'running',
+            total: req.views.length,
+            done: 0,
+            failed: 0,
+            message: '正在提交…',
+          },
+        ]),
+        () => dismissOutfitTask(taskId),
+        () => submitViewAngle(req),
+      )
+      updateOutfitTask(taskId, {
+        label: submitted.labels.join('、') || '新视角',
+        total: submitted.jobIds.length,
+        message: '已提交，排队中…',
+      })
       setViewAngleImage(null)
 
       let done = 0
@@ -702,13 +722,18 @@ export function App() {
       )
       for (const result of results) {
         if (!result) continue
-        placeOutfitResult(source, result, {
+        const placed = placeOutfitResult(source, result, {
           jobId: result.jobId,
           model: submitted.model,
           size: submitted.size,
           operation: 'view-angle',
           viewAngle: result.label,
-        }, result.label)
+        }, origin, result.label)
+        if (!placed) {
+          done -= 1
+          failed += 1
+          lastError = NOT_PLACED_MESSAGE
+        }
       }
       if (failed) notifyError(`完成 ${done} 张，${failed} 张未完成。${lastError}`, '切换视角未完成，请稍后查看任务记录。', { key: taskId });
       updateOutfitTask(taskId, {
@@ -721,7 +746,7 @@ export function App() {
             : lastError || '生成失败',
       })
     },
-    [viewAngleImage, placeOutfitResult, updateOutfitTask]
+    [viewAngleImage, placeOutfitResult, updateOutfitTask, dismissOutfitTask]
   )
 
   // 1. 快捷键监听
