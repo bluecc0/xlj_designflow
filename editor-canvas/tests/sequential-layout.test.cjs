@@ -12,7 +12,7 @@ require.extensions['.ts'] = (module, filename) => {
   })
   module._compile(outputText, filename)
 }
-const { useCanvasStore, getSortedSequentialImages, getNextGridSlot } = require('../src/store/canvasStore.ts')
+const { useCanvasStore, getSortedSequentialImages, getNextGridSlot, gridResultPlacement } = require('../src/store/canvasStore.ts')
 const { useHistoryStore } = require('../src/store/historyStore.ts')
 if (previousLoader) require.extensions['.ts'] = previousLoader
 else delete require.extensions['.ts']
@@ -164,5 +164,16 @@ test('横图按格子等比缩小并水平居中，连续追加的视角依次�
   }
   assert.deepEqual(slots.map((s) => [s.order, s.width, s.height]), [[2, 420, 280], [3, 420, 280], [4, 420, 280]])
   assert.deepEqual(slots.map((s) => s.x), [cell(1, 0).x, cell(2, 0).x, cell(3, 0).x])
+})
+
+test('画布内生成结果按当前画布状态取网格空格，并带上排布序号', () => {
+  useCanvasStore.setState({ images: [gridImage('A', 1), gridImage('B', 2), gridImage('C', 3), gridImage('D', 4)] })
+  const before = JSON.stringify(state().images)
+  const place = gridResultPlacement('page-1', 2048, 2048)
+  assert.deepEqual({ x: place.x, y: place.y, width: place.width, height: place.height, frameId: place.frameId },
+    { x: cell(0, 1).x, y: cell(0, 1).y, width: 420, height: 420, frameId: null })
+  assert.equal(place.layoutMeta.designflowLayoutOrder, 5)
+  assert.equal(place.layoutMeta.designflowOriginalWidth, 2048)
+  assert.equal(JSON.stringify(state().images), before)
 })
 

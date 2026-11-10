@@ -306,6 +306,30 @@ export function getNextGridSlot(
   }
 }
 
+/**
+ * 画布内生成结果（换装、切换视角、快捷编辑、放大、抠图、矢量化）放到网格最后一个空格时要写入的字段：
+ * 位置、尺寸，以及排布序号等 meta（之后「整理」时按顺序参与排列）。
+ */
+export function gridResultPlacement(pageId: string, rawWidth: number, rawHeight: number) {
+  const { images, frames } = useCanvasStore.getState()
+  const slot = getNextGridSlot(images, frames, pageId, rawWidth, rawHeight)
+  return {
+    pageId,
+    frameId: null,
+    x: slot.x,
+    y: slot.y,
+    width: slot.width,
+    height: slot.height,
+    layoutMeta: {
+      designflowLayoutOrder: slot.order,
+      designflowLayoutAnchorX: slot.anchorX,
+      designflowLayoutAnchorY: slot.anchorY,
+      designflowOriginalWidth: rawWidth,
+      designflowOriginalHeight: rawHeight,
+    },
+  }
+}
+
 export function isSequentialLayoutImage(img: CanvasImage, pageId: string): boolean {
   if (img.pageId !== pageId) return false
   if (img.locked) return false

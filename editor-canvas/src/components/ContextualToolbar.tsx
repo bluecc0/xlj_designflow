@@ -1,7 +1,7 @@
 import { notifyError } from '../utils/feedback'
 import React, { useState } from 'react'
 import { Rotate3d } from 'lucide-react'
-import { useCanvasStore } from '../store/canvasStore'
+import { gridResultPlacement, useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
 import { useAIOperationStore } from '../store/aiOperationStore'
 import { TextToolbar } from './TextToolbar'
@@ -251,17 +251,15 @@ export function ContextualToolbar({
         updateOperation({ message: msg })
       })
 
+      // 排到画布网格最后一个空格（满 4 张换行），已有图片不动
+      const { layoutMeta, ...place } = gridResultPlacement(target.pageId, res.width || target.width, res.height || target.height)
       addImage({
         id: 'img-' + Math.random().toString(36).slice(2, 10),
-        frameId: target.frameId,
-        x: target.x + target.width + 36,
-        y: target.y,
-        width: target.width,
-        height: target.height,
+        ...place,
         rotation: 0,
         url: res.imageUrl,
         name: `${target.name}-抠图`,
-        meta: { operation: 'matting', sourceImageId: target.id },
+        meta: { operation: 'matting', sourceImageId: target.id, ...layoutMeta },
         naturalWidth: res.width,
         naturalHeight: res.height,
         locked: false,
@@ -292,17 +290,15 @@ export function ContextualToolbar({
         updateOperation({ message: msg })
       })
 
+      // 排到画布网格最后一个空格（满 4 张换行），已有图片不动
+      const { layoutMeta, ...place } = gridResultPlacement(target.pageId, res.width || target.width, res.height || target.height)
       addImage({
         id: 'img-' + Math.random().toString(36).slice(2, 10),
-        frameId: target.frameId,
-        x: target.x + target.width + 36,
-        y: target.y,
-        width: target.width,
-        height: target.height,
+        ...place,
         rotation: 0,
         url: res.imageUrl,
         name: `${target.name}-2x高清`,
-        meta: { operation: 'upscale', sourceImageId: target.id },
+        meta: { operation: 'upscale', sourceImageId: target.id, ...layoutMeta },
         naturalWidth: res.width,
         naturalHeight: res.height,
         locked: false,
@@ -333,17 +329,15 @@ export function ContextualToolbar({
         updateOperation({ message: msg })
       })
 
+      // 排到画布网格最后一个空格（满 4 张换行），已有图片不动
+      const { layoutMeta, ...place } = gridResultPlacement(target.pageId, target.naturalWidth || target.width, target.naturalHeight || target.height)
       addImage({
         id: 'img-' + Math.random().toString(36).slice(2, 10),
-        frameId: target.frameId,
-        x: target.x + target.width + 36,
-        y: target.y,
-        width: target.width,
-        height: target.height,
+        ...place,
         rotation: 0,
         url: res.svgUrl,
         name: `${target.name}-矢量`,
-        meta: { operation: 'vectorize', sourceImageId: target.id },
+        meta: { operation: 'vectorize', sourceImageId: target.id, ...layoutMeta },
         locked: false,
         opacity: 1,
       })

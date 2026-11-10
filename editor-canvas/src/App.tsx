@@ -25,7 +25,7 @@ import { QuickEditMarkerOverlay } from './components/QuickEditMarkerOverlay'
 import { SnapGuides } from './components/SnapGuides'
 import type { OutpaintMargins, CanvasImage, QuickEditMarker } from './types'
 import { useViewportStore } from './store/viewportStore'
-import { getNextGridSlot, useCanvasStore } from './store/canvasStore'
+import { gridResultPlacement, useCanvasStore } from './store/canvasStore'
 import { useHistoryStore } from './store/historyStore'
 import { useAIOperationStore } from './store/aiOperationStore'
 import {
@@ -484,15 +484,13 @@ export function App() {
               updateOperation({ message: msg, progress })
             }
           )
-          const newX = targetImage.x + targetImage.width + 24
-          const newY = targetImage.y
+          // 排到画布网格最后一个空格（满 4 张换行），已有图片不动
+          const { layoutMeta, ...place } = gridResultPlacement(
+            targetImage.pageId, result.width || targetImage.width, result.height || targetImage.height
+          )
           const newImg = addImage({
             id: 'img-' + Math.random().toString(36).slice(2, 10),
-            frameId: targetImage.frameId,
-            x: newX,
-            y: newY,
-            width: targetImage.width,
-            height: targetImage.height,
+            ...place,
             rotation: 0,
             url: result.imageUrl,
             name: `${targetImage.name || 'image'}-编辑`,
@@ -500,7 +498,7 @@ export function App() {
             naturalHeight: result.height,
             locked: false,
             opacity: 1,
-            meta: { operation: 'quick-edit', prompt: prompt.trim(), sourceImageId: targetImage.id },
+            meta: { operation: 'quick-edit', prompt: prompt.trim(), sourceImageId: targetImage.id, ...layoutMeta },
           })
           setSelected([newImg.id], 'image')
           setQuickEditToast('快捷编辑生图完成')
@@ -543,15 +541,10 @@ export function App() {
       // 结果写回原图所在页面（用户可能在生成期间切换了页面）；原页面已删除/归档时才退回当前页面
       const pageId = state.pages.some((p) => p.id === anchor.pageId && !p.archived) ? anchor.pageId : state.activePageId
       // 按主画布的排序规则排到网格最后一个空格（满 4 张换行），已有图片一律不动
-      const slot = getNextGridSlot(state.images, state.frames, pageId, result.width || anchor.width, result.height || anchor.height)
+      const { layoutMeta, ...place } = gridResultPlacement(pageId, result.width || anchor.width, result.height || anchor.height)
       addImage({
         id: 'img-' + Math.random().toString(36).slice(2, 10),
-        pageId,
-        frameId: null,
-        x: slot.x,
-        y: slot.y,
-        width: slot.width,
-        height: slot.height,
+        ...place,
         rotation: 0,
         url: result.imageUrl,
         name: `${anchor.name || 'image'}-${nameSuffix}`,
@@ -559,14 +552,7 @@ export function App() {
         naturalHeight: result.height,
         locked: false,
         opacity: 1,
-        meta: {
-          ...meta,
-          designflowLayoutOrder: slot.order,
-          designflowLayoutAnchorX: slot.anchorX,
-          designflowLayoutAnchorY: slot.anchorY,
-          designflowOriginalWidth: result.width,
-          designflowOriginalHeight: result.height,
-        },
+        meta: { ...meta, ...layoutMeta },
       })
       return true
     },
