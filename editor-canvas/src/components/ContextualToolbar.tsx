@@ -2,6 +2,8 @@ import { notifyError } from '../utils/feedback'
 import React, { useState } from 'react'
 import { Rotate3d } from 'lucide-react'
 import { gridResultPlacement, useCanvasStore } from '../store/canvasStore'
+import { useTeamStore } from '../store/teamStore'
+import { NOT_PLACED_MESSAGE, sameCanvasSource } from '../utils/canvasTask'
 import { useViewportStore } from '../store/viewportStore'
 import { useAIOperationStore } from '../store/aiOperationStore'
 import { TextToolbar } from './TextToolbar'
@@ -246,12 +248,14 @@ export function ContextualToolbar({
     setActiveTaskMsg('智能抠图中...')
 
     try {
+      const origin = useTeamStore.getState().source
       const res = await runMatting(target.url, (msg) => {
         setActiveTaskMsg(msg)
         updateOperation({ message: msg })
       })
 
-      // 排到画布网格最后一个空格（满 4 张换行），已有图片不动
+      // 只放回发起时的那份画布；排到网格最后一个空格（满 4 张换行），已有图片不动
+      if (!sameCanvasSource(origin, useTeamStore.getState().source)) throw new Error(NOT_PLACED_MESSAGE)
       const { layoutMeta, ...place } = gridResultPlacement(target.pageId, res.width || target.width, res.height || target.height)
       addImage({
         id: 'img-' + Math.random().toString(36).slice(2, 10),
@@ -285,12 +289,14 @@ export function ContextualToolbar({
     setActiveTaskMsg('超分高清放大中...')
 
     try {
+      const origin = useTeamStore.getState().source
       const res = await runUpscale(target.url, 2, (msg) => {
         setActiveTaskMsg(msg)
         updateOperation({ message: msg })
       })
 
-      // 排到画布网格最后一个空格（满 4 张换行），已有图片不动
+      // 只放回发起时的那份画布；排到网格最后一个空格（满 4 张换行），已有图片不动
+      if (!sameCanvasSource(origin, useTeamStore.getState().source)) throw new Error(NOT_PLACED_MESSAGE)
       const { layoutMeta, ...place } = gridResultPlacement(target.pageId, res.width || target.width, res.height || target.height)
       addImage({
         id: 'img-' + Math.random().toString(36).slice(2, 10),
@@ -324,12 +330,14 @@ export function ContextualToolbar({
     setActiveTaskMsg('矢量化提取轮廓中...')
 
     try {
+      const origin = useTeamStore.getState().source
       const res = await runVectorize(target.url, (msg) => {
         setActiveTaskMsg(msg)
         updateOperation({ message: msg })
       })
 
-      // 排到画布网格最后一个空格（满 4 张换行），已有图片不动
+      // 只放回发起时的那份画布；排到网格最后一个空格（满 4 张换行），已有图片不动
+      if (!sameCanvasSource(origin, useTeamStore.getState().source)) throw new Error(NOT_PLACED_MESSAGE)
       const { layoutMeta, ...place } = gridResultPlacement(target.pageId, target.naturalWidth || target.width, target.naturalHeight || target.height)
       addImage({
         id: 'img-' + Math.random().toString(36).slice(2, 10),

@@ -177,3 +177,20 @@ test('画布内生成结果按当前画布状态取网格空格，并带上排�
   assert.equal(JSON.stringify(state().images), before)
 })
 
+test('处理中原页面被删除或归档：结果放到当前页面的网格里，不写进看不到的页面', () => {
+  const page = (id, archived = false) => ({ id, name: id, archived })
+  const onPage2 = (img) => ({ ...img, pageId: 'page-2' })
+  for (const pages of [[page('page-2')], [page('page-1', true), page('page-2')]]) {
+    useCanvasStore.setState({
+      pages, activePageId: 'page-2',
+      images: [gridImage('A', 1), onPage2(gridImage('P', 1)), onPage2(gridImage('Q', 2))],
+    })
+    const place = gridResultPlacement('page-1', 420, 560)
+    assert.equal(place.pageId, 'page-2')
+    assert.deepEqual({ x: place.x, y: place.y, order: place.layoutMeta.designflowLayoutOrder }, { ...cell(2, 0), order: 3 })
+  }
+  // 原页面还在时仍放回原页面
+  useCanvasStore.setState({ pages: [page('page-1'), page('page-2')], activePageId: 'page-2', images: [gridImage('A', 1)] })
+  assert.equal(gridResultPlacement('page-1', 420, 560).pageId, 'page-1')
+})
+

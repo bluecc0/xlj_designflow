@@ -310,8 +310,11 @@ export function getNextGridSlot(
  * 画布内生成结果（换装、切换视角、快捷编辑、放大、抠图、矢量化）放到网格最后一个空格时要写入的字段：
  * 位置、尺寸，以及排布序号等 meta（之后「整理」时按顺序参与排列）。
  */
-export function gridResultPlacement(pageId: string, rawWidth: number, rawHeight: number) {
-  const { images, frames } = useCanvasStore.getState()
+export function gridResultPlacement(sourcePageId: string, rawWidth: number, rawHeight: number) {
+  const { images, frames, pages, activePageId } = useCanvasStore.getState()
+  // 处理期间原页面可能被删除或归档：改放到当前页面，否则结果会写进看不到的页面。
+  // 只在同一份画布内回退；换了画布要由调用方先拦下（见 utils/canvasTask 的 sameCanvasSource）
+  const pageId = pages.some((p) => p.id === sourcePageId && !p.archived) ? sourcePageId : activePageId
   const slot = getNextGridSlot(images, frames, pageId, rawWidth, rawHeight)
   return {
     pageId,

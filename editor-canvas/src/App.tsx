@@ -477,6 +477,7 @@ export function App() {
             ? `正在使用 gpt-image-2.6 结合 ${markers.length} 处坐标精准生图...`
             : '正在使用 gpt-image-2.6 生成图片...'
           setQuickEditToast(toastMsg)
+          const origin = useTeamStore.getState().source
           const result = await runQuickEdit(
             targetImage.url,
             finalPrompt,
@@ -484,7 +485,8 @@ export function App() {
               updateOperation({ message: msg, progress })
             }
           )
-          // 排到画布网格最后一个空格（满 4 张换行），已有图片不动
+          // 只放回发起时的那份画布；排到网格最后一个空格（满 4 张换行），已有图片不动
+          if (!sameCanvasSource(origin, useTeamStore.getState().source)) throw new Error(NOT_PLACED_MESSAGE)
           const { layoutMeta, ...place } = gridResultPlacement(
             targetImage.pageId, result.width || targetImage.width, result.height || targetImage.height
           )
@@ -538,10 +540,8 @@ export function App() {
       if (!sameCanvasSource(origin, useTeamStore.getState().source)) return false
       const state = useCanvasStore.getState()
       const anchor = state.images.find((im) => im.id === source.id) || source
-      // 结果写回原图所在页面（用户可能在生成期间切换了页面）；原页面已删除/归档时才退回当前页面
-      const pageId = state.pages.some((p) => p.id === anchor.pageId && !p.archived) ? anchor.pageId : state.activePageId
-      // 按主画布的排序规则排到网格最后一个空格（满 4 张换行），已有图片一律不动
-      const { layoutMeta, ...place } = gridResultPlacement(pageId, result.width || anchor.width, result.height || anchor.height)
+      // 写回原图所在页面（原页面已删除/归档时退回当前页面），按主画布的排序规则排到网格最后一个空格
+      const { layoutMeta, ...place } = gridResultPlacement(anchor.pageId, result.width || anchor.width, result.height || anchor.height)
       addImage({
         id: 'img-' + Math.random().toString(36).slice(2, 10),
         ...place,
