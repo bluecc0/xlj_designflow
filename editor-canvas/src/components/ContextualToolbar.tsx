@@ -487,7 +487,6 @@ export function ContextualToolbar({
                   <span className="designflow-toolbar-label">
                     {isOutpaintBusy ? '生成中...' : '生成'}
                   </span>
-                  <span className="designflow-ai-dot" />
                 </button>
 
                 <button
@@ -512,7 +511,6 @@ export function ContextualToolbar({
               >
                 <DesignflowToolbarIcon name="outpaint" />
                 <span className="designflow-toolbar-label">扩图</span>
-                <span className="designflow-ai-dot" />
               </button>
             )}
 
