@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { AlertCircle, Camera, Loader2, X } from 'lucide-react'
+import { AlertCircle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Loader2, RotateCcw, X } from 'lucide-react'
 import type { CanvasImage } from '../types'
 import { normalizeAssetUrl, type ViewAngleRequest, type ViewAngleView } from '../services/aiImageService'
 
@@ -10,42 +10,21 @@ interface Props {
   onSubmit: (req: ViewAngleRequest) => Promise<void>
 }
 
-// 档位与后端 view_angle.py 一致：方位 45° 一档，俯仰 3 档
-const AZIMUTH_LABELS: Record<number, string> = {
-  0: '正面', 45: '右前方', 90: '右侧', 135: '右后方', 180: '背面', 225: '左后方', 270: '左侧', 315: '左前方',
-}
-// 相对原机位描述：最终朝向由后端按原图主体的朝向换算，原图本身侧身时也成立
-const AZIMUTH_HINTS: Record<number, string> = {
-  0: '与原图同一方向',
-  45: '相机向右绕 45°',
-  90: '相机向右绕到侧面',
-  135: '相机绕到右后方',
-  180: '相机绕到主体背后',
-  225: '相机绕到左后方',
-  270: '相机向左绕到侧面',
-  315: '相机向左绕 45°',
-}
-const ELEVATIONS: Array<[number, string]> = [[-60, '贴地仰拍'], [-20, '仰视'], [0, '平视'], [30, '俯视'], [90, '鸟瞰']]
-const DISTANCES: Array<[ViewAngleView['distance'], string]> = [
+// 档位与后端 view_angle.py 一致。模型只能稳定执行这些档位，所以滑块按档吸附、显示方位名而不是角度数字。
+// 旋转：相机向画面右侧绕主体转为正，-180 与 180 都是背面
+const ROTATIONS: Array<[number, string]> = [
+  [-180, '背面'], [-135, '左后方'], [-90, '左侧'], [-45, '左前方'], [0, '正面'],
+  [45, '右前方'], [90, '右侧'], [135, '右后方'], [180, '背面'],
+]
+const HEIGHTS: Array<[number, string]> = [[-60, '贴地仰拍'], [-20, '仰视'], [0, '平视'], [30, '俯视'], [90, '鸟瞰']]
+const ZOOMS: Array<[ViewAngleView['distance'], string]> = [
   ['extreme_close', '大特写'], ['closer', '近景'], ['same', '原景别'], ['farther', '远景'], ['extreme_far', '极远景'],
 ]
-const DUTCH_OPTIONS: Array<['off' | 'on', string]> = [['off', '不倾斜'], ['on', '倾斜约 25°']]
-const MODES: Array<[ViewAngleRequest['mode'], string, string]> = [
-  ['camera', '转镜头', '背景跟着机位变化，适合场景图'],
-  ['subject', '转主体', '背景不变，主体原地转身，适合白底图'],
-]
-const RESOLUTIONS: ViewAngleRequest['resolution'][] = ['1K', '2K', '4K']
-const PRESETS: Array<[number, string]> = [[315, '左前方'], [270, '左侧'], [180, '背面'], [90, '右侧'], [45, '右前方']]
-// 「一次出 4 个视角」：左右两侧、背面、俯视
-const FOUR_VIEWS: ViewAngleView[] = [
-  { azimuth: 270, elevation: 0, distance: 'same' },
-  { azimuth: 90, elevation: 0, distance: 'same' },
-  { azimuth: 180, elevation: 0, distance: 'same' },
-  { azimuth: 0, elevation: 30, distance: 'same' },
-]
+const ZOOM_SCALE: Record<string, number> = { extreme_close: 1.45, closer: 1.2, same: 1, farther: 0.78, extreme_far: 0.55 }
+const MODES: Array<[ViewAngleRequest['mode'], string]> = [['subject', '主体'], ['camera', '摄像头']]
+const DEFAULTS = { rotation: 0, height: 0, zoom: 'same' as ViewAngleView['distance'] }
 
 let lastMode: ViewAngleRequest['mode'] = 'camera'
-let lastResolution: ViewAngleRequest['resolution'] = '1K'
 
 const C = {
   ink: '#1e232d',
@@ -56,176 +35,155 @@ const C = {
   lineStrong: '#d5d9e1',
   panel: '#f7f8fa',
   surface: '#ffffff',
-  accent: '#2563eb',
   danger: '#c43d3d',
   dangerBg: '#fdf1f1',
 }
 
-const RING = { size: 228, center: 114, radius: 76 }
+const nearest = <T,>(tiers: Array<[T, string]>, value: number, valueOf: (t: T) => number) =>
+  tiers.reduce((best, tier) => (Math.abs(valueOf(tier[0]) - value) < Math.abs(valueOf(best[0]) - value) ? tier : best))[0]
+const snapRotation = (deg: number) => nearest(ROTATIONS, ((((deg + 180) % 360) + 360) % 360) - 180, (v) => v)
+const snapHeight = (deg: number) => nearest(HEIGHTS, deg, (v) => v)
 
-function snapAzimuth(deg: number): number {
-  return (Math.round((((deg % 360) + 360) % 360) / 45) * 45) % 360
-}
-
-/** 俯视转盘：中心是主体（箭头朝下 = 朝向原机位），拖动或点击外圈的相机选择方位 */
-function OrbitDial({ azimuth, onChange, disabled }: { azimuth: number; onChange: (a: number) => void; disabled: boolean }) {
-  const svgRef = useRef<SVGSVGElement>(null)
-  const dragging = useRef(false)
-  // 方位 0 在正下方，向画面右侧绕为正
-  const point = (deg: number, r = RING.radius) => ({
-    x: RING.center + Math.sin((deg * Math.PI) / 180) * r,
-    y: RING.center + Math.cos((deg * Math.PI) / 180) * r,
-  })
-  const pick = (e: React.PointerEvent) => {
-    const rect = svgRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const scale = RING.size / rect.width
-    const dx = (e.clientX - rect.left) * scale - RING.center
-    const dy = (e.clientY - rect.top) * scale - RING.center
-    if (Math.hypot(dx, dy) < 18) return
-    onChange(snapAzimuth((Math.atan2(dx, dy) * 180) / Math.PI))
-  }
-  const cam = point(azimuth)
+/** 吸附档位的滑块：拖动或点击停在最近的一档，右侧显示档位名 */
+function TierSlider<T extends string | number>({
+  label, tiers, value, onChange, disabled, valueText,
+}: {
+  label: string; tiers: Array<[T, string]>; value: T; onChange: (v: T) => void; disabled?: boolean; valueText?: string
+}) {
+  const idx = Math.max(0, tiers.findIndex(([v]) => v === value))
   return (
-    <svg
-      ref={svgRef}
-      viewBox={`0 0 ${RING.size} ${RING.size}`}
-      width={RING.size}
-      height={RING.size}
-      role="slider"
-      aria-label="机位方向"
-      aria-valuemin={0}
-      aria-valuemax={315}
-      aria-valuenow={azimuth}
-      aria-valuetext={AZIMUTH_LABELS[azimuth]}
-      tabIndex={disabled ? -1 : 0}
-      style={{ touchAction: 'none', cursor: disabled ? 'default' : 'pointer', outline: 'none', flexShrink: 0 }}
-      onPointerDown={(e) => {
-        if (disabled) return
-        dragging.current = true
-        e.currentTarget.setPointerCapture(e.pointerId)
-        pick(e)
-      }}
-      onPointerMove={(e) => dragging.current && pick(e)}
-      onPointerUp={() => { dragging.current = false }}
-      onKeyDown={(e) => {
-        if (disabled) return
-        if (e.key === 'ArrowRight' || e.key === 'ArrowUp') { e.preventDefault(); onChange(snapAzimuth(azimuth + 45)) }
-        if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') { e.preventDefault(); onChange(snapAzimuth(azimuth - 45)) }
-      }}
-    >
-      <circle cx={RING.center} cy={RING.center} r={RING.radius} fill="none" stroke={C.line} strokeWidth={14} />
-      {Object.keys(AZIMUTH_LABELS).map((key) => {
-        const deg = Number(key)
-        const p = point(deg)
-        const t = point(deg, RING.radius + 24)
-        return (
-          <g key={deg}>
-            <circle cx={p.x} cy={p.y} r={3} fill={deg === 0 ? C.muted : C.lineStrong} />
-            {deg % 90 === 0 && (
-              <text x={t.x} y={t.y + 4} textAnchor="middle" fontSize={10} fill={deg === azimuth ? C.accent : C.subtle}>
-                {deg === 0 ? '原机位' : AZIMUTH_LABELS[deg]}
-              </text>
-            )}
-          </g>
-        )
-      })}
-      {/* 主体：圆点 + 朝向原机位的箭头 */}
-      <circle cx={RING.center} cy={RING.center} r={16} fill={C.panel} stroke={C.lineStrong} />
-      <path
-        d={`M ${RING.center - 6} ${RING.center + 2} L ${RING.center} ${RING.center + 10} L ${RING.center + 6} ${RING.center + 2}`}
-        fill="none"
-        stroke={C.muted}
-        strokeWidth={1.6}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+    <div style={{ opacity: disabled ? 0.4 : 1 }}>
+      <div style={styles.sliderHead}>
+        <span style={styles.sliderLabel}>{label}</span>
+        <span style={styles.sliderValue}>{valueText ?? tiers[idx][1]}</span>
+      </div>
+      <input
+        type="range"
+        className="va-range"
+        aria-label={label}
+        aria-valuetext={tiers[idx][1]}
+        min={0}
+        max={tiers.length - 1}
+        step={1}
+        value={idx}
+        disabled={disabled}
+        onChange={(e) => onChange(tiers[Number(e.target.value)][0])}
+        style={{ '--va-fill': `${(idx / (tiers.length - 1)) * 100}%` } as React.CSSProperties}
       />
-      <line x1={RING.center} y1={RING.center} x2={cam.x} y2={cam.y} stroke={C.accent} strokeWidth={1.2} strokeDasharray="3 3" />
-      {/* 相机 */}
-      <g transform={`translate(${cam.x} ${cam.y})`}>
-        <circle r={13} fill={C.accent} />
-        <g transform="translate(-7 -7)">
-          <Camera size={14} color="#fff" strokeWidth={2} />
-        </g>
-      </g>
-    </svg>
+    </div>
   )
 }
 
-/** 跟着机位转的小方块：正面贴原图，便于理解「现在要从哪边看」 */
-function ViewCube({ imageUrl, azimuth, elevation, dutch }: { imageUrl: string; azimuth: number; elevation: number; dutch: boolean }) {
-  const s = 84
-  const face = (transform: string, content: React.ReactNode, bg = '#eef1f6'): React.ReactNode => (
-    <div
-      style={{
-        position: 'absolute', width: s, height: s, transform, backfaceVisibility: 'hidden',
-        background: bg, border: `1px solid ${C.lineStrong}`, borderRadius: 6, overflow: 'hidden',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: C.muted,
-      }}
-    >
+/** 预览上拖动：左右改旋转、上下改高度，松手吸附 */
+function useDragAngles(rotation: number, height: number, onCommit: (r: number, h: number) => void, disabled: boolean) {
+  const [live, setLive] = useState<{ r: number; h: number } | null>(null)
+  const start = useRef<{ x: number; y: number; r: number; h: number } | null>(null)
+  const handlers = {
+    onPointerDown: (e: React.PointerEvent) => {
+      if (disabled) return
+      e.currentTarget.setPointerCapture(e.pointerId)
+      start.current = { x: e.clientX, y: e.clientY, r: rotation, h: height }
+      setLive({ r: rotation, h: height })
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const s = start.current
+      if (!s) return
+      setLive({ r: s.r + (e.clientX - s.x) * 0.8, h: Math.max(-60, Math.min(90, s.h - (e.clientY - s.y) * 0.6)) })
+    },
+    onPointerUp: () => {
+      if (live) onCommit(snapRotation(live.r), snapHeight(live.h))
+      start.current = null
+      setLive(null)
+    },
+  }
+  return { r: live ? live.r : rotation, h: live ? live.h : height, handlers, dragging: Boolean(live) }
+}
+
+/** 主体模式：方块就是主体，正面贴原图，跟着旋转、高度、缩放、歪斜一起动 */
+function SubjectPreview({ imageUrl, rotation, height, zoom, dutch }: {
+  imageUrl: string; rotation: number; height: number; zoom: string; dutch: boolean
+}) {
+  const s = 104
+  const face = (transform: string, content: React.ReactNode, bg = '#f1f3f7') => (
+    <div style={{
+      position: 'absolute', width: s, height: s, transform, backfaceVisibility: 'hidden', background: bg,
+      border: `1px solid ${C.lineStrong}`, borderRadius: 8, overflow: 'hidden', display: 'flex', alignItems: 'center',
+      justifyContent: 'center', fontSize: 15, fontWeight: 700, color: '#b6bcc8',
+    }}>
       {content}
     </div>
   )
   return (
-    <div style={{ width: 132, height: 132, perspective: 420, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div
-        style={{
-          position: 'relative', width: s, height: s, transformStyle: 'preserve-3d',
-          // 机位向右绕 = 主体相对镜头向左转；机位升高 = 能看到顶面
-          transform: `rotateZ(${dutch ? -25 : 0}deg) rotateX(${-elevation}deg) rotateY(${-azimuth}deg)`,
-          transition: 'transform .35s cubic-bezier(.2,.8,.2,1)',
-        }}
-      >
+    <div style={{ perspective: 520, width: s, height: s, transform: `scale(${ZOOM_SCALE[zoom] ?? 1})`, transition: 'transform .3s' }}>
+      <div style={{
+        position: 'relative', width: s, height: s, transformStyle: 'preserve-3d',
+        // 相机向右绕 = 主体相对镜头向左转；相机升高 = 看到顶面
+        transform: `rotateZ(${dutch ? -25 : 0}deg) rotateX(${-height}deg) rotateY(${-rotation}deg)`,
+        transition: 'transform .3s cubic-bezier(.2,.8,.2,1)',
+      }}>
         {face(`translateZ(${s / 2}px)`, <img src={imageUrl} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />, '#fff')}
-        {face(`rotateY(180deg) translateZ(${s / 2}px)`, '背面')}
-        {face(`rotateY(90deg) translateZ(${s / 2}px)`, '侧面')}
-        {face(`rotateY(-90deg) translateZ(${s / 2}px)`, '侧面')}
-        {face(`rotateX(90deg) translateZ(${s / 2}px)`, '顶面', '#f4f6f9')}
-        {face(`rotateX(-90deg) translateZ(${s / 2}px)`, '底面', '#f4f6f9')}
+        {face(`rotateY(180deg) translateZ(${s / 2}px)`, 'B')}
+        {face(`rotateY(90deg) translateZ(${s / 2}px)`, 'R')}
+        {face(`rotateY(-90deg) translateZ(${s / 2}px)`, 'L')}
+        {face(`rotateX(90deg) translateZ(${s / 2}px)`, 'T')}
+        {face(`rotateX(-90deg) translateZ(${s / 2}px)`, '')}
       </div>
     </div>
   )
 }
 
-function Segmented<T extends string | number>({
-  value, options, onChange, disabled, label,
-}: { value: T; options: Array<[T, string, string?]>; onChange: (v: T) => void; disabled: boolean; label: string }) {
+/** 摄像头模式：主体卡片不动，相机在球面上移动；缩放体现为相机离主体的远近 */
+const TILT = (20 * Math.PI) / 180
+function project(azDeg: number, elDeg: number, r: number) {
+  const az = (azDeg * Math.PI) / 180, el = (elDeg * Math.PI) / 180
+  const x = Math.sin(az) * Math.cos(el), y = Math.sin(el), z = Math.cos(az) * Math.cos(el)
+  return { x: x * r, y: (z * Math.sin(TILT) - y * Math.cos(TILT)) * r, front: z * Math.cos(TILT) + y * Math.sin(TILT) > -0.05 }
+}
+
+function CameraPreview({ imageUrl, rotation, height, zoom, dutch }: {
+  imageUrl: string; rotation: number; height: number; zoom: string; dutch: boolean
+}) {
+  const size = 230, c = size / 2, R = 92
+  // 推近时相机贴近主体，拉远时相机在球外
+  const camR = R * Math.min(1.12, Math.max(0.6, 1 / (ZOOM_SCALE[zoom] ?? 1) * 0.85))
+  const cam = project(rotation, height, camR)
+  const ring = (fn: (t: number) => { x: number; y: number }) =>
+    Array.from({ length: 73 }, (_, i) => fn(i * 5)).map((p, i) => `${i ? 'L' : 'M'}${c + p.x} ${c + p.y}`).join(' ')
   return (
-    <div role="radiogroup" aria-label={label} style={styles.segmented}>
-      {options.map(([key, text, title], idx) => {
-        const active = key === value
-        return (
-          <button
-            key={String(key)}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            title={title}
-            disabled={disabled}
-            onClick={() => onChange(key)}
-            style={{
-              ...styles.segment,
-              borderLeft: idx === 0 ? 'none' : `1px solid ${C.line}`,
-              background: active ? C.ink : 'transparent',
-              color: active ? '#fff' : C.text,
-              fontWeight: active ? 650 : 500,
-            }}
-          >
-            {text}
-          </button>
-        )
-      })}
-    </div>
+    <svg width={size} height={size} style={{ display: 'block', overflow: 'visible' }}>
+      <circle cx={c} cy={c} r={R} fill="none" stroke={C.line} />
+      {[-60, -20, 30, 60].map((lat) => (
+        <path key={lat} d={ring((t) => project(t, lat, R))} fill="none" stroke={C.line} />
+      ))}
+      <path d={ring((t) => project(t, 0, R))} fill="none" stroke={C.lineStrong} />
+      {[0, 45, 90, 135].map((lon) => (
+        <path key={lon} d={ring((t) => project(lon, t - 180, R))} fill="none" stroke={C.line} />
+      ))}
+      {/* 主体卡片 */}
+      <foreignObject x={c - 40} y={c - 30} width={80} height={60}>
+        <div style={{ width: 80, height: 60, borderRadius: 6, overflow: 'hidden', border: `2px solid ${C.lineStrong}`, background: '#fff', boxSizing: 'border-box' }}>
+          <img src={imageUrl} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        </div>
+      </foreignObject>
+      <line x1={c} y1={c} x2={c + cam.x} y2={c + cam.y} stroke="#8b93a3" strokeWidth={1.2} strokeDasharray="3 3" opacity={cam.front ? 1 : 0.5} />
+      {/* 相机 */}
+      <g transform={`translate(${c + cam.x} ${c + cam.y}) rotate(${dutch ? -25 : 0})`} opacity={cam.front ? 1 : 0.55}>
+        <rect x={-15} y={-11} width={30} height={22} rx={6} fill="#fff" stroke="#8b93a3" strokeWidth={1.4} />
+        <circle r={5.5} fill="#fff" stroke={C.ink} strokeWidth={1.6} />
+        <circle r={2} fill={C.ink} />
+      </g>
+    </svg>
   )
 }
 
 export const ViewAnglePanel: React.FC<Props> = ({ image, onClose, onSubmit }) => {
-  const [azimuth, setAzimuth] = useState(180)
-  const [elevation, setElevation] = useState(0)
-  const [distance, setDistance] = useState<ViewAngleView['distance']>('same')
-  const [dutch, setDutch] = useState(false)
   const [mode, setMode] = useState<ViewAngleRequest['mode']>(lastMode)
-  const [resolution, setResolution] = useState<ViewAngleRequest['resolution']>(lastResolution)
+  const [rotation, setRotation] = useState(DEFAULTS.rotation)
+  const [height, setHeight] = useState(DEFAULTS.height)
+  const [zoom, setZoom] = useState<ViewAngleView['distance']>(DEFAULTS.zoom)
+  const [overShoulder, setOverShoulder] = useState(false)
+  const [dutch, setDutch] = useState(false)
+  const [resolution, setResolution] = useState<ViewAngleRequest['resolution']>('1K')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -239,45 +197,62 @@ export const ViewAnglePanel: React.FC<Props> = ({ image, onClose, onSubmit }) =>
     return () => window.removeEventListener('keydown', onKey, true)
   }, [submitting, onClose])
 
-  // 鸟瞰没有水平方位，背后过肩固定从背面拍（与后端 normalize_views 一致）
-  const isBird = elevation === 90
-  const isOverShoulder = distance === 'over_shoulder'
-  const dialLocked = isBird || isOverShoulder
-  const effectiveAzimuth = isBird ? 0 : isOverShoulder ? 180 : azimuth
-  const sameAsSource = effectiveAzimuth === 0 && elevation === 0 && distance === 'same' && !dutch
+  // 清晰度跟随个人设置里的默认清晰度，面板上不再单独选择
+  useEffect(() => {
+    fetch('/auth/session', { credentials: 'include' })
+      .then((r) => r.json())
+      .then((data) => {
+        const res = data?.user?.preferences?.default_resolution
+        if (res === '2K' || res === '4K') setResolution(res)
+      })
+      .catch(() => {})
+  }, [])
+
+  const isBird = height === 90
+  const azimuth = ((rotation % 360) + 360) % 360
+  // 鸟瞰没有水平方位；背后过肩固定从身后高处拍（与后端 normalize_views 一致）
+  const view: ViewAngleView = overShoulder
+    ? { azimuth: 180, elevation: 30, distance: 'over_shoulder', dutch }
+    : { azimuth: isBird ? 0 : azimuth, elevation: height, distance: zoom, dutch }
+  const sameAsSource = view.azimuth === 0 && view.elevation === 0 && view.distance === 'same' && !dutch
   const sourceUrl = normalizeAssetUrl(image.url)
-  // 与后端 view_label 一致：方位不变时只显示俯仰和景别
-  const viewText = (isOverShoulder
-    ? ['背后过肩']
-    : [effectiveAzimuth === 0 && !sameAsSource ? '' : AZIMUTH_LABELS[effectiveAzimuth],
-      elevation ? ELEVATIONS.find(([v]) => v === elevation)?.[1] : '',
-      distance !== 'same' ? DISTANCES.find(([v]) => v === distance)?.[1] : '']
-  ).concat(dutch ? ['倾斜'] : []).filter(Boolean).join(' · ')
-  const viewHint = isBird ? '相机在主体正上方' : isOverShoulder ? '从主体身后越过肩膀向前看' : AZIMUTH_HINTS[effectiveAzimuth]
+  const locked = overShoulder || submitting
 
-  const pickAzimuth = (deg: number) => {
-    setAzimuth(deg)
-    if (isOverShoulder) setDistance('same')
-    if (isBird) setElevation(0)
-  }
-  const pickElevation = (value: number) => {
-    setElevation(value)
-    if (value === 90 && isOverShoulder) setDistance('same')
+  const drag = useDragAngles(isBird ? 0 : rotation, height, (r, h) => { setRotation(r); setHeight(h) }, locked)
+  const previewRotation = overShoulder ? 180 : isBird && !drag.dragging ? 0 : drag.r
+  const previewHeight = overShoulder ? 30 : drag.h
+  const step = (dr: number, dh: number) => {
+    if (locked) return
+    if (dr) setRotation(snapRotation(rotation + dr))
+    if (dh) {
+      const i = HEIGHTS.findIndex(([v]) => v === height)
+      setHeight(HEIGHTS[Math.max(0, Math.min(HEIGHTS.length - 1, i + dh))][0])
+    }
   }
 
-  const submit = async (views: ViewAngleView[]) => {
-    if (submitting) return
+  const reset = () => {
+    setRotation(DEFAULTS.rotation)
+    setHeight(DEFAULTS.height)
+    setZoom(DEFAULTS.zoom)
+    setOverShoulder(false)
+    setDutch(false)
+    setError(null)
+  }
+
+  const submit = async () => {
+    if (submitting || sameAsSource) return
     setSubmitting(true)
     setError(null)
     lastMode = mode
-    lastResolution = resolution
     try {
-      await onSubmit({ sourceUrl: image.url, sourceName: image.name, views, mode, resolution })
+      await onSubmit({ sourceUrl: image.url, sourceName: image.name, views: [view], mode, resolution })
     } catch (err: any) {
       setError(err?.message || '提交失败')
       setSubmitting(false)
     }
   }
+
+  const rotationText = overShoulder ? '背面' : isBird ? '—' : ROTATIONS.find(([v]) => v === rotation)?.[1]
 
   return (
     <div
@@ -292,134 +267,115 @@ export const ViewAnglePanel: React.FC<Props> = ({ image, onClose, onSubmit }) =>
         e.stopPropagation()
       }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="view-angle-title"
-        style={styles.dialog}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
+      <div role="dialog" aria-modal="true" aria-labelledby="view-angle-title" style={styles.dialog} onMouseDown={(e) => e.stopPropagation()}>
         <div style={styles.header}>
           <div id="view-angle-title" style={styles.title}>切换视角</div>
-          <button type="button" onClick={onClose} disabled={submitting} style={styles.iconButton} title="关闭 (Esc)" aria-label="关闭">
-            <X size={16} />
-          </button>
+          <div style={{ display: 'flex', gap: 2 }}>
+            <button type="button" onClick={reset} disabled={submitting} style={styles.iconButton} title="恢复默认" aria-label="恢复默认">
+              <RotateCcw size={15} />
+            </button>
+            <button type="button" onClick={onClose} disabled={submitting} style={styles.iconButton} title="关闭 (Esc)" aria-label="关闭">
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         <div style={styles.body}>
-          <aside style={styles.leftCol}>
-            <div style={styles.sourceBox}>
-              <img src={sourceUrl} alt={image.name || '原图'} draggable={false} style={styles.sourceImg} />
-            </div>
-            <div style={styles.caption}>原图</div>
-          </aside>
-
-          <section style={styles.rightCol}>
-            <div style={styles.fieldLabel}>机位</div>
-            <div style={styles.orbitRow}>
-              <div style={{ opacity: dialLocked ? 0.45 : 1 }} title={dialLocked ? '鸟瞰和背后过肩不需要选水平方位' : undefined}>
-                <OrbitDial azimuth={effectiveAzimuth} onChange={pickAzimuth} disabled={submitting || dialLocked} />
-              </div>
-              <div style={styles.orbitSide}>
-                <ViewCube imageUrl={sourceUrl} azimuth={effectiveAzimuth} elevation={isOverShoulder ? 30 : elevation} dutch={dutch} />
-                <div style={styles.viewName}>{viewText}</div>
-                <div style={styles.viewHint}>{viewHint}</div>
-              </div>
-            </div>
-            <div style={styles.presets}>
-              {PRESETS.map(([deg, text]) => (
-                <button
-                  key={deg}
-                  type="button"
-                  disabled={submitting}
-                  onClick={() => pickAzimuth(deg)}
-                  style={{ ...styles.chip, ...(!dialLocked && azimuth === deg ? styles.chipActive : null) }}
-                >
-                  {text}
-                </button>
-              ))}
+          <div role="tablist" aria-label="方式" style={styles.tabs}>
+            {MODES.map(([key, text]) => (
               <button
+                key={key}
                 type="button"
+                role="tab"
+                aria-selected={mode === key}
                 disabled={submitting}
-                onClick={() => {
-                  setDistance('over_shoulder')
-                  if (isBird) setElevation(0)
-                }}
-                style={{ ...styles.chip, ...(isOverShoulder ? styles.chipActive : null) }}
-                title="相机在主体身后、高于头顶，越过肩膀向前看"
+                onClick={() => setMode(key)}
+                style={{ ...styles.tab, ...(mode === key ? styles.tabActive : null) }}
               >
-                背后过肩
+                {text}
               </button>
-            </div>
+            ))}
+          </div>
 
-            <div style={styles.grid}>
-              <div style={styles.wideField}>
-                <div style={styles.fieldLabel}>俯仰</div>
-                <Segmented label="俯仰" value={elevation} options={ELEVATIONS} onChange={pickElevation} disabled={submitting} />
-              </div>
-              <div style={styles.wideField}>
-                <div style={styles.fieldLabel}>景别</div>
-                <Segmented label="景别" value={distance} options={DISTANCES} onChange={setDistance} disabled={submitting} />
-              </div>
-              <div>
-                <div style={styles.fieldLabel}>镜头倾斜</div>
-                <Segmented
-                  label="镜头倾斜"
-                  value={dutch ? 'on' : 'off'}
-                  options={DUTCH_OPTIONS}
-                  onChange={(v) => setDutch(v === 'on')}
-                  disabled={submitting}
-                />
-              </div>
-              <div>
-                <div style={styles.fieldLabel}>方式</div>
-                <Segmented label="方式" value={mode} options={MODES} onChange={setMode} disabled={submitting} />
-              </div>
-              <div>
-                <div style={styles.fieldLabel}>清晰度</div>
-                <Segmented
-                  label="清晰度"
-                  value={resolution}
-                  options={RESOLUTIONS.map((r) => [r, r] as [ViewAngleRequest['resolution'], string])}
-                  onChange={setResolution}
-                  disabled={submitting}
-                />
-              </div>
+          <div style={styles.stage}>
+            <div
+              {...drag.handlers}
+              style={{ ...styles.stageInner, cursor: locked ? 'default' : drag.dragging ? 'grabbing' : 'grab' }}
+              title={locked ? undefined : '拖动预览：左右旋转，上下改高度'}
+            >
+              {mode === 'subject' ? (
+                <SubjectPreview imageUrl={sourceUrl} rotation={previewRotation} height={previewHeight} zoom={overShoulder ? 'same' : zoom} dutch={dutch} />
+              ) : (
+                <CameraPreview imageUrl={sourceUrl} rotation={previewRotation} height={previewHeight} zoom={overShoulder ? 'closer' : zoom} dutch={dutch} />
+              )}
             </div>
-            <div style={styles.note}>原图里看不到的一面由 AI 推测，可能与实物不同。</div>
-          </section>
+            {mode === 'camera' && !locked && (
+              <>
+                <button type="button" style={{ ...styles.arrow, top: 8, left: '50%', marginLeft: -12 }} onClick={() => step(0, 1)} aria-label="升高"><ChevronUp size={16} /></button>
+                <button type="button" style={{ ...styles.arrow, bottom: 24, left: '50%', marginLeft: -12 }} onClick={() => step(0, -1)} aria-label="降低"><ChevronDown size={16} /></button>
+                <button type="button" style={{ ...styles.arrow, left: 8, top: '50%', marginTop: -12 }} onClick={() => step(-45, 0)} aria-label="向左绕"><ChevronLeft size={16} /></button>
+                <button type="button" style={{ ...styles.arrow, right: 8, top: '50%', marginTop: -12 }} onClick={() => step(45, 0)} aria-label="向右绕"><ChevronRight size={16} /></button>
+              </>
+            )}
+            <div style={styles.stageNote}>看不到的一面由 AI 推测</div>
+          </div>
+
+          <TierSlider label="旋转" tiers={ROTATIONS} value={rotation} onChange={setRotation}
+            disabled={locked || isBird} valueText={rotationText} />
+          <TierSlider label="高度" tiers={HEIGHTS} value={height} onChange={setHeight} disabled={locked} />
+          <TierSlider label="缩放" tiers={ZOOMS} value={zoom} onChange={setZoom} disabled={locked} />
+
+          <div style={styles.extras}>
+            <span style={{ color: C.subtle }}>特殊镜头</span>
+            {([
+              ['背后过肩', overShoulder, () => setOverShoulder((v) => !v), '从主体身后越过肩膀向前看'],
+              ['画面歪斜', dutch, () => setDutch((v) => !v), '镜头倾斜约 25°（荷兰角）'],
+            ] as Array<[string, boolean, () => void, string]>).map(([text, on, toggle, title]) => (
+              <button
+                key={text}
+                type="button"
+                aria-pressed={on}
+                disabled={submitting}
+                onClick={toggle}
+                title={title}
+                style={{ ...styles.chip, ...(on ? styles.chipActive : null) }}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+
+          {error && (
+            <div role="alert" style={styles.error}>
+              <AlertCircle size={13} style={{ flexShrink: 0 }} />
+              <span>{error}</span>
+            </div>
+          )}
         </div>
 
         <div style={styles.footer}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {error && (
-              <div role="alert" style={styles.error}>
-                <AlertCircle size={13} style={{ flexShrink: 0 }} />
-                <span>{error}</span>
-              </div>
-            )}
-          </div>
-          <button
-            type="button"
-            disabled={submitting}
-            onClick={() => submit(FOUR_VIEWS)}
-            style={styles.secondaryButton}
-            title="左侧、右侧、背面、俯视各出一张"
-          >
-            一次出 4 个视角
-          </button>
+          <button type="button" onClick={onClose} disabled={submitting} style={styles.secondaryButton}>取消</button>
           <button
             type="button"
             disabled={submitting || sameAsSource}
-            onClick={() => submit([{ azimuth: effectiveAzimuth, elevation, distance, dutch }])}
+            onClick={submit}
             style={{ ...styles.primaryButton, opacity: submitting || sameAsSource ? 0.5 : 1 }}
-            title={sameAsSource ? '请先选择一个与原图不同的视角' : undefined}
+            title={sameAsSource ? '请先调整到一个与原图不同的视角' : `${mode === 'subject' ? '主体' : '摄像头'} · ${resolution}`}
           >
             {submitting && <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />}
-            生成这个视角
+            生成
           </button>
         </div>
       </div>
+      <style>{`
+        [data-modal="view-angle"] .va-range { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: transparent; margin: 0; cursor: pointer; }
+        [data-modal="view-angle"] .va-range:disabled { cursor: default; }
+        [data-modal="view-angle"] .va-range::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: linear-gradient(to right, ${C.ink} var(--va-fill), ${C.line} var(--va-fill)); }
+        [data-modal="view-angle"] .va-range::-moz-range-track { height: 3px; border-radius: 2px; background: linear-gradient(to right, ${C.ink} var(--va-fill), ${C.line} var(--va-fill)); }
+        [data-modal="view-angle"] .va-range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -7.5px; border-radius: 50%; background: #fff; border: 5px solid ${C.ink}; box-sizing: border-box; }
+        [data-modal="view-angle"] .va-range::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 5px solid ${C.ink}; box-sizing: border-box; }
+        [data-modal="view-angle"] button:focus-visible, [data-modal="view-angle"] .va-range:focus-visible { outline: 2px solid ${C.ink}; outline-offset: 2px; }
+      `}</style>
     </div>
   )
 }
@@ -431,59 +387,51 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 9999, padding: 16, userSelect: 'none',
   },
   dialog: {
-    position: 'relative', width: 'min(760px, 94vw)', maxHeight: '90vh', backgroundColor: C.surface, borderRadius: 14,
+    position: 'relative', width: 'min(400px, 94vw)', maxHeight: '92vh', backgroundColor: C.surface, borderRadius: 16,
     boxShadow: '0 24px 70px rgba(20, 30, 50, 0.18), 0 0 0 1px rgba(20, 30, 50, .06)',
     display: 'flex', flexDirection: 'column', overflow: 'hidden', color: C.text,
   },
   header: { height: 52, padding: '0 12px 0 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 },
-  title: { fontSize: 15, fontWeight: 650, color: C.ink, letterSpacing: '-0.01em' },
+  title: { fontSize: 16, fontWeight: 700, color: C.ink, letterSpacing: '-0.01em' },
   iconButton: {
     width: 32, height: 32, borderRadius: 8, border: 'none', backgroundColor: 'transparent', color: C.muted,
     display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
   },
-  body: { flex: 1, minHeight: 0, display: 'flex', gap: 20, padding: '4px 20px 16px', overflow: 'auto', flexWrap: 'wrap' },
-  leftCol: { width: 200, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 },
-  sourceBox: {
-    width: 200, height: 260, borderRadius: 10, background: C.panel, border: `1px solid ${C.line}`,
-    display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+  body: { flex: 1, minHeight: 0, overflow: 'auto', padding: '0 20px 4px', display: 'flex', flexDirection: 'column', gap: 12 },
+  tabs: { display: 'flex', padding: 3, background: '#f1f3f6', borderRadius: 11, flexShrink: 0 },
+  tab: {
+    flex: 1, height: 34, border: 'none', borderRadius: 9, background: 'transparent', color: C.muted,
+    fontSize: 14, cursor: 'pointer', fontFamily: 'inherit',
   },
-  sourceImg: { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' },
-  caption: { fontSize: 12, color: C.subtle, textAlign: 'center' },
-  rightCol: { flex: 1, minWidth: 300, display: 'flex', flexDirection: 'column', gap: 10 },
-  fieldLabel: { fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 6 },
-  orbitRow: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
-  orbitSide: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, minWidth: 140 },
-  viewName: { fontSize: 14, fontWeight: 650, color: C.ink },
-  viewHint: { fontSize: 12, color: C.muted, textAlign: 'center' },
-  presets: { display: 'flex', gap: 6, flexWrap: 'wrap' },
+  tabActive: { background: C.surface, color: C.ink, fontWeight: 600, boxShadow: '0 1px 3px rgba(20,30,50,.12)' },
+  stage: { position: 'relative', height: 260, borderRadius: 12, background: C.panel, overflow: 'hidden', flexShrink: 0 },
+  stageInner: { position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', touchAction: 'none' },
+  stageNote: { position: 'absolute', left: 0, right: 0, bottom: 8, textAlign: 'center', fontSize: 11, color: C.subtle, pointerEvents: 'none' },
+  arrow: {
+    position: 'absolute', width: 24, height: 24, border: 'none', borderRadius: 6, background: 'transparent',
+    color: C.subtle, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  sliderHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 },
+  sliderLabel: { fontSize: 14, fontWeight: 600, color: C.ink },
+  sliderValue: { fontSize: 13, color: C.muted },
+  extras: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, flexWrap: 'wrap' },
   chip: {
-    height: 28, padding: '0 10px', borderRadius: 14, border: `1px solid ${C.line}`, background: C.surface,
+    height: 26, padding: '0 10px', borderRadius: 13, border: `1px solid ${C.line}`, background: C.surface,
     color: C.text, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
   },
   // 用完整的 border 覆盖：只改 borderColor 时，取消选中会清掉简写里的颜色，边框变成黑色
-  chipActive: { border: `1px solid ${C.ink}`, color: C.ink, fontWeight: 650 },
-  wideField: { gridColumn: '1 / -1' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12, marginTop: 4 },
-  segmented: {
-    display: 'flex', width: '100%', border: `1px solid ${C.line}`, borderRadius: 9, overflow: 'hidden', background: C.surface,
-  },
-  segment: {
-    flex: 1, height: 30, padding: 0, border: 'none', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
-  },
-  note: { fontSize: 12, color: C.subtle, marginTop: 2 },
-  footer: {
-    display: 'flex', alignItems: 'center', gap: 10, padding: '12px 20px', borderTop: `1px solid ${C.line}`, flexShrink: 0,
-  },
+  chipActive: { border: `1px solid ${C.ink}`, color: C.ink, fontWeight: 650, background: '#f1f3f6' },
   error: {
     display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.danger, background: C.dangerBg,
     padding: '6px 10px', borderRadius: 8,
   },
+  footer: { display: 'flex', gap: 10, padding: '14px 20px 18px', flexShrink: 0 },
   secondaryButton: {
-    height: 34, padding: '0 14px', borderRadius: 9, border: `1px solid ${C.lineStrong}`, background: C.surface,
-    color: C.ink, fontSize: 13, fontWeight: 550, cursor: 'pointer', fontFamily: 'inherit',
+    flex: 1, height: 40, borderRadius: 10, border: `1px solid ${C.lineStrong}`, background: C.surface,
+    color: C.ink, fontSize: 14, fontWeight: 550, cursor: 'pointer', fontFamily: 'inherit',
   },
   primaryButton: {
-    height: 34, padding: '0 16px', borderRadius: 9, border: 'none', background: C.ink, color: '#fff',
-    fontSize: 13, fontWeight: 650, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'inherit',
+    flex: 1, height: 40, borderRadius: 10, border: 'none', background: C.ink, color: '#fff',
+    fontSize: 14, fontWeight: 650, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontFamily: 'inherit',
   },
 }
