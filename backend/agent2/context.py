@@ -90,7 +90,7 @@ def _image_catalog(session_id: str) -> str:
     rows = store.list_artifacts(session_id)
     lines = []
     for r in rows:
-        kind = ("用户上传" if r["kind"] == "upload" else "技能参考图" if r["kind"] == "skill_ref"
+        kind = ("用户上传" if r["kind"] == "upload" else "技能参考图" if r["kind"] == "skill_ref" else "素材库参考图" if r["kind"] == "library_ref"
                 else "人物参考图" if r["kind"] == "character_ref"
                 else ("套图" if r["group_type"] == "set" else "生成"))
         lines.append(f"- {r['id']}：{kind}" + (f"，{r['label']}" if r.get("label") else ""))

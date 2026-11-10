@@ -228,6 +228,8 @@ async def find_product_images(ctx: ToolContext, args: dict) -> dict:
     if not assets:
         kind = outfit_change.ASSET_TYPE_LABELS.get(asset_type, "商品图") if asset_type else "商品图"
         return {"error": f"素材库里没有找到货号 {sku} 的{kind}，请确认货号，或直接上传图片"}
+    # show=false：只登记成参考图 ID，不发卡片、不进画布（用户只拿它做参考或说不要展示时）
+    show = args.get("show") is not False
     images = []
     for asset in assets[:MAX_LIBRARY_IMAGES]:
         src = await asyncio.to_thread(outfit_change.resolve_library_asset, asset["asset_type"], asset["path"])
@@ -238,16 +240,22 @@ async def find_product_images(ctx: ToolContext, args: dict) -> dict:
         await asyncio.to_thread(out.write_bytes, await asyncio.to_thread(src.read_bytes))
         url = f"/ai-images/{quote(ctx.user['id'])}/library/{quote(out.name)}"
         label = f"{sku} {asset.get('type_label') or ''} {asset.get('angle') or ''}".strip()
-        artifact, event = store.register_job_artifact(
-            job_id, ctx.turn_id, lambda a: _artifact_event(a), session_id=ctx.session_id, user_id=ctx.user["id"],
-            url=url, path=str(out), label=label, source_tool_call_id=ctx.call_id,
-            meta={"operation": "library", "sku": sku, "asset_type": asset["asset_type"], "filename": src.name})
-        if ctx.publish:
-            await ctx.publish(event)
+        meta = {"operation": "library", "sku": sku, "asset_type": asset["asset_type"], "filename": src.name}
+        if show:
+            artifact, event = store.register_job_artifact(
+                job_id, ctx.turn_id, lambda a: _artifact_event(a), session_id=ctx.session_id, user_id=ctx.user["id"],
+                url=url, path=str(out), label=label, source_tool_call_id=ctx.call_id, meta=meta)
+            if ctx.publish:
+                await ctx.publish(event)
+        else:
+            artifact = store.create_artifact(session_id=ctx.session_id, user_id=ctx.user["id"], kind="library_ref",
+                                             url=url, path=str(out), label=label, source_tool_call_id=ctx.call_id,
+                                             meta=meta)
         images.append({"id": artifact["id"], "url": url, "label": label})
-    out = {"images": images}
+    # 不展示时结果不用 images 字段：前端只把 images 放进画布
+    out = {"images": images} if show else {"references": images, "note": "只作参考图，没有展示给用户"}
     if len(assets) > MAX_LIBRARY_IMAGES:
-        out["note"] = f"共找到 {len(assets)} 张，只取了前 {MAX_LIBRARY_IMAGES} 张"
+        out["note"] = (out.get("note", "") + f"；共找到 {len(assets)} 张，只取了前 {MAX_LIBRARY_IMAGES} 张").lstrip("；")
     return out
 
 
@@ -333,13 +341,17 @@ def build_image_op_tools() -> list[Tool]:
               "required": ["image_id"]},
              outpaint_image),
         Tool("find_product_images", "素材库取图：按货号从公司商品素材库取出商品图（白底图、透明 PNG、模特图等），"
-             "直接作为图片发给用户，之后可以继续抠图、换底色、做海报参考。只能按完整货号查，不能浏览或搜索文件夹。",
+             "得到图片 ID，之后可以继续抠图、换底色、做生图参考。只能按完整货号查，不能浏览或搜索文件夹。"
+             "show 决定是否把取到的图发到对话和画布。",
              {"type": "object", "properties": {
                  "sku": {"type": "string", "description": "商品货号"},
                  "asset_type": {"type": "string", "enum": list(outfit_change.ASSET_TYPE_LABELS),
                                 "description": "图片类型：" + "、".join(f"{k} {v}" for k, v in outfit_change.ASSET_TYPE_LABELS.items())
-                                               + "；用户没说就不填，返回全部类型"}},
-              "required": ["sku"]},
+                                               + "；用户没说就不填，返回全部类型"},
+                 "show": {"type": "boolean",
+                          "description": "是否把取到的图发到对话和画布。用户要看、要这些商品图时填 true；"
+                                         "只拿来当生图、换装等的参考图，或用户说不要展示、不要发出来时填 false"}},
+              "required": ["sku", "show"]},
              find_product_images),
         Tool("outfit_change", "AI 换装：给人物照片换上指定服装，保持人物、姿势和背景不变。"
              "服装来自用户上传的服装图（garment_image_ids），或素材库货号（sku）。",

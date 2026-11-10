@@ -904,7 +904,9 @@ const groupAgentSteps = function(messages) {
   var out = [];
   messages.forEach(function(m) {
     var last = out[out.length - 1];
-    if (m.type === 'agent2-tool' && AGENT2_STEP_TOOLS[m.tool]) {
+    // 只作参考、不展示的素材库取图也是准备步骤
+    var hiddenFetch = m.tool === 'find_product_images' && m.args && m.args.show === false;
+    if (m.type === 'agent2-tool' && (AGENT2_STEP_TOOLS[m.tool] || hiddenFetch)) {
       if (last && last.type === 'agent2-steps') { last.steps.push(m); return; }
       out.push({ who: 'ai', meta: 'Agent', type: 'agent2-steps', steps: [m] });
       return;
@@ -925,6 +927,7 @@ const agent2StepDetail = function(m) {
   if (m.tool === 'read_skill_file') return args.path || '';
   if (m.tool === 'use_skill_image') return (args.paths || []).length + ' 张';
   if (m.tool === 'remember') return args.content || '';
+  if (m.tool === 'find_product_images') return (args.sku || '') + ' · 仅作参考';
   return args.name || '';
 };
 

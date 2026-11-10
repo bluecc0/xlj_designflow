@@ -279,6 +279,7 @@ class Agent2ImageOpsTest(unittest.TestCase):
                 [("call", "find_product_images", {"sku": "A1234", "asset_type": "white"})],
                 [("call", "find_product_images", {"sku": "../etc"})],
                 [("call", "find_product_images", {"sku": "Z9999"})],
+                [("call", "find_product_images", {"sku": "A1234", "asset_type": "white", "show": False})],
                 [("text", "好了")],
             ], "把 A1234 的白底图发我")
         finished = [e["payload"] for e in events if e["type"] == "tool.finished"]
@@ -293,6 +294,11 @@ class Agent2ImageOpsTest(unittest.TestCase):
         self.assertFalse(finished[1]["ok"])
         self.assertFalse(finished[2]["ok"])
         self.assertIn("Z9999", finished[2]["result"]["error"])
+        # show=false：只登记参考图，不发卡片也不进画布（结果里没有 images）
+        hidden = finished[3]["result"]
+        self.assertNotIn("images", hidden)
+        self.assertEqual(len(hidden["references"]), 2)
+        self.assertEqual(store.get_artifact(hidden["references"][0]["id"], "u1")["kind"], "library_ref")
 
     def test_outfit_change_uses_durable_generation_with_built_in_prompt(self):
         person = self.source
