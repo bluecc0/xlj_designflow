@@ -25,8 +25,11 @@ const AZIMUTH_HINTS: Record<number, string> = {
   270: '相机向左绕到侧面',
   315: '相机向左绕 45°',
 }
-const ELEVATIONS: Array<[number, string]> = [[-20, '仰视'], [0, '平视'], [30, '俯视']]
-const DISTANCES: Array<[ViewAngleView['distance'], string]> = [['closer', '近景'], ['same', '原景别'], ['farther', '远景']]
+const ELEVATIONS: Array<[number, string]> = [[-60, '贴地仰拍'], [-20, '仰视'], [0, '平视'], [30, '俯视'], [90, '鸟瞰']]
+const DISTANCES: Array<[ViewAngleView['distance'], string]> = [
+  ['extreme_close', '大特写'], ['closer', '近景'], ['same', '原景别'], ['farther', '远景'], ['extreme_far', '极远景'],
+]
+const DUTCH_OPTIONS: Array<['off' | 'on', string]> = [['off', '不倾斜'], ['on', '倾斜约 25°']]
 const MODES: Array<[ViewAngleRequest['mode'], string, string]> = [
   ['camera', '转镜头', '背景跟着机位变化，适合场景图'],
   ['subject', '转主体', '背景不变，主体原地转身，适合白底图'],
@@ -150,7 +153,7 @@ function OrbitDial({ azimuth, onChange, disabled }: { azimuth: number; onChange:
 }
 
 /** 跟着机位转的小方块：正面贴原图，便于理解「现在要从哪边看」 */
-function ViewCube({ imageUrl, azimuth, elevation }: { imageUrl: string; azimuth: number; elevation: number }) {
+function ViewCube({ imageUrl, azimuth, elevation, dutch }: { imageUrl: string; azimuth: number; elevation: number; dutch: boolean }) {
   const s = 84
   const face = (transform: string, content: React.ReactNode, bg = '#eef1f6'): React.ReactNode => (
     <div
@@ -169,7 +172,7 @@ function ViewCube({ imageUrl, azimuth, elevation }: { imageUrl: string; azimuth:
         style={{
           position: 'relative', width: s, height: s, transformStyle: 'preserve-3d',
           // 机位向右绕 = 主体相对镜头向左转；机位升高 = 能看到顶面
-          transform: `rotateX(${-elevation}deg) rotateY(${-azimuth}deg)`,
+          transform: `rotateZ(${dutch ? -25 : 0}deg) rotateX(${-elevation}deg) rotateY(${-azimuth}deg)`,
           transition: 'transform .35s cubic-bezier(.2,.8,.2,1)',
         }}
       >
@@ -220,6 +223,7 @@ export const ViewAnglePanel: React.FC<Props> = ({ image, onClose, onSubmit }) =>
   const [azimuth, setAzimuth] = useState(180)
   const [elevation, setElevation] = useState(0)
   const [distance, setDistance] = useState<ViewAngleView['distance']>('same')
+  const [dutch, setDutch] = useState(false)
   const [mode, setMode] = useState<ViewAngleRequest['mode']>(lastMode)
   const [resolution, setResolution] = useState<ViewAngleRequest['resolution']>(lastResolution)
   const [submitting, setSubmitting] = useState(false)
@@ -235,12 +239,31 @@ export const ViewAnglePanel: React.FC<Props> = ({ image, onClose, onSubmit }) =>
     return () => window.removeEventListener('keydown', onKey, true)
   }, [submitting, onClose])
 
-  const sameAsSource = azimuth === 0 && elevation === 0 && distance === 'same'
+  // 鸟瞰没有水平方位，背后过肩固定从背面拍（与后端 normalize_views 一致）
+  const isBird = elevation === 90
+  const isOverShoulder = distance === 'over_shoulder'
+  const dialLocked = isBird || isOverShoulder
+  const effectiveAzimuth = isBird ? 0 : isOverShoulder ? 180 : azimuth
+  const sameAsSource = effectiveAzimuth === 0 && elevation === 0 && distance === 'same' && !dutch
   const sourceUrl = normalizeAssetUrl(image.url)
   // 与后端 view_label 一致：方位不变时只显示俯仰和景别
-  const viewText = [azimuth === 0 && !sameAsSource ? '' : AZIMUTH_LABELS[azimuth],
-    elevation ? ELEVATIONS.find(([v]) => v === elevation)?.[1] : '',
-    distance !== 'same' ? DISTANCES.find(([v]) => v === distance)?.[1] : ''].filter(Boolean).join(' · ')
+  const viewText = (isOverShoulder
+    ? ['背后过肩']
+    : [effectiveAzimuth === 0 && !sameAsSource ? '' : AZIMUTH_LABELS[effectiveAzimuth],
+      elevation ? ELEVATIONS.find(([v]) => v === elevation)?.[1] : '',
+      distance !== 'same' ? DISTANCES.find(([v]) => v === distance)?.[1] : '']
+  ).concat(dutch ? ['倾斜'] : []).filter(Boolean).join(' · ')
+  const viewHint = isBird ? '相机在主体正上方' : isOverShoulder ? '从主体身后越过肩膀向前看' : AZIMUTH_HINTS[effectiveAzimuth]
+
+  const pickAzimuth = (deg: number) => {
+    setAzimuth(deg)
+    if (isOverShoulder) setDistance('same')
+    if (isBird) setElevation(0)
+  }
+  const pickElevation = (value: number) => {
+    setElevation(value)
+    if (value === 90 && isOverShoulder) setDistance('same')
+  }
 
   const submit = async (views: ViewAngleView[]) => {
     if (submitting) return
@@ -294,11 +317,13 @@ export const ViewAnglePanel: React.FC<Props> = ({ image, onClose, onSubmit }) =>
           <section style={styles.rightCol}>
             <div style={styles.fieldLabel}>机位</div>
             <div style={styles.orbitRow}>
-              <OrbitDial azimuth={azimuth} onChange={setAzimuth} disabled={submitting} />
+              <div style={{ opacity: dialLocked ? 0.45 : 1 }} title={dialLocked ? '鸟瞰和背后过肩不需要选水平方位' : undefined}>
+                <OrbitDial azimuth={effectiveAzimuth} onChange={pickAzimuth} disabled={submitting || dialLocked} />
+              </div>
               <div style={styles.orbitSide}>
-                <ViewCube imageUrl={sourceUrl} azimuth={azimuth} elevation={elevation} />
+                <ViewCube imageUrl={sourceUrl} azimuth={effectiveAzimuth} elevation={isOverShoulder ? 30 : elevation} dutch={dutch} />
                 <div style={styles.viewName}>{viewText}</div>
-                <div style={styles.viewHint}>{AZIMUTH_HINTS[azimuth]}</div>
+                <div style={styles.viewHint}>{viewHint}</div>
               </div>
             </div>
             <div style={styles.presets}>
@@ -307,22 +332,44 @@ export const ViewAnglePanel: React.FC<Props> = ({ image, onClose, onSubmit }) =>
                   key={deg}
                   type="button"
                   disabled={submitting}
-                  onClick={() => setAzimuth(deg)}
-                  style={{ ...styles.chip, ...(azimuth === deg ? styles.chipActive : null) }}
+                  onClick={() => pickAzimuth(deg)}
+                  style={{ ...styles.chip, ...(!dialLocked && azimuth === deg ? styles.chipActive : null) }}
                 >
                   {text}
                 </button>
               ))}
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => {
+                  setDistance('over_shoulder')
+                  if (isBird) setElevation(0)
+                }}
+                style={{ ...styles.chip, ...(isOverShoulder ? styles.chipActive : null) }}
+                title="相机在主体身后、高于头顶，越过肩膀向前看"
+              >
+                背后过肩
+              </button>
             </div>
 
             <div style={styles.grid}>
-              <div>
+              <div style={styles.wideField}>
                 <div style={styles.fieldLabel}>俯仰</div>
-                <Segmented label="俯仰" value={elevation} options={ELEVATIONS} onChange={setElevation} disabled={submitting} />
+                <Segmented label="俯仰" value={elevation} options={ELEVATIONS} onChange={pickElevation} disabled={submitting} />
               </div>
-              <div>
+              <div style={styles.wideField}>
                 <div style={styles.fieldLabel}>景别</div>
                 <Segmented label="景别" value={distance} options={DISTANCES} onChange={setDistance} disabled={submitting} />
+              </div>
+              <div>
+                <div style={styles.fieldLabel}>镜头倾斜</div>
+                <Segmented
+                  label="镜头倾斜"
+                  value={dutch ? 'on' : 'off'}
+                  options={DUTCH_OPTIONS}
+                  onChange={(v) => setDutch(v === 'on')}
+                  disabled={submitting}
+                />
               </div>
               <div>
                 <div style={styles.fieldLabel}>方式</div>
@@ -364,7 +411,7 @@ export const ViewAnglePanel: React.FC<Props> = ({ image, onClose, onSubmit }) =>
           <button
             type="button"
             disabled={submitting || sameAsSource}
-            onClick={() => submit([{ azimuth, elevation, distance }])}
+            onClick={() => submit([{ azimuth: effectiveAzimuth, elevation, distance, dutch }])}
             style={{ ...styles.primaryButton, opacity: submitting || sameAsSource ? 0.5 : 1 }}
             title={sameAsSource ? '请先选择一个与原图不同的视角' : undefined}
           >
@@ -413,7 +460,9 @@ const styles: Record<string, React.CSSProperties> = {
     height: 28, padding: '0 10px', borderRadius: 14, border: `1px solid ${C.line}`, background: C.surface,
     color: C.text, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
   },
-  chipActive: { borderColor: C.ink, color: C.ink, fontWeight: 650 },
+  // 用完整的 border 覆盖：只改 borderColor 时，取消选中会清掉简写里的颜色，边框变成黑色
+  chipActive: { border: `1px solid ${C.ink}`, color: C.ink, fontWeight: 650 },
+  wideField: { gridColumn: '1 / -1' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12, marginTop: 4 },
   segmented: {
     display: 'flex', width: '100%', border: `1px solid ${C.line}`, borderRadius: 9, overflow: 'hidden', background: C.surface,

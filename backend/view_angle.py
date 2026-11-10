@@ -50,11 +50,17 @@ H 身体斜着朝向画面右侧（3/4 侧面，能看到大部分正面）"""
 FACING_CODES = {"A": 0, "B": 45, "C": 90, "D": 135, "E": 180, "F": 225, "G": 270, "H": 315}
 
 # 俯仰：相机高度相对原机位的变化
+# 鸟瞰、贴地仰拍是极限机位，提示词沿用实测通过的写法
 ELEVATIONS: dict[int, dict[str, str]] = {
+    -60: {"label": "贴地仰拍", "desc": "相机贴近地面，在主体脚边以约 60° 的大角度向上仰拍，主体显得高大。背景换成这个低机位抬头能看到的部分："
+                                    "户外通常是天空或树冠，室内是天花板；图1是纯色或棚拍背景时，保持同样的纯色背景，不要换成天空"},
     -20: {"label": "仰视", "desc": "相机降低，约 20° 自下而上仰视主体"},
     0: {"label": "平视", "desc": "相机高度与原图一致"},
     30: {"label": "俯视", "desc": "相机升高，约 30° 自上而下俯视主体"},
+    90: {"label": "鸟瞰", "desc": "相机升到主体正上方，垂直向下俯拍（鸟瞰，约 90°）。画面里主要看到主体的头顶、肩膀和下方地面，"
+                                 "人物呈现从正上方往下看时的透视压缩"},
 }
+EXTREME_ELEVATIONS = {-60, 90}
 
 # 景别都以图1的取景为基准：只写「主体完整入镜」时，半身图会被拉远成全身
 DISTANCES: dict[str, dict[str, str]] = {
@@ -63,7 +69,15 @@ DISTANCES: dict[str, dict[str, str]] = {
                                     "画面边缘裁切主体的位置（例如胸口、腰部、膝盖）与图1相同，主体在画面中的大小与图1相近。"
                                     "图1是半身或近景时，不要拉远成全身"},
     "farther": {"label": "远景", "desc": "相机比图1更远，取景比图1更宽（例如图1是半身则露出更多身体），主体在画面中更小，四周露出更多环境"},
+    "extreme_close": {"label": "大特写", "desc": "相机推近到只拍主体最有特征的局部：人物只拍脸部和肩膀以上（大特写），脸部占画面的大部分"},
+    "extreme_far": {"label": "极远景", "desc": "相机拉到很远处，主体只占画面高度的八分之一左右，四周是大面积的环境"},
+    # 背后过肩只能从主体身后拍，normalize_views 会把方位固定为背面
+    "over_shoulder": {"label": "背后过肩", "desc": "相机在主体身后、高于头顶，越过主体的肩膀向前下方俯视：能看到主体的后脑、肩膀和背部上方，"
+                                             "以及主体前方的地面和环境；主体的头、肩和背部上方在画面前景中"},
 }
+# 鸟瞰、贴地仰拍时取景以完整拍到主体为准（实测写法），原图半身时也不沿用原取景
+WHOLE_SUBJECT = "主体完整出现在画面中"
+DUTCH_DESC = "相机绕镜头光轴倾斜约 25°（荷兰角）：整个画面连同地平线、背景和主体一起倾斜"
 
 MODES = {"camera", "subject"}
 MAX_VIEWS = 4
@@ -94,14 +108,19 @@ def snap_elevation(value: float) -> int:
     return min(ELEVATIONS, key=lambda level: abs(level - float(value)))
 
 
-def view_label(azimuth: int, elevation: int, distance: str = "same") -> str:
+def view_label(azimuth: int, elevation: int, distance: str = "same", dutch: bool = False) -> str:
     """结果图上显示的视角名，如「背面 · 俯视」。"""
-    # 方位不变时只说俯仰和景别，避免「正面 · 俯视」这种多余的说法
-    bits = [] if azimuth == 0 and (elevation or distance != "same") else [AZIMUTHS[azimuth]["label"]]
-    if elevation:
-        bits.append(ELEVATIONS[elevation]["label"])
-    if distance != "same":
-        bits.append(DISTANCES[distance]["label"])
+    if distance == "over_shoulder":
+        bits = [DISTANCES[distance]["label"]]
+    else:
+        # 方位不变时只说俯仰和景别，避免「正面 · 俯视」这种多余的说法
+        bits = [] if azimuth == 0 and (elevation or distance != "same" or dutch) else [AZIMUTHS[azimuth]["label"]]
+        if elevation:
+            bits.append(ELEVATIONS[elevation]["label"])
+        if distance != "same":
+            bits.append(DISTANCES[distance]["label"])
+    if dutch:
+        bits.append("倾斜")
     return " · ".join(bits)
 
 
@@ -119,9 +138,15 @@ def normalize_views(raw_views: list) -> list[dict]:
         distance = str(item.get("distance") or "same")
         if distance not in DISTANCES:
             raise ValueError(f"不支持的景别：{distance}")
-        if azimuth == 0 and elevation == 0 and distance == "same":
+        dutch = bool(item.get("dutch"))
+        if elevation == 90:
+            azimuth = 0  # 正上方俯拍没有水平方位
+        if distance == "over_shoulder":
+            azimuth = 180
+            elevation = 30 if elevation in EXTREME_ELEVATIONS else elevation
+        if azimuth == 0 and elevation == 0 and distance == "same" and not dutch:
             raise ValueError("请选择一个与原图不同的视角")
-        view = {"azimuth": azimuth, "elevation": elevation, "distance": distance}
+        view = {"azimuth": azimuth, "elevation": elevation, "distance": distance, "dutch": dutch}
         if view not in views:
             views.append(view)
     if not views:
@@ -155,7 +180,7 @@ async def detect_facing(image_bytes: bytes, *, timeout: float = 30) -> int | Non
     return parse_facing(str(content))
 
 
-def build_view_prompt(*, azimuth: int, elevation: int, distance: str = "same",
+def build_view_prompt(*, azimuth: int, elevation: int, distance: str = "same", dutch: bool = False,
                       mode: str = "camera", extra_prompt: str = "", source_facing: int = 0) -> str:
     """拼装切换视角的内置 prompt。图1 为原图，也是唯一参考图。
 
@@ -168,12 +193,22 @@ def build_view_prompt(*, azimuth: int, elevation: int, distance: str = "same",
     ]
     if mode == "subject":
         lines.append("- 相机位置和背景保持与图1一致，让主体在原地转动，使镜头看到以下角度：")
-    if azimuth == 0:
-        lines.append("- 水平方位：保持图1中主体的朝向不变。")
+    if distance == "over_shoulder":
+        lines.append(f"- 机位：{DISTANCES[distance]['desc']}。")
     else:
-        lines.append(f"- 水平方位：{FACINGS[(source_facing + azimuth) % 360]}。与图1相比，主体的朝向要明显改变。")
-    lines.append(f"- 俯仰：{ELEVATIONS[elevation]['desc']}。")
-    lines.append(f"- 景别：{DISTANCES[distance]['desc']}。")
+        if elevation == 90:
+            pass  # 正上方俯拍没有水平方位
+        elif azimuth == 0:
+            lines.append("- 水平方位：保持图1中主体的朝向不变。")
+        else:
+            lines.append(f"- 水平方位：{FACINGS[(source_facing + azimuth) % 360]}。与图1相比，主体的朝向要明显改变。")
+        lines.append(f"- 俯仰：{ELEVATIONS[elevation]['desc']}。")
+        if distance == "same" and elevation in EXTREME_ELEVATIONS:
+            lines.append(f"- 景别：{WHOLE_SUBJECT}。")
+        else:
+            lines.append(f"- 景别：{DISTANCES[distance]['desc']}。")
+    if dutch:
+        lines.append(f"- 镜头倾斜：{DUTCH_DESC}。")
     lines += [
         "",
         "主体必须保持不变（最重要）：",

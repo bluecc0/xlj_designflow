@@ -7350,13 +7350,13 @@ async def ai_image_view_angle(
     size = outfit_change.nearest_aspect_ratio(source_ref[2], source_ref[3])
     # 按原图主体朝向换算最终朝向；判断失败时按正面处理，不影响提交
     source_facing: int | None = None
-    if any(v["azimuth"] for v in view_list):
+    if any(v["azimuth"] and v["distance"] != "over_shoulder" for v in view_list):
         try:
             source_facing = await view_angle.detect_facing(source_ref[0])
         except Exception:
             logger.warning("view-angle: facing detection failed", exc_info=True)
 
-    labels = [view_angle.view_label(v["azimuth"], v["elevation"], v["distance"]) for v in view_list]
+    labels = [view_angle.view_label(v["azimuth"], v["elevation"], v["distance"], v["dutch"]) for v in view_list]
     display_prompt = f"切换视角：{'、'.join(labels)}"
     if extra_prompt.strip():
         display_prompt += f"（{extra_prompt.strip()[:60]}）"

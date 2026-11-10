@@ -28,12 +28,42 @@ class ViewAnglePromptTest(unittest.TestCase):
             {"azimuth": 185, "elevation": -3},  # 吸附后与第一个相同
         ])
         self.assertEqual(views, [
-            {"azimuth": 180, "elevation": 0, "distance": "same"},
-            {"azimuth": 270, "elevation": 30, "distance": "closer"},
+            {"azimuth": 180, "elevation": 0, "distance": "same", "dutch": False},
+            {"azimuth": 270, "elevation": 30, "distance": "closer", "dutch": False},
         ])
         self.assertEqual(view_angle.view_label(270, 30, "closer"), "左侧 · 俯视 · 近景")
         self.assertEqual(view_angle.view_label(0, 30), "俯视")
         self.assertEqual(view_angle.view_label(0, 0, "farther"), "远景")
+
+    def test_extreme_views_are_normalized_and_labelled(self) -> None:
+        bird, shoulder, tilt, worm = view_angle.normalize_views([
+            {"azimuth": 135, "elevation": 85},                      # 鸟瞰没有水平方位
+            {"azimuth": 45, "elevation": 90, "distance": "over_shoulder"},  # 过肩固定背面，不能同时鸟瞰
+            {"dutch": True},                                       # 只倾斜也算新视角
+            {"azimuth": 90, "elevation": -55, "distance": "extreme_close"},
+        ])
+        self.assertEqual((bird["azimuth"], bird["elevation"]), (0, 90))
+        self.assertEqual((shoulder["azimuth"], shoulder["elevation"]), (180, 30))
+        self.assertTrue(tilt["dutch"])
+        self.assertEqual(worm["elevation"], -60)
+        self.assertEqual([view_angle.view_label(**v) for v in (bird, shoulder, tilt, worm)],
+                         ["鸟瞰", "背后过肩", "倾斜", "右侧 · 贴地仰拍 · 大特写"])
+
+    def test_extreme_prompts(self) -> None:
+        bird = view_angle.build_view_prompt(azimuth=0, elevation=90)
+        self.assertIn("垂直向下俯拍", bird)
+        self.assertNotIn("水平方位", bird)
+        # 极限俯仰下原景别改为完整拍到主体（实测写法），不沿用原图的半身取景
+        self.assertIn("景别：主体完整出现在画面中", bird)
+        self.assertIn("在主体脚边以约 60°", view_angle.build_view_prompt(azimuth=0, elevation=-60))
+        shoulder = view_angle.build_view_prompt(azimuth=180, elevation=30, distance="over_shoulder")
+        self.assertIn("越过主体的肩膀", shoulder)
+        self.assertNotIn("俯仰：", shoulder)
+        self.assertIn("只拍脸部和肩膀以上", view_angle.build_view_prompt(azimuth=0, elevation=0, distance="extreme_close"))
+        self.assertIn("八分之一", view_angle.build_view_prompt(azimuth=0, elevation=0, distance="extreme_far"))
+        tilt = view_angle.build_view_prompt(azimuth=0, elevation=0, dutch=True)
+        self.assertIn("荷兰角", tilt)
+        self.assertIn("保持图1中主体的朝向不变", tilt)
 
     def test_views_validation(self) -> None:
         for raw, message in (
@@ -169,6 +199,13 @@ class ViewAngleEndpointTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200, resp.text)
         self.assertIn("朝向画面左侧（看向画面的左边缘）", captured[0]["prompt"])
         self.assertIsNone(captured[0]["request_meta"]["view_angle"]["source_facing"])
+
+    def test_extreme_views_submit_and_skip_unneeded_facing_detection(self) -> None:
+        resp, captured = self._submit([{"azimuth": 90, "elevation": 90}, {"distance": "over_shoulder"}, {"dutch": True}], facing=315)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["labels"], ["鸟瞰", "背后过肩", "倾斜"])
+        self.detect.assert_not_awaited()  # 三个视角都用不到原图朝向
+        self.assertTrue(captured[2]["request_meta"]["view_angle"]["dutch"])
 
     def test_elevation_only_views_skip_facing_detection(self) -> None:
         resp, captured = self._submit([{"azimuth": 0, "elevation": 30}])

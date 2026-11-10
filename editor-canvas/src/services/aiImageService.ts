@@ -634,9 +634,12 @@ export interface OutfitChangeRequest {
 export interface ViewAngleView {
   /** 相机从原机位向画面右侧绕主体转动的角度，45° 一档 */
   azimuth: number
-  /** -20 仰视 / 0 平视 / 30 俯视 */
+  /** -60 贴地仰拍 / -20 仰视 / 0 平视 / 30 俯视 / 90 鸟瞰 */
   elevation: number
-  distance: 'closer' | 'same' | 'farther'
+  /** over_shoulder 为背后过肩，后端会把方位固定为背面 */
+  distance: 'extreme_close' | 'closer' | 'same' | 'farther' | 'extreme_far' | 'over_shoulder'
+  /** 镜头倾斜约 25°（荷兰角） */
+  dutch?: boolean
 }
 
 export interface ViewAngleRequest {
