@@ -629,6 +629,54 @@ export interface OutfitChangeRequest {
   batchCount: number
 }
 
+// ─── 切换视角 ────────────────────────────────────────────────────────────────
+
+export interface ViewAngleView {
+  /** 相机从原机位向画面右侧绕主体转动的角度，45° 一档 */
+  azimuth: number
+  /** -20 仰视 / 0 平视 / 30 俯视 */
+  elevation: number
+  distance: 'closer' | 'same' | 'farther'
+}
+
+export interface ViewAngleRequest {
+  sourceUrl: string
+  sourceName?: string
+  views: ViewAngleView[]
+  /** camera：背景随相机变化；subject：背景不变，主体原地转动 */
+  mode: 'camera' | 'subject'
+  resolution: '1K' | '2K' | '4K'
+}
+
+/**
+ * 提交切换视角任务（原图为唯一参考图，后端内置保持主体不变的 prompt），每个视角一个任务。
+ */
+export async function submitViewAngle(
+  req: ViewAngleRequest
+): Promise<{ jobIds: string[]; labels: string[]; model: string; size: string }> {
+  const sourceFile = await loadImageAsUploadFile(req.sourceUrl, 'source')
+  const clientRequestId = generateUUID()
+  const fd = new FormData()
+  fd.append('image', sourceFile)
+  fd.append('views', JSON.stringify(req.views))
+  fd.append('mode', req.mode)
+  fd.append('resolution', req.resolution)
+  fd.append('source_name', req.sourceName || '')
+  fd.append('client_request_id', clientRequestId)
+
+  const resp = await fetch('/ai-image/view-angle', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'X-Client-Request-Id': clientRequestId },
+    body: fd,
+  })
+  if (!resp.ok) throw new Error(await readErrorMessage(resp))
+  const data = await resp.json()
+  const jobIds: string[] = Array.isArray(data.job_ids) ? data.job_ids : data.job_id ? [data.job_id] : []
+  if (jobIds.length === 0) throw new Error('没有返回任务编号')
+  return { jobIds, labels: Array.isArray(data.labels) ? data.labels : [], model: data.model || '', size: data.size || '' }
+}
+
 /**
  * 提交 AI 换装任务（原图 + 勾选素材，参考图生图模式，后端内置 prompt）
  */

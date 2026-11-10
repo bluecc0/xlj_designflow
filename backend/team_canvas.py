@@ -192,6 +192,7 @@ _OPERATION_LABELS = {
     "vectorize": "矢量化",
     "quick-edit": "快捷编辑",
     "outfit-change": "AI 换装",
+    "view-angle": "切换视角",
 }
 
 

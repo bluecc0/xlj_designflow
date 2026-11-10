@@ -1,5 +1,6 @@
 import { notifyError } from '../utils/feedback'
 import React, { useState } from 'react'
+import { Rotate3d } from 'lucide-react'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
 import { useAIOperationStore } from '../store/aiOperationStore'
@@ -24,6 +25,7 @@ interface Props {
   onExecuteOutpainting?: (mode: OutpaintingMode) => void
   onCancelOutpainting?: () => void
   onOpenCompareModal?: (imageA: CanvasImage, imageB: CanvasImage) => void
+  onOpenViewAngle?: (image: CanvasImage) => void
 }
 
 /**
@@ -129,6 +131,7 @@ export function ContextualToolbar({
   onExecuteOutpainting,
   onCancelOutpainting,
   onOpenCompareModal,
+  onOpenViewAngle,
 }: Props) {
   const selectedIds = useCanvasStore((s) => s.selectedIds)
   const selectedType = useCanvasStore((s) => s.selectedType)
@@ -580,6 +583,23 @@ export function ContextualToolbar({
               )}
               <span className="designflow-toolbar-label">图层分离</span>
             </button>
+
+            {onOpenViewAngle && (
+              <>
+                <span className="designflow-toolbar-divider" />
+
+                {/* 7. 切换视角 */}
+                <button
+                  onClick={() => onOpenViewAngle(firstImage)}
+                  className="designflow-toolbar-button"
+                  title="切换视角（生成其他角度，看不到的一面由 AI 推测）"
+                  disabled={isOutpainting}
+                >
+                  <Rotate3d size={17} strokeWidth={1.4} />
+                  <span className="designflow-toolbar-label">切换视角</span>
+                </button>
+              </>
+            )}
           </>
         ) : (
           /* 多图选中：批量打包下载与对齐操作组 */

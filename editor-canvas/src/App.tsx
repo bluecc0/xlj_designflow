@@ -20,6 +20,7 @@ import { ImageCompareModal } from './components/ImageCompareModal'
 import { QuickEditPopover } from './components/QuickEditPopover'
 import { OutfitChangeModal } from './components/OutfitChangeModal'
 import { OutfitTaskTray, type OutfitTask } from './components/OutfitTaskTray'
+import { ViewAnglePanel } from './components/ViewAnglePanel'
 import { QuickEditMarkerOverlay } from './components/QuickEditMarkerOverlay'
 import { SnapGuides } from './components/SnapGuides'
 import type { OutpaintMargins, CanvasImage, QuickEditMarker } from './types'
@@ -34,7 +35,9 @@ import {
   pollJob,
   normalizeAssetUrl,
   submitOutfitChange,
+  submitViewAngle,
   type OutfitChangeRequest,
+  type ViewAngleRequest,
   type OutpaintingMode,
 } from './services/aiImageService'
 import { convertLegacyTldrawSnapshot } from './compat/legacyTldraw'
@@ -219,6 +222,7 @@ export function App() {
   const [quickEditToast, setQuickEditToast] = useState<string | null>(null)
   const [isQuickEditSubmitting, setIsQuickEditSubmitting] = useState(false)
   const [outfitImage, setOutfitImage] = useState<CanvasImage | null>(null)
+  const [viewAngleImage, setViewAngleImage] = useState<CanvasImage | null>(null)
   const [outfitTasks, setOutfitTasks] = useState<OutfitTask[]>([])
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const dragDepthRef = useRef(0)
@@ -523,7 +527,12 @@ export function App() {
   }, [])
 
   const placeOutfitResult = useCallback(
-    (source: CanvasImage, result: { imageUrl: string; width: number; height: number }, meta: Record<string, any>) => {
+    (
+      source: CanvasImage,
+      result: { imageUrl: string; width: number; height: number },
+      meta: Record<string, any>,
+      nameSuffix = '换装'
+    ) => {
       const state = useCanvasStore.getState()
       // 原图可能已被移动，优先取最新位置
       const anchor = state.images.find((im) => im.id === source.id) || source
@@ -555,7 +564,7 @@ export function App() {
         height,
         rotation: 0,
         url: result.imageUrl,
-        name: `${anchor.name || 'image'}-换装`,
+        name: `${anchor.name || 'image'}-${nameSuffix}`,
         naturalWidth: result.width,
         naturalHeight: result.height,
         locked: false,
@@ -637,13 +646,91 @@ export function App() {
     [outfitImage, placeOutfitResult, updateOutfitTask]
   )
 
+  // ─── 切换视角：与换装共用后台任务托盘，结果按视角顺序放到原图右侧 ───
+  const handleViewAngleSubmit = useCallback(
+    async (req: ViewAngleRequest) => {
+      const source = viewAngleImage
+      if (!source) return
+      // 提交失败直接抛给弹窗展示，弹窗保持打开便于重试
+      const submitted = await submitViewAngle(req)
+      const taskId = 'view-' + Math.random().toString(36).slice(2, 10)
+      const total = submitted.jobIds.length
+      setOutfitTasks((prev) => [
+        ...prev,
+        {
+          id: taskId,
+          kind: 'view-angle',
+          label: submitted.labels.join('、') || '新视角',
+          thumbUrl: normalizeAssetUrl(source.url),
+          status: 'running',
+          total,
+          done: 0,
+          failed: 0,
+          message: '已提交，排队中…',
+        },
+      ])
+      setViewAngleImage(null)
+
+      let done = 0
+      let failed = 0
+      let lastError = ''
+      // 先全部等完再按视角顺序放置，避免先完成的视角排到前面
+      const results = await Promise.all(
+        submitted.jobIds.map(async (jobId, index) => {
+          try {
+            const job = await pollJob(jobId, 660, (message, progress) => {
+              updateOutfitTask(taskId, {
+                message,
+                progress: typeof progress === 'number' ? progress : undefined,
+              })
+            })
+            const imageUrl = normalizeAssetUrl(job.image_url)
+            const dims = await getImageDimensions(imageUrl).catch(() => ({
+              width: source.naturalWidth || source.width,
+              height: source.naturalHeight || source.height,
+            }))
+            done += 1
+            updateOutfitTask(taskId, { done, failed })
+            return { jobId, label: submitted.labels[index] || '新视角', imageUrl, ...dims }
+          } catch (err: any) {
+            failed += 1
+            lastError = feedback.message(err) || '生成失败'
+            updateOutfitTask(taskId, { done, failed })
+            return null
+          }
+        })
+      )
+      for (const result of results) {
+        if (!result) continue
+        placeOutfitResult(source, result, {
+          jobId: result.jobId,
+          model: submitted.model,
+          size: submitted.size,
+          operation: 'view-angle',
+          viewAngle: result.label,
+        }, result.label)
+      }
+      if (failed) notifyError(`完成 ${done} 张，${failed} 张未完成。${lastError}`, '切换视角未完成，请稍后查看任务记录。', { key: taskId });
+      updateOutfitTask(taskId, {
+        status: done > 0 ? 'done' : 'error',
+        message:
+          done > 0
+            ? failed > 0
+              ? `完成 ${done} 张，失败 ${failed} 张：${lastError}`
+              : '已放到原图右侧，看不到的一面由 AI 推测'
+            : lastError || '生成失败',
+      })
+    },
+    [viewAngleImage, placeOutfitResult, updateOutfitTask]
+  )
+
   // 1. 快捷键监听
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!snapshotHydratedRef.current) return
       // 换装弹窗打开时只处理弹窗内的按键，避免按钮聚焦时误删、撤销或复制画布内容。
       // 不拦截事件本身，保留检索回车、部位方向键及输入框的正常行为。
-      if (outfitImage) return
+      if (outfitImage || viewAngleImage) return
       // 忽略在输入框内的快捷键
       const target = e.target as HTMLElement | null
       const isInput =
@@ -916,6 +1003,7 @@ export function App() {
     }
   }, [
     outfitImage,
+    viewAngleImage,
     selectedIds,
     selectedType,
     images,
@@ -1923,6 +2011,10 @@ export function App() {
           onExecuteOutpainting={handleExecuteOutpainting}
           onCancelOutpainting={handleCancelOutpainting}
           onOpenCompareModal={(imgA, imgB) => setCompareImages([imgA, imgB])}
+          onOpenViewAngle={(img) => {
+            setQuickEditImage(null)
+            setViewAngleImage(img)
+          }}
         />
       </div>
 
@@ -1945,6 +2037,11 @@ export function App() {
           setSelected([img.id], 'image')
           setQuickEditImage(null)
           setOutfitImage(img)
+        }}
+        onOpenViewAngle={(img) => {
+          setSelected([img.id], 'image')
+          setQuickEditImage(null)
+          setViewAngleImage(img)
         }}
       />
 
@@ -1997,7 +2094,16 @@ export function App() {
         />
       )}
 
-      {/* AI 换装后台任务进度 */}
+      {/* 切换视角弹窗 */}
+      {viewAngleImage && (
+        <ViewAnglePanel
+          image={viewAngleImage}
+          onClose={() => setViewAngleImage(null)}
+          onSubmit={handleViewAngleSubmit}
+        />
+      )}
+
+      {/* AI 换装 / 切换视角后台任务进度 */}
       <OutfitTaskTray
         tasks={outfitTasks}
         onDismiss={dismissOutfitTask}

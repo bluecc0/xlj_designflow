@@ -27,6 +27,7 @@ import {
   Sparkles,
   SlidersHorizontal,
   Shirt,
+  Rotate3d,
 } from 'lucide-react'
 import { useCanvasStore } from '../store/canvasStore'
 import { useViewportStore } from '../store/viewportStore'
@@ -49,6 +50,7 @@ interface Props {
   onOpenQuickEdit?: (image: CanvasImage) => void
   onOpenCompareModal?: (imageA: CanvasImage, imageB: CanvasImage) => void
   onOpenOutfitChange?: (image: CanvasImage) => void
+  onOpenViewAngle?: (image: CanvasImage) => void
 }
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().indexOf('MAC') >= 0
@@ -62,6 +64,7 @@ export const ContextMenu = memo(function ContextMenu({
   onOpenQuickEdit,
   onOpenCompareModal,
   onOpenOutfitChange,
+  onOpenViewAngle,
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null)
@@ -598,6 +601,19 @@ export const ContextMenu = memo(function ContextMenu({
                 <Shirt size={14} color="#687083" strokeWidth={1.8} style={{ pointerEvents: 'none' }} />
                 <span style={{ flex: 1, color: '#1e232d' }}>AI 换装</span>
                 <span style={{ ...shortcutStyle, color: '#475569', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', padding: '1px 5px', borderRadius: 4 }}>SKU</span>
+              </div>
+              <div
+                data-action="view-angle"
+                onClick={() => {
+                  onOpenViewAngle?.(singleImage)
+                  onClose()
+                }}
+                style={menuItemStyle}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f4f8')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              >
+                <Rotate3d size={14} color="#687083" strokeWidth={1.8} style={{ pointerEvents: 'none' }} />
+                <span style={{ flex: 1, color: '#1e232d' }}>切换视角</span>
               </div>
               <div
                 data-action="image-properties"
