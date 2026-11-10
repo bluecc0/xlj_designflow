@@ -52,6 +52,10 @@ class ViewAnglePromptTest(unittest.TestCase):
         self.assertIn("不要朝画面右侧", prompt)
         self.assertIn("主体必须保持不变", prompt)
         self.assertIn("背景随相机移动同步变化", prompt)
+        # 原景别保持图1的取景范围；不能要求「完整入镜」，否则半身图会被拉远成全身
+        self.assertIn("不要拉远成全身", prompt)
+        self.assertNotIn("完整入镜", prompt)
+        self.assertIn("取景比图1更紧", view_angle.build_view_prompt(azimuth=90, elevation=0, distance="closer"))
         mirrored = view_angle.build_view_prompt(azimuth=270, elevation=0)
         self.assertIn("朝向画面右侧", mirrored)
         subject = view_angle.build_view_prompt(azimuth=180, elevation=30, mode="subject", extra_prompt="保留手里的包")
