@@ -360,17 +360,49 @@ class Agent2EngineTest(unittest.TestCase):
         with patches[0], patches[1], patches[2]:
             events = self._run(model)
         # 实际提交的任务各用各的模型，而不是只改了名称
-        self.assertEqual(sorted(j["model"] for j in executed), ["gpt-image-2.6", "nano-banana-pro", "seedream-5.0-pro"])
+        self.assertEqual(sorted(j["model"] for j in executed), ["gpt-image-2.6", "nano-banana-pro", "seedream-5-5"])
         created = {e["payload"]["artifact"]["label"]: e["payload"]["artifact"]["model"]
                    for e in events if e["type"] == "artifact.created"}
         self.assertEqual(created, {"GPT Image 2.6": "gpt-image-2.6", "Nano Banana Pro": "nano-banana-pro",
-                                   "Seedream": "seedream-5.0-pro"})
+                                   "Seedream": "seedream-5-5"})
         finished = [e["payload"] for e in events if e["type"] == "tool.finished"]
         self.assertEqual(sorted(i["model"] for i in finished[0]["result"]["images"]),
-                         ["gpt-image-2.6", "nano-banana-pro", "seedream-5.0-pro"])
+                         ["gpt-image-2.6", "nano-banana-pro", "seedream-5-5"])
         # 不支持的模型整批拒绝，不会偷偷换成默认模型
         self.assertIn("midjourney", finished[1]["result"]["error"])
         self.assertEqual(len(executed), 3)
+
+    def test_seedream_tool_schema_advertises_55_for_batch_and_individual_images(self):
+        from backend.agent2.tools import build_tools
+
+        schema = build_tools()["generate_image"].parameters["properties"]
+        for model_schema in (schema["model"], schema["images"]["items"]["properties"]["model"]):
+            self.assertIn("seedream-5-5", model_schema["enum"])
+            self.assertNotIn("seedream-5.0-pro", model_schema["enum"])
+            self.assertNotIn("seedream-5.0-flash", model_schema["enum"])
+
+    def test_seedream_new_and_legacy_aliases_reach_executor_as_55(self):
+        img = Path(self.tmp.name) / "out.png"
+        img.write_bytes(b"png")
+        patches, executed = self._durable_image_tools(img)
+        aliases = ("seedream-5-5", "seedream-5.5", "seedream-5.0-pro", "seedream-5.0-flash",
+                   "seedream-5-0-pro", "seedream-5-0-flash")
+        with patches[0], patches[1], patches[2]:
+            for alias in aliases:
+                for individual in (False, True):
+                    with self.subTest(alias=alias, individual=individual):
+                        item = {"prompt": "产品海报"}
+                        args = {"images": [item]}
+                        (item if individual else args)["model"] = alias
+                        before = len(executed)
+                        events = self._run(FakeModel([
+                            [("call", "generate_image", args)], [("text", "好了")],
+                        ]))
+                        self.assertEqual(len(executed), before + 1)
+                        self.assertEqual(executed[-1]["model"], "seedream-5-5")
+                        result = next(e["payload"]["result"] for e in events if e["type"] == "tool.finished")
+                        self.assertFalse(result.get("failed"))
+                        self.assertEqual(result["images"][0]["model"], "seedream-5-5")
 
     def test_failed_image_job_is_reported_to_model(self):
         img = Path(self.tmp.name) / "out.png"

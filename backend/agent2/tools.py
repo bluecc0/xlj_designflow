@@ -20,6 +20,7 @@ from ..ai_image import GPT_IMAGE_26_MODELS, compress_image_to_data_url, save_use
 from ..ai_job_recovery import execute_image_job
 from ..character_cards import build_character_prompt
 from ..config import settings
+from ..seedream import SEEDREAM_MODEL, upgrade_seedream_model
 from ..job_store import load_ai_image_job, save_ai_image_job, save_image_checkpoint
 from ..model_routing import routed_chat_completion
 from ..user_skill_store import IMAGE_SUFFIXES
@@ -28,7 +29,7 @@ from .engine import Tool, ToolContext, user_cancelled
 
 DEFAULT_IMAGE_MODEL = "gpt-image-2.6"
 IMAGE_MODELS = ["gpt-image-2.6", "gpt-image-2.5", "gpt-image-2", "nano-banana-pro", "nano-banana-2.1",
-                "seedream-5.0-pro", "seedream-5.0-flash"]
+                SEEDREAM_MODEL]
 RESOLUTIONS = ["1K", "2K", "4K"]
 ASPECT_RATIOS = ["auto", "1:1", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "2:3", "3:2"]
 MAX_IMAGES_PER_CALL = 6
@@ -241,7 +242,7 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
         return {"error": f"resolution 只能是 {', '.join(RESOLUTIONS)}"}
     model = str(args.get("model") or DEFAULT_IMAGE_MODEL)
     # 每张可以单独指定模型（例如用户要对比几个模型），没填的用整批的 model
-    models = [str(item.get("model") or model) for item in items]
+    models = [upgrade_seedream_model(item.get("model") or model) for item in items]
     bad = sorted({m for m in models if m not in IMAGE_MODELS})
     if bad:
         return {"error": f"model 只能是 {', '.join(IMAGE_MODELS)}（收到 {', '.join(bad)}）"}
