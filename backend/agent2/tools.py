@@ -30,8 +30,8 @@ from .engine import Tool, ToolContext, user_cancelled
 DEFAULT_IMAGE_MODEL = "gpt-image-2.6"
 IMAGE_MODELS = ["gpt-image-2.6", "gpt-image-2.5", "gpt-image-2", "nano-banana-pro", "nano-banana-2.1",
                 SEEDREAM_MODEL]
-RESOLUTIONS = ["1K", "2K", "4K"]
-ASPECT_RATIOS = ["auto", "1:1", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "2:3", "3:2"]
+RESOLUTIONS = ["1K", "1.5K", "2K", "4K"]
+ASPECT_RATIOS = ["auto", "1:1", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "2:3", "3:2", "2:1", "1:2", "21:9"]
 MAX_IMAGES_PER_CALL = 6
 MAX_IMAGES_PER_TURN = 12
 MAX_REFERENCES_PER_IMAGE = 9
@@ -246,6 +246,13 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
     bad = sorted({m for m in models if m not in IMAGE_MODELS})
     if bad:
         return {"error": f"model 只能是 {', '.join(IMAGE_MODELS)}（收到 {', '.join(bad)}）"}
+    if SEEDREAM_MODEL in models and resolution not in {"1K", "1.5K", "2K"}:
+        return {"error": "Seedream 5.5 仅支持 1K、1.5K、2K"}
+    if any(m != SEEDREAM_MODEL for m in models):
+        if resolution == "1.5K":
+            return {"error": "Agent 的 1.5K 分辨率仅适用于 Seedream 5.5，请按模型分批生成"}
+        if ratio in {"2:1", "1:2", "21:9"}:
+            return {"error": "Agent 的 2:1、1:2、21:9 比例仅适用于 Seedream 5.5，请按模型分批生成"}
     variant = "sunburst" if args.get("variant") == "sunburst" else "flare"
     shared_ids = [str(rid) for rid in (args.get("reference_image_ids") or [])]
     # 技能参考图（动作包等）通常一张图配一张，放在整批共用参考里时模型往往只登记了一张就让所有图共用
@@ -523,9 +530,10 @@ def build_tools() -> dict[str, Tool]:
                      "no_character": {"type": "boolean",
                                       "description": "只有用户指定了人物、又明确说这张不要人物时才设为 true"}},
                      "required": ["prompt"]}},
-                 "aspect_ratio": {"type": "string", "enum": ASPECT_RATIOS},
+                 "aspect_ratio": {"type": "string", "enum": ASPECT_RATIOS,
+                                  "description": "2:1、1:2、21:9 在本工具中仅适用于 Seedream 5.5"},
                  "resolution": {"type": "string", "enum": RESOLUTIONS,
-                                "description": "默认 1K；只有用户指定分辨率时才改"},
+                                "description": "默认 1K；只有用户指定分辨率时才改。1.5K 仅适用于 Seedream 5.5；Seedream 5.5 支持 1K/1.5K/2K，不支持 4K"},
                  "model": {"type": "string", "enum": IMAGE_MODELS,
                            "description": "默认 gpt-image-2.6；只有用户指定模型时才改"},
                  "variant": {"type": "string", "enum": ["flare", "sunburst"],
