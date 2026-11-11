@@ -180,13 +180,12 @@ class RunCheckTest(unittest.TestCase):
         self.assertEqual(by_image[("备份/羽绒服.png", 2)], "不一致")  # 重复的图也各自报出来
         self.assertEqual(by_image[("男子/外套/1.jpg", 1)], "文案待确认")
         self.assertEqual(by_image[("儿童/1.jpg", 1)], "一致")
-        self.assertEqual(verified, [("万龙甲防暴雨冲锋衣", "万龙甲防暴风冲锋衣")])
+        self.assertEqual(verified, [])  # 重新读图仍是"防暴风"，不需要再二选一，直接保留提示
         self.assertEqual([it["_image"] for it in result["unmatched"]], ["1104/旧.jpg"])
         self.assertEqual((result["skipped_small"], result["no_product_images"], len(result["failed"])), (1, ["标题.jpg"], 1))
         self.assertEqual(sorted(r["sku"] for r in result["uncovered"]), ["C1-1", "D2-1"])
-        report = openpyxl.load_workbook(io.BytesIO(price_check.build_report(result)))
-        self.assertEqual(report.sheetnames, ["汇总", "核对明细", "图上有表格没有", "表格有图片没有"])
-        self.assertEqual(report["核对明细"].cell(2, 1).value, "不一致")  # 有问题的排在前面
+        wrong = next(r for r in result["records"] if r["status"] == "不一致")
+        self.assertEqual(wrong["diffs"], [{"kind": "价格", "label": "立省", "table": "458", "image": "271"}])
 
     def test_misread_numbers_are_dropped_or_reread(self):
         # 立省的数字被又填进吊牌价：吊牌价不可能小于等于到手价，直接丢弃
@@ -207,6 +206,39 @@ class RunCheckTest(unittest.TestCase):
         self.assertEqual(status["A1-1"], ("一致", []))
         self.assertEqual(status["A2-1"], ("不一致", ["立省：表格 458，图上 271"]))
 
+    def test_wording_is_cleared_only_when_recheck_and_reread_agree(self):
+        sheets = price_check.load_table(_xlsx(), "a.xlsx")
+        first = [{"name": "万龙甲防暴风冲锋衣", "price": 499, "save": 300}]
+
+        async def run(reread_name):
+            reads = iter([first, [{"name": reread_name, "price": 499, "save": 300}]])
+
+            async def fake_ocr(data):
+                return next(reads)
+
+            async def says_table_wording(data, pairs):
+                return [True] * len(pairs)
+
+            with patch.object(price_check, "ocr_image", fake_ocr), patch.object(price_check, "verify_wording", says_table_wording):
+                return (await price_check.run_check([("外套/1.jpg", lambda: b"x")], sheets))["records"][0]["status"]
+
+        # 复核说是表格的写法，但重新读图还是"防暴风"：保留提示（真的写错了）
+        self.assertEqual(asyncio.run(run("万龙甲防暴风冲锋衣")), "文案待确认")
+        # 复核和重新读图都是表格的写法：第一遍认错了字，不报
+        self.assertEqual(asyncio.run(run("万龙甲防暴雨冲锋衣")), "一致")
+
+    def test_missed_second_line_is_cleared_by_reread(self):
+        sheets = price_check.load_table(_xlsx(), "a.xlsx")
+        reads = iter([[{"name": "火锅羽绒", "price": 399, "save": 500}],            # 第一遍漏读了第二行
+                      [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]])
+
+        async def fake_ocr(data):
+            return next(reads)
+
+        with patch.object(price_check, "ocr_image", fake_ocr):
+            result = asyncio.run(price_check.run_check([("a/1.jpg", lambda: b"x")], sheets))
+        self.assertEqual(result["records"][0]["status"], "一致")
+
     def test_tall_image_is_split_at_blank_rows(self):
         im = Image.new("RGB", (200, 1200), "white")
         for top in (100, 500, 900):  # 三个色块，中间留白
@@ -217,6 +249,27 @@ class RunCheckTest(unittest.TestCase):
         for part in parts[:-1]:  # 切口都落在留白上
             self.assertEqual(part.getpixel((100, part.height - 1)), (255, 255, 255))
         self.assertEqual(len(price_check.split_tall(Image.new("RGB", (750, 1100)))), 1)
+
+
+class CardTest(unittest.TestCase):
+    def test_card_puts_table_values_next_to_the_image(self):
+        from backend import price_cards
+        if not price_cards.font_path():
+            self.skipTest("本机没有中文字体")
+        buf = io.BytesIO()
+        Image.new("RGB", (200, 340), (200, 30, 30)).save(buf, format="JPEG")
+        issues = [{"pos": 8, "sku": "AGCW403-1", "name": "砂砾鞋 WNTR加绒鞋", "where": "限时闪购",
+                   "diffs": [{"kind": "价格", "label": "立省", "table": "104", "image": "271"},
+                             {"kind": "文案", "label": "文案", "table": "万龙甲防暴雨冲锋衣" * 3, "image": "万龙甲防暴风冲锋衣" * 3}],
+                   "same": [("到手价", "445")]}]
+        with Image.open(io.BytesIO(price_cards.render_card(buf.getvalue(), "素材库/活动/1.jpg", issues))) as card:
+            self.assertEqual(card.width, 400 + 28 * 2 + 640)  # 小图放大两倍，右边是对照栏
+            self.assertGreaterEqual(card.height, 680 + 56)
+            self.assertEqual(card.getpixel((30, 30))[0] > 150, True)   # 左边是原图
+            self.assertEqual(card.getpixel((card.width - 5, 5)), (249, 250, 251))  # 右边是对照栏底色
+        many = issues * 12  # 问题很多时卡片跟着变高，不截断
+        with Image.open(io.BytesIO(price_cards.render_card(buf.getvalue(), "x.jpg", many))) as tall:
+            self.assertGreater(tall.height, 2000)
 
 
 class SharedFoldersTest(unittest.TestCase):
@@ -391,12 +444,19 @@ class AgentToolsTest(unittest.TestCase):
             messages = [a[1]["message"] for a in events if a[0] == "tool.progress"]
             self.assertTrue(messages[0].startswith("正在读取表格"))
             self.assertTrue(any(m.startswith("正在识别图片") for m in messages))  # 同一阶段每秒最多一条
-            self.assertTrue(messages[-1].startswith("正在生成报告"))
-            self.assertIn("立省：表格 500，图上 271", result["价格不一致"][0])
-            self.assertEqual(result["表格有价格但没找到对应图片"]["数量"], 5)
-            report = store.get_artifact(result["files"][0]["id"], "u1")
-            self.assertEqual(report["kind"], "file")
-            self.assertTrue(Path(report["path"]).is_relative_to(Path(tmp) / "out"))  # 报告写在本机输出目录
+            self.assertTrue(messages[-1].startswith("正在生成 1 张核对卡片"))
+            # 结果按图片归类，同一张图的问题放一起，并带上核对卡片
+            (found,) = result["有问题的图片"]
+            self.assertEqual(found["图片"], "男子/羽绒服.png")
+            self.assertEqual(found["问题"][0]["差异"], [{"类型": "价格", "项目": "立省", "表格": "500", "图上": "271"}])
+            self.assertEqual(sum(len(v) for v in result["表格有价格但没找到图片的商品"].values()), 5)
+            self.assertNotIn("files", result)  # 不再生成 Excel 对比表
+            (card,) = result["images"]
+            self.assertEqual(card["id"], found["核对卡片"])
+            saved = store.get_artifact(card["id"], "u1")
+            self.assertTrue(Path(saved["path"]).is_relative_to(Path(tmp) / "out"))  # 卡片写在本机输出目录
+            with Image.open(saved["path"]) as picture:
+                self.assertGreater(picture.width, 720)  # 原图旁边多出一栏对照
             self.assertEqual(sorted(p.name for p in (root / "活动").rglob("*")), ["男子", "羽绒服.png"])  # 共享盘没多出文件
             self.assertIn(("publish", "artifact.created"), events)
             # 表格截图 + 直接上传到对话里的图片：没有共享文件夹也能核对
@@ -412,7 +472,7 @@ class AgentToolsTest(unittest.TestCase):
                     patch.object(price_check, "load_table_image", fake_table_image):
                 uploaded = asyncio.run(shared_tools.check_prices(ctx, {
                     "request": "核对一下价格", "table": shot["id"], "image_ids": [shot["id"], poster["id"]]}))
-            self.assertEqual((uploaded["images_scanned"], uploaded["counts"]["不一致"]), (1, 1))
+            self.assertEqual((uploaded["概况"]["文件夹里的图片数"], uploaded["概况"]["核对结果"]["价格不一致"]), (1, 1))
             self.assertTrue(any("截图" in note for note in uploaded["说明"]))
 
 

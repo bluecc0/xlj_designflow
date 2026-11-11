@@ -49,7 +49,8 @@ backend/              Python FastAPI server
   slot_schema.py      Loader for slot_schema.json
   outfit_change.py    AI 换装: SKU angle-image lookup, built-in try-on prompt
   shared_folders.py   READ-ONLY whitelist of shared folders for the Agent (shared_folders.json); never add write/delete/move calls here (guarded by test_price_check.ReadOnlyGuardTest)
-  price_check.py      Price & copy check: parse listing sheets, OCR every image in a folder via VLM, match items to rows by name/price (no folder-structure assumptions), Excel report
+  price_check.py      Price & copy check: parse listing sheets, OCR every image in a folder via VLM, match items to rows by name/price (no folder-structure assumptions)
+  price_cards.py      Renders a check card per problem image (original image + table values side by side) for chat and canvas
 
 jobs.db               SQLite database (auto-created on startup)
 product-library/      Local product images organized by type folders

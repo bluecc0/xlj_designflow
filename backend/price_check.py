@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 import openpyxl
-from openpyxl.styles import Font, PatternFill
 from PIL import Image
 
 from .ai_image import compress_image_to_data_url
@@ -537,22 +536,30 @@ def field_diffs(item: dict, row: dict, shown: set[str]) -> tuple[list[str], list
     return wrong, unread
 
 
+def differences(item: dict, row: dict, shown: set[str], confirmed: frozenset = frozenset()) -> list[dict]:
+    """图上这个商品和表格这一行的差异，每项 {"kind": 价格/文案/没读到, "label", "table", "image"}。
+    confirmed：复核后确认图上写的就是表格文案的那些（第一遍识别认错了字）。"""
+    wrong, unread = field_diffs(item, row, shown)
+    out = [{"kind": "价格", "label": FIELD_LABELS[f], "table": row["values"][f], "image": str(item.get(f))} for f in wrong]
+    out += [{"kind": "文案", "label": "文案", "table": text, "image": (piece or item.get("name") or "").replace("\n", " ")}
+            for text, piece, _sim in wording_diffs(item, row) if text not in confirmed]
+    out += [{"kind": "没读到", "label": FIELD_LABELS[f], "table": row["values"][f], "image": ""} for f in unread]
+    return out
+
+
 def judge(item: dict, row: dict, shown: set[str], confirmed: frozenset = frozenset()) -> tuple[str, list[str]]:
-    """confirmed：复核后确认图上写的就是表格文案的那些（第一遍识别认错了字）。"""
-    wrong, unread_fields = field_diffs(item, row, shown)
-    problems = [f"{FIELD_LABELS[f]}：表格 {row['values'][f]}，图上 {item.get(f)}" for f in wrong]
-    unread = [FIELD_LABELS[f] for f in unread_fields]
-    wording = []
-    for text, piece, _sim in wording_diffs(item, row):
-        if text not in confirmed:
-            wording.append(f"文案：表格「{text}」，图上「{piece or item.get('name') or ''}」")
-    if problems:
-        return "不一致", problems + wording
-    if wording:
-        return "文案待确认", wording
-    if unread:
-        return "未识别", ["图上没读到" + "、".join(unread) + "，请人工看一下"]
-    return "一致", []
+    diffs = differences(item, row, shown, confirmed)
+    kinds = {d["kind"] for d in diffs}
+    if "价格" in kinds:
+        status, used = "不一致", [d for d in diffs if d["kind"] != "没读到"]
+    elif "文案" in kinds:
+        status, used = "文案待确认", [d for d in diffs if d["kind"] == "文案"]
+    elif "没读到" in kinds:
+        return "未识别", ["图上没读到" + "、".join(d["label"] for d in diffs) + "，请人工看一下"]
+    else:
+        return "一致", []
+    return status, [f"{d['label']}：表格{' ' if d['kind'] == '价格' else '「'}{d['table']}{'' if d['kind'] == '价格' else '」'}，"
+                    f"图上{' ' if d['kind'] == '价格' else '「'}{d['image']}{'' if d['kind'] == '价格' else '」'}" for d in used]
 
 
 def _same_item(item: dict, again: list[dict]) -> dict | None:
@@ -630,32 +637,39 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notif
             covered.add((row["sheet"], row["index"]))
             pairs.append((item, row))
 
-    # 文案只差一两个字的，多半是第一遍认错了字：按图片分组复核一次
+    # 文案对不上的再确认一遍，按图片分组：
+    # - 重新读一遍图，读出来的文字里有表格文案 → 第一遍漏读或读错了；
+    # - 只差一两个字的（容易被"读顺"），还要二选一复核也认定图上是表格的写法，两者都成立才不报。漏报比误报严重。
     loaders = dict(images)
-    near: dict[str, list[tuple[int, str, str]]] = {}
+    doubts: dict[str, list[tuple[int, str, str, bool]]] = {}
     confirmed: dict[int, set[str]] = {}
     for idx, (item, row) in enumerate(pairs):
         for text, piece, sim in wording_diffs(item, row):
-            if not piece or sim < VERIFY_SIMILARITY:
-                continue
-            if row.get("from_image"):  # 表格来自截图：分不清是截图读错还是图上写错，不报
+            near = bool(piece) and sim >= VERIFY_SIMILARITY
+            if near and row.get("from_image"):  # 表格来自截图：分不清是截图读错还是图上写错，不报
                 confirmed.setdefault(idx, set()).add(text)
             else:
-                near.setdefault(item["_image"], []).append((idx, text, piece))
+                doubts.setdefault(item["_image"], []).append((idx, text, piece, near))
+    if doubts:
+        await say(f"图片识别完成，正在复核 {len(doubts)} 张图上对不上的文案")
 
-    if near:
-        await say(f"图片识别完成，正在复核 {len(near)} 张图上只差一两个字的文案")
-
-    async def recheck(rel: str, todo: list[tuple[int, str, str]]):
+    async def recheck(rel: str, todo: list[tuple[int, str, str, bool]]):
         async with sem:
             try:
                 data = await asyncio.to_thread(loaders[rel])
+                seen = " ".join(_item_text(it) for it in (await ocr_image(data) or []))
             except Exception:
                 return [False] * len(todo)
-            return await verify_wording(data, [(text, piece) for _idx, text, piece in todo])
+            reread = [_clean(text) in seen for _idx, text, _piece, _near in todo]
+            close = [(n, text, piece) for n, (_idx, text, piece, near) in enumerate(todo) if near and reread[n]]
+            if close:
+                verdicts = await verify_wording(data, [(text, piece) for _n, text, piece in close])
+                for (n, _text, _piece), ok in zip(close, verdicts):
+                    reread[n] = ok
+            return reread
 
-    for todo, verdicts in zip(near.values(), await asyncio.gather(*[recheck(rel, todo) for rel, todo in near.items()])):
-        for (idx, text, _piece), ok in zip(todo, verdicts):
+    for todo, verdicts in zip(doubts.values(), await asyncio.gather(*[recheck(rel, todo) for rel, todo in doubts.items()])):
+        for (idx, text, _piece, _near), ok in zip(todo, verdicts):
             if ok:
                 confirmed.setdefault(idx, set()).add(text)
 
@@ -689,73 +703,9 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notif
     records = []
     for idx, (item, row) in enumerate(pairs):
         status, problems = judge(item, row, item["_shown"], frozenset(confirmed.get(idx, ())))
-        records.append({"status": status, "problems": problems, "item": item, "row": row})
+        records.append({"status": status, "problems": problems, "item": item, "row": row,
+                        "diffs": differences(item, row, item["_shown"], frozenset(confirmed.get(idx, ())))})
     uncovered = [row for sheet in sheets for row in sheet.rows
                  if row["values"] and (row["sheet"], row["index"]) not in covered]
     return {"records": records, "unmatched": unmatched, "uncovered": uncovered, "failed": failed,
             "skipped_small": small, "no_product_images": empty, "image_count": len(images)}
-
-
-# ── 报告 ──────────────────────────────────────────────────────────────────────
-
-_FILLS = {"不一致": "FFC7CE", "文案待确认": "FFEB9C", "未识别": "FFEB9C"}
-
-
-def _header(ws, headers: list[str], widths: list[int]) -> None:
-    ws.append(headers)
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-    for i, width in enumerate(widths):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(i + 1)].width = width
-    ws.freeze_panes = "A2"
-
-
-def build_report(result: dict) -> bytes:
-    records = result["records"]
-    wb = openpyxl.Workbook()
-    summary = wb.active
-    summary.title = "汇总"
-    summary.append(["扫描图片数", result["image_count"]])
-    summary.append(["对应到表格的商品数", len(records)])
-    for status in STATUSES:
-        summary.append([status, sum(r["status"] == status for r in records)])
-    summary.append(["图上有、表格里没找到的商品", len(result["unmatched"])])
-    summary.append(["表格有价格、没找到图片的商品", len(result["uncovered"])])
-    summary.append(["太小跳过的图（按钮、图标）", result["skipped_small"]])
-    summary.append(["没有商品的图（标题、背景等）", len(result["no_product_images"])])
-    for line in result["failed"]:
-        summary.append(["识别失败", line])
-    summary.column_dimensions["A"].width = 32
-    summary.column_dimensions["B"].width = 60
-
-    ws = wb.create_sheet("核对明细")
-    headers = ["结果", "问题", "图片", "图上第几个", "工作表", "分组", "SKU", "表格商品名", "图上商品名"]
-    for f in FIELD_LABELS:
-        headers += [f"{FIELD_LABELS[f]}（表格）", f"{FIELD_LABELS[f]}（图上）"]
-    _header(ws, headers, [10, 46, 36, 8, 14, 22, 14, 26, 26])
-    order = {s: i for i, s in enumerate(("不一致", "文案待确认", "未识别", "一致"))}
-    for r in sorted(records, key=lambda r: order[r["status"]]):
-        row, it = r["row"], r["item"]
-        line = [r["status"], "；".join(r["problems"]), it["_image"], it["_pos"], row["sheet"], " / ".join(row["group"]),
-                row["sku"], row["name"], it.get("name") or ""]
-        for f in FIELD_LABELS:
-            line += [row["values"].get(f, ""), "" if it.get(f) is None else str(it.get(f))]
-        ws.append(line)
-        if r["status"] in _FILLS:
-            fill = PatternFill("solid", fgColor=_FILLS[r["status"]])
-            for cell in ws[ws.max_row]:
-                cell.fill = fill
-
-    ws = wb.create_sheet("图上有表格没有")
-    _header(ws, ["图片", "图上第几个", "图上商品名", "图上价格", "图上立省"], [40, 8, 30, 12, 12])
-    for it in result["unmatched"]:
-        ws.append([it["_image"], it["_pos"], it.get("name") or "", it.get("price") or "", it.get("save") or ""])
-
-    ws = wb.create_sheet("表格有图片没有")
-    _header(ws, ["工作表", "分组", "SKU", "商品名", "到手价", "立省"], [14, 24, 14, 30, 10, 10])
-    for row in result["uncovered"]:
-        ws.append([row["sheet"], " / ".join(row["group"]), row["sku"], row["name"],
-                   row["values"].get("price", ""), row["values"].get("save", "")])
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
