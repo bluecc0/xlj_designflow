@@ -404,6 +404,44 @@ class Agent2EngineTest(unittest.TestCase):
                         self.assertFalse(result.get("failed"))
                         self.assertEqual(result["images"][0]["model"], "seedream-5-5")
 
+    def test_seedream_extended_sizes_reach_executor(self):
+        img = Path(self.tmp.name) / "out.png"
+        img.write_bytes(b"png")
+        patches, executed = self._durable_image_tools(img)
+        with patches[0], patches[1], patches[2]:
+            for ratio in ("2:1", "1:2", "21:9"):
+                with self.subTest(ratio=ratio):
+                    self._run(FakeModel([
+                        [("call", "generate_image", {"images": [{"prompt": "产品海报", "model": "seedream-5.0-pro"}],
+                                                     "resolution": "1.5K", "aspect_ratio": ratio})],
+                        [("text", "好了")],
+                    ]))
+                    self.assertEqual((executed[-1]["model"], executed[-1]["resolution"], executed[-1]["size"]),
+                                     ("seedream-5-5", "1.5K", ratio))
+        self.assertEqual(len(executed), 3)
+
+    def test_seedream_extended_sizes_reject_incompatible_models_before_submission(self):
+        img = Path(self.tmp.name) / "out.png"
+        img.write_bytes(b"png")
+        patches, executed = self._durable_image_tools(img)
+        cases = [
+            ({"model": "seedream-5-5", "resolution": "4K"}, "仅支持"),
+            ({"model": "gpt-image-2.6", "resolution": "1.5K"}, "仅适用于"),
+            ({"model": "nano-banana-pro", "aspect_ratio": "21:9"}, "仅适用于"),
+            ({"model": "seedream-5-5", "resolution": "1.5K",
+              "images": [{"prompt": "猫"}, {"prompt": "猫", "model": "gpt-image-2.6"}]}, "分批"),
+        ]
+        with patches[0], patches[1], patches[2]:
+            for options, message in cases:
+                with self.subTest(options=options):
+                    args = {"images": [{"prompt": "产品海报"}], **options}
+                    events = self._run(FakeModel([
+                        [("call", "generate_image", args)], [("text", "参数不支持")],
+                    ]))
+                    result = next(e["payload"]["result"] for e in events if e["type"] == "tool.finished")
+                    self.assertIn(message, result["error"])
+        self.assertEqual(executed, [])
+
     def test_failed_image_job_is_reported_to_model(self):
         img = Path(self.tmp.name) / "out.png"
         patches, _ = self._durable_image_tools(img, fail="上游安全审核拦截")
