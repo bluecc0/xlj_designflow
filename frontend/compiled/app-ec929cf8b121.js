@@ -5385,14 +5385,16 @@ const AGENT2_STEP_TOOLS = {
   load_skill: true,
   read_skill_file: true,
   use_skill_image: true,
-  remember: true
+  remember: true,
+  list_shared_folder: true,
+  read_table: true
 };
 const groupAgentSteps = function (messages) {
   var out = [];
   messages.forEach(function (m) {
     var last = out[out.length - 1];
     // 只作参考、不展示的素材库取图也是准备步骤
-    var hiddenFetch = m.tool === 'find_product_images' && m.args && m.args.show === false;
+    var hiddenFetch = (m.tool === 'find_product_images' || m.tool === 'use_shared_images') && m.args && m.args.show === false;
     if (m.type === 'agent2-tool' && (AGENT2_STEP_TOOLS[m.tool] || hiddenFetch)) {
       if (last && last.type === 'agent2-steps') {
         last.steps.push(m);
@@ -5424,9 +5426,11 @@ const agent2StepLabel = function (m) {
 const agent2StepDetail = function (m) {
   var args = m.args || {};
   if (m.tool === 'read_skill_file') return args.path || '';
-  if (m.tool === 'use_skill_image') return (args.paths || []).length + ' 张';
+  if (m.tool === 'use_skill_image' || m.tool === 'use_shared_images') return (args.paths || []).length + ' 张';
   if (m.tool === 'remember') return args.content || '';
   if (m.tool === 'find_product_images') return (args.sku || '') + ' · 仅作参考';
+  if (m.tool === 'list_shared_folder') return args.path || '';
+  if (m.tool === 'read_table') return args.source || '';
   return args.name || '';
 };
 const agent2StepDot = function (status) {
@@ -5608,6 +5612,9 @@ const AgentToolCard = ({
   if (m.tool === 'generate_image') {
     var count = (args.images || []).length;
     summary = count + ' 张' + (args.aspect_ratio && args.aspect_ratio !== 'auto' ? ' · ' + args.aspect_ratio : '') + (args.group_type === 'set' ? ' · 套图' : args.group_type === 'variant' ? ' · 多方案' : '');
+  } else if (m.tool === 'check_prices') {
+    var counts = result.counts || null;
+    summary = counts ? '核对 ' + (result.checked || 0) + ' 个 · 不一致 ' + (counts['不一致'] || 0) + (counts['文案待确认'] ? ' · 文案待确认 ' + counts['文案待确认'] : '') + (counts['未识别'] ? ' · 待人工看 ' + counts['未识别'] : '') : '';
   } else if (m.tool === 'special_compose') {
     summary = [args.sku, args.name].filter(Boolean).join(' · ');
   } else if (m.tool === 'load_skill' || m.tool === 'read_skill_file' || m.tool === 'use_skill_image') {
@@ -7174,7 +7181,27 @@ const ChatReturned = ({
     size: 11
   }), m.characters.map(function (card) {
     return card.name;
-  }).join('、')) : null, m.who === 'user' && Array.isArray(m.refPreviews) && m.refPreviews.length > 0 ? /*#__PURE__*/React.createElement("div", {
+  }).join('、')) : null, m.who === 'user' && Array.isArray(m.attachments) && m.attachments.length > 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      alignSelf: 'flex-end',
+      display: 'inline-flex',
+      flexWrap: 'wrap',
+      gap: 6,
+      justifyContent: 'flex-end'
+    }
+  }, m.attachments.map(function (name, idx) {
+    return /*#__PURE__*/React.createElement("span", {
+      key: idx,
+      style: {
+        fontSize: 11,
+        padding: '3px 8px',
+        borderRadius: 6,
+        border: '1px solid var(--line-2)',
+        background: 'var(--panel)',
+        color: 'var(--ink-2)'
+      }
+    }, "\u8868\u683C \xB7 ", name);
+  })) : null, m.who === 'user' && Array.isArray(m.refPreviews) && m.refPreviews.length > 0 ? /*#__PURE__*/React.createElement("div", {
     style: {
       alignSelf: 'stretch',
       padding: '8px 10px',
@@ -8003,6 +8030,9 @@ const Composer = ({
       return;
     }
     const imagesToSend = [...refImages];
+    const tablesToSend = files.filter(function (item) {
+      return item.kind === 'agent-table';
+    });
     const normalizedBatchCount = normalizeBatchCount(aiBatchCount);
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
     onSend(sendMessage, imagesToSend, {
@@ -8026,7 +8056,15 @@ const Composer = ({
           id: card.id,
           name: card.name
         };
-      }) : []
+      }) : [],
+      tables: tablesToSend.map(function (item) {
+        return item.file;
+      })
+    });
+    if (tablesToSend.length) setFiles(function (prev) {
+      return prev.filter(function (item) {
+        return item.kind !== 'agent-table';
+      });
     });
     setAiBatchCount(String(normalizedBatchCount));
     setText('');
@@ -8281,9 +8319,19 @@ const Composer = ({
     const others = fileList.filter(f => !f.type.startsWith('image/'));
     if (images.length) addImageFiles(images);
     if (others.length && agentEnabled) {
-      window.dfToast('Agent 目前只支持上传图片；Excel 铺货表请用功能菜单里的「智能铺货」', {
+      // Agent 支持表格（价格核对等），随消息一起发给 Agent
+      const tables = others.filter(f => /\.(xlsx|xlsm|csv)$/i.test(f.name));
+      if (tables.length < others.length) window.dfToast('Agent 支持上传图片和表格（xlsx、xlsm、csv）', {
         tone: 'warn'
       });
+      if (tables.length) {
+        setFiles(prev => prev.concat(tables.map(f => ({
+          name: f.name,
+          size: formatFileSize(f.size),
+          file: f,
+          kind: 'agent-table'
+        }))));
+      }
     } else if (others.length) {
       const file = others[0];
       if (selectedWorkflow === 'distribute' && isSmartDistributeFile(file)) {
@@ -9933,7 +9981,7 @@ const Composer = ({
     type: "file",
     ref: fileInputRef,
     onChange: handleFileSelect,
-    accept: "image/*,.xlsx,.xlsm",
+    accept: "image/*,.xlsx,.xlsm,.csv",
     multiple: true,
     style: {
       display: 'none'
@@ -10257,6 +10305,10 @@ const AGENT2_TOOL_LABELS = {
   load_skill: '加载技能',
   read_skill_file: '读取技能资料',
   use_skill_image: '读取技能参考图',
+  list_shared_folder: '查看共享文件夹',
+  use_shared_images: '共享盘取图',
+  read_table: '读取表格',
+  check_prices: '价格文案核对',
   special_compose: '特殊品合成',
   remember: '记忆',
   remove_background: '抠图',
@@ -10328,8 +10380,15 @@ const agent2Reduce = function (msgs, ev) {
       return list.concat([{
         who: 'user',
         text: p.text || '',
-        refPreviews: (p.uploads || []).map(function (u) {
+        refPreviews: (p.uploads || []).filter(function (u) {
+          return u.kind !== 'table';
+        }).map(function (u) {
           return agent2AbsUrl(u.url);
+        }),
+        attachments: (p.uploads || []).filter(function (u) {
+          return u.kind === 'table';
+        }).map(function (u) {
+          return u.name || '表格';
         }),
         characters: p.characters || []
       }, thinking]);
@@ -11926,7 +11985,7 @@ const Chat = ({
         } else {
           sessionId = await ensureAgentSession();
           if (agentStreamRef.current.cursor.sessionId !== sessionId) resetAgentCursor(sessionId);
-          await window.API.sendAgent2Message(sessionId, executionText, refImages, onAgentEvent, activeSkill, aiOptions.characterIds);
+          await window.API.sendAgent2Message(sessionId, executionText, refImages, onAgentEvent, activeSkill, aiOptions.characterIds, aiOptions.tables);
         }
       } catch (e) {
         streamError = e;

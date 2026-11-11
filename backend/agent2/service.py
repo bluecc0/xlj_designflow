@@ -37,9 +37,13 @@ def sse(event: dict) -> str:
     return f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+TABLE_SUFFIXES = {".xlsx", ".xlsm", ".csv"}
+
+
 def save_upload(user: dict, session_id: str, data: bytes, filename: str) -> dict:
     suffix = Path(filename or "").suffix.lower() or ".png"
-    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+    kind = "table" if suffix in TABLE_SUFFIXES else "upload"
+    if kind == "upload" and suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
         suffix = ".png"
     safe_user = re.sub(r"[^A-Za-z0-9_-]", "_", str(user["id"])) or "user"
     folder = settings.output_path / "agent2-uploads" / safe_user / session_id
@@ -47,7 +51,7 @@ def save_upload(user: dict, session_id: str, data: bytes, filename: str) -> dict
     path = folder / f"{uuid.uuid4().hex}{suffix}"
     path.write_bytes(data)
     url = "/output/" + path.relative_to(settings.output_path).as_posix()
-    return store.create_artifact(session_id=session_id, user_id=user["id"], kind="upload", url=url,
+    return store.create_artifact(session_id=session_id, user_id=user["id"], kind=kind, url=url,
                                  path=str(path), label=filename or "")
 
 
@@ -202,7 +206,7 @@ async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], 
     session = store.get_session(session["id"], user["id"]) or session  # 占用后读最新历史
     # skill 记下用户选择的技能，用于技能使用统计
     first = store.append_event(session["id"], turn["id"], "turn.started", {
-        "text": text, "uploads": [{"id": u["id"], "url": u["url"]} for u in uploads],
+        "text": text, "uploads": [{"id": u["id"], "url": u["url"], "kind": u["kind"], "name": u["label"]} for u in uploads],
         **({"skill": skill} if skill else {}),
         **({"characters": characters} if characters else {})})
     yield sse(first)
@@ -210,8 +214,12 @@ async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], 
     content = text
     if skill:
         content = f"[用户选择了技能：{skill}，请先用 load_skill 加载它再执行]\n{content}"
-    if uploads:
-        content += "\n\n[用户上传了图片：" + "、".join(u["id"] for u in uploads) + "]"
+    pictures = [u for u in uploads if u["kind"] != "table"]
+    tables = [u for u in uploads if u["kind"] == "table"]
+    if pictures:
+        content += "\n\n[用户上传了图片：" + "、".join(u["id"] for u in pictures) + "]"
+    if tables:
+        content += "\n\n[用户上传了表格：" + "、".join(f"{u['id']}（{u['label']}）" for u in tables) + "]"
     if characters:
         content += build_agent_note(characters)
     recovered = store.take_unannounced_recovered(session["id"])

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -15,6 +16,7 @@ router = APIRouter(prefix="/agent2")
 
 MAX_UPLOADS = 9  # 与输入框参考图上限一致（换装最多 1 张人物 + 8 张服装）
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_TABLE_UPLOADS = 3
 
 
 def _is_image(data: bytes) -> bool:
@@ -75,30 +77,42 @@ def delete_session(request: Request, session_id: str):
 
 @router.post("/sessions/{session_id}/messages")
 async def send_message(request: Request, session_id: str, message: str = Form(""), skill: str = Form(""),
-                       images: list[UploadFile] = File(default=[]), character_ids: str = Form("")):
+                       images: list[UploadFile] = File(default=[]), files: list[UploadFile] = File(default=[]),
+                       character_ids: str = Form("")):
     user, session = _session(request, session_id)
     text = message.strip()
     cards = resolve_cards(user, character_ids)
-    if not text and not images:
+    if not text and not images and not files:
         raise HTTPException(400, "消息不能为空")
     if len(images or []) > MAX_UPLOADS:
         raise HTTPException(400, f"一次最多上传 {MAX_UPLOADS} 张图片")
-    files = []
+    saved = []
     for upload in images or []:
         data = await upload.read(MAX_UPLOAD_BYTES + 1)
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(400, "单张图片不能超过 20MB")
         if data and not _is_image(data):
-            raise HTTPException(400, f"{upload.filename or '文件'} 不是图片；Agent 目前只支持上传图片")
+            raise HTTPException(400, f"{upload.filename or '文件'} 不是图片；Agent 支持上传图片和表格（xlsx、xlsm、csv）")
         if data:
-            files.append((data, upload.filename or ""))
+            saved.append((data, upload.filename or ""))
+    # 表格（xlsx / csv）：给价格核对等工具读取
+    if len(files or []) > MAX_TABLE_UPLOADS:
+        raise HTTPException(400, f"一次最多上传 {MAX_TABLE_UPLOADS} 个表格")
+    for upload in files or []:
+        if Path(upload.filename or "").suffix.lower() not in service.TABLE_SUFFIXES:
+            raise HTTPException(400, f"{upload.filename or '文件'} 不是表格；支持 xlsx、xlsm、csv")
+        data = await upload.read(MAX_UPLOAD_BYTES + 1)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(400, "单个表格不能超过 20MB")
+        if data:
+            saved.append((data, upload.filename or ""))
     characters = await asyncio.to_thread(service.register_characters, user, session_id, cards)
     # 校验通过后再占用会话，避免报错留下一直"运行中"的轮次
     try:
         turn = service.claim_turn(user, session, text)
     except service.TurnBusy as exc:
         raise HTTPException(409, str(exc))
-    uploads = [service.save_upload(user, session_id, data, name) for data, name in files]
+    uploads = [service.save_upload(user, session_id, data, name) for data, name in saved]
     return _stream(service.start_turn(user, session, text, uploads, skill=skill.strip(), turn=turn,
                                             characters=characters))
 

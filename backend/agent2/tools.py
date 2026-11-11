@@ -506,6 +506,7 @@ async def remember(ctx: ToolContext, args: dict) -> dict:
 
 def build_tools() -> dict[str, Tool]:
     from .image_ops import build_image_op_tools  # image_ops 依赖本模块，延迟导入
+    from .shared_tools import build_shared_tools
     tools = [
         Tool("generate_image",
              "生成图片（文生图或参考图生图）。images 里每一项生成一张，可以各自不同的 prompt；"
@@ -582,5 +583,5 @@ def build_tools() -> dict[str, Tool]:
                  "route": {"type": "string", "enum": ["auto", "normal", "full"], "description": "默认 auto"}},
               "required": ["sku"]},
              special_compose),
-    ] + build_image_op_tools()
+    ] + build_image_op_tools() + build_shared_tools()
     return {t.name: t for t in tools}
