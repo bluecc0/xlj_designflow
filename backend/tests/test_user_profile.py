@@ -54,6 +54,15 @@ class UserProfileTest(unittest.TestCase):
                 user_profile.save_preferences("u1", bad)
         self.assertEqual(user_profile.load_preferences("u2"), user_profile.PREFERENCE_DEFAULTS)
 
+    def test_legacy_seedream_preference_is_upgraded_without_database_migration(self) -> None:
+        with job_store._connect() as conn:
+            conn.execute("INSERT INTO user_preferences (user_id, prefs_json, updated_at) VALUES (?, ?, ?)",
+                         ("u1", json.dumps({"default_model": "seedream-5-0-flash", "default_ratio": "3:4"}), 1))
+            conn.commit()
+        self.assertEqual(user_profile.load_preferences("u1")["default_model"], "seedream-5-5")
+        self.assertEqual(user_profile.load_preferences("u1")["default_ratio"], "3:4")
+        self.assertEqual(user_profile.save_preferences("u1", {"default_model": "seedream-5.0-pro"})["default_model"], "seedream-5-5")
+
     def test_public_user_includes_profile_without_password_hash_or_real_name(self) -> None:
         data = user_profile.public_user(self.user)
         self.assertEqual(data["nickname"], "")

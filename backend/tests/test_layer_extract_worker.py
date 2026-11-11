@@ -27,7 +27,7 @@ class LayerExtractWorkerTest(unittest.TestCase):
             source.write_bytes(png_bytes((16, 12), "white"))
             output = root / "job"
             remote = {
-                "provider": "apimart", "model": "seedream-5-0-pro", "task_id": "task-1",
+                "provider": "apimart", "model": "seedream-5-5", "task_id": "task-1",
                 "result_layers": layers,
             }
             with (
@@ -93,7 +93,17 @@ class LayerExtractWorkerTest(unittest.TestCase):
         self.assertEqual(payload["background_status"], "ready")
         self.assertEqual([layer["bbox"] for layer in exported], [(0, 0, 16, 12), (3, 2, 8, 6)])
 
-    def test_layer_limit_accounts_for_optional_background(self):
+    def test_55_independently_sized_layer_uses_base_coordinates_and_keeps_ocr(self):
+        code, _, manifest, exported = self.run_worker([
+            {"z_index": 0, "bytes": png_bytes((32, 24), "white")},
+            {"z_index": 1, "bytes": png_bytes((40, 32), "red"),
+             "bounding_box": {"absolute": [6, 4, 16, 12]}, "text_recognition": {"text": "Sale"}},
+        ])
+        self.assertEqual(code, 0)
+        self.assertEqual(exported[1]["bbox"], (3, 2, 8, 6))
+        self.assertEqual(manifest["layers"][1]["text_recognition"], {"text": "Sale"})
+
+    def test_all_returned_layers_are_kept_including_last_subject(self):
         for include_background in (False, True):
             with self.subTest(include_background=include_background):
                 layers = [self.foreground(i) for i in range(1, 10)]
@@ -101,8 +111,8 @@ class LayerExtractWorkerTest(unittest.TestCase):
                     layers.insert(0, {"name": "background", "z_index": 0, "bytes": png_bytes((16, 12), "white")})
                 code, _, manifest, exported = self.run_worker(layers)
                 self.assertEqual(code, 0)
-                self.assertEqual(len(manifest["layers"]), 7)
-                self.assertEqual(len(exported), 7)
+                self.assertEqual(len(manifest["layers"]), len(layers))
+                self.assertEqual(len(exported), len(layers))
 
     def test_empty_result_is_a_failure_and_does_not_resubmit(self):
         code, payload, _, exported = self.run_worker([])

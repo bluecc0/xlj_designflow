@@ -1,7 +1,7 @@
-"""使用 APIMart Seedream 5.0 Pro 图层分离结果导出 PSD。
+"""使用 APIMart Seedream 5.5 图层分离结果导出 PSD。
 
 链路：
-1. 把原图提交给 APIMart ``seedream-5-0-pro`` 图层分离接口；
+1. 把原图提交给 APIMart ``seedream-5-5`` 图层分离接口；
 2. 下载模型返回的图层切片、z_index 和 bounding_box；
 3. 按返回的坐标生成 manifest，再复用 layer_psd 导出 PSD。
 
@@ -29,10 +29,6 @@ from backend.apimart_layer_decomposition import (
     ApimartLayerDecompositionClient,
     ApimartLayerDecompositionError,
 )
-from backend.kie_layer_decomposition import (
-    KieLayerDecompositionClient,
-    KieLayerDecompositionError,
-)
 from backend.layer_psd import export_psd
 
 
@@ -41,7 +37,7 @@ logger = logging.getLogger("layer_extract_worker")
 # 按图片实际内容拆分；只限制层数上限，不要求背景或任何固定的元素类别。
 LAYER_DECOMPOSITION_PROMPT = (
     "Decompose this image into meaningful, independently editable image layers based on its actual visible content. "
-    "Let the image determine the layer types and count, using as few layers as needed and at most 7 in total. "
+    "Let the image determine the layer types and count, using as few layers as needed within the requested limit. "
     "There are no required layer categories and no minimum layer count. "
     "For a simple image, extract the single useful element rather than rejecting it for lacking other categories. "
     "Keep related details together and avoid splitting tiny fragments. "
@@ -118,7 +114,7 @@ async def _download_result_layers(
         for index, layer in enumerate(result_layers, start=1):
             url = str(layer.get("url") or "").strip()
             if not url:
-                logger.warning("Kie 图层 %s 缺少图片 URL，跳过", index)
+                logger.warning("图层 %s 缺少图片 URL，跳过", index)
                 continue
             item = dict(layer)
             try:
@@ -126,7 +122,7 @@ async def _download_result_layers(
             except RuntimeError as exc:
                 # A single expired result URL should not discard the other
                 # layers when Kie returned a usable multi-layer result.
-                logger.warning("Kie 图层 %s 下载失败，跳过: %s", index, exc)
+                logger.warning("图层 %s 下载失败，跳过: %s", index, exc)
                 continue
             downloaded.append(item)
     return downloaded
@@ -313,7 +309,7 @@ def _prepare_foreground(
     return {
         "id": f"layer-{index:02d}",
         "name": str(layer.get("name") or f"layer-{index:02d}"),
-        "kind": str(layer.get("kind") or "kie-layer"),
+        "kind": str(layer.get("kind") or "seedream-layer"),
         "index": index,
         "z_index": int(layer.get("z_index", index)),
         "path": output.name,
@@ -325,6 +321,7 @@ def _prepare_foreground(
         "opacity": 1.0,
         "visible": True,
         "locked": False,
+        **{key: layer[key] for key in ("description", "text_recognition") if key in layer},
     }
 
 
@@ -342,11 +339,11 @@ async def _run_remote_decomposition(source_copy: Path) -> dict[str, Any]:
             poll_interval_seconds=settings.layer_extract_poll_interval_seconds,
             download_retries=settings.layer_extract_download_retries,
             proxy_url=settings.ai_image_api_proxy_url,
+            max_images=settings.layer_extract_max_images,
+            text_recognition=settings.layer_extract_text_recognition,
         )
-        result = await client.run(
-            source_copy,
-            prompt=LAYER_DECOMPOSITION_PROMPT,
-        )
+        prompt = "" if settings.layer_extract_text_recognition else LAYER_DECOMPOSITION_PROMPT
+        result = await client.run(source_copy, prompt=prompt)
         result_layers = await _download_result_layers(
             result["result_layers"],
             settings.layer_extract_timeout_seconds,
@@ -357,42 +354,12 @@ async def _run_remote_decomposition(source_copy: Path) -> dict[str, Any]:
             "provider": "apimart",
             "model": settings.layer_extract_model,
             "task_id": result.get("task_id", ""),
+            "prompt": prompt,
             "raw_result": result,
             "result_layers": result_layers,
         }
 
-    # 兼容历史 kie 模式
-    if not settings.kie_api_key:
-        raise KieLayerDecompositionError("未配置 KIE_API_KEY，请先在 .env 中填写")
-    client = KieLayerDecompositionClient(
-        api_key=settings.kie_api_key,
-        base_url=settings.kie_base_url,
-        upload_base_url=settings.kie_upload_base_url,
-        model=settings.kie_layer_model,
-        size=settings.kie_layer_size,
-        output_format=settings.kie_layer_output_format,
-        timeout_seconds=settings.kie_timeout_seconds,
-        poll_interval_seconds=settings.kie_poll_interval_seconds,
-        input_download_retries=settings.kie_input_download_retries,
-    )
-    upload_filename = f"designflow-layer-{source_copy.parent.name}.png"
-    result = await client.run(
-        source_copy,
-        prompt=LAYER_DECOMPOSITION_PROMPT,
-        upload_filename=upload_filename,
-    )
-    result_layers = await _download_result_layers(
-        result["result_layers"],
-        settings.kie_timeout_seconds,
-        settings.kie_result_download_retries,
-    )
-    return {
-        "provider": "kie",
-        "model": settings.kie_layer_model,
-        "task_id": result.get("task_id", ""),
-        "raw_result": result,
-        "result_layers": result_layers,
-    }
+    raise RuntimeError("Seedream 5.5 拆层仅支持 APIMart，请将 LAYER_EXTRACT_PROVIDER 设为 apimart")
 
 
 def main() -> int:
@@ -418,7 +385,7 @@ def main() -> int:
 
     try:
         remote = asyncio.run(_run_remote_decomposition(source_copy))
-    except (ApimartLayerDecompositionError, KieLayerDecompositionError, RuntimeError, OSError) as exc:
+    except (ApimartLayerDecompositionError, RuntimeError, OSError) as exc:
         _emit({"ok": False, "error": str(exc)})
         return 2
     except Exception as exc:
@@ -426,6 +393,7 @@ def main() -> int:
         _emit({"ok": False, "error": f"图层分离异常: {exc}"})
         return 2
 
+    decomposition_prompt = remote.get("prompt", LAYER_DECOMPOSITION_PROMPT)
     provider = remote.get("provider", "apimart")
     model_name = remote.get("model", "")
     task_id = remote.get("task_id", "")
@@ -487,8 +455,7 @@ def main() -> int:
             "provider": provider,
             "layer": background_manifest_layer,
         }
-    # 背景可选：不把原图冒充拆出的背景；无背景时可保留最多 7 个前景。
-    foreground_layers = foreground_layers[:7 - len(layers)]
+    # 数量由上游 max_images 控制（包含底图），保留全部返回图层，不能在本地静默截断。
     coordinate_size = _image_size(background_bytes) or source_size
     for index, layer in enumerate(foreground_layers, start=1):
         raw = layer["bytes"]
@@ -523,7 +490,7 @@ def main() -> int:
         "layerExtraction": {
             "provider": provider,
             "model": model_name,
-            "prompt": LAYER_DECOMPOSITION_PROMPT,
+            "prompt": decomposition_prompt,
             "taskId": task_id,
             "resultCount": len(result_layers),
             "resultLayers": serialized_result_layers,
@@ -536,7 +503,7 @@ def main() -> int:
         "task_id": task_id,
         "provider": provider,
         "model": model_name,
-        "prompt": LAYER_DECOMPOSITION_PROMPT,
+        "prompt": decomposition_prompt,
         "result_count": len(result_layers),
         "result_layers": serialized_result_layers,
         "raw": remote.get("raw_result", {}),
@@ -563,7 +530,7 @@ def main() -> int:
         "source_size": [source_width, source_height],
         "background_status": background_status,
         "decomposition_provider": provider,
-        "decomposition_prompt": LAYER_DECOMPOSITION_PROMPT,
+        "decomposition_prompt": decomposition_prompt,
         "task_id": task_id,
         "kie_task_id": task_id,
         "result_layers": serialized_result_layers,

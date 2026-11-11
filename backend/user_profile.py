@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 
 from .config import settings
+from .seedream import upgrade_seedream_model
 from .job_store import _connect, _lock, create_session, hash_password, log_operation, verify_password
 
 router = APIRouter(prefix="/auth")
@@ -33,7 +34,7 @@ PREFERENCE_DEFAULTS: dict[str, str] = {
 PREFERENCE_CHOICES: dict[str, set[str]] = {
     # enter：Enter 发送、Shift+Enter 换行；mod_enter：Ctrl/⌘+Enter 发送、Enter 换行
     "send_shortcut": {"enter", "mod_enter"},
-    "default_model": {"gpt-image-2.6", "gpt-image-2", "nano-banana-pro", "nano-banana-2.1", "seedream-5-0-flash"},
+    "default_model": {"gpt-image-2.6", "gpt-image-2", "nano-banana-pro", "nano-banana-2.1", "seedream-5-5"},
     "default_ratio": {"auto", "1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "16:9", "9:16"},
     "default_resolution": {"1K", "2K", "4K"},
 }
@@ -135,6 +136,8 @@ def load_preferences(user_id: str) -> dict[str, str]:
         stored = {}
     prefs = dict(PREFERENCE_DEFAULTS)
     for key, value in (stored if isinstance(stored, dict) else {}).items():
+        if key == "default_model":
+            value = upgrade_seedream_model(value)
         if key in PREFERENCE_CHOICES and value in PREFERENCE_CHOICES[key]:
             prefs[key] = value
     return prefs
@@ -143,6 +146,9 @@ def load_preferences(user_id: str) -> dict[str, str]:
 def save_preferences(user_id: str, patch: dict) -> dict[str, str]:
     if not isinstance(patch, dict) or not patch:
         raise HTTPException(400, "没有要保存的设置")
+    patch = dict(patch)
+    if "default_model" in patch:
+        patch["default_model"] = upgrade_seedream_model(patch["default_model"])
     for key, value in patch.items():
         if key not in PREFERENCE_CHOICES:
             raise HTTPException(400, f"不支持的设置项：{key}")

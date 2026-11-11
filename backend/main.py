@@ -2063,8 +2063,8 @@ def _run_local_layer_extract(src_path: Path, out_dir: Path, user_id: str) -> dic
 
 async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path, created_at: float) -> None:
     provider = getattr(settings, "layer_extract_provider", "apimart")
-    model_name = getattr(settings, "layer_extract_model", "seedream-5-0-pro")
-    prompt = "Seedream 5.0 Pro 图层分离并导出 PSD"
+    model_name = getattr(settings, "layer_extract_model", "seedream-5-5")
+    prompt = "Seedream 5.5 图层分离并导出 PSD"
     out_dir = settings.output_path / "ai-images" / user["id"] / "layer-extract" / job_id
     try:
         save_ai_image_job(
@@ -5360,8 +5360,8 @@ def start_image_operation(user: dict, operation: str, job_id: str, src_path: Pat
         runner = _run_matting_background(job_id, dict(user), src_path, created_at)
     elif operation == "layer_extract":
         provider = getattr(settings, "layer_extract_provider", "apimart")
-        model_name = getattr(settings, "layer_extract_model", "seedream-5-0-pro")
-        model, prompt = "layer-extract", "Seedream 5.0 Pro 图层分离并导出 PSD"
+        model_name = getattr(settings, "layer_extract_model", "seedream-5-5")
+        model, prompt = "layer-extract", "Seedream 5.5 图层分离并导出 PSD"
         meta.update(provider=provider, model=model_name)
         runner = _run_layer_extract_background(job_id, dict(user), src_path, created_at)
     else:
@@ -7494,7 +7494,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
     system_prompt = """你是 DesignFlow（鑫乐纪AI视觉创作平台）的 AI 设计助手，用户正在使用「问答」功能向你提问。DesignFlow 是 AI 驱动的电商设计工作台。
 
 平台主要用法：
-1. 在输入框左下角「选择功能」里选择要做的事：问答、AI 生图（GPT Image 2.6 / GPT Image 2 / Nano Banana Pro / Nano Banana 2.1 / Seedream 5.0）、智能铺货、特殊品
+1. 在输入框左下角「选择功能」里选择要做的事：问答、AI 生图（GPT Image 2.6 / GPT Image 2 / Nano Banana Pro / Nano Banana 2.1 / Seedream 5.5）、智能铺货、特殊品
 2. 在「参数设置」里选比例、清晰度、并发数等，输入描述、SKU 或上传参考图/表格后发送
 3. 结果出现在对话区，可放入中间的无限画布继续排版，并在画布上扩图、抠图、高清放大、换装等"""
 

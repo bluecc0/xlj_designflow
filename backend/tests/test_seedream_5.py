@@ -28,13 +28,13 @@ class Seedream5Test(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(ai_image.reset_provider_freeze)
 
     def test_aliases_and_routes(self):
-        for version in ("flash", "pro"):
-            model = f"seedream-5-0-{version}"
-            self.assertEqual(ai_image.normalize_model_name(f"seedream-5.0-{version}"), model)
+        for version in ("flash", "pro", "5.5"):
+            model = "seedream-5-5" if version == "5.5" else f"seedream-5-0-{version}"
+            self.assertEqual(ai_image.normalize_model_name(model), "seedream-5-5")
             for resolution in ("1K", "1.5K", "2K"):
                 self.assertEqual(ai_image.get_smart_route_candidates(model, resolution=resolution), ["apimart"])
 
-    async def test_payload_for_both_versions_all_ratios_and_resolutions(self):
+    async def test_55_and_legacy_payload_all_ratios_and_resolutions(self):
         captured = []
 
         def handler(request):
@@ -43,19 +43,21 @@ class Seedream5Test(unittest.IsolatedAsyncioTestCase):
 
         ratios = ("auto", "1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "2:1", "1:2", "21:9")
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            for version in ("flash", "pro"):
+            for version in ("flash", "pro", "5.5"):
                 for resolution in ("1K", "1.5K", "2K"):
                     for ratio in ratios:
                         for refs in (None, ["https://reference.test/product.png"]):
                             with self.subTest(version=version, resolution=resolution, ratio=ratio, refs=refs):
                                 tid = await ai_image._submit_generation_task(
                                     client, base_url="https://apimart.test", headers={},
-                                    model=f"seedream-5-0-{version}", prompt="产品海报", size=ratio,
+                                    model="seedream-5-5" if version == "5.5" else f"seedream-5-0-{version}", prompt="产品海报", size=ratio,
                                     resolution=resolution, reference_urls=refs, variant="sunburst", quality="max",
                                 )
                                 body, headers = captured[-1]
-                                expected = {"model": f"seedream-5-0-{version}", "prompt": "产品海报",
-                                            "size": ratio, "resolution": resolution, "n": 1, "output_format": "png"}
+                                expected = {"model": "seedream-5-5", "prompt": "产品海报",
+                                            "size": resolution if ratio == "auto" else ratio, "n": 1, "output_format": "png"}
+                                if ratio != "auto":
+                                    expected["resolution"] = resolution
                                 if refs:
                                     expected["image_urls"] = refs
                                 self.assertEqual(body, expected)
@@ -82,13 +84,31 @@ class Seedream5Test(unittest.IsolatedAsyncioTestCase):
     def test_size_normalization(self):
         for size in ("2x1", "1x2", "21x9"):
             self.assertEqual(ai_image._normalize_seedream_size(size, "1.5k"), (size.replace("x", ":"), "1.5K"))
-        self.assertEqual(ai_image._normalize_seedream_size("1.5K", "2K"), ("auto", "1.5K"))
-        self.assertEqual(ai_image._normalize_seedream_size("2048×1024", ""), ("2048x1024", "1K"))
+        self.assertEqual(ai_image._normalize_seedream_size("1.5K", "2K"), ("1.5K", ""))
+        self.assertEqual(ai_image._normalize_seedream_size("2048×1024", ""), ("2048x1024", ""))
+
+    async def test_pixel_sizes_and_tiers_follow_55_contract(self):
+        bodies = []
+        def handler(request):
+            bodies.append(json.loads(request.content))
+            return httpx.Response(200, json={"data": [{"task_id": "t"}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            for size, resolution, expected in (
+                ("auto", "", {"size": "2K"}),
+                ("1.5K", "2K", {"size": "1.5K"}),
+                ("2048x1152", "4K", {"size": "2048x1152"}),
+                ("16x9", "1.5K", {"size": "16:9", "resolution": "1.5K"}),
+            ):
+                await ai_image._submit_generation_task(client, base_url="https://test", headers={},
+                    model="seedream-5.5", prompt="海报", size=size, resolution=resolution)
+                body = bodies[-1]
+                self.assertEqual(body["model"], "seedream-5-5")
+                self.assertEqual({k: body[k] for k in ("size", "resolution") if k in body}, expected)
 
     async def test_generation_and_recovery_keep_selected_version(self):
-        for version in ("flash", "pro"):
+        for version in ("flash", "pro", "5.5"):
             for references in (None, [(b"image", "product.png")]):
-                model = f"seedream-5-0-{version}"
+                model = "seedream-5-5" if version == "5.5" else f"seedream-5-0-{version}"
                 submitted = []
 
                 def handler(request):
@@ -106,10 +126,10 @@ class Seedream5Test(unittest.IsolatedAsyncioTestCase):
                     result = await ai_image.smart_generate_image_async(
                         model=model, prompt="产品海报", images=references, resolution="1.5K", size="2:1", user_id="test",
                     )
-                    self.assertEqual(result["model"], model)
+                    self.assertEqual(result["model"], "seedream-5-5")
                     self.assertEqual(result["provider"], "apimart")
                     self.assertEqual(submitted[0]["resolution"], "1.5K")
-                    self.assertEqual(submitted[0]["model"], model)
+                    self.assertEqual(submitted[0]["model"], "seedream-5-5")
                     self.assertEqual(submitted[0]["n"], 1)
                     submitted.clear()
                     with patch.object(ai_image, "_wait_for_task_result", side_effect=TimeoutError("poll interrupted")):
@@ -121,7 +141,7 @@ class Seedream5Test(unittest.IsolatedAsyncioTestCase):
                         recovery={"task_id": "accepted-task"})
                     self.assertEqual(resumed["task_id"], "accepted-task")
                     self.assertEqual(len(submitted), 1)
-                    self.assertEqual(submitted[0]["model"], model)
+                    self.assertEqual(submitted[0]["model"], "seedream-5-5")
 
 
 if __name__ == "__main__":

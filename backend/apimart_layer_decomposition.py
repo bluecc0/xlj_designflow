@@ -1,6 +1,6 @@
-"""APIMart Seedream 5.0 Pro 图层分离客户端。
+"""APIMart Seedream 5.5 图层分离客户端。
 
-负责向 APIMart 提交 Seedream 5.0 Pro 图层分离任务、轮询任务状态以及提取
+负责向 APIMart 提交 Seedream 5.5 图层分离任务、轮询任务状态以及提取
 各图层的图片 URL、z_index、bounding_box 坐标与名称。
 """
 from __future__ import annotations
@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+
+from .seedream import SEEDREAM_MODEL, upgrade_seedream_model
 
 
 logger = logging.getLogger(__name__)
@@ -75,7 +77,7 @@ def extract_result_urls(payload: Any) -> list[str]:
 
 
 def extract_result_layers(payload: Any) -> list[dict[str, Any]]:
-    """解析 APIMart / Seedream 5.0 Pro 返回的图层数据结构。
+    """解析 APIMart / Seedream 5.5 返回的图层数据结构。
 
     Seedream 官方规范返回格式：
     result.images[0].layers = [
@@ -129,11 +131,13 @@ def extract_result_layers(payload: Any) -> list[dict[str, Any]]:
     if not parallel_urls:
         parallel_urls = extract_result_urls(decoded)
 
-    if isinstance(raw_layers, list) and raw_layers:
+    if isinstance(raw_layers, list) and (raw_layers or parallel_urls):
         layers: list[dict[str, Any]] = []
-        for position, raw in enumerate(raw_layers):
+        # 5.5 的 URL 与元数据平行返回；元数据缺失仍保留所有图片。
+        for position in range(max(len(raw_layers), len(parallel_urls))):
+            raw = raw_layers[position] if position < len(raw_layers) else {}
             if not isinstance(raw, dict):
-                continue
+                raw = {}
             url = str(raw.get("url") or raw.get("image_url") or "").strip()
             if not url and position < len(parallel_urls):
                 url = parallel_urls[position]
@@ -163,24 +167,36 @@ def _error_detail(response: httpx.Response) -> str:
 
 
 class ApimartLayerDecompositionClient:
-    """APIMart Seedream 5.0 Pro 图层分离客户端。"""
+    """APIMart Seedream 5.5 图层分离客户端。"""
 
     def __init__(
         self,
         *,
         api_key: str,
         base_url: str = "https://api.apimart.ai",
-        model: str = "seedream-5-0-pro",
+        model: str = "seedream-5-5",
         size: str = "auto",
         timeout_seconds: int = 900,
         poll_interval_seconds: float = 3.0,
         download_retries: int = 2,
         proxy_url: str = "",
+        max_images: int = 7,
+        text_recognition: bool = False,
     ) -> None:
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "https://api.apimart.ai").rstrip("/")
-        self.model = str(model or "seedream-5-0-pro").strip()
-        self.size = str(size or "auto").strip().lower()
+        self.model = upgrade_seedream_model(model) or SEEDREAM_MODEL
+        if self.model != SEEDREAM_MODEL:
+            raise ValueError("Seedream 5.5 拆层模型必须为 seedream-5-5")
+        self.size = str(size or "auto").strip().upper()
+        if self.size == "AUTO":
+            self.size = "auto"
+        if self.size not in {"auto", "1K", "1.5K", "2K"}:
+            raise ValueError("Seedream 5.5 拆层仅支持 auto、1K、1.5K、2K")
+        if isinstance(max_images, bool) or not isinstance(max_images, int) or not 2 <= max_images <= 100:
+            raise ValueError("Seedream 5.5 拆层 max_images 必须是 2–100 的整数（含底图）")
+        self.max_images = max_images
+        self.text_recognition = bool(text_recognition)
         self.timeout_seconds = max(60, int(timeout_seconds or 900))
         self.poll_interval_seconds = max(1.0, float(poll_interval_seconds or 3.0))
         self.download_retries = max(0, int(download_retries or 0))
@@ -251,6 +267,9 @@ class ApimartLayerDecompositionClient:
         payload: dict[str, Any] = {
             "model": self.model,
             "layer_decomposition": True,
+            "layer_decomposition_options": {"max_images": self.max_images, "text_recognition": self.text_recognition},
+            "n": 1,
+            "output_format": "png",
             "size": self.size,
             "image_urls": [image_input],
         }
@@ -335,7 +354,8 @@ class ApimartLayerDecompositionClient:
                     detail = str(err or data.get("failMsg") or data.get("message") or "未知错误")
                 raise ApimartLayerDecompositionError(f"APIMart 图层分离失败（task_id={task_id}）: {detail}")
 
-            await asyncio.sleep(self.poll_interval_seconds)
+            elapsed = self.timeout_seconds - (deadline - time.monotonic())
+            await asyncio.sleep(self.poll_interval_seconds if elapsed < 30 else max(5.0, self.poll_interval_seconds))
 
         raise ApimartLayerDecompositionError(
             f"APIMart 图层分离超时（{self.timeout_seconds}s），task_id={task_id}"

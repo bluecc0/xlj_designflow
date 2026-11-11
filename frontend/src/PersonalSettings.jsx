@@ -9,7 +9,7 @@ const DEFAULT_MODEL_OPTIONS = [
   ['gpt-image-2', 'GPT Image 2'],
   ['nano-banana-pro', 'Nano Banana Pro'],
   ['nano-banana-2.1', 'Nano Banana 2.1'],
-  ['seedream-5-0-flash', 'Seedream 5.0'],
+  ['seedream-5-5', 'Seedream 5.5'],
 ];
 const DEFAULT_RATIO_OPTIONS = [
   ['auto', '自动'], ['1:1', '1:1'], ['3:4', '3:4'], ['4:3', '4:3'], ['2:3', '2:3'], ['3:2', '3:2'],

@@ -9,11 +9,42 @@ from unittest.mock import patch
 import httpx
 from PIL import Image
 
-from backend.apimart_layer_decomposition import ApimartLayerDecompositionClient, ApimartLayerDecompositionError
+from backend.apimart_layer_decomposition import ApimartLayerDecompositionClient, ApimartLayerDecompositionError, extract_result_layers
 from backend.layer_extract_worker import LAYER_DECOMPOSITION_PROMPT
 
 
 class ApimartLayerDecompositionClientTest(unittest.IsolatedAsyncioTestCase):
+    async def test_55_layer_payload_controls_total_images_and_omits_background(self):
+        bodies = []
+        def respond(request):
+            bodies.append(json.loads(request.content))
+            return httpx.Response(200, json={"data": [{"task_id": "t"}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+            client = ApimartLayerDecompositionClient(api_key="test", model="seedream-5-0-pro",
+                size="1.5k", max_images=12, text_recognition=True)
+            await client.create_task(http, image_input="data:image/png;base64,AA==")
+        self.assertEqual(bodies, [{"model": "seedream-5-5", "size": "1.5K", "n": 1,
+            "output_format": "png", "image_urls": ["data:image/png;base64,AA=="],
+            "layer_decomposition": True, "layer_decomposition_options": {"max_images": 12, "text_recognition": True}}])
+
+    def test_layer_options_validate_before_any_request(self):
+        for kwargs in ({"size": "16:9"}, {"size": "1024x1024"}, {"size": "4K"},
+                       {"max_images": 1}, {"max_images": 101}, {"max_images": True}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                ApimartLayerDecompositionClient(api_key="test", **kwargs)
+
+    def test_55_parallel_urls_optional_metadata_and_ocr(self):
+        urls = ["https://test/base.png", "https://test/text.png", "https://test/person.png"]
+        text = {"text": "夏日", "lines": []}
+        layers = extract_result_layers({"data": {"result": {"images": [{"url": urls,
+            "layers": [{"z_index": 0}, {"z_index": 1, "text_recognition": text,
+            "bounding_box": {"absolute": [84, 156, 756, 468]}}]}]}}})
+        self.assertEqual([l["url"] for l in layers], urls)
+        self.assertEqual(layers[1]["text_recognition"], text)
+        self.assertEqual(layers[1]["bounding_box"]["absolute"], [84, 156, 756, 468])
+        self.assertEqual(layers[2]["z_index"], 2)
+        self.assertEqual(len(extract_result_layers({"result": {"images": [{"url": urls}]}})), 3)
+
     async def test_empty_or_rejected_decomposition_keeps_task_id_without_resubmitting(self) -> None:
         for terminal in (
             {"status": "completed", "result": {"images": [{"layers": []}]}},

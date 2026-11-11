@@ -133,7 +133,7 @@ Loom AI 是 DesignFlow 配套的 Photoshop CEP 插件，仍是实际工作流的
 
 - 登录使用用户名 + 密码，账号来自 `login_users.json`；`admin` 可进入后台，测试账号应设置 `is_test=true`。
 - `backend/compose.py` 负责普通 Penpot 合成；Penpot 写入和导出共用 `_compose_sem`，不要绕过串行锁。
-- `backend/ai_image.py` 处理 GPT Image 2.5、Nano Banana Pro、参考图、轮询、失败分类和线路切换。上游已接受但状态不明时不要立即重复提交。
+- `backend/ai_image.py` 处理 GPT Image 2.6、Seedream 5.5、Nano Banana Pro、参考图、轮询、失败分类和线路切换。上游已接受但状态不明时不要立即重复提交。
 - `backend/smart_distribute.py` 是规则解析器，不调用 LLM，也不依赖历史 `template_rules.json`。
 
 ## 模板与特殊品
@@ -200,3 +200,9 @@ Loom AI 是 DesignFlow 配套的 Photoshop CEP 插件，仍是实际工作流的
 | `slot_schema.json` | 普通合成列别名和字段规则 |
 | `backend/tests/` | 后端回归测试 |
 | `IDEAS.md` | 历史技术债，不作为当前行为依据 |
+
+### Seedream 5.5
+
+普通生图、Agent 和拆分 PSD 统一使用 APIMart `seedream-5-5`，不再区分 Flash / Pro。旧 5.0 模型名和个人默认设置会在新请求时映射到 5.5，历史任务仍保留原始模型标签。支持 1K / 1.5K / 2K，不支持 4K。接口契约见 [APIMart 文档](https://docs.apimart.ai/cn/api-reference/images/seedream-5-5/generation)。
+
+拆层设置：`LAYER_EXTRACT_MODEL=seedream-5-5`、`LAYER_EXTRACT_SIZE=auto`、`LAYER_EXTRACT_MAX_IMAGES=7`（2–100，包含底图）。数量由上游限制，本地保留所有返回层。`LAYER_EXTRACT_TEXT_RECOGNITION=true` 可请求可选 OCR 元数据，此时省略拆层提示词以免影响 OCR；当前 PSD 仍导出栅格层，不会自动恢复文字层。旧 Kie 拆层线路不支持此升级，新的拆层请求须使用 `LAYER_EXTRACT_PROVIDER=apimart`。

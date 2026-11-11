@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from dotenv import dotenv_values, load_dotenv
+from .seedream import SEEDREAM_MODEL, upgrade_seedream_model
 
 # 加载 .env（在 backend/ 上一级）
 _env_path = Path(__file__).parent.parent / ".env"
@@ -158,12 +159,14 @@ class Settings:
     outpaint_max_area_pixels: int = int(os.getenv("OUTPAINT_MAX_AREA_PIXELS", "4194304"))
     outpaint_recommended_area_pixels: int = int(os.getenv("OUTPAINT_RECOMMENDED_AREA_PIXELS", "2097152"))
 
-    # 图层分离转 PSD（默认使用 APIMart Seedream 5.0 Pro；留空自动复用 AI_IMAGE_* 配置）
+    # 图层分离转 PSD（默认使用 APIMart Seedream 5.5；留空自动复用 AI_IMAGE_* 配置）
     layer_extract_provider: str = os.getenv("LAYER_EXTRACT_PROVIDER", "apimart").strip().lower()
     layer_extract_base_url: str = os.getenv("LAYER_EXTRACT_BASE_URL", "")
     layer_extract_api_key: str = os.getenv("LAYER_EXTRACT_API_KEY", "")
-    layer_extract_model: str = os.getenv("LAYER_EXTRACT_MODEL", "seedream-5-0-pro").strip()
+    layer_extract_model: str = upgrade_seedream_model(os.getenv("LAYER_EXTRACT_MODEL", SEEDREAM_MODEL)) or SEEDREAM_MODEL
     layer_extract_size: str = os.getenv("LAYER_EXTRACT_SIZE", "auto").strip().lower()
+    layer_extract_max_images: int = int(os.getenv("LAYER_EXTRACT_MAX_IMAGES", "7"))
+    layer_extract_text_recognition: bool = os.getenv("LAYER_EXTRACT_TEXT_RECOGNITION", "false").strip().lower() == "true"
     layer_extract_timeout_seconds: int = int(os.getenv("LAYER_EXTRACT_TIMEOUT_SECONDS", "900"))
     layer_extract_poll_interval_seconds: float = float(os.getenv("LAYER_EXTRACT_POLL_INTERVAL_SECONDS", "3"))
     layer_extract_download_retries: int = int(os.getenv("LAYER_EXTRACT_DOWNLOAD_RETRIES", "2"))

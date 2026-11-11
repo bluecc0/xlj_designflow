@@ -28,6 +28,7 @@ import httpx
 from PIL import Image, ImageOps
 
 from .config import settings
+from .seedream import SEEDREAM_ALIASES, SEEDREAM_MODEL
 from .task_checkpoint import checkpoint, atomic_write, CheckpointError, UpstreamTaskFailed
 
 logger = logging.getLogger(__name__)
@@ -83,10 +84,7 @@ _HTTP_ERRORS: dict[int, str] = {
 SUPPORTED_MODELS: dict[str, str] = {
     "nano-banana-pro": "gemini-3-pro-image-preview",
     "nano-banana-2.1": "gemini-nano-banana-2.1",
-    "seedream-5.0-pro": "seedream-5-0-pro",
-    "seedream-5.0-flash": "seedream-5-0-flash",
-    "seedream-5-0-pro": "seedream-5-0-pro",
-    "seedream-5-0-flash": "seedream-5-0-flash",
+    **SEEDREAM_ALIASES,
     "gpt-image-2": "gpt-image-2",
     "gpt-image-2.5": "gpt-image-2.5",
     "gpt-image-2.5-flare": "gpt-image-2.5-flare",
@@ -440,7 +438,7 @@ _APIMART_GPT_IMAGE_25_MODELS = {"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
 _GPT_IMAGE_26_VARIANT_MODELS = {"gpt-image-2.6-flare", "gpt-image-2.6-sunburst"}
 _APIMART_NANO_BANANA_21_MODEL = "gemini-nano-banana-2.1"
 _NANO_BANANA_21_EXTRA_RATIOS = {"4:5", "1:4", "4:1", "1:8", "8:1", "21:9"}
-_SEEDREAM_5_MODELS = {"seedream-5-0-pro", "seedream-5-0-flash"}
+_SEEDREAM_5_MODELS = {SEEDREAM_MODEL}
 _SEEDREAM_5_RATIOS = {"auto", "1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "2:1", "1:2", "21:9"}
 _SEEDREAM_5_RESOLUTIONS = {"1K", "1.5K", "2K"}
 
@@ -448,21 +446,21 @@ _SEEDREAM_5_RESOLUTIONS = {"1K", "1.5K", "2K"}
 def _normalize_seedream_size(size: str, resolution: str) -> tuple[str, str]:
     """Seedream 使用独立尺寸契约，避免 1.5K 和宽幅比例被通用映射覆盖。"""
     clean = (size or "auto").strip()
-    res = (resolution or "1K").strip().upper()
+    res = (resolution or "2K").strip().upper()
     if clean.upper() in _SEEDREAM_5_RESOLUTIONS:
-        return "auto", clean.upper()
+        return clean.upper(), ""
     pixels = re.fullmatch(r"(\d+)[xX×](\d+)", clean)
     if pixels and f"{pixels[1]}:{pixels[2]}" not in _SEEDREAM_5_RATIOS:
         width, height = int(pixels[1]), int(pixels[2])
         if height <= 0 or not (921600 <= width * height <= 4624220 and 1 / 16 <= width / height <= 16):
-            raise ValueError("Seedream 5.0 图片尺寸超出允许范围")
+            raise ValueError("Seedream 5.5 图片尺寸超出允许范围")
         # 精确像素优先于 resolution，上游不再使用该档位。
-        return f"{width}x{height}", "1K"
+        return f"{width}x{height}", ""
     clean = clean.replace("x", ":")
     if clean not in _SEEDREAM_5_RATIOS:
-        raise ValueError("Seedream 5.0 不支持该比例")
+        raise ValueError("Seedream 5.5 不支持该比例")
     if res not in _SEEDREAM_5_RESOLUTIONS:
-        raise ValueError("Seedream 5.0 仅支持 1K、1.5K、2K 分辨率")
+        raise ValueError("Seedream 5.5 仅支持 1K、1.5K、2K 分辨率")
     return clean, res
 
 
@@ -987,17 +985,19 @@ async def _submit_generation_task(
     final_prompt = normalize_reference_prompt(prompt) if reference_urls else prompt
     if is_seedream_5:
         if apimart_ext:
-            raise ValueError("Seedream 5.0 仅支持 APIMart 普通线路")
+            raise ValueError("Seedream 5.5 仅支持 APIMart 普通线路")
         if len(reference_urls or []) > 10:
-            raise ValueError("Seedream 5.0 最多支持 10 张参考图")
+            raise ValueError("Seedream 5.5 最多支持 10 张参考图")
         payload: dict[str, Any] = {
             "model": model_name,
             "prompt": final_prompt,
-            "size": ratio,
-            "resolution": resolution,
+            "size": ratio if ratio != "auto" else resolution,
             "n": 1,
             "output_format": "png",
         }
+        # 档位直接用 size；只有宽高比写法传 resolution，精确像素不能附带它。
+        if ratio in _SEEDREAM_5_RATIOS and ratio != "auto":
+            payload["resolution"] = resolution
     elif is_nano_banana_21:
         payload = {
             "model": f"{_APIMART_NANO_BANANA_21_MODEL}-ext" if apimart_ext else model_name,
