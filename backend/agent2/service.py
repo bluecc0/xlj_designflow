@@ -49,6 +49,9 @@ def save_upload(user: dict, session_id: str, data: bytes, filename: str) -> dict
     folder = settings.output_path / "agent2-uploads" / safe_user / session_id
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{uuid.uuid4().hex}{suffix}"
+    if kind == "table":
+        from ..price_check import slim_xlsx  # 表格里嵌的图片不保存
+        data = slim_xlsx(data, filename)
     path.write_bytes(data)
     url = "/output/" + path.relative_to(settings.output_path).as_posix()
     return store.create_artifact(session_id=session_id, user_id=user["id"], kind=kind, url=url,

@@ -13,6 +13,7 @@ import json
 import math
 import re
 import unicodedata
+import zipfile
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
@@ -40,7 +41,7 @@ MAX_DISPLAY_NAME = 16             # 表格名称超过这个长度的是后台�
 OCR_PROMPT = """这是一张电商页面的图片。按阅读顺序（从上到下，同一行从左到右）列出图中每一个商品，输出 JSON 数组，每项：
 {"name": 商品名称原文（多行合在一起）, "texts": [这个商品格子里除价格数字外的其它文字，如卖点、标签，每条原文],
  "price": 最醒目的价格数字（到手价、闪购价等）, "price_label": 价格旁的小字标签原文,
- "save": 立省或立减的金额数字, "tag_price": 划线价或吊牌价数字, "discount": 折扣原文（如"4.8折"）, "fill": 含绒量、加绒等标签原文}
+ "save": 立省或立减的金额数字, "tag_price": 划线价或吊牌价数字（图上明确印着划线的原价、或标着"吊牌价"才填；立省金额不是吊牌价）, "discount": 折扣原文（如"4.8折"）, "fill": 含绒量、加绒等标签原文}
 图上没有的字段写 null；文字和数字照图上原样写，不要改写或纠正，看不清写 null。
 只列商品；标题、按钮、导航、活动规则不算。图里没有商品就输出 []。只输出 JSON。"""
 
@@ -150,6 +151,27 @@ def _sheet_rows(name: str, rows: list[list]) -> Sheet | None:
     return sheet
 
 
+SLIM_ABOVE = 5 * 1024 * 1024
+
+
+def slim_xlsx(data: bytes, filename: str) -> bytes:
+    """去掉 Excel 里嵌的图片（xl/media）和外部链接缓存（xl/externalLinks），只留文字和数字：
+    核对用不到它们，带着的话文件动辄几十上百 MB。去掉后解析不了就原样返回。"""
+    if len(data) <= SLIM_ABOVE or not filename.lower().endswith((".xlsx", ".xlsm")):
+        return data
+    try:
+        out = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(data)) as src, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
+            for info in src.infolist():
+                if not info.filename.lower().startswith(("xl/media/", "xl/externallinks/")):
+                    dst.writestr(info, src.read(info.filename))
+        slim = out.getvalue()
+        load_table(slim, filename)
+        return slim
+    except Exception:
+        return data
+
+
 def load_table(data: bytes, filename: str) -> list[Sheet]:
     if filename.lower().endswith(".csv"):
         text = None
@@ -163,7 +185,8 @@ def load_table(data: bytes, filename: str) -> list[Sheet]:
         sheets = [sheet] if sheet and sheet.rows else []
     else:
         try:
-            wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+            # keep_links=False：不读外部链接缓存（引用了别的工作簿的表，这部分解压后能有几百 MB，读它要几分钟）
+            wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True, keep_links=False)
         except Exception as exc:
             raise TableError(f"表格打不开：{exc}") from exc
         sheets = []
@@ -174,6 +197,67 @@ def load_table(data: bytes, filename: str) -> list[Sheet]:
     if not sheets:
         raise TableError("表格里没有找到商品表（需要有货号/SKU 或商品名称列）")
     return sheets
+
+
+TABLE_IMAGE_PROMPT = """这是一张表格的截图。把表格逐行原样抄成 JSON：{{"headers": [列名...], "rows": [[每个单元格的文字...], ...]}}
+- 每一行的单元格数量和列名数量一致，空单元格写 ""；数字和文字照截图原样写，不要计算、不要补全。
+- 合并单元格（跨多行的模块名等）只在它开始的那一行写值，下面的行写 ""。
+{hint}只输出 JSON。"""
+
+
+async def load_table_image(data: bytes) -> list[Sheet]:
+    """把表格截图读成表格。长截图切段读，后面的段沿用第一段的表头。"""
+    parts = await asyncio.to_thread(_image_parts, data)
+    if not parts:
+        raise TableError("表格截图太小，看不清")
+    headers: list[str] = []
+    rows: list[list] = []
+    for part in parts:
+        hint = f"- 这是长截图的后半段，可能没有表头，列的顺序是：{json.dumps(headers, ensure_ascii=False)}，headers 照这个填。\n" if headers else ""
+        last: Exception | None = None
+        for _ in range(OCR_RETRIES + 1):
+            try:
+                resp = await routed_chat_completion("vlm", {"messages": [{"role": "user", "content": [
+                    {"type": "text", "text": TABLE_IMAGE_PROMPT.format(hint=hint)},
+                    {"type": "image_url", "image_url": {"url": compress_image_to_data_url(part, 2000)}}]}],
+                    "max_tokens": 8000, "temperature": 0}, timeout=180)
+                parsed = json.loads(re.search(r"\{.*\}", resp.json()["choices"][0]["message"]["content"], re.S).group(0))
+                headers = headers or [str(h) for h in parsed.get("headers") or []]
+                rows.extend(r for r in parsed.get("rows") or [] if isinstance(r, list))
+                last = None
+                break
+            except Exception as exc:
+                last = exc
+        if last:
+            raise TableError(f"表格截图识别失败：{last}")
+    sheet = _sheet_rows("表格截图", [headers, *rows])
+    if not sheet or not sheet.rows:
+        raise TableError("截图里没有认出商品表（需要有货号/SKU 或商品名称列）")
+    for row in sheet.rows:
+        row["from_image"] = True  # 截图里的文字可能读错：文案只差一两个字的不报
+    return [sheet]
+
+
+def table_warnings(sheets: list[Sheet]) -> list[str]:
+    """表格自己算不通的行：吊牌价 − 立省 ≠ 到手价（表格填错，或截图读错）。"""
+    out = []
+    for sheet in sheets:
+        for row in sheet.rows:
+            tag, save, price = (_num(row["values"].get(f)) for f in ("tag_price", "save", "price"))
+            if None not in (tag, save, price) and abs(tag - save - price) > 0.01:
+                out.append(f"{sheet.name} {row['sku']} {row['name']}：吊牌价 {tag:g} − 立省 {save:g} = {tag - save:g}，到手价写的是 {price:g}")
+    return out
+
+
+def pick_sheets(sheets: list[Sheet], wanted: list[str]) -> list[Sheet]:
+    """只留用户点名的工作表（名字不用写全，忽略大小写和空格）。"""
+    keys = [_clean(w) for w in wanted if _clean(w)]
+    if not keys:
+        return sheets
+    picked = [s for s in sheets if any(k in _clean(s.name) or _clean(s.name) in k for k in keys)]
+    if not picked:
+        raise TableError(f"表格里没有叫「{'、'.join(wanted)}」的工作表，现有：{'、'.join(s.name for s in sheets)}")
+    return picked
 
 
 def overview(sheets: list[Sheet]) -> list[dict]:
@@ -226,24 +310,26 @@ async def _ocr_one(data: bytes) -> list[dict]:
     raise RuntimeError(f"识别失败：{last}")
 
 
+def _image_parts(data: bytes) -> list[bytes] | None:
+    """识别前的预处理：太小的图返回 None；长图切段；小图放大。"""
+    with Image.open(io.BytesIO(data)) as im:
+        im.seek(0)
+        if im.width < MIN_SIDE or im.height < MIN_SIDE:
+            return None
+        out = []
+        for part in split_tall(im.convert("RGB")):
+            if part.width < UPSCALE_BELOW:
+                scale = min(3.0, UPSCALE_BELOW / part.width)
+                part = part.resize((round(part.width * scale), round(part.height * scale)), Image.LANCZOS)
+            buf = io.BytesIO()
+            part.save(buf, format="PNG")
+            out.append(buf.getvalue())
+        return out
+
+
 async def ocr_image(data: bytes) -> list[dict] | None:
     """返回图上的商品列表；图片太小（按钮、图标）返回 None。"""
-    def prepare() -> list[bytes] | None:
-        with Image.open(io.BytesIO(data)) as im:
-            im.seek(0)
-            if im.width < MIN_SIDE or im.height < MIN_SIDE:
-                return None
-            out = []
-            for part in split_tall(im.convert("RGB")):
-                if part.width < UPSCALE_BELOW:
-                    scale = min(3.0, UPSCALE_BELOW / part.width)
-                    part = part.resize((round(part.width * scale), round(part.height * scale)), Image.LANCZOS)
-                buf = io.BytesIO()
-                part.save(buf, format="PNG")
-                out.append(buf.getvalue())
-            return out
-
-    parts = await asyncio.to_thread(prepare)
+    parts = await asyncio.to_thread(_image_parts, data)
     if parts is None:
         return None
     items: list[dict] = []
@@ -284,6 +370,14 @@ async def verify_wording(data: bytes, pairs: list[tuple[str, str]]) -> list[bool
     except Exception:
         return [False] * len(pairs)  # 复核失败就维持"待确认"
     return [picked.get(i) == "AB"[options[i].index(table)] for i, (table, _seen) in enumerate(pairs)]
+
+
+def sanitize_item(item: dict) -> dict:
+    """去掉明显读串了的数字：吊牌价不可能小于等于到手价或立省金额（常见错误是把立省的数字又填进吊牌价）。"""
+    tag, price, save = _num(item.get("tag_price")), _num(item.get("price")), _num(item.get("save"))
+    if tag is not None and ((price is not None and tag <= price) or (save is not None and tag <= save)):
+        item = dict(item, tag_price=None)
+    return item
 
 
 # ── 对应 ──────────────────────────────────────────────────────────────────────
@@ -428,19 +522,27 @@ def wording_diffs(item: dict, row: dict) -> list[tuple[str, str, float]]:
     return [(text, *_closest_piece(item, text)) for text in texts if _clean(text) and _clean(text) not in full]
 
 
-def judge(item: dict, row: dict, shown: set[str], confirmed: frozenset = frozenset()) -> tuple[str, list[str]]:
-    """shown：这张图上出现过的字段。图上整张都没有的字段（例如不印吊牌价）不比。
-    confirmed：复核后确认图上写的就是表格文案的那些（第一遍识别认错了字）。"""
-    problems, unread, wording = [], [], []
+def field_diffs(item: dict, row: dict, shown: set[str]) -> tuple[list[str], list[str]]:
+    """返回 (数值不一致的字段, 图上没读到的字段)。shown：这张图上出现过的字段，整张图都没有的字段不比。"""
+    wrong, unread = [], []
     for f, table_value in row["values"].items():
         if f not in shown:
             continue
         if f == "fill" and ("%" in table_value) != ("%" in str(item.get(f) or "%")):
             continue  # 表格写含绒比例、图上印的是充绒克重（或反过来），不是同一个指标
         if item.get(f) in (None, ""):
-            unread.append(FIELD_LABELS[f])
+            unread.append(f)
         elif not _same(table_value, item.get(f)):
-            problems.append(f"{FIELD_LABELS[f]}：表格 {table_value}，图上 {item.get(f)}")
+            wrong.append(f)
+    return wrong, unread
+
+
+def judge(item: dict, row: dict, shown: set[str], confirmed: frozenset = frozenset()) -> tuple[str, list[str]]:
+    """confirmed：复核后确认图上写的就是表格文案的那些（第一遍识别认错了字）。"""
+    wrong, unread_fields = field_diffs(item, row, shown)
+    problems = [f"{FIELD_LABELS[f]}：表格 {row['values'][f]}，图上 {item.get(f)}" for f in wrong]
+    unread = [FIELD_LABELS[f] for f in unread_fields]
+    wording = []
     for text, piece, _sim in wording_diffs(item, row):
         if text not in confirmed:
             wording.append(f"文案：表格「{text}」，图上「{piece or item.get('name') or ''}」")
@@ -453,8 +555,25 @@ def judge(item: dict, row: dict, shown: set[str], confirmed: frozenset = frozens
     return "一致", []
 
 
-async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], progress=None) -> dict:
-    """images：[(相对路径, 读取函数)]，读取函数返回图片内容。"""
+def _same_item(item: dict, again: list[dict]) -> dict | None:
+    """第二遍识别结果里对应的那个商品：数量没变按位置取，否则按名称找。"""
+    same_image = [it for it in again]
+    name = _clean(item.get("name"))
+    by_pos = same_image[item["_pos"] - 1] if 0 < item["_pos"] <= len(same_image) else None
+    if by_pos is not None and (not name or SequenceMatcher(None, name, _clean(by_pos.get("name"))).ratio() >= 0.6):
+        return by_pos
+    scored = [(SequenceMatcher(None, name, _clean(it.get("name"))).ratio(), i) for i, it in enumerate(same_image)] if name else []
+    best = max(scored, default=(0, -1))
+    return same_image[best[1]] if best[0] >= 0.8 else None
+
+
+async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notify=None) -> dict:
+    """images：[(相对路径, 读取函数)]，读取函数返回图片内容。notify(文字)：进度提示。"""
+    async def say(text: str):
+        if notify:
+            await notify(text)
+
+    await say(f"正在识别图片 0/{len(images)}")
     sem = asyncio.Semaphore(OCR_CONCURRENCY)
     cache: dict[str, asyncio.Task] = {}
     done = 0
@@ -475,8 +594,7 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], progr
             return exc
         finally:
             done += 1
-            if progress:
-                await progress(done, len(images))
+            await say(f"正在识别图片 {done}/{len(images)}")
 
     results = await asyncio.gather(*[one(rel, loader) for rel, loader in images])
     failed, small, empty = [], 0, []
@@ -492,6 +610,7 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], progr
         else:
             parts = [p for p in re.split(r"[/\\]", rel) if p]
             parts[-1] = parts[-1].rsplit(".", 1)[0]
+            result = [sanitize_item(it) for it in result]
             shown = {f for f in FIELD_LABELS if any(it.get(f) not in (None, "") for it in result)}
             items = [dict(it, _image=rel, _path=parts, _pos=i + 1, _shown=shown) for i, it in enumerate(result)]
             if len(items) == 1:  # 一图一个商品：同一文件夹里的按文件名顺序合成一组再对齐
@@ -514,10 +633,18 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], progr
     # 文案只差一两个字的，多半是第一遍认错了字：按图片分组复核一次
     loaders = dict(images)
     near: dict[str, list[tuple[int, str, str]]] = {}
+    confirmed: dict[int, set[str]] = {}
     for idx, (item, row) in enumerate(pairs):
         for text, piece, sim in wording_diffs(item, row):
-            if piece and sim >= VERIFY_SIMILARITY:
+            if not piece or sim < VERIFY_SIMILARITY:
+                continue
+            if row.get("from_image"):  # 表格来自截图：分不清是截图读错还是图上写错，不报
+                confirmed.setdefault(idx, set()).add(text)
+            else:
                 near.setdefault(item["_image"], []).append((idx, text, piece))
+
+    if near:
+        await say(f"图片识别完成，正在复核 {len(near)} 张图上只差一两个字的文案")
 
     async def recheck(rel: str, todo: list[tuple[int, str, str]]):
         async with sem:
@@ -527,11 +654,37 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], progr
                 return [False] * len(todo)
             return await verify_wording(data, [(text, piece) for _idx, text, piece in todo])
 
-    confirmed: dict[int, set[str]] = {}
     for todo, verdicts in zip(near.values(), await asyncio.gather(*[recheck(rel, todo) for rel, todo in near.items()])):
         for (idx, text, _piece), ok in zip(todo, verdicts):
             if ok:
                 confirmed.setdefault(idx, set()).add(text)
+
+    # 数字不一致的再读一遍图：两遍读数不同、且第二遍和表格一致的，是第一遍读错了，不算不一致
+    suspects: dict[str, list[tuple[dict, dict, list[str]]]] = {}
+    for item, row in pairs:
+        wrong, _unread = field_diffs(item, row, item["_shown"])
+        if wrong:
+            suspects.setdefault(item["_image"], []).append((item, row, wrong))
+
+    if suspects:
+        await say(f"正在重新读取 {len(suspects)} 张数字对不上的图，确认不是读错")
+
+    async def reread(rel: str):
+        async with sem:
+            try:
+                again = await ocr_image(await asyncio.to_thread(loaders[rel]))
+            except Exception:
+                return None
+            return [sanitize_item(it) for it in again] if again else None
+
+    for (rel, todo), again in zip(suspects.items(), await asyncio.gather(*[reread(rel) for rel in suspects])):
+        if not again:
+            continue
+        for item, row, wrong in todo:
+            second = _same_item(item, again)
+            for f in wrong:
+                if second is not None and _same(row["values"][f], second.get(f)):
+                    item[f] = second.get(f)
 
     records = []
     for idx, (item, row) in enumerate(pairs):

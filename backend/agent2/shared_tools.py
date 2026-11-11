@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import re
 import time
 import uuid
 from pathlib import Path
@@ -24,10 +25,22 @@ MAX_SHARED_IMAGES = 12
 MAX_PRICE_IMAGES = 600
 WEB_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_REPORTED = 30
+HEARTBEAT_SECONDS = 5
+# 只是一个路径或文件名（没有任何要求）：smb://…、\\\\host\\…、Z:\\…、/Volumes/…、xxx.xlsx
+_PATH_ONLY = re.compile(r"(?:smb:|file:|[A-Za-z]:|[\\\\/]{1,2})\S*|\S+\.(?:xlsx|xlsm|csv)", re.I)
+
+
+async def _load_sheets(ctx: ToolContext, source: str, folder: str = "") -> tuple[list, str, bool]:
+    """读出表格，返回 (工作表, 文件名, 是否来自截图)。Excel/CSV 直接解析，表格截图用看图模型读。"""
+    data, name = await asyncio.to_thread(_table_source, ctx, source, folder)
+    if Path(name).suffix.lower() in shared_folders.TABLE_SUFFIXES:
+        return await asyncio.to_thread(price_check.load_table, data, name), name, False
+    return await price_check.load_table_image(data), name, True
 
 
 def _table_source(ctx: ToolContext, source: str, folder: str = "") -> tuple[bytes, str]:
-    """表格来源：对话里上传的表格 ID，或共享文件夹里的路径；没指定时自动找（先找对话里上传的，再找文件夹里的）。"""
+    """表格来源：对话里上传的表格或表格截图的 ID，或共享文件夹里的路径；
+    没指定时自动找（先找对话里上传的表格，再找文件夹里的表格）。"""
     source = str(source or "").strip()
     artifact = store.get_artifact(source, ctx.user["id"]) if source.startswith("img_") else None
     if not source:
@@ -35,11 +48,13 @@ def _table_source(ctx: ToolContext, source: str, folder: str = "") -> tuple[byte
         artifact = store.get_artifact(uploaded["id"], ctx.user["id"]) if uploaded else None
     if artifact:
         path = Path(artifact["path"])
-        if artifact["kind"] != "table" or not path.is_file():
-            raise ValueError(f"{source} 不是表格文件")
-        return path.read_bytes(), artifact["label"] or path.name
+        if artifact["kind"] not in ("table", "upload") or not path.is_file():
+            raise ValueError(f"{source} 不是表格，也不是用户上传的表格截图")
+        # 用户上传的图片当作表格截图（文件名按实际保存的后缀，决定走哪种读法）
+        return path.read_bytes(), (artifact["label"] or path.name) if artifact["kind"] == "table" else path.name
     if source:
-        data, name, _shown = shared_folders.read_file(ctx.user, source, shared_folders.TABLE_SUFFIXES, folder)
+        data, name, _shown = shared_folders.read_file(
+            ctx.user, source, shared_folders.TABLE_SUFFIXES | shared_folders.IMAGE_SUFFIXES, folder)
         return data, name
     if folder:
         _shown, tables, _more = shared_folders.find_files(ctx.user, folder, shared_folders.TABLE_SUFFIXES, 20)
@@ -47,7 +62,7 @@ def _table_source(ctx: ToolContext, source: str, folder: str = "") -> tuple[byte
             return tables[0][1].read_bytes(), tables[0][1].name
         if len(tables) > 1:
             raise ValueError("文件夹里有多个表格，请指定用哪个：" + "、".join(rel for rel, _p in tables))
-    raise ValueError("没有找到表格：请上传表格，或者给出表格在共享文件夹里的路径")
+    raise ValueError("没有找到表格：请上传表格（Excel、CSV 或表格截图），或者给出表格在共享文件夹里的路径")
 
 
 async def list_shared_folder(ctx: ToolContext, args: dict) -> dict:
@@ -101,9 +116,8 @@ async def use_shared_images(ctx: ToolContext, args: dict) -> dict:
 
 
 async def read_table(ctx: ToolContext, args: dict) -> dict:
-    data, name = await asyncio.to_thread(_table_source, ctx, args.get("source"))
-    sheets = await asyncio.to_thread(price_check.load_table, data, name)
-    return {"file": name, "sheets": price_check.overview(sheets)}
+    sheets, name, _from_image = await _load_sheets(ctx, args.get("source"))
+    return {"file": name, "sheets": price_check.overview(sheets), "表格自身算不通的行": price_check.table_warnings(sheets)}
 
 
 def _describe(record: dict) -> str:
@@ -114,19 +128,60 @@ def _describe(record: dict) -> str:
 
 async def check_prices(ctx: ToolContext, args: dict) -> dict:
     folder = str(args.get("folder") or "").strip()
-    if not folder:
-        return {"error": "需要共享文件夹路径（folder）"}
-    data, name = await asyncio.to_thread(_table_source, ctx, args.get("table"), folder)
-    sheets = await asyncio.to_thread(price_check.load_table, data, name)
-    shown, files, truncated = await asyncio.to_thread(
-        shared_folders.find_files, ctx.user, folder, shared_folders.IMAGE_SUFFIXES, MAX_PRICE_IMAGES)
-    if not files:
+    image_ids = [str(i) for i in (args.get("image_ids") or []) if str(i).strip()]
+    if not folder and not image_ids:
+        return {"error": "需要要核对的图片：共享文件夹路径（folder），或用户上传到对话里的图片 ID（image_ids）"}
+    # 用户只发来路径或表格、还没说要核对时模型容易抢跑：必须带上用户提出核对的原话
+    request = str(args.get("request") or "").strip()
+    if not request or _PATH_ONLY.fullmatch(request):
+        return {"error": "用户还没有提出核对要求，先不要核对。回复一句已收到，问他要做什么（例如核对价格和文案）"}
+    # 实时进度：每个阶段说一句，等待期间每隔几秒带上已用时间，让用户知道还在跑
+    started = time.time()
+    stage = {"text": "正在读取表格"}
+
+    async def notify(text: str):
+        same_stage = text[:6] == stage["text"][:6]
+        stage["text"] = text
+        if same_stage and time.time() - stage.get("at", 0) < 1:  # 同一阶段最多每秒推一次，图片多时不刷屏
+            return
+        stage["at"] = time.time()
+        await ctx.emit("tool.progress", {"call_id": ctx.call_id, "message": f"{text}（已用 {int(time.time() - started)} 秒）"})
+
+    async def heartbeat():
+        while True:
+            await asyncio.sleep(HEARTBEAT_SECONDS)
+            await ctx.emit("tool.progress", {"call_id": ctx.call_id,
+                                             "message": f"{stage['text']}（已用 {int(time.time() - started)} 秒）"})
+
+    ticker = asyncio.ensure_future(heartbeat())
+    try:
+        return await _run_price_check(ctx, args, folder, image_ids, notify)
+    finally:
+        ticker.cancel()
+
+
+async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids: list[str], notify) -> dict:
+    await notify("正在读取表格")
+    table_id = str(args.get("table") or "").strip()
+    sheets, name, from_image = await _load_sheets(ctx, table_id, folder)
+    sheets = price_check.pick_sheets(sheets, [str(s) for s in (args.get("sheets") or [])])
+    await notify("正在查找文件夹里的图片")
+    shown, truncated = "对话里上传的图片", False
+    images: list[tuple[str, object]] = []
+    if folder:
+        shown, files, truncated = await asyncio.to_thread(
+            shared_folders.find_files, ctx.user, folder, shared_folders.IMAGE_SUFFIXES, MAX_PRICE_IMAGES)
+        images = [(rel, path.read_bytes) for rel, path in files]
+    for number, image_id in enumerate(i for i in image_ids if i != table_id):  # 表格截图本身不算要核对的图
+        artifact = store.get_artifact(image_id, ctx.user["id"])
+        if not artifact or not Path(artifact["path"]).is_file():
+            return {"error": f"找不到图片 {image_id}，请使用对话里出现过的图片 ID"}
+        images.append((artifact["label"] or f"上传的第 {number + 1} 张图", Path(artifact["path"]).read_bytes))
+    if not images:
         return {"error": f"{shown} 里没有找到图片"}
 
-    async def progress(done: int, total: int):
-        await ctx.emit("tool.progress", {"call_id": ctx.call_id, "message": f"已处理 {done}/{total} 张图"})
-
-    result = await price_check.run_check([(rel, path.read_bytes) for rel, path in files], sheets, progress)
+    result = await price_check.run_check(images, sheets, notify)
+    await notify("正在生成报告")
     report = await asyncio.to_thread(price_check.build_report, result)
     job_id = uuid.uuid4().hex
     filename = f"价格文案核对-{time.strftime('%m%d-%H%M')}.xlsx"
@@ -146,10 +201,12 @@ async def check_prices(ctx: ToolContext, args: dict) -> dict:
     notes = []
     if truncated:
         notes.append(f"图片超过 {MAX_PRICE_IMAGES} 张，只核对了前 {MAX_PRICE_IMAGES} 张，其余请缩小到子文件夹再核对")
+    if from_image:
+        notes.append("表格是从截图识别出来的，截图里的数字本身可能读错；有疑问的以原始 Excel 为准")
     if result["failed"]:
         notes.append(f"{len(result['failed'])} 张图识别失败，没有核对：" + "；".join(result["failed"][:5]))
     return {
-        "folder": shown, "table": name, "images_scanned": result["image_count"], "checked": len(records),
+        "folder": shown, "table": name, "sheets": [s.name for s in sheets], "images_scanned": result["image_count"], "checked": len(records),
         "counts": {s: len(v) for s, v in by_status.items()},
         "价格不一致": [_describe(r) for r in by_status["不一致"][:MAX_REPORTED]],
         "文案待确认": [_describe(r) for r in by_status["文案待确认"][:MAX_REPORTED]],
@@ -160,6 +217,7 @@ async def check_prices(ctx: ToolContext, args: dict) -> dict:
         "表格有价格但没找到对应图片": {
             "数量": len(result["uncovered"]),
             "举例": [f"{' / '.join([r['sheet'], *r['group']])} {r['sku']} {r['name']}" for r in result["uncovered"][:10]]},
+        "表格自身算不通的行": price_check.table_warnings(sheets)[:15],
         "说明": notes,
         "files": [{"id": artifact["id"], "url": url, "name": filename}],
     }
@@ -185,7 +243,7 @@ def build_shared_tools() -> list[Tool]:
              use_shared_images),
         Tool("read_table",
              "读取表格（xlsx/csv）的概览：每个工作表要比对的价格字段，以及按模块合并单元格划分的分组。"
-             "source 填对话里上传的表格 ID，或共享文件夹里的表格路径；不填就用对话里最近上传的表格。",
+             "source 填对话里上传的表格 ID、表格截图的图片 ID，或共享文件夹里的表格路径；不填就用对话里最近上传的表格。",
              {"type": "object", "properties": {"source": {"type": "string"}}},
              read_table),
         Tool("check_prices",
@@ -194,9 +252,17 @@ def build_shared_tools() -> list[Tool]:
              "不需要事先知道文件夹结构、文件命名或顺序，也不需要先列目录。只在用户提出要核对时调用。"
              "图片多时要跑几分钟。",
              {"type": "object", "properties": {
-                 "folder": {"type": "string", "description": "共享文件夹路径，直接用用户给的写法"},
+                 "request": {"type": "string",
+                             "description": "用户提出核对要求的原话，例如\"核对一下价格文案信息是否有误\"。"
+                                            "用户只发了路径或表格、没说要核对时不要调用本工具"},
+                 "folder": {"type": "string", "description": "要核对的图片所在的共享文件夹路径，直接用用户给的写法"},
+                 "image_ids": {"type": "array", "items": {"type": "string"},
+                               "description": "用户直接上传到对话里要核对的图片 ID（没有共享文件夹时用；可以和 folder 同时给）"},
+                 "sheets": {"type": "array", "items": {"type": "string"},
+                            "description": "只核对表格里的这几个工作表（用户点名了某个 sheet 时填，名字不用写全）；不填就核对整个表格"},
                  "table": {"type": "string",
-                           "description": "表格 ID 或共享文件夹里的表格路径；不填时用对话里上传的表格，没有就用文件夹里的表格"}},
-              "required": ["folder"]},
+                           "description": "表格：上传的 Excel/CSV 的 ID、用户上传的表格截图的图片 ID，或共享文件夹里的表格路径；"
+                                          "不填时用对话里上传的 Excel/CSV，没有就用文件夹里的表格"}},
+              "required": ["request"]},
              check_prices),
     ]

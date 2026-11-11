@@ -16,6 +16,7 @@ router = APIRouter(prefix="/agent2")
 
 MAX_UPLOADS = 9  # 与输入框参考图上限一致（换装最多 1 张人物 + 8 张服装）
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_TABLE_BYTES = 200 * 1024 * 1024  # 铺品表常嵌着大量商品图，文件很大；保存时会去掉图片
 MAX_TABLE_UPLOADS = 3
 
 
@@ -101,9 +102,9 @@ async def send_message(request: Request, session_id: str, message: str = Form(""
     for upload in files or []:
         if Path(upload.filename or "").suffix.lower() not in service.TABLE_SUFFIXES:
             raise HTTPException(400, f"{upload.filename or '文件'} 不是表格；支持 xlsx、xlsm、csv")
-        data = await upload.read(MAX_UPLOAD_BYTES + 1)
-        if len(data) > MAX_UPLOAD_BYTES:
-            raise HTTPException(400, "单个表格不能超过 20MB")
+        data = await upload.read(MAX_TABLE_BYTES + 1)
+        if len(data) > MAX_TABLE_BYTES:
+            raise HTTPException(400, f"单个表格不能超过 {MAX_TABLE_BYTES // 1024 // 1024}MB")
         if data:
             saved.append((data, upload.filename or ""))
     characters = await asyncio.to_thread(service.register_characters, user, session_id, cards)
