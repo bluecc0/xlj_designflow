@@ -37,9 +37,19 @@ def sse(event: dict) -> str:
     return f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+TABLE_SUFFIXES = {".xlsx", ".xlsm", ".csv"}
+
+
+def slim_table(data: bytes, filename: str) -> bytes:
+    """表格保存前去掉嵌入图片和外部链接缓存（核对用不到，带着动辄上百 MB）。耗 CPU，调用方放到工作线程里跑。"""
+    from ..price_check import slim_xlsx
+    return slim_xlsx(data, filename)
+
+
 def save_upload(user: dict, session_id: str, data: bytes, filename: str) -> dict:
     suffix = Path(filename or "").suffix.lower() or ".png"
-    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+    kind = "table" if suffix in TABLE_SUFFIXES else "upload"
+    if kind == "upload" and suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
         suffix = ".png"
     safe_user = re.sub(r"[^A-Za-z0-9_-]", "_", str(user["id"])) or "user"
     folder = settings.output_path / "agent2-uploads" / safe_user / session_id
@@ -47,7 +57,7 @@ def save_upload(user: dict, session_id: str, data: bytes, filename: str) -> dict
     path = folder / f"{uuid.uuid4().hex}{suffix}"
     path.write_bytes(data)
     url = "/output/" + path.relative_to(settings.output_path).as_posix()
-    return store.create_artifact(session_id=session_id, user_id=user["id"], kind="upload", url=url,
+    return store.create_artifact(session_id=session_id, user_id=user["id"], kind=kind, url=url,
                                  path=str(path), label=filename or "")
 
 
@@ -202,7 +212,7 @@ async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], 
     session = store.get_session(session["id"], user["id"]) or session  # 占用后读最新历史
     # skill 记下用户选择的技能，用于技能使用统计
     first = store.append_event(session["id"], turn["id"], "turn.started", {
-        "text": text, "uploads": [{"id": u["id"], "url": u["url"]} for u in uploads],
+        "text": text, "uploads": _upload_payload(uploads),
         **({"skill": skill} if skill else {}),
         **({"characters": characters} if characters else {})})
     yield sse(first)
@@ -210,8 +220,7 @@ async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], 
     content = text
     if skill:
         content = f"[用户选择了技能：{skill}，请先用 load_skill 加载它再执行]\n{content}"
-    if uploads:
-        content += "\n\n[用户上传了图片：" + "、".join(u["id"] for u in uploads) + "]"
+    content += upload_note(uploads)
     if characters:
         content += build_agent_note(characters)
     recovered = store.take_unannounced_recovered(session["id"])
@@ -224,16 +233,36 @@ async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], 
         yield chunk
 
 
-async def resume_turn(user: dict, session: dict, turn: dict, answer: str, claimed: bool = False) -> AsyncIterator[str]:
+def upload_note(uploads: list[dict]) -> str:
+    """告诉模型这次上传了哪些图片和表格（ID 才能给工具用）。"""
+    pictures = [u for u in uploads if u["kind"] != "table"]
+    tables = [u for u in uploads if u["kind"] == "table"]
+    note = ""
+    if pictures:
+        note += "\n\n[用户上传了图片：" + "、".join(u["id"] for u in pictures) + "]"
+    if tables:
+        note += "\n\n[用户上传了表格：" + "、".join(f"{u['id']}（{u['label']}）" for u in tables) + "]"
+    return note
+
+
+def _upload_payload(uploads: list[dict]) -> list[dict]:
+    return [{"id": u["id"], "url": u["url"], "kind": u["kind"], "name": u["label"]} for u in uploads]
+
+
+async def resume_turn(user: dict, session: dict, turn: dict, answer: str, claimed: bool = False,
+                      uploads: list[dict] | None = None) -> AsyncIterator[str]:
     state = json.loads(turn.get("engine_state") or "{}")
     pending = state.get("pending") or {}
     if not pending.get("call_id") or not (claimed or store.claim_answer(turn["id"], user["id"])):
         raise ValueError("这一轮没有在等待回答")
     session = store.get_session(session["id"], user["id"]) or session
-    yield sse(store.append_event(session["id"], turn["id"], "input.answered", {"answer": answer}))
+    uploads = uploads or []
+    yield sse(store.append_event(session["id"], turn["id"], "input.answered",
+                                 {"answer": answer, **({"uploads": _upload_payload(uploads)} if uploads else {})}))
+    reply = (answer or "（没有文字，只上传了附件）") + upload_note(uploads)
     messages = store.load_session_messages(session) + [{
         "role": "tool", "tool_call_id": pending["call_id"],
-        "content": json.dumps({"answer": answer}, ensure_ascii=False)}]
+        "content": json.dumps({"answer": reply}, ensure_ascii=False)}]
     request = f"{turn.get('user_input') or ''}（补充：{answer}）"
     async for chunk in _drive(user=user, session=session, turn_id=turn["id"], messages=messages,
                               tools=tools_factory(), model=model_factory(), request=request):

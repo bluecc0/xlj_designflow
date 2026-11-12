@@ -246,6 +246,8 @@ class Settings:
     knowledge_path: Path = Path(os.getenv("KNOWLEDGE_PATH", "./KNOWLEDGE.md"))
 
     login_users_path: Path = Path(os.getenv("LOGIN_USERS_PATH", "./login_users.json"))
+    # Agent 可只读访问的共享文件夹白名单（格式见 backend/shared_folders.py）
+    shared_folders_path: Path = Path(os.getenv("SHARED_FOLDERS_PATH", "./shared_folders.json"))
     allowed_login_users: list[dict[str, str]] = []
 
     def __init__(self) -> None:
@@ -258,6 +260,8 @@ class Settings:
             self.output_path = self.root_dir / self.output_path
         if not self.login_users_path.is_absolute():
             self.login_users_path = self.root_dir / self.login_users_path
+        if not self.shared_folders_path.is_absolute():
+            self.shared_folders_path = self.root_dir / self.shared_folders_path
         if not self.knowledge_path.is_absolute():
             self.knowledge_path = self.root_dir / self.knowledge_path
         if not self.user_skills_path.is_absolute():

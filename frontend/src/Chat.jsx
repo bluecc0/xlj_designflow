@@ -899,13 +899,14 @@ const agent2Spinner = function(size) {
 };
 
 // 准备类工具（加载技能、读资料、看图、记忆）连续出现时合并成一张步骤卡，避免一步占一行
-const AGENT2_STEP_TOOLS = { analyze_image: true, load_skill: true, read_skill_file: true, use_skill_image: true, remember: true };
+const AGENT2_STEP_TOOLS = { analyze_image: true, load_skill: true, read_skill_file: true, use_skill_image: true, remember: true,
+  list_shared_folder: true, read_table: true };
 const groupAgentSteps = function(messages) {
   var out = [];
   messages.forEach(function(m) {
     var last = out[out.length - 1];
     // 只作参考、不展示的素材库取图也是准备步骤
-    var hiddenFetch = m.tool === 'find_product_images' && m.args && m.args.show === false;
+    var hiddenFetch = (m.tool === 'find_product_images' || m.tool === 'use_shared_images') && m.args && m.args.show === false;
     if (m.type === 'agent2-tool' && (AGENT2_STEP_TOOLS[m.tool] || hiddenFetch)) {
       if (last && last.type === 'agent2-steps') { last.steps.push(m); return; }
       out.push({ who: 'ai', meta: 'Agent', type: 'agent2-steps', steps: [m] });
@@ -925,9 +926,11 @@ const agent2StepLabel = function(m) {
 const agent2StepDetail = function(m) {
   var args = m.args || {};
   if (m.tool === 'read_skill_file') return args.path || '';
-  if (m.tool === 'use_skill_image') return (args.paths || []).length + ' 张';
+  if (m.tool === 'use_skill_image' || m.tool === 'use_shared_images') return (args.paths || []).length + ' 张';
   if (m.tool === 'remember') return args.content || '';
   if (m.tool === 'find_product_images') return (args.sku || '') + ' · 仅作参考';
+  if (m.tool === 'list_shared_folder') return args.path || '';
+  if (m.tool === 'read_table') return args.source || '';
   return args.name || '';
 };
 
@@ -1002,6 +1005,11 @@ const AgentToolCard = ({ m, openImage }) => {
     summary = count + ' 张'
       + (args.aspect_ratio && args.aspect_ratio !== 'auto' ? ' · ' + args.aspect_ratio : '')
       + (args.group_type === 'set' ? ' · 套图' : args.group_type === 'variant' ? ' · 多方案' : '');
+  } else if (m.tool === 'check_prices') {
+    var counts = result.counts || null;
+    summary = counts ? ('核对 ' + (result.checked || 0) + ' 个 · 不一致 ' + (counts['不一致'] || 0)
+      + (counts['文案待确认'] ? ' · 文案待确认 ' + counts['文案待确认'] : '')
+      + (counts['未识别'] ? ' · 待人工看 ' + counts['未识别'] : '')) : '';
   } else if (m.tool === 'special_compose') {
     summary = [args.sku, args.name].filter(Boolean).join(' · ');
   } else if (m.tool === 'load_skill' || m.tool === 'read_skill_file' || m.tool === 'use_skill_image') {
@@ -1719,7 +1727,10 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 {m.thinking ? (
                   <ThinkingBlock text={m.thinking}/>
                 ) : null}
+                {/* 只发了表格没写字：只显示表格附件，不画空白气泡 */}
+                {m.who === 'user' && !m.text && Array.isArray(m.attachments) && m.attachments.length ? null : (
                 <CopyableTextBubble who={m.who} text={m.who === 'ai' && (m.feedbackError || m.meta === '错误' || /^(Agent .*失败|错误[:：]|解析错误|下载失败|设置头像失败)/.test(m.text || '')) ? formatAiImageError(m.feedbackError || m.text) : m.text} markdown/>
+                )}
                 {/* Agent CONFIRM 阶段的创意方案卡片 */}
                 {m.brief || m.contract ? (
                   <BriefCard brief={m.brief} contract={m.contract} completeness={m.completeness}/>
@@ -1746,6 +1757,13 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                   <div style={{ alignSelf: 'flex-end', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)' }}>
                     <I.user size={11}/>
                     {m.characters.map(function(card) { return card.name; }).join('、')}
+                  </div>
+                ) : null}
+                {m.who === 'user' && Array.isArray(m.attachments) && m.attachments.length > 0 ? (
+                  <div style={{ alignSelf: 'flex-end', display: 'inline-flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}>
+                    {m.attachments.map(function(name, idx) {
+                      return <span key={idx} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--line-2)', background: 'var(--panel)', color: 'var(--ink-2)' }}>表格 · {name}</span>;
+                    })}
                   </div>
                 ) : null}
                 {m.who === 'user' && Array.isArray(m.refPreviews) && m.refPreviews.length > 0 ? (
@@ -2393,7 +2411,9 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
     const skillInvocation = parseSkillInvocation(message);
     const sendMessage = message;
     const executionMessage = skillInvocation.skill ? skillInvocation.prompt : message;
-    if (!executionMessage || isLoading) return;
+    const tablesToSend = agentEnabled ? files.filter(function(item) { return item.kind === 'agent-table'; }) : [];
+    // Agent 模式下可以只发表格不写字（先发表格、下一句再说要做什么）
+    if ((!executionMessage && !tablesToSend.length) || isLoading) return;
     if (refImages.some(function(item) { return item && item.pending; })) {
       window.dfToast('参考图还在加载，请稍候再发送');
       return;
@@ -2425,7 +2445,9 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
       skillPrompt: executionMessage,
       characterIds: characterAvailable ? selectedCharacters.map(function(card) { return card.id; }) : [],
       characters: characterAvailable ? selectedCharacters.map(function(card) { return { id: card.id, name: card.name }; }) : [],
+      tables: tablesToSend.map(function(item) { return item.file; }),
     });
+    if (tablesToSend.length) setFiles(function(prev) { return prev.filter(function(item) { return item.kind !== 'agent-table'; }); });
     setAiBatchCount(String(normalizedBatchCount));
     setText('');
     setSelectedSkill('');
@@ -2713,7 +2735,12 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
     const others = fileList.filter(f => !f.type.startsWith('image/'));
     if (images.length) addImageFiles(images);
     if (others.length && agentEnabled) {
-      window.dfToast('Agent 目前只支持上传图片；Excel 铺货表请用功能菜单里的「智能铺货」', { tone: 'warn' });
+      // Agent 支持表格（价格核对等），随消息一起发给 Agent
+      const tables = others.filter(f => /\.(xlsx|xlsm|csv)$/i.test(f.name));
+      if (tables.length < others.length) window.dfToast('Agent 支持上传图片和表格（xlsx、xlsm、csv）', { tone: 'warn' });
+      if (tables.length) {
+        setFiles(prev => prev.concat(tables.map(f => ({ name: f.name, size: formatFileSize(f.size), file: f, kind: 'agent-table' }))));
+      }
     } else if (others.length) {
       const file = others[0];
       if (selectedWorkflow === 'distribute' && isSmartDistributeFile(file)) {
@@ -4187,7 +4214,7 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
           type="file"
           ref={fileInputRef}
           onChange={handleFileSelect}
-          accept="image/*,.xlsx,.xlsm"
+          accept="image/*,.xlsx,.xlsm,.csv"
           multiple
           style={{ display: 'none' }}
         />
@@ -4382,7 +4409,8 @@ const AGENT_MODE_KEY = 'designflow_agent_mode_enabled';
 const AGENT2_SESSION_KEY = 'designflow_agent2_session_id';
 const AGENT2_TOOL_LABELS = {
   generate_image: '生成图片', analyze_image: '看图', load_skill: '加载技能',
-  read_skill_file: '读取技能资料', use_skill_image: '读取技能参考图', special_compose: '特殊品合成', remember: '记忆',
+  read_skill_file: '读取技能资料', use_skill_image: '读取技能参考图', list_shared_folder: '查看共享文件夹',
+  use_shared_images: '共享盘取图', read_table: '读取表格', check_prices: '价格文案核对', special_compose: '特殊品合成', remember: '记忆',
   remove_background: '抠图', find_product_images: '素材库取图', fill_background: '换底色', upscale_image: '高清放大', vectorize_image: '转矢量图',
   split_layers: '拆分 PSD 图层', outpaint_image: '扩图', outfit_change: 'AI 换装',
 };
@@ -4395,6 +4423,15 @@ const AGENT2_MODEL_NAMES = {
 const AGENT2_TERMINAL = { 'turn.finished': true, 'turn.failed': true, 'turn.cancelled': true, 'input.required': true };
 const agent2Sleep = function(ms) { return new Promise(function(resolve) { setTimeout(resolve, ms); }); };
 const agent2AbsUrl = function(u) { return u && u.charAt(0) === '/' ? ((window.API_BASE || window.location.origin) + u) : (u || ''); };
+
+// 用户消息里随附的上传：图片显示缩略图，表格显示文件名标签
+const agent2UploadDisplay = function(uploads) {
+  var list = Array.isArray(uploads) ? uploads : [];
+  return {
+    refPreviews: list.filter(function(u) { return u.kind !== 'table'; }).map(function(u) { return agent2AbsUrl(u.url); }),
+    attachments: list.filter(function(u) { return u.kind === 'table'; }).map(function(u) { return u.name || '表格'; }),
+  };
+};
 
 // 新版 Agent 的事件 → 现有消息格式。实时推送和历史回放共用这一个归约函数。
 const agent2Reduce = function(msgs, ev) {
@@ -4415,7 +4452,8 @@ const agent2Reduce = function(msgs, ev) {
     case 'turn.started':
       return list.concat([{
         who: 'user', text: p.text || '',
-        refPreviews: (p.uploads || []).map(function(u) { return agent2AbsUrl(u.url); }),
+        refPreviews: agent2UploadDisplay(p.uploads).refPreviews,
+        attachments: agent2UploadDisplay(p.uploads).attachments,
         characters: p.characters || [],
       }, thinking]);
     case 'message.delta': {
@@ -4468,7 +4506,7 @@ const agent2Reduce = function(msgs, ev) {
       }]);
     case 'input.answered':
       return list.map(function(m) { return m.a2Ask ? Object.assign({}, m, { choices: [] }) : m; })
-        .concat([{ who: 'user', text: p.answer || '' }, thinking]);
+        .concat([Object.assign({ who: 'user', text: p.answer || '' }, agent2UploadDisplay(p.uploads)), thinking]);
     case 'suggestions': {
       var actions = (p.options || []).map(function(o) { return { label: o, value: o }; });
       var si = lastTextIdx();
@@ -5694,7 +5732,8 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
   }, [currentAiChatId, loadAiChatHistory, onComposeComplete]);
 
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
-    if (!text.trim() || isLoading) return;
+    const tablesOnly = agentEnabled && (aiOptions.tables || []).length > 0;
+    if ((!text.trim() && !tablesOnly) || isLoading) return;
     const activeSkill = String(aiOptions.skill || '').trim();
     const executionText = String(aiOptions.skillPrompt || text).trim();
     setLastSubmittedMessage(text);
@@ -5757,11 +5796,11 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         var waitingTurnId = agentTurnRef.current.waitingTurnId;
         if (waitingTurnId) {
           agentTurnRef.current.waitingTurnId = '';
-          await window.API.answerAgent2(waitingTurnId, text.trim(), onAgentEvent);
+          await window.API.answerAgent2(waitingTurnId, text.trim(), onAgentEvent, refImages, aiOptions.tables);
         } else {
           sessionId = await ensureAgentSession();
           if (agentStreamRef.current.cursor.sessionId !== sessionId) resetAgentCursor(sessionId);
-          await window.API.sendAgent2Message(sessionId, executionText, refImages, onAgentEvent, activeSkill, aiOptions.characterIds);
+          await window.API.sendAgent2Message(sessionId, executionText, refImages, onAgentEvent, activeSkill, aiOptions.characterIds, aiOptions.tables);
         }
       } catch (e) {
         streamError = e;

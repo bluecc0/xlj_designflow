@@ -373,17 +373,21 @@
         return pump();
       });
     },
-    sendAgent2Message: function(sessionId, message, refImages, onEvent, skill, characterIds) {
+    sendAgent2Message: function(sessionId, message, refImages, onEvent, skill, characterIds, tables) {
       var form = new FormData();
       form.append('message', message || '');
       if (skill) form.append('skill', skill);
       if (characterIds && characterIds.length) form.append('character_ids', JSON.stringify(characterIds));
       (refImages || []).forEach(function(item) { if (item && item.file) form.append('images', item.file); });
+      (tables || []).forEach(function(file) { if (file) form.append('files', file); });
       return this.streamAgent2('/agent2/sessions/' + encodeURIComponent(sessionId) + '/messages', form, onEvent);
     },
-    answerAgent2: function(turnId, answer, onEvent) {
+    answerAgent2: function(turnId, answer, onEvent, refImages, tables) {
       var form = new FormData();
       form.append('answer', answer || '');
+      // 回答提问时也可以带图片和表格（例如 Agent 问"请提供铺品表"）
+      (refImages || []).forEach(function(item) { if (item && item.file) form.append('images', item.file); });
+      (tables || []).forEach(function(file) { if (file) form.append('files', file); });
       return this.streamAgent2('/agent2/turns/' + encodeURIComponent(turnId) + '/answer', form, onEvent);
     },
     fetchImageTypes: function() {
