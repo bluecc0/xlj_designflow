@@ -68,6 +68,17 @@ def _field_of(header: str) -> str | None:
     return None
 
 
+_AMOUNT_FIELDS = {"price", "save", "tag_price"}
+_AMOUNT_RE = re.compile(r"^[¥￥$]?\s*\d+(?:\.\d+)?\s*元?$")
+
+
+def _usable(field_name: str, value: str) -> bool:
+    """价格类的列只认金额；单元格里填的是路径、备注之类的内容时当作没填（表格里确实出现过把素材路径填进吊牌价的）。"""
+    if not value:
+        return False
+    return bool(_AMOUNT_RE.match(value.replace(",", ""))) if field_name in _AMOUNT_FIELDS else True
+
+
 def _cell(v) -> str:
     if v is None:
         return ""
@@ -145,7 +156,7 @@ def _sheet_rows(name: str, rows: list[list]) -> Sheet | None:
             "sku": r[sku_col] if sku_col is not None else "",
             "name": r[name_col] if name_col is not None else "",
             "copy": [r[i] for i in copy_cols if r[i]],
-            "values": {f: r[i] for f, i in fields.items() if r[i]},
+            "values": {f: r[i] for f, i in fields.items() if _usable(f, r[i])},
         })
     return sheet
 
@@ -435,66 +446,157 @@ def _amounts_eq(item: dict, row: dict) -> tuple[bool, bool]:
 
 
 def _pair_score(item: dict, row: dict, path_parts: list[str]) -> float | None:
+    """不知道这张图属于表格哪一组时，按内容在全表里找：名称要对得上，光是金额碰巧相同不算（常见价格很多商品都一样）。"""
     sim = _name_sim(item, row)
     price_eq, save_eq = _amounts_eq(item, row)
-    # 名称完全对得上；或名称大致像并且有一个金额相同；或两个金额都相同。
-    # 只是名称有点像、金额全不同的不算同一个商品（常见于文件夹里混着别的活动、旧版本的图）
-    if not (sim >= 0.99 or (sim >= 0.6 and (price_eq or save_eq)) or (price_eq and save_eq)):
+    if not (sim >= 0.99 or (sim >= 0.6 and (price_eq or save_eq))):
         return None
     return sim * 2 + 0.6 * price_eq + 0.2 * save_eq + _hint(row, path_parts)
 
 
-def _align(items: list[dict], rows: list[dict]) -> tuple[float, dict[int, int]]:
-    """按顺序对齐（允许两边各自跳过），返回 (总分, {图上第几个: 表格第几行})。"""
-    n, m = len(items), len(rows)
-    scores = [[_pair_score(it, row, it["_path"]) for row in rows] for it in items]
-    dp = [[0.0] * (m + 1) for _ in range(n + 1)]
-    for i in range(1, n + 1):
-        for j in range(1, m + 1):
-            best = max(dp[i - 1][j], dp[i][j - 1])
-            s = scores[i - 1][j - 1]
-            if s is not None:
-                best = max(best, dp[i - 1][j - 1] + s)
-            dp[i][j] = best
-    pairs: dict[int, int] = {}
-    i, j = n, m
-    while i > 0 and j > 0:
-        s = scores[i - 1][j - 1]
-        if s is not None and dp[i][j] == dp[i - 1][j - 1] + s:
-            pairs[i - 1] = j - 1
-            i, j = i - 1, j - 1
-        elif dp[i][j] == dp[i - 1][j]:
-            i -= 1
-        else:
-            j -= 1
-    return dp[n][m], pairs
+def _scoped_score(item: dict, row: dict) -> float | None:
+    """已经按文件夹名、文件名确定在这一组里时，组内对应：名称大致像，或者两个金额都相同。"""
+    sim = _name_sim(item, row)
+    price_eq, save_eq = _amounts_eq(item, row)
+    if not (sim >= 0.5 or (price_eq and save_eq)):
+        return None
+    return sim * 2 + 0.6 * price_eq + 0.2 * save_eq
+
+
+# ── 按名称找表格分组 ──────────────────────────────────────────────────────────
+# 文件夹名、文件名和表格里的工作表名、模块列（合并单元格）对应：8-限时闪购 ↔ 限时闪购，
+# 10-TOP榜/男子/羽绒服.png ↔ TOP榜单 / 男子 / 羽绒服TOP榜，11-新品上市/女-服饰.png ↔ 女子 / 服饰。
+
+_SYNONYMS = {"男": ("男", "男子", "男款", "男士", "男装"), "女": ("女", "女子", "女款", "女士", "女装"),
+             "童": ("童", "儿童", "童装", "大童", "小童", "kids")}
+
+
+def _canon(text: str) -> str:
+    c = _clean(re.sub(r"^[\d.\s_-]+", "", unicodedata.normalize("NFKC", str(text or ""))))
+    return next((key for key, words in _SYNONYMS.items() if c in words), c)
+
+
+def _label_matches(label: str, token: str) -> bool:
+    a, b = _canon(label), _canon(token)
+    if not a or not b or a.isdigit() or b.isdigit():
+        return False
+    if a == b:
+        return True
+    if len(a) == 1 or len(b) == 1:  # 男/女/童 这类单字只认完全相同
+        return False
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    if short in long_:
+        return True
+    common = SequenceMatcher(None, a, b).find_longest_match(0, len(a), 0, len(b)).size
+    return common >= 3 and common >= len(short) * 0.6
+
+
+def path_tokens(rel_paths: list[str]) -> list[str]:
+    """路径里可用来对应的名字：每一级文件夹名、文件名，以及它们按 - _ 空格拆开的部分。"""
+    out: list[str] = []
+    for rel in rel_paths:
+        parts = [p for p in re.split(r"[/\\]", rel) if p]
+        if parts:
+            parts[-1] = parts[-1].rsplit(".", 1)[0]
+        for part in parts:
+            out.append(part)
+            out.extend(x for x in re.split(r"[-_\s、]+", part) if x and x != part)
+    return list(dict.fromkeys(out))
+
+
+def _row_labels(row: dict) -> list[str]:
+    """这一行能被路径名字点到的标签：模块列的各级分组，以及写着名字的"序号"（例如 KV 行写着"加绒鞋"）。"""
+    labels = list(row["group"])
+    if row["order"] and not str(row["order"]).isdigit():
+        labels.append(str(row["order"]))
+    return labels
+
+
+def scope_for(rel_paths: list[str], sheets: list[Sheet]) -> tuple[list[dict], str]:
+    """按路径名字找这组图对应表格里的哪些行，返回 (候选行, 对应依据)。对不上任何工作表和分组时返回空列表。"""
+    tokens = path_tokens(rel_paths)
+    # 工作表对应模块，模块名在文件夹名上（文件名一般是分组名，例如"女-鞋履"里的"鞋履"不该去对"绒暖越冬-鞋履"这张表）
+    folder_tokens = path_tokens(["/".join(re.split(r"[/\\]", rel)[:-1]) for rel in rel_paths])
+    sheet_hits = ([s for s in sheets if any(_label_matches(s.name, t) for t in folder_tokens)]
+                  or [s for s in sheets if any(_label_matches(s.name, t) for t in tokens)])
+    # 已经用来对上工作表的名字（例如"10-TOP榜"）不再拿去区分组，否则"外套TOP榜"也会因为"TOP榜"被点到
+    used = {t for t in tokens for s in sheet_hits if _label_matches(s.name, t)}
+    rest = [t for t in tokens if t not in used]
+    matched = lambda label: any(_label_matches(label, t) for t in rest)
+    # 表格有好几张工作表时，文件夹名得先对上工作表；对不上就不按名字对应（例如"品类热榜/女子/卫衣"
+    # 只是碰巧和"穿搭格调 / 女 / 卫衣"同名），交给后面按商品名称和价格找
+    pool = sheet_hits or (sheets if len(sheets) == 1 else [])
+    best, rows = 0, []
+    for sheet in pool:
+        for row in sheet.rows:
+            hits = sum(1 for label in _row_labels(row) if matched(label))
+            if hits > best:
+                best, rows = hits, [row]
+            elif hits == best and hits:
+                rows.append(row)
+    if best:
+        groups = list(dict.fromkeys(" / ".join([r["sheet"], *r["group"]]) for r in rows))
+        return rows, "按文件夹名、文件名对应到「" + "」「".join(groups[:3]) + "」" + ("等" if len(groups) > 3 else "")
+    if sheet_hits:
+        rows = [r for s in sheet_hits for r in s.rows]
+        return rows, "按文件夹名对应到工作表「" + "」「".join(s.name for s in sheet_hits) + "」"
+    return [], ""
 
 
 def match_unit(items: list[dict], sheets: list[Sheet]) -> dict[int, dict]:
-    """把一组图上的商品对应到表格行：先选整体最像的工作表按顺序对齐，没对上的再单独在全表里找。"""
-    best_score, best_sheet, best_pairs = 0.0, None, {}
-    for sheet in sheets:
-        score, pairs = _align(items, sheet.rows)
-        if score > best_score:
-            best_score, best_sheet, best_pairs = score, sheet, pairs
-    matched = {i: best_sheet.rows[j] for i, j in best_pairs.items()} if best_sheet else {}
-    used = {id(r) for r in matched.values()}
-    ordered = ([best_sheet] if best_sheet else []) + [s for s in sheets if s is not best_sheet]
+    """名字没能确定到单独一组的图（模块总图、KV 图，或文件夹名对不上表格）：每个商品按名称和价格找对应的行。
+    先在名字点到的那几组里找，找不到再在整张表里找；名称要对得上，金额碰巧相同不算。对应依据写进 item["_basis"]。"""
+    scope, basis = scope_for(list(dict.fromkeys(it.get("_full", it["_image"]) for it in items)), sheets)
+    in_scope = {id(row) for row in scope}
+    matched: dict[int, dict] = {}
+    used: set[int] = set()
     for i, item in enumerate(items):
-        if i in matched:
+        # 名字点到的几组和整张表一起比，取最吻合的一行；名字点到的组只稍微加分。
+        # 例如模块总图上的是 KV 款（在"kv"组里），名字却只点到模块下的男/女/童几组
+        candidates = [(s + (SCOPE_BONUS if id(row) in in_scope else 0), row)
+                      for sheet in sheets for row in sheet.rows if id(row) not in used
+                      and (s := _pair_score(item, row, item["_path"])) is not None]
+        if not candidates:
             continue
-        candidates = [(s, row) for sheet in ordered for row in sheet.rows
-                      if (s := _pair_score(item, row, item["_path"])) is not None]
-        if candidates:
-            # 同分时优先还没被对应过的行、同一张工作表里的行
-            row = max(candidates, key=lambda c: (c[0], id(c[1]) not in used, c[1]["sheet"] == getattr(best_sheet, "name", "")))[1]
-            matched[i] = row
-            used.add(id(row))
-    # 只靠名称对上、金额一个都不同的：这组图里要有六成以上的商品能对上才算数。
+        row = max(candidates, key=lambda c: c[0])[1]
+        matched[i] = row
+        used.add(id(row))
+        group = " / ".join([row["sheet"], *row["group"]])
+        item["_basis"] = (f"{basis}，按商品名称和价格对上" if id(row) in in_scope
+                          else f"按商品名称和价格对到「{group}」" + ("（文件夹名、文件名没对上表格分组）" if not scope else ""))
+    # 只靠名称对上、金额一个都不同的：这张图里要有六成以上的商品能对上才算数。
     # 否则多半是别的活动或旧版本的图，碰巧有通用名称（"防泼水短羽绒服"）和表格里某一行相同
     if len(matched) < len(items) * 0.6:
         matched = {i: row for i, row in matched.items() if any(_amounts_eq(items[i], row))}
     return matched
+
+
+def single_group(rows: list[dict]) -> bool:
+    return len({(r["sheet"], tuple(r["group"])) for r in rows}) == 1
+
+
+SCOPE_BONUS = 0.3           # 名字点到的分组里的行，按内容找时稍微优先
+MISMATCH_IMAGE_BELOW = 0.3  # 按顺序对应后，名称或金额对得上的不到三成：整张图和这一组对不上
+
+
+def match_in_order(items: list[dict], rows: list[dict], basis: str) -> tuple[list[tuple[dict, dict]], list[dict], str]:
+    """已经确定是表格里的同一组：图上第 1 个对表格第 1 个，依次往下。名称和价格不参与决定对应谁，只用来报差异。
+    返回 (配对, 多出来的商品, 整组对不上的原因)。大部分商品都对不上时，整张图算作和这一组对不上，不逐个报差异。"""
+    # 表格里没价格的行（例如组里的主推款，图上是大图不带价格）识别时常常不算商品：
+    # 按顺序对应时分两种数法——所有行、只数有价格的行——用对得上的多的那种
+    priced = [r for r in rows if r["values"]]
+    options = [rows] + ([priced] if priced and len(priced) < len(rows) else [])
+    agree_of = lambda seq: sum(1 for it, row in zip(items, seq) if _scoped_score(it, row) is not None)
+    rows = max(options, key=agree_of)
+    pairs = list(zip(items, rows))
+    agree = agree_of(rows)
+    if len(pairs) >= 3 and agree < len(pairs) * MISMATCH_IMAGE_BELOW:
+        group = " / ".join([rows[0]["sheet"], *rows[0]["group"]])
+        return [], items, (f"按名字对应到「{group}」，但按顺序对下来 {len(pairs)} 个商品里只有 {agree} 个的名称或价格对得上，"
+                           "可能是旧版本、放错文件夹，或者表格这一组不是这些商品")
+    for k, (item, _row) in enumerate(pairs):
+        item["_basis"] = f"{basis}，按顺序第 {k + 1} 个"
+    return pairs, items[len(pairs):], ""
 
 
 # ── 比对 ──────────────────────────────────────────────────────────────────────
@@ -558,8 +660,8 @@ def judge(item: dict, row: dict, shown: set[str], confirmed: frozenset = frozens
         return "未识别", ["图上没读到" + "、".join(d["label"] for d in diffs) + "，请人工看一下"]
     else:
         return "一致", []
-    return status, [f"{d['label']}：表格{' ' if d['kind'] == '价格' else '「'}{d['table']}{'' if d['kind'] == '价格' else '」'}，"
-                    f"图上{' ' if d['kind'] == '价格' else '「'}{d['image']}{'' if d['kind'] == '价格' else '」'}" for d in used]
+    quote = lambda d, v: f" {v}" if d["kind"] == "价格" else f"「{v}」"
+    return status, [f"{d['label']}：表格{quote(d, d['table'])}，图上{quote(d, d['image'])}" for d in used]
 
 
 def _same_item(item: dict, again: list[dict]) -> dict | None:
@@ -574,8 +676,9 @@ def _same_item(item: dict, again: list[dict]) -> dict | None:
     return same_image[best[1]] if best[0] >= 0.8 else None
 
 
-async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notify=None) -> dict:
-    """images：[(相对路径, 读取函数)]，读取函数返回图片内容。notify(文字)：进度提示。"""
+async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notify=None, base: str = "") -> dict:
+    """images：[(相对路径, 读取函数)]，读取函数返回图片内容。notify(文字)：进度提示。
+    base：用户给的文件夹路径。用户直接指到模块文件夹（例如 …/11-新品上市）时，模块名只在这里，对应时要带上。"""
     async def say(text: str):
         if notify:
             await notify(text)
@@ -606,7 +709,8 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notif
     results = await asyncio.gather(*[one(rel, loader) for rel, loader in images])
     failed, small, empty = [], 0, []
     units: list[list[dict]] = []
-    singles: dict[str, list[dict]] = {}
+    # 名字能确定到表格里某一组的图：同一文件夹里对应同一组的（单品图、切片图）按文件名顺序接起来，整组按顺序对应
+    in_order: dict[tuple, dict] = {}
     for (rel, _loader), result in zip(images, results):
         if isinstance(result, Exception):
             failed.append(f"{rel}：{result}")
@@ -619,14 +723,25 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notif
             parts[-1] = parts[-1].rsplit(".", 1)[0]
             result = [sanitize_item(it) for it in result]
             shown = {f for f in FIELD_LABELS if any(it.get(f) not in (None, "") for it in result)}
-            items = [dict(it, _image=rel, _path=parts, _pos=i + 1, _shown=shown) for i, it in enumerate(result)]
-            if len(items) == 1:  # 一图一个商品：同一文件夹里的按文件名顺序合成一组再对齐
-                singles.setdefault("/".join(parts[:-1]), []).extend(items)
-            else:
+            items = [dict(it, _image=rel, _full=f"{base}/{rel}" if base else rel, _path=parts, _pos=i + 1, _shown=shown)
+                     for i, it in enumerate(result)]
+            rows, basis = scope_for([f"{base}/{rel}" if base else rel], sheets)
+            if rows and single_group(rows):
+                key = ("/".join(parts[:-1]), rows[0]["sheet"], tuple(rows[0]["group"]))
+                in_order.setdefault(key, {"rows": rows, "basis": basis, "items": []})["items"].extend(items)
+            else:  # 名字没能确定到单独一组：每张图单独按名称和价格找
                 units.append(items)
-    units.extend(singles.values())
 
-    pairs, unmatched, covered = [], [], set()
+    pairs, unmatched, covered, mismatched = [], [], set(), []
+    for unit in in_order.values():
+        got, extra, reason = match_in_order(unit["items"], unit["rows"], unit["basis"])
+        if reason:
+            mismatched.append({"images": list(dict.fromkeys(it["_image"] for it in unit["items"])), "reason": reason})
+        else:
+            unmatched.extend(extra)
+        for item, row in got:
+            covered.add((row["sheet"], row["index"]))
+            pairs.append((item, row))
     for items in units:
         matched = match_unit(items, sheets)
         for i, item in enumerate(items):
@@ -705,7 +820,9 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notif
         status, problems = judge(item, row, item["_shown"], frozenset(confirmed.get(idx, ())))
         records.append({"status": status, "problems": problems, "item": item, "row": row,
                         "diffs": differences(item, row, item["_shown"], frozenset(confirmed.get(idx, ())))})
-    uncovered = [row for sheet in sheets for row in sheet.rows
-                 if row["values"] and (row["sheet"], row["index"]) not in covered]
-    return {"records": records, "unmatched": unmatched, "uncovered": uncovered, "failed": failed,
+    # "表格有、图上没找到"只看这次核对到的分组：只核对一个模块文件夹时，不把整份表其他模块都列进来
+    touched = {(row["sheet"], tuple(row["group"])) for _item, row in pairs}
+    uncovered = [row for sheet in sheets for row in sheet.rows if row["values"]
+                 and (row["sheet"], tuple(row["group"])) in touched and (row["sheet"], row["index"]) not in covered]
+    return {"records": records, "unmatched": unmatched, "uncovered": uncovered, "failed": failed, "mismatched": mismatched,
             "skipped_small": small, "no_product_images": empty, "image_count": len(images)}

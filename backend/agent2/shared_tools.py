@@ -218,7 +218,7 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
     if not images:
         return {"error": f"{shown} 里没有找到图片"}
 
-    result = await price_check.run_check(images, sheets, notify)
+    result = await price_check.run_check(images, sheets, notify, base=shown if folder else "")
     records = result["records"]
     problem = [r for r in records if r["status"] != "一致"]
     cards, card_note = await _make_cards(ctx, problem, dict(images), shown, notify)
@@ -231,6 +231,7 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
         "图片": rel, "核对卡片": cards.get(rel, {}).get("id", ""),
         "问题": [{"图上第几个": r["item"]["_pos"], "货号": r["row"]["sku"], "商品": r["row"]["name"],
                   "表格位置": " / ".join([r["row"]["sheet"], *r["row"]["group"]]),
+                  "对应依据": r["item"].get("_basis", ""),
                   "差异": [{"类型": d["kind"], "项目": d["label"], "表格": d["table"], "图上": d["image"] or "没读出来"}
                            for d in r["diffs"]]} for r in items],
     } for rel, items in by_image.items()]
@@ -264,6 +265,7 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
         # checked / counts 给前端卡片摘要用
         "checked": len(records), "counts": {s: sum(r["status"] == s for r in records) for s in price_check.STATUSES},
         "有问题的图片": problem_images[:MAX_REPORTED],
+        "整张图和表格对不上的图片": result.get("mismatched", [])[:MAX_REPORTED],
         "图上有价格但表格里没有的商品": dict(list(not_in_table.items())[:MAX_REPORTED]),
         "表格有价格但没找到图片的商品": dict(list(no_image.items())[:MAX_REPORTED]),
         "表格自身算不通的行": price_check.table_warnings(sheets)[:15],

@@ -92,10 +92,67 @@ class MatchTest(unittest.TestCase):
     def setUp(self):
         self.sheets = price_check.load_table(_xlsx(), "a.xlsx")
 
-    def test_matches_by_name_regardless_of_order(self):
-        items = [_item("拒水防泼面包羽绒", 341, 458, pos=1), _item("火锅羽绒短羽绒服", 399, 271, pos=2)]
-        matched = price_check.match_unit(items, self.sheets)
-        self.assertEqual([matched[0]["sku"], matched[1]["sku"]], ["A2-1", "A1-1"])
+    def test_named_group_is_matched_in_order_even_when_names_differ(self):
+        # 文件名对应到"男子 / 羽绒服TOP榜"：图上第 1 个就是表格第 1 个，名称和价格只用来报差异
+        items = [_item("拒水防泼面包羽绒", 341, 458, pos=1), _item("火锅羽绒短羽绒服", 399, 500, pos=2)]
+        rows, basis = price_check.scope_for(["10-TOP榜/男子/羽绒服.png"], self.sheets)
+        self.assertTrue(price_check.single_group(rows))
+        pairs, extra, reason = price_check.match_in_order(items, rows, basis)
+        self.assertEqual(([row["sku"] for _it, row in pairs], extra, reason), (["A1-1", "A2-1"], [], ""))
+        self.assertIn("按顺序第 1 个", items[0]["_basis"])
+
+    def test_group_names_alone_do_not_map_when_the_sheet_is_unknown(self):
+        # "品类热榜"不在表格里：只靠"男子"这一级碰巧同名，不能按名字对应
+        self.assertEqual(price_check.scope_for(["6-品类热榜/男子/羽绒服.png"], self.sheets), ([], ""))
+        # 只有一张工作表（例如表格截图，表名对不上文件夹）时，分组名照样能对应
+        single = [s for s in self.sheets if s.name == "TOP榜单"]
+        rows, _basis = price_check.scope_for(["随便什么模块/男子/羽绒服.png"], single)
+        self.assertEqual([r["sku"] for r in rows], ["A1-1", "A2-1"])
+
+    def test_module_name_in_the_folder_the_user_pointed_at_counts(self):
+        # 用户直接给到模块文件夹：图片的相对路径里没有模块名，模块名在给的文件夹路径上
+        rows, _basis = price_check.scope_for(["\\\\server\\活动\\11-新品上市/男-服饰.png"], self.sheets)
+        self.assertEqual([r["sku"] for r in rows], ["D2-1"])
+
+    def test_same_amounts_in_another_group_do_not_pull_the_item_away(self):
+        # 线上出过的错：女-服饰 图上"直筒宽松卫裤"的立省、到手价和儿童组某一行碰巧一样，被对到了儿童组
+        sheets = price_check.load_table(_xlsx(), "a.xlsx")
+        item = _item("直筒宽松卫裤", 368, 431, image="11-新品上市/男-服饰.png")  # 金额等于 儿童/羽绒服TOP榜 的 C2-1
+        rows, basis = price_check.scope_for([item["_image"]], sheets)
+        pairs, _extra, _reason = price_check.match_in_order([item], rows, basis)
+        self.assertEqual(pairs[0][1]["sku"], "D2-1")  # 新品上市 / 男子 / 服饰
+        status, problems = price_check.judge(item, pairs[0][1], {"price", "save"})
+        self.assertEqual(status, "不一致")
+        self.assertIn("到手价：表格 799，图上 368", problems)
+
+    def test_unpriced_lead_row_does_not_shift_the_order(self):
+        # 表格这一组第 1 行是不带价格的主推款，图上是大图、识别时不算商品：图上第 1 个对的是表格第 2 行
+        sheet = price_check._sheet_rows("新品上市", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"],
+                                                # 价格单元格里填的是素材路径（真实表格里出现过）：当作没填
+                                                ["女子", "服饰", "H0-1", "珑壳羽绒服", "\\\\192.168.2.136\\media\\童", ""],
+                                                ["", "", "H1-1", "草莓熊联名卫衣", 90, 359],
+                                                ["", "", "H2-1", "健身系列套头卫衣", 70, 279],
+                                                ["", "", "H3-1", "直筒宽松卫裤", 80, 319]])
+        items = [_item("草莓熊联名卫衣", 359, 90, image="11-新品上市/女-服饰.png", pos=1),
+                 _item("健身系列套头卫衣", 279, 70, image="11-新品上市/女-服饰.png", pos=2),
+                 _item("直筒宽松卫裤", 319, 80, image="11-新品上市/女-服饰.png", pos=3)]
+        rows, basis = price_check.scope_for(["11-新品上市/女-服饰.png"], [sheet])
+        pairs, extra, reason = price_check.match_in_order(items, rows, basis)
+        self.assertEqual(([row["sku"] for _it, row in pairs], extra, reason), (["H1-1", "H2-1", "H3-1"], [], ""))
+
+    def test_whole_image_that_does_not_fit_its_group_is_reported_once(self):
+        sheet = price_check._sheet_rows("限时闪购", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"]] + [
+            ["限时闪购" if i == 0 else "", i + 1, f"F{i}-1", f"闪购商品{i}", 100 + i, 300 + i] for i in range(4)])
+        rows, basis = price_check.scope_for(["8-限时闪购/1104/限时闪购_02.jpg"], [sheet])
+        old = [_item(f"别的活动{i}", 900 + i, 10 + i, image="8-限时闪购/1104/限时闪购_02.jpg", pos=i + 1) for i in range(4)]
+        pairs, extra, reason = price_check.match_in_order(old, rows, basis)
+        self.assertEqual((pairs, len(extra)), ([], 4))
+        self.assertIn("可能是旧版本", reason)
+        # 切片图：同一组的 _01、_02 接起来按顺序对应，第二张从表格第 3 个接着数
+        first = [_item(f"闪购商品{i}", 300 + i, 100 + i, image="8-限时闪购/限时闪购_01.jpg", pos=i + 1) for i in range(2)]
+        second = [_item(f"闪购商品{i}", 300 + i, 100 + i, image="8-限时闪购/限时闪购_02.jpg", pos=i - 1) for i in range(2, 4)]
+        pairs, _extra, reason = price_check.match_in_order(first + second, rows, basis)
+        self.assertEqual([row["sku"] for _it, row in pairs], ["F0-1", "F1-1", "F2-1", "F3-1"])
 
     def test_same_name_in_two_groups_uses_folder_hint_and_price(self):
         girl = price_check.match_unit([_item("防泼水短羽绒服", 799, 200, image="x/女子/1.jpg")], self.sheets)
@@ -184,7 +241,8 @@ class RunCheckTest(unittest.TestCase):
         self.assertEqual(verified, [])  # 重新读图仍是"防暴风"，不需要再二选一，直接保留提示
         self.assertEqual([it["_image"] for it in result["unmatched"]], ["1104/旧.jpg"])
         self.assertEqual((result["skipped_small"], result["no_product_images"], len(result["failed"])), (1, ["标题.jpg"], 1))
-        self.assertEqual(sorted(r["sku"] for r in result["uncovered"]), ["C1-1", "D2-1"])
+        # 核对到的几组（男子羽绒服、男子外套、儿童羽绒服）都找到了图；女子组、新品上市这次没核对，不算"没找到图"
+        self.assertEqual(result["uncovered"], [])
         wrong = next(r for r in result["records"] if r["status"] == "不一致")
         self.assertEqual(wrong["diffs"], [{"kind": "价格", "label": "立省", "table": "458", "image": "271"}])
 
@@ -492,7 +550,8 @@ class AgentToolsTest(unittest.TestCase):
             (found,) = result["有问题的图片"]
             self.assertEqual(found["图片"], "男子/羽绒服.png")
             self.assertEqual(found["问题"][0]["差异"], [{"类型": "价格", "项目": "立省", "表格": "500", "图上": "271"}])
-            self.assertEqual(sum(len(v) for v in result["表格有价格但没找到图片的商品"].values()), 5)
+            # 只核对了"男子 / 羽绒服TOP榜"这一组：只列这一组里没找到图的（A2-1），不把表格其他模块都列进来
+            self.assertEqual(result["表格有价格但没找到图片的商品"], {"TOP榜单 / 男子 / 羽绒服TOP榜": ["A2-1 拒水防泼 面包羽绒"]})
             self.assertNotIn("files", result)  # 不再生成 Excel 对比表
             (card,) = result["images"]
             self.assertEqual(card["id"], found["核对卡片"])

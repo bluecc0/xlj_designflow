@@ -92,7 +92,9 @@ def _layout(panel: _Panel, title: str, issues: list[dict]) -> None:
         if issue.get("seen"):
             panel.text("图上名称：" + issue["seen"], 15, MUTED, gap=2)
         if issue.get("where"):
-            panel.text("表格位置：" + issue["where"], 15, MUTED, gap=8)
+            panel.text("表格位置：" + issue["where"], 15, MUTED, gap=2)
+        if issue.get("basis"):
+            panel.text("对应依据：" + issue["basis"], 15, MUTED, gap=8)
         panel.compare("项目", "表格", "图上", MUTED)
         for diff in issue["diffs"]:
             panel.compare(diff["label"], diff["table"], diff["image"] or "没读出来", COLORS[diff["kind"]])
@@ -133,6 +135,6 @@ def issues_for(records: list[dict]) -> list[dict]:
         same = [(FIELD_LABELS[f], v) for f, v in row["values"].items()
                 if FIELD_LABELS[f] not in differing and f in item["_shown"]]
         out.append({"pos": item["_pos"], "sku": row["sku"], "name": row["name"],
-                    "seen": str(item.get("name") or "").replace("\n", " "),
+                    "seen": str(item.get("name") or "").replace("\n", " "), "basis": item.get("_basis", ""),
                     "where": " / ".join([row["sheet"], *row["group"]]), "diffs": r["diffs"], "same": same})
     return out
