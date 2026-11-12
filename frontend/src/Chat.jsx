@@ -1727,7 +1727,10 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                 {m.thinking ? (
                   <ThinkingBlock text={m.thinking}/>
                 ) : null}
+                {/* 只发了表格没写字：只显示表格附件，不画空白气泡 */}
+                {m.who === 'user' && !m.text && Array.isArray(m.attachments) && m.attachments.length ? null : (
                 <CopyableTextBubble who={m.who} text={m.who === 'ai' && (m.feedbackError || m.meta === '错误' || /^(Agent .*失败|错误[:：]|解析错误|下载失败|设置头像失败)/.test(m.text || '')) ? formatAiImageError(m.feedbackError || m.text) : m.text} markdown/>
+                )}
                 {/* Agent CONFIRM 阶段的创意方案卡片 */}
                 {m.brief || m.contract ? (
                   <BriefCard brief={m.brief} contract={m.contract} completeness={m.completeness}/>
@@ -2408,7 +2411,9 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
     const skillInvocation = parseSkillInvocation(message);
     const sendMessage = message;
     const executionMessage = skillInvocation.skill ? skillInvocation.prompt : message;
-    if (!executionMessage || isLoading) return;
+    const tablesToSend = agentEnabled ? files.filter(function(item) { return item.kind === 'agent-table'; }) : [];
+    // Agent 模式下可以只发表格不写字（先发表格、下一句再说要做什么）
+    if ((!executionMessage && !tablesToSend.length) || isLoading) return;
     if (refImages.some(function(item) { return item && item.pending; })) {
       window.dfToast('参考图还在加载，请稍候再发送');
       return;
@@ -2423,7 +2428,6 @@ const Composer = ({ onSend, onStop, onParseTable, onSmartDistribute, isLoading, 
       return;
     }
     const imagesToSend = [...refImages];
-    const tablesToSend = files.filter(function(item) { return item.kind === 'agent-table'; });
     const normalizedBatchCount = normalizeBatchCount(aiBatchCount);
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
     onSend(sendMessage, imagesToSend, {
@@ -5719,7 +5723,8 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
   }, [currentAiChatId, loadAiChatHistory, onComposeComplete]);
 
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
-    if (!text.trim() || isLoading) return;
+    const tablesOnly = agentEnabled && (aiOptions.tables || []).length > 0;
+    if ((!text.trim() && !tablesOnly) || isLoading) return;
     const activeSkill = String(aiOptions.skill || '').trim();
     const executionText = String(aiOptions.skillPrompt || text).trim();
     setLastSubmittedMessage(text);

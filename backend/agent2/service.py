@@ -40,6 +40,12 @@ def sse(event: dict) -> str:
 TABLE_SUFFIXES = {".xlsx", ".xlsm", ".csv"}
 
 
+def slim_table(data: bytes, filename: str) -> bytes:
+    """表格保存前去掉嵌入图片和外部链接缓存（核对用不到，带着动辄上百 MB）。耗 CPU，调用方放到工作线程里跑。"""
+    from ..price_check import slim_xlsx
+    return slim_xlsx(data, filename)
+
+
 def save_upload(user: dict, session_id: str, data: bytes, filename: str) -> dict:
     suffix = Path(filename or "").suffix.lower() or ".png"
     kind = "table" if suffix in TABLE_SUFFIXES else "upload"
@@ -49,9 +55,6 @@ def save_upload(user: dict, session_id: str, data: bytes, filename: str) -> dict
     folder = settings.output_path / "agent2-uploads" / safe_user / session_id
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{uuid.uuid4().hex}{suffix}"
-    if kind == "table":
-        from ..price_check import slim_xlsx  # 表格里嵌的图片不保存
-        data = slim_xlsx(data, filename)
     path.write_bytes(data)
     url = "/output/" + path.relative_to(settings.output_path).as_posix()
     return store.create_artifact(session_id=session_id, user_id=user["id"], kind=kind, url=url,

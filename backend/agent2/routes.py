@@ -18,6 +18,7 @@ MAX_UPLOADS = 9  # 与输入框参考图上限一致（换装最多 1 张人物 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_TABLE_BYTES = 200 * 1024 * 1024  # 铺品表常嵌着大量商品图，文件很大；保存时会去掉图片
 MAX_TABLE_UPLOADS = 3
+_table_slots = asyncio.Semaphore(1)  # 同时处理的大表格数
 
 
 def _is_image(data: bytes) -> bool:
@@ -106,6 +107,9 @@ async def send_message(request: Request, session_id: str, message: str = Form(""
         if len(data) > MAX_TABLE_BYTES:
             raise HTTPException(400, f"单个表格不能超过 {MAX_TABLE_BYTES // 1024 // 1024}MB")
         if data:
+            # 解压、去掉嵌入图片、试解析都很耗 CPU：放到工作线程，并且同一时间只处理一个，不卡住其他请求
+            async with _table_slots:
+                data = await asyncio.to_thread(service.slim_table, data, upload.filename or "")
             saved.append((data, upload.filename or ""))
     characters = await asyncio.to_thread(service.register_characters, user, session_id, cards)
     # 校验通过后再占用会话，避免报错留下一直"运行中"的轮次
@@ -113,7 +117,7 @@ async def send_message(request: Request, session_id: str, message: str = Form(""
         turn = service.claim_turn(user, session, text)
     except service.TurnBusy as exc:
         raise HTTPException(409, str(exc))
-    uploads = [service.save_upload(user, session_id, data, name) for data, name in saved]
+    uploads = [await asyncio.to_thread(service.save_upload, user, session_id, data, name) for data, name in saved]
     return _stream(service.start_turn(user, session, text, uploads, skill=skill.strip(), turn=turn,
                                             characters=characters))
 

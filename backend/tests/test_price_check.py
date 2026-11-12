@@ -4,6 +4,7 @@ import ast
 import asyncio
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -334,6 +335,48 @@ class SharedFoldersTest(unittest.TestCase):
         _shown, files, more = shared_folders.find_files(self.user, "素材库/temp/改价", shared_folders.IMAGE_SUFFIXES, 100)
         self.assertEqual((len(files), more), (7, False))
 
+    def _links_setup(self):
+        outside = Path(self.tmp.name) / "outside"
+        (outside / "deep").mkdir(parents=True)
+        (outside / "secret.csv").write_text("机密", encoding="utf-8")
+        Image.new("RGB", (300, 300)).save(outside / "deep" / "secret.png")
+        base = self.root / "temp" / "改价"
+        return outside, base
+
+    def test_links_pointing_outside_are_never_listed_or_read(self):
+        outside, base = self._links_setup()
+        (base / "外部文件.csv").symlink_to(outside / "secret.csv")
+        (base / "外部目录").symlink_to(outside, target_is_directory=True)
+        self._assert_nothing_outside(base)
+
+    @unittest.skipUnless(os.name == "nt", "目录联接（junction）只有 Windows 有")
+    def test_windows_junction_pointing_outside_is_skipped(self):
+        import _winapi
+        outside, base = self._links_setup()
+        _winapi.CreateJunction(str(outside), str(base / "外部联接"))
+        self._assert_nothing_outside(base)
+
+    def _assert_nothing_outside(self, base):
+        for suffixes in (shared_folders.TABLE_SUFFIXES, shared_folders.IMAGE_SUFFIXES):
+            _shown, found, _more = shared_folders.find_files(self.user, "素材库/temp/改价", suffixes, 100)
+            for rel, path in found:
+                self.assertTrue(path.resolve().is_relative_to(self.root.resolve()), rel)
+                self.assertNotIn("secret", rel)
+        listed = json.dumps(shared_folders.list_folder(self.user, "素材库/temp/改价"), ensure_ascii=False)
+        self.assertNotIn("secret", listed)
+        self.assertNotIn("deep", listed)
+
+    def test_links_inside_the_root_still_work_and_loops_stop(self):
+        base = self.root / "temp" / "改价"
+        (base / "男装快捷方式").symlink_to(base / "TOP榜" / "男子", target_is_directory=True)
+        (base / "TOP榜" / "绕回去").symlink_to(base, target_is_directory=True)  # 链接循环
+        _shown, found, _more = shared_folders.find_files(self.user, "素材库/temp/改价", shared_folders.IMAGE_SUFFIXES, 100)
+        names = [rel for rel, _p in found]
+        # 同一个实际目录只进一次：男子文件夹不管经过哪条路都只出现一次，也不会因为循环停不下来
+        self.assertEqual(sum(rel.endswith("羽绒服.PNG") for rel in names), 1)
+        self.assertEqual(len(names), 7)
+        shared_folders.list_folder(self.user, "素材库/temp/改价")
+
     def test_no_config_means_no_access(self):
         with patch.object(shared_folders.settings, "shared_folders_path", Path(self.tmp.name) / "none.json"):
             with self.assertRaises(shared_folders.SharedFolderError):
@@ -511,3 +554,61 @@ class TableImageTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TableUploadRouteTest(unittest.TestCase):
+    """只带表格、不写文字也能发；表格处理在工作线程里跑，不卡住其他请求。"""
+
+    def test_table_only_message_is_processed_off_the_event_loop(self):
+        import threading
+        import time as time_module
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from backend import job_store
+        from backend.agent2 import routes, service, store
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(job_store, "_DB_PATH", Path(tmp) / "a2.db"), \
+                patch.object(service.settings, "output_path", Path(tmp) / "out"):
+            job_store.init_db()
+            store.init_tables()
+            user = {"id": "u1", "username": "tester"}
+            session = store.create_session("u1")
+            upload = MagicMock()
+            upload.filename = "铺品.xlsx"
+
+            async def read(n=-1):
+                return _xlsx()
+            upload.read = read
+            threads, started = [], []
+
+            def slow_slim(data, filename):  # 模拟大表格处理很慢
+                threads.append(threading.current_thread() is threading.main_thread())
+                time_module.sleep(0.3)
+                return data
+
+            async def fake_start_turn(user_, session_, text, uploads, **kwargs):
+                started.append((text, [(u["kind"], u["label"]) for u in uploads]))
+                yield "data: {}\n\n"
+
+            async def scenario():
+                ticks = 0
+
+                async def other_requests():  # 其他用户的请求：表格处理期间要能照常执行
+                    nonlocal ticks
+                    for _ in range(5):
+                        await asyncio.sleep(0.05)
+                        ticks += 1
+
+                response, _ = await asyncio.gather(
+                    routes.send_message(SimpleNamespace(state=SimpleNamespace(user=user)), session["id"],
+                                        message="", skill="", images=[], files=[upload], character_ids=""),
+                    other_requests())
+                async for _chunk in response.body_iterator:
+                    pass
+                return ticks
+
+            with patch.object(service, "slim_table", slow_slim), patch.object(service, "start_turn", fake_start_turn):
+                ticks = asyncio.run(scenario())
+            self.assertEqual(threads, [False])           # 表格处理不在主线程（事件循环）里
+            self.assertEqual(ticks, 5)                   # 处理期间其他协程照常运行
+            self.assertEqual(started, [("", [("table", "铺品.xlsx")])])  # 没有文字也发出去了

@@ -7136,7 +7136,7 @@ const ChatReturned = ({
     }
   }, m.thinking ? /*#__PURE__*/React.createElement(ThinkingBlock, {
     text: m.thinking
-  }) : null, /*#__PURE__*/React.createElement(CopyableTextBubble, {
+  }) : null, m.who === 'user' && !m.text && Array.isArray(m.attachments) && m.attachments.length ? null : /*#__PURE__*/React.createElement(CopyableTextBubble, {
     who: m.who,
     text: m.who === 'ai' && (m.feedbackError || m.meta === '错误' || /^(Agent .*失败|错误[:：]|解析错误|下载失败|设置头像失败)/.test(m.text || '')) ? formatAiImageError(m.feedbackError || m.text) : m.text,
     markdown: true
@@ -8007,7 +8007,11 @@ const Composer = ({
     const skillInvocation = parseSkillInvocation(message);
     const sendMessage = message;
     const executionMessage = skillInvocation.skill ? skillInvocation.prompt : message;
-    if (!executionMessage || isLoading) return;
+    const tablesToSend = agentEnabled ? files.filter(function (item) {
+      return item.kind === 'agent-table';
+    }) : [];
+    // Agent 模式下可以只发表格不写字（先发表格、下一句再说要做什么）
+    if (!executionMessage && !tablesToSend.length || isLoading) return;
     if (refImages.some(function (item) {
       return item && item.pending;
     })) {
@@ -8030,9 +8034,6 @@ const Composer = ({
       return;
     }
     const imagesToSend = [...refImages];
-    const tablesToSend = files.filter(function (item) {
-      return item.kind === 'agent-table';
-    });
     const normalizedBatchCount = normalizeBatchCount(aiBatchCount);
     // 先发消息再清空输入，避免 isLoading=true 时消息丢失
     onSend(sendMessage, imagesToSend, {
@@ -11911,7 +11912,8 @@ const Chat = ({
     }
   }, [currentAiChatId, loadAiChatHistory, onComposeComplete]);
   const handleSend = React.useCallback(async (text, refImages = [], aiOptions = {}) => {
-    if (!text.trim() || isLoading) return;
+    const tablesOnly = agentEnabled && (aiOptions.tables || []).length > 0;
+    if (!text.trim() && !tablesOnly || isLoading) return;
     const activeSkill = String(aiOptions.skill || '').trim();
     const executionText = String(aiOptions.skillPrompt || text).trim();
     setLastSubmittedMessage(text);

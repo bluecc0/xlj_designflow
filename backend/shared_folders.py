@@ -184,17 +184,48 @@ def _is_junk(name: str) -> bool:
     return name.lower() in _JUNK or name.startswith((".", "~$"))
 
 
-def _scan(folder: Path) -> tuple[list[os.DirEntry], list[os.DirEntry]]:
-    items = sorted((e for e in os.scandir(folder) if not _is_junk(e.name)), key=lambda e: natural_key(e.name))
-    return ([e for e in items if e.is_dir(follow_symlinks=False)],
-            [e for e in items if not e.is_dir(follow_symlinks=False)])
+def _inside(root_real: Path, path: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(root_real)
+    except (OSError, RuntimeError):  # 解析不了（断链、链接循环）一律当作越界
+        return False
+
+
+def _scan(folder: Path, root_real: Path, seen: set[Path]) -> tuple[list[os.DirEntry], list[os.DirEntry]]:
+    """列出一个文件夹里的子文件夹和文件，只保留实际位置仍在白名单根目录里的。
+    符号链接、Windows 目录联接（junction）指向根目录外面的直接丢掉；
+    seen 记录已经进过的目录（按实际位置），链接绕回来的不再进，防止死循环。"""
+    subdirs, files = [], []
+    for entry in sorted((e for e in os.scandir(folder) if not _is_junk(e.name)), key=lambda e: natural_key(e.name)):
+        linked = entry.is_symlink() or getattr(entry, "is_junction", lambda: False)()
+        try:
+            is_dir = entry.is_dir()
+        except OSError:
+            continue
+        if is_dir:
+            try:
+                real = Path(entry.path).resolve()
+            except (OSError, RuntimeError):
+                continue
+            if real.is_relative_to(root_real) and real not in seen:
+                seen.add(real)
+                subdirs.append(entry)
+        elif not linked or _inside(root_real, Path(entry.path)):
+            files.append(entry)
+    return subdirs, files
+
+
+def _walk_start(root: SharedRoot, path: Path) -> tuple[Path, set[Path]]:
+    root_real = root.path.resolve()
+    return root_real, {path.resolve()}
 
 
 def list_folder(user: dict, raw: str, recursive: bool = True) -> dict:
     """按文件夹列出图片和表格（不限层级）。图片带宽高，其它文件（PSD、日志等）只按类型计数。"""
-    _root, path, shown = resolve(user, raw)
+    root, path, shown = resolve(user, raw)
     if not path.is_dir():
         raise SharedFolderError(f"找不到文件夹：{shown}")
+    root_real, seen = _walk_start(root, path)
     folders: list[dict] = []
     sized: list[tuple[dict, int, str]] = []
     listed = 0
@@ -203,7 +234,7 @@ def list_folder(user: dict, raw: str, recursive: bool = True) -> dict:
     def scan(folder: Path, rel: str):
         nonlocal listed, truncated
         try:
-            subdirs, files = _scan(folder)
+            subdirs, files = _scan(folder, root_real, seen)
         except OSError as exc:
             if not rel:
                 raise SharedFolderError(f"读取文件夹失败：{exc}") from exc
@@ -247,16 +278,17 @@ def list_folder(user: dict, raw: str, recursive: bool = True) -> dict:
 
 def find_files(user: dict, raw: str, suffixes: set[str], limit: int) -> tuple[str, list[tuple[str, Path]], bool]:
     """递归找出文件夹里指定类型的文件，返回 (显示用路径, [(相对路径, 实际路径)], 是否超出上限)。"""
-    _root, path, shown = resolve(user, raw)
+    root, path, shown = resolve(user, raw)
     if not path.is_dir():
         raise SharedFolderError(f"找不到文件夹：{shown}")
+    root_real, seen = _walk_start(root, path)
     found: list[tuple[str, Path]] = []
     truncated = False
 
     def scan(folder: Path, rel: str):
         nonlocal truncated
         try:
-            subdirs, files = _scan(folder)
+            subdirs, files = _scan(folder, root_real, seen)
         except OSError:
             return
         for item in files:
