@@ -140,6 +140,31 @@ class MatchTest(unittest.TestCase):
         pairs, extra, whole = price_check.match_group([items], rows, basis)
         self.assertEqual(([row["sku"] for _it, row in pairs], extra, whole), (["H1-1", "H2-1", "H3-1"], [], []))
 
+    def test_kv_slot_without_price_lines_up_with_the_kv_row(self):
+        # 线上的童鞋图：表格第 1 行是 KV 位（纵横 LOW户外鞋，没价格），图上 KV 大图（暖行3）也没价格。
+        # 识别时把 KV 大图算成了第 1 个商品，不能因此让后面的错位：有价格的对有价格的，没价格的对没价格的
+        sheet = price_check._sheet_rows("表格截图", [["模块", "序号", "SKU", "商品名称", "吊牌价", "立省", "到手价"],
+                                                ["儿童", "鞋履", "YKEW032-14", "纵横 LOW户外鞋", "", "", ""],
+                                                ["", "", "YKFW202-5", "织雀2跑步鞋", 499, 150, 349],
+                                                ["", "", "YKFW156-7", "步态引导跑鞋", 599, 180, 419],
+                                                ["", "", "YKCW180-34", "驭雪休闲鞋", 399, 80, 319]])
+        image = "11-新品上市/童-鞋履.png"
+        items = [_item("暖行3 中帮长绒棉鞋", None, None, image=image, pos=1),
+                 _item("赤兔9 PRO跑步鞋", 615, 84, image=image, pos=2),
+                 _item("启悦3加绒休闲鞋", 319, 80, image=image, pos=3),
+                 _item("软糖轻暖绒棉鞋", 319, 80, image=image, pos=4)]
+        rows, basis = price_check.scope_for([image], [sheet])
+        pairs, _extra, whole = price_check.match_group([items], rows, basis)
+        self.assertEqual(whole, [])
+        self.assertEqual([(it["name"], row["sku"]) for it, row in pairs],
+                         [("暖行3 中帮长绒棉鞋", "YKEW032-14"), ("赤兔9 PRO跑步鞋", "YKFW202-5"),
+                          ("启悦3加绒休闲鞋", "YKFW156-7"), ("软糖轻暖绒棉鞋", "YKCW180-34")])
+        status = [price_check.judge(it, row, {"price", "save"})[0] for it, row in pairs]
+        self.assertEqual(status, ["文案待确认", "不一致", "不一致", "文案待确认"])
+        # 识别时没把 KV 大图算成商品，结果一样
+        pairs, _extra, _whole = price_check.match_group([items[1:]], rows, basis)
+        self.assertEqual([row["sku"] for _it, row in pairs], ["YKFW202-5", "YKFW156-7", "YKCW180-34"])
+
     def test_whole_image_that_does_not_fit_its_group_is_reported_once(self):
         sheet = price_check._sheet_rows("限时闪购", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"]] + [
             ["限时闪购" if i == 0 else "", i + 1, f"F{i}-1", f"闪购商品{i}", 100 + i, 300 + i] for i in range(4)])

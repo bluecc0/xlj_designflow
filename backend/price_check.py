@@ -590,49 +590,55 @@ def _strength(items: list[dict], seq: list[dict]) -> float:
     return round(sum(s for it, row in zip(items, seq) if (s := _scoped_score(it, row)) is not None), 6)
 
 
+def _has_price(item: dict) -> bool:
+    return any(item.get(f) not in (None, "") for f in ("price", "save", "tag_price"))
+
+
 def match_group(images: list[list[dict]], rows: list[dict], basis: str) -> tuple[list[tuple[dict, dict]], list[dict], list[dict]]:
-    """已经确定是表格里同一组的几张图（同一文件夹，按文件名顺序）：图上第 1 个对表格第 1 个，依次往下。
-    名称和价格不参与决定对应谁，只用来报差异。返回 (配对, 多出来的商品, 整张对不上的图)。
+    """已经确定是表格里同一组的几张图（同一文件夹，按文件名顺序），按顺序对应。名称和价格只用来报差异。
+    返回 (配对, 多出来的商品, 整张对不上的图)。
+
+    有价格的对有价格的、没价格的对没价格的，各自按顺序：图上第 1 个带价格的商品对表格这一组第 1 个有价格的行。
+    组里的 KV 位（主推款大图）在表格和图上都不带价格，所以识别时不管有没有把 KV 大图算成商品，都不会让后面错位。
 
     同一文件夹里的几张图可能是切片或单品卡片（要接着上一张往下数），也可能是同组商品的几张完整海报、
-    修改版、不同尺寸（每张都从这一组第 1 个开始）。每张图两种起点都试，用匹配强度高的那种；
-    强度一样时，图上商品比这一组少的当作切片或单品卡片接着数，否则当作完整的一张从头数。
-    表格里没价格的行（组里的主推款，图上是大图不带价格）识别时常常不算商品，所以还分"所有行""只数有价格的行"两种数法。"""
-    priced = [r for r in rows if r["values"]]
-    seqs = [rows] + ([priced] if priced and len(priced) < len(rows) else [])
+    修改版、不同尺寸（每张都从这一组开头数）。每张图两种起点都试，用匹配强度高的那种；
+    强度一样时，带价格的商品比这一组少的当作切片或单品卡片接着数，否则当作完整的一张从头数。"""
+    priced_rows = [r for r in rows if r["values"]]
+    plain_rows = [r for r in rows if not r["values"]]
     pairs, extra, mismatched = [], [], []
-    last: dict | None = None  # 上一张图用到的最后一行
+    used = (0, 0)  # 前面的图已经用到了第几个有价格的行、第几个没价格的行
     for items in images:
+        priced = [it for it in items if _has_price(it)]
+        plain = [it for it in items if not _has_price(it)]
         options = []
-        for seq in seqs:
-            ids = [id(r) for r in seq]
-            starts = {0} | ({ids.index(id(last)) + 1} if last is not None and id(last) in ids else set())
-            for start in starts:
-                part = seq[start:]
-                if not part:
-                    continue
-                go_on = start > 0
-                prefer_go_on = len(items) < len(seq)  # 比这一组少：像切片或单品卡片
-                options.append((_strength(items, part), go_on == prefer_go_on, seq is rows, start, part))
+        for go_on, (sp, sn) in ((False, (0, 0)), (True, used)):
+            if go_on and used == (0, 0):
+                continue
+            if priced and not priced_rows[sp:]:
+                continue
+            strength = _strength(priced, priced_rows[sp:]) + _strength(plain, plain_rows[sn:])
+            options.append((strength, go_on == (len(priced) < len(priced_rows)), sp, sn))
         if not options:
-            extra.extend(items)
+            extra.extend(priced)
             continue
         # 先比匹配强度（名称一致、价格一致的优先）；强度完全相同、缺少依据时，才按"像切片就接着数"的默认规则
-        _strong, _pref, _all, _start, part = max(options, key=lambda o: o[:3])
-        agree = _agree(items, part)
-        got = list(zip(items, part))
-        if len(got) >= 3 and agree < len(got) * MISMATCH_IMAGE_BELOW:
+        _strong, _pref, sp, sn = max(options, key=lambda o: o[:2])
+        got_priced = list(zip(priced, priced_rows[sp:]))
+        got_plain = list(zip(plain, plain_rows[sn:]))
+        agree = _agree(priced, priced_rows[sp:])
+        if len(got_priced) >= 3 and agree < len(got_priced) * MISMATCH_IMAGE_BELOW:
             group = " / ".join([rows[0]["sheet"], *rows[0]["group"]])
             mismatched.append({"images": list(dict.fromkeys(it["_image"] for it in items)),
                                "group": (rows[0]["sheet"], tuple(rows[0]["group"])),
-                               "reason": f"按名字对应到「{group}」，但按顺序对下来 {len(got)} 个商品里只有 {agree} 个的名称或价格对得上，"
-                                         "可能是旧版本、放错文件夹，或者表格这一组不是这些商品"})
+                               "reason": f"按名字对应到「{group}」，但按顺序对下来 {len(got_priced)} 个带价格的商品里"
+                                         f"只有 {agree} 个的名称或价格对得上，可能是旧版本、放错文件夹，或者表格这一组不是这些商品"})
             continue
-        for item, row in got:
+        for item, row in got_priced + got_plain:
             item["_basis"] = f"{basis}，对应表格这一组第 {rows.index(row) + 1} 行"
-        pairs.extend(got)
-        extra.extend(items[len(got):])
-        last = got[-1][1] if got else last
+        pairs.extend(sorted(got_priced + got_plain, key=lambda p: p[0]["_pos"]))
+        extra.extend(priced[len(got_priced):])  # 以表格为准：图上多出来、表格没有的商品不报，只留作记录
+        used = (sp + len(got_priced), sn + len(got_plain))
     return pairs, extra, mismatched
 
 
