@@ -4424,6 +4424,15 @@ const AGENT2_TERMINAL = { 'turn.finished': true, 'turn.failed': true, 'turn.canc
 const agent2Sleep = function(ms) { return new Promise(function(resolve) { setTimeout(resolve, ms); }); };
 const agent2AbsUrl = function(u) { return u && u.charAt(0) === '/' ? ((window.API_BASE || window.location.origin) + u) : (u || ''); };
 
+// 用户消息里随附的上传：图片显示缩略图，表格显示文件名标签
+const agent2UploadDisplay = function(uploads) {
+  var list = Array.isArray(uploads) ? uploads : [];
+  return {
+    refPreviews: list.filter(function(u) { return u.kind !== 'table'; }).map(function(u) { return agent2AbsUrl(u.url); }),
+    attachments: list.filter(function(u) { return u.kind === 'table'; }).map(function(u) { return u.name || '表格'; }),
+  };
+};
+
 // 新版 Agent 的事件 → 现有消息格式。实时推送和历史回放共用这一个归约函数。
 const agent2Reduce = function(msgs, ev) {
   var p = (ev && ev.payload) || {};
@@ -4443,8 +4452,8 @@ const agent2Reduce = function(msgs, ev) {
     case 'turn.started':
       return list.concat([{
         who: 'user', text: p.text || '',
-        refPreviews: (p.uploads || []).filter(function(u) { return u.kind !== 'table'; }).map(function(u) { return agent2AbsUrl(u.url); }),
-        attachments: (p.uploads || []).filter(function(u) { return u.kind === 'table'; }).map(function(u) { return u.name || '表格'; }),
+        refPreviews: agent2UploadDisplay(p.uploads).refPreviews,
+        attachments: agent2UploadDisplay(p.uploads).attachments,
         characters: p.characters || [],
       }, thinking]);
     case 'message.delta': {
@@ -4497,7 +4506,7 @@ const agent2Reduce = function(msgs, ev) {
       }]);
     case 'input.answered':
       return list.map(function(m) { return m.a2Ask ? Object.assign({}, m, { choices: [] }) : m; })
-        .concat([{ who: 'user', text: p.answer || '' }, thinking]);
+        .concat([Object.assign({ who: 'user', text: p.answer || '' }, agent2UploadDisplay(p.uploads)), thinking]);
     case 'suggestions': {
       var actions = (p.options || []).map(function(o) { return { label: o, value: o }; });
       var si = lastTextIdx();
@@ -5787,7 +5796,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         var waitingTurnId = agentTurnRef.current.waitingTurnId;
         if (waitingTurnId) {
           agentTurnRef.current.waitingTurnId = '';
-          await window.API.answerAgent2(waitingTurnId, text.trim(), onAgentEvent);
+          await window.API.answerAgent2(waitingTurnId, text.trim(), onAgentEvent, refImages, aiOptions.tables);
         } else {
           sessionId = await ensureAgentSession();
           if (agentStreamRef.current.cursor.sessionId !== sessionId) resetAgentCursor(sessionId);

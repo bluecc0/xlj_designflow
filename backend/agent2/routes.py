@@ -77,18 +77,11 @@ def delete_session(request: Request, session_id: str):
     return {"ok": True}
 
 
-@router.post("/sessions/{session_id}/messages")
-async def send_message(request: Request, session_id: str, message: str = Form(""), skill: str = Form(""),
-                       images: list[UploadFile] = File(default=[]), files: list[UploadFile] = File(default=[]),
-                       character_ids: str = Form("")):
-    user, session = _session(request, session_id)
-    text = message.strip()
-    cards = resolve_cards(user, character_ids)
-    if not text and not images and not files:
-        raise HTTPException(400, "消息不能为空")
+async def _read_uploads(images: list[UploadFile], files: list[UploadFile]) -> list[tuple[bytes, str]]:
+    """校验并读出随消息上传的图片和表格，返回 [(内容, 文件名)]。发消息和回答提问共用。"""
     if len(images or []) > MAX_UPLOADS:
         raise HTTPException(400, f"一次最多上传 {MAX_UPLOADS} 张图片")
-    saved = []
+    saved: list[tuple[bytes, str]] = []
     for upload in images or []:
         data = await upload.read(MAX_UPLOAD_BYTES + 1)
         if len(data) > MAX_UPLOAD_BYTES:
@@ -111,6 +104,19 @@ async def send_message(request: Request, session_id: str, message: str = Form(""
             async with _table_slots:
                 data = await asyncio.to_thread(service.slim_table, data, upload.filename or "")
             saved.append((data, upload.filename or ""))
+    return saved
+
+
+@router.post("/sessions/{session_id}/messages")
+async def send_message(request: Request, session_id: str, message: str = Form(""), skill: str = Form(""),
+                       images: list[UploadFile] = File(default=[]), files: list[UploadFile] = File(default=[]),
+                       character_ids: str = Form("")):
+    user, session = _session(request, session_id)
+    text = message.strip()
+    cards = resolve_cards(user, character_ids)
+    if not text and not images and not files:
+        raise HTTPException(400, "消息不能为空")
+    saved = await _read_uploads(images, files)
     characters = await asyncio.to_thread(service.register_characters, user, session_id, cards)
     # 校验通过后再占用会话，避免报错留下一直"运行中"的轮次
     try:
@@ -123,15 +129,22 @@ async def send_message(request: Request, session_id: str, message: str = Form(""
 
 
 @router.post("/turns/{turn_id}/answer")
-async def answer(request: Request, turn_id: str, answer: str = Form(...)):
+async def answer(request: Request, turn_id: str, answer: str = Form(""),
+                 images: list[UploadFile] = File(default=[]), files: list[UploadFile] = File(default=[])):
     user = _user(request)
     turn = store.get_turn(turn_id, user["id"])
     if not turn:
         raise HTTPException(404, "轮次不存在")
     _user_, session = _session(request, turn["session_id"])
+    text = answer.strip()
+    if not text and not images and not files:
+        raise HTTPException(400, "回答不能为空")
+    # 回答时也可以附图片或表格（例如 Agent 问"请提供铺品表"）：先校验，通过后再占用这一轮
+    saved = await _read_uploads(images, files)
     if not store.claim_answer(turn_id, user["id"]):
         raise HTTPException(409, "这一轮没有在等待回答")
-    return _stream(service.resume_turn(user, session, turn, answer.strip(), claimed=True))
+    uploads = [await asyncio.to_thread(service.save_upload, user, session["id"], data, name) for data, name in saved]
+    return _stream(service.resume_turn(user, session, turn, text, claimed=True, uploads=uploads))
 
 
 @router.post("/turns/{turn_id}/cancel")

@@ -612,3 +612,85 @@ class TableUploadRouteTest(unittest.TestCase):
             self.assertEqual(threads, [False])           # 表格处理不在主线程（事件循环）里
             self.assertEqual(ticks, 5)                   # 处理期间其他协程照常运行
             self.assertEqual(started, [("", [("table", "铺品.xlsx")])])  # 没有文字也发出去了
+
+
+class AnswerWithAttachmentsTest(unittest.TestCase):
+    """Agent 在等用户回答（例如问"请提供铺品表"）时，回答里附的表格要真的送到，不能被丢掉。"""
+
+    def setUp(self):
+        from types import SimpleNamespace
+        from backend import job_store
+        from backend.agent2 import service, store
+        self.tmp = tempfile.TemporaryDirectory()
+        self.patches = [patch.object(job_store, "_DB_PATH", Path(self.tmp.name) / "a2.db"),
+                        patch.object(service.settings, "output_path", Path(self.tmp.name) / "out")]
+        for p in self.patches:
+            p.start()
+        job_store.init_db()
+        store.init_tables()
+        self.store = store
+        self.user = {"id": "u1", "username": "tester"}
+        self.request = SimpleNamespace(state=SimpleNamespace(user=self.user))
+        self.session = store.create_session("u1")
+        # 一轮正在等用户回答 ask_user 的提问
+        turn = store.claim_turn(self.session["id"], "u1", "核对一下价格")
+        store.update_turn(turn["id"], status="waiting_user",
+                          engine_state={"pending": {"call_id": "call_ask", "question": "请提供铺品表"}})
+        self.turn = turn
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def _upload(self, data, name):
+        from unittest.mock import MagicMock
+        upload = MagicMock()
+        upload.filename = name
+
+        async def read(n=-1):
+            return data
+        upload.read = read
+        return upload
+
+    def _answer(self, text, files):
+        from backend.agent2 import routes, service
+        seen = {}
+
+        async def fake_drive(*, messages, **kwargs):
+            seen["tool_reply"] = json.loads(messages[-1]["content"])["answer"]
+            yield "data: {}\n\n"
+
+        async def run():
+            response = await routes.answer(self.request, self.turn["id"], answer=text, images=[], files=files)
+            async for _chunk in response.body_iterator:
+                pass
+
+        with patch.object(service, "_drive", fake_drive), patch.object(service, "slim_table", lambda d, n: d):
+            asyncio.run(run())
+        events = [e for e in self.store.list_events(self.session["id"]) if e["type"] == "input.answered"]
+        return seen["tool_reply"], events[-1]["payload"]
+
+    def _table_id(self):
+        return next(a["id"] for a in self.store.list_artifacts(self.session["id"]) if a["kind"] == "table")
+
+    def test_table_only_answer_reaches_the_model(self):
+        reply, payload = self._answer("", [self._upload(_xlsx(), "铺品.xlsx")])
+        self.assertIn(f"[用户上传了表格：{self._table_id()}（铺品.xlsx）]", reply)
+        self.assertEqual([(u["kind"], u["name"]) for u in payload["uploads"]], [("table", "铺品.xlsx")])
+        self.assertEqual(payload["answer"], "")
+
+    def test_text_and_table_answer_keeps_both(self):
+        reply, payload = self._answer("这是表格，核对适温叠穿那页", [self._upload(_xlsx(), "铺品.xlsx")])
+        self.assertTrue(reply.startswith("这是表格，核对适温叠穿那页"))
+        self.assertIn(self._table_id(), reply)
+        self.assertEqual(payload["answer"], "这是表格，核对适温叠穿那页")
+
+    def test_invalid_attachment_does_not_consume_the_question(self):
+        from fastapi import HTTPException
+        from backend.agent2 import routes
+        with self.assertRaises(HTTPException):
+            asyncio.run(routes.answer(self.request, self.turn["id"], answer="", images=[],
+                                      files=[self._upload(b"x", "说明.docx")]))
+        # 校验失败不占用这一轮：用户改正后还能继续回答
+        self.assertTrue(self.store.claim_answer(self.turn["id"], "u1"))
