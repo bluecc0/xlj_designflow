@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from dataclasses import replace
@@ -18,6 +19,17 @@ from pathlib import Path
 root = Path(__file__).resolve().parent.parent
 print("参数：" + " ".join(sys.argv[1:]))
 print("参考：" + str(root / "assets" / "0007.jpg"))
+'''
+
+# 含 GBK 编不了的字符（𠮷、✓、é），Windows 下子进程按 GBK 输出时会乱码或直接报错
+UNICODE_SCRIPT = '''
+import sys
+from pathlib import Path
+root = Path(__file__).resolve().parent.parent
+print("分类：单人/全身 童装 𠮷 ✓ é")
+print("参考：" + str(root / "assets" / "单人" / "全身" / "0007.jpg"))
+print("错误：标签 𠮷 ✓ é", file=sys.stderr)
+sys.exit(1 if "--fail" in sys.argv else 0)
 '''
 
 CHECK_SCRIPT = '''
@@ -41,11 +53,12 @@ class SkillWhitelistTest(unittest.TestCase):
         (skill / "SKILL.md").write_text("---\nname: lookbook\ndescription: test\n---\n正文", encoding="utf-8")
         (skill / "scripts" / "query.py").write_text(QUERY_SCRIPT, encoding="utf-8")
         (skill / "scripts" / "check.py").write_text(CHECK_SCRIPT, encoding="utf-8")
+        (skill / "scripts" / "unicode.py").write_text(UNICODE_SCRIPT, encoding="utf-8")
         (skill / "scripts" / "rebuild.py").write_text("print('should not run')", encoding="utf-8")
         (skill / "scripts" / "slow.py").write_text("import time\ntime.sleep(5)", encoding="utf-8")
         self.whitelist = root / "skill_whitelist.json"
         self.write_whitelist({"lookbook": {
-            "scripts": ["scripts/query.py", "/scripts/check.py", "scripts/slow.py"],
+            "scripts": ["scripts/query.py", "/scripts/check.py", "scripts/slow.py", "scripts/unicode.py"],
             "self_check": {"enabled": True, "max_repairs": 2},
         }})
         self.env = patch.dict(os.environ, {"SKILL_WHITELIST_PATH": str(self.whitelist)})
@@ -61,10 +74,29 @@ class SkillWhitelistTest(unittest.TestCase):
         result = skill_whitelist.run_skill_script(self.skill, "scripts/query.py", ["--people", "单人", "a b"])
         self.assertEqual(result["exit_code"], 0)
         self.assertIn("参数：--people 单人 a b", result["output"])
-        self.assertIn("参考：assets/0007.jpg", result["output"])
+        # Windows 下相对路径用反斜杠，两种分隔符都能直接交给 use_skill_image
+        self.assertIn("参考：assets/0007.jpg", result["output"].replace("\\", "/"))
         self.assertNotIn(self.tmp.name, result["output"])
         # 不往技能目录写缓存
         self.assertFalse((self.skills_dir / "lookbook" / "scripts" / "__pycache__").exists())
+
+    def test_chinese_and_non_gbk_text_round_trip_in_stdout_stderr_and_paths(self) -> None:
+        ok = skill_whitelist.run_skill_script(self.skill, "scripts/unicode.py")
+        self.assertEqual(ok["exit_code"], 0)
+        self.assertIn("分类：单人/全身 童装 𠮷 ✓ é", ok["output"])
+        self.assertIn("参考：assets/单人/全身/0007.jpg", ok["output"].replace("\\", "/"))
+        self.assertNotIn("\ufffd", ok["output"])
+        failed = skill_whitelist.run_skill_script(self.skill, "scripts/unicode.py", ["--fail"])
+        self.assertEqual(failed["exit_code"], 1)
+        self.assertIn("错误：标签 𠮷 ✓ é", failed["output"])
+        self.assertNotIn("\ufffd", failed["output"])
+
+    def test_interpreter_is_forced_into_utf8_mode(self) -> None:
+        # -E 会忽略 PYTHONIOENCODING / PYTHONUTF8，只能靠 -X utf8 保证 Windows 下输出 UTF-8
+        with patch.object(skill_whitelist.subprocess, "run", wraps=subprocess.run) as run:
+            skill_whitelist.run_skill_script(self.skill, "scripts/query.py")
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[1:4], ["-E", "-X", "utf8"])
 
     def test_input_text_is_passed_as_file_and_failures_are_reported(self) -> None:
         ok = skill_whitelist.run_skill_script(self.skill, "scripts/check.py", ["--check", "{input_file}"], "a quiet park")

@@ -105,12 +105,12 @@ def run_skill_script(skill: AgentSkill, script: str, args: list | None = None, i
             clean_args = [str(input_path) if item == INPUT_FILE_PLACEHOLDER else item for item in clean_args]
         elif INPUT_FILE_PLACEHOLDER in clean_args:
             return {"error": f"参数里用了 {INPUT_FILE_PLACEHOLDER}，但没有提供 input_text"}
-        # 参数逐个传入、不经过 shell；-E 忽略环境变量里的 Python 配置，-s 不加载用户目录的包，-B 不往技能目录写缓存
+        # 参数逐个传入、不经过 shell；-E 忽略环境变量里的 Python 配置，-s 不加载用户目录的包，-B 不往技能目录写缓存。
+        # -E 也会忽略 PYTHONIOENCODING / PYTHONUTF8，所以用 -X utf8 强制 UTF-8：Windows 默认按 GBK 输出，中文和路径会乱码
         env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "TEMP", "TMP") if key in os.environ}
-        env.update({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
         try:
             proc = subprocess.run(
-                [sys.executable, "-E", "-s", "-B", str(path), *clean_args],
+                [sys.executable, "-E", "-X", "utf8", "-s", "-B", str(path), *clean_args],
                 cwd=str(root), env=env, capture_output=True, timeout=SCRIPT_TIMEOUT_SECONDS,
                 stdin=subprocess.DEVNULL,
             )
