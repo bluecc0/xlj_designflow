@@ -21,6 +21,8 @@ from ..ai_job_recovery import execute_image_job
 from ..character_cards import build_character_prompt
 from ..config import settings
 from ..seedream import SEEDREAM_MODEL, upgrade_seedream_model
+from ..skill_whitelist import INPUT_FILE_PLACEHOLDER, allowed_scripts, self_check_repairs, whitelist_entry
+from ..skill_whitelist import run_skill_script as _run_skill_script
 from ..job_store import load_ai_image_job, save_ai_image_job, save_image_checkpoint
 from ..model_routing import routed_chat_completion
 from ..user_skill_store import IMAGE_SUFFIXES
@@ -351,10 +353,47 @@ SKILL_PLATFORM_NOTE = """
 """
 
 
+def _whitelisted_platform_note(skill) -> str:
+    """白名单技能：放开脚本和出图后自检两条限制，其余平台规则不变。"""
+    scripts = allowed_scripts(skill)
+    repairs = self_check_repairs(skill)
+    lines = SKILL_PLATFORM_NOTE.splitlines()
+    if scripts:
+        lines = [line for line in lines if not line.startswith("- 不运行脚本")]
+    if repairs:
+        lines = [line for line in lines if not line.startswith("- 不自评打分")]
+    extra = ["", "# 这个技能已加入平台白名单（以下规则优先于上面和通用规则）"]
+    if scripts:
+        extra.append(
+            "- 可以用 run_skill_script 运行技能声明的脚本：" + "、".join(scripts) + "。技能要求运行这些脚本时直接调用，"
+            "不要自己读数据文件代替；命令行参数按技能写法逐个拆开放进 args（不要写 python 和脚本路径，不要整段命令），"
+            f"需要传入文件的参数（例如要检查的最终提示词）把内容放进 input_text，对应参数写 {INPUT_FILE_PLACEHOLDER}。"
+            "脚本输出里的图片路径已是技能内的相对路径，可以直接交给 use_skill_image。没有列出的脚本仍然不运行，按读脚本自己完成的方式处理；"
+            "技能里修改资料库、同步素材、重建索引的维护脚本不在这里运行。")
+    if repairs:
+        extra.append(
+            "- 出图后按技能的检查项逐张自检：用 analyze_image 看每张结果，问题要写具体（列出技能要求检查的人物身份、服装、"
+            "手脚、动作、表情、眼神、机位、景别、构图等），对照选用的动作包和参考图判断。发现问题时只改 prompt 里对应的部分，"
+            f"参考图不变，重新生成这一张；每张最多返修 {repairs} 次，仍不合格就停止并在回复里如实说明剩下的问题。"
+            "这是技能要求的检查返修，不算通用规则里的自动重试。回复里一句话说明检查和返修结果，不贴检查明细。")
+    return "\n".join(lines + extra) + "\n"
+
+
 async def load_skill(ctx: ToolContext, args: dict) -> dict:
     skill = _load_skill(ctx, args.get("name"))
-    return {"name": skill.name, "content": build_skill_context(skill) + SKILL_PLATFORM_NOTE,
+    note = _whitelisted_platform_note(skill) if whitelist_entry(skill) is not None else SKILL_PLATFORM_NOTE
+    return {"name": skill.name, "content": build_skill_context(skill) + note,
             "references": skill.references}
+
+
+async def run_skill_script(ctx: ToolContext, args: dict) -> dict:
+    skill = _load_skill(ctx, args.get("name"))
+    raw_args = args.get("args")
+    return await asyncio.to_thread(
+        _run_skill_script, skill, str(args.get("script") or ""),
+        raw_args if isinstance(raw_args, list) else [],
+        args.get("input_text") if isinstance(args.get("input_text"), str) else None,
+    )
 
 
 async def read_skill_file(ctx: ToolContext, args: dict) -> dict:
@@ -560,6 +599,18 @@ def build_tools() -> dict[str, Tool]:
              {"type": "object", "properties": {"name": {"type": "string"}, "path": {"type": "string"}},
               "required": ["name", "path"]},
              read_skill_file),
+        Tool("run_skill_script",
+             "运行白名单技能声明过的查询、检查脚本（加载技能后会说明这个技能允许运行哪些脚本）。"
+             "参数逐个放进 args，不要写 python 和脚本路径；返回脚本的输出。不在白名单里的技能会返回错误。",
+             {"type": "object", "properties": {
+                 "name": {"type": "string", "description": "技能名"},
+                 "script": {"type": "string", "description": "技能目录里的脚本相对路径，例如 scripts/query_action_packs.py"},
+                 "args": {"type": "array", "items": {"type": "string"},
+                          "description": "命令行参数，逐个拆开，例如 [\"--people\", \"单人\", \"--shot-size\", \"全身\"]"},
+                 "input_text": {"type": "string",
+                                "description": f"可选，要作为文件传给脚本的内容（例如最终提示词）；args 里对应位置写 {INPUT_FILE_PLACEHOLDER}"}},
+              "required": ["name", "script"]},
+             run_skill_script),
         Tool("use_skill_image",
              "把技能目录里的图片（例如动作参考图、示例图）登记成图片 ID，之后可以作为 generate_image 的参考图，"
              "或用 analyze_image 查看。只登记，不会显示给用户，也不放进画布。",
