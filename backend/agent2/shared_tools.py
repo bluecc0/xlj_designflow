@@ -223,7 +223,7 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
     result = await price_check.run_check(images, sheets, notify, base=shown if folder else "")
     records = result["records"]
     problem = [r for r in records if r["status"] != "一致"]
-    groups = price_check.coverage(sheets, result)
+    groups = price_check.coverage(sheets, result, whole_sheets=bool(args.get("sheets")))
     cards, card_note = await _make_cards(ctx, records, result["uncovered"], dict(images), shown, notify)
 
     # 按"哪张图有什么问题"归类，同一张图的问题放在一起，并带上它的核对卡片

@@ -748,7 +748,14 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notif
     units: list[list[dict]] = []
     # 名字能确定到表格里某一组的图：同一文件夹里对应同一组的（单品图、切片图）按文件名顺序接起来，整组按顺序对应
     in_order: dict[tuple, dict] = {}
+    # 没能核对的图按名字对应到哪些分组：核对范围按输入的图来定，识别失败的模块也要在结论里列为"没有核对"
+    not_read: list[dict] = []
     for (rel, _loader), result in zip(images, results):
+        if isinstance(result, Exception) or (result is not None and not result):
+            rows, _basis = scope_for([f"{base}/{rel}" if base else rel], sheets)
+            reason = f"图片 {rel} 识别失败" if isinstance(result, Exception) else f"图片 {rel} 上没识别出商品"
+            not_read.append({"image": rel, "reason": reason, "groups": {(r["sheet"], tuple(r["group"])) for r in rows},
+                             "failed": isinstance(result, Exception)})
         if isinstance(result, Exception):
             failed.append(f"{rel}：{result}")
         elif result is None:
@@ -864,6 +871,7 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notif
     missing = {(row["sheet"], tuple(row["group"])) for row in uncovered}
     mismatched = [m for m in mismatched if m["group"] in missing]
     return {"records": records, "unmatched": unmatched, "uncovered": uncovered, "failed": failed, "mismatched": mismatched,
+            "not_read": not_read,
             "skipped_small": small, "no_product_images": empty, "image_count": len(images)}
 
 
@@ -873,11 +881,17 @@ def group_name(row: dict) -> str:
     return " / ".join([row["sheet"], *row["group"]])
 
 
-def coverage(sheets: list[Sheet], result: dict) -> list[dict]:
+def coverage(sheets: list[Sheet], result: dict, whole_sheets: bool = False) -> list[dict]:
     """以表格为准，按分组交代这次的核对情况：核对无误、有问题、部分商品没核对到、没有核对（附原因）。
-    只列这次核对涉及到的工作表里有价格的分组（只核对一个模块文件夹时，不把整份表都列出来）。"""
+    范围按输入来定：核对到的、整张对不上的，以及识别失败或没识别出商品的图按名字对应到的工作表；
+    whole_sheets=True（用户点名了工作表）时，传进来的工作表全部算在范围里。
+    只核对一个模块文件夹时，不把整份表其它模块都列出来。"""
     records, mismatched = result["records"], result.get("mismatched", [])
-    touched = {r["row"]["sheet"] for r in records} | {m["group"][0] for m in mismatched}
+    not_read = result.get("not_read", [])
+    touched = ({r["row"]["sheet"] for r in records} | {m["group"][0] for m in mismatched}
+               | {key[0] for n in not_read for key in n["groups"]})
+    if whole_sheets:
+        touched |= {s.name for s in sheets}
     groups: dict[tuple, list[dict]] = {}
     for sheet in sheets:
         if sheet.name in touched:
@@ -891,6 +905,10 @@ def coverage(sheets: list[Sheet], result: dict) -> list[dict]:
         missing = [r for r in rows if id(r) not in checked]
         bad = list(dict.fromkeys(id(r["row"]) for r in recs if r["status"] != "一致"))
         reason = next((m["reason"] for m in mismatched if m["group"] == key), "")
+        if not reason:  # 识别失败排在"没识别出商品"前面
+            unread = sorted((n for n in not_read if key in n["groups"]), key=lambda n: not n["failed"])
+            if unread:
+                reason = "；".join(n["reason"] for n in unread[:3]) + ("等" if len(unread) > 3 else "")
         entry = {"分组": group_name(rows[0]), "表格里有价格的商品数": len(rows),
                  "核对到的商品数": len(rows) - len(missing), "有问题的商品数": len(bad),
                  "图片": list(dict.fromkeys(r["item"]["_image"] for r in recs))[:6]}

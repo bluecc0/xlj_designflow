@@ -322,6 +322,38 @@ class RunCheckTest(unittest.TestCase):
         self.assertEqual(len(only_old["mismatched"]), 1)
         self.assertEqual([r["sku"] for r in only_old["uncovered"]], ["F0-1", "F1-1", "F2-1"])
 
+    def test_module_whose_images_all_fail_stays_in_the_conclusion(self):
+        # 审核复现：同时核对"限时闪购"和"新品上市"，新品的图识别超时，结论里不能没有它
+        flash = price_check._sheet_rows("限时闪购", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"],
+                                                ["限时闪购", 1, "F0-1", "防泼水短羽绒服", 539, 360]])
+        new = price_check._sheet_rows("新品上市", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"],
+                                              ["女子", "服饰", "N0-1", "草莓熊联名卫衣", 90, 359],
+                                              ["男子", "鞋履", "N1-1", "闪击篮球鞋", 240, 559]])
+
+        async def fake_ocr(data):
+            if data == b"timeout":
+                raise RuntimeError("识别超时")
+            if data == b"blank":
+                return []
+            return [{"name": "防泼水短羽绒服", "price": 360, "save": 539}]
+
+        images = [("8-限时闪购/限时闪购.jpg", lambda: b"ok"), ("11-新品上市/女-服饰.png", lambda: b"timeout"),
+                  ("11-新品上市/男-鞋履.png", lambda: b"blank")]
+        with patch.object(price_check, "ocr_image", fake_ocr):
+            result = asyncio.run(price_check.run_check(images, [flash, new]))
+        groups = {g["分组"]: g for g in price_check.coverage([flash, new], result)}
+        self.assertEqual(groups["限时闪购 / 限时闪购"]["结果"], "核对无误")
+        self.assertEqual((groups["新品上市 / 女子 / 服饰"]["结果"], groups["新品上市 / 女子 / 服饰"]["原因"]),
+                         ("没有核对", "图片 11-新品上市/女-服饰.png 识别失败"))
+        self.assertEqual(groups["新品上市 / 男子 / 鞋履"]["原因"], "图片 11-新品上市/男-鞋履.png 上没识别出商品")
+        self.assertEqual(price_check.coverage_summary(list(groups.values())), "表格这次涉及 3 组：1 组核对无误，2 组没有核对")
+        # 用户点名了工作表：这张表的每一组都要交代，即使文件夹里一张对应的图都没有
+        with patch.object(price_check, "ocr_image", fake_ocr):
+            named = asyncio.run(price_check.run_check(images[:1], [new]))
+        named_groups = {g["分组"]: g for g in price_check.coverage([new], named, whole_sheets=True)}
+        self.assertEqual({g["结果"] for g in named_groups.values()}, {"没有核对"})
+        self.assertEqual(len(named_groups), 2)
+
     def test_misread_numbers_are_dropped_or_reread(self):
         # 立省的数字被又填进吊牌价：吊牌价不可能小于等于到手价，直接丢弃
         self.assertIsNone(price_check.sanitize_item({"price": 360, "save": 539, "tag_price": 539})["tag_price"])
