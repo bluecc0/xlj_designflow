@@ -584,13 +584,19 @@ def _agree(items: list[dict], seq: list[dict]) -> int:
     return sum(1 for it, row in zip(items, seq) if _scoped_score(it, row) is not None)
 
 
+def _strength(items: list[dict], seq: list[dict]) -> float:
+    """按顺序对下来的匹配强度：名称越接近、价格立省相同的越多，分越高。
+    "红色运动鞋"对"黑色运动鞋"名称也有八成像，光数个数分不出来，要比强度。"""
+    return round(sum(s for it, row in zip(items, seq) if (s := _scoped_score(it, row)) is not None), 6)
+
+
 def match_group(images: list[list[dict]], rows: list[dict], basis: str) -> tuple[list[tuple[dict, dict]], list[dict], list[dict]]:
     """已经确定是表格里同一组的几张图（同一文件夹，按文件名顺序）：图上第 1 个对表格第 1 个，依次往下。
     名称和价格不参与决定对应谁，只用来报差异。返回 (配对, 多出来的商品, 整张对不上的图)。
 
     同一文件夹里的几张图可能是切片或单品卡片（要接着上一张往下数），也可能是同组商品的几张完整海报、
-    修改版、不同尺寸（每张都从这一组第 1 个开始）。每张图两种起点都试，用对得上的多的那种；
-    一样多时，图上商品比这一组少的当作切片或单品卡片接着数，否则当作完整的一张从头数。
+    修改版、不同尺寸（每张都从这一组第 1 个开始）。每张图两种起点都试，用匹配强度高的那种；
+    强度一样时，图上商品比这一组少的当作切片或单品卡片接着数，否则当作完整的一张从头数。
     表格里没价格的行（组里的主推款，图上是大图不带价格）识别时常常不算商品，所以还分"所有行""只数有价格的行"两种数法。"""
     priced = [r for r in rows if r["values"]]
     seqs = [rows] + ([priced] if priced and len(priced) < len(rows) else [])
@@ -607,11 +613,13 @@ def match_group(images: list[list[dict]], rows: list[dict], basis: str) -> tuple
                     continue
                 go_on = start > 0
                 prefer_go_on = len(items) < len(seq)  # 比这一组少：像切片或单品卡片
-                options.append((_agree(items, part), go_on == prefer_go_on, seq is rows, start, part))
+                options.append((_strength(items, part), go_on == prefer_go_on, seq is rows, start, part))
         if not options:
             extra.extend(items)
             continue
-        agree, _pref, _all, _start, part = max(options, key=lambda o: o[:3])
+        # 先比匹配强度（名称一致、价格一致的优先）；强度完全相同、缺少依据时，才按"像切片就接着数"的默认规则
+        _strong, _pref, _all, _start, part = max(options, key=lambda o: o[:3])
+        agree = _agree(items, part)
         got = list(zip(items, part))
         if len(got) >= 3 and agree < len(got) * MISMATCH_IMAGE_BELOW:
             group = " / ".join([rows[0]["sheet"], *rows[0]["group"]])

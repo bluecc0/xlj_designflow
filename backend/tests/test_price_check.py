@@ -172,6 +172,19 @@ class MatchTest(unittest.TestCase):
         statuses = [price_check.judge(it, row, {"price", "save"})[0] for it, row in pairs]
         self.assertEqual(statuses, ["一致", "一致", "不一致", "不一致"])
 
+    def test_exact_names_win_over_similar_names_when_choosing_where_to_start(self):
+        # 审核复现：表格是红、蓝、黑、白四双运动鞋，两张图都展示红、蓝（价格都对）。
+        # "红色运动鞋"和"黑色运动鞋"名称也有八成像：只数个数会打平、按切片接着数到黑、白，必须比匹配强度
+        sheet = price_check._sheet_rows("限时闪购", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"]] + [
+            ["限时闪购" if i == 0 else "", i + 1, f"S{i}-1", f"{color}色运动鞋", 100 + i, 300 + i]
+            for i, color in enumerate("红蓝黑白")])
+        rows, basis = price_check.scope_for(["8-限时闪购/a.jpg"], [sheet])
+        poster = lambda image: [_item("红色运动鞋", 300, 100, image=image, pos=1), _item("蓝色运动鞋", 301, 101, image=image, pos=2)]
+        pairs, extra, whole = price_check.match_group([poster("8-限时闪购/a.jpg"), poster("8-限时闪购/b.jpg")], rows, basis)
+        self.assertEqual([(it["_image"][-5:], row["sku"]) for it, row in pairs],
+                         [("a.jpg", "S0-1"), ("a.jpg", "S1-1"), ("b.jpg", "S0-1"), ("b.jpg", "S1-1")])
+        self.assertEqual({price_check.judge(it, row, {"price", "save"})[0] for it, row in pairs}, {"一致"})
+
     def test_single_product_cards_continue_down_the_group(self):
         # 单品卡片（男子-1…4）每张一个商品，接着往下数；第 3 张价格错了也还是对第 3 行
         rows, basis = price_check.scope_for(["8-限时闪购/1.jpg"], [self._flash_sheet(4)])
