@@ -195,6 +195,17 @@ async def check_prices(ctx: ToolContext, args: dict) -> dict:
         ticker.cancel()
 
 
+def _modified_dates(files: list[tuple[str, Path]]) -> dict[str, str]:
+    """图片的修改时间：同一张图在几个版本文件夹里都有时，模型据此判断哪份是正式版。"""
+    out = {}
+    for rel, path in files:
+        try:
+            out[rel] = time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime))
+        except OSError:
+            continue
+    return out
+
+
 async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids: list[str], notify) -> dict:
     await notify("正在读取表格")
     table_id = str(args.get("table") or "").strip()
@@ -212,6 +223,7 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
         shown, files, truncated = await asyncio.to_thread(
             shared_folders.find_files, ctx.user, folder, shared_folders.IMAGE_SUFFIXES, MAX_PRICE_IMAGES)
         images = [(rel, path.read_bytes) for rel, path in files]
+        dates = await asyncio.to_thread(_modified_dates, files)
     for number, image_id in enumerate(i for i in image_ids if i != table_id):  # 表格截图本身不算要核对的图
         artifact = store.get_artifact(image_id, ctx.user["id"])
         if not artifact or not Path(artifact["path"]).is_file():
@@ -220,7 +232,8 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
     if not images:
         return {"error": f"{shown} 里没有找到图片"}
 
-    result = await price_check.run_check(images, sheets, notify, base=shown if folder else "")
+    result = await price_check.run_check(images, sheets, notify, base=shown if folder else "",
+                                         dates=dates if folder else None)
     records = result["records"]
     problem = [r for r in records if r["status"] != "一致"]
     groups = price_check.coverage(sheets, result, whole_sheets=bool(args.get("sheets")))
@@ -232,7 +245,7 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
         by_image.setdefault(r["item"]["_image"], []).append(r)
     problem_images = [{
         "图片": rel, "核对卡片": cards.get(rel, {}).get("id", ""),
-        "问题": [{"图上第几个": r["item"]["_pos"], "货号": r["row"]["sku"], "商品": r["row"]["name"],
+        "问题": [{"图上第几个": r["item"]["_pos"], "结论": r["status"], "货号": r["row"]["sku"], "商品": r["row"]["name"],
                   "表格位置": " / ".join([r["row"]["sheet"], *r["row"]["group"]]),
                   "对应依据": r["item"].get("_basis", ""),
                   "差异": [{"类型": d["kind"], "项目": d["label"], "表格": d["table"], "图上": d["image"] or "没读出来"}
@@ -246,6 +259,11 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
         notes.append("表格是从截图识别出来的，截图里的数字本身可能读错；有疑问的以原始 Excel 为准")
     if result["failed"]:
         notes.append(f"{len(result['failed'])} 张图识别失败，没有核对：" + "；".join(result["failed"][:5]))
+    if not groups:
+        table_groups = list(dict.fromkeys(price_check.group_name(r) for s in sheets for r in s.rows if r["values"]))
+        notes.append("文件夹里没有一张图能对应到表格里的分组，可能表格和文件夹不是同一个活动或模块（发错了表格或路径）。"
+                     "表格里的分组有：" + "、".join(table_groups[:10]) + ("等" if len(table_groups) > 10 else ""))
+    without = [] if args.get("sheets") else price_check.groups_without_images(sheets, result)
     return {
         "概况": {
             "文件夹": shown, "表格": name, "核对的工作表": [s.name for s in sheets],
@@ -262,8 +280,12 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
         # 以表格为准，按分组交代：哪些核对无误、哪些有问题、哪些没核对（附原因）。回复要按这个说清楚每一组查没查
         "结论": price_check.coverage_summary(groups),
         "回复要求": "以表格为准，按分组说清楚每一组查没查：先给结论；再列核对无误的组；有问题的组逐条说表格是什么、图上是什么；"
-                    "没有核对或部分没核对的组说明原因和哪些商品没核对到。不要只说商品数。",
+                    "没有核对或部分没核对的组说明原因和哪些商品没核对到。不要只说商品数。"
+                    "结论是「文案待确认」的（图上文字和表格只差几个字，可能是识别把小字读错了）要和价格不一致分开列，"
+                    "请用户看核对卡片确认，不要说成确定的错误。",
         "各分组核对情况": groups[:MAX_REPORTED * 2],
+        # 同一工作表里这次没有任何图对应到的分组：不算进结论，提一句即可（用户可能只给了一个子文件夹）
+        "这次文件夹里没有对应图片的分组": without[:15],
         "有问题的图片": problem_images[:MAX_REPORTED],
         "表格自身算不通的行": price_check.table_warnings(sheets)[:15],
         "说明": notes,
@@ -351,7 +373,7 @@ def build_shared_tools() -> list[Tool]:
                  "request": {"type": "string",
                              "description": "用户提出核对要求的原话，例如\"核对一下价格文案信息是否有误\"。"
                                             "用户只发了路径或表格、没说要核对时不要调用本工具"},
-                 "folder": {"type": "string", "description": "要核对的图片所在的共享文件夹路径，直接用用户给的写法"},
+                 "folder": {"type": "string", "description": "要核对的共享文件夹路径；用户只问某一张图时，填这张图片的完整路径（不要改成它所在的文件夹）。直接用用户给的写法"},
                  "image_ids": {"type": "array", "items": {"type": "string"},
                                "description": "用户直接上传到对话里要核对的图片 ID（没有共享文件夹时用；可以和 folder 同时给）"},
                  "sheets": {"type": "array", "items": {"type": "string"},

@@ -189,6 +189,11 @@ class Settings:
     agent_llm_api_key: str = os.getenv("AGENT_LLM_API_KEY", "") or cliproxy_api_key
     agent_llm_timeout_seconds: int = int(os.getenv("AGENT_LLM_TIMEOUT_SECONDS", "60"))
 
+    # 价格核对：判断每张图对应表格哪一组、从第几个开始，要读懂文件夹结构和表格，用更强的模型
+    check_llm_model: str = os.getenv("CHECK_LLM_MODEL", "") or "gpt-6.1-sol,gpt-6-luna"
+    check_llm_base_url: str = os.getenv("CHECK_LLM_BASE_URL", "") or cliproxy_base_url
+    check_llm_api_key: str = os.getenv("CHECK_LLM_API_KEY", "") or cliproxy_api_key
+
     agent_image_model: str = os.getenv("AGENT_IMAGE_MODEL", "gpt image 2.5")
     agent_refine_model: str = os.getenv("AGENT_REFINE_MODEL", "nano banana pro")
     agent_image_size: str = os.getenv("AGENT_IMAGE_SIZE", "auto")

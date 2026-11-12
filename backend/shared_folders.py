@@ -277,8 +277,11 @@ def list_folder(user: dict, raw: str, recursive: bool = True) -> dict:
 
 
 def find_files(user: dict, raw: str, suffixes: set[str], limit: int) -> tuple[str, list[tuple[str, Path]], bool]:
-    """递归找出文件夹里指定类型的文件，返回 (显示用路径, [(相对路径, 实际路径)], 是否超出上限)。"""
+    """递归找出文件夹里指定类型的文件，返回 (显示用路径, [(相对路径, 实际路径)], 是否超出上限)。
+    路径直接指到一个文件（例如"核对一下这张图"）时，只返回这一个文件。"""
     root, path, shown = resolve(user, raw)
+    if path.is_file() and path.suffix.lower() in suffixes and _inside(root.path.resolve(), path):
+        return shown, [(path.name, path)], False
     if not path.is_dir():
         raise SharedFolderError(f"找不到文件夹：{shown}")
     root_real, seen = _walk_start(root, path)
