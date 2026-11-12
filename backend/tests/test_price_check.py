@@ -713,3 +713,72 @@ class AnswerWithAttachmentsTest(unittest.TestCase):
                                       files=[self._upload(b"x", "说明.docx")]))
         # 校验失败不占用这一轮：用户改正后还能继续回答
         self.assertTrue(self.store.claim_answer(self.turn["id"], "u1"))
+
+
+class SlowShareTest(unittest.TestCase):
+    """共享盘慢的时候（文件多、网络延迟、SMB 断开），核对任务可以慢，但不能卡住同一后端的其他请求。"""
+
+    def test_slow_share_scan_does_not_block_other_requests(self):
+        import time as time_module
+        from backend import job_store
+        from backend.agent2 import service, shared_tools, store
+        from backend.agent2.engine import ToolContext
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(job_store, "_DB_PATH", Path(tmp) / "a2.db"), \
+                patch.object(service.settings, "output_path", Path(tmp) / "out"):
+            job_store.init_db()
+            store.init_tables()
+            root = Path(tmp) / "share"
+            (root / "活动").mkdir(parents=True)
+            Image.new("RGB", (720, 940)).save(root / "活动" / "1.png")
+            config = Path(tmp) / "shared.json"
+            config.write_text(json.dumps([{"name": "素材库", "path": str(root)}]), encoding="utf-8")
+            session = store.create_session("u1")
+            user = {"id": "u1"}
+            buf = io.BytesIO()
+            Image.new("RGB", (800, 600)).save(buf, format="PNG")
+            shot = service.save_upload(user, session["id"], buf.getvalue(), "表格截图.png")
+            real_find = shared_folders.find_files
+            scans = []
+
+            def slow_find(*args, **kwargs):  # 每次扫共享盘都要 0.3 秒
+                scans.append(args[2] == shared_folders.TABLE_SUFFIXES)
+                time_module.sleep(0.3)
+                return real_find(*args, **kwargs)
+
+            async def fake_table_image(data):
+                return price_check.load_table(_xlsx(), "a.xlsx")[:1]
+
+            async def fake_ocr(data):
+                return [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]
+
+            async def emit(*_):
+                pass
+
+            ctx = ToolContext(user=user, session_id=session["id"], turn_id="t", call_id="c", emit=emit, state={})
+
+            async def scenario():
+                ticks = []
+                start = time_module.monotonic()
+
+                async def other_request():  # 其他用户的请求：每 50ms 要执行一次
+                    for _ in range(12):
+                        await asyncio.sleep(0.05)
+                        ticks.append(time_module.monotonic() - start)
+
+                result, _ = await asyncio.gather(
+                    shared_tools.check_prices(ctx, {"request": "根据表格检查价格", "folder": "素材库/活动",
+                                                    "image_ids": [shot["id"]]}),
+                    other_request())
+                return result, ticks
+
+            with patch.object(shared_folders.settings, "shared_folders_path", config), \
+                    patch.object(shared_folders, "find_files", slow_find), \
+                    patch.object(price_check, "ocr_image", fake_ocr), \
+                    patch.object(price_check, "load_table_image", fake_table_image):
+                result, ticks = asyncio.run(scenario())
+            self.assertIn(True, scans)  # 确实走了"扫共享盘找表格"这一步
+            self.assertEqual(result["概况"]["表格"], "表格截图.png")
+            # 扫描期间其他协程照常每 50ms 运行一次，最长间隔远小于一次扫描的 0.3 秒
+            gaps = [b - a for a, b in zip([0.0] + ticks, ticks)]
+            self.assertLess(max(gaps), 0.2, gaps)

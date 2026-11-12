@@ -50,6 +50,16 @@ def _has_table(ctx: ToolContext, folder: str) -> bool:
         return False
 
 
+def _screenshot_table(ctx: ToolContext, folder: str, table_id: str, image_ids: list[str]) -> tuple[list[str], str]:
+    """给了共享文件夹时，要核对的图在文件夹里，用户贴进对话的图是表格截图的候选。
+    返回 (候选截图, 认定的表格截图 ID)：没指定表格、对话和文件夹里都没有 Excel/CSV、只有一张候选时，就是它。
+    会扫描共享盘，调用方要放到工作线程里。"""
+    screenshots = image_ids or _uploaded_images(ctx)
+    if not table_id and len(screenshots) == 1 and not _has_table(ctx, folder):
+        return screenshots, screenshots[0]
+    return screenshots, ""
+
+
 def _uploaded_images(ctx: ToolContext) -> list[str]:
     """用户这一轮及之前上传到对话里的图片 ID（最近的在前）。"""
     return [a["id"] for a in store.list_artifacts(ctx.session_id) if a["kind"] == "upload"]
@@ -186,10 +196,11 @@ async def check_prices(ctx: ToolContext, args: dict) -> dict:
 async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids: list[str], notify) -> dict:
     await notify("正在读取表格")
     table_id = str(args.get("table") or "").strip()
-    # 给了共享文件夹时，要核对的图在文件夹里；用户贴进对话的图是表格截图的候选
-    screenshots = (image_ids or _uploaded_images(ctx)) if folder else None
-    if folder and not table_id and screenshots and not _has_table(ctx, folder):
-        table_id = screenshots[0] if len(screenshots) == 1 else ""  # 这张图就是表格截图，不算要核对的图
+    screenshots = None
+    if folder:
+        # 探测要扫共享盘（可能慢、可能卡住），放到工作线程，不阻塞其他请求
+        screenshots, guessed = await asyncio.to_thread(_screenshot_table, ctx, folder, table_id, image_ids)
+        table_id = table_id or guessed
     sheets, name, from_image = await _load_sheets(ctx, table_id, folder, screenshots)
     sheets = price_check.pick_sheets(sheets, [str(s) for s in (args.get("sheets") or [])])
     await notify("正在查找文件夹里的图片")
