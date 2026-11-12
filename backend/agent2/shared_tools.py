@@ -31,17 +31,35 @@ HEARTBEAT_SECONDS = 5
 _PATH_ONLY = re.compile(r"(?:smb:|file:|[A-Za-z]:|[\\\\/]{1,2})\S*|\S+\.(?:xlsx|xlsm|csv)", re.I)
 
 
-async def _load_sheets(ctx: ToolContext, source: str, folder: str = "") -> tuple[list, str, bool]:
+async def _load_sheets(ctx: ToolContext, source: str, folder: str = "",
+                       screenshots: list[str] | None = None) -> tuple[list, str, bool]:
     """读出表格，返回 (工作表, 文件名, 是否来自截图)。Excel/CSV 直接解析，表格截图用看图模型读。"""
-    data, name = await asyncio.to_thread(_table_source, ctx, source, folder)
+    data, name = await asyncio.to_thread(_table_source, ctx, source, folder, screenshots)
     if Path(name).suffix.lower() in shared_folders.TABLE_SUFFIXES:
         return await asyncio.to_thread(price_check.load_table, data, name), name, False
     return await price_check.load_table_image(data), name, True
 
 
-def _table_source(ctx: ToolContext, source: str, folder: str = "") -> tuple[bytes, str]:
+def _has_table(ctx: ToolContext, folder: str) -> bool:
+    """对话里上传过 Excel/CSV，或文件夹里有表格。"""
+    if any(a["kind"] == "table" for a in store.list_artifacts(ctx.session_id)):
+        return True
+    try:
+        return bool(shared_folders.find_files(ctx.user, folder, shared_folders.TABLE_SUFFIXES, 1)[1])
+    except shared_folders.SharedFolderError:
+        return False
+
+
+def _uploaded_images(ctx: ToolContext) -> list[str]:
+    """用户这一轮及之前上传到对话里的图片 ID（最近的在前）。"""
+    return [a["id"] for a in store.list_artifacts(ctx.session_id) if a["kind"] == "upload"]
+
+
+def _table_source(ctx: ToolContext, source: str, folder: str = "",
+                  screenshots: list[str] | None = None) -> tuple[bytes, str]:
     """表格来源：对话里上传的表格或表格截图的 ID，或共享文件夹里的路径；
-    没指定时自动找（先找对话里上传的表格，再找文件夹里的表格）。"""
+    没指定时自动找：先找对话里上传的表格，再找文件夹里的表格，都没有时把用户上传的那张图当作表格截图。
+    screenshots：可能是表格截图的图片 ID（没给就用对话里用户上传的图片）。"""
     source = str(source or "").strip()
     artifact = store.get_artifact(source, ctx.user["id"]) if source.startswith("img_") else None
     if not source:
@@ -51,8 +69,11 @@ def _table_source(ctx: ToolContext, source: str, folder: str = "") -> tuple[byte
         path = Path(artifact["path"])
         if artifact["kind"] not in ("table", "upload") or not path.is_file():
             raise ValueError(f"{source} 不是表格，也不是用户上传的表格截图")
-        # 用户上传的图片当作表格截图（文件名按实际保存的后缀，决定走哪种读法）
-        return path.read_bytes(), (artifact["label"] or path.name) if artifact["kind"] == "table" else path.name
+        # 用户上传的图片当作表格截图。显示用户上传时的文件名；后缀要是图片后缀，后面才会按截图去读
+        label = artifact["label"] or path.name
+        if artifact["kind"] == "upload" and Path(label).suffix.lower() not in shared_folders.IMAGE_SUFFIXES:
+            label = path.name
+        return path.read_bytes(), label
     if source:
         data, name, _shown = shared_folders.read_file(
             ctx.user, source, shared_folders.TABLE_SUFFIXES | shared_folders.IMAGE_SUFFIXES, folder)
@@ -63,6 +84,13 @@ def _table_source(ctx: ToolContext, source: str, folder: str = "") -> tuple[byte
             return tables[0][1].read_bytes(), tables[0][1].name
         if len(tables) > 1:
             raise ValueError("文件夹里有多个表格，请指定用哪个：" + "、".join(rel for rel, _p in tables))
+    # 没有 Excel/CSV：用户贴的那张图就是表格截图（只有一张时直接用，多张时问是哪张）
+    candidates = list(dict.fromkeys(screenshots if screenshots is not None else _uploaded_images(ctx)))
+    if len(candidates) == 1:
+        return _table_source(ctx, candidates[0])
+    if len(candidates) > 1:
+        raise ValueError("没有 Excel/CSV 表格，用户上传了几张图：" + "、".join(candidates)
+                         + "。问用户哪张是表格截图，把它的 ID 填进 table")
     raise ValueError("没有找到表格：请上传表格（Excel、CSV 或表格截图），或者给出表格在共享文件夹里的路径")
 
 
@@ -158,7 +186,11 @@ async def check_prices(ctx: ToolContext, args: dict) -> dict:
 async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids: list[str], notify) -> dict:
     await notify("正在读取表格")
     table_id = str(args.get("table") or "").strip()
-    sheets, name, from_image = await _load_sheets(ctx, table_id, folder)
+    # 给了共享文件夹时，要核对的图在文件夹里；用户贴进对话的图是表格截图的候选
+    screenshots = (image_ids or _uploaded_images(ctx)) if folder else None
+    if folder and not table_id and screenshots and not _has_table(ctx, folder):
+        table_id = screenshots[0] if len(screenshots) == 1 else ""  # 这张图就是表格截图，不算要核对的图
+    sheets, name, from_image = await _load_sheets(ctx, table_id, folder, screenshots)
     sheets = price_check.pick_sheets(sheets, [str(s) for s in (args.get("sheets") or [])])
     await notify("正在查找文件夹里的图片")
     shown, truncated = "对话里上传的图片", False

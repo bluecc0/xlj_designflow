@@ -516,6 +516,25 @@ class AgentToolsTest(unittest.TestCase):
                 uploaded = asyncio.run(shared_tools.check_prices(ctx, {
                     "request": "核对一下价格", "table": shot["id"], "image_ids": [shot["id"], poster["id"]]}))
             self.assertEqual((uploaded["概况"]["文件夹里的图片数"], uploaded["概况"]["核对结果"]["价格不一致"]), (1, 1))
+
+            # 线上出过的情况：给了共享文件夹，表格只有一张截图，模型把截图当成"要核对的图"放进 image_ids、没填 table
+            fresh = store.create_session("u1")  # 这个会话里没有上传过 Excel
+            shot = service.save_upload(user, fresh["id"], buf.getvalue(), "表格截图.png")
+            poster = service.save_upload(user, fresh["id"], buf.getvalue(), "海报.png")
+            ctx = ToolContext(user=user, session_id=fresh["id"], turn_id="t2", call_id="c2", emit=emit, state={},
+                              publish=publish)
+            with patch.object(shared_folders.settings, "shared_folders_path", config), \
+                    patch.object(price_check, "ocr_image", fake_ocr), \
+                    patch.object(price_check, "load_table_image", fake_table_image):
+                guessed = asyncio.run(shared_tools.check_prices(ctx, {
+                    "request": "根据表格检查一下价格文案", "folder": "Z:\\活动", "image_ids": [shot["id"]]}))
+                self.assertEqual(guessed["概况"]["文件夹里的图片数"], 1)  # 截图当表格用，没被当成要核对的图
+                self.assertEqual(guessed["概况"]["表格"], "表格截图.png")  # 显示用户上传时的文件名
+                self.assertEqual(guessed["概况"]["核对结果"]["价格不一致"], 1)
+                # 贴了两张图又没说哪张是表格：问清楚，不乱猜
+                with self.assertRaisesRegex(ValueError, "哪张是表格截图"):  # 引擎会把异常转成工具错误交给模型
+                    asyncio.run(shared_tools.check_prices(ctx, {
+                        "request": "核对一下", "folder": "Z:\\活动", "image_ids": [shot["id"], poster["id"]]}))
             self.assertTrue(any("截图" in note for note in uploaded["说明"]))
 
 

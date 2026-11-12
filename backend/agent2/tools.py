@@ -586,9 +586,10 @@ def build_tools() -> dict[str, Tool]:
              {"type": "object", "properties": {"image_id": {"type": "string"}, "question": {"type": "string"}},
               "required": ["image_id"]},
              analyze_image),
-        Tool("ask_user", "向用户提一个问题并给出 2–4 个选项。只在主体不明确（用户没说要表现什么内容，例如只说“生成海报”）"
-             "或缺少必需的业务信息（例如缺少 SKU）时使用；比例、风格、张数等用默认值，不要用来确认方向。"
-             "主体不明确时，选项最后一个固定为“先随便出一张看看”。",
+        Tool("ask_user", "向用户提一个问题并给出 2–4 个选项。在不确定用户要做哪件事、该用哪个工具或材料的用途时，"
+             "主体不明确（用户没说要表现什么内容，例如只说“生成海报”）时，或缺少必需的业务信息（例如缺少 SKU）时使用；"
+             "比例、风格、张数等细节用默认值，不要用来确认方向。"
+             "问出图主体时，选项最后一个固定为“先随便出一张看看”；问要做哪件事时不要加这一项。",
              {"type": "object", "properties": {"question": {"type": "string"},
                                                "options": {"type": "array", "items": {"type": "string"}, "maxItems": 4}},
               "required": ["question"]},
