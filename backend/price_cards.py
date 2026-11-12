@@ -81,12 +81,18 @@ class _Panel:
         self.y += max(len(lines) for _x, lines, _c in wrapped) * 27 + 6
 
 
-def _layout(panel: _Panel, title: str, issues: list[dict]) -> None:
+def _layout(panel: _Panel, title: str, issues: list[dict], missing: list[str]) -> None:
     panel.text(title, 17, MUTED, gap=4)
-    panel.text("图上第几个：从上到下、每行从左到右数", 15, MUTED, gap=10)
+    bad = sum(1 for i in issues if i["diffs"])
+    panel.text(f"这张图核对了 {len(issues)} 个商品：{len(issues) - bad} 个无误，{bad} 个有问题"
+               + (f"；表格这一组还有 {len(missing)} 个没在图上找到" if missing else ""), 18, INK, gap=4)
+    panel.text("图上第几个：左上角开始，从左到右、从上到下数", 15, MUTED, gap=10)
     panel.rule()
     for issue in issues:
-        panel.text(f"第 {issue['pos']} 个　{issue['sku']}", 24, INK, gap=2)
+        if not issue["diffs"]:  # 核对无误：一行带过
+            panel.text(f"图上第 {issue['pos']} 个　{issue['sku']}　{issue.get('name') or ''}　核对无误", 18, OK_COLOR, gap=8)
+            continue
+        panel.text(f"图上第 {issue['pos']} 个　{issue['sku']}", 24, INK, gap=2)
         if issue.get("name"):
             panel.text(issue["name"], 19, MUTED, gap=2)
         if issue.get("seen"):
@@ -102,17 +108,23 @@ def _layout(panel: _Panel, title: str, issues: list[dict]) -> None:
             panel.compare(label, value, value + "　一致", OK_COLOR)
         panel.y += 6
         panel.rule()
+    if missing:
+        panel.text("表格这一组里、没在图上找到（没有核对）：", 18, COLORS["文案"], gap=4)
+        for line in missing:
+            panel.text("· " + line, 17, INK, gap=2)
 
 
-def render_card(image: bytes, title: str, issues: list[dict]) -> bytes:
-    """issues：[{"pos", "sku", "name", "where", "diffs": [{"kind", "label", "table", "image"}], "same": [(项目, 值)]}]"""
+def render_card(image: bytes, title: str, issues: list[dict], missing: list[str] | None = None) -> bytes:
+    """issues：图上每个对上表格的商品 [{"pos", "sku", "name", "where", "diffs": [...], "same": [(项目, 值)]}]，
+    diffs 为空表示核对无误；missing：表格这一组里没在图上找到的商品。"""
+    missing = missing or []
     with Image.open(io.BytesIO(image)) as im:
         im.seek(0)
         picture = im.convert("RGB")
     scale = min(IMAGE_BOX[0] / picture.width, IMAGE_BOX[1] / picture.height, 2.0)  # 小图放大，最多两倍
     picture = picture.resize((max(1, round(picture.width * scale)), max(1, round(picture.height * scale))), Image.LANCZOS)
     measure = _Panel(None, 0)
-    _layout(measure, title, issues)
+    _layout(measure, title, issues, missing)
     height = max(picture.height + PAD * 2, measure.y + PAD)
     card = Image.new("RGB", (picture.width + PAD * 2 + PANEL_WIDTH, height), "white")
     card.paste(picture, (PAD, PAD))
@@ -120,7 +132,7 @@ def render_card(image: bytes, title: str, issues: list[dict]) -> bytes:
     left = picture.width + PAD * 2
     draw.rectangle([left, 0, card.width, height], fill=PANEL)
     draw.line([(left, 0), (left, height)], fill=LINE, width=1)
-    _layout(_Panel(draw, left + PAD), title, issues)
+    _layout(_Panel(draw, left + PAD), title, issues, missing)
     buf = io.BytesIO()
     card.save(buf, format="PNG")
     return buf.getvalue()

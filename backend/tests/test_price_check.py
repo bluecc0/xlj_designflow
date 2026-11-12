@@ -99,7 +99,7 @@ class MatchTest(unittest.TestCase):
         self.assertTrue(price_check.single_group(rows))
         pairs, extra, whole = price_check.match_group([items], rows, basis)
         self.assertEqual(([row["sku"] for _it, row in pairs], extra, whole), (["A1-1", "A2-1"], [], []))
-        self.assertIn("按顺序第 1 个", items[0]["_basis"])
+        self.assertIn("对应表格这一组第 1 行", items[0]["_basis"])
 
     def test_group_names_alone_do_not_map_when_the_sheet_is_unknown(self):
         # "品类热榜"不在表格里：只靠"男子"这一级碰巧同名，不能按名字对应
@@ -304,6 +304,24 @@ class RunCheckTest(unittest.TestCase):
                                  ("8-限时闪购/限时闪购.jpg", "F0-1", "一致"), ("8-限时闪购/限时闪购.jpg", "F1-1", "一致")])
         self.assertEqual(result["unmatched"], [])
 
+    def test_table_is_the_reference_extra_images_are_ignored(self):
+        # 以表格为准：旧版本图（整张都对不上）在表格这一组已经被别的图核对完时不提示；表格那一组没核对到时才提示
+        sheet = price_check._sheet_rows("限时闪购", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"]] + [
+            ["限时闪购" if i == 0 else "", i + 1, f"F{i}-1", f"闪购商品{i}", 100 + i, 300 + i] for i in range(3)])
+        good = [{"name": f"闪购商品{i}", "price": 300 + i, "save": 100 + i} for i in range(3)]
+        old = [{"name": f"别的活动{i}", "price": 900 + i, "save": 10 + i} for i in range(3)]
+
+        async def fake_ocr(data):
+            return {b"good": good, b"old": old}[data]
+
+        with patch.object(price_check, "ocr_image", fake_ocr):
+            both = asyncio.run(price_check.run_check(
+                [("8-限时闪购/限时闪购.jpg", lambda: b"good"), ("8-限时闪购/1104/限时闪购.jpg", lambda: b"old")], [sheet]))
+            only_old = asyncio.run(price_check.run_check([("8-限时闪购/1104/限时闪购.jpg", lambda: b"old")], [sheet]))
+        self.assertEqual((both["mismatched"], both["uncovered"]), ([], []))
+        self.assertEqual(len(only_old["mismatched"]), 1)
+        self.assertEqual([r["sku"] for r in only_old["uncovered"]], ["F0-1", "F1-1", "F2-1"])
+
     def test_misread_numbers_are_dropped_or_reread(self):
         # 立省的数字被又填进吊牌价：吊牌价不可能小于等于到手价，直接丢弃
         self.assertIsNone(price_check.sanitize_item({"price": 360, "save": 539, "tag_price": 539})["tag_price"])
@@ -384,6 +402,9 @@ class CardTest(unittest.TestCase):
             self.assertGreaterEqual(card.height, 680 + 56)
             self.assertEqual(card.getpixel((30, 30))[0] > 150, True)   # 左边是原图
             self.assertEqual(card.getpixel((card.width - 5, 5)), (249, 250, 251))  # 右边是对照栏底色
+        ok = [{"pos": 1, "sku": "AGCW401-1", "name": "曲奇鞋", "diffs": [], "same": []}]
+        with Image.open(io.BytesIO(price_cards.render_card(buf.getvalue(), "x.jpg", ok + issues, ["F9-1 没上图的商品"]))) as listed:
+            self.assertGreater(listed.height, 680)  # 无误的商品、没在图上找到的商品也都列出来
         many = issues * 12  # 问题很多时卡片跟着变高，不截断
         with Image.open(io.BytesIO(price_cards.render_card(buf.getvalue(), "x.jpg", many))) as tall:
             self.assertGreater(tall.height, 2000)
@@ -492,6 +513,18 @@ class SharedFoldersTest(unittest.TestCase):
         self.assertEqual(sum(rel.endswith("羽绒服.PNG") for rel in names), 1)
         self.assertEqual(len(names), 7)
         shared_folders.list_folder(self.user, "素材库/temp/改价")
+
+    def test_large_images_are_listed_largest_first(self):
+        base = self.root / "temp" / "改价" / "TOP榜"
+        (base / "大图.jpg").write_bytes(b"x" * (1024 * 1024 + 1))   # 刚好超过 1 MB
+        (base / "男子" / "超大.png").write_bytes(b"x" * (3 * 1024 * 1024))
+        (base / "正好1M.jpg").write_bytes(b"x" * (1024 * 1024))     # 等于 1 MB 不算超过
+        result = shared_folders.large_images(self.user, "素材库/temp/改价", 1)
+        self.assertEqual([(i["path"], i["size"]) for i in result["images"]],
+                         [("TOP榜/男子/超大.png", "3.00 MB"), ("TOP榜/大图.jpg", "1.00 MB")])
+        self.assertEqual(result["over_limit"], 2)
+        self.assertEqual(result["images_checked"], 10)  # 原有 7 张 + 新加 3 张
+        self.assertIn("1 MB = 1024 KB", result["rule"])
 
     def test_no_config_means_no_access(self):
         with patch.object(shared_folders.settings, "shared_folders_path", Path(self.tmp.name) / "none.json"):
@@ -608,9 +641,17 @@ class AgentToolsTest(unittest.TestCase):
             (found,) = result["有问题的图片"]
             self.assertEqual(found["图片"], "男子/羽绒服.png")
             self.assertEqual(found["问题"][0]["差异"], [{"类型": "价格", "项目": "立省", "表格": "500", "图上": "271"}])
-            # 只核对了"男子 / 羽绒服TOP榜"这一组：只列这一组里没找到图的（A2-1），不把表格其他模块都列进来
-            self.assertEqual(result["表格有价格但没找到图片的商品"], {"TOP榜单 / 男子 / 羽绒服TOP榜": ["A2-1 拒水防泼 面包羽绒"]})
+            # 以表格为准按分组交代：这次涉及 TOP榜单 这张表，每一组都说清楚查没查
+            groups = {g["分组"]: g for g in result["各分组核对情况"]}
+            checked = groups["TOP榜单 / 男子 / 羽绒服TOP榜"]
+            self.assertEqual((checked["结果"], checked["核对到的商品数"], checked["有问题的商品数"]), ("有问题", 1, 1))
+            self.assertEqual(checked["没核对到的商品"], ["A2-1 拒水防泼 面包羽绒"])
+            self.assertEqual(groups["TOP榜单 / 女子 / 羽绒服TOP榜"]["结果"], "没有核对")
+            self.assertEqual(groups["TOP榜单 / 女子 / 羽绒服TOP榜"]["原因"], "文件夹里没找到对应这一组的图片")
+            self.assertNotIn("11.10新品上市 / 男子 / 服饰", groups)  # 没涉及的表不列
+            self.assertEqual(result["结论"], "表格这次涉及 4 组：1 组有问题，3 组没有核对")
             self.assertNotIn("files", result)  # 不再生成 Excel 对比表
+            self.assertNotIn("图上有价格但表格里没有的商品", result)  # 以表格为准，图上多出来的不报
             (card,) = result["images"]
             self.assertEqual(card["id"], found["核对卡片"])
             saved = store.get_artifact(card["id"], "u1")

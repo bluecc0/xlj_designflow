@@ -304,6 +304,29 @@ def find_files(user: dict, raw: str, suffixes: set[str], limit: int) -> tuple[st
     return shown, found, truncated
 
 
+def human_size(size: int) -> str:
+    return f"{size / 1024 / 1024:.2f} MB" if size >= 1024 * 1024 else f"{size / 1024:.0f} KB"
+
+
+def large_images(user: dict, raw: str, min_mb: float) -> dict:
+    """文件夹（含子文件夹）里大于 min_mb 的图片，从大到小。1 MB 按 1024 × 1024 字节算。"""
+    shown, found, truncated = find_files(user, raw, IMAGE_SUFFIXES, MAX_LIST_FILES)
+    limit = int(min_mb * 1024 * 1024)
+    sizes = []
+    for rel, path in found:
+        try:
+            sizes.append((rel, path.stat().st_size))
+        except OSError:
+            continue
+    big = sorted(((rel, size) for rel, size in sizes if size > limit), key=lambda x: -x[1])
+    out = {"folder": shown, "rule": f"大于 {min_mb:g} MB（1 MB = 1024 KB = {1024 * 1024:,} 字节）",
+           "images_checked": len(sizes), "over_limit": len(big),
+           "images": [{"path": rel, "size": human_size(size), "bytes": size} for rel, size in big]}
+    if truncated:
+        out["truncated"] = f"图片超过 {MAX_LIST_FILES} 张，只检查了前 {MAX_LIST_FILES} 张，请缩小到子文件夹再查"
+    return out
+
+
 def read_file(user: dict, raw: str, suffixes: set[str], base: str = "") -> tuple[bytes, str, str]:
     """读取白名单里的单个文件，返回 (内容, 文件名, 显示用路径)。"""
     _root, path, shown = resolve(user, raw, base)

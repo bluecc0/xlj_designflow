@@ -624,11 +624,12 @@ def match_group(images: list[list[dict]], rows: list[dict], basis: str) -> tuple
         if len(got) >= 3 and agree < len(got) * MISMATCH_IMAGE_BELOW:
             group = " / ".join([rows[0]["sheet"], *rows[0]["group"]])
             mismatched.append({"images": list(dict.fromkeys(it["_image"] for it in items)),
+                               "group": (rows[0]["sheet"], tuple(rows[0]["group"])),
                                "reason": f"按名字对应到「{group}」，但按顺序对下来 {len(got)} 个商品里只有 {agree} 个的名称或价格对得上，"
                                          "可能是旧版本、放错文件夹，或者表格这一组不是这些商品"})
             continue
         for item, row in got:
-            item["_basis"] = f"{basis}，按顺序第 {rows.index(row) + 1} 个"
+            item["_basis"] = f"{basis}，对应表格这一组第 {rows.index(row) + 1} 行"
         pairs.extend(got)
         extra.extend(items[len(got):])
         last = got[-1][1] if got else last
@@ -854,9 +855,64 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notif
         status, problems = judge(item, row, item["_shown"], frozenset(confirmed.get(idx, ())))
         records.append({"status": status, "problems": problems, "item": item, "row": row,
                         "diffs": differences(item, row, item["_shown"], frozenset(confirmed.get(idx, ())))})
+    # 以表格为准：只报表格里的内容在图上对不上的。
     # "表格有、图上没找到"只看这次核对到的分组：只核对一个模块文件夹时，不把整份表其他模块都列进来
-    touched = {(row["sheet"], tuple(row["group"])) for _item, row in pairs}
+    touched = {(row["sheet"], tuple(row["group"])) for _item, row in pairs} | {m["group"] for m in mismatched}
     uncovered = [row for sheet in sheets for row in sheet.rows if row["values"]
                  and (row["sheet"], tuple(row["group"])) in touched and (row["sheet"], row["index"]) not in covered]
+    # 整张图对不上：表格这一组在别的图里已经全部核对到了（例如这张是旧版本），就不用提示
+    missing = {(row["sheet"], tuple(row["group"])) for row in uncovered}
+    mismatched = [m for m in mismatched if m["group"] in missing]
     return {"records": records, "unmatched": unmatched, "uncovered": uncovered, "failed": failed, "mismatched": mismatched,
             "skipped_small": small, "no_product_images": empty, "image_count": len(images)}
+
+
+# ── 核对范围（以表格为准）────────────────────────────────────────────────────
+
+def group_name(row: dict) -> str:
+    return " / ".join([row["sheet"], *row["group"]])
+
+
+def coverage(sheets: list[Sheet], result: dict) -> list[dict]:
+    """以表格为准，按分组交代这次的核对情况：核对无误、有问题、部分商品没核对到、没有核对（附原因）。
+    只列这次核对涉及到的工作表里有价格的分组（只核对一个模块文件夹时，不把整份表都列出来）。"""
+    records, mismatched = result["records"], result.get("mismatched", [])
+    touched = {r["row"]["sheet"] for r in records} | {m["group"][0] for m in mismatched}
+    groups: dict[tuple, list[dict]] = {}
+    for sheet in sheets:
+        if sheet.name in touched:
+            for row in sheet.rows:
+                if row["values"]:
+                    groups.setdefault((row["sheet"], tuple(row["group"])), []).append(row)
+    out = []
+    for key, rows in groups.items():
+        recs = [r for r in records if (r["row"]["sheet"], tuple(r["row"]["group"])) == key]
+        checked = {id(r["row"]) for r in recs}
+        missing = [r for r in rows if id(r) not in checked]
+        bad = list(dict.fromkeys(id(r["row"]) for r in recs if r["status"] != "一致"))
+        reason = next((m["reason"] for m in mismatched if m["group"] == key), "")
+        entry = {"分组": group_name(rows[0]), "表格里有价格的商品数": len(rows),
+                 "核对到的商品数": len(rows) - len(missing), "有问题的商品数": len(bad),
+                 "图片": list(dict.fromkeys(r["item"]["_image"] for r in recs))[:6]}
+        if not recs:
+            entry["结果"] = "没有核对"
+            entry["原因"] = reason or "文件夹里没找到对应这一组的图片"
+        elif bad:
+            entry["结果"] = "有问题"
+        elif missing:
+            entry["结果"] = "部分没核对"
+        else:
+            entry["结果"] = "核对无误"
+        if missing and recs:
+            entry["没核对到的商品"] = [f"{r['sku']} {r['name']}".strip() for r in missing]
+            entry["原因"] = reason or "这些商品在对应的图上没找到"
+        out.append(entry)
+    order = {"有问题": 0, "没有核对": 1, "部分没核对": 2, "核对无误": 3}
+    return sorted(out, key=lambda e: order[e["结果"]])
+
+
+def coverage_summary(groups: list[dict]) -> str:
+    count = lambda status: sum(e["结果"] == status for e in groups)
+    parts = [f"{count(s)} 组{s}" for s in ("核对无误", "有问题", "部分没核对", "没有核对") if count(s)]
+    return f"表格这次涉及 {len(groups)} 组：" + "，".join(parts) if groups else "没有核对到表格里的任何一组"
+

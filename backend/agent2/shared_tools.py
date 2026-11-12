@@ -105,8 +105,10 @@ def _table_source(ctx: ToolContext, source: str, folder: str = "",
 
 
 async def list_shared_folder(ctx: ToolContext, args: dict) -> dict:
-    return await asyncio.to_thread(shared_folders.list_folder, ctx.user, str(args.get("path") or ""),
-                                   args.get("recursive") is not False)
+    path = str(args.get("path") or "")
+    if args.get("larger_than_mb") not in (None, ""):
+        return await asyncio.to_thread(shared_folders.large_images, ctx.user, path, float(args["larger_than_mb"]))
+    return await asyncio.to_thread(shared_folders.list_folder, ctx.user, path, args.get("recursive") is not False)
 
 
 def _as_web_image(data: bytes, name: str) -> tuple[bytes, str]:
@@ -221,7 +223,8 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
     result = await price_check.run_check(images, sheets, notify, base=shown if folder else "")
     records = result["records"]
     problem = [r for r in records if r["status"] != "一致"]
-    cards, card_note = await _make_cards(ctx, problem, dict(images), shown, notify)
+    groups = price_check.coverage(sheets, result)
+    cards, card_note = await _make_cards(ctx, records, result["uncovered"], dict(images), shown, notify)
 
     # 按"哪张图有什么问题"归类，同一张图的问题放在一起，并带上它的核对卡片
     by_image: dict[str, list[dict]] = {}
@@ -235,14 +238,6 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
                   "差异": [{"类型": d["kind"], "项目": d["label"], "表格": d["table"], "图上": d["image"] or "没读出来"}
                            for d in r["diffs"]]} for r in items],
     } for rel, items in by_image.items()]
-
-    not_in_table: dict[str, list[str]] = {}
-    for it in result["unmatched"]:
-        if it.get("price") not in (None, ""):
-            not_in_table.setdefault(it["_image"], []).append(f"第{it['_pos']}个 {it.get('name') or ''} ¥{it.get('price')}")
-    no_image: dict[str, list[str]] = {}
-    for row in result["uncovered"]:
-        no_image.setdefault(" / ".join([row["sheet"], *row["group"]]), []).append(f"{row['sku']} {row['name']}".strip())
 
     notes = [card_note] if card_note else []
     if truncated:
@@ -264,31 +259,40 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
         },
         # checked / counts 给前端卡片摘要用
         "checked": len(records), "counts": {s: sum(r["status"] == s for r in records) for s in price_check.STATUSES},
+        # 以表格为准，按分组交代：哪些核对无误、哪些有问题、哪些没核对（附原因）。回复要按这个说清楚每一组查没查
+        "结论": price_check.coverage_summary(groups),
+        "回复要求": "以表格为准，按分组说清楚每一组查没查：先给结论；再列核对无误的组；有问题的组逐条说表格是什么、图上是什么；"
+                    "没有核对或部分没核对的组说明原因和哪些商品没核对到。不要只说商品数。",
+        "各分组核对情况": groups[:MAX_REPORTED * 2],
         "有问题的图片": problem_images[:MAX_REPORTED],
-        "整张图和表格对不上的图片": result.get("mismatched", [])[:MAX_REPORTED],
-        "图上有价格但表格里没有的商品": dict(list(not_in_table.items())[:MAX_REPORTED]),
-        "表格有价格但没找到图片的商品": dict(list(no_image.items())[:MAX_REPORTED]),
         "表格自身算不通的行": price_check.table_warnings(sheets)[:15],
         "说明": notes,
         "images": list(cards.values()),
     }
 
 
-async def _make_cards(ctx: ToolContext, problem: list[dict], loaders: dict, shown: str, notify) -> tuple[dict, str]:
-    """每张有问题的图生成一张核对卡片（原图 + 表格内容对照），发到对话和画布。返回 ({图片: 卡片}, 说明)。"""
-    if not problem:
+async def _make_cards(ctx: ToolContext, records: list[dict], uncovered: list[dict], loaders: dict, shown: str,
+                      notify) -> tuple[dict, str]:
+    """每张有问题的图生成一张核对卡片（原图 + 表格内容对照），发到对话和画布。返回 ({图片: 卡片}, 说明)。
+    卡片上列出这张图上的每个商品：有问题的逐项对照，核对无误的各一行；再列出这一组表格里没在图上找到的商品。"""
+    problem_images = list(dict.fromkeys(
+        r["item"]["_image"] for r in sorted(records, key=lambda r: price_check.STATUSES.index(r["status"]))
+        if r["status"] != "一致"))  # 价格不一致的排前面
+    if not problem_images:
         return {}, ""
     if not price_cards.font_path():
         return {}, "服务器上没有找到中文字体，没有生成核对卡片（可以用环境变量 PRICE_CARD_FONT 指定字体文件）"
-    order: dict[str, list[dict]] = {}
-    for r in sorted(problem, key=lambda r: price_check.STATUSES.index(r["status"])):  # 价格不一致的排前面
-        order.setdefault(r["item"]["_image"], []).append(r)
-    await notify(f"正在生成 {min(len(order), MAX_CARDS)} 张核对卡片")
+    await notify(f"正在生成 {min(len(problem_images), MAX_CARDS)} 张核对卡片")
     cards: dict[str, dict] = {}
-    for position, (rel, items) in enumerate(list(order.items())[:MAX_CARDS]):
+    for position, rel in enumerate(problem_images[:MAX_CARDS]):
+        mine = [r for r in records if r["item"]["_image"] == rel]
+        groups = {(r["row"]["sheet"], tuple(r["row"]["group"])) for r in mine}
+        missing = [f"{row['sku']} {row['name']}".strip() for row in uncovered
+                   if (row["sheet"], tuple(row["group"])) in groups]
         try:
             data = await asyncio.to_thread(loaders[rel])
-            png = await asyncio.to_thread(price_cards.render_card, data, f"{shown}/{rel}", price_cards.issues_for(items))
+            png = await asyncio.to_thread(price_cards.render_card, data, f"{shown}/{rel}",
+                                          price_cards.issues_for(mine), missing)
         except Exception:
             continue  # 个别图画不出来不影响其它
         job_id = uuid.uuid4().hex
@@ -304,7 +308,8 @@ async def _make_cards(ctx: ToolContext, problem: list[dict], loaders: dict, show
         if ctx.publish:
             await ctx.publish(event)
         cards[rel] = {"id": artifact["id"], "url": url, "label": label}
-    note = f"有问题的图共 {len(order)} 张，只生成了前 {MAX_CARDS} 张的卡片" if len(order) > MAX_CARDS else ""
+    note = (f"有问题的图共 {len(problem_images)} 张，只生成了前 {MAX_CARDS} 张的卡片"
+            if len(problem_images) > MAX_CARDS else "")
     return cards, note
 
 
@@ -313,8 +318,12 @@ def build_shared_tools() -> list[Tool]:
         Tool("list_shared_folder",
              "只读查看共享文件夹（管理员配置的白名单共享盘）：按文件夹列出图片（带宽高）和表格，不限层级。"
              "path 直接用用户给的写法（smb://、\\\\ 开头的网络路径、带盘符的路径、共享盘名开头的路径都可以）。",
-             {"type": "object", "properties": {"path": {"type": "string"},
-                                               "recursive": {"type": "boolean", "description": "默认 true，连子文件夹一起列"}},
+             {"type": "object", "properties": {
+                 "path": {"type": "string"},
+                 "recursive": {"type": "boolean", "description": "默认 true，连子文件夹一起列"},
+                 "larger_than_mb": {"type": "number",
+                                    "description": "只列出大于这个大小的图片（含子文件夹），从大到小，带文件大小。"
+                                                   "用户问图片大小、有没有超过多少 M 时填，例如 1"}},
               "required": ["path"]},
              list_shared_folder),
         Tool("use_shared_images",
@@ -333,7 +342,8 @@ def build_shared_tools() -> list[Tool]:
              read_table),
         Tool("check_prices",
              "核对图片上的价格和文案是否和表格一致：自动识别文件夹（含子文件夹）里每张图上的商品，"
-             "按商品名称、文案和价格对应到表格里的行，逐项比对到手价、立省、吊牌价、折扣、充绒量和文案。"
+             "按文件夹名、文件名对应到表格分组，组内按顺序对应，逐项比对到手价、立省、吊牌价、折扣、充绒量和文案。"
+             "以表格为准：只报表格里的内容在图上对不上的，图上有、表格没有的信息不报。"
              "结果按图片归类；每张有问题的图会生成一张核对卡片（原图 + 表格内容对照）发到对话和画布。"
              "不需要事先知道文件夹结构、文件命名或顺序，也不需要先列目录。只在用户提出要核对时调用。"
              "图片多时要跑几分钟。",
