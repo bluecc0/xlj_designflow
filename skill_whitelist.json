@@ -1,0 +1,16 @@
+{
+  "_说明": "技能白名单：只对管理员放在 AGENT_SKILL_PATHS 目录里的系统技能生效，用户上传的技能永远不执行脚本。scripts 只放只读的查询、检查脚本；self_check 开启出图后自检，max_repairs 为每张图最多返修次数（0-3）。修改后立即生效，不用重启。",
+  "skills": {
+    "kids-lookbook": {
+      "scripts": [
+        "scripts/query_action_packs.py",
+        "scripts/query_assets.py",
+        "scripts/build_prompt_context.py"
+      ],
+      "self_check": {
+        "enabled": true,
+        "max_repairs": 2
+      }
+    }
+  }
+}
