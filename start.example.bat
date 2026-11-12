@@ -74,4 +74,4 @@ echo.
 start "" /b "%VENV_PYTHON%" "%ROOT%ensure_ui_build.py" --open-when-ready %BACKEND_PORT%
 
 cd /d "%ROOT%"
-"%VENV_PYTHON%" -m uvicorn backend.main:app --host 0.0.0.0 --port %BACKEND_PORT% --reload
+"%VENV_PYTHON%" -m uvicorn backend.main:app --host 0.0.0.0 --port %BACKEND_PORT% --reload --reload-dir backend

@@ -10,7 +10,7 @@ DesignFlow is an AI-driven e-commerce design asset platform. Operations/designer
 
 ```bash
 # Start backend (development)
-uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir backend
 
 # Install backend dependencies
 pip install -r backend/requirements.txt

@@ -37,7 +37,7 @@ DesignFlow 是面向电商设计生产的本地 Web 工具：通过对话、Penp
 正式服务：
 
 ```powershell
-.venv\Scripts\python.exe -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+.venv\Scripts\python.exe -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir backend
 ```
 
 Windows 推荐复制 `start.example.bat` 为本机的 `start.bat` 后启动。常用地址：`/ui`、`/docs`、`/health`、`/health/deep`，完整地址均以 `http://localhost:8000` 为前缀。

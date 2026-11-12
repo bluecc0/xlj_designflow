@@ -10,7 +10,7 @@
     {
       "name": "backend",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000", "--reload"],
+      "runtimeArgs": ["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000", "--reload", "--reload-dir", "backend"],
       "port": 8000
     },
     {
