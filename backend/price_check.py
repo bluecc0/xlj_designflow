@@ -579,24 +579,52 @@ SCOPE_BONUS = 0.3           # 名字点到的分组里的行，按内容找时�
 MISMATCH_IMAGE_BELOW = 0.3  # 按顺序对应后，名称或金额对得上的不到三成：整张图和这一组对不上
 
 
-def match_in_order(items: list[dict], rows: list[dict], basis: str) -> tuple[list[tuple[dict, dict]], list[dict], str]:
-    """已经确定是表格里的同一组：图上第 1 个对表格第 1 个，依次往下。名称和价格不参与决定对应谁，只用来报差异。
-    返回 (配对, 多出来的商品, 整组对不上的原因)。大部分商品都对不上时，整张图算作和这一组对不上，不逐个报差异。"""
-    # 表格里没价格的行（例如组里的主推款，图上是大图不带价格）识别时常常不算商品：
-    # 按顺序对应时分两种数法——所有行、只数有价格的行——用对得上的多的那种
+def _agree(items: list[dict], seq: list[dict]) -> int:
+    """按顺序对下来，名称或价格对得上的个数。"""
+    return sum(1 for it, row in zip(items, seq) if _scoped_score(it, row) is not None)
+
+
+def match_group(images: list[list[dict]], rows: list[dict], basis: str) -> tuple[list[tuple[dict, dict]], list[dict], list[dict]]:
+    """已经确定是表格里同一组的几张图（同一文件夹，按文件名顺序）：图上第 1 个对表格第 1 个，依次往下。
+    名称和价格不参与决定对应谁，只用来报差异。返回 (配对, 多出来的商品, 整张对不上的图)。
+
+    同一文件夹里的几张图可能是切片或单品卡片（要接着上一张往下数），也可能是同组商品的几张完整海报、
+    修改版、不同尺寸（每张都从这一组第 1 个开始）。每张图两种起点都试，用对得上的多的那种；
+    一样多时，图上商品比这一组少的当作切片或单品卡片接着数，否则当作完整的一张从头数。
+    表格里没价格的行（组里的主推款，图上是大图不带价格）识别时常常不算商品，所以还分"所有行""只数有价格的行"两种数法。"""
     priced = [r for r in rows if r["values"]]
-    options = [rows] + ([priced] if priced and len(priced) < len(rows) else [])
-    agree_of = lambda seq: sum(1 for it, row in zip(items, seq) if _scoped_score(it, row) is not None)
-    rows = max(options, key=agree_of)
-    pairs = list(zip(items, rows))
-    agree = agree_of(rows)
-    if len(pairs) >= 3 and agree < len(pairs) * MISMATCH_IMAGE_BELOW:
-        group = " / ".join([rows[0]["sheet"], *rows[0]["group"]])
-        return [], items, (f"按名字对应到「{group}」，但按顺序对下来 {len(pairs)} 个商品里只有 {agree} 个的名称或价格对得上，"
-                           "可能是旧版本、放错文件夹，或者表格这一组不是这些商品")
-    for k, (item, _row) in enumerate(pairs):
-        item["_basis"] = f"{basis}，按顺序第 {k + 1} 个"
-    return pairs, items[len(pairs):], ""
+    seqs = [rows] + ([priced] if priced and len(priced) < len(rows) else [])
+    pairs, extra, mismatched = [], [], []
+    last: dict | None = None  # 上一张图用到的最后一行
+    for items in images:
+        options = []
+        for seq in seqs:
+            ids = [id(r) for r in seq]
+            starts = {0} | ({ids.index(id(last)) + 1} if last is not None and id(last) in ids else set())
+            for start in starts:
+                part = seq[start:]
+                if not part:
+                    continue
+                go_on = start > 0
+                prefer_go_on = len(items) < len(seq)  # 比这一组少：像切片或单品卡片
+                options.append((_agree(items, part), go_on == prefer_go_on, seq is rows, start, part))
+        if not options:
+            extra.extend(items)
+            continue
+        agree, _pref, _all, _start, part = max(options, key=lambda o: o[:3])
+        got = list(zip(items, part))
+        if len(got) >= 3 and agree < len(got) * MISMATCH_IMAGE_BELOW:
+            group = " / ".join([rows[0]["sheet"], *rows[0]["group"]])
+            mismatched.append({"images": list(dict.fromkeys(it["_image"] for it in items)),
+                               "reason": f"按名字对应到「{group}」，但按顺序对下来 {len(got)} 个商品里只有 {agree} 个的名称或价格对得上，"
+                                         "可能是旧版本、放错文件夹，或者表格这一组不是这些商品"})
+            continue
+        for item, row in got:
+            item["_basis"] = f"{basis}，按顺序第 {rows.index(row) + 1} 个"
+        pairs.extend(got)
+        extra.extend(items[len(got):])
+        last = got[-1][1] if got else last
+    return pairs, extra, mismatched
 
 
 # ── 比对 ──────────────────────────────────────────────────────────────────────
@@ -728,17 +756,15 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notif
             rows, basis = scope_for([f"{base}/{rel}" if base else rel], sheets)
             if rows and single_group(rows):
                 key = ("/".join(parts[:-1]), rows[0]["sheet"], tuple(rows[0]["group"]))
-                in_order.setdefault(key, {"rows": rows, "basis": basis, "items": []})["items"].extend(items)
+                in_order.setdefault(key, {"rows": rows, "basis": basis, "images": []})["images"].append(items)
             else:  # 名字没能确定到单独一组：每张图单独按名称和价格找
                 units.append(items)
 
     pairs, unmatched, covered, mismatched = [], [], set(), []
     for unit in in_order.values():
-        got, extra, reason = match_in_order(unit["items"], unit["rows"], unit["basis"])
-        if reason:
-            mismatched.append({"images": list(dict.fromkeys(it["_image"] for it in unit["items"])), "reason": reason})
-        else:
-            unmatched.extend(extra)
+        got, extra, whole = match_group(unit["images"], unit["rows"], unit["basis"])
+        mismatched.extend(whole)
+        unmatched.extend(extra)
         for item, row in got:
             covered.add((row["sheet"], row["index"]))
             pairs.append((item, row))

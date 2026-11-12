@@ -97,8 +97,8 @@ class MatchTest(unittest.TestCase):
         items = [_item("拒水防泼面包羽绒", 341, 458, pos=1), _item("火锅羽绒短羽绒服", 399, 500, pos=2)]
         rows, basis = price_check.scope_for(["10-TOP榜/男子/羽绒服.png"], self.sheets)
         self.assertTrue(price_check.single_group(rows))
-        pairs, extra, reason = price_check.match_in_order(items, rows, basis)
-        self.assertEqual(([row["sku"] for _it, row in pairs], extra, reason), (["A1-1", "A2-1"], [], ""))
+        pairs, extra, whole = price_check.match_group([items], rows, basis)
+        self.assertEqual(([row["sku"] for _it, row in pairs], extra, whole), (["A1-1", "A2-1"], [], []))
         self.assertIn("按顺序第 1 个", items[0]["_basis"])
 
     def test_group_names_alone_do_not_map_when_the_sheet_is_unknown(self):
@@ -119,7 +119,7 @@ class MatchTest(unittest.TestCase):
         sheets = price_check.load_table(_xlsx(), "a.xlsx")
         item = _item("直筒宽松卫裤", 368, 431, image="11-新品上市/男-服饰.png")  # 金额等于 儿童/羽绒服TOP榜 的 C2-1
         rows, basis = price_check.scope_for([item["_image"]], sheets)
-        pairs, _extra, _reason = price_check.match_in_order([item], rows, basis)
+        pairs, _extra, _whole = price_check.match_group([[item]], rows, basis)
         self.assertEqual(pairs[0][1]["sku"], "D2-1")  # 新品上市 / 男子 / 服饰
         status, problems = price_check.judge(item, pairs[0][1], {"price", "save"})
         self.assertEqual(status, "不一致")
@@ -137,22 +137,48 @@ class MatchTest(unittest.TestCase):
                  _item("健身系列套头卫衣", 279, 70, image="11-新品上市/女-服饰.png", pos=2),
                  _item("直筒宽松卫裤", 319, 80, image="11-新品上市/女-服饰.png", pos=3)]
         rows, basis = price_check.scope_for(["11-新品上市/女-服饰.png"], [sheet])
-        pairs, extra, reason = price_check.match_in_order(items, rows, basis)
-        self.assertEqual(([row["sku"] for _it, row in pairs], extra, reason), (["H1-1", "H2-1", "H3-1"], [], ""))
+        pairs, extra, whole = price_check.match_group([items], rows, basis)
+        self.assertEqual(([row["sku"] for _it, row in pairs], extra, whole), (["H1-1", "H2-1", "H3-1"], [], []))
 
     def test_whole_image_that_does_not_fit_its_group_is_reported_once(self):
         sheet = price_check._sheet_rows("限时闪购", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"]] + [
             ["限时闪购" if i == 0 else "", i + 1, f"F{i}-1", f"闪购商品{i}", 100 + i, 300 + i] for i in range(4)])
         rows, basis = price_check.scope_for(["8-限时闪购/1104/限时闪购_02.jpg"], [sheet])
         old = [_item(f"别的活动{i}", 900 + i, 10 + i, image="8-限时闪购/1104/限时闪购_02.jpg", pos=i + 1) for i in range(4)]
-        pairs, extra, reason = price_check.match_in_order(old, rows, basis)
-        self.assertEqual((pairs, len(extra)), ([], 4))
-        self.assertIn("可能是旧版本", reason)
+        pairs, extra, whole = price_check.match_group([old], rows, basis)
+        self.assertEqual((pairs, extra), ([], []))
+        self.assertIn("可能是旧版本", whole[0]["reason"])
         # 切片图：同一组的 _01、_02 接起来按顺序对应，第二张从表格第 3 个接着数
         first = [_item(f"闪购商品{i}", 300 + i, 100 + i, image="8-限时闪购/限时闪购_01.jpg", pos=i + 1) for i in range(2)]
         second = [_item(f"闪购商品{i}", 300 + i, 100 + i, image="8-限时闪购/限时闪购_02.jpg", pos=i - 1) for i in range(2, 4)]
-        pairs, _extra, reason = price_check.match_in_order(first + second, rows, basis)
+        pairs, _extra, _whole = price_check.match_group([first, second], rows, basis)
         self.assertEqual([row["sku"] for _it, row in pairs], ["F0-1", "F1-1", "F2-1", "F3-1"])
+
+    def _flash_sheet(self, n=4):
+        return price_check._sheet_rows("限时闪购", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"]] + [
+            ["限时闪购" if i == 0 else "", i + 1, f"F{i}-1", f"闪购商品{i}", 100 + i, 300 + i] for i in range(n)])
+
+    def test_several_full_posters_in_one_folder_each_start_from_the_first_row(self):
+        # 审核复现的场景：同一文件夹两张完整海报（例如修改版、不同尺寸），第二张的价格写错了，必须报出来
+        rows, basis = price_check.scope_for(["8-限时闪购/限时闪购.jpg"], [self._flash_sheet(2)])
+        good = [_item(f"闪购商品{i}", 300 + i, 100 + i, image="8-限时闪购/限时闪购.jpg", pos=i + 1) for i in range(2)]
+        wrong = [_item("闪购商品0", 999, 100, image="8-限时闪购/限时闪购-改.jpg", pos=1),
+                 _item("闪购商品1", 888, 101, image="8-限时闪购/限时闪购-改.jpg", pos=2)]
+        pairs, extra, whole = price_check.match_group([good, wrong], rows, basis)
+        self.assertEqual((extra, whole), ([], []))
+        self.assertEqual([(it["_image"], row["sku"]) for it, row in pairs],
+                         [("8-限时闪购/限时闪购.jpg", "F0-1"), ("8-限时闪购/限时闪购.jpg", "F1-1"),
+                          ("8-限时闪购/限时闪购-改.jpg", "F0-1"), ("8-限时闪购/限时闪购-改.jpg", "F1-1")])
+        statuses = [price_check.judge(it, row, {"price", "save"})[0] for it, row in pairs]
+        self.assertEqual(statuses, ["一致", "一致", "不一致", "不一致"])
+
+    def test_single_product_cards_continue_down_the_group(self):
+        # 单品卡片（男子-1…4）每张一个商品，接着往下数；第 3 张价格错了也还是对第 3 行
+        rows, basis = price_check.scope_for(["8-限时闪购/1.jpg"], [self._flash_sheet(4)])
+        cards = [[_item(f"闪购商品{i}", 300 + i if i != 2 else 999, 100 + i, image=f"8-限时闪购/{i + 1}.jpg")] for i in range(4)]
+        pairs, extra, whole = price_check.match_group(cards, rows, basis)
+        self.assertEqual([row["sku"] for _it, row in pairs], ["F0-1", "F1-1", "F2-1", "F3-1"])
+        self.assertEqual(price_check.judge(pairs[2][0], pairs[2][1], {"price", "save"})[0], "不一致")
 
     def test_same_name_in_two_groups_uses_folder_hint_and_price(self):
         girl = price_check.match_unit([_item("防泼水短羽绒服", 799, 200, image="x/女子/1.jpg")], self.sheets)
@@ -245,6 +271,25 @@ class RunCheckTest(unittest.TestCase):
         self.assertEqual(result["uncovered"], [])
         wrong = next(r for r in result["records"] if r["status"] == "不一致")
         self.assertEqual(wrong["diffs"], [{"kind": "价格", "label": "立省", "table": "458", "image": "271"}])
+
+    def test_second_full_poster_with_wrong_prices_is_reported(self):
+        # 审核复现：表格 2 个商品，同一目录两张完整海报都展示这 2 个；第二张价格写成 999、888
+        sheet = price_check._sheet_rows("限时闪购", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"],
+                                                ["限时闪购", 1, "F0-1", "防泼水短羽绒服", 539, 360],
+                                                ["", 2, "F1-1", "防泼水鹅绒马甲", 479, 320]])
+        reads = {b"a": [{"name": "防泼水短羽绒服", "price": 360, "save": 539}, {"name": "防泼水鹅绒马甲", "price": 320, "save": 479}],
+                 b"b": [{"name": "防泼水短羽绒服", "price": 999, "save": 539}, {"name": "防泼水鹅绒马甲", "price": 888, "save": 479}]}
+
+        async def fake_ocr(data):
+            return reads[data]
+
+        images = [("8-限时闪购/限时闪购.jpg", lambda: b"a"), ("8-限时闪购/限时闪购-750.jpg", lambda: b"b")]
+        with patch.object(price_check, "ocr_image", fake_ocr):
+            result = asyncio.run(price_check.run_check(images, [sheet]))
+        found = sorted((r["item"]["_image"], r["row"]["sku"], r["status"]) for r in result["records"])
+        self.assertEqual(found, [("8-限时闪购/限时闪购-750.jpg", "F0-1", "不一致"), ("8-限时闪购/限时闪购-750.jpg", "F1-1", "不一致"),
+                                 ("8-限时闪购/限时闪购.jpg", "F0-1", "一致"), ("8-限时闪购/限时闪购.jpg", "F1-1", "一致")])
+        self.assertEqual(result["unmatched"], [])
 
     def test_misread_numbers_are_dropped_or_reread(self):
         # 立省的数字被又填进吊牌价：吊牌价不可能小于等于到手价，直接丢弃
