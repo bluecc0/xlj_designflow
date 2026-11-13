@@ -606,8 +606,9 @@ async def assign_groups(folder: str, entries: list[tuple[str, object]], catalog:
             continue
         seen: dict[int, list[dict]] = {}
         for a in answers if isinstance(answers, list) else []:
-            if isinstance(a, dict) and str(a.get("image", "")).strip().isdigit():
-                seen.setdefault(int(a["image"]) - 1, []).append(a)
+            number = _answer_int(a.get("image")) if isinstance(a, dict) else None
+            if number is not None and 1 <= number <= len(entries):
+                seen.setdefault(number - 1, []).append(a)
         for n in todo:
             rel, items = entries[n]
             given = seen.get(n, [])
@@ -629,25 +630,47 @@ async def assign_groups(folder: str, entries: list[tuple[str, object]], catalog:
     return out
 
 
+def _answer_int(value) -> int | None:
+    """模型编号只接受整数或 ASCII 整数字符串；不截断小数，也不把布尔值当编号。"""
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"-?[0-9]+", value.strip()):
+        try:
+            return int(value)
+        except ValueError:  # 超长数字字符串可能超过 Python 的转换限制
+            pass
+    return None
+
+
 def _check_answer(answer: dict, items, by_id: dict) -> tuple[dict | None, str]:
     """检查模型对一张图的回答：分组编号要在目录里（或明确填 null 表示不对应），start 要在这一组的范围内。
     返回 (对应, 问题)，有问题时对应为 None。"""
     reason = str(answer.get("reason") or "").strip()
+    if "group" not in answer:  # 缺字段是回答不完整，不等于模型明确填了 null
+        return None, "缺少 group（不对应表格时请明确填 null）"
     raw = answer.get("group")
-    if raw is None or str(raw).strip().lower() in ("", "null", "none"):
+    if raw is None:
         return {"group": None, "start": 1, "reason": reason}, ""
-    if not str(raw).strip().isdigit() or int(raw) not in by_id:
+    group_id = _answer_int(raw)
+    if group_id is None or group_id not in by_id:
         return None, f"分组编号 {raw} 不在表格分组目录里"
-    group = by_id[int(raw)]
-    try:
-        start = int(answer.get("start") or 1)
-    except (TypeError, ValueError):
-        return None, f"start {answer.get('start')!r} 不是数字"
-    priced = isinstance(items, list) and any(_has_price(it) for it in items)
-    # 带价格的图：start 指带价格的商品；只有不带价格大图的：指 KV 位（也可能是价格没读出来的带价格商品）
-    limit = len(group["priced"]) if priced else max(len(group["plain"]), len(group["priced"]))
-    if not 1 <= start <= max(limit, 1):
-        return None, f"start {start} 超出了第 {raw} 组的范围（1~{max(limit, 1)}）"
+    group = by_id[group_id]
+    start = _answer_int(answer.get("start"))
+    if start is None:
+        return None, f"start {answer.get('start')!r} 不是整数"
+    if start < 1:
+        return None, f"start {start} 必须从 1 开始"
+    if isinstance(items, list) and items:
+        # 和 pair_by_position 用同一份表格行：带价格的图对带价格的商品，只有不带价格大图的对 KV 位。
+        # 必然配不上的回答（没有可对的行、start 超出范围）不能当成有效回答，否则这张图显示"已核对"却什么都没比
+        priced = any(_has_price(it) for it in items)
+        rows = group["priced"] if priced else group["plain"]
+        if not rows:
+            return None, (f"第 {raw} 组没有{'带价格的商品' if priced else ' KV 位'}，"
+                          f"而这张图上{'有' if priced else '没读出'}价格，对应不上")
+        if not 1 <= start <= len(rows):
+            return None, f"start {start} 超出了第 {raw} 组的范围（1~{len(rows)}）"
+    # 识别失败、没识别出商品的图不配对，不做行数上限检查，只用分组交代没核对的原因
     return {"group": group, "start": start, "reason": reason}, ""
 
 

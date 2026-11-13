@@ -255,6 +255,90 @@ class AssignTest(unittest.TestCase):
         self.assertEqual([(out[r]["group"]["id"], out[r]["start"], out[r].get("error")) for r in ("a.jpg", "b.jpg")],
                          [(1, 1, None), (1, 2, None)])
 
+    def test_missing_group_field_is_not_an_explicit_skip(self):
+        # 审核复现：只有图片编号、没有 group 字段，是回答不完整，要重试并最终标为分组失败；明确填 null 才是跳过
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        items = [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]
+        self.assertEqual(price_check._check_answer({"image": 1}, items, {g["id"]: g for g in catalog}),
+                         (None, "缺少 group（不对应表格时请明确填 null）"))
+        fake, prompts = self._replies(*[[{"image": 1}]] * (price_check.OCR_RETRIES + 1))
+        with patch.object(price_check, "routed_chat_completion", fake):
+            out = asyncio.run(price_check.assign_groups("活动", [("a.jpg", items)], catalog))
+        self.assertTrue(out["a.jpg"]["error"])
+        self.assertIn("缺少 group", out["a.jpg"]["reason"])
+        self.assertEqual(len(prompts), price_check.OCR_RETRIES + 1)
+
+    def test_invalid_group_values_are_retried_instead_of_skipped(self):
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        items = [{"name": "火锅羽绒 短羽绒服", "price": 399}]
+        for group in ("", " ", "null", "none", True, False, 1.9, "²", [], {}):
+            with self.subTest(group=group):
+                bad = [{"image": 1, "group": group, "start": 1}]
+                fake, prompts = self._replies(*[bad] * (price_check.OCR_RETRIES + 1))
+                with patch.object(price_check, "routed_chat_completion", fake):
+                    out = asyncio.run(price_check.assign_groups("活动", [("a.jpg", items)], catalog))
+                self.assertTrue(out["a.jpg"]["error"])
+                self.assertEqual(len(prompts), price_check.OCR_RETRIES + 1)
+
+    def test_invalid_starts_do_not_default_or_truncate(self):
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        ids = {g["id"]: g for g in catalog}
+        items = [{"name": "火锅羽绒 短羽绒服", "price": 399}]
+        for start in (None, "", 0, -1, False, True, 1.9, float("inf"), float("nan"), "²", [], {}):
+            with self.subTest(start=start):
+                answer = {"image": 1, "group": 1, "start": start}
+                decision, error = price_check._check_answer(answer, items, ids)
+                self.assertIsNone(decision)
+                self.assertTrue(error)
+                fake, prompts = self._replies([answer], [{"image": 1, "group": "1", "start": "2"}])
+                with patch.object(price_check, "routed_chat_completion", fake):
+                    out = asyncio.run(price_check.assign_groups("活动", [("a.jpg", items)], catalog))
+                self.assertEqual(out["a.jpg"]["start"], 2)
+                self.assertEqual(len(prompts), 2)
+        decision, error = price_check._check_answer({"image": 1, "group": 1}, items, ids)
+        self.assertEqual((decision, bool(error)), (None, True))
+
+    def test_malformed_image_numbers_do_not_abort_the_batch(self):
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        items = [{"name": "火锅羽绒 短羽绒服", "price": 399}]
+        for number in ("²", "9" * 5000, float("inf"), 1.9, True, 0, -1, 3, [], {}):
+            with self.subTest(number=repr(number)[:40]):
+                bad = [{"image": number, "group": 1, "start": 1},
+                       {"image": 2, "group": 1, "start": 2}]
+                fake, prompts = self._replies(bad, [{"image": "1", "group": 1, "start": 1}])
+                with patch.object(price_check, "routed_chat_completion", fake):
+                    out = asyncio.run(price_check.assign_groups("活动", [("a.jpg", items), ("b.jpg", items)], catalog))
+                self.assertEqual([out[r]["start"] for r in ("a.jpg", "b.jpg")], [1, 2])
+                self.assertEqual(len(prompts), 2)
+
+    def test_start_for_kv_only_image_uses_the_same_rows_as_pairing(self):
+        # 审核复现：组内 1 个 KV 位 + 2 个带价格商品，只有 KV 大图的图片 start=2 必然配不上，不能当成有效回答
+        mixed = price_check._group_catalog([price_check._sheet_rows("新品", [
+            ["模块", "序号", "SKU", "商品名称", "立省", "到手价"],
+            ["童鞋", 1, "K1", "暖行3 中帮长绒棉鞋", None, None],
+            ["童鞋", 2, "P1", "赤兔9 PRO跑步鞋", 84, 615],
+            ["童鞋", 3, "P2", "启悦3加绒休闲鞋", 80, 319]])])[0]
+        by_id = {mixed["id"]: mixed}
+        kv_image = [{"name": "暖行3 中帮长绒棉鞋", "_pos": 1}]
+        decision, error = price_check._check_answer({"image": 1, "group": mixed["id"], "start": 2}, kv_image, by_id)
+        self.assertEqual((decision, error), (None, f"start 2 超出了第 {mixed['id']} 组的范围（1~1）"))
+        decision, error = price_check._check_answer({"image": 1, "group": mixed["id"], "start": 1}, kv_image, by_id)
+        pairs, _extra = price_check.pair_by_position(kv_image, decision["group"], decision["start"], "")
+        self.assertEqual([row["sku"] for _it, row in pairs], ["K1"])
+        # 没有 KV 位的组：图上没读出价格的主图配对必然为空，同样不算有效回答（之后重试，仍不行就报分组失败）
+        priced_only = price_check._group_catalog([price_check._sheet_rows("适温叠穿", [
+            ["模块", "序号", "SKU", "商品名称", "立省", "到手价"],
+            ["kv", 1, "A1", "排骨羽绒轻薄短羽绒服", 399, 300],
+            ["kv", 2, "A2", "火锅羽绒抗静电短羽绒服", 500, 399]])])[0]
+        ids = {priced_only["id"]: priced_only}
+        main = [{"name": "火锅羽绒抗静电短羽绒服", "_pos": 1}]
+        self.assertEqual(price_check._check_answer({"image": 1, "group": priced_only["id"], "start": 1}, main, ids),
+                         (None, f"第 {priced_only['id']} 组没有 KV 位，而这张图上没读出价格，对应不上"))
+        # 识别失败、没识别出商品的图不配对，不做范围检查，保持"识别失败""没识别出商品"的原因
+        for unread in (RuntimeError("超时"), []):
+            decision, error = price_check._check_answer({"image": 1, "group": priced_only["id"], "start": 5}, unread, ids)
+            self.assertEqual((decision["group"]["id"], error), (priced_only["id"], ""))
+
     def test_invalid_answers_end_as_assignment_failures(self):
         catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
         priced = [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]
@@ -458,6 +542,30 @@ class RunCheckTest(unittest.TestCase):
                          {"ok.jpg": "read", "lost.jpg": "unassigned", "nav.jpg": "skipped"})
         self.assertEqual(result["unassigned"], ["lost.jpg：判断对应分组失败：模型服务异常：超时"])
         self.assertEqual([r["item"]["_image"] for r in result["records"]], ["ok.jpg"])
+
+    def test_malformed_assignments_are_reported_without_losing_valid_images(self):
+        sheets = price_check.load_table(_xlsx(), "a.xlsx")
+
+        async def fake_ocr(data):
+            return [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]
+
+        for bad in ({"group": ""}, {"group": 1}, {"group": 1, "start": 0},
+                    {"group": 1, "start": 1.9}, {"group": 1, "start": float("inf")},
+                    {"group": "²", "start": 1}, {"image": "²", "group": 1, "start": 1}):
+            with self.subTest(bad=bad):
+                answer = [{"image": 1, "group": 1, "start": 1}, {"image": 2, **bad},
+                          {"image": 3, "group": None, "reason": "导航图"}]
+                fake, prompts = AssignTest()._replies(*[answer] * (price_check.OCR_RETRIES + 1))
+                with patch.object(price_check, "ocr_image", fake_ocr), \
+                        patch.object(price_check, "routed_chat_completion", fake):
+                    result = asyncio.run(price_check.run_check(
+                        [("ok.jpg", lambda: b"1"), ("lost.jpg", lambda: b"2"), ("nav.jpg", lambda: b"3")], sheets))
+                self.assertEqual({a["image"]: a["status"] for a in result["assigned"]},
+                                 {"ok.jpg": "read", "lost.jpg": "unassigned", "nav.jpg": "skipped"})
+                self.assertEqual(len(result["unassigned"]), 1)
+                self.assertTrue(result["unassigned"][0].startswith("lost.jpg：判断对应分组失败："))
+                self.assertEqual([r["row"]["sku"] for r in result["records"]], ["A1-1"])
+                self.assertEqual(len(prompts), price_check.OCR_RETRIES + 1)
 
     def test_group_with_only_kv_rows_is_in_the_conclusion(self):
         # 正式路径复现：越冬服饰 KV 组只有不带价格的商品，图上"珑壳"印成"琥壳"，
