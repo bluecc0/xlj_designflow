@@ -88,151 +88,281 @@ class LoadTableTest(unittest.TestCase):
             price_check.load_table(buf.getvalue(), "a.xlsx")
 
 
-class MatchTest(unittest.TestCase):
+def _assign(mapping=None, default=None):
+    """替换"交给模型判断对应分组"这一步：mapping 是 {图片路径: (分组名, start)}，没列出的用 default（分组名或 None）。"""
+    mapping = mapping or {}
+
+    async def fake(folder, entries, catalog, others=None, dates=None):
+        by_name = {g["name"]: g for g in catalog}
+        out = {}
+        for rel, _items in entries:
+            name, start = mapping.get(rel, (default, 1))
+            out[rel] = {"group": by_name.get(name) if name else None, "start": start, "reason": "测试"}
+        return out
+    return patch.object(price_check, "assign_groups", fake)
+
+
+def _kid_shoes():
+    # 线上的童鞋这一组：第 1 行是 KV 位（纵横 LOW户外鞋，没价格），后面三个带价格
+    return price_check._sheet_rows("表格截图", [["模块", "序号", "SKU", "商品名称", "吊牌价", "立省", "到手价"],
+                                            ["儿童", "鞋履", "YKEW032-14", "纵横 LOW户外鞋", "", "", ""],
+                                            ["", "", "YKFW202-5", "织雀2跑步鞋", 499, 150, 349],
+                                            ["", "", "YKFW156-7", "步态引导跑鞋", 599, 180, 419],
+                                            ["", "", "YKCW180-34", "驭雪休闲鞋", 399, 80, 319]])
+
+
+class PairTest(unittest.TestCase):
+    """模型定了是哪一组、从第几个开始以后，程序按位置一一对应：名称和价格不参与决定对应谁。"""
+
     def setUp(self):
-        self.sheets = price_check.load_table(_xlsx(), "a.xlsx")
+        self.group = price_check._group_catalog([_kid_shoes()])[0]
 
-    def test_named_group_is_matched_in_order_even_when_names_differ(self):
-        # 文件名对应到"男子 / 羽绒服TOP榜"：图上第 1 个就是表格第 1 个，名称和价格只用来报差异
-        items = [_item("拒水防泼面包羽绒", 341, 458, pos=1), _item("火锅羽绒短羽绒服", 399, 500, pos=2)]
-        rows, basis = price_check.scope_for(["10-TOP榜/男子/羽绒服.png"], self.sheets)
-        self.assertTrue(price_check.single_group(rows))
-        pairs, extra, whole = price_check.match_group([items], rows, basis)
-        self.assertEqual(([row["sku"] for _it, row in pairs], extra, whole), (["A1-1", "A2-1"], [], []))
-        self.assertIn("对应表格这一组第 1 行", items[0]["_basis"])
-
-    def test_group_names_alone_do_not_map_when_the_sheet_is_unknown(self):
-        # "品类热榜"不在表格里：只靠"男子"这一级碰巧同名，不能按名字对应
-        self.assertEqual(price_check.scope_for(["6-品类热榜/男子/羽绒服.png"], self.sheets), ([], ""))
-        # 只有一张工作表（例如表格截图，表名对不上文件夹）时，分组名照样能对应
-        single = [s for s in self.sheets if s.name == "TOP榜单"]
-        rows, _basis = price_check.scope_for(["随便什么模块/男子/羽绒服.png"], single)
-        self.assertEqual([r["sku"] for r in rows], ["A1-1", "A2-1"])
-
-    def test_module_name_in_the_folder_the_user_pointed_at_counts(self):
-        # 用户直接给到模块文件夹：图片的相对路径里没有模块名，模块名在给的文件夹路径上
-        rows, _basis = price_check.scope_for(["\\\\server\\活动\\11-新品上市/男-服饰.png"], self.sheets)
-        self.assertEqual([r["sku"] for r in rows], ["D2-1"])
-
-    def test_same_amounts_in_another_group_do_not_pull_the_item_away(self):
-        # 线上出过的错：女-服饰 图上"直筒宽松卫裤"的立省、到手价和儿童组某一行碰巧一样，被对到了儿童组
-        sheets = price_check.load_table(_xlsx(), "a.xlsx")
-        item = _item("直筒宽松卫裤", 368, 431, image="11-新品上市/男-服饰.png")  # 金额等于 儿童/羽绒服TOP榜 的 C2-1
-        rows, basis = price_check.scope_for([item["_image"]], sheets)
-        pairs, _extra, _whole = price_check.match_group([[item]], rows, basis)
-        self.assertEqual(pairs[0][1]["sku"], "D2-1")  # 新品上市 / 男子 / 服饰
-        status, problems = price_check.judge(item, pairs[0][1], {"price", "save"})
-        self.assertEqual(status, "不一致")
-        self.assertIn("到手价：表格 799，图上 368", problems)
-
-    def test_unpriced_lead_row_does_not_shift_the_order(self):
-        # 表格这一组第 1 行是不带价格的主推款，图上是大图、识别时不算商品：图上第 1 个对的是表格第 2 行
-        sheet = price_check._sheet_rows("新品上市", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"],
-                                                # 价格单元格里填的是素材路径（真实表格里出现过）：当作没填
-                                                ["女子", "服饰", "H0-1", "珑壳羽绒服", "\\\\192.168.2.136\\media\\童", ""],
-                                                ["", "", "H1-1", "草莓熊联名卫衣", 90, 359],
-                                                ["", "", "H2-1", "健身系列套头卫衣", 70, 279],
-                                                ["", "", "H3-1", "直筒宽松卫裤", 80, 319]])
-        items = [_item("草莓熊联名卫衣", 359, 90, image="11-新品上市/女-服饰.png", pos=1),
-                 _item("健身系列套头卫衣", 279, 70, image="11-新品上市/女-服饰.png", pos=2),
-                 _item("直筒宽松卫裤", 319, 80, image="11-新品上市/女-服饰.png", pos=3)]
-        rows, basis = price_check.scope_for(["11-新品上市/女-服饰.png"], [sheet])
-        pairs, extra, whole = price_check.match_group([items], rows, basis)
-        self.assertEqual(([row["sku"] for _it, row in pairs], extra, whole), (["H1-1", "H2-1", "H3-1"], [], []))
-
-    def test_kv_slot_without_price_lines_up_with_the_kv_row(self):
-        # 线上的童鞋图：表格第 1 行是 KV 位（纵横 LOW户外鞋，没价格），图上 KV 大图（暖行3）也没价格。
-        # 识别时把 KV 大图算成了第 1 个商品，不能因此让后面的错位：有价格的对有价格的，没价格的对没价格的
-        sheet = price_check._sheet_rows("表格截图", [["模块", "序号", "SKU", "商品名称", "吊牌价", "立省", "到手价"],
-                                                ["儿童", "鞋履", "YKEW032-14", "纵横 LOW户外鞋", "", "", ""],
-                                                ["", "", "YKFW202-5", "织雀2跑步鞋", 499, 150, 349],
-                                                ["", "", "YKFW156-7", "步态引导跑鞋", 599, 180, 419],
-                                                ["", "", "YKCW180-34", "驭雪休闲鞋", 399, 80, 319]])
+    def test_kv_slot_and_priced_items_line_up_by_position(self):
         image = "11-新品上市/童-鞋履.png"
         items = [_item("暖行3 中帮长绒棉鞋", None, None, image=image, pos=1),
                  _item("赤兔9 PRO跑步鞋", 615, 84, image=image, pos=2),
                  _item("启悦3加绒休闲鞋", 319, 80, image=image, pos=3),
                  _item("软糖轻暖绒棉鞋", 319, 80, image=image, pos=4)]
-        rows, basis = price_check.scope_for([image], [sheet])
-        pairs, _extra, whole = price_check.match_group([items], rows, basis)
-        self.assertEqual(whole, [])
+        pairs, extra = price_check.pair_by_position(items, self.group, 1, "文件名童-鞋履")
+        self.assertEqual(extra, [])
         self.assertEqual([(it["name"], row["sku"]) for it, row in pairs],
                          [("暖行3 中帮长绒棉鞋", "YKEW032-14"), ("赤兔9 PRO跑步鞋", "YKFW202-5"),
                           ("启悦3加绒休闲鞋", "YKFW156-7"), ("软糖轻暖绒棉鞋", "YKCW180-34")])
-        status = [price_check.judge(it, row, {"price", "save"})[0] for it, row in pairs]
-        self.assertEqual(status, ["文案待确认", "不一致", "不一致", "文案待确认"])
+        self.assertEqual([price_check.judge(it, row, {"price", "save"})[0] for it, row in pairs],
+                         ["文案待确认", "不一致", "不一致", "文案待确认"])
+        self.assertIn("表格这一组第 1 个带价格的商品", pairs[1][0]["_basis"])
         # 识别时没把 KV 大图算成商品，结果一样
-        pairs, _extra, _whole = price_check.match_group([items[1:]], rows, basis)
+        pairs, _extra = price_check.pair_by_position(items[1:], self.group, 1, "")
         self.assertEqual([row["sku"] for _it, row in pairs], ["YKFW202-5", "YKFW156-7", "YKCW180-34"])
 
-    def test_whole_image_that_does_not_fit_its_group_is_reported_once(self):
-        sheet = price_check._sheet_rows("限时闪购", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"]] + [
-            ["限时闪购" if i == 0 else "", i + 1, f"F{i}-1", f"闪购商品{i}", 100 + i, 300 + i] for i in range(4)])
-        rows, basis = price_check.scope_for(["8-限时闪购/1104/限时闪购_02.jpg"], [sheet])
-        old = [_item(f"别的活动{i}", 900 + i, 10 + i, image="8-限时闪购/1104/限时闪购_02.jpg", pos=i + 1) for i in range(4)]
-        pairs, extra, whole = price_check.match_group([old], rows, basis)
-        self.assertEqual((pairs, extra), ([], []))
-        self.assertIn("可能是旧版本", whole[0]["reason"])
-        # 切片图：同一组的 _01、_02 接起来按顺序对应，第二张从表格第 3 个接着数
-        first = [_item(f"闪购商品{i}", 300 + i, 100 + i, image="8-限时闪购/限时闪购_01.jpg", pos=i + 1) for i in range(2)]
-        second = [_item(f"闪购商品{i}", 300 + i, 100 + i, image="8-限时闪购/限时闪购_02.jpg", pos=i - 1) for i in range(2, 4)]
-        pairs, _extra, _whole = price_check.match_group([first, second], rows, basis)
-        self.assertEqual([row["sku"] for _it, row in pairs], ["F0-1", "F1-1", "F2-1", "F3-1"])
+    def test_kv_only_module_images_use_the_kv_slot_number(self):
+        # 正式路径复现：越冬服饰 KV 组 3 行都不带价格，每个模块一张主图。模型判断"加绒裤装.jpg"对第 3 个 KV 位，
+        # 不能都配到第 1 个（之前两张图都被配到"珑壳 加绒防泼水外套"，报出假问题）
+        winter = price_check._sheet_rows("绒暖越冬-服饰", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"]] + [
+            ["KV", None, sku, name, None, None] for sku, name in
+            [("K1", "珑壳 加绒防泼水外套"), ("K2", "保暖亲肤 长袖T恤"), ("K3", "加绒保暖 直筒宽松卫裤")]])
+        group = price_check._group_catalog([winter])[0]
+        self.assertEqual(len(group["plain"]), 3)
+        pairs, extra = price_check.pair_by_position([_item("加绒保暖 直筒宽松卫裤", None, None, pos=1)], group, 3, "")
+        self.assertEqual(([row["sku"] for _it, row in pairs], extra), (["K3"], []))
+        self.assertIn("表格这一组第 3 个 KV 位", pairs[0][0]["_basis"])
+        self.assertIn("KV 位：1.珑壳 加绒防泼水外套；2.保暖亲肤 长袖T恤；3.加绒保暖 直筒宽松卫裤",
+                      price_check._describe_groups([group]))
 
-    def _flash_sheet(self, n=4):
-        return price_check._sheet_rows("限时闪购", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"]] + [
-            ["限时闪购" if i == 0 else "", i + 1, f"F{i}-1", f"闪购商品{i}", 100 + i, 300 + i] for i in range(n)])
+    def test_wording_split_into_two_pieces_still_counts(self):
+        # 正式路径复现：图上"保暖亲肤 长袖T恤"被识别成名称"长袖T恤" + 补充文字"保暖亲肤"，不能报文案待确认
+        row = {"name": "保暖亲肤 长袖T恤", "copy": ["加绒保暖"]}
+        split = {"name": "长袖T恤", "texts": ["保暖亲肤", "加绒保暖"]}
+        self.assertEqual(price_check.wording_diffs(split, row), [])
+        # 两段里少了字（图上真的少印了"亲"）照样报
+        short = {"name": "长袖T恤", "texts": ["保暖肤", "加绒保暖"]}
+        self.assertEqual([t for t, *_ in price_check.wording_diffs(short, row)], ["保暖亲肤 长袖T恤"])
+        # 只印了一半也照样报
+        self.assertEqual([t for t, *_ in price_check.wording_diffs({"name": "长袖T恤", "texts": ["加绒保暖"]}, row)],
+                         ["保暖亲肤 长袖T恤"])
 
-    def test_several_full_posters_in_one_folder_each_start_from_the_first_row(self):
-        # 审核复现的场景：同一文件夹两张完整海报（例如修改版、不同尺寸），第二张的价格写错了，必须报出来
-        rows, basis = price_check.scope_for(["8-限时闪购/限时闪购.jpg"], [self._flash_sheet(2)])
-        good = [_item(f"闪购商品{i}", 300 + i, 100 + i, image="8-限时闪购/限时闪购.jpg", pos=i + 1) for i in range(2)]
-        wrong = [_item("闪购商品0", 999, 100, image="8-限时闪购/限时闪购-改.jpg", pos=1),
-                 _item("闪购商品1", 888, 101, image="8-限时闪购/限时闪购-改.jpg", pos=2)]
-        pairs, extra, whole = price_check.match_group([good, wrong], rows, basis)
-        self.assertEqual((extra, whole), ([], []))
-        self.assertEqual([(it["_image"], row["sku"]) for it, row in pairs],
-                         [("8-限时闪购/限时闪购.jpg", "F0-1"), ("8-限时闪购/限时闪购.jpg", "F1-1"),
-                          ("8-限时闪购/限时闪购-改.jpg", "F0-1"), ("8-限时闪购/限时闪购-改.jpg", "F1-1")])
-        statuses = [price_check.judge(it, row, {"price", "save"})[0] for it, row in pairs]
-        self.assertEqual(statuses, ["一致", "一致", "不一致", "不一致"])
+    def test_same_price_as_another_row_does_not_move_the_item(self):
+        # 图上第 1 个的价格恰好等于表格第 3 个：仍然对第 1 个，报价格不一致
+        items = [_item("某款鞋", 319, 80, pos=1)]
+        pairs, _extra = price_check.pair_by_position(items, self.group, 1, "")
+        self.assertEqual(pairs[0][1]["sku"], "YKFW202-5")
+        self.assertEqual(price_check.judge(pairs[0][0], pairs[0][1], {"price", "save"})[0], "不一致")
 
-    def test_exact_names_win_over_similar_names_when_choosing_where_to_start(self):
-        # 审核复现：表格是红、蓝、黑、白四双运动鞋，两张图都展示红、蓝（价格都对）。
-        # "红色运动鞋"和"黑色运动鞋"名称也有八成像：只数个数会打平、按切片接着数到黑、白，必须比匹配强度
-        sheet = price_check._sheet_rows("限时闪购", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"]] + [
-            ["限时闪购" if i == 0 else "", i + 1, f"S{i}-1", f"{color}色运动鞋", 100 + i, 300 + i]
-            for i, color in enumerate("红蓝黑白")])
-        rows, basis = price_check.scope_for(["8-限时闪购/a.jpg"], [sheet])
-        poster = lambda image: [_item("红色运动鞋", 300, 100, image=image, pos=1), _item("蓝色运动鞋", 301, 101, image=image, pos=2)]
-        pairs, extra, whole = price_check.match_group([poster("8-限时闪购/a.jpg"), poster("8-限时闪购/b.jpg")], rows, basis)
-        self.assertEqual([(it["_image"][-5:], row["sku"]) for it, row in pairs],
-                         [("a.jpg", "S0-1"), ("a.jpg", "S1-1"), ("b.jpg", "S0-1"), ("b.jpg", "S1-1")])
-        self.assertEqual({price_check.judge(it, row, {"price", "save"})[0] for it, row in pairs}, {"一致"})
+    def test_single_product_card_starts_where_the_model_says(self):
+        # 单品卡片"儿童-3"：模型判断从第 3 个开始；接着数的卡片不再对 KV 位
+        items = [_item("驭雪休闲鞋", 319, 80, pos=1), _item("不带价格的装饰图", None, None, pos=2)]
+        pairs, extra = price_check.pair_by_position(items, self.group, 3, "")
+        self.assertEqual(([row["sku"] for _it, row in pairs], extra), (["YKCW180-34"], []))
 
-    def test_single_product_cards_continue_down_the_group(self):
-        # 单品卡片（男子-1…4）每张一个商品，接着往下数；第 3 张价格错了也还是对第 3 行
-        rows, basis = price_check.scope_for(["8-限时闪购/1.jpg"], [self._flash_sheet(4)])
-        cards = [[_item(f"闪购商品{i}", 300 + i if i != 2 else 999, 100 + i, image=f"8-限时闪购/{i + 1}.jpg")] for i in range(4)]
-        pairs, extra, whole = price_check.match_group(cards, rows, basis)
-        self.assertEqual([row["sku"] for _it, row in pairs], ["F0-1", "F1-1", "F2-1", "F3-1"])
-        self.assertEqual(price_check.judge(pairs[2][0], pairs[2][1], {"price", "save"})[0], "不一致")
+    def test_extra_priced_items_beyond_the_table_are_set_aside(self):
+        items = [_item(f"商品{i}", 100 + i, 10, pos=i + 1) for i in range(5)]
+        pairs, extra = price_check.pair_by_position(items, self.group, 1, "")
+        self.assertEqual((len(pairs), [it["name"] for it in extra]), (3, ["商品3", "商品4"]))
 
-    def test_same_name_in_two_groups_uses_folder_hint_and_price(self):
-        girl = price_check.match_unit([_item("防泼水短羽绒服", 799, 200, image="x/女子/1.jpg")], self.sheets)
-        kid = price_check.match_unit([_item("防泼水短羽绒服", 999, 999, image="x/儿童/1.jpg")], self.sheets)
-        self.assertEqual((girl[0]["sku"], kid[0]["sku"]), ("C1-1", "C2-1"))
 
-    def test_other_campaign_image_is_not_forced_onto_rows(self):
-        # 旧版本图：只有一个通用名称碰巧相同、金额全不同，其余都对不上 → 整张都不算对应上
-        items = [_item("防泼水短羽绒服", 719, 280, image="1104/旧.jpg", pos=1),
-                 _item("韦德系列短羽绒服", 1079, 420, image="1104/旧.jpg", pos=2),
-                 _item("轻盈保暖羽绒服", 503, 196, image="1104/旧.jpg", pos=3)]
-        self.assertEqual(price_check.match_unit(items, self.sheets), {})
+class AssignTest(unittest.TestCase):
+    """交给模型判断对应分组：给它的内容里有分组目录和图上读出的商品，解析它的回答。"""
 
-    def test_wrong_price_on_single_product_image_still_matches(self):
-        matched = price_check.match_unit([_item("万龙甲防暴雨冲锋衣", 599, 200, image="外套/1.jpg")], self.sheets)
-        self.assertEqual(matched[0]["sku"], "B1-1")
+    def test_prompt_and_answer_parsing(self):
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        seen = {}
+
+        class Resp:
+            def json(self):
+                return {"choices": [{"message": {"content": "```json\n" + json.dumps([
+                    {"image": 1, "group": 1, "start": 1, "reason": "文件名男子/羽绒服"},
+                    {"image": 2, "group": None, "start": 1, "reason": "旧版本"},
+                    {"image": 9, "group": 1, "start": 1}], ensure_ascii=False) + "\n```"}}]}
+
+        async def fake_completion(purpose, payload, **kwargs):
+            seen["prompt"] = payload["messages"][0]["content"]
+            seen["purpose"] = purpose
+            return Resp()
+
+        entries = [("男子/羽绒服.png", [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]),
+                   ("1104/旧.jpg", RuntimeError("超时"))]
+        with patch.object(price_check, "routed_chat_completion", fake_completion):
+            out = asyncio.run(price_check.assign_groups("活动", entries, catalog, others=["1104/别的.jpg"],
+                                                        dates={"1104/旧.jpg": "2026-11-04 15:13", "1104/别的.jpg": "2026-11-03 10:00"}))
+        # 修改时间给模型判断版本：本批的图和其它图都带上
+        self.assertIn("[2] 1104/旧.jpg（修改于 2026-11-04 15:13）：识别失败", seen["prompt"])
+        self.assertIn("1104/别的.jpg（修改于 2026-11-03 10:00）", seen["prompt"])
+        self.assertEqual(seen["purpose"], "check_llm")  # 单独路由到更强的模型
+        self.assertIn("[1] TOP榜单 / 男子 / 羽绒服TOP榜｜带价格：1.火锅羽绒 短羽绒服；2.拒水防泼 面包羽绒", seen["prompt"])
+        # 利益点文案也给模型（KV 行序号列写的"0~10℃"等是对应哪个模块的线索，同样带上）
+        self.assertIn("KV 位：1.闪击篮球鞋｜轻量回弹", seen["prompt"])
+        self.assertIn("[1] 男子/羽绒服.png：1.火锅羽绒 短羽绒服（立省500、到手价399）", seen["prompt"])
+        self.assertEqual(out["男子/羽绒服.png"]["group"]["name"], "TOP榜单 / 男子 / 羽绒服TOP榜")
+        self.assertEqual((out["1104/旧.jpg"]["group"], out["1104/旧.jpg"]["reason"]), (None, "旧版本"))
+
+    def test_model_failure_leaves_images_unchecked_with_a_reason(self):
+        async def broken(*args, **kwargs):
+            raise RuntimeError("线路断开")
+
+        with patch.object(price_check, "routed_chat_completion", broken):
+            out = asyncio.run(price_check.assign_groups("活动", [("a.png", [])], []))
+        self.assertIsNone(out["a.png"]["group"])
+        self.assertIn("判断对应分组失败", out["a.png"]["reason"])
+        self.assertTrue(out["a.png"]["error"])  # 和模型明确判断"不对应表格"区分开
+
+    def _replies(self, *replies):
+        """模型依次给出的回答；记录每次收到的提示词。"""
+        prompts, queue = [], list(replies)
+
+        class Resp:
+            def __init__(self, answer):
+                self.answer = answer
+
+            def json(self):
+                return {"choices": [{"message": {"content": json.dumps(self.answer, ensure_ascii=False)}}]}
+
+        async def fake(purpose, payload, **kwargs):
+            prompts.append(payload["messages"][0]["content"])
+            return Resp(queue.pop(0))
+        return fake, prompts
+
+    def test_answers_are_checked_per_image_and_retried(self):
+        # 审核复现：模型只回答了 a.jpg，b.jpg 不能被当成"和表格无关"静默跳过
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        priced = [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]
+        entries = [("a.jpg", priced), ("b.jpg", priced)]
+        fake, prompts = self._replies([{"image": 1, "group": 1, "start": 1, "reason": "a"}],
+                                      [{"image": 1, "group": 1, "start": 1}, {"image": 2, "group": 1, "start": 2, "reason": "b"}])
+        with patch.object(price_check, "routed_chat_completion", fake):
+            out = asyncio.run(price_check.assign_groups("活动", entries, catalog))
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("图片 2：模型没有给出这张图的对应", prompts[1])  # 重试时告诉模型哪张没答
+        self.assertEqual([(out[r]["group"]["id"], out[r]["start"], out[r].get("error")) for r in ("a.jpg", "b.jpg")],
+                         [(1, 1, None), (1, 2, None)])
+
+    def test_missing_group_field_is_not_an_explicit_skip(self):
+        # 审核复现：只有图片编号、没有 group 字段，是回答不完整，要重试并最终标为分组失败；明确填 null 才是跳过
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        items = [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]
+        self.assertEqual(price_check._check_answer({"image": 1}, items, {g["id"]: g for g in catalog}),
+                         (None, "缺少 group（不对应表格时请明确填 null）"))
+        fake, prompts = self._replies(*[[{"image": 1}]] * (price_check.OCR_RETRIES + 1))
+        with patch.object(price_check, "routed_chat_completion", fake):
+            out = asyncio.run(price_check.assign_groups("活动", [("a.jpg", items)], catalog))
+        self.assertTrue(out["a.jpg"]["error"])
+        self.assertIn("缺少 group", out["a.jpg"]["reason"])
+        self.assertEqual(len(prompts), price_check.OCR_RETRIES + 1)
+
+    def test_invalid_group_values_are_retried_instead_of_skipped(self):
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        items = [{"name": "火锅羽绒 短羽绒服", "price": 399}]
+        for group in ("", " ", "null", "none", True, False, 1.9, "²", [], {}):
+            with self.subTest(group=group):
+                bad = [{"image": 1, "group": group, "start": 1}]
+                fake, prompts = self._replies(*[bad] * (price_check.OCR_RETRIES + 1))
+                with patch.object(price_check, "routed_chat_completion", fake):
+                    out = asyncio.run(price_check.assign_groups("活动", [("a.jpg", items)], catalog))
+                self.assertTrue(out["a.jpg"]["error"])
+                self.assertEqual(len(prompts), price_check.OCR_RETRIES + 1)
+
+    def test_invalid_starts_do_not_default_or_truncate(self):
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        ids = {g["id"]: g for g in catalog}
+        items = [{"name": "火锅羽绒 短羽绒服", "price": 399}]
+        for start in (None, "", 0, -1, False, True, 1.9, float("inf"), float("nan"), "²", [], {}):
+            with self.subTest(start=start):
+                answer = {"image": 1, "group": 1, "start": start}
+                decision, error = price_check._check_answer(answer, items, ids)
+                self.assertIsNone(decision)
+                self.assertTrue(error)
+                fake, prompts = self._replies([answer], [{"image": 1, "group": "1", "start": "2"}])
+                with patch.object(price_check, "routed_chat_completion", fake):
+                    out = asyncio.run(price_check.assign_groups("活动", [("a.jpg", items)], catalog))
+                self.assertEqual(out["a.jpg"]["start"], 2)
+                self.assertEqual(len(prompts), 2)
+        decision, error = price_check._check_answer({"image": 1, "group": 1}, items, ids)
+        self.assertEqual((decision, bool(error)), (None, True))
+
+    def test_malformed_image_numbers_do_not_abort_the_batch(self):
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        items = [{"name": "火锅羽绒 短羽绒服", "price": 399}]
+        for number in ("²", "9" * 5000, float("inf"), 1.9, True, 0, -1, 3, [], {}):
+            with self.subTest(number=repr(number)[:40]):
+                bad = [{"image": number, "group": 1, "start": 1},
+                       {"image": 2, "group": 1, "start": 2}]
+                fake, prompts = self._replies(bad, [{"image": "1", "group": 1, "start": 1}])
+                with patch.object(price_check, "routed_chat_completion", fake):
+                    out = asyncio.run(price_check.assign_groups("活动", [("a.jpg", items), ("b.jpg", items)], catalog))
+                self.assertEqual([out[r]["start"] for r in ("a.jpg", "b.jpg")], [1, 2])
+                self.assertEqual(len(prompts), 2)
+
+    def test_start_for_kv_only_image_uses_the_same_rows_as_pairing(self):
+        # 审核复现：组内 1 个 KV 位 + 2 个带价格商品，只有 KV 大图的图片 start=2 必然配不上，不能当成有效回答
+        mixed = price_check._group_catalog([price_check._sheet_rows("新品", [
+            ["模块", "序号", "SKU", "商品名称", "立省", "到手价"],
+            ["童鞋", 1, "K1", "暖行3 中帮长绒棉鞋", None, None],
+            ["童鞋", 2, "P1", "赤兔9 PRO跑步鞋", 84, 615],
+            ["童鞋", 3, "P2", "启悦3加绒休闲鞋", 80, 319]])])[0]
+        by_id = {mixed["id"]: mixed}
+        kv_image = [{"name": "暖行3 中帮长绒棉鞋", "_pos": 1}]
+        decision, error = price_check._check_answer({"image": 1, "group": mixed["id"], "start": 2}, kv_image, by_id)
+        self.assertEqual((decision, error), (None, f"start 2 超出了第 {mixed['id']} 组的范围（1~1）"))
+        decision, error = price_check._check_answer({"image": 1, "group": mixed["id"], "start": 1}, kv_image, by_id)
+        pairs, _extra = price_check.pair_by_position(kv_image, decision["group"], decision["start"], "")
+        self.assertEqual([row["sku"] for _it, row in pairs], ["K1"])
+        # 没有 KV 位的组：图上没读出价格的主图配对必然为空，同样不算有效回答（之后重试，仍不行就报分组失败）
+        priced_only = price_check._group_catalog([price_check._sheet_rows("适温叠穿", [
+            ["模块", "序号", "SKU", "商品名称", "立省", "到手价"],
+            ["kv", 1, "A1", "排骨羽绒轻薄短羽绒服", 399, 300],
+            ["kv", 2, "A2", "火锅羽绒抗静电短羽绒服", 500, 399]])])[0]
+        ids = {priced_only["id"]: priced_only}
+        main = [{"name": "火锅羽绒抗静电短羽绒服", "_pos": 1}]
+        self.assertEqual(price_check._check_answer({"image": 1, "group": priced_only["id"], "start": 1}, main, ids),
+                         (None, f"第 {priced_only['id']} 组没有 KV 位，而这张图上没读出价格，对应不上"))
+        # 识别失败、没识别出商品的图不配对，不做范围检查，保持"识别失败""没识别出商品"的原因
+        for unread in (RuntimeError("超时"), []):
+            decision, error = price_check._check_answer({"image": 1, "group": priced_only["id"], "start": 5}, unread, ids)
+            self.assertEqual((decision["group"]["id"], error), (priced_only["id"], ""))
+
+    def test_invalid_answers_end_as_assignment_failures(self):
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        priced = [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]
+        kv = [{"name": "闪击篮球鞋"}]
+        entries = [("缺项.jpg", priced), ("重复.jpg", priced), ("非法分组.jpg", priced), ("越界.jpg", priced),
+                   ("KV越界.jpg", kv), ("不对应.jpg", priced)]
+        bad = [{"image": 2, "group": 1, "start": 1}, {"image": 2, "group": 2, "start": 1},   # 同一张图两个不同答案
+               {"image": 3, "group": 99, "start": 1}, {"image": 4, "group": 1, "start": 3},  # 第 1 组只有 2 个带价格的
+               {"image": 5, "group": 5, "start": 2},                                          # 第 5 组只有 1 个 KV 位
+               {"image": 6, "group": None, "start": 1, "reason": "导航图"}]
+        fake, prompts = self._replies(*[bad] * (price_check.OCR_RETRIES + 1))
+        with patch.object(price_check, "routed_chat_completion", fake):
+            out = asyncio.run(price_check.assign_groups("活动", entries, catalog))
+        self.assertEqual(len(prompts), price_check.OCR_RETRIES + 1)  # 无效的都重试过
+        reasons = {rel: out[rel]["reason"] for rel, _items in entries}
+        self.assertIn("模型没有给出这张图的对应", reasons["缺项.jpg"])
+        self.assertIn("同一张图给出了不同的对应", reasons["重复.jpg"])
+        self.assertIn("分组编号 99 不在表格分组目录里", reasons["非法分组.jpg"])
+        self.assertIn("start 3 超出了第 1 组的范围（1~2）", reasons["越界.jpg"])
+        self.assertIn("start 2 超出了第 5 组的范围（1~1）", reasons["KV越界.jpg"])
+        self.assertTrue(all(out[rel].get("error") for rel in reasons if rel != "不对应.jpg"))
+        # 模型明确判断不对应表格（group 为 null）是有效回答，不算失败
+        self.assertEqual((out["不对应.jpg"]["group"], out["不对应.jpg"].get("error"), out["不对应.jpg"]["reason"]),
+                         (None, None, "导航图"))
 
 
 class JudgeTest(unittest.TestCase):
@@ -294,7 +424,10 @@ class RunCheckTest(unittest.TestCase):
         images = [("男子/羽绒服.png", lambda: b"top"), ("男子/外套/1.jpg", lambda: b"coat"), ("儿童/1.jpg", lambda: b"kid"),
                   ("标题.jpg", lambda: b"title"), ("tab.png", lambda: b"icon"), ("坏图.jpg", lambda: b"broken"),
                   ("1104/旧.jpg", lambda: b"old"), ("备份/羽绒服.png", lambda: b"top")]
-        with patch.object(price_check, "ocr_image", fake_ocr), patch.object(price_check, "verify_wording", fake_verify):
+        mapping = {"男子/羽绒服.png": ("TOP榜单 / 男子 / 羽绒服TOP榜", 1), "备份/羽绒服.png": ("TOP榜单 / 男子 / 羽绒服TOP榜", 1),
+                   "男子/外套/1.jpg": ("TOP榜单 / 男子 / 外套TOP榜", 1), "儿童/1.jpg": ("TOP榜单 / 儿童 / 羽绒服TOP榜", 1)}
+        with patch.object(price_check, "ocr_image", fake_ocr), patch.object(price_check, "verify_wording", fake_verify), \
+                _assign(mapping):
             result = asyncio.run(price_check.run_check(images, sheets))
         by_image = {(r["item"]["_image"], r["item"]["_pos"]): r["status"] for r in result["records"]}
         self.assertEqual(by_image[("男子/羽绒服.png", 1)], "一致")
@@ -322,7 +455,7 @@ class RunCheckTest(unittest.TestCase):
             return reads[data]
 
         images = [("8-限时闪购/限时闪购.jpg", lambda: b"a"), ("8-限时闪购/限时闪购-750.jpg", lambda: b"b")]
-        with patch.object(price_check, "ocr_image", fake_ocr):
+        with patch.object(price_check, "ocr_image", fake_ocr), _assign(default="限时闪购 / 限时闪购"):
             result = asyncio.run(price_check.run_check(images, [sheet]))
         found = sorted((r["item"]["_image"], r["row"]["sku"], r["status"]) for r in result["records"])
         self.assertEqual(found, [("8-限时闪购/限时闪购-750.jpg", "F0-1", "不一致"), ("8-限时闪购/限时闪购-750.jpg", "F1-1", "不一致"),
@@ -339,13 +472,22 @@ class RunCheckTest(unittest.TestCase):
         async def fake_ocr(data):
             return {b"good": good, b"old": old}[data]
 
-        with patch.object(price_check, "ocr_image", fake_ocr):
+        # 模型判断：同组有正式版时，1104 里的是旧版本（group 为 null），不核对
+        with patch.object(price_check, "ocr_image", fake_ocr), \
+                _assign({"8-限时闪购/限时闪购.jpg": ("限时闪购 / 限时闪购", 1), "8-限时闪购/1104/限时闪购.jpg": (None, 1)}):
             both = asyncio.run(price_check.run_check(
                 [("8-限时闪购/限时闪购.jpg", lambda: b"good"), ("8-限时闪购/1104/限时闪购.jpg", lambda: b"old")], [sheet]))
+        # 只有这一张：模型把它对到这一组，表格为准，逐项报出每个位置的差异
+        with patch.object(price_check, "ocr_image", fake_ocr), _assign(default="限时闪购 / 限时闪购"):
             only_old = asyncio.run(price_check.run_check([("8-限时闪购/1104/限时闪购.jpg", lambda: b"old")], [sheet]))
-        self.assertEqual((both["mismatched"], both["uncovered"]), ([], []))
-        self.assertEqual(len(only_old["mismatched"]), 1)
-        self.assertEqual([r["sku"] for r in only_old["uncovered"]], ["F0-1", "F1-1", "F2-1"])
+        self.assertEqual(both["uncovered"], [])
+        self.assertEqual({r["item"]["_image"] for r in both["records"]}, {"8-限时闪购/限时闪购.jpg"})
+        # 只有这一张：表格为准，逐项报出每个位置的差异，并提示整张差别很大（例如图还没按新表格更新）
+        self.assertEqual([(r["row"]["sku"], r["status"]) for r in only_old["records"]],
+                         [("F0-1", "不一致"), ("F1-1", "不一致"), ("F2-1", "不一致")])
+        self.assertEqual(only_old["uncovered"], [])
+        groups = price_check.coverage([sheet], only_old)
+        self.assertEqual(groups[0]["结果"], "有问题")
 
     def test_module_whose_images_all_fail_stays_in_the_conclusion(self):
         # 审核复现：同时核对"限时闪购"和"新品上市"，新品的图识别超时，结论里不能没有它
@@ -364,7 +506,9 @@ class RunCheckTest(unittest.TestCase):
 
         images = [("8-限时闪购/限时闪购.jpg", lambda: b"ok"), ("11-新品上市/女-服饰.png", lambda: b"timeout"),
                   ("11-新品上市/男-鞋履.png", lambda: b"blank")]
-        with patch.object(price_check, "ocr_image", fake_ocr):
+        mapping = {"8-限时闪购/限时闪购.jpg": ("限时闪购 / 限时闪购", 1),
+                   "11-新品上市/女-服饰.png": ("新品上市 / 女子 / 服饰", 1), "11-新品上市/男-鞋履.png": ("新品上市 / 男子 / 鞋履", 1)}
+        with patch.object(price_check, "ocr_image", fake_ocr), _assign(mapping):
             result = asyncio.run(price_check.run_check(images, [flash, new]))
         groups = {g["分组"]: g for g in price_check.coverage([flash, new], result)}
         self.assertEqual(groups["限时闪购 / 限时闪购"]["结果"], "核对无误")
@@ -373,16 +517,85 @@ class RunCheckTest(unittest.TestCase):
         self.assertEqual(groups["新品上市 / 男子 / 鞋履"]["原因"], "图片 11-新品上市/男-鞋履.png 上没识别出商品")
         self.assertEqual(price_check.coverage_summary(list(groups.values())), "表格这次涉及 3 组：1 组核对无误，2 组没有核对")
         # 用户点名了工作表：这张表的每一组都要交代，即使文件夹里一张对应的图都没有
-        with patch.object(price_check, "ocr_image", fake_ocr):
+        with patch.object(price_check, "ocr_image", fake_ocr), _assign():
             named = asyncio.run(price_check.run_check(images[:1], [new]))
         named_groups = {g["分组"]: g for g in price_check.coverage([new], named, whole_sheets=True)}
         self.assertEqual({g["结果"] for g in named_groups.values()}, {"没有核对"})
         self.assertEqual(len(named_groups), 2)
 
+    def test_assignment_failures_are_reported_not_skipped(self):
+        # 审核复现：分组判断失败的图要单独标出来（没有核对），不能和"模型判断不对应表格"混在一起
+        sheets = price_check.load_table(_xlsx(), "a.xlsx")
+
+        async def fake_ocr(data):
+            return [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]
+
+        async def fake_assign(folder, entries, catalog, others=None, dates=None):
+            group = next(g for g in catalog if g["name"] == "TOP榜单 / 男子 / 羽绒服TOP榜")
+            return {"ok.jpg": {"group": group, "start": 1, "reason": "文件名"},
+                    "lost.jpg": {"group": None, "start": 1, "reason": "判断对应分组失败：模型服务异常：超时", "error": True},
+                    "nav.jpg": {"group": None, "start": 1, "reason": "导航图"}}
+        with patch.object(price_check, "ocr_image", fake_ocr), patch.object(price_check, "assign_groups", fake_assign):
+            result = asyncio.run(price_check.run_check(
+                [("ok.jpg", lambda: b"1"), ("lost.jpg", lambda: b"2"), ("nav.jpg", lambda: b"3")], sheets))
+        self.assertEqual({a["image"]: a["status"] for a in result["assigned"]},
+                         {"ok.jpg": "read", "lost.jpg": "unassigned", "nav.jpg": "skipped"})
+        self.assertEqual(result["unassigned"], ["lost.jpg：判断对应分组失败：模型服务异常：超时"])
+        self.assertEqual([r["item"]["_image"] for r in result["records"]], ["ok.jpg"])
+
+    def test_malformed_assignments_are_reported_without_losing_valid_images(self):
+        sheets = price_check.load_table(_xlsx(), "a.xlsx")
+
+        async def fake_ocr(data):
+            return [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]
+
+        for bad in ({"group": ""}, {"group": 1}, {"group": 1, "start": 0},
+                    {"group": 1, "start": 1.9}, {"group": 1, "start": float("inf")},
+                    {"group": "²", "start": 1}, {"image": "²", "group": 1, "start": 1}):
+            with self.subTest(bad=bad):
+                answer = [{"image": 1, "group": 1, "start": 1}, {"image": 2, **bad},
+                          {"image": 3, "group": None, "reason": "导航图"}]
+                fake, prompts = AssignTest()._replies(*[answer] * (price_check.OCR_RETRIES + 1))
+                with patch.object(price_check, "ocr_image", fake_ocr), \
+                        patch.object(price_check, "routed_chat_completion", fake):
+                    result = asyncio.run(price_check.run_check(
+                        [("ok.jpg", lambda: b"1"), ("lost.jpg", lambda: b"2"), ("nav.jpg", lambda: b"3")], sheets))
+                self.assertEqual({a["image"]: a["status"] for a in result["assigned"]},
+                                 {"ok.jpg": "read", "lost.jpg": "unassigned", "nav.jpg": "skipped"})
+                self.assertEqual(len(result["unassigned"]), 1)
+                self.assertTrue(result["unassigned"][0].startswith("lost.jpg：判断对应分组失败："))
+                self.assertEqual([r["row"]["sku"] for r in result["records"]], ["A1-1"])
+                self.assertEqual(len(prompts), price_check.OCR_RETRIES + 1)
+
+    def test_group_with_only_kv_rows_is_in_the_conclusion(self):
+        # 正式路径复现：越冬服饰 KV 组只有不带价格的商品，图上"珑壳"印成"琥壳"，
+        # 问题图片里有它，分组结论里也必须有它（不能显示"9 组有问题"却列出 10 张问题图）
+        winter = price_check._sheet_rows("绒暖越冬-服饰", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"],
+                                                        ["KV", "加绒外套", "K1", "珑壳 加绒防泼水外套", None, None],
+                                                        ["KV", "加绒裤装", "K2", "加绒保暖 直筒宽松卫裤", None, None]])
+
+        async def fake_ocr(data):
+            return [{"name": {b"coat": "琥壳 加绒防泼水外套", b"pants": "加绒保暖 直筒宽松卫裤"}[data]}]
+
+        async def no(data, pairs):
+            return [False] * len(pairs)
+
+        with patch.object(price_check, "ocr_image", fake_ocr), patch.object(price_check, "verify_wording", no), \
+                _assign({"加绒外套.jpg": ("绒暖越冬-服饰 / KV / 加绒外套", 1), "加绒裤装.jpg": ("绒暖越冬-服饰 / KV / 加绒裤装", 1)}):
+            result = asyncio.run(price_check.run_check([("加绒外套.jpg", lambda: b"coat"), ("加绒裤装.jpg", lambda: b"pants")],
+                                                       [winter]))
+        self.assertEqual([(r["row"]["sku"], r["status"] != "一致") for r in result["records"]], [("K1", True), ("K2", False)])
+        groups = price_check.coverage([winter], result)
+        self.assertEqual([(g["分组"], g["结果"], g["表格里有价格的商品数"], g.get("KV 位有问题的商品数")) for g in groups],
+                         [("绒暖越冬-服饰 / KV / 加绒外套", "有问题", 0, 1), ("绒暖越冬-服饰 / KV / 加绒裤装", "核对无误", 0, None)])
+
     def test_misread_numbers_are_dropped_or_reread(self):
         # 立省的数字被又填进吊牌价：吊牌价不可能小于等于到手价，直接丢弃
         self.assertIsNone(price_check.sanitize_item({"price": 360, "save": 539, "tag_price": 539})["tag_price"])
         self.assertEqual(price_check.sanitize_item({"price": 360, "save": 539, "tag_price": 899})["tag_price"], 899)
+        # 金额读成"¥559""￥ 1999""300元"的去掉符号，报出来的读数统一
+        self.assertEqual(price_check.sanitize_item({"price": "¥559", "save": "300元", "tag_price": "￥ 1999"}),
+                         {"price": "559", "save": "300", "tag_price": "1999"})
         sheets = price_check.load_table(_xlsx(), "a.xlsx")
         reads = {b"flaky": iter([[{"name": "火锅羽绒 短羽绒服", "price": 899, "save": 500}],   # 第一遍把价格读错
                                  [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]]),
@@ -392,11 +605,34 @@ class RunCheckTest(unittest.TestCase):
             return next(reads[data])
 
         images = [("a/1.jpg", lambda: b"flaky"), ("b/1.jpg", lambda: b"wrong")]
-        with patch.object(price_check, "ocr_image", fake_ocr):
+        with patch.object(price_check, "ocr_image", fake_ocr), _assign({"a/1.jpg": ("TOP榜单 / 男子 / 羽绒服TOP榜", 1), "b/1.jpg": ("TOP榜单 / 男子 / 羽绒服TOP榜", 2)}):
             result = asyncio.run(price_check.run_check(images, sheets))
         status = {r["row"]["sku"]: (r["status"], r["problems"]) for r in result["records"]}
         self.assertEqual(status["A1-1"], ("一致", []))
         self.assertEqual(status["A2-1"], ("不一致", ["立省：表格 458，图上 271"]))
+
+    def test_reread_never_confirms_with_a_neighbours_numbers(self):
+        # 注入错误测试复现：相邻两个商品的到手价放反了（表格 479/719，图上 719/479）。
+        # 第二遍多读出一张不带价格的 KV 大图，位置错开一位；"高蓬锁暖羽绒服"和"保暖短羽绒服"名称又很像，
+        # 不能拿隔壁商品的 719 当作"第一遍读错"，两个位置都要报出来
+        sheet = price_check._sheet_rows("新品上市", [["模块", "序号", "SKU", "商品名称", "立省", "到手价"],
+                                                ["儿童", 1, "K1", "保暖短羽绒服", 180, 479],
+                                                ["儿童", 2, "K2", "高蓬锁暖羽绒服", 120, 719]])
+        first = [{"name": "保暖短羽绒服", "price": 719, "save": 180}, {"name": "高蓬锁暖羽绒服", "price": 479, "save": 120}]
+        second = [{"name": "男大童中羽绒服"}] + first
+        reads = iter([first, second, second])
+
+        async def fake_ocr(data):
+            return next(reads)
+
+        async def no(data, pairs):
+            return [False] * len(pairs)
+
+        with patch.object(price_check, "ocr_image", fake_ocr), patch.object(price_check, "verify_wording", no), \
+                _assign(default="新品上市 / 儿童"):
+            result = asyncio.run(price_check.run_check([("童-服饰.png", lambda: b"x")], [sheet]))
+        prices = {r["row"]["sku"]: [p for p in r["problems"] if p.startswith("到手价")] for r in result["records"]}
+        self.assertEqual(prices, {"K1": ["到手价：表格 479，图上 719"], "K2": ["到手价：表格 719，图上 479"]})
 
     def test_wording_is_cleared_only_when_recheck_and_reread_agree(self):
         sheets = price_check.load_table(_xlsx(), "a.xlsx")
@@ -411,7 +647,8 @@ class RunCheckTest(unittest.TestCase):
             async def says_table_wording(data, pairs):
                 return [True] * len(pairs)
 
-            with patch.object(price_check, "ocr_image", fake_ocr), patch.object(price_check, "verify_wording", says_table_wording):
+            with patch.object(price_check, "ocr_image", fake_ocr), patch.object(price_check, "verify_wording", says_table_wording), \
+                    _assign(default="TOP榜单 / 男子 / 外套TOP榜"):
                 return (await price_check.run_check([("外套/1.jpg", lambda: b"x")], sheets))["records"][0]["status"]
 
         # 复核说是表格的写法，但重新读图还是"防暴风"：保留提示（真的写错了）
@@ -427,7 +664,7 @@ class RunCheckTest(unittest.TestCase):
         async def fake_ocr(data):
             return next(reads)
 
-        with patch.object(price_check, "ocr_image", fake_ocr):
+        with patch.object(price_check, "ocr_image", fake_ocr), _assign(default="TOP榜单 / 男子 / 羽绒服TOP榜"):
             result = asyncio.run(price_check.run_check([("a/1.jpg", lambda: b"x")], sheets))
         self.assertEqual(result["records"][0]["status"], "一致")
 
@@ -528,6 +765,12 @@ class SharedFoldersTest(unittest.TestCase):
         self.assertEqual(folders["TOP榜/男子"]["images"], ["羽绒服.PNG (720x940)"])
         _shown, files, more = shared_folders.find_files(self.user, "素材库/temp/改价", shared_folders.IMAGE_SUFFIXES, 100)
         self.assertEqual((len(files), more), (7, False))
+        # 直接给一张图的路径：只核对这一张；类型不对的文件不当作图片
+        _shown, one, _more = shared_folders.find_files(self.user, "素材库/temp/改价/TOP榜/男子-5.jpg",
+                                                       shared_folders.IMAGE_SUFFIXES, 100)
+        self.assertEqual([rel for rel, _p in one], ["男子-5.jpg"])
+        with self.assertRaises(shared_folders.SharedFolderError):
+            shared_folders.find_files(self.user, "素材库/temp/改价/铺品.xlsx", shared_folders.IMAGE_SUFFIXES, 100)
 
     def _links_setup(self):
         outside = Path(self.tmp.name) / "outside"
@@ -551,6 +794,9 @@ class SharedFoldersTest(unittest.TestCase):
         self._assert_nothing_outside(base)
 
     def _assert_nothing_outside(self, base):
+        # 直接指到一个链到外面的文件，也不能读
+        with self.assertRaises(shared_folders.SharedFolderError):
+            shared_folders.find_files(self.user, "素材库/temp/改价/外部文件.csv", shared_folders.TABLE_SUFFIXES, 100)
         for suffixes in (shared_folders.TABLE_SUFFIXES, shared_folders.IMAGE_SUFFIXES):
             _shown, found, _more = shared_folders.find_files(self.user, "素材库/temp/改价", suffixes, 100)
             for rel, path in found:
@@ -682,12 +928,34 @@ class AgentToolsTest(unittest.TestCase):
             ctx = ToolContext(user=user, session_id=session["id"], turn_id="t", call_id="c", emit=emit, state={},
                               publish=publish)
             with patch.object(shared_folders.settings, "shared_folders_path", config), \
-                    patch.object(price_check, "ocr_image", fake_ocr):
+                    patch.object(price_check, "ocr_image", fake_ocr), _assign(default="TOP榜单 / 男子 / 羽绒服TOP榜"):
                 overview = asyncio.run(shared_tools.read_table(ctx, {}))  # 不填 source：用对话里上传的表格
                 for early in ({"folder": "Z:\\活动"}, {"folder": "Z:\\活动", "request": "smb://192.168.1.2/素材库/活动"},
                               {"folder": "Z:\\活动", "request": "铺品.xlsx"}):
                     self.assertIn("还没有提出核对要求", asyncio.run(shared_tools.check_prices(ctx, early))["error"])
                 result = asyncio.run(shared_tools.check_prices(ctx, {"folder": "Z:\\活动", "request": "核对一下价格文案信息是否有误"}))
+            # 发错了表格：没有一张图对应得上，要告诉用户表格里是哪些分组，提醒可能发错了
+            kept = len(events)
+            with patch.object(shared_folders.settings, "shared_folders_path", config), \
+                    patch.object(price_check, "ocr_image", fake_ocr), _assign(default=None):
+                wrong = asyncio.run(shared_tools.check_prices(ctx, {"folder": "Z:\\活动", "request": "核对一下价格文案信息是否有误"}))
+            del events[kept:]  # 下面只检查第一次核对的进度消息
+            # 审核复现：判断对应分组的模型线路全部失败，不能说成"可能发错了表格"，要说清没有核对、结果不完整
+            kept = len(events)
+
+            async def broken(*args, **kwargs):
+                raise RuntimeError("线路断开")
+            with patch.object(shared_folders.settings, "shared_folders_path", config), \
+                    patch.object(price_check, "ocr_image", fake_ocr), patch.object(price_check, "routed_chat_completion", broken):
+                down = asyncio.run(shared_tools.check_prices(ctx, {"folder": "Z:\\活动", "request": "核对一下价格文案信息是否有误"}))
+            del events[kept:]
+            self.assertIn("判断对应分组失败", down["结论"])
+            self.assertIn("结果不完整", down["结论"])
+            self.assertEqual(down["概况"]["判断对应分组失败、没有核对的图片数"], 1)
+            self.assertTrue(any("不代表它们和表格无关" in n and "男子/羽绒服.png" in n for n in down["说明"]))
+            self.assertFalse(any("发错了表格" in n for n in down["说明"]))
+            self.assertEqual(wrong["结论"], "没有核对到表格里的任何一组")
+            self.assertTrue(any("可能表格和文件夹不是同一个活动" in n and "TOP榜单 / 男子 / 羽绒服TOP榜" in n for n in wrong["说明"]))
             self.assertEqual([s["sheet"] for s in overview["sheets"]], ["TOP榜单", "新品上市"])
             self.assertEqual((result["checked"], result["counts"]["不一致"]), (1, 1))
             messages = [a[1]["message"] for a in events if a[0] == "tool.progress"]
@@ -698,15 +966,19 @@ class AgentToolsTest(unittest.TestCase):
             (found,) = result["有问题的图片"]
             self.assertEqual(found["图片"], "男子/羽绒服.png")
             self.assertEqual(found["问题"][0]["差异"], [{"类型": "价格", "项目": "立省", "表格": "500", "图上": "271"}])
-            # 以表格为准按分组交代：这次涉及 TOP榜单 这张表，每一组都说清楚查没查
+            self.assertEqual(found["问题"][0]["结论"], "不一致")  # 和"文案待确认"区分开，回复时分开说
+            self.assertIn("文案待确认", result["回复要求"])
+            # 以表格为准按分组交代：有图对应到的分组都说清楚查没查
             groups = {g["分组"]: g for g in result["各分组核对情况"]}
             checked = groups["TOP榜单 / 男子 / 羽绒服TOP榜"]
             self.assertEqual((checked["结果"], checked["核对到的商品数"], checked["有问题的商品数"]), ("有问题", 1, 1))
             self.assertEqual(checked["没核对到的商品"], ["A2-1 拒水防泼 面包羽绒"])
-            self.assertEqual(groups["TOP榜单 / 女子 / 羽绒服TOP榜"]["结果"], "没有核对")
-            self.assertEqual(groups["TOP榜单 / 女子 / 羽绒服TOP榜"]["原因"], "文件夹里没找到对应这一组的图片")
-            self.assertNotIn("11.10新品上市 / 男子 / 服饰", groups)  # 没涉及的表不列
-            self.assertEqual(result["结论"], "表格这次涉及 4 组：1 组有问题，3 组没有核对")
+            # 同一张表里没有任何图对应到的分组不算进结论（用户可能只给了一个子文件夹），单独列出来提一句
+            self.assertEqual(list(groups), ["TOP榜单 / 男子 / 羽绒服TOP榜"])
+            self.assertEqual(result["结论"], "表格这次涉及 1 组：1 组有问题")
+            self.assertEqual(result["这次文件夹里没有对应图片的分组"],
+                             ["TOP榜单 / 男子 / 外套TOP榜", "TOP榜单 / 女子 / 羽绒服TOP榜", "TOP榜单 / 儿童 / 羽绒服TOP榜"])
+            self.assertNotIn("11.10新品上市 / 男子 / 服饰", result["这次文件夹里没有对应图片的分组"])  # 没涉及的表不列
             self.assertNotIn("files", result)  # 不再生成 Excel 对比表
             self.assertNotIn("图上有价格但表格里没有的商品", result)  # 以表格为准，图上多出来的不报
             (card,) = result["images"]
@@ -726,7 +998,7 @@ class AgentToolsTest(unittest.TestCase):
             async def fake_table_image(data):
                 return price_check.load_table(_xlsx(), "a.xlsx")[:1]
 
-            with patch.object(price_check, "ocr_image", fake_ocr), \
+            with patch.object(price_check, "ocr_image", fake_ocr), _assign(default="TOP榜单 / 男子 / 羽绒服TOP榜"), \
                     patch.object(price_check, "load_table_image", fake_table_image):
                 uploaded = asyncio.run(shared_tools.check_prices(ctx, {
                     "request": "核对一下价格", "table": shot["id"], "image_ids": [shot["id"], poster["id"]]}))
@@ -739,7 +1011,7 @@ class AgentToolsTest(unittest.TestCase):
             ctx = ToolContext(user=user, session_id=fresh["id"], turn_id="t2", call_id="c2", emit=emit, state={},
                               publish=publish)
             with patch.object(shared_folders.settings, "shared_folders_path", config), \
-                    patch.object(price_check, "ocr_image", fake_ocr), \
+                    patch.object(price_check, "ocr_image", fake_ocr), _assign(default="TOP榜单 / 男子 / 羽绒服TOP榜"), \
                     patch.object(price_check, "load_table_image", fake_table_image):
                 guessed = asyncio.run(shared_tools.check_prices(ctx, {
                     "request": "根据表格检查一下价格文案", "folder": "Z:\\活动", "image_ids": [shot["id"]]}))
@@ -781,7 +1053,7 @@ class TableImageTest(unittest.TestCase):
         async def fake_ocr(data):
             return [{"name": "短羽绒衣", "price": 360, "save": 500}]
 
-        with patch.object(price_check, "ocr_image", fake_ocr):
+        with patch.object(price_check, "ocr_image", fake_ocr), _assign(default="表格截图 / 限时闪购"):
             result = asyncio.run(price_check.run_check([("a.png", lambda: b"x")], sheets))
         self.assertEqual(result["records"][0]["problems"], ["立省：表格 539，图上 500"])
 
@@ -989,7 +1261,7 @@ class SlowShareTest(unittest.TestCase):
 
             with patch.object(shared_folders.settings, "shared_folders_path", config), \
                     patch.object(shared_folders, "find_files", slow_find), \
-                    patch.object(price_check, "ocr_image", fake_ocr), \
+                    patch.object(price_check, "ocr_image", fake_ocr), _assign(default="TOP榜单 / 男子 / 羽绒服TOP榜"), \
                     patch.object(price_check, "load_table_image", fake_table_image):
                 result, ticks = asyncio.run(scenario())
             self.assertIn(True, scans)  # 确实走了"扫共享盘找表格"这一步

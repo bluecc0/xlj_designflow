@@ -74,7 +74,7 @@ def chat_completions_endpoint(base_url: str) -> str:
 
 
 def get_model_routes(purpose: str) -> list[ModelRoute]:
-    if purpose not in {"chat_llm", "agent_llm", "skill_llm", "vlm", "agent_vlm"}:
+    if purpose not in {"chat_llm", "agent_llm", "skill_llm", "check_llm", "vlm", "agent_vlm"}:
         raise ValueError(f"Unknown model routing purpose: {purpose}")
     if purpose == "vlm":
         base, key, model = settings.current_vlm_config()
