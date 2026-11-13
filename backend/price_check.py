@@ -585,26 +585,70 @@ async def assign_groups(folder: str, entries: list[tuple[str, object]], catalog:
                                                    for i, (rel, items) in enumerate(entries)),
                                   others=others_text)
     by_id = {g["id"]: g for g in catalog}
-    last: Exception | None = None
-    for _ in range(OCR_RETRIES + 1):
+    out: dict[str, dict] = {}
+    problems: dict[str, str] = {rel: "模型没有给出这张图的对应" for rel, _items in entries}
+    for attempt in range(OCR_RETRIES + 1):
+        todo = [n for n, (rel, _items) in enumerate(entries) if rel not in out]
+        if not todo:
+            break
+        ask = prompt
+        if attempt:  # 重试时告诉模型上次哪几张没答好
+            ask += "\n\n上一次的回答有问题，请重新给出全部图片的结果，特别注意：\n" + "\n".join(
+                f"图片 {n + 1}：{problems[entries[n][0]]}" for n in todo[:20])
         try:
-            resp = await routed_chat_completion("check_llm", {"messages": [{"role": "user", "content": prompt}],
+            resp = await routed_chat_completion("check_llm", {"messages": [{"role": "user", "content": ask}],
                                                               "temperature": 0}, timeout=120)
             content = resp.json()["choices"][0]["message"]["content"] or ""
             answers = json.loads(re.search(r"\[.*\]", content, re.S).group(0))
-            out = {}
-            for a in answers:
-                if not isinstance(a, dict):
-                    continue
-                k = int(a.get("image") or 0) - 1
-                if 0 <= k < len(entries):
-                    group = by_id.get(int(a["group"])) if str(a.get("group") or "").strip().isdigit() else None
-                    out[entries[k][0]] = {"group": group, "start": max(1, int(a.get("start") or 1)),
-                                          "reason": str(a.get("reason") or "").strip()}
-            return out
         except Exception as exc:  # 线路断开、JSON 不完整都重试
-            last = exc
-    return {rel: {"group": None, "start": 1, "reason": f"判断对应分组失败：{last}"} for rel, _items in entries}
+            for n in todo:
+                problems[entries[n][0]] = f"模型服务异常：{exc}"
+            continue
+        seen: dict[int, list[dict]] = {}
+        for a in answers if isinstance(answers, list) else []:
+            if isinstance(a, dict) and str(a.get("image", "")).strip().isdigit():
+                seen.setdefault(int(a["image"]) - 1, []).append(a)
+        for n in todo:
+            rel, items = entries[n]
+            given = seen.get(n, [])
+            if not given:
+                problems[rel] = "模型没有给出这张图的对应"
+                continue
+            decisions = [_check_answer(a, items, by_id) for a in given]
+            errors = [error for _decision, error in decisions if error]
+            if errors:
+                problems[rel] = errors[0]
+            elif len({(d["group"] or {}).get("id") for d, _e in decisions}) > 1 or len({d["start"] for d, _e in decisions}) > 1:
+                problems[rel] = "同一张图给出了不同的对应"
+            else:
+                out[rel] = decisions[0][0]
+    # 重试用完仍没有有效对应的：明确标成"判断对应分组失败"，和模型明确判断"不对应表格"（group 为 null）区分开
+    for rel, _items in entries:
+        if rel not in out:
+            out[rel] = {"group": None, "start": 1, "reason": f"判断对应分组失败：{problems[rel]}", "error": True}
+    return out
+
+
+def _check_answer(answer: dict, items, by_id: dict) -> tuple[dict | None, str]:
+    """检查模型对一张图的回答：分组编号要在目录里（或明确填 null 表示不对应），start 要在这一组的范围内。
+    返回 (对应, 问题)，有问题时对应为 None。"""
+    reason = str(answer.get("reason") or "").strip()
+    raw = answer.get("group")
+    if raw is None or str(raw).strip().lower() in ("", "null", "none"):
+        return {"group": None, "start": 1, "reason": reason}, ""
+    if not str(raw).strip().isdigit() or int(raw) not in by_id:
+        return None, f"分组编号 {raw} 不在表格分组目录里"
+    group = by_id[int(raw)]
+    try:
+        start = int(answer.get("start") or 1)
+    except (TypeError, ValueError):
+        return None, f"start {answer.get('start')!r} 不是数字"
+    priced = isinstance(items, list) and any(_has_price(it) for it in items)
+    # 带价格的图：start 指带价格的商品；只有不带价格大图的：指 KV 位（也可能是价格没读出来的带价格商品）
+    limit = len(group["priced"]) if priced else max(len(group["plain"]), len(group["priced"]))
+    if not 1 <= start <= max(limit, 1):
+        return None, f"start {start} 超出了第 {raw} 组的范围（1~{max(limit, 1)}）"
+    return {"group": group, "start": start, "reason": reason}, ""
 
 
 def _has_price(item: dict) -> bool:
@@ -698,10 +742,12 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notif
 
     pairs, unmatched, covered, assigned = [], [], set(), []
     for rel, result in read.items():
-        decision = decisions.get(rel) or {"group": None, "start": 1, "reason": "模型没有给出对应"}
+        decision = decisions.get(rel) or {"group": None, "start": 1, "reason": "判断对应分组失败：模型没有给出对应",
+                                          "error": True}
         group = decision["group"]
-        status = ("failed" if isinstance(result, Exception) else "empty" if not result
-                  else "skipped" if group is None else "read")
+        # unassigned：没能判断对应哪一组（模型服务异常或回答无效），没有核对；skipped：模型明确判断不对应表格
+        status = ("unassigned" if decision.get("error") else "failed" if isinstance(result, Exception)
+                  else "empty" if not result else "skipped" if group is None else "read")
         assigned.append({"image": rel, "group": group["key"] if group else None, "status": status,
                          "reason": decision["reason"]})
         if status != "read":
@@ -787,7 +833,9 @@ async def run_check(images: list[tuple[str, object]], sheets: list[Sheet], notif
     touched = {a["group"] for a in assigned if a["group"]}
     uncovered = [row for sheet in sheets for row in sheet.rows if row["values"]
                  and (row["sheet"], tuple(row["group"])) in touched and (row["sheet"], row["index"]) not in covered]
+    unassigned = [f"{a['image']}：{a['reason']}" for a in assigned if a["status"] == "unassigned"]
     return {"records": records, "unmatched": unmatched, "uncovered": uncovered, "failed": failed, "assigned": assigned,
+            "unassigned": unassigned,
             "skipped_small": small, "no_product_images": empty, "image_count": len(images)}
 
 

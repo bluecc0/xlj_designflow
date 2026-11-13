@@ -223,6 +223,62 @@ class AssignTest(unittest.TestCase):
             out = asyncio.run(price_check.assign_groups("活动", [("a.png", [])], []))
         self.assertIsNone(out["a.png"]["group"])
         self.assertIn("判断对应分组失败", out["a.png"]["reason"])
+        self.assertTrue(out["a.png"]["error"])  # 和模型明确判断"不对应表格"区分开
+
+    def _replies(self, *replies):
+        """模型依次给出的回答；记录每次收到的提示词。"""
+        prompts, queue = [], list(replies)
+
+        class Resp:
+            def __init__(self, answer):
+                self.answer = answer
+
+            def json(self):
+                return {"choices": [{"message": {"content": json.dumps(self.answer, ensure_ascii=False)}}]}
+
+        async def fake(purpose, payload, **kwargs):
+            prompts.append(payload["messages"][0]["content"])
+            return Resp(queue.pop(0))
+        return fake, prompts
+
+    def test_answers_are_checked_per_image_and_retried(self):
+        # 审核复现：模型只回答了 a.jpg，b.jpg 不能被当成"和表格无关"静默跳过
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        priced = [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]
+        entries = [("a.jpg", priced), ("b.jpg", priced)]
+        fake, prompts = self._replies([{"image": 1, "group": 1, "start": 1, "reason": "a"}],
+                                      [{"image": 1, "group": 1, "start": 1}, {"image": 2, "group": 1, "start": 2, "reason": "b"}])
+        with patch.object(price_check, "routed_chat_completion", fake):
+            out = asyncio.run(price_check.assign_groups("活动", entries, catalog))
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("图片 2：模型没有给出这张图的对应", prompts[1])  # 重试时告诉模型哪张没答
+        self.assertEqual([(out[r]["group"]["id"], out[r]["start"], out[r].get("error")) for r in ("a.jpg", "b.jpg")],
+                         [(1, 1, None), (1, 2, None)])
+
+    def test_invalid_answers_end_as_assignment_failures(self):
+        catalog = price_check._group_catalog(price_check.load_table(_xlsx(), "a.xlsx"))
+        priced = [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]
+        kv = [{"name": "闪击篮球鞋"}]
+        entries = [("缺项.jpg", priced), ("重复.jpg", priced), ("非法分组.jpg", priced), ("越界.jpg", priced),
+                   ("KV越界.jpg", kv), ("不对应.jpg", priced)]
+        bad = [{"image": 2, "group": 1, "start": 1}, {"image": 2, "group": 2, "start": 1},   # 同一张图两个不同答案
+               {"image": 3, "group": 99, "start": 1}, {"image": 4, "group": 1, "start": 3},  # 第 1 组只有 2 个带价格的
+               {"image": 5, "group": 5, "start": 2},                                          # 第 5 组只有 1 个 KV 位
+               {"image": 6, "group": None, "start": 1, "reason": "导航图"}]
+        fake, prompts = self._replies(*[bad] * (price_check.OCR_RETRIES + 1))
+        with patch.object(price_check, "routed_chat_completion", fake):
+            out = asyncio.run(price_check.assign_groups("活动", entries, catalog))
+        self.assertEqual(len(prompts), price_check.OCR_RETRIES + 1)  # 无效的都重试过
+        reasons = {rel: out[rel]["reason"] for rel, _items in entries}
+        self.assertIn("模型没有给出这张图的对应", reasons["缺项.jpg"])
+        self.assertIn("同一张图给出了不同的对应", reasons["重复.jpg"])
+        self.assertIn("分组编号 99 不在表格分组目录里", reasons["非法分组.jpg"])
+        self.assertIn("start 3 超出了第 1 组的范围（1~2）", reasons["越界.jpg"])
+        self.assertIn("start 2 超出了第 5 组的范围（1~1）", reasons["KV越界.jpg"])
+        self.assertTrue(all(out[rel].get("error") for rel in reasons if rel != "不对应.jpg"))
+        # 模型明确判断不对应表格（group 为 null）是有效回答，不算失败
+        self.assertEqual((out["不对应.jpg"]["group"], out["不对应.jpg"].get("error"), out["不对应.jpg"]["reason"]),
+                         (None, None, "导航图"))
 
 
 class JudgeTest(unittest.TestCase):
@@ -382,6 +438,26 @@ class RunCheckTest(unittest.TestCase):
         named_groups = {g["分组"]: g for g in price_check.coverage([new], named, whole_sheets=True)}
         self.assertEqual({g["结果"] for g in named_groups.values()}, {"没有核对"})
         self.assertEqual(len(named_groups), 2)
+
+    def test_assignment_failures_are_reported_not_skipped(self):
+        # 审核复现：分组判断失败的图要单独标出来（没有核对），不能和"模型判断不对应表格"混在一起
+        sheets = price_check.load_table(_xlsx(), "a.xlsx")
+
+        async def fake_ocr(data):
+            return [{"name": "火锅羽绒 短羽绒服", "price": 399, "save": 500}]
+
+        async def fake_assign(folder, entries, catalog, others=None, dates=None):
+            group = next(g for g in catalog if g["name"] == "TOP榜单 / 男子 / 羽绒服TOP榜")
+            return {"ok.jpg": {"group": group, "start": 1, "reason": "文件名"},
+                    "lost.jpg": {"group": None, "start": 1, "reason": "判断对应分组失败：模型服务异常：超时", "error": True},
+                    "nav.jpg": {"group": None, "start": 1, "reason": "导航图"}}
+        with patch.object(price_check, "ocr_image", fake_ocr), patch.object(price_check, "assign_groups", fake_assign):
+            result = asyncio.run(price_check.run_check(
+                [("ok.jpg", lambda: b"1"), ("lost.jpg", lambda: b"2"), ("nav.jpg", lambda: b"3")], sheets))
+        self.assertEqual({a["image"]: a["status"] for a in result["assigned"]},
+                         {"ok.jpg": "read", "lost.jpg": "unassigned", "nav.jpg": "skipped"})
+        self.assertEqual(result["unassigned"], ["lost.jpg：判断对应分组失败：模型服务异常：超时"])
+        self.assertEqual([r["item"]["_image"] for r in result["records"]], ["ok.jpg"])
 
     def test_group_with_only_kv_rows_is_in_the_conclusion(self):
         # 正式路径复现：越冬服饰 KV 组只有不带价格的商品，图上"珑壳"印成"琥壳"，
@@ -756,6 +832,20 @@ class AgentToolsTest(unittest.TestCase):
                     patch.object(price_check, "ocr_image", fake_ocr), _assign(default=None):
                 wrong = asyncio.run(shared_tools.check_prices(ctx, {"folder": "Z:\\活动", "request": "核对一下价格文案信息是否有误"}))
             del events[kept:]  # 下面只检查第一次核对的进度消息
+            # 审核复现：判断对应分组的模型线路全部失败，不能说成"可能发错了表格"，要说清没有核对、结果不完整
+            kept = len(events)
+
+            async def broken(*args, **kwargs):
+                raise RuntimeError("线路断开")
+            with patch.object(shared_folders.settings, "shared_folders_path", config), \
+                    patch.object(price_check, "ocr_image", fake_ocr), patch.object(price_check, "routed_chat_completion", broken):
+                down = asyncio.run(shared_tools.check_prices(ctx, {"folder": "Z:\\活动", "request": "核对一下价格文案信息是否有误"}))
+            del events[kept:]
+            self.assertIn("判断对应分组失败", down["结论"])
+            self.assertIn("结果不完整", down["结论"])
+            self.assertEqual(down["概况"]["判断对应分组失败、没有核对的图片数"], 1)
+            self.assertTrue(any("不代表它们和表格无关" in n and "男子/羽绒服.png" in n for n in down["说明"]))
+            self.assertFalse(any("发错了表格" in n for n in down["说明"]))
             self.assertEqual(wrong["结论"], "没有核对到表格里的任何一组")
             self.assertTrue(any("可能表格和文件夹不是同一个活动" in n and "TOP榜单 / 男子 / 羽绒服TOP榜" in n for n in wrong["说明"]))
             self.assertEqual([s["sheet"] for s in overview["sheets"]], ["TOP榜单", "新品上市"])

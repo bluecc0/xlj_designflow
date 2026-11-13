@@ -259,7 +259,11 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
         notes.append("表格是从截图识别出来的，截图里的数字本身可能读错；有疑问的以原始 Excel 为准")
     if result["failed"]:
         notes.append(f"{len(result['failed'])} 张图识别失败，没有核对：" + "；".join(result["failed"][:5]))
-    if not groups:
+    unassigned = result.get("unassigned", [])
+    if unassigned:  # 模型服务异常或回答无效：这些图没有核对，不能当成和表格无关
+        notes.append(f"{len(unassigned)} 张图没能判断对应表格哪一组（模型服务异常或回答无效），这些图没有核对，"
+                     "不代表它们和表格无关，可以稍后重试：" + "；".join(unassigned[:5]) + ("等" if len(unassigned) > 5 else ""))
+    if not groups and not unassigned:
         table_groups = list(dict.fromkeys(price_check.group_name(r) for s in sheets for r in s.rows if r["values"]))
         notes.append("文件夹里没有一张图能对应到表格里的分组，可能表格和文件夹不是同一个活动或模块（发错了表格或路径）。"
                      "表格里的分组有：" + "、".join(table_groups[:10]) + ("等" if len(table_groups) > 10 else ""))
@@ -270,6 +274,7 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
             "文件夹里的图片数": result["image_count"],
             "其中没有商品的图片数（标题、背景、按钮等，不用核对）": len(result["no_product_images"]) + result["skipped_small"],
             "识别失败的图片数": len(result["failed"]),
+            "判断对应分组失败、没有核对的图片数": len(unassigned),
             "对应到表格并完成核对的商品数": len(records),
             "核对结果": {"一致": sum(r["status"] == "一致" for r in records), "价格不一致": sum(r["status"] == "不一致" for r in records),
                          "文案待确认": sum(r["status"] == "文案待确认" for r in records),
@@ -278,7 +283,8 @@ async def _run_price_check(ctx: ToolContext, args: dict, folder: str, image_ids:
         # checked / counts 给前端卡片摘要用
         "checked": len(records), "counts": {s: sum(r["status"] == s for r in records) for s in price_check.STATUSES},
         # 以表格为准，按分组交代：哪些核对无误、哪些有问题、哪些没核对（附原因）。回复要按这个说清楚每一组查没查
-        "结论": price_check.coverage_summary(groups),
+        "结论": price_check.coverage_summary(groups) + (
+            f"；另有 {len(unassigned)} 张图判断对应分组失败（模型服务异常或回答无效），没有核对，结果不完整" if unassigned else ""),
         "回复要求": "以表格为准，按分组说清楚每一组查没查：先给结论；再列核对无误的组；有问题的组逐条说表格是什么、图上是什么；"
                     "没有核对或部分没核对的组说明原因和哪些商品没核对到。不要只说商品数。"
                     "结论是「文案待确认」的（图上文字和表格只差几个字，可能是识别把小字读错了）要和价格不一致分开列，"
