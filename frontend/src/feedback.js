@@ -6,6 +6,7 @@
   function detailOf(value) {
     if (value == null) return '';
     if (typeof value === 'object') {
+      if (value.code === 'media-type-mismatch') return '素材图片的实际格式与上传格式不一致，请重新导出为 PNG 或 JPEG 后再试。';
       if (Array.isArray(value)) return value.map(detailOf).filter(Boolean).join('；');
       if (Array.isArray(value.loc) && value.msg) {
         var names = { prompt: '提示词', size: '尺寸', resolution: '分辨率', images: '参考图', image: '图片', username: '用户名', password: '密码' };
@@ -32,6 +33,7 @@
     if (batch) return batch[1] + message(batch[2], fallback);
     var status = Number(error && (error.httpStatus || error.status)) || Number((raw.match(/HTTP\s*(\d+)/i) || [])[1]);
     var otherwise = fallback || '操作未完成，暂时无法确认原因，请稍后再试。';
+    if (/media-type-mismatch/i.test(raw)) return '素材图片的实际格式与上传格式不一致，请重新导出为 PNG 或 JPEG 后再试。';
     // These phases must never suggest another paid generation.
     if (/本地修改|尚未保存/.test(raw)) return raw.replace(/\s*[（(]\d+[）)]/g, '');
     if (/受理状态|是否受理|重复.*扣费|ambiguous/i.test(raw)) return '暂时无法确认任务是否已提交，请先查看任务记录，避免重复提交。';

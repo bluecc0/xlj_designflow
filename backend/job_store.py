@@ -811,6 +811,7 @@ def load_special_jobs(limit: int = 50, user_id: Optional[str] = None) -> list[di
             'user_id': row["user_id"],
             'sku': row["sku"] or '',
             'status': row["status"],
+            'error': row["error"],
             'created_at': row["created_at"],
             'penpot_edit_url': _public_penpot_edit_url(row["penpot_edit_url"]),
             'frames': frame_list,

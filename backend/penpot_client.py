@@ -586,13 +586,29 @@ class PenpotClient:
         with open(image_path, "rb") as f:
             img_bytes = f.read()
 
-        ext = os.path.splitext(image_path)[1].lower()
-        mime = "image/png" if ext == ".png" else "image/jpeg"
+        import io
+        from PIL import Image
+
+        # Shared assets can have misleading extensions; Penpot validates the bytes.
+        try:
+            with Image.open(io.BytesIO(img_bytes)) as image:
+                if image.format in ("PNG", "JPEG"):
+                    image.verify()
+                    mime = "image/png" if image.format == "PNG" else "image/jpeg"
+                else:
+                    converted = io.BytesIO()
+                    image.convert("RGBA").save(converted, format="PNG")
+                    img_bytes = converted.getvalue()
+                    mime = "image/png"
+        except (OSError, ValueError) as exc:
+            raise ValueError("素材图片无法读取，请重新导出为 PNG 或 JPEG 后再试") from exc
+        extension = ".png" if mime == "image/png" else ".jpg"
+        upload_name = os.path.splitext(os.path.basename(image_path))[0] + extension
 
         raw = self._rpc(
             "upload-file-media-object",
             params={"file-id": file_id, "is-local": "true", "name": name},
-            files={"content": (os.path.basename(image_path), img_bytes, mime)},
+            files={"content": (upload_name, img_bytes, mime)},
         )
         # 处理 Transit list 格式（有时返回 list 而非 dict）
         if isinstance(raw, list) and raw:

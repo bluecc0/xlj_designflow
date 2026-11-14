@@ -378,7 +378,7 @@ var TemplatePanel = function(_ref2) {
               },
               onClick: function() {
                 if (job.status === 'failed') {
-                  window.dfToast('这条任务生成失败' + (job.error ? '：' + String(job.error).slice(0, 120) : ''), { tone: 'danger' });
+                  window.dfToast(window.DesignflowFeedback.message(job.error, '这条任务生成失败，暂未提供具体原因。'), { tone: 'danger' });
                   return;
                 }
                 if (job.status !== 'done') {
