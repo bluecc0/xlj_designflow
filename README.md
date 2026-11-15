@@ -205,4 +205,6 @@ Loom AI 是 DesignFlow 配套的 Photoshop CEP 插件，仍是实际工作流的
 
 普通生图、Agent 和拆分 PSD 统一使用 APIMart `seedream-5-5`，不再区分 Flash / Pro。旧 5.0 模型名和个人默认设置会在新请求时映射到 5.5，历史任务仍保留原始模型标签。支持 1K / 1.5K / 2K，不支持 4K。接口契约见 [APIMart 文档](https://docs.apimart.ai/cn/api-reference/images/seedream-5-5/generation)。
 
+GPT Image 2.6 智能路由依次尝试：符合能力条件的 Sub2API → APIMart `gpt-image-2.6-ext` → 普通 APIMart 2.6 → 原有 2.5 兜底。Ext 使用内部线路标识 `apimart-26-ext`，与 2.5 Ext 独立熔断；通过 `version` 保留 Flare / Sunburst，支持 1K / 2K / 4K 及 `quality`，每次上游请求 `n=1`。GIF 仅尝试 2.6 Ext 和普通 APIMart 2.6。已受理但状态不确定时继续查询原任务，不重复提交。接口契约见 [APIMart 2.6 Ext 文档](https://docs.apimart.ai/cn/api-reference/images/gpt-image-2.6-ext/generation)。
+
 拆层设置：`LAYER_EXTRACT_MODEL=seedream-5-5`、`LAYER_EXTRACT_SIZE=auto`、`LAYER_EXTRACT_MAX_IMAGES=7`（2–100，包含底图）。数量由上游限制，本地保留所有返回层。`LAYER_EXTRACT_TEXT_RECOGNITION=true` 可请求可选 OCR 元数据，此时省略拆层提示词以免影响 OCR；当前 PSD 仍导出栅格层，不会自动恢复文字层。旧 Kie 拆层线路不支持此升级，新的拆层请求须使用 `LAYER_EXTRACT_PROVIDER=apimart`。

@@ -230,28 +230,28 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             adobe2api_base_url="", adobe2api_api_key="",
             ai_image_api_key="sk-apimart", smart_routing_rules_json="",
         ):
-            # 1K 非高画质：Sub2API 2.6 → APIMart 2.6 → 其余线路的 2.5
+            # 1K 非高画质：Sub2API 2.6 → APIMart 2.6 Ext → APIMart 2.6 → 2.5 兜底
             for quality, expected in (
-                ("", ["sub2api", "apimart", "tuzi", "apimart-ext"]),
-                ("auto", ["sub2api", "apimart", "tuzi", "apimart-ext"]),
-                ("medium", ["sub2api", "apimart", "apimart-ext"]),
+                ("", ["sub2api", "apimart-26-ext", "apimart", "tuzi", "apimart-ext"]),
+                ("auto", ["sub2api", "apimart-26-ext", "apimart", "tuzi", "apimart-ext"]),
+                ("medium", ["sub2api", "apimart-26-ext", "apimart", "apimart-ext"]),
             ):
                 with self.subTest(quality=quality):
                     self.assertEqual(
                         ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="1K", quality=quality),
                         expected,
                     )
-            # 2K/4K/高画质：APIMart 2.6 → APIMart Ext 的 2.5
+            # 2K/4K/高画质：APIMart 2.6 Ext → APIMart 2.6 → APIMart 2.5 Ext
             for resolution, quality in (("2K", "auto"), ("4K", "auto"), ("1K", "xhigh"), ("1K", "max")):
                 with self.subTest(resolution=resolution, quality=quality):
                     self.assertEqual(
                         ai_image.get_smart_route_candidates("gpt-image-2.6", resolution=resolution, quality=quality),
-                        ["apimart", "apimart-ext"],
+                        ["apimart-26-ext", "apimart", "apimart-ext"],
                     )
             with patch.object(ai_image.settings, "cliproxy_api_key", ""):
                 self.assertEqual(
                     ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="1K"),
-                    ["apimart", "tuzi", "apimart-ext"],
+                    ["apimart-26-ext", "apimart", "tuzi", "apimart-ext"],
                 )
 
     def test_gpt_image_26_frozen_provider_is_not_readded_by_25_fallback(self) -> None:
@@ -268,12 +268,12 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         ):
             for frozen, resolution, expected in (
                 # Sub2API 的 2.6 冻结：2.5 兜底里的 Sub2API 不能再加回来（执行时仍会发 2.6）
-                ([("sub2api", "gpt-image-2.6")], "1K", ["apimart", "tuzi", "apimart-ext"]),
-                ([("apimart", "gpt-image-2.6")], "1K", ["sub2api", "tuzi", "apimart-ext"]),
+                ([("sub2api", "gpt-image-2.6")], "1K", ["apimart-26-ext", "apimart", "tuzi", "apimart-ext"]),
+                ([("apimart", "gpt-image-2.6")], "1K", ["sub2api", "apimart-26-ext", "tuzi", "apimart-ext"]),
                 # 只冻结了 2.5，不影响 2.6 的主路由
-                ([("sub2api", "gpt-image-2.5")], "1K", ["sub2api", "apimart", "tuzi", "apimart-ext"]),
-                ([("sub2api", "gpt-image-2.6"), ("apimart", "gpt-image-2.6")], "1K", ["tuzi", "apimart-ext"]),
-                ([("apimart", "gpt-image-2.6")], "2K", ["apimart-ext"]),
+                ([("sub2api", "gpt-image-2.5")], "1K", ["sub2api", "apimart-26-ext", "apimart", "tuzi", "apimart-ext"]),
+                ([("sub2api", "gpt-image-2.6"), ("apimart", "gpt-image-2.6")], "1K", ["apimart-26-ext", "tuzi", "apimart-ext"]),
+                ([("apimart", "gpt-image-2.6")], "2K", ["apimart-26-ext", "apimart-ext"]),
             ):
                 with self.subTest(frozen=frozen, resolution=resolution):
                     ai_image.reset_provider_freeze()
@@ -293,7 +293,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
         calls = []
 
         async def mock_apimart(*args, **kwargs):
-            provider = "apimart-ext" if kwargs["apimart_ext"] else "apimart"
+            provider = ("apimart-26-ext" if kwargs["model"] in ai_image.GPT_IMAGE_26_MODELS else "apimart-ext") if kwargs["apimart_ext"] else "apimart"
             calls.append((provider, kwargs["model"]))
             if provider == "apimart":
                 raise ai_image.UpstreamTaskFailed("生图任务失败")
@@ -306,7 +306,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             ai_image_api_key="sk-apimart", smart_routing_rules_json="",
         ), patch.object(ai_image, "generate_image_async", side_effect=mock_apimart):
             self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="2K"),
-                             ["apimart", "apimart-ext"])
+                             ["apimart-26-ext", "apimart", "apimart-ext"])
             # 真实走一次智能路由：两轮里 apimart-ext 的 2.5 连接失败两次
             with self.assertRaises(ai_image.AllProvidersFailedError):
                 await ai_image.smart_generate_image_async(
@@ -360,7 +360,7 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
                 model="gpt-image-2.6", prompt="生成 gif 图", user_id="test_user", resolution="2K",
                 output_format="gif",
             )
-        self.assertEqual(result["provider"], "apimart")
+        self.assertEqual(result["provider"], "apimart-26-ext")
         self.assertEqual(calls, [("gpt-image-2.6", "gif")])
         self.assertTrue(ai_image.wants_gif_output("生成 GIF 图"))
         self.assertTrue(ai_image.wants_gif_output("做一个动图"))

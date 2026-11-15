@@ -97,6 +97,8 @@ SLASH_MODEL_MAP = SUPPORTED_MODELS
 
 PROVIDER_APIMART = "apimart"
 PROVIDER_APIMART_EXT = "apimart-ext"
+PROVIDER_APIMART_26_EXT = "apimart-26-ext"
+APIMART_ASYNC_PROVIDERS = {PROVIDER_APIMART, PROVIDER_APIMART_EXT, PROVIDER_APIMART_26_EXT}
 PROVIDER_ADOBE2API = "adobe2api"
 PROVIDER_TUZI = "tuzi"
 
@@ -975,10 +977,13 @@ async def _submit_generation_task(
 ) -> str:
     model_name = _apimart_model_name(model, variant)
     is_seedream_5 = model_name in _SEEDREAM_5_MODELS
+    is_gpt_26_ext = apimart_ext and model_name in _GPT_IMAGE_26_VARIANT_MODELS
     ratio, resolution = _normalize_seedream_size(size, resolution) if is_seedream_5 else _normalize_size(size, resolution)
     is_nano_banana_21 = model_name in {_APIMART_NANO_BANANA_21_MODEL, f"{_APIMART_NANO_BANANA_21_MODEL}-ext"}
     if is_nano_banana_21 and size.strip() in _NANO_BANANA_21_EXTRA_RATIOS:
         ratio = size.strip()
+    if is_gpt_26_ext and size.strip() == "21:9":
+        ratio = "21:9"
     # APIMart 文档要求 GPT Image 2/2.5 的 resolution 使用小写。
     if model_name == "gpt-image-2" or model_name in _APIMART_GPT_IMAGE_25_MODELS or model_name in _GPT_IMAGE_26_VARIANT_MODELS:
         resolution = resolution.lower()
@@ -1011,12 +1016,15 @@ async def _submit_generation_task(
             # 由本地路由处理回退，保留真实线路、任务号和计费诊断。
             payload["official_fallback"] = False
     elif apimart_ext:
+        ext_version = model_name.rsplit("-", 1)[-1] if is_gpt_26_ext else (variant or "flare").strip().lower()
+        if ext_version not in {"flare", "sunburst"}:
+            ext_version = "flare"
         payload = {
-            "model": "gpt-image-2.5-ext",
-            "version": (variant or "flare").strip().lower() if (variant or "").strip().lower() in {"flare", "sunburst"} else "flare",
+            "model": "gpt-image-2.6-ext" if is_gpt_26_ext else "gpt-image-2.5-ext",
+            "version": ext_version,
             "prompt": final_prompt,
             "size": ratio,
-            "resolution": resolution.upper(),
+            "resolution": resolution.lower() if is_gpt_26_ext else resolution.upper(),
             "n": 1,
         }
     else:
@@ -1028,23 +1036,26 @@ async def _submit_generation_task(
         }
     if not apimart_ext and model_name == "gpt-image-2":
         payload["official_fallback"] = True
-    elif not apimart_ext and (model_name in _APIMART_GPT_IMAGE_25_MODELS or model_name in _GPT_IMAGE_26_VARIANT_MODELS):
+    elif is_gpt_26_ext or (not apimart_ext and (model_name in _APIMART_GPT_IMAGE_25_MODELS or model_name in _GPT_IMAGE_26_VARIANT_MODELS)):
         clean_quality = (quality or getattr(settings, "ai_image_gpt_25_quality", "auto") or "auto").strip().lower()
         if clean_quality not in {"auto", "low", "medium", "high", "xhigh", "max"}:
             clean_quality = "auto"
         payload["quality"] = clean_quality
+    if is_gpt_26_ext and len(reference_urls or []) > 16:
+        raise ValueError("GPT Image 2.6 Ext 最多支持 16 张参考图")
     if output_format == "gif":
         if model_name not in _GPT_IMAGE_26_VARIANT_MODELS or reference_urls:
             raise ValueError("GIF 动图仅支持 GPT Image 2.6 文生图")
-        # GIF 只支持文生图；尺寸为单帧像素，省略时上游默认 512×512，不能用比例
+        # GIF 仅文生图且不能传比例；Ext 保留 resolution，普通版省略尺寸字段。
         payload.pop("size", None)
-        payload.pop("resolution", None)
+        if not is_gpt_26_ext:
+            payload.pop("resolution", None)
         payload["output_format"] = "gif"
     if reference_urls:
         payload["image_urls"] = reference_urls
     endpoint = f"{base_url}/v1/images/generations"
     request_headers = dict(headers)
-    if apimart_ext and not is_nano_banana_21:
+    if apimart_ext and not is_nano_banana_21 and not is_gpt_26_ext:
         request_headers["X-APIMart-Response-Version"] = "2026-07-27"
         request_headers["Idempotency-Key"] = str(uuid.uuid4())
     checkpoint("submitting")
@@ -1492,7 +1503,7 @@ async def resume_image_async(*, provider: str, model: str, user_id: str,
     task_id = str(recovery.get("task_id") or "")
     result_url = str(recovery.get("result_url") or "")
     detail = {}
-    if provider in {PROVIDER_APIMART, PROVIDER_APIMART_EXT}:
+    if provider in APIMART_ASYNC_PROVIDERS:
         base_url, api_key = _model_credentials(_normalize_model_name(model))
         async with httpx.AsyncClient(**_ai_image_client_kwargs(240)) as client:
             if not result_url:
@@ -1706,7 +1717,7 @@ async def _save_cliproxy_response_image(data: dict[str, Any], *, user_id: str, a
 
 
 _SUB2API_GPT_IMAGE_25_MODELS = {"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
-# GPT Image 2.6 目前只有 Sub2API 提供，且只支持 1K
+# GPT Image 2.6：Sub2API 支持 1K；APIMart 普通和 Ext 支持全部档位。
 GPT_IMAGE_26_MODELS = {"gpt-image-2.6", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"}
 _SUB2API_GPT_IMAGE_26_MODELS = _GPT_IMAGE_26_VARIANT_MODELS
 _SUB2API_ALLOWED_MODELS = {"gpt-image-2", *_SUB2API_GPT_IMAGE_25_MODELS, *_SUB2API_GPT_IMAGE_26_MODELS}
@@ -2276,6 +2287,7 @@ PROVIDER_MODEL_CAPABILITIES: dict[str, set[str] | None] = {
     PROVIDER_TUZI: {"gpt-image-2.5", "gpt-image-2.5-flare"},
     PROVIDER_ADOBE2API: {"gemini-3-pro-image-preview", "gpt-image-2"},
     PROVIDER_APIMART_EXT: {"gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", _APIMART_NANO_BANANA_21_MODEL},
+    PROVIDER_APIMART_26_EXT: GPT_IMAGE_26_MODELS,
     PROVIDER_APIMART: None,  # APIMart 适配通用架构，全支持
 }
 
@@ -2418,7 +2430,7 @@ def get_provider_freeze_status(*, now: float | None = None) -> dict[str, dict[st
     status: dict[str, dict[str, Any]] = {}
     with _provider_circuit_lock:
         all_keys = set(_provider_consecutive_failures.keys()) | set(_provider_frozen_until.keys())
-        for p in (PROVIDER_SUB2API, PROVIDER_APIMART_EXT, PROVIDER_APIMART, PROVIDER_ADOBE2API, PROVIDER_TUZI):
+        for p in (PROVIDER_SUB2API, PROVIDER_APIMART_26_EXT, PROVIDER_APIMART_EXT, PROVIDER_APIMART, PROVIDER_ADOBE2API, PROVIDER_TUZI):
             all_keys.add(p)
         for k in all_keys:
             fails = _provider_consecutive_failures.get(k, 0)
@@ -2498,7 +2510,7 @@ def get_smart_route_candidates(
         res_upper = res_clean.upper() if res_clean else "1K"
 
     # GPT Image 2.6：Sub2API 只有 1K 非高画质，APIMart 全档位都有。
-    # 顺序为 Sub2API 2.6（满足条件时）→ APIMart 2.6 → 其他线路的 GPT Image 2.5 兜底
+    # 顺序为 Sub2API 2.6（满足条件时）→ APIMart 2.6 Ext → APIMart 2.6 → GPT Image 2.5 兜底。
     if model_name in GPT_IMAGE_26_MODELS:
         fallback = get_smart_route_candidates(
             "gpt-image-2.5", resolution=res_upper, size=size, variant=variant, quality=quality,
@@ -2508,10 +2520,11 @@ def get_smart_route_candidates(
         if gpt_image_26_on_sub2api(res_upper, quality_clean) and settings.cliproxy_base_url and settings.cliproxy_api_key:
             primary.append(PROVIDER_SUB2API)
         if settings.ai_image_api_key:
+            primary.append(PROVIDER_APIMART_26_EXT)
             primary.append(PROVIDER_APIMART)
-        # 执行时这两条线路收到 2.6 一律发 2.6，所以只能经主路由（按 2.6 的冻结状态）进入，
+        # 执行时这些主线路收到 2.6 一律发 2.6，只能按 2.6 冻结状态进入，
         # 不能再从按 2.5 冻结状态生成的兜底列表里加回来
-        fallback = [p for p in fallback if p not in (PROVIDER_SUB2API, PROVIDER_APIMART)]
+        fallback = [p for p in fallback if p not in (PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_APIMART_26_EXT)]
         active = [p for p in primary if not (filter_frozen and is_provider_frozen(p, model=model_name, now=now))]
         if not active and not fallback:
             # 全部冻结时与通用规则一致：不过滤，避免完全不可用
@@ -2583,7 +2596,7 @@ def get_smart_route_candidates(
         elif provider == PROVIDER_ADOBE2API:
             if settings.adobe2api_base_url and settings.adobe2api_api_key:
                 candidates.append(provider)
-        elif provider in (PROVIDER_APIMART, PROVIDER_APIMART_EXT):
+        elif provider in APIMART_ASYNC_PROVIDERS:
             if settings.ai_image_api_key:
                 candidates.append(provider)
 
@@ -2659,8 +2672,8 @@ async def smart_generate_image_async(
     """
     gif_output = output_format == "gif" and _normalize_model_name(model).lower() in GPT_IMAGE_26_MODELS and not images
     if gif_output:
-        # 动图只有 APIMart 的 GPT Image 2.6 支持，不降级到其他线路
-        candidates = [PROVIDER_APIMART] if settings.ai_image_api_key else []
+        # GIF 只走 APIMart 2.6 Ext / 普通 2.6，不降级到不支持动图的线路。
+        candidates = [PROVIDER_APIMART_26_EXT, PROVIDER_APIMART] if settings.ai_image_api_key else []
     else:
         candidates = get_smart_route_candidates(
             model,
@@ -2713,7 +2726,7 @@ async def smart_generate_image_async(
         provider_on_accepted = _make_on_accepted(provider)
         # 熔断按实际发送的模型记录：2.6 降级到其他线路时发的是 2.5，要与选路时查询的 2.5 冻结状态一致
         circuit_model = model
-        if _normalize_model_name(model).lower() in GPT_IMAGE_26_MODELS and provider not in (PROVIDER_SUB2API, PROVIDER_APIMART):
+        if _normalize_model_name(model).lower() in GPT_IMAGE_26_MODELS and provider not in (PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_APIMART_26_EXT):
             circuit_model = "gpt-image-2.5"
         try:
             if on_attempt:
@@ -2721,10 +2734,10 @@ async def smart_generate_image_async(
             attempt_count += 1
             canonical_model = _normalize_model_name(model).lower()
             if canonical_model in GPT_IMAGE_26_MODELS:
-                # Sub2API 和 APIMart 有 2.6，其他线路一律降级为 2.5
+                # Sub2API、APIMart 及 2.6 Ext 保持 2.6；其他线路降级为 2.5。
                 if provider == PROVIDER_SUB2API:
                     provider_model = _sub2api_model_name(model, variant)
-                elif provider == PROVIDER_APIMART:
+                elif provider in (PROVIDER_APIMART, PROVIDER_APIMART_26_EXT):
                     provider_model = model
                 else:
                     provider_model = "gpt-image-2.5"
@@ -2766,7 +2779,7 @@ async def smart_generate_image_async(
                         model=provider_model, prompt=prompt, images=images,
                         size=size, resolution=resolution, user_id=user_id,
                         variant=variant, quality=quality,
-                        apimart_ext=provider == PROVIDER_APIMART_EXT,
+                        apimart_ext=provider in (PROVIDER_APIMART_EXT, PROVIDER_APIMART_26_EXT),
                         on_progress=on_progress, on_accepted=provider_on_accepted,
                     )
                 else:
@@ -2774,7 +2787,7 @@ async def smart_generate_image_async(
                         model=provider_model, prompt=prompt,
                         size=size, resolution=resolution, user_id=user_id,
                         variant=variant, quality=quality,
-                        apimart_ext=provider == PROVIDER_APIMART_EXT,
+                        apimart_ext=provider in (PROVIDER_APIMART_EXT, PROVIDER_APIMART_26_EXT),
                         on_progress=on_progress, on_accepted=provider_on_accepted,
                         output_format="gif" if gif_output else "",
                     )

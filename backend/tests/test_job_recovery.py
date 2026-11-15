@@ -172,6 +172,21 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resume.call_args.kwargs["recovery"]["task_id"], "paid-task")
         self.assertEqual(self.job()["status"], "done")
 
+    async def test_ext_26_accepted_task_resumes_via_scanner_without_post(self):
+        self.seed(phase="accepted", provider="apimart-26-ext", task_id="paid-ext-26")
+        self.assertIn("image-job", [job["id"] for job in job_store.load_recoverable_image_jobs()])
+        resume = AsyncMock(return_value={"url": "/result.png", "task_id": "paid-ext-26",
+                                         "provider": "apimart-26-ext"})
+        with patch.object(main, "resume_image_async", resume), \
+             patch.object(main, "generate_image_async") as post, \
+             patch.object(main, "smart_generate_image_async") as smart:
+            await self.execute()
+        post.assert_not_called()
+        smart.assert_not_called()
+        self.assertEqual(resume.call_args.kwargs["provider"], "apimart-26-ext")
+        self.assertEqual(resume.call_args.kwargs["recovery"]["task_id"], "paid-ext-26")
+        self.assertEqual(self.job()["status"], "done")
+
     async def test_shutdown_before_any_post_can_resume(self):
         self.seed()
         with self.assertRaises(asyncio.CancelledError):

@@ -1220,7 +1220,7 @@ def load_recoverable_image_jobs() -> list[dict]:
             WHERE status IN ('pending', 'queued', 'processing', 'running')
                OR (status = 'done' AND json_valid(request_meta_json)
                    AND json_extract(request_meta_json, '$.recovery.phase') = 'downloaded')
-               OR (status = 'failed' AND provider IN ('apimart', 'apimart-ext')
+               OR (status = 'failed' AND provider IN ('apimart', 'apimart-ext', 'apimart-26-ext')
                    AND task_id IS NOT NULL AND task_id != ''
                    AND (request_meta_json IS NULL OR (json_valid(request_meta_json)
                         AND json_extract(request_meta_json, '$.recovery') IS NULL)))
