@@ -106,21 +106,39 @@ class NanoBanana21Test(unittest.IsolatedAsyncioTestCase):
                     else:
                         self.assertTrue(all("image_urls" not in body for body in submitted))
 
-    async def test_interrupted_accepted_ext_task_resumes_without_another_submission(self):
+    async def test_timed_out_ext_task_is_abandoned_and_switches_route(self):
+        # 新策略：线路超时（含已受理后轮询超时）一律放弃该请求并换下一条线路，不再等待恢复原任务。
+        submitted = []
+
+        def handler(request):
+            body = json.loads(request.content)
+            submitted.append(body["model"])
+            return httpx.Response(200, json={"data": [{"task_id": f"task-{len(submitted)}"}]})
+
+        async def poll(client, **kwargs):
+            if kwargs["task_id"] == "task-1":
+                raise TimeoutError("poll interrupted")
+            return "https://result.test/image.png", 100, {}
+
+        with (
+            patch.object(ai_image, "_ai_image_client_kwargs", return_value={"transport": httpx.MockTransport(handler)}),
+            patch.object(ai_image, "_wait_for_task_result", side_effect=poll),
+            patch.object(ai_image, "_download_final_image", return_value="/ai-images/test/result.png"),
+        ):
+            result = await ai_image.smart_generate_image_async(model="nano-banana-2.1", prompt="产品海报")
+        self.assertEqual(submitted, ["gemini-nano-banana-2.1-ext", "gemini-nano-banana-2.1"])
+        self.assertEqual(result["provider"], "apimart")
+        self.assertEqual(result["task_id"], "task-2")
+        self.assertTrue(result.get("provider_switched"))
+
+    async def test_resume_polls_accepted_ext_task_without_another_submission(self):
+        # 进程重启等恢复场景仍只查询原任务，不重新提交。
         submitted = []
 
         def handler(request):
             submitted.append(request.method)
-            return httpx.Response(200, json={"data": [{"task_id": "accepted-ext"}]})
+            return httpx.Response(500)
 
-        with (
-            patch.object(ai_image, "_ai_image_client_kwargs", return_value={"transport": httpx.MockTransport(handler)}),
-            patch.object(ai_image, "_wait_for_task_result", side_effect=TimeoutError("poll interrupted")),
-        ):
-            with self.assertRaises(TimeoutError) as raised:
-                await ai_image.smart_generate_image_async(model="nano-banana-2.1", prompt="产品海报")
-        self.assertEqual(raised.exception.provider, "apimart-ext")
-        self.assertEqual(raised.exception.task_id, "accepted-ext")
         with (
             patch.object(ai_image, "_ai_image_client_kwargs", return_value={"transport": httpx.MockTransport(handler)}),
             patch.object(ai_image, "_wait_for_task_result", return_value=("https://result.test/image.png", 100, {})) as poll,
@@ -130,8 +148,7 @@ class NanoBanana21Test(unittest.IsolatedAsyncioTestCase):
                 user_id="test", recovery={"task_id": "accepted-ext"})
         self.assertEqual(result["task_id"], "accepted-ext")
         self.assertEqual(poll.call_args.kwargs["task_id"], "accepted-ext")
-        self.assertEqual(submitted, ["POST"])
-
+        self.assertEqual(submitted, [])
 
 if __name__ == "__main__":
     unittest.main()

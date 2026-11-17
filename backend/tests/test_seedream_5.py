@@ -132,16 +132,20 @@ class Seedream5Test(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(submitted[0]["model"], "seedream-5-5")
                     self.assertEqual(submitted[0]["n"], 1)
                     submitted.clear()
+                    # 新策略：轮询超时即放弃该请求并按两轮重试，不再保留原任务等待恢复。
+                    ai_image.reset_provider_freeze()
                     with patch.object(ai_image, "_wait_for_task_result", side_effect=TimeoutError("poll interrupted")):
-                        with self.assertRaises(TimeoutError) as raised:
+                        with self.assertRaises(ai_image.AllProvidersFailedError) as raised:
                             await ai_image.smart_generate_image_async(model=model, prompt="海报", images=references)
-                    self.assertEqual(raised.exception.task_id, "accepted-task")
-                    self.assertEqual(raised.exception.provider, "apimart")
+                    self.assertEqual(raised.exception.task_id, "")
+                    self.assertEqual([body["model"] for body in submitted], ["seedream-5-5", "seedream-5-5"])
+                    ai_image.reset_provider_freeze()
+                    submitted.clear()
+                    # 进程重启等恢复场景仍只查询原任务，不重新提交，并保留所选版本。
                     resumed = await ai_image.resume_image_async(provider="apimart", model=model, user_id="test",
                         recovery={"task_id": "accepted-task"})
                     self.assertEqual(resumed["task_id"], "accepted-task")
-                    self.assertEqual(len(submitted), 1)
-                    self.assertEqual(submitted[0]["model"], "seedream-5-5")
+                    self.assertEqual(submitted, [])
 
 
 if __name__ == "__main__":
