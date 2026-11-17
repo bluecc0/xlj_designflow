@@ -213,18 +213,18 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
         worker.assert_not_called()
         self.assertEqual(self.job()["request_meta"]["recovery"]["phase"], "submission_unknown")
 
-    async def test_read_timeout_stops_auto_routing_and_marks_uncertain(self):
+    async def test_read_timeout_switches_auto_route(self):
         self.seed(provider="auto")
         async def lost_submission(**kwargs):
             checkpoint("submitting")
             raise httpx.ReadTimeout("lost response")
         with patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "apimart"]), \
              patch.object(ai_image, "generate_sub2api_async", AsyncMock(side_effect=lost_submission)) as sub, \
-             patch.object(ai_image, "generate_image_async", AsyncMock()) as post:
+             patch.object(ai_image, "generate_image_async", AsyncMock(return_value={"url": "/result.png"})) as post:
             await self.execute()
         self.assertEqual(sub.await_count, 1)
-        post.assert_not_called()
-        self.assertEqual(self.job()["request_meta"]["recovery"]["phase"], "submission_unknown")
+        post.assert_awaited_once()
+        self.assertEqual(self.job()["status"], "done")
 
     async def test_interrupted_while_waiting_for_provider_slot_can_resume(self):
         self.seed(provider="sub2api")

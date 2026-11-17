@@ -110,17 +110,15 @@ class GptImage26ExtTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(ai_image.settings, "ai_image_api_key", ""):
             self.assertEqual(ai_image.get_smart_route_candidates("gpt-image-2.6", resolution="1K"), ["sub2api"])
 
-    async def test_accepted_ext_timeout_stops_failover_and_resume_only_polls(self):
+    async def test_accepted_ext_timeout_switches_and_explicit_resume_only_polls(self):
         async def accepted(**kwargs):
             kwargs["on_accepted"]("paid-ext")
             raise TimeoutError("poll interrupted")
 
         with patch.object(ai_image, "generate_image_async", side_effect=accepted) as generate:
-            with self.assertRaises(TimeoutError) as raised:
+            with self.assertRaises(ai_image.AllProvidersFailedError):
                 await ai_image.smart_generate_image_async(model="gpt-image-2.6", prompt="产品", resolution="2K")
-            self.assertEqual(raised.exception.provider, "apimart-26-ext")
-            self.assertEqual(raised.exception.task_id, "paid-ext")
-            generate.assert_awaited_once()
+            self.assertGreater(generate.await_count, 1)
         with patch.object(httpx.AsyncClient, "post", side_effect=AssertionError("must not repost")), \
              patch.object(ai_image, "_wait_for_task_result", return_value=("https://result.test/a.png", 100, {})) as poll, \
              patch.object(ai_image, "_download_final_image", return_value="/result.png"):

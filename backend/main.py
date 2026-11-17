@@ -4798,16 +4798,13 @@ async def _execute_ai_image_background(
                     recovery=resume, on_progress=on_progress,
                 )
         elif provider == PROVIDER_AUTO or not provider:
-            result = await asyncio.wait_for(
-                smart_generate_image_async(
-                    model=model, prompt=prompt,
-                    images=refs if refs else None,
-                    size=size, resolution=resolution, user_id=user_id,
-                    variant=variant, quality=quality,
-                    on_progress=on_progress, on_attempt=on_attempt, on_accepted=on_accepted,
-                    output_format=str((request_meta or {}).get("output_format") or ""),
-                ),
-                timeout=max(60, int(settings.ai_image_smart_route_timeout_seconds or 360)),
+            result = await smart_generate_image_async(
+                model=model, prompt=prompt,
+                images=refs if refs else None,
+                size=size, resolution=resolution, user_id=user_id,
+                variant=variant, quality=quality,
+                on_progress=on_progress, on_attempt=on_attempt, on_accepted=on_accepted,
+                output_format=str((request_meta or {}).get("output_format") or ""),
             )
         elif provider == PROVIDER_BFL:
             on_attempt(provider)

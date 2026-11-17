@@ -2616,6 +2616,17 @@ def get_smart_route_candidates(
 
 # 智能路由：候选线路完整轮询轮数。1→2→3 后再 1→2→3，都失败才抛错。
 SMART_ROUTE_ROUNDS = 2
+SMART_ROUTE_ATTEMPT_SECONDS = 100
+
+
+async def _bounded_route_attempt(call):
+    try:
+        return await asyncio.wait_for(call, timeout=SMART_ROUTE_ATTEMPT_SECONDS)
+    except (TimeoutError, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
+        # An abandoned request may still be billed upstream; never resume it.
+        raise UpstreamTaskFailed(
+            f"线路等待超时（上限 {SMART_ROUTE_ATTEMPT_SECONDS} 秒），已放弃本次请求并切换线路"
+        ) from exc
 
 
 def public_generation_error(exc: BaseException | str | None = None) -> str:
@@ -2668,7 +2679,7 @@ async def smart_generate_image_async(
     全部失败才把错误抛给用户。
 
     前端只有两个失败出口：明确的上游安全审核拦截，或全部线路完成两轮后仍失败。
-    已受理且状态不确定时恢复原任务；明确终态失败才允许继续两轮线路尝试。
+    每条线路最多等待 100 秒；超时后放弃该请求，继续两轮线路尝试。
     """
     gif_output = output_format == "gif" and _normalize_model_name(model).lower() in GPT_IMAGE_26_MODELS and not images
     if gif_output:
@@ -2755,27 +2766,27 @@ async def smart_generate_image_async(
                 provider, round_no, SMART_ROUTE_ROUNDS, index + 1, len(schedule),
             )
             if provider == PROVIDER_SUB2API:
-                result = await generate_sub2api_async(
+                attempt = generate_sub2api_async(
                     model=provider_model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
                     variant=variant,
                     on_progress=on_progress, on_accepted=provider_on_accepted,
                 )
             elif provider == PROVIDER_TUZI:
-                result = await generate_tuzi_async(
+                attempt = generate_tuzi_async(
                     model=provider_model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
                     on_progress=on_progress, on_accepted=provider_on_accepted,
                 )
             elif provider == PROVIDER_ADOBE2API:
-                result = await generate_adobe2api_async(
+                attempt = generate_adobe2api_async(
                     model=provider_model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
                     on_progress=on_progress, on_accepted=provider_on_accepted,
                 )
             else:  # APIMart / APIMart Ext
                 if images:
-                    result = await generate_image_with_reference_async(
+                    attempt = generate_image_with_reference_async(
                         model=provider_model, prompt=prompt, images=images,
                         size=size, resolution=resolution, user_id=user_id,
                         variant=variant, quality=quality,
@@ -2783,7 +2794,7 @@ async def smart_generate_image_async(
                         on_progress=on_progress, on_accepted=provider_on_accepted,
                     )
                 else:
-                    result = await generate_image_async(
+                    attempt = generate_image_async(
                         model=provider_model, prompt=prompt,
                         size=size, resolution=resolution, user_id=user_id,
                         variant=variant, quality=quality,
@@ -2792,6 +2803,7 @@ async def smart_generate_image_async(
                         output_format="gif" if gif_output else "",
                     )
 
+            result = await _bounded_route_attempt(attempt)
             record_provider_success(provider, model=circuit_model)
             result["provider"] = provider
             accepted_tid = (accepted.get(provider) or "").strip()
@@ -2808,8 +2820,8 @@ async def smart_generate_image_async(
 
         except Exception as exc:
             already_accepted = provider in accepted
-            # A confirmed terminal failure can proceed through the schedule.
-            # Unknown acceptance and interrupted polling/download must stop.
+            # Terminal failures and abandoned deadlines allow failover.
+            # Other uncertain accepted requests retain recovery behavior.
             terminal_failure = isinstance(exc, UpstreamTaskFailed)
             if isinstance(exc, CheckpointError) or (already_accepted and not terminal_failure):
                 if already_accepted:
@@ -2838,9 +2850,13 @@ async def smart_generate_image_async(
                 safety_error.task_id = str(accepted.get(provider) or "")  # type: ignore[attr-defined]
                 raise safety_error from exc
 
-            if terminal_failure:
-                # The failed task has ended; this route may be tried next round.
-                accepted.pop(provider, None)
+            logger.warning("[smart-routing] Abandon provider=%s task_id=%s round=%s error=%s",
+                           provider, accepted.get(provider) or "(unknown)", round_no, exc)
+            accepted.pop(provider, None)
+            if on_attempt and already_accepted:
+                on_attempt(provider)  # Clear the abandoned task ID in persistence and the worker.
+            else:
+                checkpoint("preparing", provider=provider)
 
             logger.info(
                 "[smart-routing] Provider %s failed%s; continue schedule (%d/%d)",
