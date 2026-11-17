@@ -439,6 +439,8 @@ var overlayState = {
   lightbox: null
 };
 var overlayListeners = [];
+var lightboxLoaded = new Set(); // 已加载过的原图，切换回来时直接显示，不再经过缩略图
+
 function setOverlayState(patch) {
   overlayState = Object.assign({}, overlayState, patch);
   overlayListeners.forEach(function (fn) {
@@ -579,10 +581,12 @@ const Lightbox = ({
   const items = box.items && box.items.length ? box.items : [box];
   const count = items.length;
   const [index, setIndex] = React.useState(Math.min(Math.max(box.index || 0, 0), count - 1));
-  const [fullState, setFullState] = React.useState('loading');
+  const [fullState, setFullState] = React.useState({
+    url: '',
+    status: 'loading'
+  });
   const go = function (step) {
     if (count < 2) return;
-    setFullState('loading');
     setIndex(function (i) {
       return (i + step + count) % count;
     });
@@ -625,7 +629,22 @@ const Lightbox = ({
   const fullUrl = cur.downloadUrl || cur.src;
   // 先用传入的缩略图占位，原图加载完成后替换；原图失败则保留缩略图
   const hasPreview = !!cur.src && cur.src !== fullUrl;
-  const showFull = fullState === 'loaded' || !hasPreview;
+  const fullStatus = fullState.url === fullUrl ? fullState.status : lightboxLoaded.has(fullUrl) ? 'loaded' : 'loading';
+  const showFull = fullStatus === 'loaded' || !hasPreview;
+  // 预加载前后两张原图，切换时直接显示
+  React.useEffect(function () {
+    if (count < 2) return;
+    [index - 1, index + 1].forEach(function (i) {
+      const it = items[(i + count) % count];
+      const url = it.downloadUrl || it.src;
+      if (lightboxLoaded.has(url)) return;
+      const img = new Image();
+      img.onload = function () {
+        lightboxLoaded.add(url);
+      };
+      img.src = url;
+    });
+  }, [index, count]);
   const run = function (fn) {
     return function () {
       close();
@@ -739,14 +758,20 @@ const Lightbox = ({
   }, /*#__PURE__*/React.createElement(I.chevronRight, {
     size: 18
   })), /*#__PURE__*/React.createElement("img", {
-    key: fullUrl,
     src: fullUrl,
     alt: cur.title || '预览',
     onLoad: function () {
-      setFullState('loaded');
+      lightboxLoaded.add(fullUrl);
+      setFullState({
+        url: fullUrl,
+        status: 'loaded'
+      });
     },
     onError: function () {
-      setFullState('failed');
+      setFullState({
+        url: fullUrl,
+        status: 'failed'
+      });
       window.dfError('原图加载失败，当前显示的是缩略图，请稍后重新打开。');
     },
     style: {
@@ -769,12 +794,12 @@ const Lightbox = ({
       boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
       background: 'white'
     }
-  }), hasPreview && fullState !== 'loaded' && /*#__PURE__*/React.createElement("div", {
+  }), hasPreview && fullStatus !== 'loaded' && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'rgba(255,255,255,0.72)'
     }
-  }, fullState === 'failed' ? '缩略图预览' : '正在加载原图…'), cur.title && /*#__PURE__*/React.createElement("div", {
+  }, fullStatus === 'failed' ? '缩略图预览' : '正在加载原图…'), cur.title && /*#__PURE__*/React.createElement("div", {
     style: {
       maxWidth: 640,
       fontSize: 12,
