@@ -1047,7 +1047,7 @@ const AgentToolCard = ({ m, openImage }) => {
       {running && m.log ? <div style={{ fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.5 }}>{m.log}</div> : null}
       {(images.length > 0 || pendingSlots.length > 0) ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
-          {images.map(function(im) {
+          {images.map(function(im, ii) {
             var src = agent2AbsUrl(im.url);
             return (
               <div key={im.id || im.url} style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
@@ -1055,7 +1055,10 @@ const AgentToolCard = ({ m, openImage }) => {
                   src={src}
                   alt={im.label || label}
                   {...canvasDragProps(src)}
-                  onClick={function() { openImage(src, src, im.label || label); }}
+                  onClick={function() {
+                    var items = images.map(function(x) { var u = agent2AbsUrl(x.url); return { src: u, downloadUrl: u, title: x.label || label }; });
+                    openImage(src, src, im.label || label, items, ii);
+                  }}
                   style={{ width: '100%', borderRadius: 8, display: 'block', border: '1px solid var(--line-2)', cursor: 'zoom-in', background: 'var(--panel-2)' }}
                 />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
@@ -1165,8 +1168,9 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
     return idx === lastAiCardIdx;
   };
 
-  const openImage = (src, full, title) => {
-    window.dfOpenLightbox({ src: src || full, downloadUrl: full, title: title });
+  // items 传入时在弹窗里可左右切换同一批次的图片
+  const openImage = (src, full, title, items, index) => {
+    window.dfOpenLightbox({ src: src || full, downloadUrl: full, title: title, items: items, index: index });
   };
 
   return (
@@ -1321,7 +1325,18 @@ const ChatReturned = ({ messages, template, onCompose, isGenerating, user, greet
                         src: imShown || imFull,
                         alt: (m.prompt || '') + ' #' + (bi + 1),
                         style: { width: '100%', borderRadius: 8, display: 'block', border: '1px solid var(--line-2)', cursor: 'zoom-in' },
-                        onClick: function() { openImage(imShown, imFull, m.prompt); },
+                        onClick: function() {
+                          var items = [];
+                          var startIndex = 0;
+                          batchImages.forEach(function(x, xi) {
+                            if (x.status !== 'done' || !x.url) return;
+                            var shown = x.previewUrl || x.url;
+                            if (shown.startsWith('/')) shown = (window.API_BASE || window.location.origin) + shown;
+                            if (xi === bi) startIndex = items.length;
+                            items.push({ src: shown, downloadUrl: x.url, title: m.prompt });
+                          });
+                          openImage(imShown, imFull, m.prompt, items, startIndex);
+                        },
                       })),
                       React.createElement('div', { style: { display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' } },
                         React.createElement('a', {

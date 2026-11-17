@@ -432,6 +432,7 @@ window.aggregateTemplates = aggregateTemplates;
 // Confirmation dialogs and image previews. Lightweight notifications live in feedback.js.
 // Usage: window.dfToast(msg, { tone }), await window.dfConfirm({ title, message, danger }),
 //        window.dfOpenLightbox({ src, downloadUrl, title, actions })
+//        同一批次多张图：window.dfOpenLightbox({ items: [{ src, downloadUrl, title }], index })
 
 var overlayState = {
   confirm: null,
@@ -458,7 +459,7 @@ window.dfConfirm = function (opts) {
   });
 };
 window.dfOpenLightbox = function (opts) {
-  if (!opts || !opts.src) return;
+  if (!opts || !(opts.src || opts.items && opts.items.length)) return;
   setOverlayState({
     lightbox: opts
   });
@@ -575,25 +576,55 @@ const Lightbox = ({
       lightbox: null
     });
   };
+  const items = box.items && box.items.length ? box.items : [box];
+  const count = items.length;
+  const [index, setIndex] = React.useState(Math.min(Math.max(box.index || 0, 0), count - 1));
+  const [fullState, setFullState] = React.useState('loading');
+  const go = function (step) {
+    if (count < 2) return;
+    setFullState('loading');
+    setIndex(function (i) {
+      return (i + step + count) % count;
+    });
+  };
   React.useEffect(function () {
     const onKey = function (e) {
       if (e.key === 'Escape') {
         e.preventDefault();
         close();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        go(-1);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        go(1);
       }
     };
     window.addEventListener('keydown', onKey);
     return function () {
       window.removeEventListener('keydown', onKey);
     };
-  }, []);
-  const fullUrl = box.downloadUrl || box.src;
+  }, [count]);
+  const touchRef = React.useRef(null);
+  const onTouchStart = function (e) {
+    const t = e.touches[0];
+    touchRef.current = {
+      x: t.clientX,
+      y: t.clientY
+    };
+  };
+  const onTouchEnd = function (e) {
+    const start = touchRef.current;
+    touchRef.current = null;
+    if (!start) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(t.clientY - start.y)) go(dx < 0 ? 1 : -1);
+  };
+  const cur = items[index];
+  const fullUrl = cur.downloadUrl || cur.src;
   // 先用传入的缩略图占位，原图加载完成后替换；原图失败则保留缩略图
-  const hasPreview = !!box.src && box.src !== fullUrl;
-  const [fullState, setFullState] = React.useState('loading');
-  React.useEffect(function () {
-    setFullState('loading');
-  }, [fullUrl]);
+  const hasPreview = !!cur.src && cur.src !== fullUrl;
   const showFull = fullState === 'loaded' || !hasPreview;
   const run = function (fn) {
     return function () {
@@ -606,23 +637,41 @@ const Lightbox = ({
     label: '放入画布',
     icon: I.layers,
     onClick: function () {
-      onInsertToCanvas(fullUrl, box.title);
+      onInsertToCanvas(fullUrl, cur.title);
     }
   });
   if (onUseAsReference) actions.push({
     label: '作为参考图',
     icon: I.image,
     onClick: function () {
-      onUseAsReference(fullUrl, box.title);
+      onUseAsReference(fullUrl, cur.title);
     }
   });
   (box.actions || []).forEach(function (a) {
     actions.push(a);
   });
+  const navBtn = function (side) {
+    return {
+      position: 'absolute',
+      top: '50%',
+      [side]: 16,
+      transform: 'translateY(-50%)',
+      width: 40,
+      height: 40,
+      borderRadius: 99,
+      background: 'rgba(255,255,255,0.14)',
+      color: 'white',
+      display: 'grid',
+      placeItems: 'center',
+      cursor: 'pointer'
+    };
+  };
   return /*#__PURE__*/React.createElement("div", {
     onMouseDown: function (e) {
       if (e.target === e.currentTarget) close();
     },
+    onTouchStart: onTouchStart,
+    onTouchEnd: onTouchEnd,
     style: {
       position: 'fixed',
       inset: 0,
@@ -633,7 +682,7 @@ const Lightbox = ({
       alignItems: 'center',
       justifyContent: 'center',
       gap: 14,
-      padding: 24
+      padding: count > 1 ? '56px 64px 24px' : 24
     }
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
@@ -654,9 +703,45 @@ const Lightbox = ({
     }
   }, /*#__PURE__*/React.createElement(I.close, {
     size: 14
+  })), count > 1 && /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      position: 'absolute',
+      top: 24,
+      left: '50%',
+      transform: 'translateX(-50%)',
+      fontSize: 12,
+      color: 'rgba(255,255,255,0.85)'
+    }
+  }, '第 ' + (index + 1) + ' 张 / 共 ' + count + ' 张'), count > 1 && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: function () {
+      go(-1);
+    },
+    "aria-label": "\u4E0A\u4E00\u5F20",
+    title: "\u4E0A\u4E00\u5F20\uFF08\u2190\uFF09",
+    style: navBtn('left')
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: 'grid',
+      transform: 'scaleX(-1)'
+    }
+  }, /*#__PURE__*/React.createElement(I.chevronRight, {
+    size: 18
+  }))), count > 1 && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: function () {
+      go(1);
+    },
+    "aria-label": "\u4E0B\u4E00\u5F20",
+    title: "\u4E0B\u4E00\u5F20\uFF08\u2192\uFF09",
+    style: navBtn('right')
+  }, /*#__PURE__*/React.createElement(I.chevronRight, {
+    size: 18
   })), /*#__PURE__*/React.createElement("img", {
+    key: fullUrl,
     src: fullUrl,
-    alt: box.title || '预览',
+    alt: cur.title || '预览',
     onLoad: function () {
       setFullState('loaded');
     },
@@ -674,8 +759,8 @@ const Lightbox = ({
       background: 'white'
     }
   }), !showFull && /*#__PURE__*/React.createElement("img", {
-    src: box.src,
-    alt: box.title || '预览',
+    src: cur.src,
+    alt: cur.title || '预览',
     style: {
       maxWidth: '100%',
       maxHeight: 'calc(100vh - 140px)',
@@ -689,7 +774,7 @@ const Lightbox = ({
       fontSize: 12,
       color: 'rgba(255,255,255,0.72)'
     }
-  }, fullState === 'failed' ? '缩略图预览' : '正在加载原图…'), box.title && /*#__PURE__*/React.createElement("div", {
+  }, fullState === 'failed' ? '缩略图预览' : '正在加载原图…'), cur.title && /*#__PURE__*/React.createElement("div", {
     style: {
       maxWidth: 640,
       fontSize: 12,
@@ -701,7 +786,7 @@ const Lightbox = ({
       WebkitBoxOrient: 'vertical',
       overflow: 'hidden'
     }
-  }, box.title), /*#__PURE__*/React.createElement("div", {
+  }, cur.title), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8,
@@ -2888,7 +2973,7 @@ var TemplatePanel = function (_ref2) {
       },
       onClick: function () {
         if (job.status === 'failed') {
-          window.dfToast('这条任务生成失败' + (job.error ? '：' + String(job.error).slice(0, 120) : ''), {
+          window.dfToast(window.DesignflowFeedback.message(job.error, '这条任务生成失败，暂未提供具体原因。'), {
             tone: 'danger'
           });
           return;
@@ -5719,7 +5804,7 @@ const AgentToolCard = ({
       gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
       gap: 8
     }
-  }, images.map(function (im) {
+  }, images.map(function (im, ii) {
     var src = agent2AbsUrl(im.url);
     return /*#__PURE__*/React.createElement("div", {
       key: im.id || im.url,
@@ -5734,7 +5819,15 @@ const AgentToolCard = ({
       alt: im.label || label
     }, canvasDragProps(src), {
       onClick: function () {
-        openImage(src, src, im.label || label);
+        var items = images.map(function (x) {
+          var u = agent2AbsUrl(x.url);
+          return {
+            src: u,
+            downloadUrl: u,
+            title: x.label || label
+          };
+        });
+        openImage(src, src, im.label || label, items, ii);
       },
       style: {
         width: '100%',
@@ -5951,11 +6044,15 @@ const ChatReturned = ({
     if (msg.jobId && !isBatch) return true;
     return idx === lastAiCardIdx;
   };
-  const openImage = (src, full, title) => {
+
+  // items 传入时在弹窗里可左右切换同一批次的图片
+  const openImage = (src, full, title, items, index) => {
     window.dfOpenLightbox({
       src: src || full,
       downloadUrl: full,
-      title: title
+      title: title,
+      items: items,
+      index: index
     });
   };
   return /*#__PURE__*/React.createElement("div", {
@@ -6280,7 +6377,20 @@ const ChatReturned = ({
             cursor: 'zoom-in'
           },
           onClick: function () {
-            openImage(imShown, imFull, m.prompt);
+            var items = [];
+            var startIndex = 0;
+            batchImages.forEach(function (x, xi) {
+              if (x.status !== 'done' || !x.url) return;
+              var shown = x.previewUrl || x.url;
+              if (shown.startsWith('/')) shown = (window.API_BASE || window.location.origin) + shown;
+              if (xi === bi) startIndex = items.length;
+              items.push({
+                src: shown,
+                downloadUrl: x.url,
+                title: m.prompt
+              });
+            });
+            openImage(imShown, imFull, m.prompt, items, startIndex);
           }
         })), React.createElement('div', {
           style: {
