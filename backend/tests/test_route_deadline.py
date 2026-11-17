@@ -1,11 +1,22 @@
 import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from backend import ai_image
 
 
 class RouteDeadlineTest(unittest.IsolatedAsyncioTestCase):
+    async def test_deadline_matches_effective_resolution(self):
+        for size, resolution, expected in [
+            ("auto", "1K", 100), ("auto", "2K", 300),
+            ("3:4", "4k", 300), ("auto", "", 100),
+            ("2048x2048", "", 300), ("2048x2048", "1K", 100),
+        ]:
+            with self.subTest(size=size, resolution=resolution):
+                with patch.object(ai_image.asyncio, "wait_for", AsyncMock(return_value={})) as wait:
+                    await ai_image._bounded_route_attempt(None, size=size, resolution=resolution)
+                    self.assertEqual(wait.call_args.kwargs["timeout"], expected)
+
     async def test_timeout_abandons_accepted_request_and_switches(self):
         cancelled = []
         attempts = []

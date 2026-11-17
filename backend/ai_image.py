@@ -2829,15 +2829,19 @@ def get_smart_route_candidates(
 # 智能路由：候选线路完整轮询轮数。1→2→3 后再 1→2→3，都失败才抛错。
 SMART_ROUTE_ROUNDS = 2
 SMART_ROUTE_ATTEMPT_SECONDS = 100
+SMART_ROUTE_HIGH_RES_ATTEMPT_SECONDS = 300
 
 
-async def _bounded_route_attempt(call):
+async def _bounded_route_attempt(call, *, size: str = "", resolution: str = ""):
+    _, normalized_resolution = _normalize_size(size, resolution)
+    timeout = (SMART_ROUTE_HIGH_RES_ATTEMPT_SECONDS
+               if normalized_resolution in {"2K", "4K"} else SMART_ROUTE_ATTEMPT_SECONDS)
     try:
-        return await asyncio.wait_for(call, timeout=SMART_ROUTE_ATTEMPT_SECONDS)
+        return await asyncio.wait_for(call, timeout=timeout)
     except (TimeoutError, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
         # An abandoned request may still be billed upstream; never resume it.
         raise UpstreamTaskFailed(
-            f"线路等待超时（上限 {SMART_ROUTE_ATTEMPT_SECONDS} 秒），已放弃本次请求并切换线路"
+            f"线路等待超时（上限 {timeout} 秒），已放弃本次请求并切换线路"
         ) from exc
 
 
@@ -2891,7 +2895,7 @@ async def smart_generate_image_async(
     全部失败才把错误抛给用户。
 
     前端只有两个失败出口：明确的上游安全审核拦截，或全部线路完成两轮后仍失败。
-    每条线路最多等待 100 秒；超时后放弃该请求，继续两轮线路尝试。
+    每条线路 1K 最多等待 100 秒，2K / 4K 最多等待 300 秒；超时后放弃并切换。
     """
     gif_output = output_format == "gif" and _normalize_model_name(model).lower() in GPT_IMAGE_26_MODELS and not images
     if gif_output:
@@ -3021,7 +3025,7 @@ async def smart_generate_image_async(
                         output_format="gif" if gif_output else "",
                     )
 
-            result = await _bounded_route_attempt(attempt)
+            result = await _bounded_route_attempt(attempt, size=size, resolution=resolution)
             record_provider_success(provider, model=circuit_model)
             result["provider"] = provider
             accepted_tid = (accepted.get(provider) or "").strip()
