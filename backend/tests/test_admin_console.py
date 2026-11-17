@@ -155,6 +155,28 @@ class AdminConsoleStoreTest(unittest.TestCase):
         self.assertEqual(overview["user_ranking"][0]["display_name"], "李设计")
         self.assertEqual(overview["user_ranking"][0]["image_count"], 3)
 
+    def test_user_stopped_image_is_neither_failure_nor_in_success_rate(self) -> None:
+        with job_store._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_image_jobs
+                  (id, user_id, status, model, prompt, size, error, progress, created_at, request_meta_json)
+                VALUES ('ai-stopped', 'designer', 'failed', 'gpt-image-2', '停止的任务', 'auto', '用户已停止', 0, ?,
+                        '{"source":"agent2","recovery":{"phase":"cancelled","resuming":false}}')
+                """,
+                (self.now - 150,),
+            )
+        with patch("backend.job_store.time.time", return_value=self.now):
+            overview = job_store.load_admin_overview(24)
+
+        summary = overview["summary"]
+        self.assertEqual((summary["total"], summary["done"], summary["failed"], summary["cancelled"]), (6, 3, 1, 1))
+        self.assertEqual(summary["success_rate"], 75.0)
+        self.assertEqual(sum(item["failed"] for item in overview["series"]), 1)
+        self.assertEqual(sum(item["failed"] for item in overview["health_timeline"]), 1)
+        self.assertNotIn("ai-stopped", {item["id"] for item in overview["recent_failures"]})
+        self.assertEqual(sum(item["count"] for item in overview["failure_reasons"]), 1)
+
     def test_overview_supports_all_time_range(self) -> None:
         with patch("backend.job_store.time.time", return_value=self.now):
             overview = job_store.load_admin_overview(0)
@@ -664,6 +686,20 @@ class AdminSkillUsageTest(unittest.TestCase):
         self.assertEqual(set(stats), {("alice", "poster-main"), ("bob", "poster-main")})
         self.assertEqual(stats[("alice", "poster-main")]["total"], 2)
         self.assertEqual(stats[("alice", "poster-main")]["failed"], 1)
+
+    def test_user_stopped_skill_job_is_not_counted_as_failed(self) -> None:
+        with job_store._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_image_jobs
+                  (id, user_id, status, model, prompt, size, progress, created_at, request_meta_json)
+                VALUES ('s6', 'bob', 'failed', 'gpt-image-2', 'p', 'auto', 0, ?,
+                        '{"skill": "poster-main", "recovery": {"phase": "cancelled"}}')
+                """,
+                (time.time(),),
+            )
+        usage = job_store.load_skill_usage_stats()[("bob", "poster-main")]
+        self.assertEqual((usage["total"], usage["failed"]), (2, 0))
 
     def test_usage_counts_each_interaction_including_agent_turns(self) -> None:
         from backend.agent2 import store as agent2_store

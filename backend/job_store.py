@@ -2318,7 +2318,7 @@ def _admin_task_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                    updated_at, error, '' AS model, {_SPECIAL_SOURCE_SQL} AS source
             FROM special_jobs {where}
             UNION ALL
-            SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
+            SELECT 'ai_image' AS task_type, id, user_id, {_AI_STATUS_SQL} AS status, created_at,
                    COALESCE(updated_at, created_at) AS updated_at, error, model, {_AI_SOURCE_SQL} AS source
             FROM ai_image_jobs {where}
             UNION ALL
@@ -2338,7 +2338,7 @@ def _admin_task_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                updated_at, error, '' AS model, {_SPECIAL_SOURCE_SQL} AS source
         FROM special_jobs
         UNION ALL
-        SELECT 'ai_image' AS task_type, id, user_id, status, created_at,
+        SELECT 'ai_image' AS task_type, id, user_id, {_AI_STATUS_SQL} AS status, created_at,
                COALESCE(updated_at, created_at) AS updated_at, error, model, {_AI_SOURCE_SQL} AS source
         FROM ai_image_jobs
         UNION ALL
@@ -2624,12 +2624,14 @@ def load_admin_overview(hours: int = 24) -> dict:
     def summarize(items: list[dict]) -> dict:
         done = sum(1 for item in items if item["status"] == "done")
         failed = sum(1 for item in items if item["status"] == "failed")
+        cancelled = sum(1 for item in items if item["status"] == "cancelled")
         active = sum(1 for item in items if item["status"] in _ADMIN_ACTIVE_STATUSES)
         terminal = done + failed
         return {
             "total": len(items),
             "done": done,
             "failed": failed,
+            "cancelled": cancelled,
             "active": active,
             "success_rate": round(done * 100 / terminal, 1) if terminal else None,
         }
@@ -2837,6 +2839,14 @@ _AI_SOURCE_SQL = (
 )
 _SPECIAL_SOURCE_SQL = "CASE WHEN source = 'agent2' THEN 'agent' ELSE '' END"
 
+# 用户主动停止的生图任务落库为 failed + recovery.phase=cancelled（见 agent2/tools.py）；
+# 统计时归为 cancelled，既不算失败，也不进成功率分母
+_AI_STATUS_SQL = (
+    "CASE WHEN status = 'failed' AND json_valid(request_meta_json) "
+    "AND json_extract(request_meta_json, '$.recovery.phase') = 'cancelled' "
+    "THEN 'cancelled' ELSE status END"
+)
+
 
 # 生图任务的 request_meta_json 里记录了所用技能名；非法 JSON 时视为未用技能
 _SKILL_SQL = (
@@ -2856,7 +2866,7 @@ def load_skill_usage_stats() -> dict[tuple[str, str], dict]:
         for row in conn.execute(
             f"""
             SELECT user_id, {_SKILL_SQL} AS skill,
-                   MIN(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                   MIN(CASE WHEN {_AI_STATUS_SQL} = 'failed' THEN 1 ELSE 0 END) AS failed,
                    MAX(created_at) AS used_at,
                    COALESCE(NULLIF(CASE WHEN json_valid(request_meta_json)
                        THEN json_extract(request_meta_json, '$.batch_id') END, ''), id) AS interaction
