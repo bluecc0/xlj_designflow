@@ -3042,16 +3042,13 @@ async def smart_generate_image_async(
 
         except Exception as exc:
             already_accepted = provider in accepted
-            # Terminal failures and abandoned deadlines allow failover.
-            # Other uncertain accepted requests retain recovery behavior.
-            terminal_failure = isinstance(exc, UpstreamTaskFailed)
-            if isinstance(exc, CheckpointError) or (already_accepted and not terminal_failure):
+            # Local durability failures must stop; upstream failures must not
+            # bypass the two-round route schedule, even after acceptance.
+            if isinstance(exc, CheckpointError):
                 if already_accepted:
                     exc.provider = provider
                     exc.task_id = accepted.get(provider) or ""
                 raise
-            if not terminal_failure and submission_may_be_accepted(exc):
-                raise AmbiguousUpstreamError(str(exc), provider=provider) from exc
             err_msg = format_generation_error(exc, stage="smart_route", provider=provider, model=model)
             logger.warning(
                 "[smart-routing] Provider %s failed (round %d): %s",

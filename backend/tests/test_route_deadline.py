@@ -1,11 +1,22 @@
 import asyncio
 import unittest
+import httpx
 from unittest.mock import AsyncMock, patch
 
 from backend import ai_image
 
 
 class RouteDeadlineTest(unittest.IsolatedAsyncioTestCase):
+    async def test_uncertain_upstream_errors_failover(self):
+        for error in [ai_image.AmbiguousUpstreamError("lost response", provider="sub2api"),
+                      RuntimeError("HTTP 504"), httpx.RemoteProtocolError("disconnected")]:
+            with self.subTest(error=error):
+                with patch.object(ai_image, "get_smart_route_candidates", return_value=["sub2api", "kie"]), \
+                     patch.object(ai_image, "generate_sub2api_async", AsyncMock(side_effect=error)), \
+                     patch.object(ai_image, "generate_kie_async", AsyncMock(return_value={"url": "/ok.png"})):
+                    result = await ai_image.smart_generate_image_async(model="nano-banana-pro", prompt="test")
+                self.assertEqual(result["provider"], "kie")
+
     async def test_deadline_matches_effective_resolution(self):
         for size, resolution, expected in [
             ("auto", "1K", 100), ("auto", "2K", 300),
