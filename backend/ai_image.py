@@ -101,6 +101,9 @@ PROVIDER_APIMART_26_EXT = "apimart-26-ext"
 APIMART_ASYNC_PROVIDERS = {PROVIDER_APIMART, PROVIDER_APIMART_EXT, PROVIDER_APIMART_26_EXT}
 PROVIDER_ADOBE2API = "adobe2api"
 PROVIDER_TUZI = "tuzi"
+PROVIDER_KIE = "kie"
+# 按上游任务号恢复的线路：重启后只查询原任务，不重复提交。
+TASK_RESUMABLE_PROVIDERS = APIMART_ASYNC_PROVIDERS | {PROVIDER_KIE}
 
 _OUTPUT_DIR = settings.output_path / "ai-images"
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1517,6 +1520,18 @@ async def resume_image_async(*, provider: str, model: str, user_id: str,
             local_url = await _download_final_image(
                 client, image_url=result_url, user_id=user_id, task_id=task_id,
             )
+    elif provider == PROVIDER_KIE:
+        base_url, _, api_key = _kie_credentials()
+        async with httpx.AsyncClient(**_ai_image_client_kwargs(240)) as client:
+            if not result_url:
+                if not task_id:
+                    raise RuntimeError("原生图任务缺少上游任务号")
+                result_url, detail = await _wait_for_kie_task(
+                    client, base_url=base_url, api_key=api_key, task_id=task_id, on_progress=on_progress,
+                )
+            local_url = await _download_final_image(
+                client, image_url=result_url, user_id=user_id, task_id=task_id,
+            )
     elif result_url and provider == PROVIDER_SUB2API:
         local_url = await _download_cliproxy_image(
             result_url, user_id=user_id, api_key=settings.cliproxy_api_key,
@@ -2276,6 +2291,198 @@ def is_safety_review_error(exc: BaseException | str | None) -> bool:
     ))
 
 
+# ── Kie Nano Banana Pro 线路 ────────────────────────────────────────────────
+
+KIE_NANO_BANANA_PRO_MODEL = "nano-banana-pro"
+_KIE_NANO_BANANA_PRO_RATIOS = {"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "auto"}
+_KIE_MAX_REFERENCES = 8
+_KIE_REFERENCE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+def _kie_credentials() -> tuple[str, str, str]:
+    base_url = (settings.kie_base_url or "https://api.kie.ai").rstrip("/")
+    upload_base_url = (settings.kie_upload_base_url or "https://kieai.redpandaai.co").rstrip("/")
+    if not settings.kie_api_key:
+        raise RuntimeError("Kie 未配置：请检查 KIE_API_KEY")
+    return base_url, upload_base_url, settings.kie_api_key
+
+
+async def _upload_kie_reference(
+    client: httpx.AsyncClient, upload_base_url: str, api_key: str, image_bytes: bytes, filename: str,
+) -> str:
+    content_type = _reference_image_type(image_bytes, filename)
+    if content_type not in _KIE_REFERENCE_TYPES:
+        image_bytes, _, content_type = _normalize_apimart_reference(image_bytes)
+    upload_name = f"reference_{uuid.uuid4().hex}{_extension_from_mime(content_type)}"
+    try:
+        resp = await client.post(
+            f"{upload_base_url}/api/file-stream-upload",
+            headers={"Authorization": f"Bearer {api_key}"},
+            data={"uploadPath": "images/designflow-references", "fileName": upload_name},
+            files={"file": (upload_name, image_bytes, content_type)},
+        )
+    except httpx.RequestError as exc:
+        # 上传发生在创建任务之前，失败不会产生生图任务，可以安全换线路。
+        raise RuntimeError(f"Kie 上传参考图连接失败：{type(exc).__name__}: {exc}") from exc
+    if not resp.is_success:
+        raise RuntimeError(f"Kie 上传参考图失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
+    body = resp.json()
+    url = (body.get("data") or {}).get("downloadUrl") if isinstance(body, dict) else ""
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        raise RuntimeError(f"Kie 上传参考图未返回有效地址：{str(body)[:200]}")
+    return url
+
+
+def _kie_result_url(data: dict[str, Any]) -> str:
+    result = data.get("resultJson")
+    if isinstance(result, str) and result.strip():
+        try:
+            result = json.loads(result)
+        except json.JSONDecodeError:
+            result = None
+    if not isinstance(result, dict):
+        result = data.get("response") if isinstance(data.get("response"), dict) else {}
+    urls = result.get("resultUrls") or []
+    return str(urls[0]) if urls and isinstance(urls[0], str) else ""
+
+
+async def _wait_for_kie_task(
+    client: httpx.AsyncClient,
+    *,
+    base_url: str,
+    api_key: str,
+    task_id: str,
+    on_progress: Callable[[int, str], Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """轮询 Kie 统一任务查询接口，返回 (结果图片 URL, 任务详情)。"""
+    deadline = time.monotonic() + max(int(settings.kie_timeout_seconds or 900), 60)
+    interval = max(float(settings.kie_poll_interval_seconds or 3), 1.0)
+    progress_by_state = {"waiting": 15, "queuing": 25, "generating": 60}
+    transient_errors = 0
+    last_state = ""
+    while time.monotonic() < deadline:
+        try:
+            resp = await client.get(
+                f"{base_url}/api/v1/jobs/recordInfo",
+                headers={"Authorization": f"Bearer {api_key}"},
+                params={"taskId": task_id},
+            )
+            if not resp.is_success:
+                if resp.status_code not in _TRANSIENT_TASK_STATUS_CODES:
+                    raise RuntimeError(f"Kie 查询任务失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
+                raise TransientTaskStatusError(f"HTTP {resp.status_code}")
+            body = resp.json()
+        except (httpx.RequestError, TransientTaskStatusError) as exc:
+            transient_errors += 1
+            if transient_errors >= 12:
+                raise RuntimeError(f"Kie 查询任务状态连续失败次数过多（task_id={task_id}）：{exc}") from exc
+            await asyncio_sleep(min(interval * (1.4 ** min(transient_errors, 4)), 10.0))
+            continue
+        transient_errors = 0
+        code = body.get("code") if isinstance(body, dict) else None
+        if code not in (None, 200):
+            raise RuntimeError(f"Kie 查询任务失败：HTTP {code} - {body.get('msg') or ''}")
+        data = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else {}
+        state = str(data.get("state") or "").strip().lower()
+        last_state = state or last_state
+        if on_progress and state in progress_by_state:
+            try:
+                on_progress(progress_by_state[state], state)
+            except Exception:
+                pass
+        if state == "success":
+            url = _kie_result_url(data)
+            if not url:
+                raise RuntimeError(f"Kie 任务已完成，但未返回图片地址（task_id={task_id}）")
+            return url, {"status": state, "cost": data.get("creditsConsumed"), "actual_time": data.get("costTime")}
+        if state == "fail":
+            detail = data.get("failMsg") or data.get("failCode") or "未知错误"
+            raise UpstreamTaskFailed(f"生图任务失败（task_id={task_id}）: {detail}")
+        await asyncio_sleep(interval)
+    raise RuntimeError(f"Kie 生图任务超时（task_id={task_id}），最后状态={last_state or 'unknown'}")
+
+
+async def generate_kie_async(
+    model: str,
+    prompt: str,
+    images: list[tuple[bytes, str]] | None = None,
+    size: str = "1024x1024",
+    resolution: str = "",
+    user_id: str = "anonymous",
+    on_progress: Callable[[int, str], Any] | None = None,
+    on_accepted: Callable[[str], Any] | None = None,
+) -> dict:
+    """通过 Kie Market 生成 Nano Banana Pro 图片：上传参考图 → 创建任务 → 轮询 → 下载。"""
+    if _normalize_model_name(model).lower() != "gemini-3-pro-image-preview":
+        raise ValueError(f"Kie 线路不支持模型 {model}")
+    base_url, upload_base_url, api_key = _kie_credentials()
+    ratio, res_clean = _normalize_size(size, resolution)
+    if (size or "").strip() == "21:9":
+        ratio = "21:9"
+    if ratio not in _KIE_NANO_BANANA_PRO_RATIOS:
+        ratio = "auto"
+    refs = images or []
+    if len(refs) > _KIE_MAX_REFERENCES:
+        logger.warning("[kie] 参考图 %d 张，仅发送前 %d 张", len(refs), _KIE_MAX_REFERENCES)
+    async with httpx.AsyncClient(**_ai_image_client_kwargs(240)) as client:
+        image_input = [
+            await _upload_kie_reference(client, upload_base_url, api_key, image_bytes, filename or f"reference_{index}.png")
+            for index, (image_bytes, filename) in enumerate(refs[:_KIE_MAX_REFERENCES])
+        ]
+        payload = {
+            "model": KIE_NANO_BANANA_PRO_MODEL,
+            "input": {
+                "prompt": normalize_reference_prompt(prompt) if image_input else prompt,
+                "image_input": image_input,
+                "aspect_ratio": ratio,
+                "resolution": res_clean or "1K",
+                "output_format": "png",
+            },
+        }
+        checkpoint("submitting")
+        resp = await client.post(
+            f"{base_url}/api/v1/jobs/createTask",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+        )
+        if not resp.is_success:
+            raise RuntimeError(f"Kie 提交生图任务失败：{_api_error_msg(resp.status_code, _extract_error_text(resp))}")
+        try:
+            body = resp.json()
+        except Exception as exc:
+            raise AmbiguousUpstreamError(
+                f"Kie POST 成功但返回不是 JSON，上游状态无法确认：{resp.text[:300]}", provider=PROVIDER_KIE,
+            ) from exc
+        # Kie 业务错误也用 HTTP 200 返回，状态码在 body.code 里。
+        code = body.get("code") if isinstance(body, dict) else None
+        if code != 200:
+            raise RuntimeError(f"Kie 提交生图任务失败：HTTP {code} - {(body or {}).get('msg') or ''}")
+        task_id = str(((body.get("data") or {}).get("taskId")) or "").strip()
+        if not task_id:
+            raise AmbiguousUpstreamError(
+                f"Kie POST 成功但未返回 taskId，上游状态无法确认：{str(body)[:200]}", provider=PROVIDER_KIE,
+            )
+        if on_accepted:
+            on_accepted(task_id)
+        if on_progress:
+            on_progress(10, "submitted")
+        result_url, detail = await _wait_for_kie_task(
+            client, base_url=base_url, api_key=api_key, task_id=task_id, on_progress=on_progress,
+        )
+        local_url = await _download_final_image(client, image_url=result_url, user_id=user_id, task_id=task_id)
+    return {
+        "url": local_url,
+        "model": _normalize_model_name(model),
+        "prompt": prompt,
+        "size": size,
+        "resolution": resolution,
+        "reference": bool(image_input),
+        "task_id": task_id,
+        "cost": detail.get("cost"),
+        "actual_time": detail.get("actual_time"),
+    }
+
+
 # 默认模型选路优先级表：映射标准模型名到首选/降级线路
 DEFAULT_MODEL_ROUTING_RULES: dict[str, list[str]] = {
     "default": [PROVIDER_SUB2API, PROVIDER_TUZI, PROVIDER_APIMART],
@@ -2288,6 +2495,7 @@ PROVIDER_MODEL_CAPABILITIES: dict[str, set[str] | None] = {
     PROVIDER_ADOBE2API: {"gemini-3-pro-image-preview", "gpt-image-2"},
     PROVIDER_APIMART_EXT: {"gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", _APIMART_NANO_BANANA_21_MODEL},
     PROVIDER_APIMART_26_EXT: GPT_IMAGE_26_MODELS,
+    PROVIDER_KIE: {"gemini-3-pro-image-preview"},
     PROVIDER_APIMART: None,  # APIMart 适配通用架构，全支持
 }
 
@@ -2430,7 +2638,7 @@ def get_provider_freeze_status(*, now: float | None = None) -> dict[str, dict[st
     status: dict[str, dict[str, Any]] = {}
     with _provider_circuit_lock:
         all_keys = set(_provider_consecutive_failures.keys()) | set(_provider_frozen_until.keys())
-        for p in (PROVIDER_SUB2API, PROVIDER_APIMART_26_EXT, PROVIDER_APIMART_EXT, PROVIDER_APIMART, PROVIDER_ADOBE2API, PROVIDER_TUZI):
+        for p in (PROVIDER_SUB2API, PROVIDER_APIMART_26_EXT, PROVIDER_APIMART_EXT, PROVIDER_APIMART, PROVIDER_KIE, PROVIDER_ADOBE2API, PROVIDER_TUZI):
             all_keys.add(p)
         for k in all_keys:
             fails = _provider_consecutive_failures.get(k, 0)
@@ -2559,7 +2767,8 @@ def get_smart_route_candidates(
     elif model_name in _SEEDREAM_5_MODELS:
         preferred_order = [PROVIDER_APIMART]
     elif "banana" in model_name or "gemini" in model_name:
-        preferred_order = [PROVIDER_APIMART, PROVIDER_ADOBE2API]
+        # Adobe2API 暂停使用；需要恢复时加回 PROVIDER_ADOBE2API。
+        preferred_order = [PROVIDER_APIMART, PROVIDER_KIE]
     else:
         preferred_order = (custom_rules and custom_rules.get("default")) or DEFAULT_MODEL_ROUTING_RULES["default"]
 
@@ -2598,6 +2807,9 @@ def get_smart_route_candidates(
                 candidates.append(provider)
         elif provider in APIMART_ASYNC_PROVIDERS:
             if settings.ai_image_api_key:
+                candidates.append(provider)
+        elif provider == PROVIDER_KIE:
+            if settings.kie_base_url and settings.kie_api_key:
                 candidates.append(provider)
 
     # 3. 动态过滤处于 30 分钟冻结期（连续失败 >= 2 次）的线路
@@ -2780,6 +2992,12 @@ async def smart_generate_image_async(
                 )
             elif provider == PROVIDER_ADOBE2API:
                 attempt = generate_adobe2api_async(
+                    model=provider_model, prompt=prompt, images=images,
+                    size=size, resolution=resolution, user_id=user_id,
+                    on_progress=on_progress, on_accepted=provider_on_accepted,
+                )
+            elif provider == PROVIDER_KIE:
+                attempt = generate_kie_async(
                     model=provider_model, prompt=prompt, images=images,
                     size=size, resolution=resolution, user_id=user_id,
                     on_progress=on_progress, on_accepted=provider_on_accepted,

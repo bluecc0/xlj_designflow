@@ -8,7 +8,7 @@ import time
 import httpx
 
 from .ai_image import (
-    APIMART_ASYNC_PROVIDERS, AllProvidersFailedError, SafetyReviewError, load_user_refs, public_generation_error,
+    TASK_RESUMABLE_PROVIDERS, AllProvidersFailedError, SafetyReviewError, load_user_refs, public_generation_error,
     submission_may_be_accepted,
 )
 from .job_store import load_ai_image_job, save_image_checkpoint, append_ai_chat_message
@@ -33,7 +33,7 @@ async def execute_image_job(worker, job_id: str, *, initial: dict | None = None)
         meta["reference_count"] = int(job.get("reference_count") or 0)
         recovery = meta.get("recovery") or {}
         if job["status"] == "failed" and not (
-            not recovery and job.get("provider") in APIMART_ASYNC_PROVIDERS and job.get("task_id")
+            not recovery and job.get("provider") in TASK_RESUMABLE_PROVIDERS and job.get("task_id")
         ):
             return
         if job["status"] == "done" and recovery.get("phase") != "downloaded":
@@ -44,7 +44,7 @@ async def execute_image_job(worker, job_id: str, *, initial: dict | None = None)
         # Legacy records cannot prove a POST was not sent. Only real async IDs are resumable.
         if not recovery:
             recovery = {"version": 1, "phase": "submitting", "provider": provider}
-            if provider in APIMART_ASYNC_PROVIDERS and job.get("task_id"):
+            if provider in TASK_RESUMABLE_PROVIDERS and job.get("task_id"):
                 recovery.update(phase="accepted", task_id=job["task_id"])
             meta["recovery"] = recovery
         phase = recovery.get("phase")
@@ -73,7 +73,7 @@ async def execute_image_job(worker, job_id: str, *, initial: dict | None = None)
 
         if is_resume and not (
             recovery.get("local_url") or recovery.get("result_url")
-            or (provider in APIMART_ASYNC_PROVIDERS and recovery.get("task_id"))
+            or (provider in TASK_RESUMABLE_PROVIDERS and recovery.get("task_id"))
             or (provider == "bfl" and recovery.get("task_id") and recovery.get("polling_url"))
         ):
             fail(UNKNOWN_MESSAGE, "submission_unknown")
@@ -175,7 +175,7 @@ async def execute_image_job(worker, job_id: str, *, initial: dict | None = None)
                 return
             resumable = bool(
                 recovery.get("result_url")
-                or (provider in APIMART_ASYNC_PROVIDERS and recovery.get("task_id"))
+                or (provider in TASK_RESUMABLE_PROVIDERS and recovery.get("task_id"))
                 or (provider == "bfl" and recovery.get("polling_url") and recovery.get("task_id"))
             )
             before_submit = recovery.get("phase") in {"queued", "preparing"} and (
@@ -185,7 +185,7 @@ async def execute_image_job(worker, job_id: str, *, initial: dict | None = None)
                 attempts = int(recovery.get("attempts") or 0) + 1
                 recovery["attempts"] = attempts
                 if attempts < 3:
-                    if provider in (APIMART_ASYNC_PROVIDERS | {"bfl"}) and recovery.get("task_id"):
+                    if provider in (TASK_RESUMABLE_PROVIDERS | {"bfl"}) and recovery.get("task_id"):
                         # Signed result links may expire during a restart. Poll
                         # the original task again to obtain its current result.
                         recovery.pop("result_url", None)
