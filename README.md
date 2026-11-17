@@ -86,8 +86,8 @@ cd ..
 | `AI_IMAGE_PROVIDER` | 生图线路，通常为 `auto` |
 | `AI_IMAGE_BASE_URL` / `AI_IMAGE_API_KEY` | APIMart 默认线路 |
 | `CLIPROXY_BASE_URL` / `CLIPROXY_API_KEY` | 订阅线路 |
-| `ADOBE2API_BASE_URL` / `ADOBE2API_API_KEY` | Adobe 兼容线路 |
-| `KIE_API_KEY` | PSD 分层能力 |
+| `ADOBE2API_BASE_URL` / `ADOBE2API_API_KEY` | Adobe 兼容线路（暂停使用，智能路由不再选择） |
+| `KIE_API_KEY` | Nano Banana Pro 备用线路、旧版 PSD 分层 |
 | `UPSCALE_CLI_PATH` | 本地高清放大 CLI |
 | `AGENT_SKILL_PATHS` | Skill 搜索路径，Windows 用 `;` |
 | `PROXY_DOWNLOAD_*` | 花瓣下载中继配置 |
@@ -133,7 +133,7 @@ Loom AI 是 DesignFlow 配套的 Photoshop CEP 插件，仍是实际工作流的
 
 - 登录使用用户名 + 密码，账号来自 `login_users.json`；`admin` 可进入后台，测试账号应设置 `is_test=true`。
 - `backend/compose.py` 负责普通 Penpot 合成；Penpot 写入和导出共用 `_compose_sem`，不要绕过串行锁。
-- `backend/ai_image.py` 处理 GPT Image 2.6、Seedream 5.5、Nano Banana Pro、参考图、轮询、失败分类和线路切换。上游已接受但状态不明时不要立即重复提交。
+- `backend/ai_image.py` 处理 GPT Image 2.6、Seedream 5.5、Nano Banana Pro、参考图、轮询、失败分类和线路切换。上游已接受但状态不明时不要立即重复提交。Nano Banana Pro 智能路由为 APIMart → Kie（`nano-banana-pro`，最多 8 张参考图，支持 1K / 2K / 4K），Kie 任务受理后重启只查询原任务。
 - `backend/smart_distribute.py` 是规则解析器，不调用 LLM，也不依赖历史 `template_rules.json`。
 
 ## 模板与特殊品

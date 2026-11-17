@@ -36,7 +36,8 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
              patch.object(ai_image.settings, "cliproxy_api_key", "sk-sub2api"), \
              patch.object(ai_image.settings, "adobe2api_base_url", "http://adobe:6001"), \
              patch.object(ai_image.settings, "adobe2api_api_key", "sk-adobe"), \
-             patch.object(ai_image.settings, "ai_image_api_key", "sk-apimart"):
+             patch.object(ai_image.settings, "ai_image_api_key", "sk-apimart"), \
+             patch.object(ai_image.settings, "kie_api_key", ""):
 
             gpt_1k_candidates = ai_image.get_smart_route_candidates("gpt-image-2", resolution="1K")
             self.assertEqual(gpt_1k_candidates, ["sub2api", "apimart"])
@@ -48,7 +49,10 @@ class SmartRoutingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(gpt_4k_candidates, ["apimart"])
 
             banana_candidates = ai_image.get_smart_route_candidates("nano-banana-pro")
-            self.assertEqual(banana_candidates, ["apimart", "adobe2api"])
+            # Adobe2API 已暂停；未配置 Kie 时只剩 APIMart
+            self.assertEqual(banana_candidates, ["apimart"])
+            with patch.object(ai_image.settings, "kie_api_key", "sk-kie"):
+                self.assertEqual(ai_image.get_smart_route_candidates("nano-banana-pro"), ["apimart", "kie"])
 
     async def test_gpt_image_2_resolution_dispatch_and_reference_failover(self) -> None:
         with patch.multiple(
