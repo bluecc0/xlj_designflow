@@ -900,7 +900,7 @@ def _can_read_ai_image(parts: Sequence[str], user: dict) -> bool:
     if parts[0].rstrip(" .").casefold() == expected_owner.casefold() or is_super_admin(user):
         return True
     path = "/ai-images/" + "/".join(parts)
-    return can_view_shared_asset(path, user) or is_inspiration_asset(path) or is_shared_character_asset(parts)
+    return can_view_shared_asset(path, user) or is_inspiration_asset(path) or is_shared_character_asset(parts, user)
 
 
 def _can_read_output_asset(parts: Sequence[str], user: dict) -> bool:

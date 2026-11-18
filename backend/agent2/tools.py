@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 import uuid
 from pathlib import Path
@@ -163,6 +164,11 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str,
     if item.get("reference_image_ids") or kept != ref_ids:
         ref_ids, refs = kept, [_artifact_bytes(ctx, rid) for rid in kept]
     prompt = _with_character_prompt(ctx, written_prompt, ref_ids)
+    roles = item.get("reference_roles") or {}
+    if roles:
+        prompt += "\n\n参考图职责（按实际发送顺序，优先于上文的参考图编号）：\n" + "\n".join(
+            f"参考图{i + 1}：{roles[rid]}" for i, rid in enumerate(ref_ids) if rid in roles
+        )
     uid = ctx.user["id"]
     job_id = uuid.uuid4().hex
     # 和普通生图一样建成可恢复任务：执行锁防重复执行，断点记录上游 task_id，重启后由后台续跑
@@ -257,6 +263,33 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
             return {"error": "Agent 的 2:1、1:2、21:9 比例仅适用于 Seedream 5.5，请按模型分批生成"}
     variant = "sunburst" if args.get("variant") == "sunburst" else "flare"
     shared_ids = [str(rid) for rid in (args.get("reference_image_ids") or [])]
+    effective = [item.get("reference_image_ids") or shared_ids for item in items]
+    for item, ids in zip(items, effective):
+        roles = item.get("reference_roles") or {}
+        if not isinstance(roles, dict) or any(rid not in ids for rid in roles):
+            ctx.state["images"] = used
+            return {"error": "reference_roles 必须以实际传入的图片 ID 为键，不能给未传入的图片分配职责"}
+    # Resolve explicit image numbers against this turn's uploads, not history.
+    required = set()
+    for event in store.list_events(ctx.session_id):
+        if event["turn_id"] != ctx.turn_id or event["type"] not in {"turn.started", "input.answered"}:
+            continue
+        payload = event["payload"]
+        uploads = [u for u in payload.get("uploads", []) if u.get("kind") != "table"]
+        text = str(payload.get("text") or payload.get("answer") or "")
+        for match in re.finditer(r"(?:参考图|图片|图)\s*([1-9][0-9]*)", text):
+            index = int(match.group(1)) - 1
+            if index < len(uploads):
+                required.add(uploads[index]["id"])
+    supplied = {rid for ids in effective for rid in ids}
+    if required - supplied:
+        ctx.state["images"] = used
+        return {"error": "遗漏本轮用户明确指定的参考图：" + "、".join(sorted(required - supplied))
+                + "。请按本轮要求替换历史参考，修正 reference_image_ids 和 reference_roles 后再生成；不要沿用旧场景。"}
+    if len(required) == 1 and any(not required <= set(ids) for ids in effective):
+        ctx.state["images"] = used
+        return {"error": "本轮只明确指定了一张参考图，每张输出都必须携带：" + "、".join(sorted(required))
+                + "。不同输出使用不同参考图时，请按对应关系分批调用。"}
     # 技能参考图（动作包等）通常一张图配一张，放在整批共用参考里时模型往往只登记了一张就让所有图共用
     if len(items) > 1 and any((store.get_artifact(rid, ctx.user["id"]) or {}).get("kind") == "skill_ref"
                               for rid in shared_ids):
@@ -305,10 +338,21 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
 async def analyze_image(ctx: ToolContext, args: dict) -> dict:
     data, _name = _artifact_bytes(ctx, args.get("image_id"))
     question = str(args.get("question") or "").strip() or "描述这张图：主体是什么、外观特征、颜色材质、构图和风格，图里有哪些文字。"
+    reference_ids = list(dict.fromkeys(args.get("reference_image_ids") or []))
+    if len(reference_ids) > MAX_REFERENCES_PER_IMAGE:
+        return {"error": f"最多对照 {MAX_REFERENCES_PER_IMAGE} 张参考图"}
+    comparisons = []
+    for index, rid in enumerate(reference_ids):
+        ref, _ = _artifact_bytes(ctx, rid)
+        comparisons.extend([
+            {"type": "text", "text": f"对照参考图{index + 1}（{rid}）："},
+            {"type": "image_url", "image_url": {"url": compress_image_to_data_url(ref, 1024)}},
+        ])
     payload = {
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": question + "\n用中文简洁回答，不超过 200 字。"},
+            {"type": "text", "text": question + "\n第一张为待检查图片，后续为对照参考图。没有对照图时不得声称一致性已验证。用中文简洁回答，不超过 200 字。"},
             {"type": "image_url", "image_url": {"url": compress_image_to_data_url(data, 1024)}},
+            *comparisons,
         ]}],
         "max_tokens": 600, "temperature": 0.2,
     }
@@ -567,6 +611,8 @@ def build_tools() -> dict[str, Tool]:
                                "description": "可选，只用于这一张的模型；用户要用几个模型分别出图对比时，每张填一个"},
                      "reference_image_ids": {"type": "array", "items": {"type": "string"},
                                              "description": "可选，只用于这一张的参考图；修改多张已有图时，每张填它自己的原图 ID"},
+                     "reference_roles": {"type": "object", "additionalProperties": {"type": "string"},
+                                         "description": "图片 ID 到用途的映射，例如身份、服装、场景、动作；多图参考时填写，程序按真实顺序生成编号说明"},
                      "no_character": {"type": "boolean",
                                       "description": "只有用户指定了人物、又明确说这张不要人物时才设为 true"}},
                      "required": ["prompt"]}},
@@ -583,7 +629,9 @@ def build_tools() -> dict[str, Tool]:
               "required": ["images"]},
              generate_image),
         Tool("analyze_image", "看图：理解用户上传的参考图或商品图，返回主体、外观、风格、文字等描述。",
-             {"type": "object", "properties": {"image_id": {"type": "string"}, "question": {"type": "string"}},
+             {"type": "object", "properties": {"image_id": {"type": "string"}, "question": {"type": "string"},
+                 "reference_image_ids": {"type": "array", "maxItems": MAX_REFERENCES_PER_IMAGE,
+                                         "items": {"type": "string"}, "description": "检查一致性时必须同时传入原始参考图，不能仅凭结果图断言一致"}},
               "required": ["image_id"]},
              analyze_image),
         Tool("ask_user", "向用户提一个问题并给出 2–4 个选项。在不确定用户要做哪件事、该用哪个工具或材料的用途时，"

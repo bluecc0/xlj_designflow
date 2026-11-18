@@ -4,6 +4,10 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const feedback = require('../src/feedback.js');
 
+test('Penpot image format mismatch has an actionable cause', () => {
+  assert.match(feedback.message('upload-file-media-object HTTP 400: {"code":"media-type-mismatch"}'), /实际格式.*PNG.*JPEG/);
+});
+
 test('HTTP and nested validation responses explain a cause without exposing response bodies', () => {
   assert.match(feedback.responseError(401, '{"detail":"Unauthorized"}').message, /登录已失效/);
   assert.match(feedback.responseError(413, '<html>Payload Too Large</html>').message, /过大/);

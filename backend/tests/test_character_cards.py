@@ -176,6 +176,26 @@ class CharacterCardApiTest(unittest.IsolatedAsyncioTestCase):
         async with self._client(ADMIN) as client:
             self.assertTrue((await client.get("/character-cards")).json()["cards"][0]["can_edit"])
 
+    async def test_other_admin_can_manage_private_card(self) -> None:
+        card = await self._create(shared=False)
+        other_admin = {"id": "another-admin", "username": "manager", "role": "admin"}
+        with patch.dict(USERS, {other_admin["id"]: other_admin}):
+            await self._assert_admin_manages_card(other_admin, card)
+
+    async def _assert_admin_manages_card(self, other_admin, card):
+        async with self._client(other_admin) as client:
+            listed = (await client.get("/character-cards")).json()["cards"]
+            self.assertTrue(listed[0]["can_edit"])
+            self.assertEqual((await client.get(card["images"][0]["url"])).status_code, 200)
+            response = await client.put(f"/character-cards/{card['id']}", data={
+                "name": "管理员改名", "version": card["version"],
+                "keep_image_ids": json.dumps([card["images"][0]["id"]])})
+            self.assertEqual(response.status_code, 200, response.text)
+            updated = response.json()["card"]
+            self.assertEqual(updated["name"], "管理员改名")
+            self.assertEqual((await client.delete(f"/character-cards/{card['id']}",
+                params={"version": updated["version"]})).status_code, 200)
+
     async def test_unsharing_closes_access_again(self) -> None:
         card = await self._create(shared=True)
         async with self._client(OWNER) as client:

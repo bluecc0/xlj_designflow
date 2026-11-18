@@ -1,6 +1,6 @@
 """角色卡：保存人物的名字、参考图和描述，生图时按 ID 选用。
 
-卡片默认只有创建者可见，打开共享后全团队都能看到和选用，但只有创建者和 admin 账号能修改。
+卡片默认只有创建者和管理员可见，打开共享后全团队都能看到和选用，创建者和管理员能修改。
 前端只传卡片 ID，图片和描述一律由后端读取，这里同时负责校验、参考图加载和人物提示词。
 人物提示词只锁定“这个人是谁”：长相跟参考图走，服装、姿势、场景、画风都跟本次需求走。
 """
@@ -22,7 +22,6 @@ from PIL import Image, ImageOps
 from .ai_image import _safe_user_id
 from .config import settings
 from .job_store import _connect
-from .team_canvas import is_super_admin
 from .user_profile import real_name
 
 router = APIRouter(prefix="/character-cards")
@@ -107,7 +106,7 @@ def _public_card(card: dict, user: dict) -> dict:
 
 
 def _can_edit(card: dict, user: dict) -> bool:
-    return card["owner_id"] == str(user["id"]) or is_super_admin(user)
+    return card["owner_id"] == str(user["id"]) or user.get("role") == "admin"
 
 
 def _can_use(card: dict, user: dict) -> bool:
@@ -220,19 +219,19 @@ def list_cards(user: dict) -> list[dict]:
     uid = str(user["id"])
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM character_cards WHERE owner_id = ? OR is_shared = 1 "
+            "SELECT * FROM character_cards WHERE owner_id = ? OR is_shared = 1 OR ? = 1 "
             "ORDER BY CASE WHEN owner_id = ? THEN 0 ELSE 1 END, updated_at DESC",
-            (uid, uid),
+            (uid, int(user.get("role") == "admin"), uid),
         ).fetchall()
     return [_public_card(_row_to_card(row), user) for row in rows]
 
 
-def is_shared_character_asset(parts: Sequence[str]) -> bool:
+def is_shared_character_asset(parts: Sequence[str], user: dict | None = None) -> bool:
     """parts 是 ai-images 目录下的相对路径。只放行共享卡片当前在用的图，所有段都按精确匹配比较。"""
     if len(parts) != 4 or parts[1] != "characters":
         return False
     card = _load_card(parts[2])
-    return bool(card) and card["is_shared"] and _safe_user_id(card["owner_id"]) == parts[0] \
+    return bool(card) and (card["is_shared"] or bool(user and _can_edit(card, user))) and _safe_user_id(card["owner_id"]) == parts[0] \
         and (parts[3] == card["avatar_file"] or any(image["file"] == parts[3] for image in card["images"]))
 
 
@@ -363,7 +362,7 @@ def _editable_card(card_id: str, user: dict) -> dict:
     if not card or not _can_use(card, user):
         raise HTTPException(404, "角色不存在")
     if not _can_edit(card, user):
-        raise HTTPException(403, "只有创建者可以修改这个角色")
+        raise HTTPException(403, "只有创建者或管理员可以修改这个角色")
     return card
 
 
