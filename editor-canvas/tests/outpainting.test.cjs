@@ -36,17 +36,23 @@ test('fast rejects references above 8:1 while high accepts valid output geometry
   assert.equal(plan(image(1025, 128), null, margins(), 'high').error, null)
 })
 
-test('fast reserves padding headroom and high retains the full output budget', () => {
-  assert.equal(plan(image(1900, 1900), null, margins({ right: 100 })).error, null)
-  assert.match(plan(image(1900, 1900), null, margins({ right: 101 })).error, /安全上限 3.80MP/)
-  assert.equal(plan(image(1900, 1900), null, margins({ right: 101 }), 'high').error, null)
-  assert.equal(plan(image(1920, 1920), null, margins({ top: 64, right: 64, bottom: 64, left: 64 }), 'high').error, null)
+test('results above the single-call limit are allowed in both modes (backend tiles them)', () => {
+  for (const mode of ['fast', 'high']) {
+    assert.equal(plan(image(1900, 1900), null, margins({ right: 101 }), mode).error, null)
+    assert.equal(plan(image(1920, 1920), null, margins({ top: 128, right: 128, bottom: 128, left: 128 }), mode).error, null)
+  }
+})
+
+test('the source itself must still fit one upstream call', () => {
+  for (const mode of ['fast', 'high']) {
+    assert.match(plan(image(2100, 2100), null, margins(), mode).error, /原图不能超过 4.19MP/)
+  }
 })
 
 test('both modes reject excessive physical dimensions and total pixels', () => {
   for (const mode of ['fast', 'high']) {
     assert.match(plan(image(4096, 512), null, margins(), mode).error, /4096/)
-    assert.match(plan(image(2048, 2048), null, margins(), mode).error, /4.19MP/)
+    assert.match(plan(image(2048, 2048), null, margins({ right: 400 }), mode).error, /5.00MP/)
   }
 })
 

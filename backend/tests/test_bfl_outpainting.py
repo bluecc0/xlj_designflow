@@ -937,7 +937,7 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
         for size, outpaint, reason in (
             ((32, 32), {"top": 64, "right": 64}, "每边至少 64px"),
             ((1025, 128), {"right": 64}, "8:1"),
-            ((1900, 1900), {"right": 101}, "安全上限 3.80MP"),
+            ((2048, 2048), {"right": 500}, "不能超过 5000000 像素"),
         ):
             with (
                 self.subTest(size=size),
@@ -968,15 +968,16 @@ class OutpaintingApiTest(unittest.IsolatedAsyncioTestCase):
             patch.object(app_main.settings, "bfl_outpainting_mode", "fast"),
             patch.object(app_main.settings, "outpaint_max_width", 4096),
             patch.object(app_main.settings, "outpaint_max_height", 4096),
-            patch.object(app_main.settings, "outpaint_max_area_pixels", 4_194_304),
+            patch.object(app_main.settings, "outpaint_max_area_pixels", 5_000_000),
         ):
             config = app_main.ai_image_outpainting_config()
         self.assertTrue(config["enabled"])
         self.assertEqual(config["snap_pixels"], 1)
         self.assertEqual(config["max_width"], 4096)
         self.assertEqual(config["max_height"], 4096)
-        self.assertEqual(config["max_area_pixels"], 4_194_304)
-        self.assertEqual(config["fast_max_area_pixels"], 3_800_000)
+        # 超过上游单次上限的扩图会自动分块，fast 不再单独限 3.8MP
+        self.assertEqual(config["max_area_pixels"], 5_000_000)
+        self.assertEqual(config["fast_max_area_pixels"], 5_000_000)
         self.assertEqual(config["max_source_bytes"], app_main.settings.bfl_outpainting_max_source_bytes)
         self.assertEqual(
             config["timeout_seconds"],

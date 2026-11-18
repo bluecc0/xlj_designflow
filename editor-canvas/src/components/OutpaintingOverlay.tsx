@@ -84,10 +84,10 @@ export function OutpaintingOverlay({
         next.right = Math.max(0, Math.min(2048, Math.round(prev.right + dx)))
       }
 
-      // 面积与尺寸硬约束 (≤ 4096, ≤ 4,194,304 像素)
+      // 面积与尺寸硬约束 (≤ 4096, ≤ 5,000,000 像素；超过上游单次上限的由后端分块)
       const totalW = image.width + next.left + next.right
       const totalH = image.height + next.top + next.bottom
-      if (totalW <= 4096 && totalH <= 4096 && totalW * totalH <= 4194304) {
+      if (totalW <= 4096 && totalH <= 4096 && totalW * totalH <= 5_000_000) {
         onMarginsChange(next)
       }
     }

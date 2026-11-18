@@ -11,10 +11,12 @@ export interface OutpaintingLimits {
 export const DEFAULT_OUTPAINTING_LIMITS: OutpaintingLimits = {
   maxWidth: 4096,
   maxHeight: 4096,
-  maxAreaPixels: 4_194_304,
-  // Product safety margin: BFL does not publish its fast latent padding formula.
-  fastMaxAreaPixels: 3_800_000,
+  // 超过上游单次上限（4MP）的扩图由后端自动分块，最终画面上限 5MP
+  maxAreaPixels: 5_000_000,
+  fastMaxAreaPixels: 5_000_000,
 }
+// 原图本身仍要能一次发给上游
+const MAX_PROCESSING_PIXELS = 4_194_304
 
 type SourceSize = Pick<CanvasImage, 'width' | 'height' | 'naturalWidth' | 'naturalHeight'>
 export interface OutpaintingPlan {
@@ -60,6 +62,8 @@ export function getOutpaintingPlan(
   } else if (processingWidth > limits.maxWidth || processingHeight > limits.maxHeight ||
     outputWidth > limits.maxWidth || outputHeight > limits.maxHeight) {
     error = `最终尺寸不能超过 ${limits.maxWidth}×${limits.maxHeight}px，请缩小原图或边距`
+  } else if (processingWidth * processingHeight > MAX_PROCESSING_PIXELS) {
+    error = `原图不能超过 ${(MAX_PROCESSING_PIXELS / 1_000_000).toFixed(2)}MP，请缩小原图`
   } else if (outputWidth < 64 || outputHeight < 64) {
     error = '最终尺寸每边至少需要 64px，请放大原图或增加边距'
   } else if (outputWidth * outputHeight > limits.maxAreaPixels) {

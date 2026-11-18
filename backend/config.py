@@ -156,7 +156,7 @@ class Settings:
     outpaint_snap_pixels: int = int(os.getenv("OUTPAINT_SNAP_PIXELS", "1"))
     outpaint_max_width: int = int(os.getenv("OUTPAINT_MAX_WIDTH", "4096"))
     outpaint_max_height: int = int(os.getenv("OUTPAINT_MAX_HEIGHT", "4096"))
-    outpaint_max_area_pixels: int = int(os.getenv("OUTPAINT_MAX_AREA_PIXELS", "4194304"))
+    outpaint_max_area_pixels: int = int(os.getenv("OUTPAINT_MAX_AREA_PIXELS", "5000000"))
     outpaint_recommended_area_pixels: int = int(os.getenv("OUTPAINT_RECOMMENDED_AREA_PIXELS", "2097152"))
 
     # 图层分离转 PSD（默认使用 APIMart Seedream 5.5；留空自动复用 AI_IMAGE_* 配置）

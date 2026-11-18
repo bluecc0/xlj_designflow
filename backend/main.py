@@ -89,7 +89,6 @@ from .matting_service import matting_service
 from .bfl_outpainting import (
     BFL_ALLOWED_MODES,
     BFL_OUTPAINTING_MODEL,
-    FAST_SAFE_OUTPUT_PIXELS,
     MAX_OUTPUT_PIXELS,
     MAX_OUTPUT_SIDE,
     MIN_CANVAS_SIDE,
@@ -106,6 +105,14 @@ from .bfl_outpainting import (
     run_outpainting,
     validate_geometry,
     validate_mode_geometry,
+    _resolve_source_snapshot_path,
+)
+from .outpainting_tiles import (
+    TILED_MAX_OUTPUT_PIXELS,
+    needs_tiling,
+    plan_job_tiles,
+    run_tiled_outpainting,
+    tiled_geometry,
 )
 from .special_compose_full import run_special_full_compose
 from .special_export import SpecialExportSizeError, prepare_special_export_image
@@ -1286,8 +1293,9 @@ async def _run_matting_background(job_id: str, user: dict, src_path: Path, creat
 def _outpainting_effective_limits(mode: str | None = None) -> dict[str, int]:
     max_width = min(MAX_OUTPUT_SIDE, max(1, int(settings.outpaint_max_width)))
     max_height = min(MAX_OUTPUT_SIDE, max(1, int(settings.outpaint_max_height)))
+    # 超过上游单次上限的扩图会自动分块，最终画面上限按分块上限算
     max_area = min(
-        MAX_OUTPUT_PIXELS,
+        TILED_MAX_OUTPUT_PIXELS,
         max(1, int(settings.outpaint_max_area_pixels)),
         max_width * max_height,
     )
@@ -1296,7 +1304,7 @@ def _outpainting_effective_limits(mode: str | None = None) -> dict[str, int]:
         "max_width": max_width,
         "max_height": max_height,
         "max_area_pixels": max_area,
-        "fast_max_area_pixels": min(max_area, FAST_SAFE_OUTPUT_PIXELS),
+        "fast_max_area_pixels": max_area,
         "recommended_area_pixels": min(
             max_area,
             max(1, int(settings.outpaint_recommended_area_pixels)),
@@ -1467,6 +1475,253 @@ async def _run_outpainting_background(*args, **kwargs):
                 # Re-scan its durable state rather than using a stale submit plan.
                 return
         await _execute_outpainting_background(*args, **kwargs)
+
+
+def _tiled_geometry_from_meta(meta: dict) -> OutpaintingGeometry:
+    geometry = tiled_geometry(
+        processing_width=meta.get("processing_width"),
+        processing_height=meta.get("processing_height"),
+        top=meta.get("top"),
+        right=meta.get("right"),
+        bottom=meta.get("bottom"),
+        left=meta.get("left"),
+        mode=str(meta.get("mode") or settings.bfl_outpainting_mode),
+    )
+    if (meta.get("expected_width"), meta.get("expected_height")) != (
+        geometry.expected_width,
+        geometry.expected_height,
+    ):
+        raise OutpaintingValidationError("恢复尺寸不一致")
+    return geometry
+
+
+async def _run_tiled_outpainting_background(
+    job_id: str,
+    user: dict,
+    geometry: OutpaintingGeometry,
+    request_meta: dict,
+    created_at: float,
+) -> None:
+    with execution_lock(f"outpainting:{job_id}") as acquired:
+        if not acquired:
+            return
+        stored = await asyncio.to_thread(load_ai_image_job, job_id)
+        if stored:
+            if stored["status"] in {"done", "failed"}:
+                return
+            # 以库里最新的进度为准（重启恢复、并发扫描时内存里的可能是旧的）
+            if isinstance(stored.get("request_meta"), dict):
+                request_meta = dict(stored["request_meta"])
+        await _execute_tiled_outpainting(job_id, user, geometry, request_meta, created_at)
+
+
+async def _execute_tiled_outpainting(
+    job_id: str,
+    user: dict,
+    geometry: OutpaintingGeometry,
+    request_meta: dict,
+    created_at: float,
+) -> None:
+    """超过上游单次上限的扩图：按 plan_job_tiles 逐块调用上游，拼回一张。
+    每块完成后画布写盘、进度落库；重启后从下一块继续，已受理的块续查结果不重复提交。"""
+    import os
+
+    from PIL import Image
+
+    prompt = "FLUX outpainting"
+    user_id = str(user.get("id") or "")
+    mode = str(request_meta.get("mode") or settings.bfl_outpainting_mode)
+    semaphore, _tasks = _outpainting_runtime()
+    size = f"{geometry.expected_width}x{geometry.expected_height}"
+    common = dict(
+        job_id=job_id, user_id=user_id, model=BFL_OUTPAINTING_MODEL, provider="bfl",
+        prompt=prompt, original_prompt=prompt, resolved_prompt=prompt, resolution="",
+        has_reference=True, reference_count=1, created_at=created_at,
+    )
+    tiles = plan_job_tiles(
+        geometry,
+        int(request_meta["processing_width"]),
+        int(request_meta["processing_height"]),
+        mode,
+    )
+    tile_count = len(tiles)
+
+    def current_task_id() -> str:
+        task = request_meta.get("tile_task")
+        return str(task.get("provider_task_id") or "") if isinstance(task, dict) else ""
+
+    async def persist(state: dict) -> None:
+        request_meta.update(state)
+        request_meta["phase"] = "tiling"
+        done = int(request_meta.get("tiles_done") or 0)
+        await _save_outpainting_job_with_retries(
+            **common, status="processing", size=size, request_meta=dict(request_meta),
+            task_id=current_task_id(), progress=10 + int(80 * done / max(1, tile_count)),
+        )
+
+    async def run_tile(*, index, tile, input_path, provider_task_id, polling_url, on_accepted):
+        tile_geometry = validate_geometry(
+            processing_width=tile.known.width,
+            processing_height=tile.known.height,
+            **tile.margins,
+        )
+        prepared = None
+        if not provider_task_id:
+            prepared = prepare_outpainting_image(
+                input_path,
+                max_source_bytes=max(1, int(settings.bfl_outpainting_max_encoded_input_bytes)),
+                max_source_pixels=MAX_OUTPUT_PIXELS,
+                max_encoded_input_bytes=max(1, int(settings.bfl_outpainting_max_encoded_input_bytes)),
+            )
+        async with semaphore:
+            result = await run_outpainting(
+                api_key=settings.bfl_api_key,
+                api_url=settings.bfl_api_url,
+                proxy_url=settings.bfl_outpainting_proxy_url,
+                mode=mode,
+                output_format=settings.bfl_outpainting_output_format,
+                auto_crop=settings.bfl_outpainting_auto_crop,
+                result_host_suffixes=_outpainting_result_host_suffixes(),
+                prepared=prepared,
+                geometry=tile_geometry,
+                provider_task_id=provider_task_id,
+                polling_url=polling_url,
+                output_root=settings.output_path,
+                user_id=user_id,
+                job_id=f"{job_id}-tile{index}",
+                timeout_seconds=max(1.0, float(settings.bfl_outpainting_timeout_seconds)),
+                poll_interval_seconds=max(0.1, float(settings.bfl_outpainting_poll_interval_seconds)),
+                transient_retry_count=max(0, int(settings.bfl_outpainting_transient_retries)),
+                retry_backoff_seconds=max(0.0, float(settings.bfl_outpainting_retry_backoff_seconds)),
+                retry_backoff_cap_seconds=max(0.1, float(settings.bfl_outpainting_retry_backoff_cap_seconds)),
+                max_result_bytes=max(1, int(settings.bfl_outpainting_max_result_bytes)),
+                result_download_retry_count=max(0, int(settings.bfl_outpainting_result_download_retries)),
+                submit_request=not provider_task_id,
+                on_accepted=on_accepted,
+            )
+        result_path = settings.output_path / "ai-images" / unquote(result.image_url.removeprefix("/ai-images/"))
+        try:
+            with Image.open(result_path) as opened:
+                image = opened.copy()
+        finally:
+            result_path.unlink(missing_ok=True)
+        return image, result.cost
+
+    try:
+        snapshot_path = _resolve_source_snapshot_path(
+            str(request_meta.get("source_snapshot_url") or ""),
+            output_root=settings.output_path,
+            user_id=user_id,
+        )
+        await persist({})
+        canvas = await run_tiled_outpainting(
+            work_dir=snapshot_path.parent,
+            source_path=snapshot_path,
+            geometry=geometry,
+            tiles=tiles,
+            state=request_meta,
+            run_tile=run_tile,
+            persist=persist,
+        )
+        safe_user = "".join(c for c in user_id if c.isalnum() or c in {"-", "_"}) or "anonymous"
+        out_dir = settings.output_path / "ai-images" / safe_user / datetime.now().date().isoformat()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"outpainting_{job_id}.png"
+        temp_path = out_dir / f".{out_path.name}.{uuid.uuid4().hex}.tmp"
+        try:
+            await asyncio.to_thread(canvas.save, temp_path, "PNG", optimize=True)
+            os.replace(temp_path, out_path)
+        finally:
+            canvas.close()
+            temp_path.unlink(missing_ok=True)
+        image_url = "/ai-images/" + quote(
+            out_path.relative_to(settings.output_path / "ai-images").as_posix(), safe="/"
+        )
+        cost = request_meta.get("tiles_cost")
+        final_meta = {
+            **request_meta,
+            "phase": "done",
+            "output_url": image_url,
+            "cost": cost,
+            "actual_width": geometry.expected_width,
+            "actual_height": geometry.expected_height,
+            "tile_count": tile_count,
+            "retry_action": "none",
+            "retryable": False,
+        }
+        await _save_outpainting_job_with_retries(
+            **common, status="done", size=size, image_url=image_url,
+            request_meta=final_meta, task_id="", progress=100,
+        )
+        shutil.rmtree(snapshot_path.parent, ignore_errors=True)
+        try:
+            generate_inspiration_thumb(image_url, user_id, job_id)
+        except Exception:
+            logger.exception("BFL tiled outpainting thumbnail failed: job=%s", job_id)
+        try:
+            log_operation(
+                user_id=user_id,
+                username=str(user.get("username") or ""),
+                action="ai_image_outpainting",
+                detail=f"job={job_id[:8]} result=done tiles={tile_count} size={size}",
+                payload=json.dumps(
+                    {"job_id": job_id, "image_url": image_url, "width": geometry.expected_width,
+                     "height": geometry.expected_height, "cost": cost, "tile_count": tile_count},
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception:
+            logger.exception("BFL tiled outpainting success operation log failed: job=%s", job_id)
+    except asyncio.CancelledError:
+        # 停服：保留画布和进度，重启后从未完成的块接着做
+        try:
+            request_meta["phase"] = "tiling"
+            await _save_outpainting_job_with_retries(
+                **common, status="processing", size=size, request_meta=dict(request_meta),
+                task_id=current_task_id(), progress=10,
+            )
+        except Exception:
+            logger.exception("BFL tiled outpainting interruption persistence failed: job=%s", job_id)
+        raise
+    except Exception as exc:
+        if isinstance(exc, (BflOutpaintingError, OutpaintingValidationError)):
+            public_error = getattr(exc, "public_message", "") or str(exc)
+            diagnostic = getattr(exc, "diagnostic", "") or type(exc).__name__
+        else:
+            public_error = "扩图服务处理失败，请稍后重试"
+            diagnostic = type(exc).__name__
+        logger.error(
+            "BFL tiled outpainting failed: job=%s tiles=%s/%s error=%s diagnostic=%s",
+            job_id, request_meta.get("tiles_done"), tile_count, type(exc).__name__, str(diagnostic)[:500],
+        )
+        try:
+            await _save_outpainting_job_with_retries(
+                **common, status="failed", size=size,
+                request_meta={**request_meta, "phase": "failed", "retry_action": "none", "retryable": False},
+                task_id=current_task_id(), error=public_error, progress=100,
+            )
+            source_url = str(request_meta.get("source_snapshot_url") or "")
+            if source_url:
+                try:
+                    shutil.rmtree(
+                        _resolve_source_snapshot_path(source_url, output_root=settings.output_path,
+                                                      user_id=user_id).parent,
+                        ignore_errors=True,
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception("BFL tiled outpainting failure persistence failed: job=%s", job_id)
+        try:
+            log_operation(
+                user_id=user_id,
+                username=str(user.get("username") or ""),
+                action="ai_image_outpainting",
+                detail=f"job={job_id[:8]} result=failed tiles={request_meta.get('tiles_done')}/{tile_count}",
+                payload=json.dumps({"job_id": job_id, "error": public_error}, ensure_ascii=False),
+            )
+        except Exception:
+            logger.exception("BFL tiled outpainting failure operation log failed: job=%s", job_id)
 
 
 async def _execute_outpainting_background(
@@ -1917,6 +2172,7 @@ async def _recover_outpainting_jobs() -> None:
     recoveries: list[
         tuple[dict, OutpaintingGeometry, str, dict, PreparedOutpaintingImage | None, bool, str]
     ] = []
+    tiled_recoveries: list[tuple[dict, OutpaintingGeometry, dict]] = []
     for stored_job in jobs:
         job_id = str(stored_job.get("id") or "")
         with execution_lock(f"outpainting:{job_id}") as available:
@@ -1926,6 +2182,9 @@ async def _recover_outpainting_jobs() -> None:
             try:
                 if not job_id or not isinstance(meta, dict):
                     raise OutpaintingValidationError("恢复元数据缺失")
+                if meta.get("tiled"):
+                    tiled_recoveries.append((stored_job, _tiled_geometry_from_meta(meta), dict(meta)))
+                    continue
                 provider_task_id = str(
                     stored_job.get("task_id")
                     or meta.get("provider_task_id")
@@ -2004,6 +2263,17 @@ async def _recover_outpainting_jobs() -> None:
                 except Exception:
                     logger.exception("BFL outpainting invalid recovery persistence failed: job=%s", job_id)
 
+    for job, geometry, meta in tiled_recoveries:
+        # 分块任务逐块排队占用并发名额，这里直接放到后台接着做
+        _track_outpainting_task(
+            _run_tiled_outpainting_background(
+                str(job.get("id")),
+                {"id": str(job.get("user_id") or ""), "username": ""},
+                geometry,
+                meta,
+                float(job.get("created_at") or time.time()),
+            ),
+        )
     concurrency = max(1, int(settings.bfl_outpainting_max_concurrency or 2))
     for offset in range(0, len(recoveries), concurrency):
         batch = recoveries[offset:offset + concurrency]
@@ -5126,18 +5396,36 @@ async def submit_outpainting_job(user: dict, body: dict, *, source, source_kind:
                 max_source_pixels=max(1, int(settings.bfl_outpainting_max_source_pixels)),
                 max_encoded_input_bytes=max(1, int(settings.bfl_outpainting_max_encoded_input_bytes)),
             )
-            geometry = validate_geometry(
-                processing_width=prepared.processing_width,
-                processing_height=prepared.processing_height,
-                top=outpaint.get("top", 0),
-                right=outpaint.get("right", 0),
-                bottom=outpaint.get("bottom", 0),
-                left=outpaint.get("left", 0),
-                max_width=limits["max_width"],
-                max_height=limits["max_height"],
-                max_pixels=limits["max_area_pixels"],
-            )
-            validate_mode_geometry(prepared, geometry, mode)
+            requested_margins = {
+                "top": outpaint.get("top", 0),
+                "right": outpaint.get("right", 0),
+                "bottom": outpaint.get("bottom", 0),
+                "left": outpaint.get("left", 0),
+            }
+            tiled = all(
+                isinstance(v, int) and not isinstance(v, bool) for v in requested_margins.values()
+            ) and needs_tiling(prepared.processing_width, prepared.processing_height, requested_margins, mode)
+            if tiled:
+                # 超过上游单次上限：后台拆成多块依次扩，再拼回一张
+                geometry = tiled_geometry(
+                    processing_width=prepared.processing_width,
+                    processing_height=prepared.processing_height,
+                    **requested_margins,
+                    mode=mode,
+                    max_width=limits["max_width"],
+                    max_height=limits["max_height"],
+                    max_pixels=limits["max_area_pixels"],
+                )
+            else:
+                geometry = validate_geometry(
+                    processing_width=prepared.processing_width,
+                    processing_height=prepared.processing_height,
+                    **requested_margins,
+                    max_width=limits["max_width"],
+                    max_height=limits["max_height"],
+                    max_pixels=limits["max_area_pixels"],
+                )
+                validate_mode_geometry(prepared, geometry, mode)
             job_id = uuid.uuid4().hex
             created_at = time.time()
             prompt = "FLUX outpainting"
@@ -5181,6 +5469,7 @@ async def submit_outpainting_job(user: dict, body: dict, *, source, source_kind:
                 "mode": mode,
                 "phase": "queued",
                 "cost": None,
+                **({"tiled": True, "tiles_done": 0, "tile_task": None, "tiles_cost": None} if tiled else {}),
                 **(extra_meta or {}),
             }
             claims[job_id] = user_id
@@ -5240,7 +5529,9 @@ async def submit_outpainting_job(user: dict, body: dict, *, source, source_kind:
     if existing_job:
         return _outpainting_job_response(existing_job)
     _track_outpainting_task(
-        _run_outpainting_background(
+        _run_tiled_outpainting_background(job_id, dict(user), geometry, request_meta, created_at)
+        if request_meta.get("tiled")
+        else _run_outpainting_background(
             job_id,
             dict(user),
             prepared,
