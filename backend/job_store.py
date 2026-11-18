@@ -1234,7 +1234,7 @@ def load_recoverable_image_jobs() -> list[dict]:
         if not job:
             continue
         meta = job["request_meta"]
-        if meta.get("operation", "") not in {"", "generate", "outfit-change", "view-angle"}:
+        if meta.get("operation", "") not in {"", "generate", "outfit-change", "view-angle", "detail-repair"}:
             continue
         recovery = meta.get("recovery") or {}
         if not recovery and job["model"] not in image_models:

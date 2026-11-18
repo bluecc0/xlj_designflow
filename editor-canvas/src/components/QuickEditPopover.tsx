@@ -11,6 +11,8 @@ interface Props {
   onClose: () => void
   onSubmit: (prompt: string, image: CanvasImage, markers: QuickEditMarker[]) => void | Promise<void>
   isSubmitting?: boolean
+  /** 有图案时是细节修复（说明可不填）；只有涂抹时是局部重绘 */
+  repairMode?: 'pattern' | 'paint' | null
 }
 
 export const QuickEditPopover = memo(function QuickEditPopover({
@@ -19,6 +21,7 @@ export const QuickEditPopover = memo(function QuickEditPopover({
   onClose,
   onSubmit,
   isSubmitting = false,
+  repairMode = null,
 }: Props) {
   const [prompt, setPrompt] = useState('')
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -96,7 +99,7 @@ export const QuickEditPopover = memo(function QuickEditPopover({
 
   const handleSubmit = () => {
     const cleanPrompt = prompt.trim()
-    if (!cleanPrompt || isSubmitting) return
+    if ((!cleanPrompt && repairMode !== 'pattern') || isSubmitting) return
     onSubmit(cleanPrompt, image, markers)
   }
 
@@ -118,11 +121,15 @@ export const QuickEditPopover = memo(function QuickEditPopover({
   // 始终在图片下方；若超出屏幕则停靠在视口底端，绝不上翻遮挡顶部的工具栏
   const finalTop = Math.min(winH - popoverHeight - 20, Math.max(72, bottomY))
 
-  const canSubmit = Boolean(prompt.trim()) && !isSubmitting
+  const canSubmit = (Boolean(prompt.trim()) || repairMode === 'pattern') && !isSubmitting
 
-  const placeholderText = markers.length > 0
-    ? '如：<标记1>改为红色 <标记2>增加反光...'
-    : '输入修改需求，或在图片上标记/框选局部...'
+  const placeholderText = repairMode === 'pattern'
+    ? '补充说明（选填），回车生成实拍效果'
+    : repairMode === 'paint'
+      ? '描述涂抹区域要改成什么'
+      : markers.length > 0
+        ? '如：<标记1>改为红色 <标记2>增加反光...'
+        : '输入修改需求；单击标记、拖动框选、Shift+拖动涂抹'
 
   return (
     <div

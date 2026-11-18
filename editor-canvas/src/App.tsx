@@ -22,6 +22,19 @@ import { OutfitChangeModal } from './components/OutfitChangeModal'
 import { OutfitTaskTray, type OutfitTask } from './components/OutfitTaskTray'
 import { ViewAnglePanel } from './components/ViewAnglePanel'
 import { QuickEditMarkerOverlay } from './components/QuickEditMarkerOverlay'
+import { RepairPatchLayer } from './components/RepairPatchLayer'
+import { decodeCanvasImages, encodeCanvasImages, layoutPastedImages } from './utils/canvasClipboard'
+import {
+  canvasToLocal,
+  createPatch,
+  MAX_PATCHES,
+  hasPaint,
+  isInsideTarget,
+  renderMaskBlob,
+  toSourcePlacement,
+  type RepairPatch,
+  type RepairStroke,
+} from './utils/detailRepair'
 import { SnapGuides } from './components/SnapGuides'
 import type { OutpaintMargins, CanvasImage, QuickEditMarker } from './types'
 import { useViewportStore } from './store/viewportStore'
@@ -36,6 +49,8 @@ import {
   normalizeAssetUrl,
   submitOutfitChange,
   submitViewAngle,
+  submitDetailRepair,
+  loadImageAsUploadFile,
   type OutfitChangeRequest,
   type ViewAngleRequest,
   type OutpaintingMode,
@@ -222,6 +237,20 @@ export function App() {
   const [quickEditMarkers, setQuickEditMarkers] = useState<QuickEditMarker[]>([])
   const [quickEditToast, setQuickEditToast] = useState<string | null>(null)
   const [isQuickEditSubmitting, setIsQuickEditSubmitting] = useState(false)
+  // 细节修复：快捷编辑里拖入 / 粘贴图案后进入，只存在本地状态，不改动主画布
+  // 可以叠多个图案（如鞋子外侧、内侧各一个），数组顺序即叠放顺序，后面的盖在上面
+  const [repairPatches, setRepairPatches] = useState<RepairPatch[]>([])
+  const [selectedPatchId, setSelectedPatchId] = useState<string | null>(null)
+  const [repairStrokes, setRepairStrokes] = useState<RepairStroke[]>([])
+  const [isRepairSubmitting, setIsRepairSubmitting] = useState(false)
+  const quickEditImageRef = useRef<CanvasImage | null>(null)
+  quickEditImageRef.current = quickEditImage
+  const repairActiveRef = useRef(false)
+  repairActiveRef.current = Boolean(quickEditImage && (repairPatches.length > 0 || repairStrokes.length > 0))
+  const repairPatchesRef = useRef<RepairPatch[]>([])
+  repairPatchesRef.current = repairPatches
+  const selectedPatchIdRef = useRef<string | null>(null)
+  selectedPatchIdRef.current = selectedPatchId
   const [outfitImage, setOutfitImage] = useState<CanvasImage | null>(null)
   const [viewAngleImage, setViewAngleImage] = useState<CanvasImage | null>(null)
   const [outfitTasks, setOutfitTasks] = useState<OutfitTask[]>([])
@@ -559,6 +588,200 @@ export function App() {
     [addImage]
   )
 
+  // ── 细节修复 ──────────────────────────────────────────────────────────────
+  // 换了快捷编辑的目标图（或退出快捷编辑）就丢弃修复状态
+  useEffect(() => {
+    setRepairPatches([])
+    setSelectedPatchId(null)
+    setRepairStrokes([])
+  }, [quickEditImage?.id])
+
+  // 本地文件的预览地址：图案移除后释放
+  const patchUrlsRef = useRef<string[]>([])
+  useEffect(() => {
+    const now = repairPatches.map((p) => p.url)
+    for (const url of patchUrlsRef.current) {
+      if (url.startsWith('blob:') && !now.includes(url)) URL.revokeObjectURL(url)
+    }
+    patchUrlsRef.current = now
+  }, [repairPatches])
+  useEffect(
+    () => () => {
+      for (const url of patchUrlsRef.current) if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+    },
+    []
+  )
+
+  const updateRepairPatch = useCallback((next: RepairPatch) => {
+    setRepairPatches((prev) => prev.map((p) => (p.id === next.id ? next : p)))
+  }, [])
+  const removeRepairPatch = useCallback((id: string) => {
+    setRepairPatches((prev) => prev.filter((p) => p.id !== id))
+    setSelectedPatchId((cur) => (cur === id ? null : cur))
+  }, [])
+  /** 选中一个图案并把它放到最上面（显示和提交的叠放顺序一致） */
+  const selectRepairPatch = useCallback((id: string) => {
+    setSelectedPatchId(id)
+    setRepairPatches((prev) => {
+      const i = prev.findIndex((p) => p.id === id)
+      return i < 0 || i === prev.length - 1 ? prev : [...prev.slice(0, i), ...prev.slice(i + 1), prev[i]]
+    })
+  }, [])
+  const deselectRepairPatch = useCallback(() => setSelectedPatchId(null), [])
+
+  const closeQuickEdit = useCallback(() => {
+    setQuickEditImage(null)
+    setQuickEditMarkers([])
+  }, [])
+
+  /** 把图片作为图案叠到快捷编辑的原图上，进入细节修复模式；client 为落点（屏幕坐标），不在原图上时放在原图中心 */
+  const startRepair = useCallback(
+    async (input: { file?: Blob | null; url?: string }, client?: { x: number; y: number } | null) => {
+      const target = quickEditImageRef.current
+      if (!target) return
+      const sourceUrl = input.url ? normalizeAssetUrl(input.url) : ''
+      const displayUrl = input.file ? URL.createObjectURL(input.file) : sourceUrl
+      if (!displayUrl) return
+      try {
+        const dims = await getImageDimensions(displayUrl)
+        const current = quickEditImageRef.current
+        if (!current || current.id !== target.id) throw new Error('cancelled')
+        let at: { x: number; y: number } | null = null
+        if (client) {
+          const local = canvasToLocal(useViewportStore.getState().screenToCanvas(client), current)
+          if (isInsideTarget(local, current)) at = local
+        }
+        const patch = createPatch(current, dims, { url: displayUrl, file: input.file || null, sourceUrl }, at)
+        if (repairPatchesRef.current.length >= MAX_PATCHES) throw new Error('too-many')
+        repairPatchesRef.current = [...repairPatchesRef.current, patch]
+        setRepairPatches((prev) => [...prev, patch])
+        setSelectedPatchId(patch.id)
+      } catch (err: any) {
+        if (displayUrl.startsWith('blob:')) URL.revokeObjectURL(displayUrl)
+        if (err?.message === 'too-many') notifyError(`一次最多叠加 ${MAX_PATCHES} 个图案，可以先删掉不用的再放。`)
+        else if (err?.message !== 'cancelled') notifyError('这张图片暂时无法读取，请换一张图片。')
+      }
+    },
+    []
+  )
+  const startRepairRef = useRef(startRepair)
+  startRepairRef.current = startRepair
+
+  /** 快捷编辑时拖动画布上的其他图片：拖到原图上作为图案，单击则退出快捷编辑并选中那张图 */
+  const handleGhostDrag = useCallback(
+    (im: CanvasImage, clientX: number, clientY: number, moved: boolean) => {
+      const target = quickEditImageRef.current
+      if (!target) return
+      if (!moved) {
+        closeQuickEdit()
+        useCanvasStore.getState().setSelected([im.id], 'image')
+        return
+      }
+      const local = canvasToLocal(useViewportStore.getState().screenToCanvas({ x: clientX, y: clientY }), target)
+      if (isInsideTarget(local, target)) startRepair({ url: im.url }, { x: clientX, y: clientY })
+    },
+    [closeQuickEdit, startRepair]
+  )
+
+  const handleRepairSubmit = useCallback(
+    async (extraPrompt: string) => {
+      const target = quickEditImage
+      const patches = repairPatches
+      const hasPatch = patches.length > 0
+      if (!target || (!hasPatch && !hasPaint(repairStrokes)) || isRepairSubmitting) return
+      setIsRepairSubmitting(true)
+      const origin = useTeamStore.getState().source
+      const taskId = 'repair-' + Math.random().toString(36).slice(2, 10)
+      let submitted: { jobIds: string[]; model: string; size: string }
+      try {
+        const natural =
+          target.naturalWidth && target.naturalHeight
+            ? { width: target.naturalWidth, height: target.naturalHeight }
+            : await getImageDimensions(normalizeAssetUrl(target.url))
+        const mask = hasPaint(repairStrokes) ? await renderMaskBlob(repairStrokes, target, natural) : null
+        const patterns = await Promise.all(
+          patches.map((p) => (p.file ? Promise.resolve(p.file) : loadImageAsUploadFile(p.sourceUrl, 'pattern')))
+        )
+        submitted = await submitWithPlaceholder(
+          () =>
+            setOutfitTasks((prev) => [
+              ...prev,
+              {
+                id: taskId,
+                kind: 'detail-repair',
+                label: (hasPatch ? '细节修复 · ' : '局部重绘 · ') + (target.name || '图片'),
+                thumbUrl: normalizeAssetUrl(target.url),
+                status: 'running',
+                total: 1,
+                done: 0,
+                failed: 0,
+                message: '正在提交…',
+              },
+            ]),
+          () => dismissOutfitTask(taskId),
+          () =>
+            submitDetailRepair({
+              sourceUrl: target.url,
+              patterns,
+              mask,
+              placements: patches.map((p) => toSourcePlacement(p, target, natural)),
+              extraPrompt,
+              sourceName: target.name || '',
+            })
+        )
+      } catch (err: any) {
+        notifyError(feedback.message(err) || '提交失败，请稍后重试')
+        setIsRepairSubmitting(false)
+        return
+      }
+      setIsRepairSubmitting(false)
+      // 不退出快捷编辑：图案和涂抹留在原图上，方便和生成结果对比、微调后再提交
+      updateOutfitTask(taskId, { total: submitted.jobIds.length, message: '已提交，排队中…' })
+      const kindLabel = hasPatch ? '细节修复' : '局部重绘'
+      let done = 0
+      let failed = 0
+      let lastError = ''
+      await Promise.all(
+        submitted.jobIds.map(async (jobId) => {
+          try {
+            const job = await pollJob(jobId, 660, (message, progress) => {
+              updateOutfitTask(taskId, { message, progress: typeof progress === 'number' ? progress : undefined })
+            })
+            const imageUrl = normalizeAssetUrl(job.image_url)
+            const dims = await getImageDimensions(imageUrl).catch(() => ({
+              width: target.naturalWidth || target.width,
+              height: target.naturalHeight || target.height,
+            }))
+            const placed = placeOutfitResult(
+              target,
+              { imageUrl, ...dims },
+              { jobId, model: submitted.model, size: submitted.size, operation: 'detail-repair', prompt: extraPrompt },
+              origin,
+              kindLabel
+            )
+            if (!placed) throw new Error(NOT_PLACED_MESSAGE)
+            done += 1
+          } catch (err: any) {
+            failed += 1
+            lastError = feedback.message(err) || '生成失败'
+          }
+          updateOutfitTask(taskId, { done, failed })
+        })
+      )
+      if (failed) notifyError(`完成 ${done} 张，${failed} 张未完成。${lastError}`, `${kindLabel}未完成，请稍后查看任务记录。`, { key: taskId })
+      updateOutfitTask(taskId, {
+        status: done > 0 ? 'done' : 'error',
+        message:
+          done > 0
+            ? failed > 0
+              ? `完成 ${done} 张，失败 ${failed} 张：${lastError}`
+              : `完成 ${done} 张，已放到画布末尾`
+            : lastError || '生成失败',
+      })
+    },
+    [quickEditImage, repairPatches, repairStrokes, isRepairSubmitting, dismissOutfitTask, updateOutfitTask, placeOutfitResult]
+  )
+
   const handleOutfitSubmit = useCallback(
     async (req: OutfitChangeRequest) => {
       const source = outfitImage
@@ -749,6 +972,22 @@ export function App() {
         }
       }
 
+      // 快捷编辑里有涂抹或图案时：Cmd/Ctrl+Z 撤销上一笔涂抹，Delete 移除选中的图案，其他画布快捷键不作用到主画布
+      if (repairActiveRef.current) {
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+          e.preventDefault()
+          setRepairStrokes((prev) => prev.slice(0, -1))
+        } else if (e.code === 'Delete' || e.code === 'Backspace') {
+          e.preventDefault()
+          const id = selectedPatchIdRef.current
+          if (id) removeRepairPatch(id)
+        } else if ((e.metaKey || e.ctrlKey) && /^[adyz]$/i.test(e.key)) {
+          e.preventDefault()
+        }
+        // 不拦 Cmd+V 等其他按键的默认行为，粘贴新图案照常触发
+        return
+      }
+
       // 退出扩图 (Escape) / 确认扩图 (Enter)
       if (e.key === 'Escape') {
         if (outpaintingImageIdRef.current) {
@@ -917,6 +1156,28 @@ export function App() {
         }
       }
 
+      // 从画布复制的图片（可来自另一个画布或标签页）
+      const copiedImages = imageFiles.length === 0 ? decodeCanvasImages(clipboardData.getData('text/plain') || '') : null
+      if (copiedImages) {
+        e.preventDefault()
+        e.stopPropagation()
+        // 快捷编辑中粘贴：第一张作为图案叠到原图上（细节修复）
+        if (quickEditImageRef.current) {
+          startRepairRef.current({ url: copiedImages[0].url }, mousePosRef.current)
+          return
+        }
+        // 其他输入框里不粘贴这段内部数据
+        if (isInput) return
+        const center = screenToCanvas(
+          mousePosRef.current || { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+        )
+        const added = addImages(
+          layoutPastedImages(copiedImages, center, () => 'img-' + Math.random().toString(36).slice(2, 10))
+        )
+        if (added.length) useCanvasStore.getState().setSelected(added.map((im) => im.id), 'image')
+        return
+      }
+
       // 如果在输入框中且剪贴板没有图片，放行原生文本输入
       if (isInput && imageFiles.length === 0) {
         return
@@ -926,6 +1187,12 @@ export function App() {
       if (imageFiles.length > 0) {
         e.preventDefault()
         e.stopPropagation()
+
+        // 快捷编辑中粘贴：作为图案叠到原图上（细节修复），不放进主画布
+        if (quickEditImageRef.current) {
+          startRepairRef.current({ file: imageFiles[0] }, mousePosRef.current)
+          return
+        }
 
         loadImagesFromFiles(imageFiles).then((loaded) => {
           if (loaded.length > 0) {
@@ -948,6 +1215,11 @@ export function App() {
       if (text && isImageUrl(text) && !isInput) {
         e.preventDefault()
         e.stopPropagation()
+
+        if (quickEditImageRef.current) {
+          startRepairRef.current({ url: text }, mousePosRef.current)
+          return
+        }
 
         const screenCenter = mousePosRef.current || {
           x: window.innerWidth / 2,
@@ -993,9 +1265,25 @@ export function App() {
     window.addEventListener('mouseup', onMouseUpWindow)
     window.addEventListener('blur', onBlurWindow)
     window.addEventListener('mouseleave', onMouseLeaveWindow)
+    // 复制选中的图片：写进系统剪贴板，可粘贴到其他画布
+    const onCopyWindow = (e: ClipboardEvent) => {
+      if (!snapshotHydratedRef.current || !e.clipboardData) return
+      const target = e.target as HTMLElement | null
+      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return
+      if ((window.getSelection()?.toString() || '').trim()) return
+      const state = useCanvasStore.getState()
+      if (state.selectedType !== 'image' || !state.selectedIds.length) return
+      const ids = new Set(state.selectedIds)
+      const text = encodeCanvasImages(state.images.filter((im) => ids.has(im.id)))
+      if (!text) return
+      e.preventDefault()
+      e.clipboardData.setData('text/plain', text)
+    }
     window.addEventListener('paste', onPasteWindow)
+    window.addEventListener('copy', onCopyWindow)
 
     return () => {
+      window.removeEventListener('copy', onCopyWindow)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('mousemove', onMouseMoveWindow)
@@ -1082,6 +1370,18 @@ export function App() {
       if ((e.target as HTMLElement | null)?.closest?.('[data-modal]')) return
 
       const hostImageUrl = e.dataTransfer?.getData(HOST_IMAGE_DRAG_TYPE)
+      const quickTarget = quickEditImageRef.current
+      if (quickTarget) {
+        const client = { x: e.clientX, y: e.clientY }
+        const local = canvasToLocal(useViewportStore.getState().screenToCanvas(client), quickTarget)
+        const droppedFile = Array.from(e.dataTransfer?.files || []).find((f) => f.type.startsWith('image/'))
+        if (isInsideTarget(local, quickTarget) && (hostImageUrl || droppedFile)) {
+          e.preventDefault()
+          e.stopPropagation()
+          startRepairRef.current(hostImageUrl ? { url: hostImageUrl } : { file: droppedFile }, client)
+          return
+        }
+      }
       if (hostImageUrl) {
         e.preventDefault()
         e.stopPropagation()
@@ -1873,6 +2173,11 @@ export function App() {
           <div key={im.id} style={{ pointerEvents: isHandOrPanMode ? 'none' : 'auto' }}>
             <ImageShape
               image={im}
+              onGhostDrag={
+                quickEditImage && quickEditImage.id !== im.id && !isRepairSubmitting
+                  ? (x, y, moved) => handleGhostDrag(im, x, y, moved)
+                  : undefined
+              }
               isSelected={selectedType === 'image' && selectedIds.includes(im.id)}
               isSingleSelected={selectedType === 'image' && selectedIds.length === 1 && selectedIds[0] === im.id}
               onSelect={(isShift) => {
@@ -1981,7 +2286,22 @@ export function App() {
               onAddMarker={handleAddQuickEditMarker}
               onUpdateMarker={handleUpdateQuickEditMarker}
               onRemoveMarker={handleRemoveQuickEditMarker}
-            />
+              strokes={repairStrokes}
+              onStrokesChange={setRepairStrokes}
+            >
+              {repairPatches.map((p) => (
+                <RepairPatchLayer
+                  key={p.id}
+                  image={quickEditImage}
+                  patch={p}
+                  selected={p.id === selectedPatchId}
+                  onSelect={() => selectRepairPatch(p.id)}
+                  onDeselect={deselectRepairPatch}
+                  onPatchChange={updateRepairPatch}
+                  onRemove={() => removeRepairPatch(p.id)}
+                />
+              ))}
+            </QuickEditMarkerOverlay>
           </div>
         )}
 
@@ -2077,14 +2397,19 @@ export function App() {
         <QuickEditPopover
           image={quickEditImage}
           markers={quickEditMarkers}
+          repairMode={repairPatches.length ? 'pattern' : hasPaint(repairStrokes) ? 'paint' : null}
           onRemoveMarker={handleRemoveQuickEditMarker}
           onClearMarkers={handleClearQuickEditMarkers}
           onClose={() => {
             setQuickEditImage(null)
             setQuickEditMarkers([])
           }}
-          onSubmit={handleQuickEditSubmit}
-          isSubmitting={isQuickEditSubmitting}
+          onSubmit={(prompt, image, markers) =>
+            repairPatches.length || hasPaint(repairStrokes)
+              ? handleRepairSubmit(prompt)
+              : handleQuickEditSubmit(prompt, image, markers)
+          }
+          isSubmitting={isQuickEditSubmitting || isRepairSubmitting}
         />
       )}
 

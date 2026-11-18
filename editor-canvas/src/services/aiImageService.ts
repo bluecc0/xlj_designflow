@@ -730,3 +730,51 @@ export async function submitOutfitChange(
   if (jobIds.length === 0) throw new Error('没有返回任务编号')
   return { jobIds, resolvedPrompt: data.resolved_prompt || '', model: data.model || req.model, size: data.size || '' }
 }
+
+export interface DetailRepairRequest {
+  sourceUrl: string
+  /** 可以有多个图案（与 placements 一一对应）；没有图案时是局部重绘：只按 extraPrompt 改涂抹区域 */
+  patterns: Blob[]
+  mask: Blob | null
+  placements: {
+    center_x: number
+    center_y: number
+    width: number
+    height: number
+    rotation: number
+    crop: { x: number; y: number; width: number; height: number }
+  }[]
+  extraPrompt: string
+  sourceName?: string
+}
+
+/** 细节修复：原图 + 摆好的图案（+ 涂抹区域），或只有涂抹区域的局部重绘；后端只重绘局部并贴回原图。 */
+export async function submitDetailRepair(
+  req: DetailRepairRequest
+): Promise<{ jobIds: string[]; model: string; size: string }> {
+  const sourceFile = await loadImageAsUploadFile(req.sourceUrl, 'source')
+  const clientRequestId = generateUUID()
+  const fd = new FormData()
+  fd.append('image', sourceFile)
+  req.patterns.forEach((pattern, i) => {
+    fd.append('pattern', pattern, `pattern_${i + 1}.` + ((pattern.type || 'image/png').split('/')[1] || 'png'))
+  })
+  if (req.mask) fd.append('mask', req.mask, 'mask.png')
+  if (req.patterns.length) fd.append('placement', JSON.stringify(req.placements))
+  fd.append('extra_prompt', req.extraPrompt || '')
+  fd.append('source_name', req.sourceName || '')
+  fd.append('client_request_id', clientRequestId)
+
+  const resp = await fetch('/ai-image/detail-repair', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'X-Client-Request-Id': clientRequestId },
+    body: fd,
+  })
+  if (!resp.ok) throw new Error(await readErrorMessage(resp))
+  const data = await resp.json()
+  // 后端一次生成多张供挑选（job_ids）；兼容只返回 job_id 的旧接口
+  const jobIds: string[] = Array.isArray(data.job_ids) && data.job_ids.length ? data.job_ids : data.job_id ? [data.job_id] : []
+  if (!jobIds.length) throw new Error('没有返回任务编号')
+  return { jobIds, model: data.model || '', size: data.size || '' }
+}

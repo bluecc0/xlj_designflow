@@ -2,6 +2,7 @@ import React, { memo, useRef, useState, useEffect } from 'react'
 import { X } from 'lucide-react'
 import type { CanvasImage, QuickEditMarker } from '../types'
 import { useViewportStore } from '../store/viewportStore'
+import { canvasToLocal, drawStrokes, type RepairStroke } from '../utils/detailRepair'
 
 interface Props {
   image: CanvasImage
@@ -9,7 +10,16 @@ interface Props {
   onAddMarker: (marker: QuickEditMarker) => void
   onUpdateMarker: (marker: QuickEditMarker) => void
   onRemoveMarker: (id: string) => void
+  /** 涂抹笔迹（按住 Shift / Alt 拖动） */
+  strokes?: RepairStroke[]
+  onStrokesChange?: (strokes: RepairStroke[]) => void
+  /** 叠在原图上的图案图层（细节修复） */
+  children?: React.ReactNode
 }
+
+/** 屏幕像素下的笔刷直径；缩放画布可以涂得更细 */
+const BRUSH_SCREEN_PX = 28
+const PAINT = 'rgb(255, 59, 48)'
 
 export const QuickEditMarkerOverlay = memo(function QuickEditMarkerOverlay({
   image,
@@ -17,9 +27,54 @@ export const QuickEditMarkerOverlay = memo(function QuickEditMarkerOverlay({
   onAddMarker,
   onUpdateMarker,
   onRemoveMarker,
+  strokes = [],
+  onStrokesChange,
+  children,
 }: Props) {
   const zoom = useViewportStore((s) => s.zoom)
   const screenToCanvas = useViewportStore((s) => s.screenToCanvas)
+  const strokeCanvasRef = useRef<HTMLCanvasElement>(null)
+  const [brushHover, setBrushHover] = useState<{ x: number; y: number } | null>(null)
+
+  // 笔迹画布：分辨率随原图在画布上的尺寸自适应
+  const strokeRes = Math.min(4, Math.max(1, 1600 / Math.max(image.width, image.height)))
+  useEffect(() => {
+    const canvas = strokeCanvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    drawStrokes(ctx as any, strokes, strokeRes, PAINT)
+  }, [strokes, strokeRes, image.width, image.height])
+
+  const toLocal = (clientX: number, clientY: number) =>
+    canvasToLocal(screenToCanvas({ x: clientX, y: clientY }), image)
+
+  /** Shift / Alt + 拖动：涂抹要修改的区域 */
+  const startPaint = (e: React.MouseEvent) => {
+    if (!onStrokesChange) return
+    e.preventDefault()
+    // 输入框保持焦点时 Cmd+Z 会变成撤销文字，涂抹时先让出焦点
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    const size = BRUSH_SCREEN_PX / zoom
+    const stroke: RepairStroke = { points: [toLocal(e.clientX, e.clientY)], size, erase: false }
+    const base = strokes
+    onStrokesChange([...base, stroke])
+    const move = (ev: MouseEvent) => {
+      const local = toLocal(ev.clientX, ev.clientY)
+      setBrushHover(local)
+      const last = stroke.points[stroke.points.length - 1]
+      if (Math.hypot(local.x - last.x, local.y - last.y) < size * 0.15) return
+      stroke.points = [...stroke.points, local]
+      onStrokesChange([...base, { ...stroke }])
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move, true)
+      window.removeEventListener('mouseup', up, true)
+    }
+    window.addEventListener('mousemove', move, true)
+    window.addEventListener('mouseup', up, true)
+  }
 
   const [hoveredMarkerId, setHoveredMarkerId] = useState<string | null>(null)
   const [draggingMarkerId, setDraggingMarkerId] = useState<string | null>(null)
@@ -151,6 +206,10 @@ export const QuickEditMarkerOverlay = memo(function QuickEditMarkerOverlay({
   const handleOverlayMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return
     e.stopPropagation()
+    if ((e.shiftKey || e.altKey) && onStrokesChange) {
+      startPaint(e)
+      return
+    }
     clickStartRef.current = {
       clientX: e.clientX,
       clientY: e.clientY,
@@ -277,6 +336,8 @@ export const QuickEditMarkerOverlay = memo(function QuickEditMarkerOverlay({
       data-quick-edit-area="true"
       onMouseDown={handleOverlayMouseDown}
       onMouseUp={handleOverlayMouseUp}
+      onMouseMove={(e) => setBrushHover(onStrokesChange && (e.shiftKey || e.altKey) ? toLocal(e.clientX, e.clientY) : null)}
+      onMouseLeave={() => setBrushHover(null)}
       onClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
@@ -298,6 +359,41 @@ export const QuickEditMarkerOverlay = memo(function QuickEditMarkerOverlay({
         userSelect: 'none',
       }}
     >
+      {children}
+
+      {/* 涂抹笔迹（盖在图案上面，方便看清涂到了哪里） */}
+      <canvas
+        ref={strokeCanvasRef}
+        width={Math.max(1, Math.round(image.width * strokeRes))}
+        height={Math.max(1, Math.round(image.height * strokeRes))}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          opacity: 0.45,
+          pointerEvents: 'none',
+          zIndex: 65,
+        }}
+      />
+      {brushHover && (
+        <div
+          style={{
+            position: 'absolute',
+            left: brushHover.x,
+            top: brushHover.y,
+            width: BRUSH_SCREEN_PX / zoom,
+            height: BRUSH_SCREEN_PX / zoom,
+            transform: 'translate(-50%, -50%)',
+            borderRadius: '50%',
+            border: `${1.5 / zoom}px solid ${PAINT}`,
+            background: 'rgba(255,59,48,0.15)',
+            pointerEvents: 'none',
+            zIndex: 66,
+          }}
+        />
+      )}
+
       {/* 正在框选时的临时虚线预览框 */}
       {previewBoxStyle && <div style={previewBoxStyle} />}
 
