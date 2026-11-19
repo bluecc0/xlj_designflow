@@ -15942,9 +15942,9 @@ function AdminPage({
       }
     }, /*#__PURE__*/React.createElement("option", {
       value: "estimated"
-    }, "\u53E3\u5F84\uFF1A\u9884\u4F30"), /*#__PURE__*/React.createElement("option", {
+    }, "\u9884\u4F30\u8D39\u7528"), /*#__PURE__*/React.createElement("option", {
       value: "actual"
-    }, "\u53E3\u5F84\uFF1A\u5B9E\u9645")), /*#__PURE__*/React.createElement("select", {
+    }, "\u5B9E\u9645\u8D39\u7528")), /*#__PURE__*/React.createElement("select", {
       className: "df-admin-control",
       value: costFilters.currency,
       onChange: function (e) {

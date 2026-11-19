@@ -1769,8 +1769,8 @@ function AdminPage({ user, onBack }) {
             })}
           </select>
           <select className="df-admin-control" value={costFilters.costMode} onChange={function(e) { setCostFilter('costMode', e.target.value); }}>
-            <option value="estimated">口径：预估</option>
-            <option value="actual">口径：实际</option>
+            <option value="estimated">预估费用</option>
+            <option value="actual">实际费用</option>
           </select>
           <select className="df-admin-control" value={costFilters.currency} onChange={function(e) { setCostFilter('currency', e.target.value); }}>
             <option value="CNY">人民币 (CNY · 1:7.2 预估)</option>
