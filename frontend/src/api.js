@@ -411,6 +411,7 @@
       if (options.category && options.category !== 'all') params.push('category=' + encodeURIComponent(options.category));
       if (options.granularity) params.push('granularity=' + encodeURIComponent(options.granularity));
       if (options.includeTest) params.push('include_test=true');
+      if (options.costMode) params.push('cost_mode=' + encodeURIComponent(options.costMode));
       return request('/admin/cost-center' + (params.length ? '?' + params.join('&') : ''));
     },
     getAdminCostPricing: function() {

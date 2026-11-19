@@ -7820,6 +7820,7 @@ def admin_cost_center(
     category: str = "all",
     granularity: str = "day",
     include_test: bool = False,
+    cost_mode: str = "estimated",
 ):
     """成本中心多维度统计（仅管理员）：按成员、时间、模型统计调用量、Token 与费用。"""
     user = _current_user(request)
@@ -7835,6 +7836,7 @@ def admin_cost_center(
             category=category or "all",
             granularity=granularity or "day",
             include_test=include_test,
+            cost_mode=cost_mode or "estimated",
         )
     except ValueError as exc:
         raise HTTPException(400, f"日期参数格式错误: {exc}")

@@ -14836,6 +14836,7 @@ function AdminPage({
     model: '',
     category: 'all',
     currency: 'CNY',
+    costMode: 'estimated',
     includeTest: false
   });
   var [expandedMemberCost, setExpandedMemberCost] = React.useState({});
@@ -14996,7 +14997,8 @@ function AdminPage({
       userId: costFilters.userId,
       model: costFilters.model,
       category: costFilters.category,
-      includeTest: costFilters.includeTest
+      includeTest: costFilters.includeTest,
+      costMode: costFilters.costMode
     }).then(function (data) {
       setCostCenter(data);
       setUpdatedAt(Date.now());
@@ -15005,7 +15007,7 @@ function AdminPage({
     }).finally(function () {
       setLoading(false);
     });
-  }, [costFilters.hours, costFilters.granularity, costFilters.userId, costFilters.model, costFilters.category, costFilters.includeTest]);
+  }, [costFilters.hours, costFilters.granularity, costFilters.userId, costFilters.model, costFilters.category, costFilters.includeTest, costFilters.costMode]);
   React.useEffect(function () {
     if (view === 'cost') loadCostCenter();
   }, [view, loadCostCenter]);
@@ -15933,6 +15935,16 @@ function AdminPage({
         value: m
       }, m);
     })), /*#__PURE__*/React.createElement("select", {
+      className: "df-admin-control",
+      value: costFilters.costMode,
+      onChange: function (e) {
+        setCostFilter('costMode', e.target.value);
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: "estimated"
+    }, "\u53E3\u5F84\uFF1A\u9884\u4F30\uFF08\u542B sub2api\uFF09"), /*#__PURE__*/React.createElement("option", {
+      value: "actual"
+    }, "\u53E3\u5F84\uFF1A\u5B9E\u9645\uFF08\u4E0D\u542B sub2api\uFF09")), /*#__PURE__*/React.createElement("select", {
       className: "df-admin-control",
       value: costFilters.currency,
       onChange: function (e) {

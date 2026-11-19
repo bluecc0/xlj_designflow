@@ -284,6 +284,49 @@ class AdminCostCenterTest(unittest.TestCase):
         self.assertEqual(res, {"user_a": "user_a", "user_b": "user_b"})
         self.assertIsNone(model_routing.get_usage_user())
 
+    def test_cost_mode_actual_excludes_sub2api(self):
+        job_store.init_db()
+        now = time.time()
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO users (id, username, username_key, created_at, is_test) VALUES (?, ?, ?, ?, 0)",
+                ("u1", "alice", "alice", now),
+            )
+            conn.execute(
+                "INSERT INTO ai_image_jobs (id, user_id, status, model, provider, prompt, size, created_at, cost, cost_source) VALUES (?, ?, 'done', ?, ?, 'p', '1:1', ?, ?, 'estimated')",
+                ("img-sub", "u1", "gpt-image-2.6", "sub2api", now, 0.06),
+            )
+            conn.execute(
+                "INSERT INTO ai_image_jobs (id, user_id, status, model, provider, prompt, size, created_at, cost, cost_source) VALUES (?, ?, 'done', ?, ?, 'p', '1:1', ?, ?, 'upstream')",
+                ("img-api", "u1", "gpt-image-2.6", "apimart", now, 0.08),
+            )
+        job_store.record_llm_usage(
+            user_id="u1",
+            model="gpt-5",
+            provider="sub2api",
+            input_tokens=1000,
+            output_tokens=200,
+            total_tokens=1200,
+            cost=0.03,
+        )
+        job_store.record_llm_usage(
+            user_id="u1",
+            model="gpt-5",
+            provider="apimart",
+            input_tokens=1000,
+            output_tokens=200,
+            total_tokens=1200,
+            cost=0.04,
+        )
+
+        est = job_store.load_admin_cost_center(hours=24, cost_mode="estimated", include_test=False)
+        self.assertEqual(est["summary"]["total_calls"], 4)
+        self.assertAlmostEqual(est["summary"]["total_cost"], 0.21, places=4)
+
+        act = job_store.load_admin_cost_center(hours=24, cost_mode="actual", include_test=False)
+        self.assertEqual(act["summary"]["total_calls"], 2)
+        self.assertAlmostEqual(act["summary"]["total_cost"], 0.12, places=4)
+
 
 if __name__ == "__main__":
     unittest.main()

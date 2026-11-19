@@ -3991,6 +3991,7 @@ def load_admin_cost_center(
     category: str | None = None,
     granularity: str = "day",
     include_test: bool = False,
+    cost_mode: str = "estimated",
 ) -> dict:
     """Aggregate cost and token usage across member, time, and model dimensions."""
     from .cost_pricing import get_usd_to_cny_rate, resolve_image_cost, resolve_llm_cost
@@ -4020,6 +4021,7 @@ def load_admin_cost_center(
 
     safe_granularity = granularity if granularity in ("day", "week", "month") else "day"
     safe_category = category if category in ("all", "image", "llm") else "all"
+    safe_cost_mode = "actual" if str(cost_mode or "").strip().lower() == "actual" else "estimated"
     clean_user = str(user_id or "").strip() or None
     clean_model = str(model or "").strip() or None
 
@@ -4080,6 +4082,9 @@ def load_admin_cost_center(
     events: list[dict] = []
 
     for r in img_rows:
+        prov = str(r["provider"] or "").strip().lower()
+        if safe_cost_mode == "actual" and prov == "sub2api":
+            continue
         uid = str(r["user_id"] or "unknown")
         mname = str(r["model"] or "unknown")
         all_member_ids.add(uid)
@@ -4117,6 +4122,9 @@ def load_admin_cost_center(
         })
 
     for r in llm_rows:
+        prov = str(r["provider"] or "").strip().lower()
+        if safe_cost_mode == "actual" and prov == "sub2api":
+            continue
         uid = str(r["user_id"] or "unknown")
         mname = str(r["model"] or "unknown")
         all_member_ids.add(uid)

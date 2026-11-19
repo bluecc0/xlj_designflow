@@ -1041,6 +1041,7 @@ function AdminPage({ user, onBack }) {
     model: '',
     category: 'all',
     currency: 'CNY',
+    costMode: 'estimated',
     includeTest: false,
   });
   var [expandedMemberCost, setExpandedMemberCost] = React.useState({});
@@ -1186,11 +1187,12 @@ function AdminPage({ user, onBack }) {
       model: costFilters.model,
       category: costFilters.category,
       includeTest: costFilters.includeTest,
+      costMode: costFilters.costMode,
     })
       .then(function(data) { setCostCenter(data); setUpdatedAt(Date.now()); })
       .catch(function(err) { setError(err.message || '成本中心数据加载失败'); })
       .finally(function() { setLoading(false); });
-  }, [costFilters.hours, costFilters.granularity, costFilters.userId, costFilters.model, costFilters.category, costFilters.includeTest]);
+  }, [costFilters.hours, costFilters.granularity, costFilters.userId, costFilters.model, costFilters.category, costFilters.includeTest, costFilters.costMode]);
 
   React.useEffect(function() {
     if (view === 'cost') loadCostCenter();
@@ -1765,6 +1767,10 @@ function AdminPage({ user, onBack }) {
             {(opts.models || []).map(function(m) {
               return <option key={m} value={m}>{m}</option>;
             })}
+          </select>
+          <select className="df-admin-control" value={costFilters.costMode} onChange={function(e) { setCostFilter('costMode', e.target.value); }}>
+            <option value="estimated">口径：预估（含 sub2api）</option>
+            <option value="actual">口径：实际（不含 sub2api）</option>
           </select>
           <select className="df-admin-control" value={costFilters.currency} onChange={function(e) { setCostFilter('currency', e.target.value); }}>
             <option value="CNY">人民币 (CNY · 1:7.2 预估)</option>
