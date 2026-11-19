@@ -327,6 +327,47 @@ class AdminCostCenterTest(unittest.TestCase):
         self.assertEqual(act["summary"]["total_calls"], 2)
         self.assertAlmostEqual(act["summary"]["total_cost"], 0.12, places=4)
 
+    def test_kie_write_stats_restart_backfill_idempotency(self):
+        with patch.dict(os.environ, {"KIE_CREDIT_TO_USD": "0.005"}):
+            job_store.init_db()
+            now = time.time()
+            with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
+                conn.execute(
+                    "INSERT INTO users (id, username, username_key, created_at, is_test) VALUES (?, ?, ?, ?, 0)",
+                    ("u1", "alice", "alice", now),
+                )
+                conn.execute(
+                    "INSERT INTO ai_image_jobs (id, user_id, status, model, provider, prompt, size, created_at) VALUES (?, ?, 'done', ?, ?, 'upscale', '', ?)",
+                    ("kie-1", "u1", "kie-topaz", "kie", now),
+                )
+                conn.execute(
+                    "INSERT INTO operation_logs (user_id, username, action, detail, payload, created_at) VALUES (?, ?, 'ai_image', 'done', ?, ?)",
+                    ("u1", "alice", json.dumps({"job_id": "kie-1", "result": "done", "cost": 10, "provider": "kie"}), now),
+                )
+
+            # 1. Write normalized cost from 10 raw KIE credits -> $0.05 USD
+            job_store.update_ai_image_job_cost("kie-1", cost=10, model="kie-topaz", provider="kie")
+            with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute("SELECT cost, cost_source, cost_unit FROM ai_image_jobs WHERE id='kie-1'").fetchone()
+                self.assertAlmostEqual(row["cost"], 0.05, places=6)
+                self.assertEqual(row["cost_source"], "upstream")
+                self.assertEqual(row["cost_unit"], "USD")
+
+            # 2. Load cost center -> must report $0.05 (NOT 0.00025 / 0.0003)
+            stats = job_store.load_admin_cost_center(hours=24, include_test=False)
+            self.assertAlmostEqual(stats["summary"]["total_cost"], 0.05, places=6)
+
+            # 3. Simulate server restart (init_db again) -> cost must stay $0.05
+            job_store.init_db()
+            with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                row2 = conn.execute("SELECT cost, cost_source, cost_unit FROM ai_image_jobs WHERE id='kie-1'").fetchone()
+                self.assertAlmostEqual(row2["cost"], 0.05, places=6)
+                self.assertEqual(row2["cost_unit"], "USD")
+            stats2 = job_store.load_admin_cost_center(hours=24, include_test=False)
+            self.assertAlmostEqual(stats2["summary"]["total_cost"], 0.05, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

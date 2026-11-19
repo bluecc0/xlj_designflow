@@ -226,19 +226,19 @@ def resolve_image_cost(
     size: str | None = None,
     upstream_cost: Any = None,
     db_overrides: dict[str, dict[str, Any]] | None = None,
+    upstream_is_usd: bool = False,
 ) -> tuple[float, str]:
     """Use upstream cost when available in USD (or reliably converted); otherwise estimate from pricing table."""
     if upstream_cost is not None:
         try:
             val = float(upstream_cost)
             if val >= 0:
-                if is_credit_based_provider(provider, model):
-                    rate = get_kie_credit_to_usd_rate()
-                    if rate is not None:
-                        return round(val * rate, 6), "upstream"
-                    # KIE creditsConsumed is credits, not USD; fall back to estimated/manual pricing
-                else:
+                if upstream_is_usd or not is_credit_based_provider(provider, model):
                     return round(val, 6), "upstream"
+                rate = get_kie_credit_to_usd_rate()
+                if rate is not None:
+                    return round(val * rate, 6), "upstream"
+                # KIE creditsConsumed is credits, not USD; fall back to estimated/manual pricing
         except (TypeError, ValueError):
             pass
     return estimate_image_cost(

@@ -258,6 +258,7 @@ def init_db() -> None:
             ("updated_at", "REAL"),
             ("cost", "REAL"),
             ("cost_source", "TEXT"),
+            ("cost_unit", "TEXT"),
             ("input_tokens", "INTEGER"),
             ("output_tokens", "INTEGER"),
             ("total_tokens", "INTEGER"),
@@ -3773,35 +3774,64 @@ def _load_db_pricing_overrides(conn: sqlite3.Connection) -> tuple[dict[str, dict
 
 def _backfill_ai_image_costs(conn: sqlite3.Connection) -> None:
     """Idempotent backfill of cost & token usage from operation_logs into ai_image_jobs."""
-    from .cost_pricing import get_kie_credit_to_usd_rate, resolve_image_cost
+    from .cost_pricing import is_credit_based_provider, resolve_image_cost
 
     img_overrides, _ = _load_db_pricing_overrides(conn)
 
-    # Repair any historical KIE rows whose raw credits were previously recorded as USD 'upstream'
-    if get_kie_credit_to_usd_rate() is None:
-        kie_bad = conn.execute(
-            """
-            SELECT id, model, provider, resolution, size
-            FROM ai_image_jobs
-            WHERE status = 'done'
-              AND cost_source = 'upstream'
-              AND (LOWER(COALESCE(provider, '')) = 'kie' OR LOWER(model) LIKE 'kie-%')
-            """
+    # Load operation_logs index once when either legacy repair or null backfill is needed
+    need_op_index = bool(
+        conn.execute(
+            "SELECT 1 FROM ai_image_jobs WHERE status = 'done' AND ((cost IS NULL AND total_tokens IS NULL) OR cost_unit IS NULL) LIMIT 1"
+        ).fetchone()
+    )
+    by_job_id: dict[str, dict] = {}
+    if need_op_index:
+        op_rows = conn.execute(
+            "SELECT payload FROM operation_logs WHERE action = 'ai_image' AND payload != ''"
         ).fetchall()
-        for job in kie_bad:
+        for row in op_rows:
+            try:
+                data = json.loads(row["payload"])
+            except Exception:
+                continue
+            if not isinstance(data, dict) or data.get("result") != "done":
+                continue
+            jid = str(data.get("job_id") or "").strip()
+            if jid:
+                by_job_id[jid] = data
+
+    # Step 1: One-time migration for legacy rows where cost IS NOT NULL and cost_unit IS NULL.
+    # Once cost_unit='USD' is set, subsequent restarts will NEVER re-convert or alter them.
+    legacy_rows = conn.execute(
+        """
+        SELECT id, model, provider, resolution, size, cost, cost_source
+        FROM ai_image_jobs
+        WHERE status = 'done' AND cost IS NOT NULL AND cost_unit IS NULL
+        """
+    ).fetchall()
+    for job in legacy_rows:
+        jid = job["id"]
+        if job["cost_source"] == "upstream" and is_credit_based_provider(job["provider"], job["model"]):
+            op = by_job_id.get(jid) or {}
+            raw_credits = op.get("cost")
+            # If operation_logs has raw credits, resolve from raw_credits; otherwise fall back to estimated/manual (upstream_cost=None)
             cost_val, cost_src = resolve_image_cost(
                 job["model"],
-                provider=job["provider"] or "kie",
+                provider=job["provider"] or op.get("provider") or "kie",
                 resolution=job["resolution"],
                 size=job["size"],
-                upstream_cost=None,
+                upstream_cost=raw_credits,
                 db_overrides=img_overrides,
+                upstream_is_usd=False,
             )
             conn.execute(
-                "UPDATE ai_image_jobs SET cost = ?, cost_source = ? WHERE id = ?",
-                (cost_val, cost_src, job["id"]),
+                "UPDATE ai_image_jobs SET cost = ?, cost_source = ?, cost_unit = 'USD' WHERE id = ?",
+                (cost_val, cost_src, jid),
             )
+        else:
+            conn.execute("UPDATE ai_image_jobs SET cost_unit = 'USD' WHERE id = ?", (jid,))
 
+    # Step 2: Backfill rows with cost IS NULL AND total_tokens IS NULL
     pending = conn.execute(
         """
         SELECT id, model, provider, resolution, size, status
@@ -3809,24 +3839,6 @@ def _backfill_ai_image_costs(conn: sqlite3.Connection) -> None:
         WHERE status = 'done' AND cost IS NULL AND total_tokens IS NULL
         """
     ).fetchall()
-    if not pending:
-        return
-
-    by_job_id: dict[str, dict] = {}
-    op_rows = conn.execute(
-        "SELECT payload FROM operation_logs WHERE action = 'ai_image' AND payload != ''"
-    ).fetchall()
-    for row in op_rows:
-        try:
-            data = json.loads(row["payload"])
-        except Exception:
-            continue
-        if not isinstance(data, dict) or data.get("result") != "done":
-            continue
-        jid = str(data.get("job_id") or "").strip()
-        if jid:
-            by_job_id[jid] = data
-
     for job in pending:
         jid = job["id"]
         op = by_job_id.get(jid) or {}
@@ -3845,11 +3857,12 @@ def _backfill_ai_image_costs(conn: sqlite3.Connection) -> None:
             size=job["size"],
             upstream_cost=upstream_cost,
             db_overrides=img_overrides,
+            upstream_is_usd=False,
         )
         conn.execute(
             """
             UPDATE ai_image_jobs
-            SET cost = ?, cost_source = ?,
+            SET cost = ?, cost_source = ?, cost_unit = 'USD',
                 input_tokens = COALESCE(input_tokens, ?),
                 output_tokens = COALESCE(output_tokens, ?),
                 total_tokens = COALESCE(total_tokens, ?)
@@ -3870,7 +3883,7 @@ def update_ai_image_job_cost(
     resolution: str | None = None,
     size: str | None = None,
 ) -> None:
-    """Persist cost & token usage for a completed ai_image_jobs row."""
+    """Persist normalized USD cost & token usage for a completed ai_image_jobs row."""
     if not job_id:
         return
     from .cost_pricing import resolve_image_cost
@@ -3898,12 +3911,13 @@ def update_ai_image_job_cost(
             size=size or row["size"],
             upstream_cost=cost,
             db_overrides=img_overrides,
+            upstream_is_usd=False,
         )
         final_src = cost_source or resolved_src
         conn.execute(
             """
             UPDATE ai_image_jobs
-            SET cost = ?, cost_source = ?,
+            SET cost = ?, cost_source = ?, cost_unit = 'USD',
                 input_tokens = COALESCE(?, input_tokens),
                 output_tokens = COALESCE(?, output_tokens),
                 total_tokens = COALESCE(?, total_tokens),
@@ -4053,7 +4067,7 @@ def load_admin_cost_center(
         img_rows = conn.execute(
             f"""
             SELECT id, user_id, model, provider, resolution, size,
-                   cost, cost_source, input_tokens, output_tokens, total_tokens, created_at
+                   cost, cost_source, cost_unit, input_tokens, output_tokens, total_tokens, created_at
             FROM ai_image_jobs
             WHERE {' AND '.join(img_where)}
             """,
@@ -4095,16 +4109,27 @@ def load_admin_cost_center(
             continue
         if clean_model and mname != clean_model:
             continue
-        cost_val, cost_src = resolve_image_cost(
-            mname,
-            provider=r["provider"],
-            resolution=r["resolution"],
-            size=r["size"],
-            upstream_cost=r["cost"],
-            db_overrides=img_overrides,
-        )
-        if r["cost"] is not None and r["cost_source"]:
-            cost_src = str(r["cost_source"])
+        if r["cost"] is not None:
+            cost_val, cost_src = resolve_image_cost(
+                mname,
+                provider=r["provider"],
+                resolution=r["resolution"],
+                size=r["size"],
+                upstream_cost=r["cost"],
+                db_overrides=img_overrides,
+                upstream_is_usd=True,
+            )
+            if r["cost_source"]:
+                cost_src = str(r["cost_source"])
+        else:
+            cost_val, cost_src = resolve_image_cost(
+                mname,
+                provider=r["provider"],
+                resolution=r["resolution"],
+                size=r["size"],
+                upstream_cost=None,
+                db_overrides=img_overrides,
+            )
         in_tok = int(r["input_tokens"] or 0)
         out_tok = int(r["output_tokens"] or 0)
         tot_tok = int(r["total_tokens"] or (in_tok + out_tok))
