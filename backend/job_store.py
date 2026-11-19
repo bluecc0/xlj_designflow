@@ -3773,7 +3773,34 @@ def _load_db_pricing_overrides(conn: sqlite3.Connection) -> tuple[dict[str, dict
 
 def _backfill_ai_image_costs(conn: sqlite3.Connection) -> None:
     """Idempotent backfill of cost & token usage from operation_logs into ai_image_jobs."""
-    from .cost_pricing import resolve_image_cost
+    from .cost_pricing import get_kie_credit_to_usd_rate, resolve_image_cost
+
+    img_overrides, _ = _load_db_pricing_overrides(conn)
+
+    # Repair any historical KIE rows whose raw credits were previously recorded as USD 'upstream'
+    if get_kie_credit_to_usd_rate() is None:
+        kie_bad = conn.execute(
+            """
+            SELECT id, model, provider, resolution, size
+            FROM ai_image_jobs
+            WHERE status = 'done'
+              AND cost_source = 'upstream'
+              AND (LOWER(COALESCE(provider, '')) = 'kie' OR LOWER(model) LIKE 'kie-%')
+            """
+        ).fetchall()
+        for job in kie_bad:
+            cost_val, cost_src = resolve_image_cost(
+                job["model"],
+                provider=job["provider"] or "kie",
+                resolution=job["resolution"],
+                size=job["size"],
+                upstream_cost=None,
+                db_overrides=img_overrides,
+            )
+            conn.execute(
+                "UPDATE ai_image_jobs SET cost = ?, cost_source = ? WHERE id = ?",
+                (cost_val, cost_src, job["id"]),
+            )
 
     pending = conn.execute(
         """
@@ -3785,7 +3812,6 @@ def _backfill_ai_image_costs(conn: sqlite3.Connection) -> None:
     if not pending:
         return
 
-    img_overrides, _ = _load_db_pricing_overrides(conn)
     by_job_id: dict[str, dict] = {}
     op_rows = conn.execute(
         "SELECT payload FROM operation_logs WHERE action = 'ai_image' AND payload != ''"

@@ -34,6 +34,8 @@ def _user(request: Request) -> dict:
     user = getattr(request.state, "user", None)
     if not user:
         raise HTTPException(401, "请先登录")
+    from ..model_routing import set_usage_user
+    set_usage_user(user.get("id"))
     return user
 
 

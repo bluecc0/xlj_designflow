@@ -1,6 +1,7 @@
 """Shared Sub2API -> APIMart routing for text and vision completions."""
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import json
 import logging
@@ -22,6 +23,15 @@ def set_usage_user(user_id: str | None) -> None:
 
 def get_usage_user() -> str | None:
     return _usage_user_var.get()
+
+
+@contextlib.contextmanager
+def usage_user_scope(user_id: str | None):
+    token = _usage_user_var.set(str(user_id) if user_id else None)
+    try:
+        yield
+    finally:
+        _usage_user_var.reset(token)
 
 
 def _estimate_messages_tokens(messages: Any) -> int:

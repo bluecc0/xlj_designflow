@@ -1,12 +1,17 @@
+import asyncio
+import contextlib
 import json
+import os
 import sqlite3
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from backend import cost_pricing, job_store
+from backend import cost_pricing, job_store, model_routing
+from backend.agent2 import routes as agent2_routes
 
 
 class AdminCostCenterTest(unittest.TestCase):
@@ -21,7 +26,7 @@ class AdminCostCenterTest(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_cost_pricing_resolution(self):
-        cost, src = cost_pricing.resolve_image_cost("gpt-image-2.6", upstream_cost=0.12)
+        cost, src = cost_pricing.resolve_image_cost("gpt-image-2.6", provider="apimart", upstream_cost=0.12)
         self.assertEqual(cost, 0.12)
         self.assertEqual(src, "upstream")
 
@@ -37,22 +42,41 @@ class AdminCostCenterTest(unittest.TestCase):
         self.assertEqual(llm_src, "estimated")
         self.assertGreater(llm_cost, 0)
 
+    def test_kie_credits_not_treated_as_usd(self):
+        # Without KIE_CREDIT_TO_USD, 10 KIE credits must NOT become $10.00 upstream USD
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("KIE_CREDIT_TO_USD", None)
+            cost, src = cost_pricing.resolve_image_cost("kie-topaz", provider="kie", upstream_cost=10)
+            self.assertEqual(src, "estimated")
+            self.assertAlmostEqual(cost, 0.04, places=4)
+
+        # With explicit conversion rate, convert credits to USD
+        with patch.dict(os.environ, {"KIE_CREDIT_TO_USD": "0.005"}):
+            cost, src = cost_pricing.resolve_image_cost("kie-topaz", provider="kie", upstream_cost=10)
+            self.assertEqual(src, "upstream")
+            self.assertAlmostEqual(cost, 0.05, places=4)
+
     def test_legacy_db_migration_and_backfill(self):
         now = time.time()
-        # Simulate an older production jobs.db without cost columns or llm_usage_logs
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("""
                 CREATE TABLE ai_image_jobs (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     status TEXT NOT NULL,
                     model TEXT NOT NULL,
+                    provider TEXT,
                     prompt TEXT NOT NULL,
                     size TEXT NOT NULL,
                     image_url TEXT,
                     has_reference INTEGER NOT NULL DEFAULT 0,
                     error TEXT,
-                    created_at REAL NOT NULL
+                    created_at REAL NOT NULL,
+                    cost REAL,
+                    cost_source TEXT,
+                    input_tokens INTEGER,
+                    output_tokens INTEGER,
+                    total_tokens INTEGER
                 )
             """)
             conn.execute("""
@@ -81,12 +105,17 @@ class AdminCostCenterTest(unittest.TestCase):
                 ("u1", "alice", "alice", now),
             )
             conn.execute(
-                "INSERT INTO ai_image_jobs (id, user_id, status, model, prompt, size, image_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                ("job-1", "u1", "done", "gpt-image-2.6", "poster", "1:1", "/output/1.png", now),
+                "INSERT INTO ai_image_jobs (id, user_id, status, model, provider, prompt, size, image_url, created_at) VALUES (?, ?, 'done', ?, ?, 'poster', '1:1', '/output/1.png', ?)",
+                ("job-1", "u1", "gpt-image-2.6", "apimart", now),
             )
             conn.execute(
-                "INSERT INTO ai_image_jobs (id, user_id, status, model, prompt, size, image_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                ("job-2", "u1", "done", "gpt-image-2", "banner", "1:1", "/output/2.png", now),
+                "INSERT INTO ai_image_jobs (id, user_id, status, model, provider, prompt, size, image_url, created_at) VALUES (?, ?, 'done', ?, ?, 'banner', '1:1', '/output/2.png', ?)",
+                ("job-2", "u1", "gpt-image-2", "sub2api", now),
+            )
+            # Simulate previously mis-recorded KIE credits as upstream USD
+            conn.execute(
+                "INSERT INTO ai_image_jobs (id, user_id, status, model, provider, prompt, size, image_url, created_at, cost, cost_source) VALUES (?, ?, 'done', ?, ?, 'upscale', '', '/output/3.png', ?, 10.0, 'upstream')",
+                ("job-kie", "u1", "kie-topaz", "kie", now),
             )
             conn.execute(
                 "INSERT INTO operation_logs (user_id, username, action, detail, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -106,24 +135,28 @@ class AdminCostCenterTest(unittest.TestCase):
                     now,
                 ),
             )
-            conn.commit()
 
-        job_store.init_db()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("KIE_CREDIT_TO_USD", None)
+            job_store.init_db()
 
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             j1 = conn.execute("SELECT cost, cost_source, total_tokens FROM ai_image_jobs WHERE id='job-1'").fetchone()
             j2 = conn.execute("SELECT cost, cost_source FROM ai_image_jobs WHERE id='job-2'").fetchone()
+            jkie = conn.execute("SELECT cost, cost_source FROM ai_image_jobs WHERE id='job-kie'").fetchone()
             self.assertAlmostEqual(j1["cost"], 0.08, places=4)
             self.assertEqual(j1["cost_source"], "upstream")
             self.assertEqual(j1["total_tokens"], 300)
             self.assertIn(j2["cost_source"], ("estimated", "manual"))
             self.assertGreater(j2["cost"], 0)
+            self.assertNotEqual(jkie["cost_source"], "upstream")
+            self.assertLess(jkie["cost"], 1.0)
 
     def test_load_admin_cost_center_dimensions(self):
         job_store.init_db()
         now = time.time()
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 "INSERT INTO users (id, username, username_key, created_at, is_test) VALUES (?, ?, ?, ?, 0)",
                 ("u1", "alice", "alice", now),
@@ -144,7 +177,6 @@ class AdminCostCenterTest(unittest.TestCase):
                 "INSERT INTO ai_image_jobs (id, user_id, status, model, provider, prompt, size, created_at, cost, cost_source, total_tokens) VALUES (?, ?, 'done', ?, ?, 'p', '1:1', ?, ?, 'upstream', ?)",
                 ("img-test", "u_test", "gpt-image-2.6", "sub2api", now, 9.99, 5000),
             )
-            conn.commit()
 
         job_store.record_llm_usage(
             user_id="u2",
@@ -166,7 +198,6 @@ class AdminCostCenterTest(unittest.TestCase):
             self.assertEqual(len(data["by_model"]), 2)
             self.assertGreaterEqual(len(data["timeline"]), 1)
 
-            # Filter by model
             filtered = job_store.load_admin_cost_center(hours=24, model="gpt-5", include_test=False)
             self.assertEqual(filtered["summary"]["total_calls"], 1)
             self.assertAlmostEqual(filtered["summary"]["total_cost"], 0.02, places=4)
@@ -174,12 +205,11 @@ class AdminCostCenterTest(unittest.TestCase):
     def test_manual_model_pricing_and_db_sync(self):
         job_store.init_db()
         now = time.time()
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 "INSERT INTO users (id, username, username_key, created_at, is_test) VALUES (?, ?, ?, ?, 0)",
                 ("u1", "alice", "alice", now),
             )
-            # One estimated/null-upstream job and one real-upstream job
             conn.execute(
                 "INSERT INTO ai_image_jobs (id, user_id, status, model, provider, prompt, size, created_at, cost, cost_source) VALUES (?, ?, 'done', ?, ?, 'p', '1:1', ?, ?, 'estimated')",
                 ("img-est", "u1", "custom-img-model", "sub2api", now, 0.04),
@@ -188,15 +218,12 @@ class AdminCostCenterTest(unittest.TestCase):
                 "INSERT INTO ai_image_jobs (id, user_id, status, model, provider, prompt, size, created_at, cost, cost_source) VALUES (?, ?, 'done', ?, ?, 'p', '1:1', ?, ?, 'upstream')",
                 ("img-up", "u1", "custom-img-model", "apimart", now, 0.25),
             )
-            conn.commit()
 
-        # Unregistered model should appear in list_admin_model_pricing
         items = job_store.list_admin_model_pricing()
         unreg = [it for it in items if it["model_key"] == "custom-img-model"]
         self.assertEqual(len(unreg), 1)
         self.assertFalse(unreg[0]["registered"])
 
-        # Register manual price with 1K/1.5K/2K/4K tiers and sync DB
         res = job_store.save_admin_model_pricing(
             category="image",
             model_key="custom-img-model",
@@ -210,13 +237,12 @@ class AdminCostCenterTest(unittest.TestCase):
         )
         self.assertEqual(res["synced_count"], 1)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             est_row = conn.execute("SELECT cost, cost_source FROM ai_image_jobs WHERE id='img-est'").fetchone()
             up_row = conn.execute("SELECT cost, cost_source FROM ai_image_jobs WHERE id='img-up'").fetchone()
             self.assertAlmostEqual(est_row["cost"], 0.05, places=4)
             self.assertEqual(est_row["cost_source"], "manual")
-            # Upstream real cost must remain untouched
             self.assertAlmostEqual(up_row["cost"], 0.25, places=4)
             self.assertEqual(up_row["cost_source"], "upstream")
 
@@ -232,6 +258,31 @@ class AdminCostCenterTest(unittest.TestCase):
         c2, _ = cost_pricing.resolve_image_cost("seedream-5.0-lite", resolution="2K")
         self.assertLess(c1, c15)
         self.assertLess(c15, c2)
+
+    def test_agent2_user_context_binding_and_concurrency_isolation(self):
+        with model_routing.usage_user_scope(None):
+            req = SimpleNamespace(state=SimpleNamespace(user={"id": "operator_e", "username": "operator_e"}))
+            u = agent2_routes._user(req)
+            self.assertEqual(u["id"], "operator_e")
+            self.assertEqual(model_routing.get_usage_user(), "operator_e")
+
+        # After scope exit, context is restored
+        self.assertIsNone(model_routing.get_usage_user())
+
+        async def _run_concurrent():
+            results = {}
+
+            async def worker(uid: str, delay: float):
+                with model_routing.usage_user_scope(uid):
+                    await asyncio.sleep(delay)
+                    results[uid] = model_routing.get_usage_user()
+
+            await asyncio.gather(worker("user_a", 0.02), worker("user_b", 0.01))
+            return results
+
+        res = asyncio.run(_run_concurrent())
+        self.assertEqual(res, {"user_a": "user_a", "user_b": "user_b"})
+        self.assertIsNone(model_routing.get_usage_user())
 
 
 if __name__ == "__main__":

@@ -202,6 +202,23 @@ def estimate_image_cost(
     return _DEFAULT_FALLBACK_IMAGE_PRICE, "estimated"
 
 
+def is_credit_based_provider(provider: str | None = None, model: str | None = None) -> bool:
+    p = str(provider or "").strip().lower()
+    m = normalize_model_key(model)
+    return p == "kie" or m.startswith("kie-")
+
+
+def get_kie_credit_to_usd_rate() -> float | None:
+    raw = os.getenv("KIE_CREDIT_TO_USD", "").strip()
+    if not raw:
+        return None
+    try:
+        val = float(raw)
+        return val if val > 0 else None
+    except Exception:
+        return None
+
+
 def resolve_image_cost(
     model: str | None,
     provider: str | None = None,
@@ -210,12 +227,18 @@ def resolve_image_cost(
     upstream_cost: Any = None,
     db_overrides: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[float, str]:
-    """Use upstream cost when available; otherwise estimate from pricing table."""
+    """Use upstream cost when available in USD (or reliably converted); otherwise estimate from pricing table."""
     if upstream_cost is not None:
         try:
             val = float(upstream_cost)
             if val >= 0:
-                return round(val, 6), "upstream"
+                if is_credit_based_provider(provider, model):
+                    rate = get_kie_credit_to_usd_rate()
+                    if rate is not None:
+                        return round(val * rate, 6), "upstream"
+                    # KIE creditsConsumed is credits, not USD; fall back to estimated/manual pricing
+                else:
+                    return round(val, 6), "upstream"
         except (TypeError, ValueError):
             pass
     return estimate_image_cost(
