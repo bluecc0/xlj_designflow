@@ -400,6 +400,29 @@
       var rangeHours = hours == null ? 24 : hours;
       return request('/admin/overview?hours=' + encodeURIComponent(rangeHours));
     },
+    getAdminCostCenter: function(options) {
+      options = options || {};
+      var params = [];
+      if (options.hours != null) params.push('hours=' + encodeURIComponent(options.hours));
+      if (options.startDate) params.push('start_date=' + encodeURIComponent(options.startDate));
+      if (options.endDate) params.push('end_date=' + encodeURIComponent(options.endDate));
+      if (options.userId) params.push('user_id=' + encodeURIComponent(options.userId));
+      if (options.model) params.push('model=' + encodeURIComponent(options.model));
+      if (options.category && options.category !== 'all') params.push('category=' + encodeURIComponent(options.category));
+      if (options.granularity) params.push('granularity=' + encodeURIComponent(options.granularity));
+      if (options.includeTest) params.push('include_test=true');
+      return request('/admin/cost-center' + (params.length ? '?' + params.join('&') : ''));
+    },
+    getAdminCostPricing: function() {
+      return request('/admin/cost-center/pricing');
+    },
+    saveAdminCostPricing: function(payload) {
+      return request('/admin/cost-center/pricing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+      });
+    },
     getAdminServiceProbes: function(service, limit) {
       return request('/admin/service-probes?service=' + encodeURIComponent(service || 'sub2api')
         + '&limit=' + encodeURIComponent(limit || 48));

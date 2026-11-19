@@ -256,11 +256,24 @@ def init_db() -> None:
             ("client_request_id", "TEXT"),
             ("request_meta_json", "TEXT"),
             ("updated_at", "REAL"),
+            ("cost", "REAL"),
+            ("cost_source", "TEXT"),
+            ("input_tokens", "INTEGER"),
+            ("output_tokens", "INTEGER"),
+            ("total_tokens", "INTEGER"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE ai_image_jobs ADD COLUMN {col} {col_def}")
             except Exception:
                 pass
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ai_image_jobs_created_at
+            ON ai_image_jobs(created_at)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ai_image_jobs_user_created
+            ON ai_image_jobs(user_id, created_at)
+        """)
         conn.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_image_jobs_user_client_request_unique
             ON ai_image_jobs(user_id, client_request_id)
@@ -522,6 +535,53 @@ def init_db() -> None:
                 seeded_at   REAL NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS llm_usage_logs (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       TEXT,
+                session_id    TEXT,
+                turn_id       TEXT,
+                source        TEXT NOT NULL DEFAULT 'agent2',
+                provider      TEXT,
+                model         TEXT NOT NULL,
+                input_tokens  INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens  INTEGER NOT NULL DEFAULT 0,
+                cost          REAL,
+                cost_source   TEXT,
+                usage_source  TEXT NOT NULL DEFAULT 'upstream',
+                created_at    REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_llm_usage_created
+            ON llm_usage_logs(created_at)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_llm_usage_user_created
+            ON llm_usage_logs(user_id, created_at)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_llm_usage_model_created
+            ON llm_usage_logs(model, created_at)
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS model_pricing (
+                category           TEXT NOT NULL DEFAULT 'image',
+                model_key          TEXT NOT NULL,
+                unit_price         REAL,
+                input_per_1m       REAL,
+                output_per_1m      REAL,
+                resolution_2k_mult REAL NOT NULL DEFAULT 1.5,
+                resolution_4k_mult REAL NOT NULL DEFAULT 2.0,
+                note               TEXT NOT NULL DEFAULT '',
+                updated_by         TEXT NOT NULL DEFAULT '',
+                updated_at         REAL NOT NULL,
+                PRIMARY KEY (category, model_key)
+            )
+        """)
+        _seed_default_model_pricing(conn)
+        _backfill_ai_image_costs(conn)
         conn.commit()
 
     try:
@@ -3618,4 +3678,821 @@ def delete_quick_prompt(prompt_id: str, user_id: str) -> bool:
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+# ── Cost Center (成本中心) ────────────────────────────────────────────────────
+
+def _seed_default_model_pricing(conn: sqlite3.Connection) -> None:
+    """Seed default model prices using INSERT OR IGNORE so manual edits are preserved."""
+    from .cost_pricing import DEFAULT_IMAGE_PRICING, DEFAULT_LLM_PRICING
+
+    now = time.time()
+    for mkey, spec in DEFAULT_IMAGE_PRICING.items():
+        unit = float(spec.get("unit_price", 0.04)) if isinstance(spec, dict) else float(spec)
+        mults = spec.get("resolution_multipliers") if isinstance(spec, dict) else {}
+        m2k = float((mults or {}).get("2K", 1.5))
+        m4k = float((mults or {}).get("4K", 2.0))
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO model_pricing (
+                category, model_key, unit_price, resolution_2k_mult, resolution_4k_mult,
+                note, updated_by, updated_at
+            ) VALUES ('image', ?, ?, ?, ?, '系统默认单价', 'system', ?)
+            """,
+            (mkey, unit, m2k, m4k, now),
+        )
+    for mkey, spec in DEFAULT_LLM_PRICING.items():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO model_pricing (
+                category, model_key, input_per_1m, output_per_1m,
+                note, updated_by, updated_at
+            ) VALUES ('llm', ?, ?, ?, '系统默认单价', 'system', ?)
+            """,
+            (mkey, float(spec.get("input_per_1m", 1.0)), float(spec.get("output_per_1m", 4.0)), now),
+        )
+
+
+def _load_db_pricing_overrides(conn: sqlite3.Connection) -> tuple[dict[str, dict], dict[str, dict]]:
+    """Load registered model pricing from model_pricing table."""
+    img_map: dict[str, dict] = {}
+    llm_map: dict[str, dict] = {}
+    try:
+        rows = conn.execute("SELECT * FROM model_pricing").fetchall()
+    except Exception:
+        return img_map, llm_map
+    for r in rows:
+        cat = str(r["category"] or "image")
+        key = str(r["model_key"] or "").strip().lower()
+        if not key:
+            continue
+        if cat == "llm":
+            llm_map[key] = {
+                "input_per_1m": float(r["input_per_1m"] or 0.0),
+                "output_per_1m": float(r["output_per_1m"] or 0.0),
+            }
+        else:
+            img_map[key] = {
+                "unit_price": float(r["unit_price"] or 0.0),
+                "resolution_multipliers": {
+                    "2K": float(r["resolution_2k_mult"] or 1.5),
+                    "4K": float(r["resolution_4k_mult"] or 2.0),
+                },
+            }
+    return img_map, llm_map
+
+
+def _backfill_ai_image_costs(conn: sqlite3.Connection) -> None:
+    """Idempotent backfill of cost & token usage from operation_logs into ai_image_jobs."""
+    from .cost_pricing import resolve_image_cost
+
+    pending = conn.execute(
+        """
+        SELECT id, model, provider, resolution, size, status
+        FROM ai_image_jobs
+        WHERE status = 'done' AND cost IS NULL AND total_tokens IS NULL
+        """
+    ).fetchall()
+    if not pending:
+        return
+
+    img_overrides, _ = _load_db_pricing_overrides(conn)
+    by_job_id: dict[str, dict] = {}
+    op_rows = conn.execute(
+        "SELECT payload FROM operation_logs WHERE action = 'ai_image' AND payload != ''"
+    ).fetchall()
+    for row in op_rows:
+        try:
+            data = json.loads(row["payload"])
+        except Exception:
+            continue
+        if not isinstance(data, dict) or data.get("result") != "done":
+            continue
+        jid = str(data.get("job_id") or "").strip()
+        if jid:
+            by_job_id[jid] = data
+
+    for job in pending:
+        jid = job["id"]
+        op = by_job_id.get(jid) or {}
+        usage = op.get("usage") if isinstance(op.get("usage"), dict) else {}
+        in_tok = int(usage.get("input_tokens") or 0) or None
+        out_tok = int(usage.get("output_tokens") or 0) or None
+        tot_tok = int(usage.get("total_tokens") or 0) or (
+            (in_tok or 0) + (out_tok or 0) if (in_tok or out_tok) else None
+        )
+        upstream_cost = op.get("cost")
+        provider = job["provider"] or op.get("provider")
+        cost_val, cost_src = resolve_image_cost(
+            job["model"],
+            provider=provider,
+            resolution=job["resolution"],
+            size=job["size"],
+            upstream_cost=upstream_cost,
+            db_overrides=img_overrides,
+        )
+        conn.execute(
+            """
+            UPDATE ai_image_jobs
+            SET cost = ?, cost_source = ?,
+                input_tokens = COALESCE(input_tokens, ?),
+                output_tokens = COALESCE(output_tokens, ?),
+                total_tokens = COALESCE(total_tokens, ?)
+            WHERE id = ? AND cost IS NULL
+            """,
+            (cost_val, cost_src, in_tok, out_tok, tot_tok, jid),
+        )
+
+
+def update_ai_image_job_cost(
+    job_id: str,
+    *,
+    cost: float | None = None,
+    cost_source: str | None = None,
+    usage: dict | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+    resolution: str | None = None,
+    size: str | None = None,
+) -> None:
+    """Persist cost & token usage for a completed ai_image_jobs row."""
+    if not job_id:
+        return
+    from .cost_pricing import resolve_image_cost
+
+    in_tok: int | None = None
+    out_tok: int | None = None
+    tot_tok: int | None = None
+    if isinstance(usage, dict):
+        in_tok = int(usage.get("input_tokens") or 0)
+        out_tok = int(usage.get("output_tokens") or 0)
+        tot_tok = int(usage.get("total_tokens") or (in_tok + out_tok))
+
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT model, provider, resolution, size FROM ai_image_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        if not row:
+            return
+        img_overrides, _ = _load_db_pricing_overrides(conn)
+        resolved_cost, resolved_src = resolve_image_cost(
+            model or row["model"],
+            provider=provider or row["provider"],
+            resolution=resolution or row["resolution"],
+            size=size or row["size"],
+            upstream_cost=cost,
+            db_overrides=img_overrides,
+        )
+        final_src = cost_source or resolved_src
+        conn.execute(
+            """
+            UPDATE ai_image_jobs
+            SET cost = ?, cost_source = ?,
+                input_tokens = COALESCE(?, input_tokens),
+                output_tokens = COALESCE(?, output_tokens),
+                total_tokens = COALESCE(?, total_tokens),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (resolved_cost, final_src, in_tok, out_tok, tot_tok, time.time(), job_id),
+        )
+        conn.commit()
+
+
+def record_llm_usage(
+    *,
+    user_id: str | None,
+    model: str,
+    provider: str | None = None,
+    session_id: str | None = None,
+    turn_id: str | None = None,
+    source: str = "agent2",
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    total_tokens: int = 0,
+    cost: float | None = None,
+    cost_source: str | None = None,
+    usage_source: str = "upstream",
+) -> None:
+    """Record one LLM/VLM call's token usage and cost."""
+    from .cost_pricing import resolve_llm_cost
+
+    in_tok = max(0, int(input_tokens or 0))
+    out_tok = max(0, int(output_tokens or 0))
+    tot_tok = max(0, int(total_tokens or (in_tok + out_tok)))
+
+    with _lock, _connect() as conn:
+        _, llm_overrides = _load_db_pricing_overrides(conn)
+        resolved_cost, resolved_src = resolve_llm_cost(
+            model, input_tokens=in_tok, output_tokens=out_tok, upstream_cost=cost,
+            db_overrides=llm_overrides,
+        )
+        final_src = cost_source or resolved_src
+        conn.execute(
+            """
+            INSERT INTO llm_usage_logs (
+                user_id, session_id, turn_id, source, provider, model,
+                input_tokens, output_tokens, total_tokens,
+                cost, cost_source, usage_source, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(user_id) if user_id else None,
+                str(session_id) if session_id else None,
+                str(turn_id) if turn_id else None,
+                str(source or "agent2"),
+                str(provider) if provider else None,
+                str(model or "unknown"),
+                in_tok,
+                out_tok,
+                tot_tok,
+                resolved_cost,
+                final_src,
+                str(usage_source or "upstream"),
+                time.time(),
+            ),
+        )
+        conn.commit()
+
+
+def _cost_bucket_key(ts: float, granularity: str) -> tuple[str, str]:
+    dt = datetime.fromtimestamp(ts)
+    if granularity == "month":
+        return dt.strftime("%Y-%m"), dt.strftime("%Y-%m")
+    if granularity == "week":
+        monday = (dt - timedelta(days=dt.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        return monday.strftime("%Y-%m-%d"), monday.strftime("%m/%d 周")
+    return dt.strftime("%Y-%m-%d"), dt.strftime("%m/%d")
+
+
+def load_admin_cost_center(
+    *,
+    hours: int = 168,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    user_id: str | None = None,
+    model: str | None = None,
+    category: str | None = None,
+    granularity: str = "day",
+    include_test: bool = False,
+) -> dict:
+    """Aggregate cost and token usage across member, time, and model dimensions."""
+    from .cost_pricing import get_usd_to_cny_rate, resolve_image_cost, resolve_llm_cost
+
+    now = time.time()
+    all_time = False
+    range_start = 0.0
+    range_end = now
+
+    if start_date or end_date:
+        if start_date:
+            s_dt = datetime.strptime(start_date.strip(), "%Y-%m-%d")
+            range_start = s_dt.timestamp()
+        if end_date:
+            e_dt = datetime.strptime(end_date.strip(), "%Y-%m-%d") + timedelta(days=1)
+            range_end = e_dt.timestamp()
+    else:
+        req_hours = int(hours)
+        all_time = req_hours == 0
+        if not all_time:
+            safe_hours = max(1, min(req_hours, 24 * 365))
+            days = max(1, -(-safe_hours // 24))
+            start_dt = datetime.fromtimestamp(now).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) - timedelta(days=days - 1)
+            range_start = start_dt.timestamp()
+
+    safe_granularity = granularity if granularity in ("day", "week", "month") else "day"
+    safe_category = category if category in ("all", "image", "llm") else "all"
+    clean_user = str(user_id or "").strip() or None
+    clean_model = str(model or "").strip() or None
+
+    with _connect() as conn:
+        img_overrides, llm_overrides = _load_db_pricing_overrides(conn)
+        test_uids = set() if include_test else _test_user_ids_set()
+        user_rows = conn.execute("SELECT id, username FROM users").fetchall()
+        username_map = {str(r["id"]): str(r["username"]) for r in user_rows if r["id"]}
+        display_name_map = _admin_display_name_map()
+
+        img_where = ["status = 'done'"]
+        img_params: list = []
+        llm_where = ["1=1"]
+        llm_params: list = []
+
+        if not all_time:
+            img_where.append("created_at >= ? AND created_at <= ?")
+            img_params.extend([range_start, range_end])
+            llm_where.append("created_at >= ? AND created_at <= ?")
+            llm_params.extend([range_start, range_end])
+
+        if test_uids:
+            ph = ",".join("?" for _ in test_uids)
+            img_where.append(f"(user_id IS NULL OR user_id NOT IN ({ph}))")
+            img_params.extend(test_uids)
+            llm_where.append(f"(user_id IS NULL OR user_id NOT IN ({ph}))")
+            llm_params.extend(test_uids)
+
+        img_rows = conn.execute(
+            f"""
+            SELECT id, user_id, model, provider, resolution, size,
+                   cost, cost_source, input_tokens, output_tokens, total_tokens, created_at
+            FROM ai_image_jobs
+            WHERE {' AND '.join(img_where)}
+            """,
+            tuple(img_params),
+        ).fetchall()
+
+        llm_rows = conn.execute(
+            f"""
+            SELECT id, user_id, source, provider, model,
+                   input_tokens, output_tokens, total_tokens,
+                   cost, cost_source, usage_source, created_at
+            FROM llm_usage_logs
+            WHERE {' AND '.join(llm_where)}
+            """,
+            tuple(llm_params),
+        ).fetchall()
+
+    def _member_label(uid: str) -> tuple[str, str]:
+        uname = username_map.get(uid, uid or "unknown")
+        dname = display_name_map.get(uid) or uname
+        return uname, dname
+
+    # Collect filter options from all records in the time window before applying user/model filters
+    all_member_ids: set[str] = set()
+    all_model_names: set[str] = set()
+    events: list[dict] = []
+
+    for r in img_rows:
+        uid = str(r["user_id"] or "unknown")
+        mname = str(r["model"] or "unknown")
+        all_member_ids.add(uid)
+        all_model_names.add(mname)
+        if safe_category == "llm":
+            continue
+        if clean_user and uid != clean_user:
+            continue
+        if clean_model and mname != clean_model:
+            continue
+        cost_val, cost_src = resolve_image_cost(
+            mname,
+            provider=r["provider"],
+            resolution=r["resolution"],
+            size=r["size"],
+            upstream_cost=r["cost"],
+            db_overrides=img_overrides,
+        )
+        if r["cost"] is not None and r["cost_source"]:
+            cost_src = str(r["cost_source"])
+        in_tok = int(r["input_tokens"] or 0)
+        out_tok = int(r["output_tokens"] or 0)
+        tot_tok = int(r["total_tokens"] or (in_tok + out_tok))
+        events.append({
+            "category": "image",
+            "user_id": uid,
+            "model": mname,
+            "provider": str(r["provider"] or "-"),
+            "cost": cost_val,
+            "cost_source": cost_src,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "total_tokens": tot_tok,
+            "created_at": float(r["created_at"] or now),
+        })
+
+    for r in llm_rows:
+        uid = str(r["user_id"] or "unknown")
+        mname = str(r["model"] or "unknown")
+        all_member_ids.add(uid)
+        all_model_names.add(mname)
+        if safe_category == "image":
+            continue
+        if clean_user and uid != clean_user:
+            continue
+        if clean_model and mname != clean_model:
+            continue
+        in_tok = int(r["input_tokens"] or 0)
+        out_tok = int(r["output_tokens"] or 0)
+        tot_tok = int(r["total_tokens"] or (in_tok + out_tok))
+        cost_val, cost_src = resolve_llm_cost(
+            mname, input_tokens=in_tok, output_tokens=out_tok, upstream_cost=r["cost"],
+            db_overrides=llm_overrides,
+        )
+        if r["cost"] is not None and r["cost_source"]:
+            cost_src = str(r["cost_source"])
+        events.append({
+            "category": "llm",
+            "user_id": uid,
+            "model": mname,
+            "provider": str(r["provider"] or r["source"] or "-"),
+            "cost": cost_val,
+            "cost_source": cost_src,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "total_tokens": tot_tok,
+            "created_at": float(r["created_at"] or now),
+        })
+
+    # Aggregate summary, timeline, by_member, by_model
+    total_cost = 0.0
+    image_cost = 0.0
+    llm_cost = 0.0
+    image_calls = 0
+    llm_calls = 0
+    total_tokens = 0
+    input_tokens = 0
+    output_tokens = 0
+    upstream_count = 0
+    estimated_count = 0
+    free_count = 0
+
+    timeline_map: dict[str, dict] = {}
+    member_map: dict[str, dict] = {}
+    model_map: dict[str, dict] = {}
+
+    for ev in events:
+        c = float(ev["cost"])
+        in_t = ev["input_tokens"]
+        out_t = ev["output_tokens"]
+        tot_t = ev["total_tokens"]
+        cat = ev["category"]
+        uid = ev["user_id"]
+        mname = ev["model"]
+        ts = ev["created_at"]
+
+        total_cost += c
+        total_tokens += tot_t
+        input_tokens += in_t
+        output_tokens += out_t
+        if cat == "image":
+            image_cost += c
+            image_calls += 1
+        else:
+            llm_cost += c
+            llm_calls += 1
+
+        if ev["cost_source"] == "upstream":
+            upstream_count += 1
+        elif ev["cost_source"] == "free":
+            free_count += 1
+        else:
+            estimated_count += 1
+
+        bkey, blabel = _cost_bucket_key(ts, safe_granularity)
+        tb = timeline_map.get(bkey)
+        if not tb:
+            tb = {
+                "bucket": bkey,
+                "label": blabel,
+                "total_cost": 0.0,
+                "image_cost": 0.0,
+                "llm_cost": 0.0,
+                "image_calls": 0,
+                "llm_calls": 0,
+                "total_tokens": 0,
+            }
+            timeline_map[bkey] = tb
+        tb["total_cost"] += c
+        tb["total_tokens"] += tot_t
+        if cat == "image":
+            tb["image_cost"] += c
+            tb["image_calls"] += 1
+        else:
+            tb["llm_cost"] += c
+            tb["llm_calls"] += 1
+
+        mb = member_map.get(uid)
+        if not mb:
+            uname, dname = _member_label(uid)
+            mb = {
+                "user_id": uid,
+                "username": uname,
+                "display_name": dname,
+                "total_cost": 0.0,
+                "image_cost": 0.0,
+                "llm_cost": 0.0,
+                "image_calls": 0,
+                "llm_calls": 0,
+                "total_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "last_active_at": ts,
+                "_models": {},
+            }
+            member_map[uid] = mb
+        mb["total_cost"] += c
+        mb["total_tokens"] += tot_t
+        mb["input_tokens"] += in_t
+        mb["output_tokens"] += out_t
+        if ts > mb["last_active_at"]:
+            mb["last_active_at"] = ts
+        if cat == "image":
+            mb["image_cost"] += c
+            mb["image_calls"] += 1
+        else:
+            mb["llm_cost"] += c
+            mb["llm_calls"] += 1
+
+        mm = mb["_models"].get((mname, cat))
+        if not mm:
+            mm = {"model": mname, "category": cat, "calls": 0, "total_tokens": 0, "cost": 0.0}
+            mb["_models"][(mname, cat)] = mm
+        mm["calls"] += 1
+        mm["total_tokens"] += tot_t
+        mm["cost"] += c
+
+        md_key = f"{cat}::{mname}"
+        md = model_map.get(md_key)
+        if not md:
+            md = {
+                "model": mname,
+                "category": cat,
+                "providers": set(),
+                "calls": 0,
+                "total_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_cost": 0.0,
+                "upstream_count": 0,
+                "estimated_count": 0,
+                "free_count": 0,
+            }
+            model_map[md_key] = md
+        md["calls"] += 1
+        md["total_tokens"] += tot_t
+        md["input_tokens"] += in_t
+        md["output_tokens"] += out_t
+        md["total_cost"] += c
+        if ev["provider"] and ev["provider"] != "-":
+            md["providers"].add(ev["provider"])
+        if ev["cost_source"] == "upstream":
+            md["upstream_count"] += 1
+        elif ev["cost_source"] == "free":
+            md["free_count"] += 1
+        else:
+            md["estimated_count"] += 1
+
+    timeline = []
+    for k in sorted(timeline_map.keys()):
+        item = timeline_map[k]
+        item["total_cost"] = round(item["total_cost"], 4)
+        item["image_cost"] = round(item["image_cost"], 4)
+        item["llm_cost"] = round(item["llm_cost"], 4)
+        timeline.append(item)
+
+    by_member = []
+    for mb in member_map.values():
+        models_list = sorted(mb.pop("_models").values(), key=lambda x: (-x["cost"], -x["calls"]))
+        for m in models_list:
+            m["cost"] = round(m["cost"], 4)
+        mb["total_cost"] = round(mb["total_cost"], 4)
+        mb["image_cost"] = round(mb["image_cost"], 4)
+        mb["llm_cost"] = round(mb["llm_cost"], 4)
+        mb["total_calls"] = mb["image_calls"] + mb["llm_calls"]
+        mb["top_model"] = models_list[0]["model"] if models_list else "-"
+        mb["models"] = models_list
+        mb["share_pct"] = round(mb["total_cost"] * 100 / total_cost, 1) if total_cost > 0 else 0.0
+        by_member.append(mb)
+    by_member.sort(key=lambda x: (-x["total_cost"], -x["total_calls"]))
+
+    by_model = []
+    for md in model_map.values():
+        provs = sorted(md.pop("providers"))
+        md["provider"] = ", ".join(provs) if provs else "-"
+        md["total_cost"] = round(md["total_cost"], 4)
+        md["avg_cost"] = round(md["total_cost"] / md["calls"], 4) if md["calls"] else 0.0
+        md["share_pct"] = round(md["total_cost"] * 100 / total_cost, 1) if total_cost > 0 else 0.0
+        by_model.append(md)
+    by_model.sort(key=lambda x: (-x["total_cost"], -x["calls"]))
+
+    total_calls = image_calls + llm_calls
+    filter_members = []
+    for uid in sorted(all_member_ids):
+        uname, dname = _member_label(uid)
+        filter_members.append({"user_id": uid, "username": uname, "display_name": dname})
+    filter_members.sort(key=lambda x: x["display_name"].casefold())
+
+    return {
+        "currency": "USD",
+        "usd_to_cny": get_usd_to_cny_rate(),
+        "range": {
+            "hours": 0 if all_time else int(hours),
+            "start_date": start_date or "",
+            "end_date": end_date or "",
+            "granularity": safe_granularity,
+            "all_time": all_time,
+        },
+        "summary": {
+            "total_cost": round(total_cost, 4),
+            "image_cost": round(image_cost, 4),
+            "llm_cost": round(llm_cost, 4),
+            "total_calls": total_calls,
+            "image_calls": image_calls,
+            "llm_calls": llm_calls,
+            "total_tokens": total_tokens,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "upstream_cost_count": upstream_count,
+            "estimated_cost_count": estimated_count,
+            "free_count": free_count,
+            "active_members": len(by_member),
+            "active_models": len(by_model),
+            "avg_cost_per_call": round(total_cost / total_calls, 4) if total_calls else None,
+        },
+        "timeline": timeline,
+        "by_member": by_member,
+        "by_model": by_model,
+        "filter_options": {
+            "members": filter_members,
+            "models": sorted(all_model_names),
+        },
+    }
+
+
+def list_admin_model_pricing() -> list[dict]:
+    """List registered model pricing rows plus any observed models without explicit pricing."""
+    from .cost_pricing import normalize_model_key
+
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM model_pricing ORDER BY category ASC, model_key ASC"
+        ).fetchall()
+        items: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for r in rows:
+            cat = str(r["category"] or "image")
+            mkey = str(r["model_key"] or "").strip().lower()
+            seen.add((cat, mkey))
+            items.append({
+                "category": cat,
+                "model_key": mkey,
+                "unit_price": r["unit_price"],
+                "input_per_1m": r["input_per_1m"],
+                "output_per_1m": r["output_per_1m"],
+                "resolution_2k_mult": float(r["resolution_2k_mult"] or 1.5),
+                "resolution_4k_mult": float(r["resolution_4k_mult"] or 2.0),
+                "note": str(r["note"] or ""),
+                "updated_by": str(r["updated_by"] or ""),
+                "updated_at": r["updated_at"],
+                "registered": True,
+            })
+
+        # Discover models observed in ai_image_jobs or llm_usage_logs not yet in model_pricing
+        for r in conn.execute("SELECT DISTINCT model FROM ai_image_jobs WHERE model IS NOT NULL AND model != ''").fetchall():
+            mkey = normalize_model_key(r["model"])
+            if mkey and not mkey.startswith("local-") and ("image", mkey) not in seen:
+                seen.add(("image", mkey))
+                items.append({
+                    "category": "image",
+                    "model_key": mkey,
+                    "unit_price": None,
+                    "input_per_1m": None,
+                    "output_per_1m": None,
+                    "resolution_2k_mult": 1.5,
+                    "resolution_4k_mult": 2.0,
+                    "note": "未登记单价（当前按默认兜底估算）",
+                    "updated_by": "",
+                    "updated_at": None,
+                    "registered": False,
+                })
+        for r in conn.execute("SELECT DISTINCT model FROM llm_usage_logs WHERE model IS NOT NULL AND model != ''").fetchall():
+            mkey = normalize_model_key(r["model"])
+            if mkey and ("llm", mkey) not in seen:
+                seen.add(("llm", mkey))
+                items.append({
+                    "category": "llm",
+                    "model_key": mkey,
+                    "unit_price": None,
+                    "input_per_1m": None,
+                    "output_per_1m": None,
+                    "resolution_2k_mult": 1.5,
+                    "resolution_4k_mult": 2.0,
+                    "note": "未登记单价（当前按默认兜底估算）",
+                    "updated_by": "",
+                    "updated_at": None,
+                    "registered": False,
+                })
+    return items
+
+
+def save_admin_model_pricing(
+    *,
+    category: str,
+    model_key: str,
+    unit_price: float | None = None,
+    input_per_1m: float | None = None,
+    output_per_1m: float | None = None,
+    resolution_2k_mult: float = 1.5,
+    resolution_4k_mult: float = 2.0,
+    note: str = "",
+    updated_by: str = "",
+    sync_history: bool = True,
+) -> dict:
+    """Register or update a model's price and optionally sync historical non-upstream records in DB."""
+    from .cost_pricing import estimate_image_cost, estimate_llm_cost, normalize_model_key
+
+    cat = "llm" if str(category).strip().lower() == "llm" else "image"
+    clean_key = normalize_model_key(model_key)
+    if not clean_key or clean_key == "unknown":
+        raise ValueError("模型名称不能为空")
+
+    now = time.time()
+    m2k = max(0.0, float(resolution_2k_mult if resolution_2k_mult is not None else 1.5))
+    m4k = max(0.0, float(resolution_4k_mult if resolution_4k_mult is not None else 2.0))
+    clean_note = str(note or "").strip()
+
+    if cat == "image":
+        if unit_price is None or float(unit_price) < 0:
+            raise ValueError("生图模型单价不能为负数")
+        u_price = round(float(unit_price), 6)
+        in_p = None
+        out_p = None
+    else:
+        if input_per_1m is None or output_per_1m is None or float(input_per_1m) < 0 or float(output_per_1m) < 0:
+            raise ValueError("对话模型输入/输出单价不能为负数")
+        u_price = None
+        in_p = round(float(input_per_1m), 6)
+        out_p = round(float(output_per_1m), 6)
+
+    synced_count = 0
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO model_pricing (
+                category, model_key, unit_price, input_per_1m, output_per_1m,
+                resolution_2k_mult, resolution_4k_mult, note, updated_by, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(category, model_key) DO UPDATE SET
+                unit_price = excluded.unit_price,
+                input_per_1m = excluded.input_per_1m,
+                output_per_1m = excluded.output_per_1m,
+                resolution_2k_mult = excluded.resolution_2k_mult,
+                resolution_4k_mult = excluded.resolution_4k_mult,
+                note = excluded.note,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (cat, clean_key, u_price, in_p, out_p, m2k, m4k, clean_note, str(updated_by or ""), now),
+        )
+
+        if sync_history:
+            img_overrides, llm_overrides = _load_db_pricing_overrides(conn)
+            if cat == "image":
+                rows = conn.execute(
+                    """
+                    SELECT id, model, provider, resolution, size, cost_source
+                    FROM ai_image_jobs
+                    WHERE status = 'done' AND (cost_source IS NULL OR cost_source != 'upstream')
+                    """
+                ).fetchall()
+                for r in rows:
+                    if normalize_model_key(r["model"]) != clean_key:
+                        continue
+                    new_cost, new_src = estimate_image_cost(
+                        r["model"],
+                        provider=r["provider"],
+                        resolution=r["resolution"],
+                        size=r["size"],
+                        db_overrides=img_overrides,
+                    )
+                    conn.execute(
+                        "UPDATE ai_image_jobs SET cost = ?, cost_source = ?, updated_at = ? WHERE id = ?",
+                        (new_cost, new_src, now, r["id"]),
+                    )
+                    synced_count += 1
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, model, input_tokens, output_tokens, cost_source
+                    FROM llm_usage_logs
+                    WHERE cost_source IS NULL OR cost_source != 'upstream'
+                    """
+                ).fetchall()
+                for r in rows:
+                    if normalize_model_key(r["model"]) != clean_key:
+                        continue
+                    new_cost, new_src = estimate_llm_cost(
+                        r["model"],
+                        input_tokens=int(r["input_tokens"] or 0),
+                        output_tokens=int(r["output_tokens"] or 0),
+                        db_overrides=llm_overrides,
+                    )
+                    conn.execute(
+                        "UPDATE llm_usage_logs SET cost = ?, cost_source = ? WHERE id = ?",
+                        (new_cost, new_src, r["id"]),
+                    )
+                    synced_count += 1
+
+        conn.commit()
+        saved_row = conn.execute(
+            "SELECT * FROM model_pricing WHERE category = ? AND model_key = ?",
+            (cat, clean_key),
+        ).fetchone()
+
+    item = dict(saved_row) if saved_row else {}
+    item["registered"] = True
+    return {"item": item, "synced_count": synced_count}
+
+
 

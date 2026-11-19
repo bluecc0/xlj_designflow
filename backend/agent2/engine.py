@@ -111,6 +111,7 @@ class ModelStep:
     text: str = ""
     tool_calls: list[dict] = field(default_factory=list)
     route: dict = field(default_factory=dict)
+    usage: dict = field(default_factory=dict)
 
 
 class ModelClient(Protocol):
@@ -139,6 +140,7 @@ class RoutedModelClient:
             text_parts: list[str] = []
             calls: dict[int, dict] = {}
             finished = False
+            usage_data: dict | None = None
             try:
                 body = _payload(route, {"messages": messages, "tools": tools, "temperature": 0.4}, stream=True)
                 if self.require_tool_once and tools:
@@ -163,6 +165,8 @@ class RoutedModelClient:
                             chunk = json.loads(raw)
                             # 顶层 error 或 finish_reason=error 都是失败：丢弃本线路的文字和工具调用，换下一条
                             _check_response_error(chunk)
+                            if isinstance(chunk.get("usage"), dict):
+                                usage_data = chunk["usage"]
                             for choice in chunk.get("choices") or []:
                                 delta = choice.get("delta") or choice.get("message") or {}
                                 content = delta.get("content")
@@ -193,8 +197,32 @@ class RoutedModelClient:
                     raise ModelRoutingError("模型未遵守工具调用约束：只返回文字，未实际执行")
                 route_succeeded(route)
                 self.require_tool_once = False
-                yield ("step", ModelStep(text="".join(text_parts), tool_calls=tool_calls,
-                                         route={"provider": route.provider, "model": route.model}))
+                full_text = "".join(text_parts)
+                if isinstance(usage_data, dict):
+                    in_tok = int(usage_data.get("prompt_tokens") or usage_data.get("input_tokens") or 0)
+                    out_tok = int(usage_data.get("completion_tokens") or usage_data.get("output_tokens") or 0)
+                    tot_tok = int(usage_data.get("total_tokens") or (in_tok + out_tok))
+                    step_usage = {
+                        "input_tokens": in_tok,
+                        "output_tokens": out_tok,
+                        "total_tokens": tot_tok,
+                        "cost": usage_data.get("cost"),
+                        "usage_source": "upstream",
+                    }
+                else:
+                    from .context import estimate_tokens
+                    in_tok = estimate_tokens(messages)
+                    out_chars = len(full_text) + sum(len(c["name"]) + len(c["arguments"]) for c in tool_calls)
+                    out_tok = max(1, out_chars // 3)
+                    step_usage = {
+                        "input_tokens": in_tok,
+                        "output_tokens": out_tok,
+                        "total_tokens": in_tok + out_tok,
+                        "usage_source": "estimated",
+                    }
+                yield ("step", ModelStep(text=full_text, tool_calls=tool_calls,
+                                         route={"provider": route.provider, "model": route.model},
+                                         usage=step_usage))
                 return
             except (httpx.HTTPError, ValueError, ModelRoutingError) as exc:
                 reason = str(exc) if isinstance(exc, ModelRoutingError) else type(exc).__name__
@@ -309,6 +337,25 @@ async def run_loop(
                     raise
                 logger.warning("[agent2] context overflow, forcing compaction")
         assert step is not None
+        if isinstance(step.usage, dict) and step.usage:
+            try:
+                from ..job_store import record_llm_usage
+                u = ctx_base.get("user") or {}
+                record_llm_usage(
+                    user_id=u.get("id") if isinstance(u, dict) else None,
+                    session_id=ctx_base.get("session_id"),
+                    turn_id=ctx_base.get("turn_id"),
+                    source="agent2",
+                    provider=step.route.get("provider") if isinstance(step.route, dict) else None,
+                    model=(step.route.get("model") if isinstance(step.route, dict) else None) or "unknown",
+                    input_tokens=int(step.usage.get("input_tokens") or 0),
+                    output_tokens=int(step.usage.get("output_tokens") or 0),
+                    total_tokens=int(step.usage.get("total_tokens") or 0),
+                    cost=step.usage.get("cost"),
+                    usage_source=str(step.usage.get("usage_source") or "upstream"),
+                )
+            except Exception:
+                logger.exception("[agent2] failed to record llm usage")
         if note in messages:  # 纠正提示只给模型看这一次，不进会话历史
             messages.remove(note)
         logger.info("[agent2] turn %s step via %s tools=%s", ctx_base.get("turn_id"), step.route,

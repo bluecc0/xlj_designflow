@@ -1033,6 +1033,30 @@ function AdminPage({ user, onBack }) {
   var [updatedAt, setUpdatedAt] = React.useState(null);
 
   var [showTestUsers, setShowTestUsers] = React.useState(false);
+  var [costCenter, setCostCenter] = React.useState(null);
+  var [costFilters, setCostFilters] = React.useState({
+    hours: 168,
+    granularity: 'day',
+    userId: '',
+    model: '',
+    category: 'all',
+    currency: 'USD',
+    includeTest: false,
+  });
+  var [expandedMemberCost, setExpandedMemberCost] = React.useState({});
+  var [pricingOpen, setPricingOpen] = React.useState(false);
+  var [pricingItems, setPricingItems] = React.useState([]);
+  var [pricingEdits, setPricingEdits] = React.useState({});
+  var [pricingSavingKey, setPricingSavingKey] = React.useState('');
+  var [pricingNotice, setPricingNotice] = React.useState('');
+  var [newPricing, setNewPricing] = React.useState({
+    category: 'image',
+    model_key: '',
+    unit_price: '0.04',
+    input_per_1m: '1.0',
+    output_per_1m: '4.0',
+    note: '',
+  });
 
   var loadUsers = React.useCallback(function(includeTest) {
     var queryInclude = includeTest !== undefined ? includeTest : showTestUsers;
@@ -1150,6 +1174,109 @@ function AdminPage({ user, onBack }) {
     if (view === 'memories') loadMemories();
   }, [view, loadMemories]);
 
+  var loadCostCenter = React.useCallback(function() {
+    setLoading(true); setError('');
+    return window.API.getAdminCostCenter({
+      hours: costFilters.hours,
+      granularity: costFilters.granularity,
+      userId: costFilters.userId,
+      model: costFilters.model,
+      category: costFilters.category,
+      includeTest: costFilters.includeTest,
+    })
+      .then(function(data) { setCostCenter(data); setUpdatedAt(Date.now()); })
+      .catch(function(err) { setError(err.message || '成本中心数据加载失败'); })
+      .finally(function() { setLoading(false); });
+  }, [costFilters.hours, costFilters.granularity, costFilters.userId, costFilters.model, costFilters.category, costFilters.includeTest]);
+
+  React.useEffect(function() {
+    if (view === 'cost') loadCostCenter();
+  }, [view, loadCostCenter]);
+
+  var loadCostPricing = React.useCallback(function() {
+    return window.API.getAdminCostPricing()
+      .then(function(data) {
+        var list = data.items || [];
+        setPricingItems(list);
+        var edits = {};
+        list.forEach(function(it) {
+          var k = it.category + ':' + it.model_key;
+          edits[k] = {
+            unit_price: it.unit_price != null ? String(it.unit_price) : '0.04',
+            input_per_1m: it.input_per_1m != null ? String(it.input_per_1m) : '1.0',
+            output_per_1m: it.output_per_1m != null ? String(it.output_per_1m) : '4.0',
+            resolution_2k_mult: it.resolution_2k_mult != null ? String(it.resolution_2k_mult) : '1.5',
+            resolution_4k_mult: it.resolution_4k_mult != null ? String(it.resolution_4k_mult) : '2.0',
+            note: it.note || '',
+          };
+        });
+        setPricingEdits(edits);
+      })
+      .catch(function(err) { setError(err.message || '模型价格列表加载失败'); });
+  }, []);
+
+  React.useEffect(function() {
+    if (view === 'cost' && pricingOpen) loadCostPricing();
+  }, [view, pricingOpen, loadCostPricing]);
+
+  var handleSavePricing = function(item) {
+    var k = item.category + ':' + item.model_key;
+    var draft = pricingEdits[k] || {};
+    setPricingSavingKey(k);
+    setPricingNotice('');
+    setError('');
+    var payload = {
+      category: item.category,
+      model_key: item.model_key,
+      note: draft.note || '',
+      sync_history: true,
+    };
+    if (item.category === 'llm') {
+      payload.input_per_1m = Number(draft.input_per_1m || 0);
+      payload.output_per_1m = Number(draft.output_per_1m || 0);
+    } else {
+      payload.unit_price = Number(draft.unit_price || 0);
+      payload.resolution_2k_mult = Number(draft.resolution_2k_mult || 1.5);
+      payload.resolution_4k_mult = Number(draft.resolution_4k_mult || 2.0);
+    }
+    return window.API.saveAdminCostPricing(payload)
+      .then(function(res) {
+        setPricingNotice('已保存「' + item.model_key + '」单价，并同步重算 ' + (res.synced_count || 0) + ' 条非上游直出历史记录');
+        return Promise.all([loadCostPricing(), loadCostCenter()]);
+      })
+      .catch(function(err) { setError(err.message || '保存模型价格失败'); })
+      .finally(function() { setPricingSavingKey(''); });
+  };
+
+  var handleAddNewPricing = function(e) {
+    e.preventDefault();
+    if (!String(newPricing.model_key || '').trim()) return;
+    var k = '__new__';
+    setPricingSavingKey(k);
+    setPricingNotice('');
+    setError('');
+    var payload = {
+      category: newPricing.category,
+      model_key: String(newPricing.model_key).trim(),
+      note: newPricing.note || '后台手动登记',
+      sync_history: true,
+    };
+    if (newPricing.category === 'llm') {
+      payload.input_per_1m = Number(newPricing.input_per_1m || 0);
+      payload.output_per_1m = Number(newPricing.output_per_1m || 0);
+    } else {
+      payload.unit_price = Number(newPricing.unit_price || 0);
+    }
+    return window.API.saveAdminCostPricing(payload)
+      .then(function(res) {
+        setPricingNotice('已新增并保存「' + payload.model_key + '」单价，同步更新 ' + (res.synced_count || 0) + ' 条历史记录');
+        setNewPricing(Object.assign({}, newPricing, { model_key: '', note: '' }));
+        return Promise.all([loadCostPricing(), loadCostCenter()]);
+      })
+      .catch(function(err) { setError(err.message || '新增模型价格失败'); })
+      .finally(function() { setPricingSavingKey(''); });
+  };
+
   React.useEffect(function() {
     if (!selectedSkill) { setSkillDetail(null); setSkillDetailError(''); return; }
     var cancelled = false;
@@ -1210,6 +1337,7 @@ function AdminPage({ user, onBack }) {
 
   var navItems = [
     ['overview', '运营总览', I.grid],
+    ['cost', '成本中心', I.zap],
     ['tasks', '任务中心', I.layers],
     ['services', '服务状态', I.zap],
     ['users', '用户权限', I.user],
@@ -1219,6 +1347,7 @@ function AdminPage({ user, onBack }) {
   ];
   var viewTitles = {
     overview: ['运营总览', '任务健康、异常和使用趋势'],
+    cost: ['成本中心', '按成员、时间与模型维度统计调用与费用'],
     tasks: ['任务中心', '跨业务查询所有持久化任务'],
     services: ['服务状态', '本机资源与外部依赖连通性'],
     users: ['用户权限', '账号、角色和使用情况'],
@@ -1228,6 +1357,7 @@ function AdminPage({ user, onBack }) {
   };
 
   var doRefresh = function() {
+    if (view === 'cost') return loadCostCenter();
     if (view === 'tasks') return loadTasks();
     if (view === 'audit') return loadOperations();
     if (view === 'users') return loadUsers();
@@ -1564,6 +1694,395 @@ function AdminPage({ user, onBack }) {
     );
   };
 
+  var formatCostAmount = function(usdVal) {
+    var val = Number(usdVal || 0);
+    var rate = (costCenter && costCenter.usd_to_cny) || 7.2;
+    if (costFilters.currency === 'CNY') {
+      return '¥' + (val * rate).toFixed(2);
+    }
+    return '$' + val.toFixed(4).replace(/0+$/, '').replace(/\.$/, '.00');
+  };
+
+  var formatCompactTokens = function(n) {
+    var num = Number(n || 0);
+    if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return String(num);
+  };
+
+  var renderCostCenter = function() {
+    if (!costCenter) return <AdminEmpty text={loading ? '正在加载成本中心数据…' : '成本中心数据暂不可用'} />;
+    var cs = costCenter.summary || {};
+    var timeline = costCenter.timeline || [];
+    var byMember = costCenter.by_member || [];
+    var byModel = costCenter.by_model || [];
+    var opts = costCenter.filter_options || {};
+    var maxBucketCost = timeline.reduce(function(acc, item) { return Math.max(acc, Number(item.total_cost || 0)); }, 0) || 1;
+    var setCostFilter = function(key, value) {
+      setCostFilters(function(prev) { return Object.assign({}, prev, { [key]: value }); });
+    };
+
+    return (
+      <>
+        <div className="df-admin-filters">
+          <select className="df-admin-control" value={costFilters.hours} onChange={function(e) { setCostFilter('hours', Number(e.target.value)); }}>
+            <option value="24">今天</option>
+            <option value="168">最近 7 天</option>
+            <option value="720">最近 30 天</option>
+            <option value="0">所有时间</option>
+          </select>
+          <select className="df-admin-control" value={costFilters.granularity} onChange={function(e) { setCostFilter('granularity', e.target.value); }}>
+            <option value="day">按天统计</option>
+            <option value="week">按周统计</option>
+            <option value="month">按月统计</option>
+          </select>
+          <select className="df-admin-control" value={costFilters.category} onChange={function(e) { setCostFilter('category', e.target.value); }}>
+            <option value="all">全部类型</option>
+            <option value="image">仅 AI 生图</option>
+            <option value="llm">仅 Agent 对话</option>
+          </select>
+          <select className="df-admin-control" value={costFilters.userId} onChange={function(e) { setCostFilter('userId', e.target.value); }}>
+            <option value="">全部成员</option>
+            {(opts.members || []).map(function(m) {
+              return <option key={m.user_id} value={m.user_id}>{m.display_name || m.username || m.user_id}</option>;
+            })}
+          </select>
+          <select className="df-admin-control" value={costFilters.model} onChange={function(e) { setCostFilter('model', e.target.value); }}>
+            <option value="">全部模型</option>
+            {(opts.models || []).map(function(m) {
+              return <option key={m} value={m}>{m}</option>;
+            })}
+          </select>
+          <select className="df-admin-control" value={costFilters.currency} onChange={function(e) { setCostFilter('currency', e.target.value); }}>
+            <option value="USD">美元 (USD)</option>
+            <option value="CNY">人民币 (CNY)</option>
+          </select>
+          <label className="df-admin-control" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input type="checkbox" checked={!!costFilters.includeTest} onChange={function(e) { setCostFilter('includeTest', e.target.checked); }} />
+            <span>含测试账号</span>
+          </label>
+          <button
+            className="df-admin-control"
+            style={pricingOpen ? { background: '#262925', color: '#fff', borderColor: '#262925' } : {}}
+            onClick={function() { setPricingOpen(function(v) { return !v; }); }}
+          >
+            {pricingOpen ? '收起模型价格配置' : '模型价格登记与同步'}
+          </button>
+        </div>
+
+        {pricingOpen ? (
+          <section className="df-admin-card" style={{ marginBottom: 14, padding: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 12, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 650 }}>模型价格登记与数据库同步</div>
+                <div className="df-admin-muted" style={{ fontSize: 11 }}>
+                  上游未返回真实账单时按此处单价计算；保存后会自动同步重算数据库中非上游直出成本的历史记录（单位：USD）。
+                </div>
+              </div>
+              {pricingNotice ? <span style={{ fontSize: 11, color: '#2b6b3a', fontWeight: 600 }}>{pricingNotice}</span> : null}
+            </div>
+
+            <form onSubmit={handleAddNewPricing} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 12, padding: 10, background: '#fafaf8', borderRadius: 8 }}>
+              <select className="df-admin-control" value={newPricing.category} onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { category: e.target.value })); }}>
+                <option value="image">AI 生图（按次）</option>
+                <option value="llm">Agent 对话（按 1M Token）</option>
+              </select>
+              <input
+                className="df-admin-control"
+                style={{ minWidth: 180 }}
+                placeholder="模型名称，如 gpt-image-2.6"
+                value={newPricing.model_key}
+                onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { model_key: e.target.value })); }}
+              />
+              {newPricing.category === 'image' ? (
+                <input
+                  className="df-admin-control"
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  style={{ width: 120 }}
+                  placeholder="单次价格 ($)"
+                  value={newPricing.unit_price}
+                  onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { unit_price: e.target.value })); }}
+                />
+              ) : (
+                <>
+                  <input
+                    className="df-admin-control"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    style={{ width: 120 }}
+                    placeholder="输入 $/1M"
+                    value={newPricing.input_per_1m}
+                    onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { input_per_1m: e.target.value })); }}
+                  />
+                  <input
+                    className="df-admin-control"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    style={{ width: 120 }}
+                    placeholder="输出 $/1M"
+                    value={newPricing.output_per_1m}
+                    onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { output_per_1m: e.target.value })); }}
+                  />
+                </>
+              )}
+              <input
+                className="df-admin-control"
+                style={{ minWidth: 160, flex: 1 }}
+                placeholder="备注（可选）"
+                value={newPricing.note}
+                onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { note: e.target.value })); }}
+              />
+              <button className="df-admin-control" type="submit" disabled={pricingSavingKey === '__new__' || !String(newPricing.model_key || '').trim()} style={{ background: '#262925', color: '#fff', borderColor: '#262925' }}>
+                {pricingSavingKey === '__new__' ? '保存中…' : '登记并同步'}
+              </button>
+            </form>
+
+            <div className="df-admin-tablewrap">
+              <table className="df-admin-table">
+                <thead>
+                  <tr>
+                    <th>模型</th>
+                    <th>类型</th>
+                    <th>状态</th>
+                    <th>单价设置 (USD)</th>
+                    <th>备注</th>
+                    <th>最近更新</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pricingItems.map(function(it) {
+                    var k = it.category + ':' + it.model_key;
+                    var draft = pricingEdits[k] || {};
+                    var setDraft = function(field, val) {
+                      setPricingEdits(function(prev) {
+                        var next = Object.assign({}, prev);
+                        next[k] = Object.assign({}, next[k] || {}, { [field]: val });
+                        return next;
+                      });
+                    };
+                    return (
+                      <tr key={k}>
+                        <td style={{ fontWeight: 600 }}>{it.model_key}</td>
+                        <td>{it.category === 'llm' ? 'Agent 对话' : 'AI 生图'}</td>
+                        <td>
+                          {it.registered
+                            ? <span className="df-admin-muted">已登记</span>
+                            : <span style={{ color: '#b45309', fontWeight: 600 }}>未登记</span>}
+                        </td>
+                        <td>
+                          {it.category === 'llm' ? (
+                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                              <span className="df-admin-muted">入</span>
+                              <input className="df-admin-control" type="number" step="0.01" min="0" style={{ width: 78, height: 28 }} value={draft.input_per_1m || ''} onChange={function(e) { setDraft('input_per_1m', e.target.value); }} />
+                              <span className="df-admin-muted">出</span>
+                              <input className="df-admin-control" type="number" step="0.01" min="0" style={{ width: 78, height: 28 }} value={draft.output_per_1m || ''} onChange={function(e) { setDraft('output_per_1m', e.target.value); }} />
+                              <span className="df-admin-muted" style={{ fontSize: 10 }}>$/1M</span>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                              <input className="df-admin-control" type="number" step="0.0001" min="0" style={{ width: 88, height: 28 }} value={draft.unit_price || ''} onChange={function(e) { setDraft('unit_price', e.target.value); }} />
+                              <span className="df-admin-muted" style={{ fontSize: 10 }}>$/次</span>
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          <input className="df-admin-control" style={{ width: 150, height: 28 }} value={draft.note || ''} onChange={function(e) { setDraft('note', e.target.value); }} />
+                        </td>
+                        <td className="df-admin-muted" style={{ fontSize: 11 }}>
+                          {it.updated_at ? (it.updated_by || '-') + ' · ' + adminFormatTime(it.updated_at, false) : '-'}
+                        </td>
+                        <td>
+                          <button className="df-admin-linkbutton" disabled={pricingSavingKey === k} onClick={function() { handleSavePricing(it); }}>
+                            {pricingSavingKey === k ? '同步中…' : '保存并同步'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
+
+        <section className="df-admin-metrics">
+          <div className="df-admin-metriccard">
+            <div className="df-admin-metriclabel">总费用 ({costFilters.currency})</div>
+            <div className="df-admin-metricvalue">{formatCostAmount(cs.total_cost)}</div>
+            <div className="df-admin-metricfoot">
+              真实账单 {cs.upstream_cost_count || 0} 笔 · 估算 {cs.estimated_cost_count || 0} 笔
+            </div>
+          </div>
+          <div className="df-admin-metriccard">
+            <div className="df-admin-metriclabel">总调用次数</div>
+            <div className="df-admin-metricvalue">{cs.total_calls || 0}</div>
+            <div className="df-admin-metricfoot">
+              生图 {cs.image_calls || 0} 次 ({formatCostAmount(cs.image_cost)}) · 对话 {cs.llm_calls || 0} 次 ({formatCostAmount(cs.llm_cost)})
+            </div>
+          </div>
+          <div className="df-admin-metriccard">
+            <div className="df-admin-metriclabel">Token 总消耗</div>
+            <div className="df-admin-metricvalue">{formatCompactTokens(cs.total_tokens || 0)}</div>
+            <div className="df-admin-metricfoot">
+              输入 {formatCompactTokens(cs.input_tokens || 0)} · 输出 {formatCompactTokens(cs.output_tokens || 0)}
+            </div>
+          </div>
+          <div className="df-admin-metriccard">
+            <div className="df-admin-metriclabel">活跃成员 / 模型</div>
+            <div className="df-admin-metricvalue">{cs.active_members || 0} / {cs.active_models || 0}</div>
+            <div className="df-admin-metricfoot">
+              单次均价 {cs.avg_cost_per_call != null ? formatCostAmount(cs.avg_cost_per_call) : '-'}
+            </div>
+          </div>
+        </section>
+
+        <section className="df-admin-card" style={{ marginTop: 14, padding: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 650 }}>时间维度费用趋势</div>
+              <div className="df-admin-muted" style={{ fontSize: 11 }}>
+                按{costFilters.granularity === 'month' ? '月' : (costFilters.granularity === 'week' ? '周' : '天')}聚合（深色为生图，浅色为对话）
+              </div>
+            </div>
+            <div className="df-admin-muted" style={{ fontSize: 11 }}>共 {timeline.length} 个周期</div>
+          </div>
+          {timeline.length ? (
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 150, paddingTop: 14, overflowX: 'auto' }}>
+              {timeline.map(function(item) {
+                var totalH = Math.max(4, Math.round((Number(item.total_cost || 0) / maxBucketCost) * 108));
+                var imgH = item.total_cost > 0 ? Math.round((Number(item.image_cost || 0) / item.total_cost) * totalH) : 0;
+                var llmH = Math.max(0, totalH - imgH);
+                var tip = item.bucket + ' · 总计 ' + formatCostAmount(item.total_cost) + '（生图 ' + item.image_calls + ' 次 / 对话 ' + item.llm_calls + ' 次）';
+                return (
+                  <div key={item.bucket} title={tip} style={{ flex: '1 0 38px', maxWidth: 64, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
+                    <div className="df-admin-muted" style={{ fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>{formatCostAmount(item.total_cost)}</div>
+                    <div style={{ width: '68%', height: totalH, display: 'flex', flexDirection: 'column-reverse', borderRadius: 4, overflow: 'hidden', background: '#eff0ec' }}>
+                      {imgH > 0 ? <div style={{ height: imgH, background: '#262925' }} /> : null}
+                      {llmH > 0 ? <div style={{ height: llmH, background: '#7d8a79' }} /> : null}
+                    </div>
+                    <div className="df-admin-muted" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>{item.label}</div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : <AdminEmpty text="当前时间范围内暂无调用记录" />}
+        </section>
+
+        <section className="df-admin-card" style={{ marginTop: 14 }}>
+          <div style={{ padding: '14px 16px 6px', fontSize: 13, fontWeight: 650 }}>模型维度明细（{byModel.length}）</div>
+          {byModel.length ? (
+            <div className="df-admin-tablewrap">
+              <table className="df-admin-table">
+                <thead>
+                  <tr>
+                    <th>模型</th>
+                    <th>类型</th>
+                    <th>线路 / Provider</th>
+                    <th>调用次数</th>
+                    <th>Token 消耗</th>
+                    <th>单次均价</th>
+                    <th>总费用</th>
+                    <th>费用占比</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {byModel.map(function(m) {
+                    return (
+                      <tr key={m.category + ':' + m.model}>
+                        <td style={{ fontWeight: 600 }}>{m.model}</td>
+                        <td>{m.category === 'image' ? 'AI 生图' : 'Agent 对话'}</td>
+                        <td className="df-admin-muted">{m.provider || '-'}</td>
+                        <td style={{ fontVariantNumeric: 'tabular-nums' }}>{m.calls}</td>
+                        <td className="df-admin-muted" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCompactTokens(m.total_tokens)}</td>
+                        <td className="df-admin-muted" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCostAmount(m.avg_cost)}</td>
+                        <td style={{ fontWeight: 650, fontVariantNumeric: 'tabular-nums' }}>{formatCostAmount(m.total_cost)}</td>
+                        <td style={{ minWidth: 110 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div style={{ flex: 1, height: 6, borderRadius: 99, background: '#eff0ec', overflow: 'hidden' }}>
+                              <div style={{ width: Math.min(100, m.share_pct || 0) + '%', height: '100%', background: '#262925' }} />
+                            </div>
+                            <span className="df-admin-muted" style={{ fontSize: 11, width: 38, textAlign: 'right' }}>{m.share_pct}%</span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : <AdminEmpty text="暂无模型消费记录" />}
+        </section>
+
+        <section className="df-admin-card" style={{ marginTop: 14 }}>
+          <div style={{ padding: '14px 16px 6px', fontSize: 13, fontWeight: 650 }}>成员维度统计（{byMember.length}）</div>
+          {byMember.length ? (
+            <div className="df-admin-tablewrap">
+              <table className="df-admin-table">
+                <thead>
+                  <tr>
+                    <th>成员</th>
+                    <th>总调用 (生图 / 对话)</th>
+                    <th>Token 消耗</th>
+                    <th>主力模型</th>
+                    <th>总费用</th>
+                    <th>占比</th>
+                    <th>模型拆分</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {byMember.map(function(u) {
+                    var expanded = !!expandedMemberCost[u.user_id];
+                    return (
+                      <React.Fragment key={u.user_id}>
+                        <tr>
+                          <td style={{ fontWeight: 600 }}>{u.display_name || u.username || u.user_id}</td>
+                          <td style={{ fontVariantNumeric: 'tabular-nums' }}>{u.total_calls} <span className="df-admin-muted">({u.image_calls} / {u.llm_calls})</span></td>
+                          <td className="df-admin-muted" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCompactTokens(u.total_tokens)}</td>
+                          <td className="df-admin-muted">{u.top_model || '-'}</td>
+                          <td style={{ fontWeight: 650, fontVariantNumeric: 'tabular-nums' }}>{formatCostAmount(u.total_cost)}</td>
+                          <td className="df-admin-muted" style={{ fontVariantNumeric: 'tabular-nums' }}>{u.share_pct}%</td>
+                          <td>
+                            <button className="df-admin-linkbutton" onClick={function() {
+                              setExpandedMemberCost(function(prev) {
+                                var next = Object.assign({}, prev);
+                                next[u.user_id] = !next[u.user_id];
+                                return next;
+                              });
+                            }}>{expanded ? '收起' : '查看明细 (' + (u.models || []).length + ')'}</button>
+                          </td>
+                        </tr>
+                        {expanded ? (
+                          <tr>
+                            <td colSpan="7" style={{ background: '#fafaf8', padding: '10px 16px' }}>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                {(u.models || []).map(function(mm) {
+                                  return (
+                                    <span key={mm.category + ':' + mm.model} className="df-admin-control" style={{ height: 'auto', padding: '4px 10px', fontSize: 11 }}>
+                                      <strong>{mm.model}</strong> · {mm.category === 'image' ? '生图' : '对话'} {mm.calls} 次 · {formatCompactTokens(mm.total_tokens)} tok · <strong>{formatCostAmount(mm.cost)}</strong>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : <AdminEmpty text="暂无成员消费记录" />}
+        </section>
+      </>
+    );
+  };
+
   return (
     <div className="df-admin">
       <style>{ADMIN_CSS}</style>
@@ -1605,6 +2124,7 @@ function AdminPage({ user, onBack }) {
           <div className="df-admin-content">
             {error ? <div className="df-admin-error">{error}</div> : null}
             {view === 'overview' ? renderOverview() : null}
+            {view === 'cost' ? renderCostCenter() : null}
             {view === 'tasks' ? renderTasks() : null}
             {view === 'services' ? renderServices() : null}
             {view === 'users' ? <AdminUserManagement currentUser={user} users={users} onReload={function() { return loadUsers(showTestUsers); }} showTestUsers={showTestUsers} onToggleShowTest={handleToggleShowTestUsers} /> : null}
