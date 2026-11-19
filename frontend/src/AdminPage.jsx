@@ -1040,7 +1040,7 @@ function AdminPage({ user, onBack }) {
     userId: '',
     model: '',
     category: 'all',
-    currency: 'USD',
+    currency: 'CNY',
     includeTest: false,
   });
   var [expandedMemberCost, setExpandedMemberCost] = React.useState({});
@@ -1698,7 +1698,11 @@ function AdminPage({ user, onBack }) {
     var val = Number(usdVal || 0);
     var rate = (costCenter && costCenter.usd_to_cny) || 7.2;
     if (costFilters.currency === 'CNY') {
-      return '¥' + (val * rate).toFixed(2);
+      var cny = val * rate;
+      if (cny > 0 && cny < 0.05) {
+        return '¥' + cny.toFixed(3);
+      }
+      return '¥' + cny.toFixed(2);
     }
     return '$' + val.toFixed(4).replace(/0+$/, '').replace(/\.$/, '.00');
   };
@@ -1724,7 +1728,7 @@ function AdminPage({ user, onBack }) {
 
     return (
       <>
-        <div className="df-admin-filters">
+        <div className="df-admin-toolbar">
           <select className="df-admin-control" value={costFilters.hours} onChange={function(e) { setCostFilter('hours', Number(e.target.value)); }}>
             <option value="24">今天</option>
             <option value="168">最近 7 天</option>
@@ -1754,16 +1758,16 @@ function AdminPage({ user, onBack }) {
             })}
           </select>
           <select className="df-admin-control" value={costFilters.currency} onChange={function(e) { setCostFilter('currency', e.target.value); }}>
+            <option value="CNY">人民币 (CNY · 1:7.2 预估)</option>
             <option value="USD">美元 (USD)</option>
-            <option value="CNY">人民币 (CNY)</option>
           </select>
-          <label className="df-admin-control" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+          <label className="df-admin-control" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', boxSizing: 'border-box' }}>
             <input type="checkbox" checked={!!costFilters.includeTest} onChange={function(e) { setCostFilter('includeTest', e.target.checked); }} />
             <span>含测试账号</span>
           </label>
           <button
             className="df-admin-control"
-            style={pricingOpen ? { background: '#262925', color: '#fff', borderColor: '#262925' } : {}}
+            style={pricingOpen ? { marginLeft: 'auto', background: '#262925', color: '#fff', borderColor: '#262925' } : { marginLeft: 'auto' }}
             onClick={function() { setPricingOpen(function(v) { return !v; }); }}
           >
             {pricingOpen ? '收起模型价格配置' : '模型价格登记与同步'}
@@ -1771,25 +1775,21 @@ function AdminPage({ user, onBack }) {
         </div>
 
         {pricingOpen ? (
-          <section className="df-admin-card" style={{ marginBottom: 14, padding: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 12, flexWrap: 'wrap' }}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 650 }}>模型价格登记与数据库同步</div>
-                <div className="df-admin-muted" style={{ fontSize: 11 }}>
-                  上游未返回真实账单时按此处单价计算；保存后会自动同步重算数据库中非上游直出成本的历史记录（单位：USD）。
-                </div>
-              </div>
-              {pricingNotice ? <span style={{ fontSize: 11, color: '#2b6b3a', fontWeight: 600 }}>{pricingNotice}</span> : null}
+          <section className="df-admin-card" style={{ marginBottom: 10 }}>
+            <div className="df-admin-cardhead">
+              <div className="df-admin-cardtitle">模型价格登记与数据库同步</div>
+              <div className="df-admin-cardmeta">上游未返回真实账单时按此处单价计算；保存后同步重算非上游直出历史记录（USD）</div>
+              {pricingNotice ? <span style={{ marginLeft: 'auto', fontSize: 11, color: '#157a4e', fontWeight: 600 }}>{pricingNotice}</span> : null}
             </div>
 
-            <form onSubmit={handleAddNewPricing} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 12, padding: 10, background: '#fafaf8', borderRadius: 8 }}>
-              <select className="df-admin-control" value={newPricing.category} onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { category: e.target.value })); }}>
+            <form onSubmit={handleAddNewPricing} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', padding: '12px 16px', background: '#fafaf8', borderBottom: '1px solid var(--admin-line)' }}>
+              <select className="df-admin-control" style={{ boxSizing: 'border-box' }} value={newPricing.category} onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { category: e.target.value })); }}>
                 <option value="image">AI 生图（按次）</option>
                 <option value="llm">Agent 对话（按 1M Token）</option>
               </select>
               <input
                 className="df-admin-control"
-                style={{ minWidth: 180 }}
+                style={{ width: 190, boxSizing: 'border-box' }}
                 placeholder="模型名称，如 gpt-image-2.6"
                 value={newPricing.model_key}
                 onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { model_key: e.target.value })); }}
@@ -1800,7 +1800,7 @@ function AdminPage({ user, onBack }) {
                   type="number"
                   step="0.0001"
                   min="0"
-                  style={{ width: 120 }}
+                  style={{ width: 120, boxSizing: 'border-box' }}
                   placeholder="单次价格 ($)"
                   value={newPricing.unit_price}
                   onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { unit_price: e.target.value })); }}
@@ -1812,7 +1812,7 @@ function AdminPage({ user, onBack }) {
                     type="number"
                     step="0.01"
                     min="0"
-                    style={{ width: 120 }}
+                    style={{ width: 110, boxSizing: 'border-box' }}
                     placeholder="输入 $/1M"
                     value={newPricing.input_per_1m}
                     onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { input_per_1m: e.target.value })); }}
@@ -1822,7 +1822,7 @@ function AdminPage({ user, onBack }) {
                     type="number"
                     step="0.01"
                     min="0"
-                    style={{ width: 120 }}
+                    style={{ width: 110, boxSizing: 'border-box' }}
                     placeholder="输出 $/1M"
                     value={newPricing.output_per_1m}
                     onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { output_per_1m: e.target.value })); }}
@@ -1831,12 +1831,12 @@ function AdminPage({ user, onBack }) {
               )}
               <input
                 className="df-admin-control"
-                style={{ minWidth: 160, flex: 1 }}
+                style={{ minWidth: 160, flex: 1, boxSizing: 'border-box' }}
                 placeholder="备注（可选）"
                 value={newPricing.note}
                 onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { note: e.target.value })); }}
               />
-              <button className="df-admin-control" type="submit" disabled={pricingSavingKey === '__new__' || !String(newPricing.model_key || '').trim()} style={{ background: '#262925', color: '#fff', borderColor: '#262925' }}>
+              <button className="df-admin-control" type="submit" disabled={pricingSavingKey === '__new__' || !String(newPricing.model_key || '').trim()} style={{ background: '#262925', color: '#fff', borderColor: '#262925', boxSizing: 'border-box' }}>
                 {pricingSavingKey === '__new__' ? '保存中…' : '登记并同步'}
               </button>
             </form>
@@ -1867,36 +1867,36 @@ function AdminPage({ user, onBack }) {
                     };
                     return (
                       <tr key={k}>
-                        <td style={{ fontWeight: 600 }}>{it.model_key}</td>
-                        <td>{it.category === 'llm' ? 'Agent 对话' : 'AI 生图'}</td>
-                        <td>
+                        <td className="df-admin-nowrap" style={{ fontWeight: 600 }}>{it.model_key}</td>
+                        <td className="df-admin-nowrap">{it.category === 'llm' ? 'Agent 对话' : 'AI 生图'}</td>
+                        <td className="df-admin-nowrap">
                           {it.registered
-                            ? <span className="df-admin-muted">已登记</span>
-                            : <span style={{ color: '#b45309', fontWeight: 600 }}>未登记</span>}
+                            ? <span className="df-admin-status is-success">已登记</span>
+                            : <span className="df-admin-status is-active">未登记</span>}
                         </td>
                         <td>
                           {it.category === 'llm' ? (
-                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', verticalAlign: 'middle' }}>
                               <span className="df-admin-muted">入</span>
-                              <input className="df-admin-control" type="number" step="0.01" min="0" style={{ width: 78, height: 28 }} value={draft.input_per_1m || ''} onChange={function(e) { setDraft('input_per_1m', e.target.value); }} />
+                              <input className="df-admin-control" type="number" step="0.01" min="0" style={{ width: 76, height: 28, boxSizing: 'border-box' }} value={draft.input_per_1m || ''} onChange={function(e) { setDraft('input_per_1m', e.target.value); }} />
                               <span className="df-admin-muted">出</span>
-                              <input className="df-admin-control" type="number" step="0.01" min="0" style={{ width: 78, height: 28 }} value={draft.output_per_1m || ''} onChange={function(e) { setDraft('output_per_1m', e.target.value); }} />
-                              <span className="df-admin-muted" style={{ fontSize: 10 }}>$/1M</span>
+                              <input className="df-admin-control" type="number" step="0.01" min="0" style={{ width: 76, height: 28, boxSizing: 'border-box' }} value={draft.output_per_1m || ''} onChange={function(e) { setDraft('output_per_1m', e.target.value); }} />
+                              <span className="df-admin-muted" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>$/1M</span>
                             </div>
                           ) : (
-                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                              <input className="df-admin-control" type="number" step="0.0001" min="0" style={{ width: 88, height: 28 }} value={draft.unit_price || ''} onChange={function(e) { setDraft('unit_price', e.target.value); }} />
-                              <span className="df-admin-muted" style={{ fontSize: 10 }}>$/次</span>
+                            <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', verticalAlign: 'middle' }}>
+                              <input className="df-admin-control" type="number" step="0.0001" min="0" style={{ width: 88, height: 28, boxSizing: 'border-box' }} value={draft.unit_price || ''} onChange={function(e) { setDraft('unit_price', e.target.value); }} />
+                              <span className="df-admin-muted" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>$/次</span>
                             </div>
                           )}
                         </td>
                         <td>
-                          <input className="df-admin-control" style={{ width: 150, height: 28 }} value={draft.note || ''} onChange={function(e) { setDraft('note', e.target.value); }} />
+                          <input className="df-admin-control" style={{ width: 160, height: 28, boxSizing: 'border-box' }} value={draft.note || ''} onChange={function(e) { setDraft('note', e.target.value); }} />
                         </td>
-                        <td className="df-admin-muted" style={{ fontSize: 11 }}>
+                        <td className="df-admin-muted df-admin-nowrap" style={{ fontSize: 11 }}>
                           {it.updated_at ? (it.updated_by || '-') + ' · ' + adminFormatTime(it.updated_at, false) : '-'}
                         </td>
-                        <td>
+                        <td className="df-admin-nowrap">
                           <button className="df-admin-linkbutton" disabled={pricingSavingKey === k} onClick={function() { handleSavePricing(it); }}>
                             {pricingSavingKey === k ? '同步中…' : '保存并同步'}
                           </button>
@@ -1911,61 +1911,64 @@ function AdminPage({ user, onBack }) {
         ) : null}
 
         <section className="df-admin-metrics">
-          <div className="df-admin-metriccard">
-            <div className="df-admin-metriclabel">总费用 ({costFilters.currency})</div>
+          <div className="df-admin-metric" style={{ '--metric-color': '#2563eb' }}>
+            <div className="df-admin-metrichead"><span>总费用 ({costFilters.currency === 'CNY' ? 'CNY · 1:7.2 预估' : 'USD'})</span><span className="df-admin-metricdot" /></div>
             <div className="df-admin-metricvalue">{formatCostAmount(cs.total_cost)}</div>
             <div className="df-admin-metricfoot">
-              真实账单 {cs.upstream_cost_count || 0} 笔 · 估算 {cs.estimated_cost_count || 0} 笔
+              真实账单 <strong>{cs.upstream_cost_count || 0}</strong> 笔 · 估算 <strong>{cs.estimated_cost_count || 0}</strong> 笔
             </div>
           </div>
-          <div className="df-admin-metriccard">
-            <div className="df-admin-metriclabel">总调用次数</div>
+          <div className="df-admin-metric" style={{ '--metric-color': '#188656' }}>
+            <div className="df-admin-metrichead"><span>总调用次数</span><span className="df-admin-metricdot" /></div>
             <div className="df-admin-metricvalue">{cs.total_calls || 0}</div>
             <div className="df-admin-metricfoot">
-              生图 {cs.image_calls || 0} 次 ({formatCostAmount(cs.image_cost)}) · 对话 {cs.llm_calls || 0} 次 ({formatCostAmount(cs.llm_cost)})
+              生图 <strong>{cs.image_calls || 0}</strong> ({formatCostAmount(cs.image_cost)}) · 对话 <strong>{cs.llm_calls || 0}</strong> ({formatCostAmount(cs.llm_cost)})
             </div>
           </div>
-          <div className="df-admin-metriccard">
-            <div className="df-admin-metriclabel">Token 总消耗</div>
+          <div className="df-admin-metric" style={{ '--metric-color': '#5f6fe8' }}>
+            <div className="df-admin-metrichead"><span>Token 总消耗</span><span className="df-admin-metricdot" /></div>
             <div className="df-admin-metricvalue">{formatCompactTokens(cs.total_tokens || 0)}</div>
             <div className="df-admin-metricfoot">
-              输入 {formatCompactTokens(cs.input_tokens || 0)} · 输出 {formatCompactTokens(cs.output_tokens || 0)}
+              输入 <strong>{formatCompactTokens(cs.input_tokens || 0)}</strong> · 输出 <strong>{formatCompactTokens(cs.output_tokens || 0)}</strong>
             </div>
           </div>
-          <div className="df-admin-metriccard">
-            <div className="df-admin-metriclabel">活跃成员 / 模型</div>
+          <div className="df-admin-metric" style={{ '--metric-color': '#bd741d' }}>
+            <div className="df-admin-metrichead"><span>活跃成员 / 模型</span><span className="df-admin-metricdot" /></div>
             <div className="df-admin-metricvalue">{cs.active_members || 0} / {cs.active_models || 0}</div>
             <div className="df-admin-metricfoot">
-              单次均价 {cs.avg_cost_per_call != null ? formatCostAmount(cs.avg_cost_per_call) : '-'}
+              单次均价 <strong>{cs.avg_cost_per_call != null ? formatCostAmount(cs.avg_cost_per_call) : '-'}</strong>
             </div>
           </div>
         </section>
 
-        <section className="df-admin-card" style={{ marginTop: 14, padding: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 650 }}>时间维度费用趋势</div>
-              <div className="df-admin-muted" style={{ fontSize: 11 }}>
-                按{costFilters.granularity === 'month' ? '月' : (costFilters.granularity === 'week' ? '周' : '天')}聚合（深色为生图，浅色为对话）
-              </div>
+        <section className="df-admin-card df-admin-section">
+          <div className="df-admin-cardhead">
+            <div className="df-admin-cardtitle">时间维度费用趋势</div>
+            <div className="df-admin-cardmeta">按{costFilters.granularity === 'month' ? '月' : (costFilters.granularity === 'week' ? '周' : '天')}聚合 · 共 {timeline.length} 个周期</div>
+            <div className="df-admin-legend" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--admin-muted)' }}>
+              <span className="is-ai"><i />AI 生图</span>
+              <span className="is-agent"><i />Agent 对话</span>
             </div>
-            <div className="df-admin-muted" style={{ fontSize: 11 }}>共 {timeline.length} 个周期</div>
           </div>
           {timeline.length ? (
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 150, paddingTop: 14, overflowX: 'auto' }}>
+            <div className="df-admin-chart" style={{ overflowX: 'auto' }}>
               {timeline.map(function(item) {
-                var totalH = Math.max(4, Math.round((Number(item.total_cost || 0) / maxBucketCost) * 108));
-                var imgH = item.total_cost > 0 ? Math.round((Number(item.image_cost || 0) / item.total_cost) * totalH) : 0;
-                var llmH = Math.max(0, totalH - imgH);
+                var totalPct = Number(item.total_cost || 0) > 0
+                  ? Math.max(4, Math.round((Number(item.total_cost || 0) / maxBucketCost) * 100))
+                  : 0;
+                var imgPct = item.total_cost > 0 ? Math.round((Number(item.image_cost || 0) / item.total_cost) * totalPct) : 0;
+                var llmPct = Math.max(0, totalPct - imgPct);
                 var tip = item.bucket + ' · 总计 ' + formatCostAmount(item.total_cost) + '（生图 ' + item.image_calls + ' 次 / 对话 ' + item.llm_calls + ' 次）';
                 return (
-                  <div key={item.bucket} title={tip} style={{ flex: '1 0 38px', maxWidth: 64, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
-                    <div className="df-admin-muted" style={{ fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>{formatCostAmount(item.total_cost)}</div>
-                    <div style={{ width: '68%', height: totalH, display: 'flex', flexDirection: 'column-reverse', borderRadius: 4, overflow: 'hidden', background: '#eff0ec' }}>
-                      {imgH > 0 ? <div style={{ height: imgH, background: '#262925' }} /> : null}
-                      {llmH > 0 ? <div style={{ height: llmH, background: '#7d8a79' }} /> : null}
+                  <div className="df-admin-baritem" key={item.bucket} title={tip} style={{ minWidth: 34 }}>
+                    <div className="df-admin-barlabel" style={{ fontSize: 10, color: 'var(--admin-muted)', fontVariantNumeric: 'tabular-nums' }}>
+                      {formatCostAmount(item.total_cost)}
                     </div>
-                    <div className="df-admin-muted" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>{item.label}</div>
+                    <div className="df-admin-bartrack">
+                      {llmPct > 0 ? <div className="df-admin-bar is-agent" style={{ height: llmPct + '%' }} /> : null}
+                      {imgPct > 0 ? <div className="df-admin-bar is-ai" style={{ height: imgPct + '%' }} /> : null}
+                    </div>
+                    <div className="df-admin-barlabel">{item.label}</div>
                   </div>
                 );
               })}
@@ -1973,8 +1976,11 @@ function AdminPage({ user, onBack }) {
           ) : <AdminEmpty text="当前时间范围内暂无调用记录" />}
         </section>
 
-        <section className="df-admin-card" style={{ marginTop: 14 }}>
-          <div style={{ padding: '14px 16px 6px', fontSize: 13, fontWeight: 650 }}>模型维度明细（{byModel.length}）</div>
+        <section className="df-admin-card df-admin-section">
+          <div className="df-admin-cardhead">
+            <div className="df-admin-cardtitle">模型维度明细</div>
+            <div className="df-admin-cardmeta">共 {byModel.length} 个模型</div>
+          </div>
           {byModel.length ? (
             <div className="df-admin-tablewrap">
               <table className="df-admin-table">
@@ -1994,19 +2000,19 @@ function AdminPage({ user, onBack }) {
                   {byModel.map(function(m) {
                     return (
                       <tr key={m.category + ':' + m.model}>
-                        <td style={{ fontWeight: 600 }}>{m.model}</td>
-                        <td>{m.category === 'image' ? 'AI 生图' : 'Agent 对话'}</td>
+                        <td className="df-admin-nowrap" style={{ fontWeight: 600 }}>{m.model}</td>
+                        <td className="df-admin-nowrap">{m.category === 'image' ? 'AI 生图' : 'Agent 对话'}</td>
                         <td className="df-admin-muted">{m.provider || '-'}</td>
-                        <td style={{ fontVariantNumeric: 'tabular-nums' }}>{m.calls}</td>
-                        <td className="df-admin-muted" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCompactTokens(m.total_tokens)}</td>
-                        <td className="df-admin-muted" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCostAmount(m.avg_cost)}</td>
-                        <td style={{ fontWeight: 650, fontVariantNumeric: 'tabular-nums' }}>{formatCostAmount(m.total_cost)}</td>
-                        <td style={{ minWidth: 110 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <div style={{ flex: 1, height: 6, borderRadius: 99, background: '#eff0ec', overflow: 'hidden' }}>
+                        <td className="df-admin-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>{m.calls}</td>
+                        <td className="df-admin-muted df-admin-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCompactTokens(m.total_tokens)}</td>
+                        <td className="df-admin-muted df-admin-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCostAmount(m.avg_cost)}</td>
+                        <td className="df-admin-nowrap" style={{ fontWeight: 650, fontVariantNumeric: 'tabular-nums' }}>{formatCostAmount(m.total_cost)}</td>
+                        <td style={{ minWidth: 120 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <div style={{ flex: 1, height: 5, borderRadius: 99, background: '#eeefeb', overflow: 'hidden' }}>
                               <div style={{ width: Math.min(100, m.share_pct || 0) + '%', height: '100%', background: '#262925' }} />
                             </div>
-                            <span className="df-admin-muted" style={{ fontSize: 11, width: 38, textAlign: 'right' }}>{m.share_pct}%</span>
+                            <span className="df-admin-muted" style={{ fontSize: 11, width: 40, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{m.share_pct}%</span>
                           </div>
                         </td>
                       </tr>
@@ -2018,8 +2024,11 @@ function AdminPage({ user, onBack }) {
           ) : <AdminEmpty text="暂无模型消费记录" />}
         </section>
 
-        <section className="df-admin-card" style={{ marginTop: 14 }}>
-          <div style={{ padding: '14px 16px 6px', fontSize: 13, fontWeight: 650 }}>成员维度统计（{byMember.length}）</div>
+        <section className="df-admin-card df-admin-section">
+          <div className="df-admin-cardhead">
+            <div className="df-admin-cardtitle">成员维度统计</div>
+            <div className="df-admin-cardmeta">共 {byMember.length} 位成员</div>
+          </div>
           {byMember.length ? (
             <div className="df-admin-tablewrap">
               <table className="df-admin-table">
@@ -2040,13 +2049,13 @@ function AdminPage({ user, onBack }) {
                     return (
                       <React.Fragment key={u.user_id}>
                         <tr>
-                          <td style={{ fontWeight: 600 }}>{u.display_name || u.username || u.user_id}</td>
-                          <td style={{ fontVariantNumeric: 'tabular-nums' }}>{u.total_calls} <span className="df-admin-muted">({u.image_calls} / {u.llm_calls})</span></td>
-                          <td className="df-admin-muted" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCompactTokens(u.total_tokens)}</td>
-                          <td className="df-admin-muted">{u.top_model || '-'}</td>
-                          <td style={{ fontWeight: 650, fontVariantNumeric: 'tabular-nums' }}>{formatCostAmount(u.total_cost)}</td>
-                          <td className="df-admin-muted" style={{ fontVariantNumeric: 'tabular-nums' }}>{u.share_pct}%</td>
-                          <td>
+                          <td className="df-admin-nowrap" style={{ fontWeight: 600 }}>{u.display_name || u.username || u.user_id}</td>
+                          <td className="df-admin-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>{u.total_calls} <span className="df-admin-muted">({u.image_calls} / {u.llm_calls})</span></td>
+                          <td className="df-admin-muted df-admin-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>{formatCompactTokens(u.total_tokens)}</td>
+                          <td className="df-admin-muted df-admin-nowrap">{u.top_model || '-'}</td>
+                          <td className="df-admin-nowrap" style={{ fontWeight: 650, fontVariantNumeric: 'tabular-nums' }}>{formatCostAmount(u.total_cost)}</td>
+                          <td className="df-admin-muted df-admin-nowrap" style={{ fontVariantNumeric: 'tabular-nums' }}>{u.share_pct}%</td>
+                          <td className="df-admin-nowrap">
                             <button className="df-admin-linkbutton" onClick={function() {
                               setExpandedMemberCost(function(prev) {
                                 var next = Object.assign({}, prev);
@@ -2062,8 +2071,10 @@ function AdminPage({ user, onBack }) {
                               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                                 {(u.models || []).map(function(mm) {
                                   return (
-                                    <span key={mm.category + ':' + mm.model} className="df-admin-control" style={{ height: 'auto', padding: '4px 10px', fontSize: 11 }}>
-                                      <strong>{mm.model}</strong> · {mm.category === 'image' ? '生图' : '对话'} {mm.calls} 次 · {formatCompactTokens(mm.total_tokens)} tok · <strong>{formatCostAmount(mm.cost)}</strong>
+                                    <span key={mm.category + ':' + mm.model} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 6, border: '1px solid var(--admin-line)', background: '#fff', fontSize: 11 }}>
+                                      <strong>{mm.model}</strong>
+                                      <span className="df-admin-muted">· {mm.category === 'image' ? '生图' : '对话'} {mm.calls} 次 · {formatCompactTokens(mm.total_tokens)} tok ·</span>
+                                      <strong>{formatCostAmount(mm.cost)}</strong>
                                     </span>
                                   );
                                 })}
