@@ -29,7 +29,7 @@ from ..model_routing import routed_chat_completion
 from ..user_skill_store import IMAGE_SUFFIXES
 from . import memory, store
 from .engine import Tool, ToolContext, user_cancelled
-from .image_constraints import explicit_models, numbered_references, turn_inputs
+from .image_constraints import explicit_models, numbered_references, turn_inputs, reference_order_error
 from .reference_preflight import check_reference_roles
 
 DEFAULT_IMAGE_MODEL = "gpt-image-2.6"
@@ -299,6 +299,9 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
     shared_ids = [str(rid) for rid in (args.get("reference_image_ids") or [])]
     effective = [item.get("reference_image_ids") or shared_ids for item in items]
     for item, ids in zip(items, effective):
+        if reference_order_error(inputs, ids, item["prompt"]):
+            return {"error": "带编号的参考图必须保持本轮用户上传顺序，技能动作图追加在后面。"
+                             "请同时重写 reference_image_ids、prompt 中的编号和 reference_roles 后重试；尚未提交生图。"}
         roles = item.get("reference_roles") or {}
         if not isinstance(roles, dict) or any(rid not in ids for rid in roles):
             ctx.state["images"] = used

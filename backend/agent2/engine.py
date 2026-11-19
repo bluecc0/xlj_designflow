@@ -28,6 +28,7 @@ from ..model_routing import (
     route_failed,
     route_succeeded,
 )
+from .image_constraints import requested_image_count
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,13 @@ _IMAGE_ACTION = re.compile(r"生图|出图|输出图片|生成.{0,30}(?:图|海�
                            r"(?:图|人物|背景|场景).{0,40}(?:调整为|换成|替换|去除)|抠图|扩图|放大.{0,10}图", re.I)
 _LOOKUP_ONLY = re.compile(r"(?:不要|不用|别|无需|不必).{0,8}(?:生成|生图|出图|重做)|"
                           r"我的图呢|图在哪|哪里下载|是否完成|做好了吗|之前是不是|怎么(?:使用|操作|生图|出图)")
+_READ_ONLY_REQUEST = re.compile(r"只(?:要|写|看|给).{0,8}(?:提示词|文案)|先别做|取消.{0,8}(?:生图|任务)|停止生成")
+
+
+def _no_new_image_work(request: str) -> bool:
+    return bool(_LOOKUP_ONLY.search(request) or _READ_ONLY_REQUEST.search(request))
+
+
 _NEW_WORK_CLAIM = re.compile(r"(?:正在|现在|开始|我会|马上|这就|已按|已将|已去除|已调整|已生成|已完成).{0,50}"
                              r"(?:生成|出图|生图|处理|调整|去除|补全|替换|完成)|已去除|已调整", re.S)
 _HONEST_STOP = re.compile(r"不能|无法|做不到|不支持|失败|没能|未能|没有.{0,8}(?:生成|执行)|请.{0,12}(?:上传|补充|确认)|需要.{0,12}(?:上传|确认)")
@@ -79,7 +87,7 @@ def _needs_execution(text: str) -> bool:
 
 def _unsupported_work_claim(text: str, request: str, messages: list[dict]) -> bool:
     # A status lookup never authorizes a new paid generation.
-    if _LOOKUP_ONLY.search(request):
+    if _no_new_image_work(request):
         return False
     if _HONEST_STOP.search(text) and not _NEW_WORK_CLAIM.search(text):
         return False
@@ -277,6 +285,9 @@ async def run_loop(
     final_text = ""
     corrected = False
     execution_attempted = False
+    execution_failed = False
+    execution_succeeded = False
+    generated_ids: set[str] = set()
     request = str(ctx_base.get("state", {}).get("request") or next(
         (m.get("content") or "" for m in reversed(messages) if m.get("role") == "user"), ""))
     note: dict | None = None
@@ -304,7 +315,15 @@ async def run_loop(
                     [c["name"] for c in step.tool_calls])
         unexecuted = (not step.tool_calls and not execution_attempted
                       and _unsupported_work_claim(step.text or "", request, messages))
-        lookup_promise = (not step.tool_calls and not execution_attempted and bool(_LOOKUP_ONLY.search(request))
+        failed_claim = (not step.tool_calls and execution_failed and not execution_succeeded
+                        and bool(_NEW_WORK_CLAIM.search(step.text or "") or _CLAIMS_DONE.search(step.text or ""))
+                        and not _HONEST_STOP.search(step.text or ""))
+        if failed_claim:
+            await emit("message.reset", {})
+            # The operation was already attempted: never force a second paid
+            # submission just to correct an inaccurate final answer.
+            raise RuntimeError("图片工具未返回成功结果，不能报告已完成；请核对已有任务，不要重复提交。")
+        lookup_promise = (not step.tool_calls and not execution_attempted and _no_new_image_work(request)
                           and bool(re.search(r"(?:现在|这就|马上|我会|正在为你).{0,25}(?:生成|处理|去除|调整|出图)", step.text or "")))
         if lookup_promise:
             await emit("message.reset", {})
@@ -341,14 +360,40 @@ async def run_loop(
         if step.text:
             final_text = step.text
         if not step.tool_calls:
+            target = requested_image_count(request)
+            if target and generated_ids and len(generated_ids) < target:
+                await emit("message.reset", {})
+                question = f"你要求生成{target}张，本轮实际只生成{len(generated_ids)}张。是否继续补足，还是保留当前结果？"
+                call_id = f"quantity_{time.time_ns()}"
+                pending = {"call_id": call_id, "tool": "ask_user", "question": question,
+                           "options": ["继续补足", "保留当前结果"]}
+                messages.append({"role": "assistant", "content": None, "tool_calls": [{
+                    "id": call_id, "type": "function", "function": {"name": "ask_user",
+                    "arguments": json.dumps({"question": question, "options": pending["options"]}, ensure_ascii=False)}}]})
+                await emit("input.required", pending)
+                return TurnResult(status="waiting_user", messages=messages, text=question, pending=pending)
             return TurnResult(status="done", messages=messages, text=final_text)
 
         suspending = [c for c in step.tool_calls if tools.get(c["name"]) and tools[c["name"]].suspends]
         normal = [c for c in step.tool_calls if c not in suspending]
+        blocked = [c for c in normal if c["name"] in _IMAGE_EXECUTORS and _no_new_image_work(request)]
+        normal = [c for c in normal if c not in blocked]
+        for call in blocked:
+            messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps({
+                "error": "本轮仅查询、取消或索要提示词，未授权新建图片任务；请如实回答，不要重新提交。"}, ensure_ascii=False)})
         results = await asyncio.gather(*[
             _run_tool(tools.get(c["name"]), c["name"], c, ctx_base, emit) for c in normal
         ])
         execution_attempted = execution_attempted or any(c["name"] in _IMAGE_EXECUTORS for c in normal)
+        for call, content in zip(normal, results):
+            if call["name"] in _IMAGE_EXECUTORS:
+                result = json.loads(content)
+                if call["name"] == "generate_image" and isinstance(result, dict):
+                    generated_ids.update(i["id"] for i in result.get("images", [])
+                                         if isinstance(i, dict) and i.get("id"))
+                successful = bool(isinstance(result, dict) and (result.get("images") or result.get("zip_url")))
+                execution_succeeded = execution_succeeded or successful
+                execution_failed = execution_failed or not successful
         for call, content in zip(normal, results):
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": content})
         if checkpoint:

@@ -61,7 +61,8 @@ class Agent2EngineTest(unittest.TestCase):
         async def echo(ctx, args):
             self.calls.append(args)
             await ctx.emit("tool.progress", {"call_id": ctx.call_id, "progress": 50})
-            return {"images": [{"id": "img_1", "url": "/x.png"}]}
+            return {"images": [{"id": f"img_{len(self.calls)}_{i}", "url": "/x.png"}
+                               for i, _ in enumerate(args.get("images") or [{}])]}
 
         async def noop(ctx, args):
             return {}
@@ -131,7 +132,7 @@ class Agent2EngineTest(unittest.TestCase):
             + [[("call", "generate_image", {"images": [{"prompt": "lookbook"}]})],
                [("text", "Lookbook ready.")]]
         )
-        events = self._run(model)
+        events = self._run(model, "生成1张lookbook")
         self.assertEqual(len(model.seen), 22)
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(events[-1]["type"], "turn.finished")
@@ -225,6 +226,42 @@ class Agent2EngineTest(unittest.TestCase):
             events = self._run(model, request)
             self.assertEqual(len(model.seen), 1)
             self.assertEqual(events[-1]["type"], "turn.finished")
+
+    def test_lookup_cannot_execute_paid_tool_even_if_model_calls_it(self):
+        for request in ["我的图呢", "做好了吗", "先别做了，取消这次生图", "只写提示词，不要生成"]:
+            with self.subTest(request=request):
+                before = len(self.calls)
+                model = FakeModel([[("call", "generate_image", {"images": [{"prompt": "unwanted"}]})],
+                                   [("text", "没有提交新任务。")]])
+                events = self._run(model, request)
+                self.assertEqual(len(self.calls), before)
+                self.assertEqual(events[-1]["type"], "turn.finished")
+
+    def test_failed_execution_cannot_claim_success_or_automatically_resubmit(self):
+        async def failed(ctx, args):
+            self.calls.append(args)
+            return {"error": "供应商失败"}
+        self.tools["generate_image"] = Tool("generate_image", "gen", {}, failed)
+        model = FakeModel([[("call", "generate_image", {"images": [{"prompt": "shoe"}]})],
+                           [("text", "已生成图片。")]])
+        events = self._run(model, "生成跑鞋海报")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(events[-1]["type"], "turn.failed")
+
+    def test_prompt_only_request_does_not_require_execution(self):
+        model = FakeModel([[("text", "提示词：生成一张跑鞋海报，使用白色背景。")]])
+        events = self._run(model, "只写生图提示词，生成一张跑鞋海报")
+        self.assertEqual(len(model.seen), 1)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(events[-1]["type"], "turn.finished")
+
+    def test_prompt_only_work_promise_is_corrected_without_execution(self):
+        model = FakeModel([[("text", "现在开始生成图片。")],
+                           [("text", "提示词：白色背景的跑鞋海报。")]])
+        events = self._run(model, "只写生图提示词")
+        self.assertEqual(self.calls, [])
+        self.assertIn("message.reset", [e["type"] for e in events])
+        self.assertEqual(events[-1]["type"], "turn.finished")
 
     def test_recovered_results_reply_is_not_treated_as_fake(self):
         # 后台补回的图：用户消息里带补回说明，回复"已经生成好了"是如实转告

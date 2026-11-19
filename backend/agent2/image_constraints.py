@@ -44,3 +44,32 @@ def numbered_references(text: str, uploads: list[dict]) -> set[str]:
         if index < len(uploads):
             result.add(uploads[index]["id"])
     return result
+
+
+def reference_order_error(inputs: list[dict], ids: list[str], prompt: str) -> bool:
+    """Do not silently reorder files after a numbered prompt has been written."""
+    if not re.search(r"(?:参考图|reference\s*(?:image\s*)?)\s*[1-9]", prompt, re.I):
+        return False
+    uploads = [u["id"] for p in inputs for u in p.get("uploads", []) if u.get("kind") != "table"]
+    uploads = list(dict.fromkeys(uploads))
+    if not uploads:
+        return False
+    expected = [rid for rid in uploads if rid in ids]
+    expected += [rid for rid in ids if rid not in uploads]
+    return ids != expected
+
+
+def requested_image_count(text: str) -> int | None:
+    # Only unambiguous generation quantities, not reference numbers or dimensions.
+    matches = re.findall(r"(?:生成|制作|出图|输出|出)\s*([1-9][0-9]*|[一二三四五六七八九十两])\s*张", text)
+    if not matches:
+        return None
+    value = matches[-1]
+    return int(value) if value.isdigit() else {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+        "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}[value]
+
+
+def explicit_reference_roles(text: str, index: int) -> list[str]:
+    """Extract direct assignments without asking a model to renumber images."""
+    pattern = rf"(?:图片|参考图|图)\s*{index}(?![0-9])\s*(?:是|作|作为|用作|只参考)\s*([^，。；;\n@]{{1,60}})"
+    return list(dict.fromkeys(match.strip() for match in re.findall(pattern, text)))
