@@ -3,24 +3,25 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
-# Default image generation pricing (USD per call/image).
+# Default image generation pricing (USD per image/call by resolution tier).
 # Upstream-returned `cost` always takes precedence when present.
 DEFAULT_IMAGE_PRICING: dict[str, dict[str, Any]] = {
-    "gpt-image-2": {"unit_price": 0.04, "resolution_multipliers": {"2K": 1.5, "4K": 2.0}},
-    "gpt-image-2.5": {"unit_price": 0.05, "resolution_multipliers": {"2K": 1.5, "4K": 2.0}},
-    "gpt-image-2.6": {"unit_price": 0.06, "resolution_multipliers": {"2K": 1.5, "4K": 2.0}},
-    "gemini-3-pro-image-preview": {"unit_price": 0.04, "resolution_multipliers": {"2K": 1.5, "4K": 2.0}},
-    "gemini-nano-banana-2.1": {"unit_price": 0.03, "resolution_multipliers": {"2K": 1.5, "4K": 2.0}},
-    "seedream-5.0-lite": {"unit_price": 0.03, "resolution_multipliers": {"2K": 1.25, "4K": 1.8}},
-    "seedream-4.5": {"unit_price": 0.03, "resolution_multipliers": {"2K": 1.25, "4K": 1.8}},
-    "seedream-4.0": {"unit_price": 0.025, "resolution_multipliers": {"2K": 1.25, "4K": 1.8}},
-    "flux-tools/outpainting-v1": {"unit_price": 0.05},
-    "flux-vto": {"unit_price": 0.05},
-    "kie-topaz": {"unit_price": 0.04},
-    "layer-extract": {"unit_price": 0.03},
+    "gpt-image-2": {"price_1k": 0.04, "price_1_5k": 0.05, "price_2k": 0.06, "price_4k": 0.08},
+    "gpt-image-2.5": {"price_1k": 0.05, "price_1_5k": 0.06, "price_2k": 0.075, "price_4k": 0.10},
+    "gpt-image-2.6": {"price_1k": 0.06, "price_1_5k": 0.075, "price_2k": 0.09, "price_4k": 0.12},
+    "gemini-3-pro-image-preview": {"price_1k": 0.04, "price_1_5k": 0.05, "price_2k": 0.06, "price_4k": 0.08},
+    "gemini-nano-banana-2.1": {"price_1k": 0.03, "price_1_5k": 0.04, "price_2k": 0.045, "price_4k": 0.06},
+    "seedream-5.0-lite": {"price_1k": 0.03, "price_1_5k": 0.035, "price_2k": 0.04, "price_4k": 0.06},
+    "seedream-4.5": {"price_1k": 0.03, "price_1_5k": 0.035, "price_2k": 0.04, "price_4k": 0.06},
+    "seedream-4.0": {"price_1k": 0.025, "price_1_5k": 0.03, "price_2k": 0.035, "price_4k": 0.05},
+    "flux-tools/outpainting-v1": {"price_1k": 0.05, "price_1_5k": 0.05, "price_2k": 0.05, "price_4k": 0.05},
+    "flux-vto": {"price_1k": 0.05, "price_1_5k": 0.05, "price_2k": 0.05, "price_4k": 0.05},
+    "kie-topaz": {"price_1k": 0.04, "price_1_5k": 0.04, "price_2k": 0.04, "price_4k": 0.08},
+    "layer-extract": {"price_1k": 0.03, "price_1_5k": 0.03, "price_2k": 0.03, "price_4k": 0.03},
 }
 
 # Default LLM / VLM pricing (USD per 1M tokens).
@@ -47,8 +48,24 @@ _MODEL_ALIASES: dict[str, str] = {
     "nano-banana-2.1": "gemini-nano-banana-2.1",
 }
 
+_SIZE_TO_TIER: dict[str, str] = {
+    "1024x1024": "1K",
+    "768x1024": "1K",
+    "1280x1024": "1K",
+    "1080x1920": "1K",
+    "1536x1536": "1.5K",
+    "2048x2048": "2K",
+    "1536x2048": "2K",
+    "2560x2048": "2K",
+    "1152x2048": "2K",
+    "4096x4096": "4K",
+    "2448x3264": "4K",
+    "2160x3840": "4K",
+}
+
 _DEFAULT_FALLBACK_IMAGE_PRICE = 0.04
 _DEFAULT_FALLBACK_LLM_PRICE = {"input_per_1m": 1.0, "output_per_1m": 4.0}
+_DIM_RE = re.compile(r"^\s*(\d+)\s*[xX×]\s*(\d+)\s*$")
 
 
 def _load_custom_pricing() -> dict[str, Any]:
@@ -92,10 +109,58 @@ def normalize_model_key(model: str | None) -> str:
     return clean
 
 
+def infer_resolution_tier(resolution: str | None = None, size: str | None = None) -> str:
+    """Normalize resolution into one of '1K', '1.5K', '2K', '4K'."""
+    res = str(resolution or "").strip().upper()
+    if res in ("1K", "1.5K", "2K", "4K"):
+        return res
+    sz = str(size or "").strip().lower()
+    if sz in _SIZE_TO_TIER:
+        return _SIZE_TO_TIER[sz]
+    m = _DIM_RE.match(sz)
+    if m:
+        w, h = int(m.group(1)), int(m.group(2))
+        max_dim = max(w, h)
+        if max_dim >= 3200:
+            return "4K"
+        if max_dim >= 1900:
+            return "2K"
+        if max_dim >= 1450:
+            return "1.5K"
+    return "1K"
+
+
 def _is_free_local_model(model: str | None, provider: str | None = None) -> bool:
     m = str(model or "").strip().lower()
     p = str(provider or "").strip().lower()
     return p == "local" or m.startswith("local-")
+
+
+def _pick_tier_price(entry: dict[str, Any], tier: str) -> float:
+    tier_field = {
+        "1K": "price_1k",
+        "1.5K": "price_1_5k",
+        "2K": "price_2k",
+        "4K": "price_4k",
+    }.get(tier, "price_1k")
+
+    if entry.get(tier_field) is not None:
+        return float(entry[tier_field])
+
+    base = float(entry.get("price_1k") or entry.get("unit_price") or _DEFAULT_FALLBACK_IMAGE_PRICE)
+    if tier == "1.5K":
+        return base * 1.25
+    if tier == "2K":
+        mults = entry.get("resolution_multipliers")
+        if isinstance(mults, dict) and mults.get("2K") is not None:
+            return base * float(mults["2K"])
+        return base * 1.5
+    if tier == "4K":
+        mults = entry.get("resolution_multipliers")
+        if isinstance(mults, dict) and mults.get("4K") is not None:
+            return base * float(mults["4K"])
+        return base * 2.0
+    return base
 
 
 def estimate_image_cost(
@@ -117,22 +182,22 @@ def estimate_image_cost(
 
     key = normalize_model_key(model)
     entry = pricing.get(key)
+    matched_key = key if entry is not None else None
     if entry is None:
         for k, v in pricing.items():
             if key.startswith(k) or k in key:
                 entry = v
+                matched_key = k
                 break
 
     if isinstance(entry, (int, float)):
         return round(float(entry), 6), "estimated"
 
     if isinstance(entry, dict):
-        unit = float(entry.get("unit_price", _DEFAULT_FALLBACK_IMAGE_PRICE))
-        mult = 1.0
-        res = str(resolution or "").strip().upper()
-        if res and isinstance(entry.get("resolution_multipliers"), dict):
-            mult = float(entry["resolution_multipliers"].get(res, 1.0))
-        return round(unit * mult, 6), "manual" if (db_overrides and key in db_overrides) else "estimated"
+        tier = infer_resolution_tier(resolution, size)
+        price = _pick_tier_price(entry, tier)
+        src = "manual" if (db_overrides and matched_key in db_overrides) else "estimated"
+        return round(price, 6), src
 
     return _DEFAULT_FALLBACK_IMAGE_PRICE, "estimated"
 
@@ -180,7 +245,6 @@ def estimate_llm_cost(
     entry = pricing.get(key)
     matched_key = key if entry is not None else None
     if entry is None:
-        # Prefix / substring match (e.g. "gpt-5-2025-08-07" -> "gpt-5", "claude-sonnet-4-20250514" -> "claude-sonnet-4")
         best_len = 0
         for k, v in pricing.items():
             if (key.startswith(k) or k in key) and len(k) > best_len:

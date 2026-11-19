@@ -570,6 +570,10 @@ def init_db() -> None:
                 category           TEXT NOT NULL DEFAULT 'image',
                 model_key          TEXT NOT NULL,
                 unit_price         REAL,
+                price_1k           REAL,
+                price_1_5k         REAL,
+                price_2k           REAL,
+                price_4k           REAL,
                 input_per_1m       REAL,
                 output_per_1m      REAL,
                 resolution_2k_mult REAL NOT NULL DEFAULT 1.5,
@@ -580,6 +584,26 @@ def init_db() -> None:
                 PRIMARY KEY (category, model_key)
             )
         """)
+        for col, col_def in [
+            ("price_1k", "REAL"),
+            ("price_1_5k", "REAL"),
+            ("price_2k", "REAL"),
+            ("price_4k", "REAL"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE model_pricing ADD COLUMN {col} {col_def}")
+            except Exception:
+                pass
+        conn.execute(
+            """
+            UPDATE model_pricing
+            SET price_1k = COALESCE(price_1k, unit_price),
+                price_1_5k = COALESCE(price_1_5k, ROUND(COALESCE(unit_price, 0.04) * 1.25, 6)),
+                price_2k = COALESCE(price_2k, ROUND(COALESCE(unit_price, 0.04) * COALESCE(resolution_2k_mult, 1.5), 6)),
+                price_4k = COALESCE(price_4k, ROUND(COALESCE(unit_price, 0.04) * COALESCE(resolution_4k_mult, 2.0), 6))
+            WHERE category = 'image' AND (price_1k IS NULL OR price_1_5k IS NULL OR price_2k IS NULL OR price_4k IS NULL)
+            """
+        )
         _seed_default_model_pricing(conn)
         _backfill_ai_image_costs(conn)
         conn.commit()
@@ -3688,18 +3712,22 @@ def _seed_default_model_pricing(conn: sqlite3.Connection) -> None:
 
     now = time.time()
     for mkey, spec in DEFAULT_IMAGE_PRICING.items():
-        unit = float(spec.get("unit_price", 0.04)) if isinstance(spec, dict) else float(spec)
-        mults = spec.get("resolution_multipliers") if isinstance(spec, dict) else {}
-        m2k = float((mults or {}).get("2K", 1.5))
-        m4k = float((mults or {}).get("4K", 2.0))
+        if isinstance(spec, dict):
+            p1 = float(spec.get("price_1k", spec.get("unit_price", 0.04)))
+            p15 = float(spec.get("price_1_5k", round(p1 * 1.25, 6)))
+            p2 = float(spec.get("price_2k", round(p1 * 1.5, 6)))
+            p4 = float(spec.get("price_4k", round(p1 * 2.0, 6)))
+        else:
+            p1 = float(spec)
+            p15, p2, p4 = round(p1 * 1.25, 6), round(p1 * 1.5, 6), round(p1 * 2.0, 6)
         conn.execute(
             """
             INSERT OR IGNORE INTO model_pricing (
-                category, model_key, unit_price, resolution_2k_mult, resolution_4k_mult,
+                category, model_key, unit_price, price_1k, price_1_5k, price_2k, price_4k,
                 note, updated_by, updated_at
-            ) VALUES ('image', ?, ?, ?, ?, '系统默认单价', 'system', ?)
+            ) VALUES ('image', ?, ?, ?, ?, ?, ?, '系统默认单价', 'system', ?)
             """,
-            (mkey, unit, m2k, m4k, now),
+            (mkey, p1, p1, p15, p2, p4, now),
         )
     for mkey, spec in DEFAULT_LLM_PRICING.items():
         conn.execute(
@@ -3732,12 +3760,13 @@ def _load_db_pricing_overrides(conn: sqlite3.Connection) -> tuple[dict[str, dict
                 "output_per_1m": float(r["output_per_1m"] or 0.0),
             }
         else:
+            p1 = r["price_1k"] if r["price_1k"] is not None else r["unit_price"]
+            base = float(p1 or 0.0)
             img_map[key] = {
-                "unit_price": float(r["unit_price"] or 0.0),
-                "resolution_multipliers": {
-                    "2K": float(r["resolution_2k_mult"] or 1.5),
-                    "4K": float(r["resolution_4k_mult"] or 2.0),
-                },
+                "price_1k": base,
+                "price_1_5k": float(r["price_1_5k"]) if r["price_1_5k"] is not None else round(base * 1.25, 6),
+                "price_2k": float(r["price_2k"]) if r["price_2k"] is not None else round(base * float(r["resolution_2k_mult"] or 1.5), 6),
+                "price_4k": float(r["price_4k"]) if r["price_4k"] is not None else round(base * float(r["resolution_4k_mult"] or 2.0), 6),
             }
     return img_map, llm_map
 
@@ -4324,14 +4353,21 @@ def list_admin_model_pricing() -> list[dict]:
             cat = str(r["category"] or "image")
             mkey = str(r["model_key"] or "").strip().lower()
             seen.add((cat, mkey))
+            p1 = r["price_1k"] if r["price_1k"] is not None else r["unit_price"]
+            p1_val = float(p1) if p1 is not None else None
+            p15_val = float(r["price_1_5k"]) if r["price_1_5k"] is not None else (round(p1_val * 1.25, 6) if p1_val is not None else None)
+            p2_val = float(r["price_2k"]) if r["price_2k"] is not None else (round(p1_val * 1.5, 6) if p1_val is not None else None)
+            p4_val = float(r["price_4k"]) if r["price_4k"] is not None else (round(p1_val * 2.0, 6) if p1_val is not None else None)
             items.append({
                 "category": cat,
                 "model_key": mkey,
-                "unit_price": r["unit_price"],
+                "unit_price": p1_val,
+                "price_1k": p1_val,
+                "price_1_5k": p15_val,
+                "price_2k": p2_val,
+                "price_4k": p4_val,
                 "input_per_1m": r["input_per_1m"],
                 "output_per_1m": r["output_per_1m"],
-                "resolution_2k_mult": float(r["resolution_2k_mult"] or 1.5),
-                "resolution_4k_mult": float(r["resolution_4k_mult"] or 2.0),
                 "note": str(r["note"] or ""),
                 "updated_by": str(r["updated_by"] or ""),
                 "updated_at": r["updated_at"],
@@ -4347,10 +4383,12 @@ def list_admin_model_pricing() -> list[dict]:
                     "category": "image",
                     "model_key": mkey,
                     "unit_price": None,
+                    "price_1k": None,
+                    "price_1_5k": None,
+                    "price_2k": None,
+                    "price_4k": None,
                     "input_per_1m": None,
                     "output_per_1m": None,
-                    "resolution_2k_mult": 1.5,
-                    "resolution_4k_mult": 2.0,
                     "note": "未登记单价（当前按默认兜底估算）",
                     "updated_by": "",
                     "updated_at": None,
@@ -4364,10 +4402,12 @@ def list_admin_model_pricing() -> list[dict]:
                     "category": "llm",
                     "model_key": mkey,
                     "unit_price": None,
+                    "price_1k": None,
+                    "price_1_5k": None,
+                    "price_2k": None,
+                    "price_4k": None,
                     "input_per_1m": None,
                     "output_per_1m": None,
-                    "resolution_2k_mult": 1.5,
-                    "resolution_4k_mult": 2.0,
                     "note": "未登记单价（当前按默认兜底估算）",
                     "updated_by": "",
                     "updated_at": None,
@@ -4381,6 +4421,10 @@ def save_admin_model_pricing(
     category: str,
     model_key: str,
     unit_price: float | None = None,
+    price_1k: float | None = None,
+    price_1_5k: float | None = None,
+    price_2k: float | None = None,
+    price_4k: float | None = None,
     input_per_1m: float | None = None,
     output_per_1m: float | None = None,
     resolution_2k_mult: float = 1.5,
@@ -4403,15 +4447,23 @@ def save_admin_model_pricing(
     clean_note = str(note or "").strip()
 
     if cat == "image":
-        if unit_price is None or float(unit_price) < 0:
-            raise ValueError("生图模型单价不能为负数")
-        u_price = round(float(unit_price), 6)
+        base_raw = price_1k if price_1k is not None else unit_price
+        if base_raw is None or float(base_raw) < 0:
+            raise ValueError("生图模型 1K 单价不能为负数")
+        p1 = round(float(base_raw), 6)
+        p15 = round(float(price_1_5k if price_1_5k is not None else p1 * 1.25), 6)
+        p2 = round(float(price_2k if price_2k is not None else p1 * m2k), 6)
+        p4 = round(float(price_4k if price_4k is not None else p1 * m4k), 6)
+        if p15 < 0 or p2 < 0 or p4 < 0:
+            raise ValueError("生图模型各分辨率单价不能为负数")
+        u_price = p1
         in_p = None
         out_p = None
     else:
         if input_per_1m is None or output_per_1m is None or float(input_per_1m) < 0 or float(output_per_1m) < 0:
             raise ValueError("对话模型输入/输出单价不能为负数")
         u_price = None
+        p1 = p15 = p2 = p4 = None
         in_p = round(float(input_per_1m), 6)
         out_p = round(float(output_per_1m), 6)
 
@@ -4420,11 +4472,16 @@ def save_admin_model_pricing(
         conn.execute(
             """
             INSERT INTO model_pricing (
-                category, model_key, unit_price, input_per_1m, output_per_1m,
-                resolution_2k_mult, resolution_4k_mult, note, updated_by, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                category, model_key, unit_price, price_1k, price_1_5k, price_2k, price_4k,
+                input_per_1m, output_per_1m, resolution_2k_mult, resolution_4k_mult,
+                note, updated_by, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(category, model_key) DO UPDATE SET
                 unit_price = excluded.unit_price,
+                price_1k = excluded.price_1k,
+                price_1_5k = excluded.price_1_5k,
+                price_2k = excluded.price_2k,
+                price_4k = excluded.price_4k,
                 input_per_1m = excluded.input_per_1m,
                 output_per_1m = excluded.output_per_1m,
                 resolution_2k_mult = excluded.resolution_2k_mult,
@@ -4433,7 +4490,7 @@ def save_admin_model_pricing(
                 updated_by = excluded.updated_by,
                 updated_at = excluded.updated_at
             """,
-            (cat, clean_key, u_price, in_p, out_p, m2k, m4k, clean_note, str(updated_by or ""), now),
+            (cat, clean_key, u_price, p1, p15, p2, p4, in_p, out_p, m2k, m4k, clean_note, str(updated_by or ""), now),
         )
 
         if sync_history:

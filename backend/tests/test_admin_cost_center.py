@@ -196,11 +196,14 @@ class AdminCostCenterTest(unittest.TestCase):
         self.assertEqual(len(unreg), 1)
         self.assertFalse(unreg[0]["registered"])
 
-        # Register manual price and sync DB
+        # Register manual price with 1K/1.5K/2K/4K tiers and sync DB
         res = job_store.save_admin_model_pricing(
             category="image",
             model_key="custom-img-model",
-            unit_price=0.09,
+            price_1k=0.05,
+            price_1_5k=0.07,
+            price_2k=0.09,
+            price_4k=0.14,
             note="手动登记",
             updated_by="admin",
             sync_history=True,
@@ -211,11 +214,24 @@ class AdminCostCenterTest(unittest.TestCase):
             conn.row_factory = sqlite3.Row
             est_row = conn.execute("SELECT cost, cost_source FROM ai_image_jobs WHERE id='img-est'").fetchone()
             up_row = conn.execute("SELECT cost, cost_source FROM ai_image_jobs WHERE id='img-up'").fetchone()
-            self.assertAlmostEqual(est_row["cost"], 0.09, places=4)
+            self.assertAlmostEqual(est_row["cost"], 0.05, places=4)
             self.assertEqual(est_row["cost_source"], "manual")
             # Upstream real cost must remain untouched
             self.assertAlmostEqual(up_row["cost"], 0.25, places=4)
             self.assertEqual(up_row["cost_source"], "upstream")
+
+    def test_resolution_tiers_and_size_inference(self):
+        self.assertEqual(cost_pricing.infer_resolution_tier("1.5K", "auto"), "1.5K")
+        self.assertEqual(cost_pricing.infer_resolution_tier(None, "2048x2048"), "2K")
+        self.assertEqual(cost_pricing.infer_resolution_tier(None, "4096x4096"), "4K")
+        self.assertEqual(cost_pricing.infer_resolution_tier("", "1536x1536"), "1.5K")
+        self.assertEqual(cost_pricing.infer_resolution_tier(None, "1024x1024"), "1K")
+
+        c1, _ = cost_pricing.resolve_image_cost("seedream-5.0-lite", resolution="1K")
+        c15, _ = cost_pricing.resolve_image_cost("seedream-5.0-lite", resolution="1.5K")
+        c2, _ = cost_pricing.resolve_image_cost("seedream-5.0-lite", resolution="2K")
+        self.assertLess(c1, c15)
+        self.assertLess(c15, c2)
 
 
 if __name__ == "__main__":

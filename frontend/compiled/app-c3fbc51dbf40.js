@@ -14847,7 +14847,10 @@ function AdminPage({
   var [newPricing, setNewPricing] = React.useState({
     category: 'image',
     model_key: '',
-    unit_price: '0.04',
+    price_1k: '0.04',
+    price_1_5k: '0.05',
+    price_2k: '0.06',
+    price_4k: '0.08',
     input_per_1m: '1.0',
     output_per_1m: '4.0',
     note: ''
@@ -15013,12 +15016,14 @@ function AdminPage({
       var edits = {};
       list.forEach(function (it) {
         var k = it.category + ':' + it.model_key;
+        var p1 = it.price_1k != null ? it.price_1k : it.unit_price != null ? it.unit_price : 0.04;
         edits[k] = {
-          unit_price: it.unit_price != null ? String(it.unit_price) : '0.04',
+          price_1k: String(p1),
+          price_1_5k: String(it.price_1_5k != null ? it.price_1_5k : Number((p1 * 1.25).toFixed(4))),
+          price_2k: String(it.price_2k != null ? it.price_2k : Number((p1 * 1.5).toFixed(4))),
+          price_4k: String(it.price_4k != null ? it.price_4k : Number((p1 * 2.0).toFixed(4))),
           input_per_1m: it.input_per_1m != null ? String(it.input_per_1m) : '1.0',
           output_per_1m: it.output_per_1m != null ? String(it.output_per_1m) : '4.0',
-          resolution_2k_mult: it.resolution_2k_mult != null ? String(it.resolution_2k_mult) : '1.5',
-          resolution_4k_mult: it.resolution_4k_mult != null ? String(it.resolution_4k_mult) : '2.0',
           note: it.note || ''
         };
       });
@@ -15046,9 +15051,10 @@ function AdminPage({
       payload.input_per_1m = Number(draft.input_per_1m || 0);
       payload.output_per_1m = Number(draft.output_per_1m || 0);
     } else {
-      payload.unit_price = Number(draft.unit_price || 0);
-      payload.resolution_2k_mult = Number(draft.resolution_2k_mult || 1.5);
-      payload.resolution_4k_mult = Number(draft.resolution_4k_mult || 2.0);
+      payload.price_1k = Number(draft.price_1k || 0);
+      payload.price_1_5k = Number(draft.price_1_5k || 0);
+      payload.price_2k = Number(draft.price_2k || 0);
+      payload.price_4k = Number(draft.price_4k || 0);
     }
     return window.API.saveAdminCostPricing(payload).then(function (res) {
       setPricingNotice('已保存「' + item.model_key + '」单价，并同步重算 ' + (res.synced_count || 0) + ' 条非上游直出历史记录');
@@ -15076,7 +15082,10 @@ function AdminPage({
       payload.input_per_1m = Number(newPricing.input_per_1m || 0);
       payload.output_per_1m = Number(newPricing.output_per_1m || 0);
     } else {
-      payload.unit_price = Number(newPricing.unit_price || 0);
+      payload.price_1k = Number(newPricing.price_1k || 0);
+      payload.price_1_5k = Number(newPricing.price_1_5k || 0);
+      payload.price_2k = Number(newPricing.price_2k || 0);
+      payload.price_4k = Number(newPricing.price_4k || 0);
     }
     return window.API.saveAdminCostPricing(payload).then(function (res) {
       setPricingNotice('已新增并保存「' + payload.model_key + '」单价，同步更新 ' + (res.synced_count || 0) + ' 条历史记录');
@@ -16020,23 +16029,75 @@ function AdminPage({
           model_key: e.target.value
         }));
       }
-    }), newPricing.category === 'image' ? /*#__PURE__*/React.createElement("input", {
+    }), newPricing.category === 'image' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
       className: "df-admin-control",
       type: "number",
       step: "0.0001",
       min: "0",
       style: {
-        width: 120,
+        width: 82,
         boxSizing: 'border-box'
       },
-      placeholder: "\u5355\u6B21\u4EF7\u683C ($)",
-      value: newPricing.unit_price,
+      placeholder: "1K ($)",
+      title: "1K \u5355\u4EF7 ($)",
+      value: newPricing.price_1k,
       onChange: function (e) {
         setNewPricing(Object.assign({}, newPricing, {
-          unit_price: e.target.value
+          price_1k: e.target.value
         }));
       }
-    }) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "df-admin-control",
+      type: "number",
+      step: "0.0001",
+      min: "0",
+      style: {
+        width: 82,
+        boxSizing: 'border-box'
+      },
+      placeholder: "1.5K ($)",
+      title: "1.5K \u5355\u4EF7 ($)",
+      value: newPricing.price_1_5k,
+      onChange: function (e) {
+        setNewPricing(Object.assign({}, newPricing, {
+          price_1_5k: e.target.value
+        }));
+      }
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "df-admin-control",
+      type: "number",
+      step: "0.0001",
+      min: "0",
+      style: {
+        width: 82,
+        boxSizing: 'border-box'
+      },
+      placeholder: "2K ($)",
+      title: "2K \u5355\u4EF7 ($)",
+      value: newPricing.price_2k,
+      onChange: function (e) {
+        setNewPricing(Object.assign({}, newPricing, {
+          price_2k: e.target.value
+        }));
+      }
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "df-admin-control",
+      type: "number",
+      step: "0.0001",
+      min: "0",
+      style: {
+        width: 82,
+        boxSizing: 'border-box'
+      },
+      placeholder: "4K ($)",
+      title: "4K \u5355\u4EF7 ($)",
+      value: newPricing.price_4k,
+      onChange: function (e) {
+        setNewPricing(Object.assign({}, newPricing, {
+          price_4k: e.target.value
+        }));
+      }
+    })) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
       className: "df-admin-control",
       type: "number",
       step: "0.01",
@@ -16071,7 +16132,7 @@ function AdminPage({
     })), /*#__PURE__*/React.createElement("input", {
       className: "df-admin-control",
       style: {
-        minWidth: 160,
+        minWidth: 140,
         flex: 1,
         boxSizing: 'border-box'
       },
@@ -16096,7 +16157,7 @@ function AdminPage({
       className: "df-admin-tablewrap"
     }, /*#__PURE__*/React.createElement("table", {
       className: "df-admin-table"
-    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\u6A21\u578B"), /*#__PURE__*/React.createElement("th", null, "\u7C7B\u578B"), /*#__PURE__*/React.createElement("th", null, "\u72B6\u6001"), /*#__PURE__*/React.createElement("th", null, "\u5355\u4EF7\u8BBE\u7F6E (USD)"), /*#__PURE__*/React.createElement("th", null, "\u5907\u6CE8"), /*#__PURE__*/React.createElement("th", null, "\u6700\u8FD1\u66F4\u65B0"), /*#__PURE__*/React.createElement("th", null, "\u64CD\u4F5C"))), /*#__PURE__*/React.createElement("tbody", null, pricingItems.map(function (it) {
+    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\u6A21\u578B"), /*#__PURE__*/React.createElement("th", null, "\u7C7B\u578B"), /*#__PURE__*/React.createElement("th", null, "\u72B6\u6001"), /*#__PURE__*/React.createElement("th", null, "\u5355\u4EF7\u8BBE\u7F6E (USD \xB7 1K / 1.5K / 2K / 4K \u6216 Token)"), /*#__PURE__*/React.createElement("th", null, "\u5907\u6CE8"), /*#__PURE__*/React.createElement("th", null, "\u6700\u8FD1\u66F4\u65B0"), /*#__PURE__*/React.createElement("th", null, "\u64CD\u4F5C"))), /*#__PURE__*/React.createElement("tbody", null, pricingItems.map(function (it) {
       var k = it.category + ':' + it.model_key;
       var draft = pricingEdits[k] || {};
       var setDraft = function (field, val) {
@@ -16173,21 +16234,84 @@ function AdminPage({
           display: 'inline-flex',
           gap: 6,
           alignItems: 'center',
-          verticalAlign: 'middle'
+          verticalAlign: 'middle',
+          flexWrap: 'wrap'
         }
-      }, /*#__PURE__*/React.createElement("input", {
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted",
+        style: {
+          fontSize: 10
+        }
+      }, "1K"), /*#__PURE__*/React.createElement("input", {
         className: "df-admin-control",
         type: "number",
         step: "0.0001",
         min: "0",
         style: {
-          width: 88,
+          width: 68,
           height: 28,
           boxSizing: 'border-box'
         },
-        value: draft.unit_price || '',
+        value: draft.price_1k || '',
         onChange: function (e) {
-          setDraft('unit_price', e.target.value);
+          setDraft('price_1k', e.target.value);
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted",
+        style: {
+          fontSize: 10
+        }
+      }, "1.5K"), /*#__PURE__*/React.createElement("input", {
+        className: "df-admin-control",
+        type: "number",
+        step: "0.0001",
+        min: "0",
+        style: {
+          width: 68,
+          height: 28,
+          boxSizing: 'border-box'
+        },
+        value: draft.price_1_5k || '',
+        onChange: function (e) {
+          setDraft('price_1_5k', e.target.value);
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted",
+        style: {
+          fontSize: 10
+        }
+      }, "2K"), /*#__PURE__*/React.createElement("input", {
+        className: "df-admin-control",
+        type: "number",
+        step: "0.0001",
+        min: "0",
+        style: {
+          width: 68,
+          height: 28,
+          boxSizing: 'border-box'
+        },
+        value: draft.price_2k || '',
+        onChange: function (e) {
+          setDraft('price_2k', e.target.value);
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted",
+        style: {
+          fontSize: 10
+        }
+      }, "4K"), /*#__PURE__*/React.createElement("input", {
+        className: "df-admin-control",
+        type: "number",
+        step: "0.0001",
+        min: "0",
+        style: {
+          width: 68,
+          height: 28,
+          boxSizing: 'border-box'
+        },
+        value: draft.price_4k || '',
+        onChange: function (e) {
+          setDraft('price_4k', e.target.value);
         }
       }), /*#__PURE__*/React.createElement("span", {
         className: "df-admin-muted",

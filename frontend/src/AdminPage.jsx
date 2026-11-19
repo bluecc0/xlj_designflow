@@ -1052,7 +1052,10 @@ function AdminPage({ user, onBack }) {
   var [newPricing, setNewPricing] = React.useState({
     category: 'image',
     model_key: '',
-    unit_price: '0.04',
+    price_1k: '0.04',
+    price_1_5k: '0.05',
+    price_2k: '0.06',
+    price_4k: '0.08',
     input_per_1m: '1.0',
     output_per_1m: '4.0',
     note: '',
@@ -1201,12 +1204,14 @@ function AdminPage({ user, onBack }) {
         var edits = {};
         list.forEach(function(it) {
           var k = it.category + ':' + it.model_key;
+          var p1 = it.price_1k != null ? it.price_1k : (it.unit_price != null ? it.unit_price : 0.04);
           edits[k] = {
-            unit_price: it.unit_price != null ? String(it.unit_price) : '0.04',
+            price_1k: String(p1),
+            price_1_5k: String(it.price_1_5k != null ? it.price_1_5k : Number((p1 * 1.25).toFixed(4))),
+            price_2k: String(it.price_2k != null ? it.price_2k : Number((p1 * 1.5).toFixed(4))),
+            price_4k: String(it.price_4k != null ? it.price_4k : Number((p1 * 2.0).toFixed(4))),
             input_per_1m: it.input_per_1m != null ? String(it.input_per_1m) : '1.0',
             output_per_1m: it.output_per_1m != null ? String(it.output_per_1m) : '4.0',
-            resolution_2k_mult: it.resolution_2k_mult != null ? String(it.resolution_2k_mult) : '1.5',
-            resolution_4k_mult: it.resolution_4k_mult != null ? String(it.resolution_4k_mult) : '2.0',
             note: it.note || '',
           };
         });
@@ -1235,9 +1240,10 @@ function AdminPage({ user, onBack }) {
       payload.input_per_1m = Number(draft.input_per_1m || 0);
       payload.output_per_1m = Number(draft.output_per_1m || 0);
     } else {
-      payload.unit_price = Number(draft.unit_price || 0);
-      payload.resolution_2k_mult = Number(draft.resolution_2k_mult || 1.5);
-      payload.resolution_4k_mult = Number(draft.resolution_4k_mult || 2.0);
+      payload.price_1k = Number(draft.price_1k || 0);
+      payload.price_1_5k = Number(draft.price_1_5k || 0);
+      payload.price_2k = Number(draft.price_2k || 0);
+      payload.price_4k = Number(draft.price_4k || 0);
     }
     return window.API.saveAdminCostPricing(payload)
       .then(function(res) {
@@ -1265,7 +1271,10 @@ function AdminPage({ user, onBack }) {
       payload.input_per_1m = Number(newPricing.input_per_1m || 0);
       payload.output_per_1m = Number(newPricing.output_per_1m || 0);
     } else {
-      payload.unit_price = Number(newPricing.unit_price || 0);
+      payload.price_1k = Number(newPricing.price_1k || 0);
+      payload.price_1_5k = Number(newPricing.price_1_5k || 0);
+      payload.price_2k = Number(newPricing.price_2k || 0);
+      payload.price_4k = Number(newPricing.price_4k || 0);
     }
     return window.API.saveAdminCostPricing(payload)
       .then(function(res) {
@@ -1795,16 +1804,12 @@ function AdminPage({ user, onBack }) {
                 onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { model_key: e.target.value })); }}
               />
               {newPricing.category === 'image' ? (
-                <input
-                  className="df-admin-control"
-                  type="number"
-                  step="0.0001"
-                  min="0"
-                  style={{ width: 120, boxSizing: 'border-box' }}
-                  placeholder="单次价格 ($)"
-                  value={newPricing.unit_price}
-                  onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { unit_price: e.target.value })); }}
-                />
+                <>
+                  <input className="df-admin-control" type="number" step="0.0001" min="0" style={{ width: 82, boxSizing: 'border-box' }} placeholder="1K ($)" title="1K 单价 ($)" value={newPricing.price_1k} onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { price_1k: e.target.value })); }} />
+                  <input className="df-admin-control" type="number" step="0.0001" min="0" style={{ width: 82, boxSizing: 'border-box' }} placeholder="1.5K ($)" title="1.5K 单价 ($)" value={newPricing.price_1_5k} onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { price_1_5k: e.target.value })); }} />
+                  <input className="df-admin-control" type="number" step="0.0001" min="0" style={{ width: 82, boxSizing: 'border-box' }} placeholder="2K ($)" title="2K 单价 ($)" value={newPricing.price_2k} onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { price_2k: e.target.value })); }} />
+                  <input className="df-admin-control" type="number" step="0.0001" min="0" style={{ width: 82, boxSizing: 'border-box' }} placeholder="4K ($)" title="4K 单价 ($)" value={newPricing.price_4k} onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { price_4k: e.target.value })); }} />
+                </>
               ) : (
                 <>
                   <input
@@ -1831,7 +1836,7 @@ function AdminPage({ user, onBack }) {
               )}
               <input
                 className="df-admin-control"
-                style={{ minWidth: 160, flex: 1, boxSizing: 'border-box' }}
+                style={{ minWidth: 140, flex: 1, boxSizing: 'border-box' }}
                 placeholder="备注（可选）"
                 value={newPricing.note}
                 onChange={function(e) { setNewPricing(Object.assign({}, newPricing, { note: e.target.value })); }}
@@ -1848,7 +1853,7 @@ function AdminPage({ user, onBack }) {
                     <th>模型</th>
                     <th>类型</th>
                     <th>状态</th>
-                    <th>单价设置 (USD)</th>
+                    <th>单价设置 (USD · 1K / 1.5K / 2K / 4K 或 Token)</th>
                     <th>备注</th>
                     <th>最近更新</th>
                     <th>操作</th>
@@ -1884,8 +1889,15 @@ function AdminPage({ user, onBack }) {
                               <span className="df-admin-muted" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>$/1M</span>
                             </div>
                           ) : (
-                            <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', verticalAlign: 'middle' }}>
-                              <input className="df-admin-control" type="number" step="0.0001" min="0" style={{ width: 88, height: 28, boxSizing: 'border-box' }} value={draft.unit_price || ''} onChange={function(e) { setDraft('unit_price', e.target.value); }} />
+                            <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', verticalAlign: 'middle', flexWrap: 'wrap' }}>
+                              <span className="df-admin-muted" style={{ fontSize: 10 }}>1K</span>
+                              <input className="df-admin-control" type="number" step="0.0001" min="0" style={{ width: 68, height: 28, boxSizing: 'border-box' }} value={draft.price_1k || ''} onChange={function(e) { setDraft('price_1k', e.target.value); }} />
+                              <span className="df-admin-muted" style={{ fontSize: 10 }}>1.5K</span>
+                              <input className="df-admin-control" type="number" step="0.0001" min="0" style={{ width: 68, height: 28, boxSizing: 'border-box' }} value={draft.price_1_5k || ''} onChange={function(e) { setDraft('price_1_5k', e.target.value); }} />
+                              <span className="df-admin-muted" style={{ fontSize: 10 }}>2K</span>
+                              <input className="df-admin-control" type="number" step="0.0001" min="0" style={{ width: 68, height: 28, boxSizing: 'border-box' }} value={draft.price_2k || ''} onChange={function(e) { setDraft('price_2k', e.target.value); }} />
+                              <span className="df-admin-muted" style={{ fontSize: 10 }}>4K</span>
+                              <input className="df-admin-control" type="number" step="0.0001" min="0" style={{ width: 68, height: 28, boxSizing: 'border-box' }} value={draft.price_4k || ''} onChange={function(e) { setDraft('price_4k', e.target.value); }} />
                               <span className="df-admin-muted" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>$/次</span>
                             </div>
                           )}

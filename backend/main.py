@@ -761,6 +761,8 @@ def _current_user(request: Request) -> dict:
     user = getattr(request.state, "user", None)
     if not user:
         raise HTTPException(401, "请先输入名字进入系统")
+    from .model_routing import set_usage_user
+    set_usage_user(user.get("id"))
     return user
 
 
@@ -7858,6 +7860,10 @@ def admin_save_cost_center_pricing(request: Request, body: dict):
             category=body.get("category") or "image",
             model_key=body.get("model_key") or "",
             unit_price=body.get("unit_price"),
+            price_1k=body.get("price_1k"),
+            price_1_5k=body.get("price_1_5k"),
+            price_2k=body.get("price_2k"),
+            price_4k=body.get("price_4k"),
             input_per_1m=body.get("input_per_1m"),
             output_per_1m=body.get("output_per_1m"),
             resolution_2k_mult=body.get("resolution_2k_mult", 1.5),
