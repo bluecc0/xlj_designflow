@@ -19,9 +19,9 @@ class RouteDeadlineTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_deadline_matches_effective_resolution(self):
         for size, resolution, expected in [
-            ("auto", "1K", 100), ("auto", "2K", 300),
-            ("3:4", "4k", 300), ("auto", "", 100),
-            ("2048x2048", "", 300), ("2048x2048", "1K", 100),
+            ("auto", "1K", 120), ("auto", "2K", 300),
+            ("3:4", "4k", 300), ("auto", "", 120),
+            ("2048x2048", "", 300), ("2048x2048", "1K", 120),
         ]:
             with self.subTest(size=size, resolution=resolution):
                 with patch.object(ai_image.asyncio, "wait_for", AsyncMock(return_value={})) as wait:

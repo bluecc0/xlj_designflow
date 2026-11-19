@@ -2506,6 +2506,9 @@ PROVIDER_FAILURE_THRESHOLD = 2              # 2 consecutive failures
 _provider_circuit_lock = threading.Lock()
 _provider_consecutive_failures: dict[str, int] = {}
 _provider_frozen_until: dict[str, float] = {}
+_provider_last_failure: dict[str, float] = {}
+_provider_ignore_before: dict[str, float] = {}
+PROVIDER_FAILURE_WINDOW_SECONDS = 300
 
 
 def _circuit_key(provider: str, model: str = "") -> str:
@@ -2582,15 +2585,34 @@ def is_freezable_provider_error(exc: BaseException | str | None) -> bool:
     return False
 
 
-def record_provider_failure(provider: str, model: str = "", *, now: float | None = None) -> bool:
+def record_provider_failure(provider: str, model: str = "", *, now: float | None = None,
+                            attempt_started: float | None = None) -> bool:
     """记录一次供应商失败。若连续失败达到阈值（2次），冻结30分钟并返回 True。"""
     curr = time.time() if now is None else now
     key = _circuit_key(provider, model)
     with _provider_circuit_lock:
+        if attempt_started is not None and attempt_started < _provider_ignore_before.get(key, float('-inf')):
+            return False
+        until = _provider_frozen_until.get(key, 0)
+        if until > curr:
+            logger.warning("[smart-routing] circuit=%s failure ignored while frozen count=%s until=%s",
+                           key, _provider_consecutive_failures.get(key, 0), until)
+            return True
+        if until:
+            _provider_frozen_until.pop(key, None)
+            _provider_consecutive_failures.pop(key, None)
+        if attempt_started is not None and until and attempt_started < until:
+            return False
+        if curr - _provider_last_failure.get(key, float('-inf')) > PROVIDER_FAILURE_WINDOW_SECONDS:
+            _provider_consecutive_failures.pop(key, None)
         count = _provider_consecutive_failures.get(key, 0) + 1
+        _provider_last_failure[key] = curr
+        logger.warning("[smart-routing] circuit=%s failure_count=%d->%d window_seconds=%d",
+                       key, count - 1, count, PROVIDER_FAILURE_WINDOW_SECONDS)
         _provider_consecutive_failures[key] = count
         if count >= PROVIDER_FAILURE_THRESHOLD:
             frozen_until = curr + PROVIDER_FREEZE_DURATION_SECONDS
+            _provider_ignore_before[key] = frozen_until
             _provider_frozen_until[key] = frozen_until
             logger.warning(
                 "[smart-routing] Provider circuit %s has failed %d consecutive times; frozen for %ds (until %s)",
@@ -2603,15 +2625,21 @@ def record_provider_failure(provider: str, model: str = "", *, now: float | None
     return False
 
 
-def record_provider_success(provider: str, model: str = "") -> None:
+def record_provider_success(provider: str, model: str = "", *, attempt_started: float | None = None) -> None:
     """记录一次供应商成功。清空连续失败计数并解除冻结。"""
     key = _circuit_key(provider, model)
     with _provider_circuit_lock:
         for k in (key, provider):
+            if attempt_started is not None and attempt_started < _provider_ignore_before.get(k, float('-inf')):
+                continue
+            if attempt_started is not None and attempt_started <= _provider_last_failure.get(k, float('-inf')):
+                logger.info("[smart-routing] circuit=%s late success ignored", k)
+                continue
             if _provider_consecutive_failures.get(k, 0) > 0 or k in _provider_frozen_until:
                 logger.info("[smart-routing] Provider circuit %s succeeded; resetting failure count and freeze", k)
             _provider_consecutive_failures.pop(k, None)
             _provider_frozen_until.pop(k, None)
+            _provider_last_failure.pop(k, None)
 
 
 def is_provider_frozen(provider: str, model: str = "", *, now: float | None = None) -> bool:
@@ -2659,12 +2687,18 @@ def reset_provider_freeze(provider: str | None = None, model: str = "") -> None:
             key = _circuit_key(provider, model)
             _provider_consecutive_failures.pop(key, None)
             _provider_frozen_until.pop(key, None)
+            _provider_last_failure.pop(key, None)
+            _provider_ignore_before.pop(key, None)
             if model:
                 _provider_consecutive_failures.pop(provider, None)
                 _provider_frozen_until.pop(provider, None)
+                _provider_last_failure.pop(provider, None)
+                _provider_ignore_before.pop(provider, None)
         else:
             _provider_consecutive_failures.clear()
             _provider_frozen_until.clear()
+            _provider_last_failure.clear()
+            _provider_ignore_before.clear()
 
 
 def _get_custom_rules() -> dict[str, list[str]]:
@@ -2828,7 +2862,7 @@ def get_smart_route_candidates(
 
 # 智能路由：候选线路完整轮询轮数。1→2→3 后再 1→2→3，都失败才抛错。
 SMART_ROUTE_ROUNDS = 2
-SMART_ROUTE_ATTEMPT_SECONDS = 100
+SMART_ROUTE_ATTEMPT_SECONDS = 120
 SMART_ROUTE_HIGH_RES_ATTEMPT_SECONDS = 300
 
 
@@ -2888,6 +2922,7 @@ async def smart_generate_image_async(
     on_attempt: Callable[[str], Any] | None = None,
     on_accepted: Callable[[str, str], Any] | None = None,
     output_format: str = "",
+    routing_job_id: str = "",
 ) -> dict:
     """智能路由生图：按模型与配置选路，暂态错误自动 Failover 并循环两轮。
 
@@ -2895,7 +2930,7 @@ async def smart_generate_image_async(
     全部失败才把错误抛给用户。
 
     前端只有两个失败出口：明确的上游安全审核拦截，或全部线路完成两轮后仍失败。
-    每条线路 1K 最多等待 100 秒，2K / 4K 最多等待 300 秒；超时后放弃并切换。
+    每条线路 1K 最多等待 120 秒，2K / 4K 最多等待 300 秒；超时后放弃并切换。
     """
     gif_output = output_format == "gif" and _normalize_model_name(model).lower() in GPT_IMAGE_26_MODELS and not images
     if gif_output:
@@ -2922,6 +2957,9 @@ async def smart_generate_image_async(
     ]
 
     errors: list[str] = []
+    logger.warning("[smart-routing] route_plan job=%s candidates=%s frozen=%s",
+                   routing_job_id or "unknown", candidates,
+                   {key: value for key, value in get_provider_freeze_status().items() if value["is_frozen"]})
     primary_provider = candidates[0]
     accepted: dict[str, str] = {}
     last_provider = primary_provider
@@ -2955,6 +2993,10 @@ async def smart_generate_image_async(
         circuit_model = model
         if _normalize_model_name(model).lower() in GPT_IMAGE_26_MODELS and provider not in (PROVIDER_SUB2API, PROVIDER_APIMART, PROVIDER_APIMART_26_EXT):
             circuit_model = "gpt-image-2.5"
+        attempt_started = time.time()
+        attempt_id = uuid.uuid4().hex
+        logger.warning("[smart-routing] attempt_start job=%s attempt=%s provider=%s circuit=%s round=%d",
+                       routing_job_id or "unknown", attempt_id, provider, _circuit_key(provider, circuit_model), round_no)
         try:
             if on_attempt:
                 on_attempt(provider)
@@ -3026,7 +3068,10 @@ async def smart_generate_image_async(
                     )
 
             result = await _bounded_route_attempt(attempt, size=size, resolution=resolution)
-            record_provider_success(provider, model=circuit_model)
+            record_provider_success(provider, model=circuit_model, attempt_started=attempt_started)
+            logger.warning("[smart-routing] attempt_success job=%s attempt=%s provider=%s upstream=%s elapsed=%.2f",
+                           routing_job_id or "unknown", attempt_id, provider, result.get("task_id") or accepted.get(provider) or "unknown",
+                           time.time() - attempt_started)
             result["provider"] = provider
             accepted_tid = (accepted.get(provider) or "").strip()
             if accepted_tid and not result.get("task_id"):
@@ -3056,8 +3101,12 @@ async def smart_generate_image_async(
             )
             errors.append(f"R{round_no}/{provider}: {err_msg}")
 
-            if is_freezable_provider_error(exc):
-                record_provider_failure(provider, model=circuit_model)
+            freezable = is_freezable_provider_error(exc)
+            logger.warning("[smart-routing] attempt_failure job=%s attempt=%s provider=%s upstream=%s round=%d freezable=%s elapsed=%.2f error=%s",
+                           routing_job_id or "unknown", attempt_id, provider, accepted.get(provider) or "unknown",
+                           round_no, freezable, time.time() - attempt_started, err_msg)
+            if freezable:
+                record_provider_failure(provider, model=circuit_model, attempt_started=attempt_started)
 
             if is_safety_review_error(exc):
                 logger.warning(
