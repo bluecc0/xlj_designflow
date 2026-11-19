@@ -59,6 +59,31 @@ def _looks_fake_done(text: str, messages: list[dict]) -> bool:
     if _ANNOUNCES_WORK.search(text):
         return True
     return bool(_CLAIMS_DONE.search(text)) and not _has_prior_results(messages)
+
+
+_IMAGE_EXECUTORS = {"generate_image", "outfit_change", "special_compose", "upscale_image",
+                    "remove_background", "outpaint_image", "vectorize_image", "split_layers", "fill_background"}
+_IMAGE_ACTION = re.compile(r"生图|出图|输出图片|生成.{0,30}(?:图|海报|lookbook)|去除.{0,20}人物|"
+                           r"(?:调整|修改|替换|更换|去掉|删除|移除|换成).{0,40}(?:图|人物|背景|场景|光影|色彩|服装)|"
+                           r"(?:图|人物|背景|场景).{0,40}(?:调整为|换成|替换|去除)|抠图|扩图|放大.{0,10}图", re.I)
+_LOOKUP_ONLY = re.compile(r"(?:不要|不用|别|无需|不必).{0,8}(?:生成|生图|出图|重做)|"
+                          r"我的图呢|图在哪|哪里下载|是否完成|做好了吗|之前是不是|怎么(?:使用|操作|生图|出图)")
+_NEW_WORK_CLAIM = re.compile(r"(?:正在|现在|开始|我会|马上|这就|已按|已将|已去除|已调整|已生成|已完成).{0,50}"
+                             r"(?:生成|出图|生图|处理|调整|去除|补全|替换|完成)|已去除|已调整", re.S)
+_HONEST_STOP = re.compile(r"不能|无法|做不到|不支持|失败|没能|未能|没有.{0,8}(?:生成|执行)|请.{0,12}(?:上传|补充|确认)|需要.{0,12}(?:上传|确认)")
+
+
+def _needs_execution(text: str) -> bool:
+    return bool(_IMAGE_ACTION.search(text)) and not bool(_LOOKUP_ONLY.search(text))
+
+
+def _unsupported_work_claim(text: str, request: str, messages: list[dict]) -> bool:
+    # A status lookup never authorizes a new paid generation.
+    if _LOOKUP_ONLY.search(request):
+        return False
+    if _HONEST_STOP.search(text) and not _NEW_WORK_CLAIM.search(text):
+        return False
+    return _needs_execution(request) or bool(_NEW_WORK_CLAIM.search(text)) or _looks_fake_done(text, messages)
 _OVERFLOW_HINTS = ("context_length", "context length", "maximum context", "too many tokens",
                    "prompt is too long", "input is too long", "context window")
 
@@ -91,6 +116,7 @@ class RoutedModelClient:
     def __init__(self, purpose: str = "agent_llm", timeout: float = 90):
         self.purpose = purpose
         self.timeout = timeout
+        self.require_tool_once = False
 
     async def stream(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[tuple[str, Any]]:
         errors: list[str] = []
@@ -107,6 +133,8 @@ class RoutedModelClient:
             finished = False
             try:
                 body = _payload(route, {"messages": messages, "tools": tools, "temperature": 0.4}, stream=True)
+                if self.require_tool_once and tools:
+                    body["tool_choice"] = "required"
                 async with httpx.AsyncClient(**_client_options(route, self.timeout)) as client:
                     async with client.stream("POST", chat_completions_endpoint(route.base_url),
                                              headers=_headers(route), json=body) as response:
@@ -153,7 +181,10 @@ class RoutedModelClient:
                     {"id": c["id"] or f"call_{i}", "name": c["name"], "arguments": c["arguments"]}
                     for i, c in sorted(calls.items())
                 ]
+                if self.require_tool_once and tools and not tool_calls:
+                    raise ModelRoutingError("模型未遵守工具调用约束：只返回文字，未实际执行")
                 route_succeeded(route)
+                self.require_tool_once = False
                 yield ("step", ModelStep(text="".join(text_parts), tool_calls=tool_calls,
                                          route={"provider": route.provider, "model": route.model}))
                 return
@@ -244,8 +275,10 @@ async def run_loop(
     """
     specs = [t.spec() for t in tools.values()]
     final_text = ""
-    used_tools = False
     corrected = False
+    execution_attempted = False
+    request = str(ctx_base.get("state", {}).get("request") or next(
+        (m.get("content") or "" for m in reversed(messages) if m.get("role") == "user"), ""))
     note: dict | None = None
     while True:
         step: ModelStep | None = None
@@ -269,12 +302,30 @@ async def run_loop(
             messages.remove(note)
         logger.info("[agent2] turn %s step via %s tools=%s", ctx_base.get("turn_id"), step.route,
                     [c["name"] for c in step.tool_calls])
-        if not step.tool_calls and not used_tools and not corrected and _looks_fake_done(step.text or "", messages):
+        unexecuted = (not step.tool_calls and not execution_attempted
+                      and _unsupported_work_claim(step.text or "", request, messages))
+        lookup_promise = (not step.tool_calls and not execution_attempted and bool(_LOOKUP_ONLY.search(request))
+                          and bool(re.search(r"(?:现在|这就|马上|我会|正在为你).{0,25}(?:生成|处理|去除|调整|出图)", step.text or "")))
+        if lookup_promise:
+            await emit("message.reset", {})
+            if corrected:
+                raise RuntimeError("未找到本轮执行证据，不能声称已生成或正在处理；请查看已有任务状态。")
+            corrected = True
+            note = {"role": "system", "content": "用户本轮仅查询已有结果，不授权新任务。请如实说明已有工具结果；"
+                    "如果先前没有实际执行就明确告知，没有任务在处理。不得说现在开始、正在处理或已完成，不得新建付费请求。"}
+            messages.append(note)
+            continue
+        if unexecuted and corrected:
+            await emit("message.reset", {})
+            raise RuntimeError("Agent 未实际执行本轮图片任务，已停止，未自动重复提交。请重试或联系管理员。")
+        if unexecuted and not corrected:
             # 只纠正一次：清掉前端已显示的这段文字，提醒模型去真正调用工具或如实说明
             corrected = True
             logger.warning("[agent2] turn %s claimed done without tools via %s: %s",
                            ctx_base.get("turn_id"), step.route, (step.text or "")[:80])
             await emit("message.reset", {})
+            if hasattr(model, "require_tool_once"):
+                model.require_tool_once = True
             note = {"role": "system", "content": FAKE_DONE_NOTE}
             messages.append(note)
             continue
@@ -292,16 +343,28 @@ async def run_loop(
         if not step.tool_calls:
             return TurnResult(status="done", messages=messages, text=final_text)
 
-        used_tools = True
         suspending = [c for c in step.tool_calls if tools.get(c["name"]) and tools[c["name"]].suspends]
         normal = [c for c in step.tool_calls if c not in suspending]
         results = await asyncio.gather(*[
             _run_tool(tools.get(c["name"]), c["name"], c, ctx_base, emit) for c in normal
         ])
+        execution_attempted = execution_attempted or any(c["name"] in _IMAGE_EXECUTORS for c in normal)
         for call, content in zip(normal, results):
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": content})
         if checkpoint:
             checkpoint(messages)
+        # A tool-detected material conflict must actually pause, not merely ask
+        # the planning model to remember to ask the user on its next step.
+        clarification = next((json.loads(content).get("clarification") for content in results
+                              if isinstance(json.loads(content), dict) and json.loads(content).get("clarification")), None)
+        if clarification and not suspending:
+            call_id = f"clarify_{time.time_ns()}"
+            messages.append({"role": "assistant", "content": None, "tool_calls": [{
+                "id": call_id, "type": "function", "function": {"name": "ask_user",
+                "arguments": json.dumps(clarification, ensure_ascii=False)}}]})
+            pending = {"call_id": call_id, "tool": "ask_user", **clarification}
+            await emit("input.required", pending)
+            return TurnResult(status="waiting_user", messages=messages, text=final_text, pending=pending)
         if suspending:
             call = suspending[0]
             # 同一步里多余的提问直接回复"已忽略"，保证消息序列完整

@@ -28,6 +28,49 @@ OK_STREAM = _sse([
 
 
 class RoutedModelClientTest(unittest.TestCase):
+    def test_required_tool_text_only_response_fails_over(self):
+        seen = []
+        def handler(request):
+            seen.append(request.url.host)
+            if request.url.host == "bad.example":
+                return httpx.Response(200, content=OK_STREAM)
+            return httpx.Response(200, content=_sse([{"choices": [{"delta": {"tool_calls": [{
+                "index": 0, "id": "c", "function": {"name": "ask_user", "arguments": "{}"}}]},
+                "finish_reason": "tool_calls"}]}]))
+        real_client = httpx.AsyncClient
+        routes = [ModelRoute("sub2api", "http://bad.example/v1", "k", "gpt-6.1-sol"),
+                  ModelRoute("apimart", "http://good.example/v1", "k", "m")]
+        async def run():
+            client = engine.RoutedModelClient()
+            client.require_tool_once = True
+            return [part async for part in client.stream([], [{"type": "function", "function": {"name": "ask_user"}}])]
+        with patch.object(engine, "get_model_routes", return_value=routes), \
+             patch.object(engine.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler))):
+            parts = asyncio.run(run())
+        self.assertEqual(seen, ["bad.example", "good.example"])
+        self.assertEqual(parts[-1][1].tool_calls[0]["name"], "ask_user")
+
+    def test_corrective_request_requires_a_tool_only_once(self):
+        requests = []
+        def handler(request):
+            requests.append(json.loads(request.content))
+            return httpx.Response(200, content=_sse([{"choices": [{"delta": {"tool_calls": [{
+                "index": 0, "id": "c", "function": {"name": "ask_user", "arguments": "{}"}}]},
+                "finish_reason": "tool_calls"}]}]))
+        real_client = httpx.AsyncClient
+        route = ModelRoute("sub2api", "http://test.example/v1", "k", "gpt-6.1-sol")
+        async def run():
+            client = engine.RoutedModelClient()
+            client.require_tool_once = True
+            specs = [{"type": "function", "function": {"name": "ask_user", "parameters": {"type": "object"}}}]
+            _ = [part async for part in client.stream([], specs)]
+            _ = [part async for part in client.stream([], specs)]
+        with patch.object(engine, "get_model_routes", return_value=[route]), \
+             patch.object(engine.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler))):
+            asyncio.run(run())
+        self.assertEqual(requests[0]["tool_choice"], "required")
+        self.assertNotIn("tool_choice", requests[1])
+
     def _run(self, streams: dict[str, bytes]):
         seen = []
 
