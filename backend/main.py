@@ -7332,6 +7332,8 @@ def _finish_detail_repair(user_id: str, job_id: str, request_meta: dict, raw_url
         raise RuntimeError("模型生成的局部图不存在")
     merged = detail_repair.finish_from_files(
         _detail_repair_ref_dir(user_id, storage_id), raw_path, tuple(int(v) for v in box),
+        # 局部重绘（没放图案）可能要求改任何内容，整块区域都用模型结果；旧任务没有该字段时按图案修复处理
+        keep_texture=bool(info.get("has_pattern", True)),
     )
     out_path = _ensure_user_dated_output_dir(user_id) / f"{job_id}_repair.png"
     atomic_write(out_path, merged)

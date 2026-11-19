@@ -9,8 +9,9 @@
 3. 以修复区域为中心、多留一圈上下文，按最接近的生图比例裁出局部，放大后发给模型三张参考：
    图1 原图局部（未被遮挡，看清商品原本的材质、褶皱和光影），图2 同一局部叠上新图案的效果（位置/大小/角度），
    图3 起依次是每个图案裁切后的素材（样式细节）；
-4. 模型结果缩回局部尺寸，先对齐原图的清晰度和色调（用修复区域外的上下文估计），
-   再只把修复区域内“真正变了”的像素（向外略扩、边缘羽化）贴回原图，区域外像素与原图完全一致。
+4. 模型结果缩回局部尺寸，用修复区域外的上下文把位置、清晰度对齐原图，
+   再在修复区域内做泊松融合：边界取原图，区域内只取模型里明确的边（新图案），
+   布料的明暗、褶皱、纹理保留原图（模型重画时常会自己添褶皱），区域外像素与原图完全一致。
 
 所有坐标都是原图像素坐标；图案的裁切框是图案原图像素坐标。
 """
@@ -21,6 +22,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+import cv2
 import numpy as np
 from PIL import Image, ImageChops, ImageFilter, ImageOps
 
@@ -34,16 +36,15 @@ MAX_WORK_SIDE = 2048
 MASK_GROW_PX = 3
 # 一次修复最多叠几个图案（参考图 = 原图区域 + 叠加效果 + 每个图案）
 MAX_PATTERNS = 4
-MIN_FEATHER_PX = 2
-# 贴回前对齐色调：在这么大的网格上估计低频色差（局部长边缩到该格数）
-TONE_GRID = 48
-# 修复区域内与原图差异低于 CHANGE_LOW 的像素保留原图，高于 CHANGE_HIGH 的完全用模型结果（0-255）
-CHANGE_LOW = 8.0
-CHANGE_HIGH = 28.0
-# 改动区域再向外扩（局部长边的比例，至少 3px）：旧图案边缘那圈淡灰边 / 压缩噪点与结果只差一点，
-# 若正好落在半贴半留的过渡带里，旧图案的轮廓会半透明地留下来；扩出去让过渡落在干净的底子上。
-# 扩太多会把模型自己画的褶皱阴影也带进来，1.2% 在实测中两头兼顾。
-CHANGE_GROW_RATIO = 0.012
+# 贴回时挑选梯度的阈值（0-255，相邻像素差）：低于 EDGE_LOW 算布纹/明暗等细弱变化，高于 EDGE_HIGH 算明确的边
+EDGE_LOW = 4.0
+EDGE_HIGH = 12.0
+# 对齐模型结果时允许的最大偏差：缩放/旋转（仿射矩阵线性部分偏离单位阵）和平移（局部长边的比例），超出视为对齐失败
+ALIGN_MAX_LINEAR = 0.05
+ALIGN_MAX_SHIFT = 0.03
+# 泊松方程求解（多重网格预条件共轭梯度）：区域内每像素残差的均方根低于这个值就停（0-255 灰度）
+POISSON_TOL = 0.001
+POISSON_MAX_ITERS = 500
 # 清晰度对齐时尝试的模糊半径
 SOFTEN_RADII = (0.4, 0.6, 0.8, 1.0, 1.3, 1.6, 2.0)
 
@@ -280,40 +281,6 @@ def build_plan(
     )
 
 
-def _gauss_blur(arr: np.ndarray, sigma: float) -> np.ndarray:
-    """二维数组的高斯模糊（只用在缩小后的小网格上）。"""
-    r = max(1, int(3 * sigma))
-    x = np.arange(-r, r + 1, dtype=np.float64)
-    k = np.exp(-(x ** 2) / (2 * sigma ** 2))
-    k /= k.sum()
-    a = np.pad(arr, r, mode="edge")
-    a = np.apply_along_axis(lambda v: np.convolve(v, k, mode="valid"), 0, a)
-    return np.apply_along_axis(lambda v: np.convolve(v, k, mode="valid"), 1, a)
-
-
-def _tone_correction(diff: np.ndarray, weight: np.ndarray) -> np.ndarray:
-    """用 weight>0 处的色差（原图-结果）估计一张平滑的色差图，并外推到修复区域里。"""
-    h, w = weight.shape
-    scale = TONE_GRID / max(h, w)
-    gw, gh = max(2, round(w * scale)), max(2, round(h * scale))
-
-    def down(arr: np.ndarray) -> np.ndarray:
-        return np.asarray(Image.fromarray(arr.astype(np.float32), "F").resize((gw, gh), Image.BOX), np.float64)
-
-    def up(arr: np.ndarray) -> np.ndarray:
-        return np.asarray(Image.fromarray(arr.astype(np.float32), "F").resize((w, h), Image.BILINEAR), np.float64)
-
-    sigma = TONE_GRID * 0.12
-    den = _gauss_blur(down(weight), sigma)
-    total = float(weight.sum())
-    out = np.zeros_like(diff)
-    for c in range(diff.shape[2]):
-        mean = float((diff[..., c] * weight).sum() / total) if total > 0 else 0.0
-        num = _gauss_blur(down(diff[..., c] * weight), sigma)
-        out[..., c] = up(np.where(den > 1e-3, num / np.maximum(den, 1e-6), mean))
-    return out
-
-
 def _detail_energy(image: Image.Image, weight: np.ndarray) -> float:
     """weight 区域内的平均高频强度，用来比较清晰度。"""
     gray = image.convert("L")
@@ -336,48 +303,190 @@ def _match_sharpness(patch: Image.Image, local: Image.Image, weight: np.ndarray)
     return best
 
 
-def _blur_unit(arr: np.ndarray, radius: float) -> np.ndarray:
-    img = Image.fromarray(np.clip(arr * 255, 0, 255).round().astype(np.uint8), "L")
-    return np.asarray(img.filter(ImageFilter.GaussianBlur(radius)), np.float64) / 255
+def _dilate(mask: np.ndarray, radius: int) -> np.ndarray:
+    if radius <= 0:
+        return mask.astype(bool)
+    kernel = np.ones((2 * radius + 1, 2 * radius + 1), np.uint8)
+    return cv2.dilate(mask.astype(np.uint8), kernel).astype(bool)
 
 
-def paste_back(source: Image.Image, result: Image.Image, box: tuple[int, int, int, int], region_mask: Image.Image) -> Image.Image:
-    """模型结果缩回局部尺寸，对齐清晰度和色调后，只把修复区域内真正变了的像素贴回原图。"""
+def _align(local: Image.Image, patch: Image.Image, context: np.ndarray) -> Image.Image:
+    """模型会把整个局部重画一遍，常带亚像素的偏移/缩放。用修复区外的内容估计仿射变换，把结果对回原图。
+    估不出来或偏差离谱时原样返回。"""
+    if context.sum() < 200:
+        return patch
+    a = cv2.GaussianBlur(np.asarray(local.convert("L"), np.float32), (0, 0), 1.5)
+    b = cv2.GaussianBlur(np.asarray(patch.convert("L"), np.float32), (0, 0), 1.5)
+    identity = np.eye(2, 3, dtype=np.float32)
+    warp = identity
+    # 仿射估不动（纹理只有一个方向时会原样返回单位阵）或报错时，退回只估平移
+    for motion in (cv2.MOTION_AFFINE, cv2.MOTION_TRANSLATION):
+        try:
+            _, warp = cv2.findTransformECC(
+                a, b, identity.copy(), motion,
+                (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 200, 1e-6),
+                context.astype(np.uint8) * 255, 5,
+            )
+        except cv2.error:
+            continue
+        if not np.array_equal(warp, identity):
+            break
+    if np.array_equal(warp, identity):
+        return patch
+    h, w = a.shape
+    if (np.abs(warp[:, :2] - np.eye(2)).max() > ALIGN_MAX_LINEAR
+            or np.abs(warp[:, 2]).max() > max(w, h) * ALIGN_MAX_SHIFT):
+        return patch
+    out = cv2.warpAffine(np.asarray(patch.convert("RGB")), warp, (w, h),
+                         flags=cv2.INTER_LANCZOS4 + cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REFLECT)
+    return Image.fromarray(out, "RGB")
+
+
+def _grads(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """前向差分：gx[y,x] = a[y,x+1]-a[y,x]，gy[y,x] = a[y+1,x]-a[y,x]。"""
+    gx = np.zeros_like(a)
+    gy = np.zeros_like(a)
+    gx[:, :-1] = a[:, 1:] - a[:, :-1]
+    gy[:-1] = a[1:] - a[:-1]
+    return gx, gy
+
+
+def _edge_weight(g: np.ndarray) -> np.ndarray:
+    """梯度有多像“明确的边”：0（布纹、明暗）到 1（图案边缘）。三通道共用，避免颜色漂移。"""
+    return np.clip((np.abs(g).max(axis=2, keepdims=True) - EDGE_LOW) / (EDGE_HIGH - EDGE_LOW), 0, 1)
+
+
+def _pick_gradient(model_g: np.ndarray, source_g: np.ndarray) -> np.ndarray:
+    """模型里明确的边（新图案）用模型的；原图里明确而模型里没有的边（去掉的旧图案）清零；
+    其余细弱变化保留原图，模型自己添的褶皱、明暗、布纹不带进来。"""
+    wm = _edge_weight(model_g)
+    return wm * model_g + (1 - wm) * (1 - _edge_weight(source_g)) * source_g
+
+
+def _neighbor_sum(a: np.ndarray) -> np.ndarray:
+    out = np.zeros_like(a)
+    out[1:] += a[:-1]
+    out[:-1] += a[1:]
+    out[:, 1:] += a[:, :-1]
+    out[:, :-1] += a[:, 1:]
+    return out
+
+
+def _apply_lap(v: np.ndarray, m: np.ndarray) -> np.ndarray:
+    """区域内的离散负拉普拉斯 (4v - Σ邻居)，区域外视为 0。"""
+    return (4 * v - _neighbor_sum(v * m)) * m
+
+
+def _vcycle(r: np.ndarray, m: np.ndarray) -> np.ndarray:
+    """多重网格 V 循环：近似解 A·e = r（区域外 e=0）。用作共轭梯度的预条件。"""
+    h, w = m.shape[:2]
+    if min(h, w) < 16:
+        e = np.zeros_like(r)
+        for _ in range(60):  # 最粗一层很小，多做几次加权雅可比即可
+            e += 0.8 * (r - _apply_lap(e, m)) / 4 * m
+        return e
+    e = np.zeros_like(r)
+    for _ in range(2):
+        e += 0.8 * (r - _apply_lap(e, m)) / 4 * m
+    res = r - _apply_lap(e, m)
+    hh, ww = (h + 1) // 2 * 2, (w + 1) // 2 * 2
+    pad = ((0, hh - h), (0, ww - w), (0, 0))
+    rp, mp = np.pad(res, pad), np.pad(m, pad)
+
+    def block_sum(a: np.ndarray) -> np.ndarray:
+        return a[0::2, 0::2] + a[1::2, 0::2] + a[0::2, 1::2] + a[1::2, 1::2]
+
+    # 粗网格步长翻倍，算子尺度 ×4：残差取 2x2 之和；区域取 2x2 里有任一像素；修正量按块复制回来
+    ec = _vcycle(block_sum(rp), (block_sum(mp) > 0).astype(np.float64))
+    e += np.repeat(np.repeat(ec, 2, axis=0), 2, axis=1)[:h, :w] * m
+    for _ in range(2):
+        e += 0.8 * (r - _apply_lap(e, m)) / 4 * m
+    return e
+
+
+def _cg(b: np.ndarray, m: np.ndarray, x: np.ndarray, tol: float) -> np.ndarray:
+    """多重网格预条件的共轭梯度，解 A·x = b（A 见 _apply_lap），三通道一起；
+    tol 是区域内每像素残差的均方根（0-255 灰度）。"""
+    x = x * m
+    r = b - _apply_lap(x, m)
+    z = _vcycle(r, m)
+    p = z.copy()
+    rz = (r * z).sum(axis=(0, 1))
+    stop = (tol ** 2) * max(float(m.sum()), 1.0)
+    for _ in range(POISSON_MAX_ITERS):
+        if ((r * r).sum(axis=(0, 1)) <= stop).all():
+            break
+        ap = _apply_lap(p, m)
+        alpha = rz / np.maximum((p * ap).sum(axis=(0, 1)), 1e-30)
+        x += alpha * p
+        r -= alpha * ap
+        z = _vcycle(r, m)
+        rz_new = (r * z).sum(axis=(0, 1))
+        p = z + (rz_new / np.where(rz == 0, 1e-30, rz)) * p
+        rz = rz_new
+    return x
+
+
+def _poisson(src: np.ndarray, gx: np.ndarray, gy: np.ndarray, omega: np.ndarray) -> np.ndarray:
+    """在 omega 内求 f：拉普拉斯(f) = div(gx, gy)，omega 外（含边界）取原图。"""
+    om = omega.copy()
+    om[0, :] = om[-1, :] = om[:, 0] = om[:, -1] = False
+    if not om.any():
+        return src
+    ys, xs = np.nonzero(om)
+    y0, y1, x0, x1 = ys.min() - 1, ys.max() + 2, xs.min() - 1, xs.max() + 2
+    s, gx, gy, om = src[y0:y1, x0:x1], gx[y0:y1, x0:x1], gy[y0:y1, x0:x1], om[y0:y1, x0:x1]
+    m = om[..., None].astype(np.float64)
+
+    # 4f - Σ邻居 = -div(g)；区域外的已知像素移到右边
+    neg_div = -gx.copy()
+    neg_div[:, 1:] += gx[:, :-1]
+    neg_div -= gy
+    neg_div[1:] += gy[:-1]
+    b = (_neighbor_sum(s * (1 - m)) + neg_div) * m
+    x = _cg(b, m, s, POISSON_TOL)
+    out = src.copy()
+    out[y0:y1, x0:x1] = np.where(om[..., None], x, s)
+    return out
+
+
+def paste_back(
+    source: Image.Image,
+    result: Image.Image,
+    box: tuple[int, int, int, int],
+    region_mask: Image.Image,
+    keep_texture: bool = True,
+) -> Image.Image:
+    """模型结果贴回原图：先把结果对齐到原图，再在修复区域内做泊松融合。
+
+    融合时区域边界取原图像素，区域内按梯度重建，所以边界处在数学上是连续的，不会出现接缝、色块。
+    keep_texture=True（图案修复）时只取模型里明确的边（新图案），布料的明暗、褶皱、纹理保留原图；
+    False（局部重绘，用户可能要求改任何内容）时整块区域都用模型的梯度。区域外像素与原图完全一致。"""
     source = source.convert("RGB")
     bw, bh = box[2] - box[0], box[3] - box[1]
-    patch = result.convert("RGB").resize((bw, bh), Image.LANCZOS)
     local = source.crop(box)
-    local_mask = region_mask.convert("L").crop(box)
-    if MASK_GROW_PX > 0:
-        local_mask = local_mask.filter(ImageFilter.MaxFilter(MASK_GROW_PX * 2 + 1))
+    patch = result.convert("RGB").resize((bw, bh), Image.LANCZOS)
+    region = np.asarray(region_mask.convert("L").crop(box), np.uint8) > 127
+    omega = _dilate(region, MASK_GROW_PX)
+    if not omega.any():
+        return source.copy()
 
-    # 上下文：修复区域外再隔开一圈（模型在区域边上常有过渡），用来估计清晰度和色差
-    gap = max(3, round(max(bw, bh) * 0.03))
-    # 用盒式模糊 + 阈值做膨胀（大半径的 MaxFilter 非常慢）
-    near = (np.asarray(local_mask.filter(ImageFilter.BoxBlur(gap))) > 0).astype(np.float64)
-    context = 1 - near
-    if context.sum() < 50:
-        context = 1 - np.asarray(local_mask, np.float64) / 255
+    # 上下文：修复区域外再隔开一圈（模型在区域边上常有过渡），用来对齐位置和清晰度
+    context = ~_dilate(region, max(3, round(max(bw, bh) * 0.03)))
+    patch = _align(local, patch, context)
+    patch = _match_sharpness(patch, local, context.astype(np.float64))
 
-    patch = _match_sharpness(patch, local, context)
     src = np.asarray(local, np.float64)
-    fixed = np.clip(np.asarray(patch, np.float64) + _tone_correction(src - np.asarray(patch, np.float64), context), 0, 255)
-
-    # 修复区域里模型没怎么改的地方保留原图像素，避免整块区域的纹理、褶皱和周围对不上
-    diff = np.abs(src - fixed).max(axis=2) / 255
-    diff = _blur_unit(diff, 1.5) * 255
-    change = np.clip((diff - CHANGE_LOW) / (CHANGE_HIGH - CHANGE_LOW), 0, 1)
-    grow = max(3, round(max(bw, bh) * CHANGE_GROW_RATIO))
-    core = Image.fromarray(((change > 0.25) * 255).astype(np.uint8), "L")
-    grown = (np.asarray(core.filter(ImageFilter.BoxBlur(grow))) > 0).astype(np.float64)
-    change = np.maximum(change, _blur_unit(grown, grow / 2))
-    feather = max(MIN_FEATHER_PX, round(max(bw, bh) * 0.006))
-    region_alpha = np.asarray(local_mask.filter(ImageFilter.GaussianBlur(feather)), np.float64) / 255
-    alpha = _blur_unit(region_alpha * change, 1)[..., None]
-
-    merged = src * (1 - alpha) + fixed * alpha
+    model = np.asarray(patch, np.float64)
+    mgx, mgy = _grads(model)
+    if keep_texture:
+        sgx, sgy = _grads(src)
+        gx, gy = _pick_gradient(mgx, sgx), _pick_gradient(mgy, sgy)
+    else:
+        gx, gy = mgx, mgy
+    merged = _poisson(src, gx, gy, omega)
     out = source.copy()
-    out.paste(Image.fromarray(merged.round().astype(np.uint8), "RGB"), box[:2])
+    out.paste(Image.fromarray(np.clip(merged, 0, 255).round().astype(np.uint8), "RGB"), box[:2])
     return out
 
 
@@ -410,6 +519,7 @@ def build_prompt(extra_prompt: str = "", pattern_count: int = 1) -> str:
         "",
         "要求：",
         "- 以图1为底图输出一张同样构图的局部照片。",
+        "- 保持原图的光影透视还有褶皱，仅作图案修改。",
         "- 新图案的位置、大小、角度和形状与图2一致，不要移动、缩放或重新设计；图案的样式、颜色和细节参照图3。",
         "- 让图案像真实做在图1这块表面上一样（印花、刺绣、压印等工艺质感参照图3）：跟随图1中表面的曲面、褶皱和起伏变形，带上图1中同样的光照、阴影和材质纹理。",
         "- 图1中位于新图案范围内（图2里被新图案及其底色盖住的地方）的旧图案、旧logo要去掉，只保留新图案。",
@@ -432,6 +542,7 @@ def _build_multi_prompt(extra_prompt: str, count: int) -> str:
         "",
         "要求：",
         "- 以图1为底图输出一张同样构图的局部照片。",
+        "- 保持原图的光影透视还有褶皱，仅作图案修改。",
         f"- 每个新图案的位置、大小、角度和形状都与图2一致，不要移动、缩放、合并或重新设计；样式、颜色和细节参照图3到图{last}中对应的素材。",
         "- 每个图案都像真实做在它所在的那一面上一样（印花、刺绣、压印等工艺质感参照对应素材）：跟随图1中那一面的曲面、褶皱和起伏变形，带上图1中同样的光照、阴影和材质纹理。",
         "- 图1中位于新图案范围内（图2里被新图案及其底色盖住的地方）的旧图案、旧logo要去掉，只保留新图案。",
@@ -468,8 +579,8 @@ def save_paste_back_inputs(ref_dir, source_bytes: bytes, region_mask: Image.Imag
     atomic_write(ref_dir / REGION_FILENAME, _png(region_mask.convert("L")))
 
 
-def finish_from_files(ref_dir, result_path, box: tuple[int, int, int, int]) -> bytes:
-    """读取保存的原图、修复区域和模型结果，返回贴回后的整图 PNG。"""
+def finish_from_files(ref_dir, result_path, box: tuple[int, int, int, int], keep_texture: bool = True) -> bytes:
+    """读取保存的原图、修复区域和模型结果，返回贴回后的整图 PNG。keep_texture 见 paste_back。"""
     with Image.open(ref_dir / SOURCE_FILENAME) as src, Image.open(ref_dir / REGION_FILENAME) as region, \
             Image.open(result_path) as result:
-        return _png(paste_back(src.convert("RGB"), result.convert("RGB"), box, region.convert("L")))
+        return _png(paste_back(src.convert("RGB"), result.convert("RGB"), box, region.convert("L"), keep_texture))

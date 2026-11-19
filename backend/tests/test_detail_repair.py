@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import unittest
 
+import numpy as np
+
 from PIL import Image, ImageChops, ImageDraw
 
 from backend import detail_repair as dr
@@ -156,6 +158,14 @@ class PlanAndPasteBackTest(unittest.TestCase):
         self.assertIn("2 个新图案", text)
         self.assertIn("补充说明：鞋内侧也要", text)
 
+    def test_pattern_prompt_preserves_original_lighting_perspective_and_folds(self):
+        instruction = "保持原图的光影透视还有褶皱，仅作图案修改"
+        for count in (1, 2, dr.MAX_PATTERNS):
+            with self.subTest(pattern_count=count):
+                self.assertEqual(dr.build_prompt("", count).count(instruction), 1)
+        # 自由局部重绘可能要改光影/形态，不应被图案修复的约束影响。
+        self.assertNotIn(instruction, dr.build_inpaint_prompt("改成红色"))
+
     def _fake_model_result(self, plan, shift=-30, logo=(255, 255, 255)):
         """模拟模型输出：整体偏暗（色调漂移），图案中心多一块白色。"""
         x0, y0, x1, y1 = plan.box
@@ -171,9 +181,9 @@ class PlanAndPasteBackTest(unittest.TestCase):
         self.assertEqual(out.size, self.smooth.size)
         diff_bbox = ImageChops.difference(out, self.smooth).getbbox()
         self.assertIsNotNone(diff_bbox)
-        # 改动只出现在修复区域外扩 + 羽化的范围内
+        # 改动只出现在修复区域外扩的范围内
         rx0, ry0, rx1, ry1 = plan.region_mask.getbbox()
-        slack = dr.MASK_GROW_PX + 4 * dr.MIN_FEATHER_PX + 4
+        slack = dr.MASK_GROW_PX + 1
         self.assertGreaterEqual(diff_bbox[0], rx0 - slack)
         self.assertGreaterEqual(diff_bbox[1], ry0 - slack)
         self.assertLessEqual(diff_bbox[2], rx1 + slack)
@@ -205,6 +215,57 @@ class PlanAndPasteBackTest(unittest.TestCase):
         # 旧 logo 的淡边位置不能残留半透明的轮廓
         for pt in ((171, 200), (200, 171), (229, 200), (200, 229), (172, 172)):
             self.assertTrue(all(abs(v - bg) <= 3 for v in out.getpixel(pt)), (pt, out.getpixel(pt)))
+
+    def _flat_case(self, bg=200):
+        source = Image.new("RGB", (400, 400), (bg, bg, bg))
+        plan = dr.build_plan(png(source), [(png(self.pattern), dr.Placement(200, 200, 120, 120))], None)
+        x0, y0, x1, y1 = plan.box
+        return source, plan, Image.new("RGB", (x1 - x0, y1 - y0), (bg, bg, bg))
+
+    def test_paste_back_does_not_import_model_folds_and_has_no_seam(self):
+        # 模型重画时自己添了一道柔和的褶皱阴影（逐像素变化很小），图案修复时不能带进来
+        source, plan, result = self._flat_case()
+        x0, y0 = plan.box[:2]
+        a = np.asarray(result, np.float64)
+        yy, xx = np.mgrid[0:a.shape[0], 0:a.shape[1]]
+        fold = 25 * np.exp(-(((xx + y0) - (yy + x0) - 0) ** 2) / (2 * 6.0 ** 2))  # 沿对角线的暗带
+        a = a - fold[..., None]
+        result = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+        ImageDraw.Draw(result).ellipse((190 - x0, 190 - y0, 210 - x0, 210 - y0), fill="blue")
+        out = dr.paste_back(source, result.resize((1024, 1024)), plan.box, plan.region_mask)
+        o = np.asarray(out, np.float64)
+        # 新图案在
+        self.assertGreater(o[200, 200, 2] - o[200, 200, 0], 80)
+        # 褶皱经过、但离图案较远的位置保持原图底色
+        for pt in ((150, 150), (250, 250), (160, 160)):
+            self.assertTrue(np.abs(o[pt[1], pt[0]] - 200).max() <= 3, (pt, o[pt[1], pt[0]]))
+
+    def test_inpaint_paste_back_keeps_model_shading_without_seam(self):
+        # 局部重绘：模型把区域里画暗了一块（用户要求的改动），要保留，且区域边界与原图连续
+        source, plan, result = self._flat_case()
+        x0, y0 = plan.box[:2]
+        ImageDraw.Draw(result).ellipse((170 - x0, 170 - y0, 230 - x0, 230 - y0), fill=(150, 150, 150))
+        out = np.asarray(dr.paste_back(source, result.resize((1024, 1024)), plan.box, plan.region_mask,
+                                       keep_texture=False), np.float64)
+        self.assertLess(out[200, 200].max(), 160)
+        kept = np.asarray(dr.paste_back(source, result.resize((1024, 1024)), plan.box, plan.region_mask), np.float64)
+        # 同样输入按图案修复：明确的边也会保留（暗块边缘够硬），说明两种模式都不丢明显改动
+        self.assertLess(kept[200, 200].max(), 160)
+
+    def test_paste_back_realigns_shifted_model_result(self):
+        # 模型结果整体偏了 2 像素：用区域外的格纹对齐，贴回后穿过区域的竖条纹不应错位
+        src = Image.new("RGB", (400, 400), (210, 210, 210))
+        d = ImageDraw.Draw(src)
+        for x in range(20, 400, 40):
+            d.rectangle((x, 0, x + 6, 399), fill=(60, 60, 60))
+        for y in range(13, 400, 37):
+            d.rectangle((0, y, 399, y + 4), fill=(120, 120, 120))
+        plan = dr.build_plan(png(src), [(png(self.pattern), dr.Placement(200, 200, 100, 100))], None)
+        x0, y0, x1, y1 = plan.box
+        result = src.crop((x0 - 2, y0, x1 - 2, y1))
+        out = np.asarray(dr.paste_back(src, result.resize((1024, 1024), Image.LANCZOS), plan.box, plan.region_mask), np.float64)
+        ref = np.asarray(src, np.float64)
+        self.assertLess(np.abs(out[200, 150:260] - ref[200, 150:260]).max(), 40)
 
     def test_inpaint_plan_without_pattern_uses_brush_only(self):
         brush = Image.new("L", self.source.size, 0)
