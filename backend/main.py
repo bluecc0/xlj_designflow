@@ -4811,6 +4811,7 @@ async def _execute_ai_image_background(
                 variant=variant, quality=quality,
                 on_progress=on_progress, on_attempt=on_attempt, on_accepted=on_accepted,
                 output_format=str((request_meta or {}).get("output_format") or ""),
+                routing_job_id=job_id,
             )
         elif provider == PROVIDER_BFL:
             on_attempt(provider)
