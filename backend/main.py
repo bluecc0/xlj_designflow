@@ -173,10 +173,14 @@ from .job_store import (
     list_ai_chat_sessions,
     load_admin_stats,
     load_admin_overview,
+    load_admin_cost_center,
+    list_admin_model_pricing,
+    save_admin_model_pricing,
     load_admin_task_detail,
     load_admin_tasks,
     load_skill_usage_stats,
     load_admin_users,
+    update_ai_image_job_cost,
     claim_service_probe,
     complete_service_probe,
     load_latest_completed_service_probe,
@@ -757,6 +761,8 @@ def _current_user(request: Request) -> dict:
     user = getattr(request.state, "user", None)
     if not user:
         raise HTTPException(401, "请先输入名字进入系统")
+    from .model_routing import set_usage_user
+    set_usage_user(user.get("id"))
     return user
 
 
@@ -4882,6 +4888,18 @@ async def _execute_ai_image_background(
         usage_str = ""
         if isinstance(usage, dict):
             usage_str = f" tokens={usage.get('total_tokens') or usage.get('input_tokens',0)+usage.get('output_tokens',0)}"
+        try:
+            update_ai_image_job_cost(
+                job_id,
+                cost=result.get("cost"),
+                usage=usage if isinstance(usage, dict) else None,
+                model=model,
+                provider=actual_provider,
+                resolution=resolution,
+                size=size,
+            )
+        except Exception:
+            logger.exception("failed to persist ai_image_job cost: job_id=%s", job_id)
         preview_url = ""
         try:
             preview_url, _, _ = generate_inspiration_thumb(result.get("url") or "", user_id, job_id)
@@ -7790,6 +7808,86 @@ def admin_user_memories(request: Request):
     if not _is_admin(user):
         raise HTTPException(403, "需要管理员权限")
     return {"users": list_all_memories()}
+
+
+@app.get("/admin/cost-center")
+def admin_cost_center(
+    request: Request,
+    hours: int = 168,
+    start_date: str = "",
+    end_date: str = "",
+    user_id: str = "",
+    model: str = "",
+    category: str = "all",
+    granularity: str = "day",
+    include_test: bool = False,
+    cost_mode: str = "estimated",
+):
+    """成本中心多维度统计（仅管理员）：按成员、时间、模型统计调用量、Token 与费用。"""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    try:
+        return load_admin_cost_center(
+            hours=hours,
+            start_date=start_date or None,
+            end_date=end_date or None,
+            user_id=user_id or None,
+            model=model or None,
+            category=category or "all",
+            granularity=granularity or "day",
+            include_test=include_test,
+            cost_mode=cost_mode or "estimated",
+        )
+    except ValueError as exc:
+        raise HTTPException(400, f"日期参数格式错误: {exc}")
+
+
+@app.get("/admin/cost-center/pricing")
+def admin_cost_center_pricing(request: Request):
+    """查询已登记的模型价格及历史调用中未登记的模型（仅管理员）。"""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    return {"items": list_admin_model_pricing()}
+
+
+@app.post("/admin/cost-center/pricing")
+def admin_save_cost_center_pricing(request: Request, body: dict):
+    """手动登记或更新模型单价，并同步重算数据库中非上游直出成本的历史记录（仅管理员）。"""
+    user = _current_user(request)
+    if not _is_admin(user):
+        raise HTTPException(403, "需要管理员权限")
+    try:
+        res = save_admin_model_pricing(
+            category=body.get("category") or "image",
+            model_key=body.get("model_key") or "",
+            unit_price=body.get("unit_price"),
+            price_1k=body.get("price_1k"),
+            price_1_5k=body.get("price_1_5k"),
+            price_2k=body.get("price_2k"),
+            price_4k=body.get("price_4k"),
+            input_per_1m=body.get("input_per_1m"),
+            output_per_1m=body.get("output_per_1m"),
+            resolution_2k_mult=body.get("resolution_2k_mult", 1.5),
+            resolution_4k_mult=body.get("resolution_4k_mult", 2.0),
+            note=body.get("note") or "",
+            updated_by=str(user.get("username") or user.get("id") or ""),
+            sync_history=bool(body.get("sync_history", True)),
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc))
+    try:
+        log_operation(
+            user_id=user["id"],
+            username=user.get("username") or user["id"],
+            action="cost_pricing_update",
+            detail=f"model={res['item'].get('model_key')} category={res['item'].get('category')} synced={res.get('synced_count', 0)}",
+            payload=json.dumps(res, ensure_ascii=False),
+        )
+    except Exception:
+        logger.exception("failed to write cost_pricing_update operation log")
+    return {"ok": True, **res}
 
 
 @app.get("/admin/users")

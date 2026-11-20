@@ -1,6 +1,8 @@
 """Shared Sub2API -> APIMart routing for text and vision completions."""
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
 import time
@@ -12,6 +14,84 @@ import httpx
 from .config import settings
 
 logger = logging.getLogger(__name__)
+_usage_user_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("df_usage_user", default=None)
+
+
+def set_usage_user(user_id: str | None) -> None:
+    _usage_user_var.set(str(user_id) if user_id else None)
+
+
+def get_usage_user() -> str | None:
+    return _usage_user_var.get()
+
+
+@contextlib.contextmanager
+def usage_user_scope(user_id: str | None):
+    token = _usage_user_var.set(str(user_id) if user_id else None)
+    try:
+        yield
+    finally:
+        _usage_user_var.reset(token)
+
+
+def _estimate_messages_tokens(messages: Any) -> int:
+    if not isinstance(messages, list):
+        return 0
+    total_chars = 0
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            total_chars += len(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        total_chars += len(str(part.get("text") or ""))
+                    elif part.get("type") == "image_url":
+                        total_chars += 600
+    return max(1, total_chars // 3) if total_chars else 0
+
+
+def _record_routed_usage(
+    purpose: str,
+    route: "ModelRoute",
+    payload: dict,
+    usage_dict: dict | None,
+    output_text: str,
+) -> None:
+    try:
+        from .job_store import record_llm_usage
+
+        if isinstance(usage_dict, dict) and (
+            usage_dict.get("total_tokens") or usage_dict.get("prompt_tokens") or usage_dict.get("input_tokens")
+        ):
+            in_tok = int(usage_dict.get("prompt_tokens") or usage_dict.get("input_tokens") or 0)
+            out_tok = int(usage_dict.get("completion_tokens") or usage_dict.get("output_tokens") or 0)
+            tot_tok = int(usage_dict.get("total_tokens") or (in_tok + out_tok))
+            cost_val = usage_dict.get("cost")
+            usage_src = "upstream"
+        else:
+            in_tok = _estimate_messages_tokens(payload.get("messages"))
+            out_tok = max(1, len(output_text or "") // 3)
+            tot_tok = in_tok + out_tok
+            cost_val = None
+            usage_src = "estimated"
+
+        record_llm_usage(
+            user_id=get_usage_user(),
+            source=str(purpose or "llm"),
+            provider=route.provider,
+            model=route.model,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            total_tokens=tot_tok,
+            cost=cost_val,
+            usage_source=usage_src,
+        )
+    except Exception:
+        logger.debug("[model-routing] failed to record llm usage", exc_info=True)
 
 
 class ModelRoutingError(RuntimeError):
@@ -194,6 +274,13 @@ async def routed_chat_completion(
                 response = httpx.Response(200, json=data)
             _check_content(data, validate)
             route_succeeded(route)
+            _record_routed_usage(
+                purpose,
+                route,
+                payload,
+                data.get("usage") if isinstance(data, dict) else None,
+                _chunk_text(data),
+            )
             response.extensions["model_route"] = {"provider": route.provider, "model": route.model}
             logger.info("[model-routing] %s succeeded via %s model=%s", purpose, route.provider, route.model)
             return response
@@ -223,6 +310,7 @@ async def routed_chat_stream(
             emitted = False
         text_parts = []
         finished = False
+        stream_usage: dict | None = None
         try:
             async with httpx.AsyncClient(**_client_options(route, timeout)) as client:
                 async with client.stream(
@@ -242,6 +330,8 @@ async def routed_chat_stream(
                             break
                         chunk = json.loads(raw)
                         _check_response_error(chunk)
+                        if isinstance(chunk.get("usage"), dict):
+                            stream_usage = chunk["usage"]
                         choices = chunk.get("choices") or []
                         finished = finished or any(c.get("finish_reason") for c in choices)
                         content = _chunk_text(chunk)
@@ -250,10 +340,12 @@ async def routed_chat_stream(
                         if choices:
                             emitted = True
                             yield {**chunk, "_route": {"provider": route.provider, "model": route.model}}
-            _check_content({"choices": [{"message": {"content": "".join(text_parts)}}]}, validate)
+            full_text = "".join(text_parts)
+            _check_content({"choices": [{"message": {"content": full_text}}]}, validate)
             if not finished:
                 raise ModelRoutingError("模型流响应中断")
             route_succeeded(route)
+            _record_routed_usage(purpose, route, payload, stream_usage, full_text)
             logger.info("[model-routing] %s stream succeeded via %s model=%s", purpose, route.provider, route.model)
             return
         except (httpx.HTTPError, ValueError, TypeError, AttributeError, IndexError, ModelRoutingError) as exc:

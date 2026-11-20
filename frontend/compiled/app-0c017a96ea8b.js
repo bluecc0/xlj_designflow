@@ -14828,6 +14828,34 @@ function AdminPage({
   var [error, setError] = React.useState('');
   var [updatedAt, setUpdatedAt] = React.useState(null);
   var [showTestUsers, setShowTestUsers] = React.useState(false);
+  var [costCenter, setCostCenter] = React.useState(null);
+  var [costFilters, setCostFilters] = React.useState({
+    hours: 168,
+    granularity: 'day',
+    userId: '',
+    model: '',
+    category: 'all',
+    currency: 'CNY',
+    costMode: 'estimated',
+    includeTest: false
+  });
+  var [expandedMemberCost, setExpandedMemberCost] = React.useState({});
+  var [pricingOpen, setPricingOpen] = React.useState(false);
+  var [pricingItems, setPricingItems] = React.useState([]);
+  var [pricingEdits, setPricingEdits] = React.useState({});
+  var [pricingSavingKey, setPricingSavingKey] = React.useState('');
+  var [pricingNotice, setPricingNotice] = React.useState('');
+  var [newPricing, setNewPricing] = React.useState({
+    category: 'image',
+    model_key: '',
+    price_1k: '0.04',
+    price_1_5k: '0.05',
+    price_2k: '0.06',
+    price_4k: '0.08',
+    input_per_1m: '1.0',
+    output_per_1m: '4.0',
+    note: ''
+  });
   var loadUsers = React.useCallback(function (includeTest) {
     var queryInclude = includeTest !== undefined ? includeTest : showTestUsers;
     return window.API.getAdminUsers(queryInclude).then(function (data) {
@@ -14960,6 +14988,120 @@ function AdminPage({
   React.useEffect(function () {
     if (view === 'memories') loadMemories();
   }, [view, loadMemories]);
+  var loadCostCenter = React.useCallback(function () {
+    setLoading(true);
+    setError('');
+    return window.API.getAdminCostCenter({
+      hours: costFilters.hours,
+      granularity: costFilters.granularity,
+      userId: costFilters.userId,
+      model: costFilters.model,
+      category: costFilters.category,
+      includeTest: costFilters.includeTest,
+      costMode: costFilters.costMode
+    }).then(function (data) {
+      setCostCenter(data);
+      setUpdatedAt(Date.now());
+    }).catch(function (err) {
+      setError(err.message || '成本中心数据加载失败');
+    }).finally(function () {
+      setLoading(false);
+    });
+  }, [costFilters.hours, costFilters.granularity, costFilters.userId, costFilters.model, costFilters.category, costFilters.includeTest, costFilters.costMode]);
+  React.useEffect(function () {
+    if (view === 'cost') loadCostCenter();
+  }, [view, loadCostCenter]);
+  var loadCostPricing = React.useCallback(function () {
+    return window.API.getAdminCostPricing().then(function (data) {
+      var list = data.items || [];
+      setPricingItems(list);
+      var edits = {};
+      list.forEach(function (it) {
+        var k = it.category + ':' + it.model_key;
+        var p1 = it.price_1k != null ? it.price_1k : it.unit_price != null ? it.unit_price : 0.04;
+        edits[k] = {
+          price_1k: String(p1),
+          price_1_5k: String(it.price_1_5k != null ? it.price_1_5k : Number((p1 * 1.25).toFixed(4))),
+          price_2k: String(it.price_2k != null ? it.price_2k : Number((p1 * 1.5).toFixed(4))),
+          price_4k: String(it.price_4k != null ? it.price_4k : Number((p1 * 2.0).toFixed(4))),
+          input_per_1m: it.input_per_1m != null ? String(it.input_per_1m) : '1.0',
+          output_per_1m: it.output_per_1m != null ? String(it.output_per_1m) : '4.0',
+          note: it.note || ''
+        };
+      });
+      setPricingEdits(edits);
+    }).catch(function (err) {
+      setError(err.message || '模型价格列表加载失败');
+    });
+  }, []);
+  React.useEffect(function () {
+    if (view === 'cost' && pricingOpen) loadCostPricing();
+  }, [view, pricingOpen, loadCostPricing]);
+  var handleSavePricing = function (item) {
+    var k = item.category + ':' + item.model_key;
+    var draft = pricingEdits[k] || {};
+    setPricingSavingKey(k);
+    setPricingNotice('');
+    setError('');
+    var payload = {
+      category: item.category,
+      model_key: item.model_key,
+      note: draft.note || '',
+      sync_history: true
+    };
+    if (item.category === 'llm') {
+      payload.input_per_1m = Number(draft.input_per_1m || 0);
+      payload.output_per_1m = Number(draft.output_per_1m || 0);
+    } else {
+      payload.price_1k = Number(draft.price_1k || 0);
+      payload.price_1_5k = Number(draft.price_1_5k || 0);
+      payload.price_2k = Number(draft.price_2k || 0);
+      payload.price_4k = Number(draft.price_4k || 0);
+    }
+    return window.API.saveAdminCostPricing(payload).then(function (res) {
+      setPricingNotice('已保存「' + item.model_key + '」单价，并同步重算 ' + (res.synced_count || 0) + ' 条非上游直出历史记录');
+      return Promise.all([loadCostPricing(), loadCostCenter()]);
+    }).catch(function (err) {
+      setError(err.message || '保存模型价格失败');
+    }).finally(function () {
+      setPricingSavingKey('');
+    });
+  };
+  var handleAddNewPricing = function (e) {
+    e.preventDefault();
+    if (!String(newPricing.model_key || '').trim()) return;
+    var k = '__new__';
+    setPricingSavingKey(k);
+    setPricingNotice('');
+    setError('');
+    var payload = {
+      category: newPricing.category,
+      model_key: String(newPricing.model_key).trim(),
+      note: newPricing.note || '后台手动登记',
+      sync_history: true
+    };
+    if (newPricing.category === 'llm') {
+      payload.input_per_1m = Number(newPricing.input_per_1m || 0);
+      payload.output_per_1m = Number(newPricing.output_per_1m || 0);
+    } else {
+      payload.price_1k = Number(newPricing.price_1k || 0);
+      payload.price_1_5k = Number(newPricing.price_1_5k || 0);
+      payload.price_2k = Number(newPricing.price_2k || 0);
+      payload.price_4k = Number(newPricing.price_4k || 0);
+    }
+    return window.API.saveAdminCostPricing(payload).then(function (res) {
+      setPricingNotice('已新增并保存「' + payload.model_key + '」单价，同步更新 ' + (res.synced_count || 0) + ' 条历史记录');
+      setNewPricing(Object.assign({}, newPricing, {
+        model_key: '',
+        note: ''
+      }));
+      return Promise.all([loadCostPricing(), loadCostCenter()]);
+    }).catch(function (err) {
+      setError(err.message || '新增模型价格失败');
+    }).finally(function () {
+      setPricingSavingKey('');
+    });
+  };
   React.useEffect(function () {
     if (!selectedSkill) {
       setSkillDetail(null);
@@ -15034,9 +15176,10 @@ function AdminPage({
       });
     });
   };
-  var navItems = [['overview', '运营总览', I.grid], ['tasks', '任务中心', I.layers], ['services', '服务状态', I.zap], ['users', '用户权限', I.user], ['skills', '用户技能', I.wand], ['memories', '用户记忆', I.bookmark], ['audit', '审计日志', I.file]];
+  var navItems = [['overview', '运营总览', I.grid], ['cost', '成本中心', I.zap], ['tasks', '任务中心', I.layers], ['services', '服务状态', I.zap], ['users', '用户权限', I.user], ['skills', '用户技能', I.wand], ['memories', '用户记忆', I.bookmark], ['audit', '审计日志', I.file]];
   var viewTitles = {
     overview: ['运营总览', '任务健康、异常和使用趋势'],
+    cost: ['成本中心', '按成员、时间与模型维度统计调用与费用'],
     tasks: ['任务中心', '跨业务查询所有持久化任务'],
     services: ['服务状态', '本机资源与外部依赖连通性'],
     users: ['用户权限', '账号、角色和使用情况'],
@@ -15045,6 +15188,7 @@ function AdminPage({
     audit: ['审计日志', '关键操作与请求上下文']
   };
   var doRefresh = function () {
+    if (view === 'cost') return loadCostCenter();
     if (view === 'tasks') return loadTasks();
     if (view === 'audit') return loadOperations();
     if (view === 'users') return loadUsers();
@@ -15687,6 +15831,815 @@ function AdminPage({
       text: loading ? '正在加载日志…' : '暂无操作记录'
     })));
   };
+  var formatCostAmount = function (usdVal) {
+    var val = Number(usdVal || 0);
+    var rate = costCenter && costCenter.usd_to_cny || 7.2;
+    if (costFilters.currency === 'CNY') {
+      var cny = val * rate;
+      if (cny > 0 && cny < 0.05) {
+        return '¥' + cny.toFixed(3);
+      }
+      return '¥' + cny.toFixed(2);
+    }
+    return '$' + val.toFixed(4).replace(/0+$/, '').replace(/\.$/, '.00');
+  };
+  var formatCompactTokens = function (n) {
+    var num = Number(n || 0);
+    if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return String(num);
+  };
+  var renderCostCenter = function () {
+    if (!costCenter) return /*#__PURE__*/React.createElement(AdminEmpty, {
+      text: loading ? '正在加载成本中心数据…' : '成本中心数据暂不可用'
+    });
+    var cs = costCenter.summary || {};
+    var timeline = costCenter.timeline || [];
+    var byMember = costCenter.by_member || [];
+    var byModel = costCenter.by_model || [];
+    var opts = costCenter.filter_options || {};
+    var maxBucketCost = timeline.reduce(function (acc, item) {
+      return Math.max(acc, Number(item.total_cost || 0));
+    }, 0) || 1;
+    var setCostFilter = function (key, value) {
+      setCostFilters(function (prev) {
+        return Object.assign({}, prev, {
+          [key]: value
+        });
+      });
+    };
+    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-toolbar"
+    }, /*#__PURE__*/React.createElement("select", {
+      className: "df-admin-control",
+      value: costFilters.hours,
+      onChange: function (e) {
+        setCostFilter('hours', Number(e.target.value));
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: "24"
+    }, "\u4ECA\u5929"), /*#__PURE__*/React.createElement("option", {
+      value: "168"
+    }, "\u6700\u8FD1 7 \u5929"), /*#__PURE__*/React.createElement("option", {
+      value: "720"
+    }, "\u6700\u8FD1 30 \u5929"), /*#__PURE__*/React.createElement("option", {
+      value: "0"
+    }, "\u6240\u6709\u65F6\u95F4")), /*#__PURE__*/React.createElement("select", {
+      className: "df-admin-control",
+      value: costFilters.granularity,
+      onChange: function (e) {
+        setCostFilter('granularity', e.target.value);
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: "day"
+    }, "\u6309\u5929\u7EDF\u8BA1"), /*#__PURE__*/React.createElement("option", {
+      value: "week"
+    }, "\u6309\u5468\u7EDF\u8BA1"), /*#__PURE__*/React.createElement("option", {
+      value: "month"
+    }, "\u6309\u6708\u7EDF\u8BA1")), /*#__PURE__*/React.createElement("select", {
+      className: "df-admin-control",
+      value: costFilters.category,
+      onChange: function (e) {
+        setCostFilter('category', e.target.value);
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: "all"
+    }, "\u5168\u90E8\u7C7B\u578B"), /*#__PURE__*/React.createElement("option", {
+      value: "image"
+    }, "\u4EC5 AI \u751F\u56FE"), /*#__PURE__*/React.createElement("option", {
+      value: "llm"
+    }, "\u4EC5 Agent \u5BF9\u8BDD")), /*#__PURE__*/React.createElement("select", {
+      className: "df-admin-control",
+      value: costFilters.userId,
+      onChange: function (e) {
+        setCostFilter('userId', e.target.value);
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "\u5168\u90E8\u6210\u5458"), (opts.members || []).map(function (m) {
+      return /*#__PURE__*/React.createElement("option", {
+        key: m.user_id,
+        value: m.user_id
+      }, m.display_name || m.username || m.user_id);
+    })), /*#__PURE__*/React.createElement("select", {
+      className: "df-admin-control",
+      value: costFilters.model,
+      onChange: function (e) {
+        setCostFilter('model', e.target.value);
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "\u5168\u90E8\u6A21\u578B"), (opts.models || []).map(function (m) {
+      return /*#__PURE__*/React.createElement("option", {
+        key: m,
+        value: m
+      }, m);
+    })), /*#__PURE__*/React.createElement("select", {
+      className: "df-admin-control",
+      value: costFilters.costMode,
+      onChange: function (e) {
+        setCostFilter('costMode', e.target.value);
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: "estimated"
+    }, "\u9884\u4F30\u8D39\u7528"), /*#__PURE__*/React.createElement("option", {
+      value: "actual"
+    }, "\u5B9E\u9645\u8D39\u7528")), /*#__PURE__*/React.createElement("select", {
+      className: "df-admin-control",
+      value: costFilters.currency,
+      onChange: function (e) {
+        setCostFilter('currency', e.target.value);
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: "CNY"
+    }, "\u4EBA\u6C11\u5E01 (CNY \xB7 1:7.2 \u9884\u4F30)"), /*#__PURE__*/React.createElement("option", {
+      value: "USD"
+    }, "\u7F8E\u5143 (USD)")), /*#__PURE__*/React.createElement("label", {
+      className: "df-admin-control",
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        cursor: 'pointer',
+        boxSizing: 'border-box'
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: !!costFilters.includeTest,
+      onChange: function (e) {
+        setCostFilter('includeTest', e.target.checked);
+      }
+    }), /*#__PURE__*/React.createElement("span", null, "\u542B\u6D4B\u8BD5\u8D26\u53F7")), /*#__PURE__*/React.createElement("button", {
+      className: "df-admin-control",
+      style: pricingOpen ? {
+        marginLeft: 'auto',
+        background: '#262925',
+        color: '#fff',
+        borderColor: '#262925'
+      } : {
+        marginLeft: 'auto'
+      },
+      onClick: function () {
+        setPricingOpen(function (v) {
+          return !v;
+        });
+      }
+    }, pricingOpen ? '收起模型价格配置' : '模型价格登记与同步')), pricingOpen ? /*#__PURE__*/React.createElement("section", {
+      className: "df-admin-card",
+      style: {
+        marginBottom: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardhead"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardtitle"
+    }, "\u6A21\u578B\u4EF7\u683C\u767B\u8BB0\u4E0E\u6570\u636E\u5E93\u540C\u6B65"), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardmeta"
+    }, "\u4E0A\u6E38\u672A\u8FD4\u56DE\u771F\u5B9E\u8D26\u5355\u65F6\u6309\u6B64\u5904\u5355\u4EF7\u8BA1\u7B97\uFF1B\u4FDD\u5B58\u540E\u540C\u6B65\u91CD\u7B97\u975E\u4E0A\u6E38\u76F4\u51FA\u5386\u53F2\u8BB0\u5F55\uFF08USD\uFF09"), pricingNotice ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginLeft: 'auto',
+        fontSize: 11,
+        color: '#157a4e',
+        fontWeight: 600
+      }
+    }, pricingNotice) : null), /*#__PURE__*/React.createElement("form", {
+      onSubmit: handleAddNewPricing,
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 8,
+        alignItems: 'center',
+        padding: '12px 16px',
+        background: '#fafaf8',
+        borderBottom: '1px solid var(--admin-line)'
+      }
+    }, /*#__PURE__*/React.createElement("select", {
+      className: "df-admin-control",
+      style: {
+        boxSizing: 'border-box'
+      },
+      value: newPricing.category,
+      onChange: function (e) {
+        setNewPricing(Object.assign({}, newPricing, {
+          category: e.target.value
+        }));
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: "image"
+    }, "AI \u751F\u56FE\uFF08\u6309\u6B21\uFF09"), /*#__PURE__*/React.createElement("option", {
+      value: "llm"
+    }, "Agent \u5BF9\u8BDD\uFF08\u6309 1M Token\uFF09")), /*#__PURE__*/React.createElement("input", {
+      className: "df-admin-control",
+      style: {
+        width: 190,
+        boxSizing: 'border-box'
+      },
+      placeholder: "\u6A21\u578B\u540D\u79F0\uFF0C\u5982 gpt-image-2.6",
+      value: newPricing.model_key,
+      onChange: function (e) {
+        setNewPricing(Object.assign({}, newPricing, {
+          model_key: e.target.value
+        }));
+      }
+    }), newPricing.category === 'image' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
+      className: "df-admin-control",
+      type: "number",
+      step: "0.0001",
+      min: "0",
+      style: {
+        width: 82,
+        boxSizing: 'border-box'
+      },
+      placeholder: "1K ($)",
+      title: "1K \u5355\u4EF7 ($)",
+      value: newPricing.price_1k,
+      onChange: function (e) {
+        setNewPricing(Object.assign({}, newPricing, {
+          price_1k: e.target.value
+        }));
+      }
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "df-admin-control",
+      type: "number",
+      step: "0.0001",
+      min: "0",
+      style: {
+        width: 82,
+        boxSizing: 'border-box'
+      },
+      placeholder: "1.5K ($)",
+      title: "1.5K \u5355\u4EF7 ($)",
+      value: newPricing.price_1_5k,
+      onChange: function (e) {
+        setNewPricing(Object.assign({}, newPricing, {
+          price_1_5k: e.target.value
+        }));
+      }
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "df-admin-control",
+      type: "number",
+      step: "0.0001",
+      min: "0",
+      style: {
+        width: 82,
+        boxSizing: 'border-box'
+      },
+      placeholder: "2K ($)",
+      title: "2K \u5355\u4EF7 ($)",
+      value: newPricing.price_2k,
+      onChange: function (e) {
+        setNewPricing(Object.assign({}, newPricing, {
+          price_2k: e.target.value
+        }));
+      }
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "df-admin-control",
+      type: "number",
+      step: "0.0001",
+      min: "0",
+      style: {
+        width: 82,
+        boxSizing: 'border-box'
+      },
+      placeholder: "4K ($)",
+      title: "4K \u5355\u4EF7 ($)",
+      value: newPricing.price_4k,
+      onChange: function (e) {
+        setNewPricing(Object.assign({}, newPricing, {
+          price_4k: e.target.value
+        }));
+      }
+    })) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
+      className: "df-admin-control",
+      type: "number",
+      step: "0.01",
+      min: "0",
+      style: {
+        width: 110,
+        boxSizing: 'border-box'
+      },
+      placeholder: "\u8F93\u5165 $/1M",
+      value: newPricing.input_per_1m,
+      onChange: function (e) {
+        setNewPricing(Object.assign({}, newPricing, {
+          input_per_1m: e.target.value
+        }));
+      }
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "df-admin-control",
+      type: "number",
+      step: "0.01",
+      min: "0",
+      style: {
+        width: 110,
+        boxSizing: 'border-box'
+      },
+      placeholder: "\u8F93\u51FA $/1M",
+      value: newPricing.output_per_1m,
+      onChange: function (e) {
+        setNewPricing(Object.assign({}, newPricing, {
+          output_per_1m: e.target.value
+        }));
+      }
+    })), /*#__PURE__*/React.createElement("input", {
+      className: "df-admin-control",
+      style: {
+        minWidth: 140,
+        flex: 1,
+        boxSizing: 'border-box'
+      },
+      placeholder: "\u5907\u6CE8\uFF08\u53EF\u9009\uFF09",
+      value: newPricing.note,
+      onChange: function (e) {
+        setNewPricing(Object.assign({}, newPricing, {
+          note: e.target.value
+        }));
+      }
+    }), /*#__PURE__*/React.createElement("button", {
+      className: "df-admin-control",
+      type: "submit",
+      disabled: pricingSavingKey === '__new__' || !String(newPricing.model_key || '').trim(),
+      style: {
+        background: '#262925',
+        color: '#fff',
+        borderColor: '#262925',
+        boxSizing: 'border-box'
+      }
+    }, pricingSavingKey === '__new__' ? '保存中…' : '登记并同步')), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-tablewrap"
+    }, /*#__PURE__*/React.createElement("table", {
+      className: "df-admin-table"
+    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\u6A21\u578B"), /*#__PURE__*/React.createElement("th", null, "\u7C7B\u578B"), /*#__PURE__*/React.createElement("th", null, "\u72B6\u6001"), /*#__PURE__*/React.createElement("th", null, "\u5355\u4EF7\u8BBE\u7F6E (USD \xB7 1K / 1.5K / 2K / 4K \u6216 Token)"), /*#__PURE__*/React.createElement("th", null, "\u5907\u6CE8"), /*#__PURE__*/React.createElement("th", null, "\u6700\u8FD1\u66F4\u65B0"), /*#__PURE__*/React.createElement("th", null, "\u64CD\u4F5C"))), /*#__PURE__*/React.createElement("tbody", null, pricingItems.map(function (it) {
+      var k = it.category + ':' + it.model_key;
+      var draft = pricingEdits[k] || {};
+      var setDraft = function (field, val) {
+        setPricingEdits(function (prev) {
+          var next = Object.assign({}, prev);
+          next[k] = Object.assign({}, next[k] || {}, {
+            [field]: val
+          });
+          return next;
+        });
+      };
+      return /*#__PURE__*/React.createElement("tr", {
+        key: k
+      }, /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap",
+        style: {
+          fontWeight: 600
+        }
+      }, it.model_key), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap"
+      }, it.category === 'llm' ? 'Agent 对话' : 'AI 生图'), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap"
+      }, it.registered ? /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-status is-success"
+      }, "\u5DF2\u767B\u8BB0") : /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-status is-active"
+      }, "\u672A\u767B\u8BB0")), /*#__PURE__*/React.createElement("td", null, it.category === 'llm' ? /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'inline-flex',
+          gap: 6,
+          alignItems: 'center',
+          verticalAlign: 'middle'
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted"
+      }, "\u5165"), /*#__PURE__*/React.createElement("input", {
+        className: "df-admin-control",
+        type: "number",
+        step: "0.01",
+        min: "0",
+        style: {
+          width: 76,
+          height: 28,
+          boxSizing: 'border-box'
+        },
+        value: draft.input_per_1m || '',
+        onChange: function (e) {
+          setDraft('input_per_1m', e.target.value);
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted"
+      }, "\u51FA"), /*#__PURE__*/React.createElement("input", {
+        className: "df-admin-control",
+        type: "number",
+        step: "0.01",
+        min: "0",
+        style: {
+          width: 76,
+          height: 28,
+          boxSizing: 'border-box'
+        },
+        value: draft.output_per_1m || '',
+        onChange: function (e) {
+          setDraft('output_per_1m', e.target.value);
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted",
+        style: {
+          fontSize: 10,
+          whiteSpace: 'nowrap'
+        }
+      }, "$/1M")) : /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'inline-flex',
+          gap: 6,
+          alignItems: 'center',
+          verticalAlign: 'middle',
+          flexWrap: 'wrap'
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted",
+        style: {
+          fontSize: 10
+        }
+      }, "1K"), /*#__PURE__*/React.createElement("input", {
+        className: "df-admin-control",
+        type: "number",
+        step: "0.0001",
+        min: "0",
+        style: {
+          width: 68,
+          height: 28,
+          boxSizing: 'border-box'
+        },
+        value: draft.price_1k || '',
+        onChange: function (e) {
+          setDraft('price_1k', e.target.value);
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted",
+        style: {
+          fontSize: 10
+        }
+      }, "1.5K"), /*#__PURE__*/React.createElement("input", {
+        className: "df-admin-control",
+        type: "number",
+        step: "0.0001",
+        min: "0",
+        style: {
+          width: 68,
+          height: 28,
+          boxSizing: 'border-box'
+        },
+        value: draft.price_1_5k || '',
+        onChange: function (e) {
+          setDraft('price_1_5k', e.target.value);
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted",
+        style: {
+          fontSize: 10
+        }
+      }, "2K"), /*#__PURE__*/React.createElement("input", {
+        className: "df-admin-control",
+        type: "number",
+        step: "0.0001",
+        min: "0",
+        style: {
+          width: 68,
+          height: 28,
+          boxSizing: 'border-box'
+        },
+        value: draft.price_2k || '',
+        onChange: function (e) {
+          setDraft('price_2k', e.target.value);
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted",
+        style: {
+          fontSize: 10
+        }
+      }, "4K"), /*#__PURE__*/React.createElement("input", {
+        className: "df-admin-control",
+        type: "number",
+        step: "0.0001",
+        min: "0",
+        style: {
+          width: 68,
+          height: 28,
+          boxSizing: 'border-box'
+        },
+        value: draft.price_4k || '',
+        onChange: function (e) {
+          setDraft('price_4k', e.target.value);
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted",
+        style: {
+          fontSize: 10,
+          whiteSpace: 'nowrap'
+        }
+      }, "$/\u6B21"))), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {
+        className: "df-admin-control",
+        style: {
+          width: 160,
+          height: 28,
+          boxSizing: 'border-box'
+        },
+        value: draft.note || '',
+        onChange: function (e) {
+          setDraft('note', e.target.value);
+        }
+      })), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted df-admin-nowrap",
+        style: {
+          fontSize: 11
+        }
+      }, it.updated_at ? (it.updated_by || '-') + ' · ' + adminFormatTime(it.updated_at, false) : '-'), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap"
+      }, /*#__PURE__*/React.createElement("button", {
+        className: "df-admin-linkbutton",
+        disabled: pricingSavingKey === k,
+        onClick: function () {
+          handleSavePricing(it);
+        }
+      }, pricingSavingKey === k ? '同步中…' : '保存并同步')));
+    }))))) : null, /*#__PURE__*/React.createElement("section", {
+      className: "df-admin-metrics"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metric",
+      style: {
+        '--metric-color': '#2563eb'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metrichead"
+    }, /*#__PURE__*/React.createElement("span", null, "\u603B\u8D39\u7528 (", costFilters.currency === 'CNY' ? 'CNY · 1:7.2 预估' : 'USD', ")"), /*#__PURE__*/React.createElement("span", {
+      className: "df-admin-metricdot"
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metricvalue"
+    }, formatCostAmount(cs.total_cost)), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metricfoot"
+    }, "\u771F\u5B9E\u8D26\u5355 ", /*#__PURE__*/React.createElement("strong", null, cs.upstream_cost_count || 0), " \u7B14 \xB7 \u4F30\u7B97 ", /*#__PURE__*/React.createElement("strong", null, cs.estimated_cost_count || 0), " \u7B14")), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metric",
+      style: {
+        '--metric-color': '#188656'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metrichead"
+    }, /*#__PURE__*/React.createElement("span", null, "\u603B\u8C03\u7528\u6B21\u6570"), /*#__PURE__*/React.createElement("span", {
+      className: "df-admin-metricdot"
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metricvalue"
+    }, cs.total_calls || 0), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metricfoot"
+    }, "\u751F\u56FE ", /*#__PURE__*/React.createElement("strong", null, cs.image_calls || 0), " (", formatCostAmount(cs.image_cost), ") \xB7 \u5BF9\u8BDD ", /*#__PURE__*/React.createElement("strong", null, cs.llm_calls || 0), " (", formatCostAmount(cs.llm_cost), ")")), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metric",
+      style: {
+        '--metric-color': '#5f6fe8'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metrichead"
+    }, /*#__PURE__*/React.createElement("span", null, "Token \u603B\u6D88\u8017"), /*#__PURE__*/React.createElement("span", {
+      className: "df-admin-metricdot"
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metricvalue"
+    }, formatCompactTokens(cs.total_tokens || 0)), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metricfoot"
+    }, "\u8F93\u5165 ", /*#__PURE__*/React.createElement("strong", null, formatCompactTokens(cs.input_tokens || 0)), " \xB7 \u8F93\u51FA ", /*#__PURE__*/React.createElement("strong", null, formatCompactTokens(cs.output_tokens || 0)))), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metric",
+      style: {
+        '--metric-color': '#bd741d'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metrichead"
+    }, /*#__PURE__*/React.createElement("span", null, "\u6D3B\u8DC3\u6210\u5458 / \u6A21\u578B"), /*#__PURE__*/React.createElement("span", {
+      className: "df-admin-metricdot"
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metricvalue"
+    }, cs.active_members || 0, " / ", cs.active_models || 0), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-metricfoot"
+    }, "\u5355\u6B21\u5747\u4EF7 ", /*#__PURE__*/React.createElement("strong", null, cs.avg_cost_per_call != null ? formatCostAmount(cs.avg_cost_per_call) : '-')))), /*#__PURE__*/React.createElement("section", {
+      className: "df-admin-card df-admin-section"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardhead"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardtitle"
+    }, "\u65F6\u95F4\u7EF4\u5EA6\u8D39\u7528\u8D8B\u52BF"), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardmeta"
+    }, "\u6309", costFilters.granularity === 'month' ? '月' : costFilters.granularity === 'week' ? '周' : '天', "\u805A\u5408 \xB7 \u5171 ", timeline.length, " \u4E2A\u5468\u671F"), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-legend",
+      style: {
+        marginLeft: 'auto',
+        fontSize: 11,
+        color: 'var(--admin-muted)'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "is-ai"
+    }, /*#__PURE__*/React.createElement("i", null), "AI \u751F\u56FE"), /*#__PURE__*/React.createElement("span", {
+      className: "is-agent"
+    }, /*#__PURE__*/React.createElement("i", null), "Agent \u5BF9\u8BDD"))), timeline.length ? /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-chart",
+      style: {
+        overflowX: 'auto'
+      }
+    }, timeline.map(function (item) {
+      var totalPct = Number(item.total_cost || 0) > 0 ? Math.max(4, Math.round(Number(item.total_cost || 0) / maxBucketCost * 100)) : 0;
+      var imgPct = item.total_cost > 0 ? Math.round(Number(item.image_cost || 0) / item.total_cost * totalPct) : 0;
+      var llmPct = Math.max(0, totalPct - imgPct);
+      var tip = item.bucket + ' · 总计 ' + formatCostAmount(item.total_cost) + '（生图 ' + item.image_calls + ' 次 / 对话 ' + item.llm_calls + ' 次）';
+      return /*#__PURE__*/React.createElement("div", {
+        className: "df-admin-baritem",
+        key: item.bucket,
+        title: tip,
+        style: {
+          minWidth: 34
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "df-admin-barlabel",
+        style: {
+          fontSize: 10,
+          color: 'var(--admin-muted)',
+          fontVariantNumeric: 'tabular-nums'
+        }
+      }, formatCostAmount(item.total_cost)), /*#__PURE__*/React.createElement("div", {
+        className: "df-admin-bartrack"
+      }, llmPct > 0 ? /*#__PURE__*/React.createElement("div", {
+        className: "df-admin-bar is-agent",
+        style: {
+          height: llmPct + '%'
+        }
+      }) : null, imgPct > 0 ? /*#__PURE__*/React.createElement("div", {
+        className: "df-admin-bar is-ai",
+        style: {
+          height: imgPct + '%'
+        }
+      }) : null), /*#__PURE__*/React.createElement("div", {
+        className: "df-admin-barlabel"
+      }, item.label));
+    })) : /*#__PURE__*/React.createElement(AdminEmpty, {
+      text: "\u5F53\u524D\u65F6\u95F4\u8303\u56F4\u5185\u6682\u65E0\u8C03\u7528\u8BB0\u5F55"
+    })), /*#__PURE__*/React.createElement("section", {
+      className: "df-admin-card df-admin-section"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardhead"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardtitle"
+    }, "\u6A21\u578B\u7EF4\u5EA6\u660E\u7EC6"), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardmeta"
+    }, "\u5171 ", byModel.length, " \u4E2A\u6A21\u578B")), byModel.length ? /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-tablewrap"
+    }, /*#__PURE__*/React.createElement("table", {
+      className: "df-admin-table"
+    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\u6A21\u578B"), /*#__PURE__*/React.createElement("th", null, "\u7C7B\u578B"), /*#__PURE__*/React.createElement("th", null, "\u7EBF\u8DEF / Provider"), /*#__PURE__*/React.createElement("th", null, "\u8C03\u7528\u6B21\u6570"), /*#__PURE__*/React.createElement("th", null, "Token \u6D88\u8017"), /*#__PURE__*/React.createElement("th", null, "\u5355\u6B21\u5747\u4EF7"), /*#__PURE__*/React.createElement("th", null, "\u603B\u8D39\u7528"), /*#__PURE__*/React.createElement("th", null, "\u8D39\u7528\u5360\u6BD4"))), /*#__PURE__*/React.createElement("tbody", null, byModel.map(function (m) {
+      return /*#__PURE__*/React.createElement("tr", {
+        key: m.category + ':' + m.model
+      }, /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap",
+        style: {
+          fontWeight: 600
+        }
+      }, m.model), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap"
+      }, m.category === 'image' ? 'AI 生图' : 'Agent 对话'), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted"
+      }, m.provider || '-'), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap",
+        style: {
+          fontVariantNumeric: 'tabular-nums'
+        }
+      }, m.calls), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted df-admin-nowrap",
+        style: {
+          fontVariantNumeric: 'tabular-nums'
+        }
+      }, formatCompactTokens(m.total_tokens)), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted df-admin-nowrap",
+        style: {
+          fontVariantNumeric: 'tabular-nums'
+        }
+      }, formatCostAmount(m.avg_cost)), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap",
+        style: {
+          fontWeight: 650,
+          fontVariantNumeric: 'tabular-nums'
+        }
+      }, formatCostAmount(m.total_cost)), /*#__PURE__*/React.createElement("td", {
+        style: {
+          minWidth: 120
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          flex: 1,
+          height: 5,
+          borderRadius: 99,
+          background: '#eeefeb',
+          overflow: 'hidden'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          width: Math.min(100, m.share_pct || 0) + '%',
+          height: '100%',
+          background: '#262925'
+        }
+      })), /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted",
+        style: {
+          fontSize: 11,
+          width: 40,
+          textAlign: 'right',
+          fontVariantNumeric: 'tabular-nums'
+        }
+      }, m.share_pct, "%"))));
+    })))) : /*#__PURE__*/React.createElement(AdminEmpty, {
+      text: "\u6682\u65E0\u6A21\u578B\u6D88\u8D39\u8BB0\u5F55"
+    })), /*#__PURE__*/React.createElement("section", {
+      className: "df-admin-card df-admin-section"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardhead"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardtitle"
+    }, "\u6210\u5458\u7EF4\u5EA6\u7EDF\u8BA1"), /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-cardmeta"
+    }, "\u5171 ", byMember.length, " \u4F4D\u6210\u5458")), byMember.length ? /*#__PURE__*/React.createElement("div", {
+      className: "df-admin-tablewrap"
+    }, /*#__PURE__*/React.createElement("table", {
+      className: "df-admin-table"
+    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\u6210\u5458"), /*#__PURE__*/React.createElement("th", null, "\u603B\u8C03\u7528 (\u751F\u56FE / \u5BF9\u8BDD)"), /*#__PURE__*/React.createElement("th", null, "Token \u6D88\u8017"), /*#__PURE__*/React.createElement("th", null, "\u4E3B\u529B\u6A21\u578B"), /*#__PURE__*/React.createElement("th", null, "\u603B\u8D39\u7528"), /*#__PURE__*/React.createElement("th", null, "\u5360\u6BD4"), /*#__PURE__*/React.createElement("th", null, "\u6A21\u578B\u62C6\u5206"))), /*#__PURE__*/React.createElement("tbody", null, byMember.map(function (u) {
+      var expanded = !!expandedMemberCost[u.user_id];
+      return /*#__PURE__*/React.createElement(React.Fragment, {
+        key: u.user_id
+      }, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap",
+        style: {
+          fontWeight: 600
+        }
+      }, u.display_name || u.username || u.user_id), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap",
+        style: {
+          fontVariantNumeric: 'tabular-nums'
+        }
+      }, u.total_calls, " ", /*#__PURE__*/React.createElement("span", {
+        className: "df-admin-muted"
+      }, "(", u.image_calls, " / ", u.llm_calls, ")")), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted df-admin-nowrap",
+        style: {
+          fontVariantNumeric: 'tabular-nums'
+        }
+      }, formatCompactTokens(u.total_tokens)), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted df-admin-nowrap"
+      }, u.top_model || '-'), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap",
+        style: {
+          fontWeight: 650,
+          fontVariantNumeric: 'tabular-nums'
+        }
+      }, formatCostAmount(u.total_cost)), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-muted df-admin-nowrap",
+        style: {
+          fontVariantNumeric: 'tabular-nums'
+        }
+      }, u.share_pct, "%"), /*#__PURE__*/React.createElement("td", {
+        className: "df-admin-nowrap"
+      }, /*#__PURE__*/React.createElement("button", {
+        className: "df-admin-linkbutton",
+        onClick: function () {
+          setExpandedMemberCost(function (prev) {
+            var next = Object.assign({}, prev);
+            next[u.user_id] = !next[u.user_id];
+            return next;
+          });
+        }
+      }, expanded ? '收起' : '查看明细 (' + (u.models || []).length + ')'))), expanded ? /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+        colSpan: "7",
+        style: {
+          background: '#fafaf8',
+          padding: '10px 16px'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8
+        }
+      }, (u.models || []).map(function (mm) {
+        return /*#__PURE__*/React.createElement("span", {
+          key: mm.category + ':' + mm.model,
+          style: {
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '4px 10px',
+            borderRadius: 6,
+            border: '1px solid var(--admin-line)',
+            background: '#fff',
+            fontSize: 11
+          }
+        }, /*#__PURE__*/React.createElement("strong", null, mm.model), /*#__PURE__*/React.createElement("span", {
+          className: "df-admin-muted"
+        }, "\xB7 ", mm.category === 'image' ? '生图' : '对话', " ", mm.calls, " \u6B21 \xB7 ", formatCompactTokens(mm.total_tokens), " tok \xB7"), /*#__PURE__*/React.createElement("strong", null, formatCostAmount(mm.cost)));
+      })))) : null);
+    })))) : /*#__PURE__*/React.createElement(AdminEmpty, {
+      text: "\u6682\u65E0\u6210\u5458\u6D88\u8D39\u8BB0\u5F55"
+    })));
+  };
   return /*#__PURE__*/React.createElement("div", {
     className: "df-admin"
   }, /*#__PURE__*/React.createElement("style", null, ADMIN_CSS), /*#__PURE__*/React.createElement("aside", {
@@ -15781,7 +16734,7 @@ function AdminPage({
     className: "df-admin-content"
   }, error ? /*#__PURE__*/React.createElement("div", {
     className: "df-admin-error"
-  }, error) : null, view === 'overview' ? renderOverview() : null, view === 'tasks' ? renderTasks() : null, view === 'services' ? renderServices() : null, view === 'users' ? /*#__PURE__*/React.createElement(AdminUserManagement, {
+  }, error) : null, view === 'overview' ? renderOverview() : null, view === 'cost' ? renderCostCenter() : null, view === 'tasks' ? renderTasks() : null, view === 'services' ? renderServices() : null, view === 'users' ? /*#__PURE__*/React.createElement(AdminUserManagement, {
     currentUser: user,
     users: users,
     onReload: function () {
