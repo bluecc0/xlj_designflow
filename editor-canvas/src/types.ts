@@ -21,6 +21,8 @@ export interface CanvasPage {
   archived?: boolean
   archivedAt?: number
   groupId?: string | null
+  pinned?: boolean
+  pinnedAt?: number
 }
 
 export interface CanvasPageGroup {
