@@ -5,6 +5,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useHistoryStore } from '../store/historyStore'
 import { calculateSnap, getSnapTargets } from '../utils/snapping'
 import { useSnapStore } from '../store/snapStore'
+import { RecoverableImage } from './RecoverableImage'
 
 interface Props {
   image: CanvasImage
@@ -169,19 +170,7 @@ function ImageShapeInner({
         borderRadius: 2,
       }}
     >
-      <img
-        src={image.url}
-        alt={image.name || 'image'}
-        draggable={false}
-        style={{
-          width: '100%',
-          height: '100%',
-          objectFit: 'contain',
-          display: 'block',
-          opacity: image.opacity ?? 1,
-          pointerEvents: 'none',
-        }}
-      />
+      <RecoverableImage key={image.url} source={image.url} name={image.name || 'image'} opacity={image.opacity ?? 1} />
     </div>
   )
 }

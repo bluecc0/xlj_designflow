@@ -63,6 +63,7 @@ interface CanvasState {
   deletePage: (pageId: string) => void
   archivePage: (pageId: string) => void
   unarchivePage: (pageId: string) => void
+  togglePinPage: (pageId: string) => void
 
   // 分组操作
   createGroup: (name?: string) => string
@@ -543,6 +544,20 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     recordHistory(get)
     set((s) => withMutation(s, {
       pages: s.pages.map((p) => (p.id === pageId ? { ...p, name: name.trim() || p.name } : p)),
+    }))
+  },
+
+  togglePinPage: (pageId) => {
+    const target = get().pages.find((p) => p.id === pageId)
+    if (!target) return
+    recordHistory(get)
+    const nextPinned = !target.pinned
+    set((s) => withMutation(s, {
+      pages: s.pages.map((p) =>
+        p.id === pageId
+          ? { ...p, pinned: nextPinned, pinnedAt: nextPinned ? Date.now() : undefined }
+          : p
+      ),
     }))
   },
 

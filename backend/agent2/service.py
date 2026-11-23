@@ -94,6 +94,12 @@ def settle_tool_calls(convo: list[dict], note: str = INTERRUPTED_NOTE) -> list[d
     return out
 
 
+async def _prepare_with_memory(context, messages: list[dict], force: bool, user_id: str, skill_dir):
+    # Refresh before every decision, including tool continuations and overflow retries.
+    messages[0] = {"role": "system", "content": build_system_prompt(skill_dir, memory.memory_index(user_id))}
+    return await context.prepare(messages, force)
+
+
 async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict],
                  tools: dict[str, Tool], model: ModelClient, request: str = "") -> AsyncIterator[str]:
     """运行引擎；事件先落库，再通过队列按顺序推给前端。"""
@@ -115,6 +121,10 @@ async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict
     context = ContextManager(session, emit)
 
     full = [system] + messages
+
+    async def prepare(msgs, force=False):
+        return await _prepare_with_memory(context, msgs, force, user["id"], _user_skill_dir(user))
+
     title = session.get("title") or next((str(m.get("content"))[:30] for m in messages if m.get("role") == "user"), "")
 
     def save(msgs: list[dict], settle: bool = False) -> None:
@@ -122,39 +132,42 @@ async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict
         store.save_session_messages(session_id, settle_tool_calls(convo) if settle else convo, title=title)
 
     async def runner():
-        try:
-            save(full)  # 本轮的用户输入先落库
-            result = await run_loop(model=model, tools=tools, messages=full, emit=emit,
-                                    ctx_base={"user": user, "session_id": session_id, "turn_id": turn_id,
-                                              "state": {"request": request}, "publish": publish},
-                                    prepare=context.prepare, checkpoint=save)
-            save(result.messages)
-            if result.status == "waiting_user":
-                store.update_turn(turn_id, status="waiting_user", engine_state={"pending": result.pending})
-            else:
-                text, options = _split_next(result.text)
-                if options:
-                    await emit("suggestions", {"options": options})
-                await emit("turn.finished", {"text": text})
-                store.update_turn(turn_id, status="done")
-        except asyncio.CancelledError:
-            save(full, settle=True)
-            if turn_id in user_cancelled:
-                store.update_turn(turn_id, status="cancelled")
-                await emit("turn.cancelled", {})
-            else:
-                # 关服、reload 等非用户取消：记为中断而不是停止，已提交的任务完成后照常补回
-                store.update_turn(turn_id, status="failed", error=INTERRUPTED_MESSAGE)
-                await emit("turn.failed", {"message": INTERRUPTED_MESSAGE})
-        except Exception as exc:
-            logger.exception("[agent2] turn %s failed", turn_id)
-            save(full, settle=True)
-            store.update_turn(turn_id, status="failed", error=str(exc)[:500])
-            await emit("turn.failed", {"message": str(exc)[:300]})
-        finally:
-            _running.pop(turn_id, None)
-            user_cancelled.discard(turn_id)
-            await queue.put(None)
+        from ..model_routing import usage_user_scope
+        uid = user.get("id") if isinstance(user, dict) else None
+        with usage_user_scope(uid):
+            try:
+                save(full)  # 本轮的用户输入先落库
+                result = await run_loop(model=model, tools=tools, messages=full, emit=emit,
+                                        ctx_base={"user": user, "session_id": session_id, "turn_id": turn_id,
+                                                  "state": {"request": request}, "publish": publish},
+                                        prepare=prepare, checkpoint=save)
+                save(result.messages)
+                if result.status == "waiting_user":
+                    store.update_turn(turn_id, status="waiting_user", engine_state={"pending": result.pending})
+                else:
+                    text, options = _split_next(result.text)
+                    if options:
+                        await emit("suggestions", {"options": options})
+                    await emit("turn.finished", {"text": text})
+                    store.update_turn(turn_id, status="done")
+            except asyncio.CancelledError:
+                save(full, settle=True)
+                if turn_id in user_cancelled:
+                    store.update_turn(turn_id, status="cancelled")
+                    await emit("turn.cancelled", {})
+                else:
+                    # 关服、reload 等非用户取消：记为中断而不是停止，已提交的任务完成后照常补回
+                    store.update_turn(turn_id, status="failed", error=INTERRUPTED_MESSAGE)
+                    await emit("turn.failed", {"message": INTERRUPTED_MESSAGE})
+            except Exception as exc:
+                logger.exception("[agent2] turn %s failed", turn_id)
+                save(full, settle=True)
+                store.update_turn(turn_id, status="failed", error=str(exc)[:500])
+                await emit("turn.failed", {"message": str(exc)[:300]})
+            finally:
+                _running.pop(turn_id, None)
+                user_cancelled.discard(turn_id)
+                await queue.put(None)
 
     task = asyncio.create_task(runner())
     _running[turn_id] = task

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from backend.agent2 import memory, prompts, tools
+from backend.agent2 import memory, prompts, tools, service
 from backend.config import settings
 
 
@@ -51,13 +51,37 @@ class MemoryTest(unittest.TestCase):
         with self.assertRaises(memory.MemoryError):
             memory.delete_memory("u1", "../../etc")
 
-    def test_index_is_capped_keeping_newest(self):
+    def test_index_keeps_older_constraints(self):
         for i in range(30):
             memory.add_memory("u1", f"偏好 {i} " + "字" * 80)
         index = memory.memory_index("u1")
         self.assertLessEqual(len(index), memory.MAX_INDEX_CHARS)
         self.assertIn("偏好 29", index)
-        self.assertNotIn("偏好 0 ", index)
+        self.assertIn("偏好 0 ", index)
+
+    def test_every_model_decision_refreshes_memory(self):
+        from unittest.mock import AsyncMock
+        context = MagicMock()
+        context.prepare = AsyncMock(side_effect=lambda messages, force: list(messages))
+        messages = [{"role": "system", "content": "stale"}, {"role": "user", "content": "生成图片"}]
+        with patch.object(service, "build_system_prompt", side_effect=lambda folder, text: text):
+            memory.add_memory("u1", "不要主动使用技能")
+            first = asyncio.run(service._prepare_with_memory(context, messages, False, "u1", None))
+            self.assertIn("不要主动使用技能", first[0]["content"])
+            memory.add_memory("u1", "默认生成两张")
+            second = asyncio.run(service._prepare_with_memory(context, messages, True, "u1", None))
+            self.assertIn("默认生成两张", second[0]["content"])
+            self.assertNotIn("默认生成两张", first[0]["content"])
+            other = asyncio.run(service._prepare_with_memory(context, messages, False, "u2", None))
+            self.assertNotIn("不要主动使用技能", other[0]["content"])
+        self.assertTrue(context.prepare.call_args_list[1].args[1])
+
+    def test_all_fifty_maximum_entries_are_injected(self):
+        for i in range(memory.MAX_MEMORIES):
+            memory.add_memory("u1", f"{i:02d}" + "字" * 198)
+        index = memory.memory_index("u1")
+        self.assertEqual(len(index.splitlines()), memory.MAX_MEMORIES)
+        self.assertLessEqual(len(index), memory.MAX_INDEX_CHARS)
 
     def test_admin_lists_all_users_with_names(self):
         memory.add_memory("u1", "主色偏好橙色", username="xuduo")
@@ -89,6 +113,8 @@ class MemoryTest(unittest.TestCase):
         self.assertIn("sports-photo", prompt)
         self.assertLess(prompt.index("## 可用技能"), prompt.index("## 核心原则"))
         self.assertEqual(prompt.count("## 核心原则"), 1)
+        self.assertIn("技能自动匹配服从用户本轮要求及长期记忆", prompt)
+        self.assertIn("适用于所有工具和回复", prompt)
 
 
 if __name__ == "__main__":

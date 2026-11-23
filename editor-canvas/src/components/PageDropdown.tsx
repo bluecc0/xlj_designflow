@@ -16,6 +16,7 @@ import {
   Link2Off,
   Users,
   Loader2,
+  Pin,
 } from 'lucide-react'
 import { feedback, notifyError } from '../utils/feedback'
 import { confirmAction } from '../utils/confirm'
@@ -28,6 +29,74 @@ import { refreshTeamCanvases } from '../useTeamCanvasSync'
 import type { CanvasPage } from '../types'
 
 const currentUserId = new URLSearchParams(window.location.search).get('user_id') || ''
+const TEAM_COLLAPSED_STORAGE_KEY = `designflow_canvas_team_collapsed_${currentUserId || 'default'}`
+const TEAM_PINS_STORAGE_KEY = `designflow_canvas_team_pins_${currentUserId || 'default'}`
+
+function readStoredTeamCollapsed(): boolean {
+  try {
+    return localStorage.getItem(TEAM_COLLAPSED_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeStoredTeamCollapsed(collapsed: boolean) {
+  try {
+    if (collapsed) localStorage.setItem(TEAM_COLLAPSED_STORAGE_KEY, '1')
+    else localStorage.removeItem(TEAM_COLLAPSED_STORAGE_KEY)
+  } catch {}
+}
+
+function readStoredTeamPins(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(TEAM_PINS_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : null
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeStoredTeamPins(pins: Record<string, number>) {
+  try {
+    localStorage.setItem(TEAM_PINS_STORAGE_KEY, JSON.stringify(pins))
+  } catch {}
+}
+
+export function sortPersonalPagesByPin(pages: CanvasPage[]): CanvasPage[] {
+  return pages
+    .map((page, idx) => ({ page, idx }))
+    .sort((a, b) => {
+      const aPinned = Boolean(a.page.pinned)
+      const bPinned = Boolean(b.page.pinned)
+      if (aPinned !== bPinned) return aPinned ? -1 : 1
+      if (aPinned && bPinned) {
+        const aTime = Number(a.page.pinnedAt || 0)
+        const bTime = Number(b.page.pinnedAt || 0)
+        if (aTime !== bTime) return bTime - aTime
+      }
+      return a.idx - b.idx
+    })
+    .map((entry) => entry.page)
+}
+
+export function sortTeamCanvasesByPin(
+  canvases: TeamCanvasMeta[],
+  teamPins: Record<string, number>,
+): TeamCanvasMeta[] {
+  return canvases
+    .map((canvas, idx) => ({ canvas, idx }))
+    .sort((a, b) => {
+      const aTime = Number(teamPins[a.canvas.id] || 0)
+      const bTime = Number(teamPins[b.canvas.id] || 0)
+      const aPinned = aTime > 0
+      const bPinned = bTime > 0
+      if (aPinned !== bPinned) return aPinned ? -1 : 1
+      if (aPinned && bPinned && aTime !== bTime) return bTime - aTime
+      return a.idx - b.idx
+    })
+    .map((entry) => entry.canvas)
+}
 
 // 分享、复制前等本地修改落盘，服务端才能拿到这页的最新内容
 function waitUntilSaved(action = '分享', timeoutMs = 10000) {
@@ -67,13 +136,37 @@ export function PageDropdown() {
   const renameGroup = useCanvasStore((s) => s.renameGroup)
   const deleteGroup = useCanvasStore((s) => s.deleteGroup)
   const toggleGroupCollapse = useCanvasStore((s) => s.toggleGroupCollapse)
+  const togglePinPage = useCanvasStore((s) => s.togglePinPage)
 
   const [isOpen, setIsOpen] = useState(false)
   const [isArchivedOpen, setIsArchivedOpen] = useState(false)
+  const [isTeamCollapsed, setIsTeamCollapsed] = useState(() => readStoredTeamCollapsed())
+  const [teamPins, setTeamPins] = useState<Record<string, number>>(() => readStoredTeamPins())
   const [editingPageId, setEditingPageId] = useState<string | null>(null)
   const [editingPageName, setEditingPageName] = useState('')
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null)
   const [editingGroupName, setEditingGroupName] = useState('')
+
+  const handleToggleTeamCollapse = () => {
+    setIsTeamCollapsed((prev) => {
+      const next = !prev
+      writeStoredTeamCollapsed(next)
+      return next
+    })
+  }
+
+  const handleToggleTeamPin = (canvasId: string) => {
+    setTeamPins((prev) => {
+      const next = { ...prev }
+      if (next[canvasId]) {
+        delete next[canvasId]
+      } else {
+        next[canvasId] = Date.now()
+      }
+      writeStoredTeamPins(next)
+      return next
+    })
+  }
 
   const dropdownRef = useRef<HTMLDivElement>(null)
   const pendingPageSwitch = useRef<ReturnType<typeof window.setTimeout> | null>(null)
@@ -239,6 +332,7 @@ export function PageDropdown() {
     const isActive = source.kind === 'team' && source.id === canvas.id
     const isEditing = editingPageId === canvas.page_id
     const isOwner = canvas.owner_id === currentUserId
+    const isPinned = Boolean(teamPins[canvas.id])
     return (
       <div
         key={canvas.id}
@@ -259,6 +353,7 @@ export function PageDropdown() {
       >
         <div style={{ width: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           {isActive ? <Check size={12} strokeWidth={2.4} color="#0f172a" />
+            : isPinned ? <Pin size={10} strokeWidth={2.2} color="#4f46e5" style={{ transform: 'rotate(45deg)' }} />
             : <div style={{ width: 3, height: 3, borderRadius: '50%', backgroundColor: '#cbd5e1', opacity: 0.5 }} />}
         </div>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 5 }}>
@@ -293,6 +388,22 @@ export function PageDropdown() {
         </div>
         {!isEditing && (
           <div className="canvas-item-actions" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => handleToggleTeamPin(canvas.id)}
+              style={iconButtonStyle}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              title={isPinned ? '取消置顶' : '置顶此画布'}
+            >
+              <Pin
+                size={12}
+                strokeWidth={1.8}
+                color={isPinned ? '#4f46e5' : '#64748b'}
+                fill={isPinned ? '#4f46e5' : 'none'}
+                style={{ transform: 'rotate(45deg)' }}
+              />
+            </button>
             <button
               type="button"
               disabled={teamBusyId !== null}
@@ -346,6 +457,7 @@ export function PageDropdown() {
   const renderPageItem = (page: CanvasPage, isArchived = false, isIndented = false) => {
     const isActive = !inTeam && page.id === activePageId
     const isEditing = editingPageId === page.id
+    const isPinned = Boolean(page.pinned)
 
     return (
       <div
@@ -377,10 +489,12 @@ export function PageDropdown() {
           cursor: 'pointer',
         }}
       >
-        {/* 左侧选中态对勾指示 */}
+        {/* 左侧选中态对勾 / 置顶指示 */}
         <div style={{ width: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           {isActive ? (
             <Check size={12} strokeWidth={2.4} color="#0f172a" />
+          ) : isPinned ? (
+            <Pin size={10} strokeWidth={2.2} color="#0f172a" style={{ transform: 'rotate(45deg)' }} />
           ) : (
             <div style={{ width: 3, height: 3, borderRadius: '50%', backgroundColor: '#cbd5e1', opacity: 0.5 }} />
           )}
@@ -438,6 +552,29 @@ export function PageDropdown() {
           className={`canvas-item-actions ${isEditing ? 'force-visible' : ''}`}
           onClick={(e) => e.stopPropagation()}
         >
+          {/* 置顶 */}
+          {!isEditing && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                togglePinPage(page.id)
+              }}
+              style={iconButtonStyle}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              title={isPinned ? '取消置顶' : '置顶此画布'}
+            >
+              <Pin
+                size={12}
+                strokeWidth={1.8}
+                color={isPinned ? '#0f172a' : '#64748b'}
+                fill={isPinned ? '#0f172a' : 'none'}
+                style={{ transform: 'rotate(45deg)' }}
+              />
+            </button>
+          )}
+
           {/* 分享 */}
           {!isArchived && !isEditing && (
             <button
@@ -542,8 +679,12 @@ export function PageDropdown() {
     )
   }
 
-  // 根级未分组活跃画布
-  const rootPages = unarchivedPages.filter((p) => !p.groupId || !groups.some((g) => g.id === p.groupId))
+  // 根级未分组活跃画布（置顶优先）
+  const rootPages = sortPersonalPagesByPin(
+    unarchivedPages.filter((p) => !p.groupId || !groups.some((g) => g.id === p.groupId)),
+  )
+  const sortedTeamCanvases = sortTeamCanvasesByPin(teamCanvases, teamPins)
+  const sortedArchivedPages = sortPersonalPagesByPin(archivedPages)
 
   return (
     <div ref={dropdownRef} onMouseDownCapture={cancelPendingPageSwitch} style={{ position: 'relative' }}>
@@ -672,15 +813,40 @@ export function PageDropdown() {
             }}
           >
             {/* 0. 团队文件夹：我能访问的共享画布 */}
-            {teamCanvases.length > 0 && (
+            {sortedTeamCanvases.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 1, paddingBottom: 4, marginBottom: 3, borderBottom: '1px solid #f1f5f9' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, height: 30, padding: '0 8px', color: '#334155', fontSize: 12, fontWeight: 600 }}>
-                  <div style={{ width: 14, flexShrink: 0 }} />
+                <div
+                  className="canvas-group-item"
+                  onClick={handleToggleTeamCollapse}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    height: 30,
+                    padding: '0 8px',
+                    borderRadius: 8,
+                    color: '#334155',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div style={{ width: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <ChevronRight
+                      size={11}
+                      strokeWidth={2.2}
+                      color="#94a3b8"
+                      style={{
+                        transform: isTeamCollapsed ? 'rotate(0deg)' : 'rotate(90deg)',
+                        transition: 'transform 140ms ease',
+                      }}
+                    />
+                  </div>
                   <Users size={13} strokeWidth={1.8} color="#4f46e5" style={{ flexShrink: 0 }} />
                   <span style={{ letterSpacing: '-0.01em' }}>团队</span>
-                  <span style={{ fontSize: 10, fontWeight: 500, color: '#94a3b8' }}>({teamCanvases.length})</span>
+                  <span style={{ fontSize: 10, fontWeight: 500, color: '#94a3b8' }}>({sortedTeamCanvases.length})</span>
                 </div>
-                {teamCanvases.map(renderTeamItem)}
+                {!isTeamCollapsed && sortedTeamCanvases.map(renderTeamItem)}
               </div>
             )}
 
@@ -689,7 +855,9 @@ export function PageDropdown() {
 
             {/* 2. 各分组与组内画布 */}
             {groups.map((group) => {
-              const groupPages = unarchivedPages.filter((p) => p.groupId === group.id)
+              const groupPages = sortPersonalPagesByPin(
+                unarchivedPages.filter((p) => p.groupId === group.id),
+              )
               const isGroupEditing = editingGroupId === group.id
               const isCollapsed = Boolean(group.collapsed)
 
@@ -923,7 +1091,7 @@ export function PageDropdown() {
                   marginTop: 2,
                 }}
               >
-                {archivedPages.length === 0 ? (
+                {sortedArchivedPages.length === 0 ? (
                   <div
                     style={{
                       padding: '5px 8px 6px 28px',
@@ -935,7 +1103,7 @@ export function PageDropdown() {
                     暂无已归档画布
                   </div>
                 ) : (
-                  archivedPages.map((page) => renderPageItem(page, true, false))
+                  sortedArchivedPages.map((page) => renderPageItem(page, true, false))
                 )}
               </div>
             )}

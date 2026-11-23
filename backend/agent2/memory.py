@@ -21,7 +21,7 @@ from ..user_skill_store import user_skill_dir
 KINDS = {"preference": "偏好", "fact": "信息"}
 MAX_MEMORIES = 50
 MAX_CONTENT_CHARS = 200
-MAX_INDEX_CHARS = 1500
+MAX_INDEX_CHARS = 16000  # All 50 bounded entries fit; never silently drop older constraints.
 INDEX_NAME = "MEMORY.md"
 OWNER_NAME = ".owner.json"  # 记录用户 ID 和用户名，供管理后台显示
 _ID_RE = re.compile(r"^m_[0-9a-f]{8}$")
@@ -129,11 +129,9 @@ def delete_memory(user_id: str, memory_id: str) -> None:
 
 
 def memory_index(user_id: str) -> str:
-    """注入系统提示词的索引；超长时保留最新的条目。"""
+    """注入全部长期记忆，不能因新偏好增加而静默丢掉旧约束。"""
     path = memory_dir(user_id) / INDEX_NAME
     text = path.read_text(encoding="utf-8").strip() if path.is_file() else ""
-    while len(text) > MAX_INDEX_CHARS and "\n" in text:
-        text = text.split("\n", 1)[1]
     return text
 
 

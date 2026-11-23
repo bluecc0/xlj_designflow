@@ -534,7 +534,13 @@ def _run_inner(job: SpecialComposeJob) -> None:
             _log(job, f"提交 {len(all_changes)} 个变更…")
             client.update_file(work_file_id, all_changes)
             _log(job, "打开 Penpot 工作区刷新布局…")
-            refresh_penpot_workspace(edit_url=edit_url, client=client, log=lambda msg: _log(job, msg))
+            if not refresh_penpot_workspace(
+                edit_url=edit_url, client=client, log=lambda msg: _log(job, msg),
+                file_id=work_file_id, page_id=req.page_id,
+                text_layer_ids=[s["id"] for s in slots if s.get("type") == "text"
+                                and s.get("frame_id") in req.frame_ids],
+            ):
+                raise RuntimeError("Penpot 文字布局未确认保存完成，请稍后重试，未导出错位图片")
         else:
             _log(job, "无变更，直接导出")
 

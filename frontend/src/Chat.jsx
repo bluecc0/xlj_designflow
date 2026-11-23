@@ -6041,11 +6041,11 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       const _endpoint  = isFull ? '/special-compose-full' : '/special-compose';
       const _pollBase  = isFull ? '/special-compose-full' : '/special-compose';
       const _errHint   = '请提供 SKU，格式：SKU，文案，时间文案';
-      const _tplHint   = isFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板';
-      const templates = Array.isArray(window.TEMPLATES) ? window.TEMPLATES : [];
-      const effectiveTemplate = templates.find(function(t) {
+      const _tplHint = '未找到对应的特殊品模板，请联系管理员检查 Penpot 模板配置，无需手动选择模板。';
+      let templates = Array.isArray(window.TEMPLATES) ? window.TEMPLATES : [];
+      let effectiveTemplate = templates.find(function(t) {
         return isFull ? t.is_special_full : (t.is_special && !t.is_special_full);
-      }) || template;
+      });
 
       const displayText = text.trim();
       setMessages(msgs => [...msgs, { who: 'user', text: displayText, refPreviews: userRefPreviews, refMeta: userRefMeta }]);
@@ -6067,6 +6067,16 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
         const sku = parts[0] || '';
         const fields = { name: parts[1] || '', time: parts[2] || '' };
         if (!sku) throw new Error(_errHint);
+        if (!effectiveTemplate) {
+          try {
+            const data = await window.API.fetchTemplates();
+            templates = window.aggregateTemplates(data);
+            window.TEMPLATES = templates;
+            effectiveTemplate = templates.find(t => isFull ? t.is_special_full : (t.is_special && !t.is_special_full));
+          } catch (err) {
+            throw new Error('Penpot 模板服务暂时不可用，请稍后重试；无需手动选择模板。' + (err.message || ''));
+          }
+        }
         if (!effectiveTemplate) throw new Error(_tplHint);
 
         const frameIds = effectiveTemplate.frames ? effectiveTemplate.frames.map(f => f.id) : [effectiveTemplate.id];

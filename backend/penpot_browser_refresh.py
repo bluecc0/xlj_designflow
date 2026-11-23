@@ -103,12 +103,58 @@ async def _refresh_with_websockets(ws_url: str, edit_url: str, auth_token: str, 
         return ((state_result or {}).get("result") or {}).get("value", {}).get("title", "")
 
 
+def wait_for_text_layout(client, file_id, page_id, layer_ids, timeout=45.0):
+    """Require persisted text layout, not merely a loaded workspace title."""
+    wanted = set(layer_ids)
+    if not wanted:
+        return True
+    deadline = time.monotonic() + timeout
+    previous = None
+    stable = 0
+    def text_of(node):
+        if not isinstance(node, dict):
+            return ""
+        return str(node.get("text") or "") + "".join(text_of(c) for c in node.get("children", []))
+    while time.monotonic() < deadline:
+        data = client.get_file(file_id).get("data", {})
+        pages = data.get("pagesIndex") or data.get("pages-index") or {}
+        objects = pages.get(page_id, {}).get("objects", {})
+        signature = []
+        for lid in sorted(wanted):
+            obj = objects.get(lid, {})
+            runs = obj.get("positionData") or obj.get("position-data") or []
+            content = "".join(text_of(obj.get("content", {})).split())
+            rendered = "".join(str(r.get("text") or "") for r in runs)
+            if not runs or content != "".join(rendered.split()):
+                break
+            # A resize can save new text before its cached glyph positions move.
+            if any(float(r.get("x", obj.get("x", 0))) < float(obj.get("x", 0)) - 2
+                   or float(r.get("x", 0)) + float(r.get("width", 0)) >
+                   float(obj.get("x", 0)) + float(obj.get("width", 0)) + 2
+                   for r in runs):
+                break
+            signature.append((lid, obj.get("x"), obj.get("y"), obj.get("width"),
+                              obj.get("height"), json.dumps(runs, sort_keys=True)))
+        if len(signature) == len(wanted):
+            stable = stable + 1 if signature == previous else 1
+            previous = signature
+            if stable >= 4:
+                return True
+        else:
+            stable, previous = 0, None
+        time.sleep(2)
+    return False
+
+
 def refresh_penpot_workspace(
     *,
     edit_url: str,
     client: PenpotClient,
     wait_seconds: float = 12.0,
     log: Optional[Callable[[str], None]] = None,
+    file_id: str = "",
+    page_id: str = "",
+    text_layer_ids: Optional[list[str]] = None,
 ) -> bool:
     """Open Penpot workspace in a temporary headless browser to let Penpot refresh layout data."""
 
@@ -208,6 +254,9 @@ def refresh_penpot_workspace(
                     wait_seconds,
                 )
             )
+        if file_id and not wait_for_text_layout(client, file_id, page_id, text_layer_ids or []):
+            emit("Penpot 文字布局尚未保存完成，停止导出以避免文字错位")
+            return False
         emit(f"Penpot 布局刷新完成: {title or 'workspace'}")
         return True
     except Exception as exc:
