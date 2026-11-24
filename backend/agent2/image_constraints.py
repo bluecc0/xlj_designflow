@@ -48,7 +48,7 @@ def numbered_references(text: str, uploads: list[dict]) -> set[str]:
 
 def reference_order_error(inputs: list[dict], ids: list[str], prompt: str) -> bool:
     """Do not silently reorder files after a numbered prompt has been written."""
-    if not re.search(r"(?:参考图|reference\s*(?:image\s*)?)\s*[1-9]", prompt, re.I):
+    if not re.search(r"(?:@\s*(?:图片|图)?|参考图|图片|图|reference\s*(?:image\s*)?)\s*[1-9]", prompt, re.I):
         return False
     uploads = [u["id"] for p in inputs for u in p.get("uploads", []) if u.get("kind") != "table"]
     uploads = list(dict.fromkeys(uploads))
@@ -57,6 +57,19 @@ def reference_order_error(inputs: list[dict], ids: list[str], prompt: str) -> bo
     expected = [rid for rid in uploads if rid in ids]
     expected += [rid for rid in ids if rid not in uploads]
     return ids != expected
+
+
+def bind_upload_numbers(prompt: str, ids: list[str], inputs: list[dict]) -> str:
+    """Replace user upload aliases with their actual per-image send positions."""
+    uploads = [u['id'] for p in inputs for u in p.get('uploads', []) if u.get('kind') != 'table']
+    if not uploads:
+        return prompt
+    def replace(match):
+        index = int(match.group(1)) - 1
+        if index >= len(uploads) or uploads[index] not in ids:
+            raise ValueError('提示词引用了未发送的用户图片，请修正参考列表和编号后重试')
+        return '参考图' + str(ids.index(uploads[index]) + 1)
+    return re.sub(r'(?:@\s*(?:图片|图)?|图片)\s*([1-9][0-9]*)(?![0-9])', replace, prompt)
 
 
 def requested_image_count(text: str) -> int | None:

@@ -3000,6 +3000,8 @@ async def smart_generate_image_async(
         try:
             if on_attempt:
                 on_attempt(provider)
+            checkpoint('route_attempt', provider=provider, round=round_no, attempt_id=attempt_id,
+                       status='started', started_at=attempt_started)
             attempt_count += 1
             canonical_model = _normalize_model_name(model).lower()
             if canonical_model in GPT_IMAGE_26_MODELS:
@@ -3072,6 +3074,9 @@ async def smart_generate_image_async(
             logger.warning("[smart-routing] attempt_success job=%s attempt=%s provider=%s upstream=%s elapsed=%.2f",
                            routing_job_id or "unknown", attempt_id, provider, result.get("task_id") or accepted.get(provider) or "unknown",
                            time.time() - attempt_started)
+            checkpoint('route_attempt', provider=provider, round=round_no, attempt_id=attempt_id,
+                       status='succeeded', elapsed=round(time.time() - attempt_started, 3),
+                       task_id=accepted.get(provider) or '')
             result["provider"] = provider
             accepted_tid = (accepted.get(provider) or "").strip()
             if accepted_tid and not result.get("task_id"):
@@ -3100,6 +3105,14 @@ async def smart_generate_image_async(
                 provider, round_no, err_msg,
             )
             errors.append(f"R{round_no}/{provider}: {err_msg}")
+            # Persist bounded diagnostics without credentials, signed URLs or upstream bodies.
+            safe_error = re.sub(r'https?://\S+', '[URL]', str(exc))
+            safe_error = re.sub(r'(?i)(bearer\s+|api[_-]?key[=: ]+|token[=: ]+)\S+', r'\1[REDACTED]', safe_error)
+            safe_error = re.sub(r'sk-[A-Za-z0-9_-]+', '[REDACTED]', safe_error)
+            checkpoint('route_attempt', provider=provider, round=round_no, attempt_id=attempt_id,
+                       status='failed', elapsed=round(time.time() - attempt_started, 3),
+                       task_id=accepted.get(provider) or '', error_type=type(exc).__name__,
+                       message=public_generation_error(exc), diagnostic=safe_error[:500])
 
             freezable = is_freezable_provider_error(exc)
             logger.warning("[smart-routing] attempt_failure job=%s attempt=%s provider=%s upstream=%s round=%d freezable=%s elapsed=%.2f error=%s",
