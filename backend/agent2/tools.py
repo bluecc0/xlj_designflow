@@ -29,7 +29,7 @@ from ..model_routing import routed_chat_completion
 from ..user_skill_store import IMAGE_SUFFIXES
 from . import memory, store
 from .engine import Tool, ToolContext, user_cancelled
-from .image_constraints import explicit_models, numbered_references, turn_inputs, reference_order_error
+from .image_constraints import explicit_models, numbered_references, turn_inputs, reference_order_error, bind_upload_numbers
 from .reference_preflight import check_reference_roles
 
 DEFAULT_IMAGE_MODEL = "gpt-image-2.6"
@@ -168,7 +168,8 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str,
     kept = [rid for rid in ref_ids if not _character_artifact(ctx, rid)] if item.get("no_character") else ref_ids
     if item.get("reference_image_ids") or kept != ref_ids:
         ref_ids, refs = kept, [_artifact_bytes(ctx, rid) for rid in kept]
-    prompt = _with_character_prompt(ctx, written_prompt, ref_ids)
+    inputs = ctx.state.get('upload_number_inputs') or []
+    prompt = _with_character_prompt(ctx, bind_upload_numbers(written_prompt, ref_ids, inputs), ref_ids)
     roles = item.get("reference_roles") or {}
     if roles:
         prompt += "\n\n参考图职责（按实际发送顺序，优先于上文的参考图编号）：\n" + "\n".join(
@@ -248,7 +249,15 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
     ctx.state.setdefault("images", used)
     if used + len(items) > MAX_IMAGES_PER_TURN:
         return {"error": f"本轮最多生成 {MAX_IMAGES_PER_TURN} 张，已生成 {used} 张"}
-    inputs = turn_inputs(store.list_events(ctx.session_id), ctx.turn_id)
+    events = store.list_events(ctx.session_id)
+    inputs = turn_inputs(events, ctx.turn_id)
+    ctx.state['upload_number_inputs'] = []
+    if not any(p.get('uploads') for p in inputs):
+        for event in reversed(events):
+            payload = event.get('payload') or {}
+            if event.get('type') in {'turn.started', 'input.answered'} and payload.get('uploads'):
+                ctx.state['upload_number_inputs'] = [payload]
+                break
     requested_models: set[str] = set()
     for payload in inputs:
         selected = explicit_models(str(payload.get("text") or payload.get("answer") or ""))
@@ -299,6 +308,11 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
     shared_ids = [str(rid) for rid in (args.get("reference_image_ids") or [])]
     effective = [item.get("reference_image_ids") or shared_ids for item in items]
     for item, ids in zip(items, effective):
+        # Bind upload aliases before validating order; never submit contradictory numbers.
+        try:
+            item['prompt'] = bind_upload_numbers(item['prompt'], ids, inputs)
+        except ValueError as exc:
+            return {'error': str(exc)}
         if reference_order_error(inputs, ids, item["prompt"]):
             return {"error": "带编号的参考图必须保持本轮用户上传顺序，技能动作图追加在后面。"
                              "请同时重写 reference_image_ids、prompt 中的编号和 reference_roles 后重试；尚未提交生图。"}
@@ -391,6 +405,7 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
 async def analyze_image(ctx: ToolContext, args: dict) -> dict:
     data, _name = _artifact_bytes(ctx, args.get("image_id"))
     question = str(args.get("question") or "").strip() or "描述这张图：主体是什么、外观特征、颜色材质、构图和风格，图里有哪些文字。"
+    question += "\n若描述动作，必须包含滑板等必要道具、支撑物、脚手接触关系。图片的平台编号由上传元数据确定，不是视觉判断任务，不要因无法验证编号而要求用户确认。"
     reference_ids = list(dict.fromkeys(args.get("reference_image_ids") or []))
     artifact = store.get_artifact(str(args.get("image_id") or ""), ctx.user["id"])
     expected = []

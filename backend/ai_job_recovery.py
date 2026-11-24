@@ -81,6 +81,11 @@ async def execute_image_job(worker, job_id: str, *, initial: dict | None = None)
 
         def on_checkpoint(next_phase, **values):
             nonlocal provider
+            if next_phase == 'route_attempt':
+                meta.setdefault('route_attempts', []).append(values)
+                meta['route_attempts'] = meta['route_attempts'][-40:]
+                persist()
+                return
             if next_phase == "preparing":
                 provider = str(values.pop("provider", provider))
                 # Never associate a newly attempted route with an earlier route's ID.

@@ -3176,6 +3176,7 @@ const Canvas = ({
   template,
   resultTemplate,
   editorCommands,
+  pendingImages,
   onUseReferenceImages,
   onQuickEditGenerate,
   userId
@@ -3185,6 +3186,8 @@ const Canvas = ({
   const iframeRef = React.useRef(null);
   const editorReadyRef = React.useRef(false);
   const pendingMessagesRef = React.useRef([]);
+  const latestPendingImagesRef = React.useRef([]);
+  latestPendingImagesRef.current = Array.isArray(pendingImages) ? pendingImages : [];
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
   React.useEffect(() => {
@@ -3224,7 +3227,20 @@ const Canvas = ({
       });
       pendingMessagesRef.current = [];
     }
+    if (latestPendingImagesRef.current.length > 0) {
+      postToEditor({
+        type: 'designflow:pending-images',
+        items: latestPendingImagesRef.current
+      });
+    }
   }, [postToEditor]);
+  React.useEffect(() => {
+    if (!editorReadyRef.current) return;
+    postToEditor({
+      type: 'designflow:pending-images',
+      items: Array.isArray(pendingImages) ? pendingImages : []
+    });
+  }, [pendingImages, postToEditor]);
 
   // 接收编辑器的 ready 信号，用于命令就绪判定（不控制 UI 可见性）
   React.useEffect(() => {
@@ -4447,25 +4463,430 @@ function postAiImageForm(apiBase, formData, options) {
   return attemptOnce(1);
 }
 
-// 生成耗时计时器，每秒刷新
+// 生成耗时计时器，支持 0.1s 精度（对齐 beautifului.dev Loading State）
 const ChatTimer = ({
-  startedAt
+  startedAt,
+  precise
 }) => {
-  const [elapsed, setElapsed] = React.useState(Math.floor((Date.now() - startedAt) / 1000));
+  const [elapsedMs, setElapsedMs] = React.useState(Math.max(0, Date.now() - startedAt));
   React.useEffect(() => {
-    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    const interval = precise ? 100 : 1000;
+    const id = setInterval(() => setElapsedMs(Math.max(0, Date.now() - startedAt)), interval);
     return () => clearInterval(id);
-  }, [startedAt]);
-  const m = Math.floor(elapsed / 60),
-    s = elapsed % 60;
+  }, [startedAt, precise]);
+  const totalSec = elapsedMs / 1000;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  const text = precise ? m > 0 ? m + 'm ' + s.toFixed(1).padStart(4, '0') + 's' : s.toFixed(1) + 's' : m > 0 ? m + 'm ' + String(Math.floor(s)).padStart(2, '0') + 's' : Math.floor(s) + 's';
   return React.createElement('span', {
     className: 'mono',
     style: {
       fontSize: 11,
       color: 'var(--ink-3)',
-      fontVariantNumeric: 'tabular-nums'
+      fontVariantNumeric: 'tabular-nums',
+      whiteSpace: 'nowrap',
+      flexShrink: 0
     }
-  }, m > 0 ? m + 'm ' + String(s).padStart(2, '0') + 's' : s + 's');
+  }, text);
+};
+
+// 3×3 Pixel-grid loader（参考 beautifului.dev Loading State）
+const PixelGridLoader = ({
+  large
+}) => React.createElement('span', {
+  className: large ? 'df-pixel-grid is-lg' : 'df-pixel-grid',
+  'aria-hidden': 'true'
+}, Array.from({
+  length: 9
+}).map(function (_, idx) {
+  return React.createElement('span', {
+    key: idx
+  });
+}));
+function parseAspectRatioCss(raw) {
+  var s = String(raw || '').trim().toLowerCase();
+  if (!s || s === 'auto') return '1 / 1';
+  var m = s.match(/^(\d+(?:\.\d+)?)\s*[:x×/]\s*(\d+(?:\.\d+)?)$/);
+  if (!m) return '1 / 1';
+  var w = parseFloat(m[1]),
+    h = parseFloat(m[2]);
+  if (!(w > 0 && h > 0)) return '1 / 1';
+  // 防止极端细长比例撑爆对话气泡
+  var ratio = Math.max(0.56, Math.min(1.85, w / h));
+  return ratio.toFixed(3) + ' / 1';
+}
+
+// 数学曲线动力学加载图标（10 · 透镜焦散 Lens Caustic / Nephroid）
+const MathCurveLoader = ({
+  size,
+  seed,
+  color
+}) => {
+  var svgRef = React.useRef(null);
+  var groupRef = React.useRef(null);
+  var pathRef = React.useRef(null);
+  var circlesRef = React.useRef([]);
+  var numericSeed = Number(seed) || 0;
+  var pxSize = Number(size) || 36;
+  var TRAILS = 2;
+  var PARTICLES_PER_TRAIL = 28;
+  var TOTAL_PARTICLES = TRAILS * PARTICLES_PER_TRAIL;
+  React.useEffect(function () {
+    var svg = svgRef.current;
+    var group = groupRef.current;
+    var path = pathRef.current;
+    if (!svg || !group || !path) return;
+    var reduceMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var PATH_STEPS = 160;
+    var TRAIL_SPAN = 0.28;
+    var DURATION_MS = 4600;
+    var PULSE_DURATION_MS = 4600;
+    var ROTATION_DURATION_MS = 34000;
+    var phaseOffset = numericSeed * 0.23 % 1;
+    var startTime = performance.now();
+    var visible = true;
+    var raf = 0;
+    var samplePoint = function (progress, pulse) {
+      var t = progress * Math.PI * 2;
+      var k = 0.22 + pulse * 0.14;
+      var x = (Math.cos(t) * (1 - k) + k * Math.cos(3 * t)) * 35;
+      var y = (Math.sin(t) * (1 + k * 0.5) - k * Math.sin(3 * t)) * 32;
+      return {
+        x: 50 + x,
+        y: 50 + y
+      };
+    };
+    var buildPath = function (pulse) {
+      var parts = new Array(PATH_STEPS + 1);
+      for (var i = 0; i <= PATH_STEPS; i++) {
+        var pt = samplePoint(i / PATH_STEPS, pulse);
+        parts[i] = (i === 0 ? 'M ' : 'L ') + pt.x.toFixed(2) + ' ' + pt.y.toFixed(2);
+      }
+      return parts.join(' ');
+    };
+    var io = typeof IntersectionObserver !== 'undefined' ? new IntersectionObserver(function (entries) {
+      visible = !entries[0] || entries[0].isIntersecting;
+    }, {
+      rootMargin: '64px'
+    }) : null;
+    if (io) io.observe(svg);
+    var renderFrame = function (now) {
+      var time = reduceMotion ? 0 : now - startTime;
+      var progress = (time + phaseOffset * DURATION_MS) % DURATION_MS / DURATION_MS;
+      var pulseProgress = (time + phaseOffset * PULSE_DURATION_MS) % PULSE_DURATION_MS / PULSE_DURATION_MS;
+      var pulse = (Math.sin(pulseProgress * Math.PI * 2) + 1) / 2;
+      var rotation = -((time + phaseOffset * ROTATION_DURATION_MS) % ROTATION_DURATION_MS / ROTATION_DURATION_MS) * 360;
+      group.setAttribute('transform', 'rotate(' + rotation.toFixed(2) + ' 50 50)');
+      path.setAttribute('d', buildPath(pulse));
+      for (var tr = 0; tr < TRAILS; tr++) {
+        var offset = tr / TRAILS;
+        for (var i = 0; i < PARTICLES_PER_TRAIL; i++) {
+          var node = circlesRef.current[tr * PARTICLES_PER_TRAIL + i];
+          if (!node) continue;
+          var tail = i / (PARTICLES_PER_TRAIL - 1);
+          var p = ((progress + offset - tail * TRAIL_SPAN) % 1 + 1) % 1;
+          var pt = samplePoint(p, pulse);
+          var fade = Math.pow(1 - tail, 0.58);
+          node.setAttribute('cx', pt.x.toFixed(2));
+          node.setAttribute('cy', pt.y.toFixed(2));
+          node.setAttribute('r', (0.65 + fade * 1.95).toFixed(2));
+          node.setAttribute('opacity', (0.03 + fade * 0.78).toFixed(3));
+        }
+      }
+    };
+    renderFrame(startTime);
+    if (reduceMotion) {
+      return function () {
+        if (io) io.disconnect();
+      };
+    }
+    var tick = function (now) {
+      raf = window.requestAnimationFrame(tick);
+      if (!visible) return;
+      renderFrame(now);
+    };
+    raf = window.requestAnimationFrame(tick);
+    return function () {
+      window.cancelAnimationFrame(raf);
+      if (io) io.disconnect();
+    };
+  }, [numericSeed]);
+  return React.createElement('svg', {
+    ref: svgRef,
+    width: pxSize,
+    height: pxSize,
+    viewBox: '0 0 100 100',
+    fill: 'none',
+    'aria-hidden': 'true',
+    style: {
+      color: color || '#94a3b8',
+      display: 'block',
+      flexShrink: 0
+    }
+  }, React.createElement('g', {
+    ref: groupRef
+  }, React.createElement('path', {
+    ref: pathRef,
+    stroke: 'currentColor',
+    strokeWidth: 3.8,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    opacity: 0.09
+  }), Array.from({
+    length: TOTAL_PARTICLES
+  }).map(function (_, i) {
+    return React.createElement('circle', {
+      key: i,
+      ref: function (el) {
+        circlesRef.current[i] = el;
+      },
+      fill: 'currentColor'
+    });
+  })));
+};
+
+// 动态创意图片占位符（克制柔光 + 数学曲线动力学加载）
+const CreativeImagePlaceholder = ({
+  aspectRatio,
+  compact,
+  seed
+}) => {
+  var cssRatio = parseAspectRatioCss(aspectRatio);
+  var idx = Number(seed) || 0;
+  var phaseDelay = (-(idx % 5 * 1.65)).toFixed(2) + 's';
+  var sweepDelay = (-(idx % 5 * 0.85)).toFixed(2) + 's';
+  return React.createElement('div', {
+    className: 'df-gen-canvas',
+    style: compact ? {
+      aspectRatio: cssRatio,
+      minHeight: 104
+    } : {
+      aspectRatio: cssRatio,
+      minHeight: 168,
+      maxHeight: 270
+    }
+  }, React.createElement('div', {
+    className: 'df-gen-aurora',
+    'aria-hidden': 'true'
+  }, React.createElement('span', {
+    className: 'df-gen-orb is-a',
+    style: {
+      animationDelay: phaseDelay
+    }
+  }), React.createElement('span', {
+    className: 'df-gen-orb is-b',
+    style: {
+      animationDelay: phaseDelay
+    }
+  }), React.createElement('span', {
+    className: 'df-gen-sweep',
+    style: {
+      animationDelay: sweepDelay
+    }
+  })), React.createElement('div', {
+    className: 'df-gen-center'
+  }, React.createElement(MathCurveLoader, {
+    size: compact ? 28 : 34,
+    seed: idx
+  }), React.createElement('span', {
+    className: compact ? 'df-gen-label is-compact' : 'df-gen-label'
+  }, '正在生成', React.createElement('span', {
+    className: 'df-pending-dots',
+    'aria-hidden': 'true'
+  }, React.createElement('span', null, '.'), React.createElement('span', null, '.'), React.createElement('span', null, '.')))));
+};
+const REVEAL_RETRY_DELAYS = [1000, 3000, 8000];
+const REVEAL_LOAD_TIMEOUT = 25000;
+function buildRevealRetryUrl(source, attempt, retryNonce) {
+  var raw = String(source || '');
+  if (!raw || !attempt && !retryNonce) return raw;
+  if (raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
+  try {
+    var origin = typeof window !== 'undefined' && window.location ? window.location.origin : 'http://localhost';
+    var url = new URL(raw, origin);
+    if (url.origin !== origin && !raw.startsWith('/')) return raw;
+    url.searchParams.set('_imgRetry', String(attempt) + '-' + String(retryNonce || 0));
+    return raw.startsWith('/') && !raw.startsWith('//') ? url.pathname + url.search + url.hash : url.toString();
+  } catch (e) {
+    return raw;
+  }
+}
+
+// 真实图片柔焦显影组件：加载前为柔光流光底，onLoad 后平滑清晰显影；失败时有界重试 + 网络恢复自愈 + 可点击重试
+const RevealImage = ({
+  src,
+  alt,
+  aspectRatio,
+  onClick,
+  dragProps,
+  style
+}) => {
+  var _s = React.useState('loading');
+  var status = _s[0],
+    setStatus = _s[1];
+  var _a = React.useState(0);
+  var attempt = _a[0],
+    setAttempt = _a[1];
+  var _n = React.useState(0);
+  var retryNonce = _n[0],
+    setRetryNonce = _n[1];
+  var _v = React.useState(true);
+  var showVeil = _v[0],
+    setShowVeil = _v[1];
+  var imgRef = React.useRef(null);
+  var failRef = React.useRef(function () {});
+  React.useEffect(function () {
+    setAttempt(0);
+    setRetryNonce(0);
+    setStatus('loading');
+    setShowVeil(true);
+  }, [src]);
+  React.useEffect(function () {
+    var active = true;
+    var settled = false;
+    var retryTimer = null;
+    var img = imgRef.current;
+    if (img && img.complete && img.naturalWidth > 0) {
+      setStatus('loaded');
+      setShowVeil(false);
+      return;
+    }
+    setStatus('loading');
+    setShowVeil(true);
+    var triggerFail = function () {
+      if (!active || settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      if (attempt < REVEAL_RETRY_DELAYS.length) {
+        retryTimer = setTimeout(function () {
+          if (active) setAttempt(function (prev) {
+            return prev + 1;
+          });
+        }, REVEAL_RETRY_DELAYS[attempt]);
+      } else {
+        setShowVeil(false);
+        setStatus('failed');
+      }
+    };
+    var timeoutId = setTimeout(triggerFail, REVEAL_LOAD_TIMEOUT);
+    failRef.current = triggerFail;
+    var handleLoad = function () {
+      if (!active || !img || !img.naturalWidth) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      if (retryTimer) clearTimeout(retryTimer);
+      setStatus('loaded');
+    };
+    if (img) {
+      img.addEventListener('load', handleLoad);
+      img.addEventListener('error', triggerFail);
+      if (img.complete) {
+        if (img.naturalWidth > 0) handleLoad();else triggerFail();
+      }
+    }
+    return function () {
+      active = false;
+      clearTimeout(timeoutId);
+      if (retryTimer) clearTimeout(retryTimer);
+      if (img) {
+        img.removeEventListener('load', handleLoad);
+        img.removeEventListener('error', triggerFail);
+      }
+    };
+  }, [src, attempt, retryNonce]);
+  React.useEffect(function () {
+    if (status !== 'loaded' || !showVeil) return;
+    var timer = setTimeout(function () {
+      setShowVeil(false);
+    }, 560);
+    return function () {
+      clearTimeout(timer);
+    };
+  }, [status, showVeil]);
+  React.useEffect(function () {
+    if (typeof window === 'undefined') return;
+    var onOnline = function () {
+      if (status === 'failed') {
+        setAttempt(0);
+        setRetryNonce(function (n) {
+          return n + 1;
+        });
+      }
+    };
+    window.addEventListener('online', onOnline);
+    return function () {
+      window.removeEventListener('online', onOnline);
+    };
+  }, [status]);
+  var loaded = status === 'loaded';
+  var failed = status === 'failed';
+  var effectiveSrc = buildRevealRetryUrl(src, attempt, retryNonce);
+  return React.createElement(React.Fragment, null, React.createElement('img', Object.assign({}, dragProps || {}, {
+    key: String(src || '') + ':' + attempt + ':' + retryNonce,
+    ref: imgRef,
+    src: effectiveSrc,
+    alt: alt,
+    className: 'df-reveal-img ' + (loaded ? 'is-loaded' : 'is-loading'),
+    onError: function () {
+      failRef.current();
+    },
+    onClick: loaded ? onClick : undefined,
+    style: Object.assign({
+      display: failed ? 'none' : 'block',
+      width: '100%',
+      cursor: loaded ? 'zoom-in' : 'default',
+      minHeight: loaded ? undefined : 100,
+      aspectRatio: loaded ? undefined : parseAspectRatioCss(aspectRatio)
+    }, style || {})
+  })), !failed && showVeil ? React.createElement('div', {
+    className: 'df-gen-aurora' + (loaded ? ' is-fading' : ''),
+    'aria-hidden': 'true',
+    style: {
+      zIndex: 1,
+      background: 'linear-gradient(155deg, #f9fafc 0%, #f4f6fa 100%)'
+    }
+  }, React.createElement('span', {
+    className: 'df-gen-orb is-a'
+  }), React.createElement('span', {
+    className: 'df-gen-orb is-b'
+  })) : null, failed ? React.createElement('button', {
+    type: 'button',
+    title: '图片加载失败，点击重试',
+    'aria-label': '图片加载失败，点击重试',
+    onClick: function (e) {
+      e.stopPropagation();
+      setAttempt(0);
+      setRetryNonce(function (n) {
+        return n + 1;
+      });
+    },
+    style: {
+      width: '100%',
+      minHeight: 108,
+      aspectRatio: parseAspectRatioCss(aspectRatio),
+      border: '1px solid rgba(15, 23, 42, 0.08)',
+      borderRadius: 10,
+      background: 'linear-gradient(155deg, #f9fafc 0%, #f3f5f9 100%)',
+      color: '#64748b',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      cursor: 'pointer',
+      padding: '10px 8px'
+    }
+  }, React.createElement(I.refresh, {
+    size: 15,
+    style: {
+      color: '#64748b'
+    }
+  }), React.createElement('span', {
+    style: {
+      fontSize: 11,
+      color: '#64748b'
+    }
+  }, '加载失败，点击重试')) : null);
 };
 const Avatar = ({
   who,
@@ -4481,9 +4902,9 @@ const Avatar = ({
   if (who === 'ai') {
     return /*#__PURE__*/React.createElement("div", {
       style: {
-        width: 24,
-        height: 24,
-        borderRadius: 7,
+        width: 22,
+        height: 22,
+        borderRadius: 6,
         flexShrink: 0,
         background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
         color: 'white',
@@ -4491,19 +4912,19 @@ const Avatar = ({
         placeItems: 'center'
       }
     }, /*#__PURE__*/React.createElement(I.sparkles, {
-      size: 12,
+      size: 11,
       stroke: 2
     }));
   }
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      width: 24,
-      height: 24,
-      borderRadius: 7,
+      width: 22,
+      height: 22,
+      borderRadius: 6,
       flexShrink: 0,
       background: 'oklch(0.82 0.07 200)',
       color: 'oklch(0.3 0.05 200)',
-      fontSize: 11,
+      fontSize: 10.5,
       fontWeight: 600,
       display: 'grid',
       placeItems: 'center',
@@ -4529,16 +4950,17 @@ const Bubble = ({
   user,
   continued
 }) => /*#__PURE__*/React.createElement("div", {
+  className: "df-msg-in",
   style: {
     display: 'flex',
-    gap: 10,
+    gap: 8,
     alignItems: 'flex-start',
     flexDirection: who === 'user' ? 'row-reverse' : 'row',
-    marginTop: continued ? -8 : 0
+    marginTop: continued ? -4 : 0
   }
 }, continued ? /*#__PURE__*/React.createElement("div", {
   style: {
-    width: 24,
+    width: 22,
     flexShrink: 0
   }
 }) : /*#__PURE__*/React.createElement(Avatar, {
@@ -4546,43 +4968,69 @@ const Bubble = ({
   user: user
 }), /*#__PURE__*/React.createElement("div", {
   style: {
-    maxWidth: 'calc(100% - 38px)',
+    flex: who === 'ai' ? 1 : undefined,
+    maxWidth: 'calc(100% - 30px)',
+    minWidth: 0,
     display: 'flex',
     flexDirection: 'column',
-    gap: 6,
+    gap: 4,
     alignItems: who === 'user' ? 'flex-end' : 'flex-start'
   }
 }, meta && !continued && /*#__PURE__*/React.createElement("div", {
   style: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: 600,
     color: 'var(--ink-2)',
     lineHeight: 1.3
   }
 }, meta), children));
 
-// 简易 Markdown → HTML 渲染（支持粗体、斜体、行内代码、列表、标题、链接）
+// 简易 Markdown → HTML 渲染（支持代码块、引用、分割线、粗体、斜体、行内代码、列表、标题、链接）
 const renderMarkdown = text => {
   if (!text) return '';
-  let html = text;
-  // 行内代码（优先，避免被后续规则干扰）
-  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--panel-2);padding:1px 5px;border-radius:4px;font-size: 12px;font-family:monospace;">$1</code>');
-  // 粗体
-  html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-  // 斜体
-  html = html.replace(/\*(.+?)\*/g, '<i>$1</i>');
-  // 链接
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent);">$1</a>');
-  // 标题
-  html = html.replace(/^### (.+)$/gm, '<h3 style="font-size: 13px;font-weight:600;margin:4px 0 2px;">$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2 style="font-size: 13px;font-weight:600;margin:6px 0 2px;">$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1 style="font-size: 15px;font-weight:600;margin:6px 0 2px;">$1</h1>');
-  // 无序列表
-  html = html.replace(/^- (.+)$/gm, '<li style="margin-left:16px;">$1</li>');
-  // 有序列表
-  html = html.replace(/^\d+\. (.+)$/gm, '<li style="margin-left:16px;">$1</li>');
-  // 换行
+  let html = String(text);
+  // 1. 提取 fenced code blocks，避免内部被行内规则误伤
+  const codeBlocks = [];
+  html = html.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, function (_, lang, code) {
+    const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const idx = codeBlocks.push('<pre><code>' + escaped.replace(/\n$/, '') + '</code></pre>') - 1;
+    return '\u0000CODEBLOCK' + idx + '\u0000';
+  });
+  // 2. 行内代码
+  html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  // 3. 粗体与斜体
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // 4. 链接
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // 5. 块级元素
+  html = html.replace(/^---+\s*$/gm, '<hr/>');
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+  html = html.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // 6. 列表包裹
+  html = html.replace(/(?:^- .+(?:\n|$))+/gm, function (block) {
+    const items = block.trim().split('\n').map(function (line) {
+      return '<li>' + line.replace(/^- /, '') + '</li>';
+    }).join('');
+    return '<ul>' + items + '</ul>';
+  });
+  html = html.replace(/(?:^\d+\. .+(?:\n|$))+/gm, function (block) {
+    const items = block.trim().split('\n').map(function (line) {
+      return '<li>' + line.replace(/^\d+\. /, '') + '</li>';
+    }).join('');
+    return '<ol>' + items + '</ol>';
+  });
+  // 7. 换行（避免在块级标签紧邻处插多余 <br/>）
   html = html.replace(/\n/g, '<br/>');
+  html = html.replace(/(<\/(?:h1|h2|h3|ul|ol|blockquote|pre)>|<hr\/>)<br\/>/g, '$1');
+  html = html.replace(/<br\/>(<(?:h1|h2|h3|ul|ol|blockquote|pre|hr))/g, '$1');
+  // 8. 还原代码块
+  html = html.replace(/\u0000CODEBLOCK(\d+)\u0000/g, function (_, idx) {
+    return codeBlocks[Number(idx)] || '';
+  });
   return html;
 };
 const TextBubble = ({
@@ -4597,27 +5045,42 @@ const TextBubble = ({
     if (!match) return raw;
     return React.createElement(React.Fragment, null, React.createElement('span', {
       style: {
-        color: 'oklch(0.72 0.16 255)',
-        fontWeight: 750
+        color: 'oklch(0.76 0.14 265)',
+        fontWeight: 700
       }
     }, match[1]), match[2], React.createElement('span', null, match[3]));
   };
+  if (who === 'user') {
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        lineHeight: 1.55,
+        padding: '9px 13px',
+        borderRadius: '14px 14px 4px 14px',
+        background: 'var(--ink)',
+        color: 'white',
+        boxShadow: '0 2px 8px rgba(20, 22, 40, 0.10)',
+        maxWidth: '100%',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word'
+      }
+    }, renderUserSkillText(content));
+  }
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12,
-      lineHeight: 1.55,
-      padding: '9px 12px',
-      borderRadius: 10,
-      background: who === 'user' ? 'var(--ink)' : 'var(--panel)',
-      color: who === 'user' ? 'white' : 'var(--ink)',
-      border: who === 'user' ? 'none' : '1px solid var(--line-2)',
-      maxWidth: '100%'
+      fontSize: 13,
+      lineHeight: 1.68,
+      padding: '2px 0',
+      color: 'var(--ink)',
+      maxWidth: '100%',
+      wordBreak: 'break-word'
     }
-  }, who === 'ai' && markdown ? /*#__PURE__*/React.createElement("div", {
+  }, markdown ? /*#__PURE__*/React.createElement("div", {
+    className: "df-md",
     dangerouslySetInnerHTML: {
       __html: content
     }
-  }) : who === 'user' ? renderUserSkillText(content) : content);
+  }) : content);
 };
 const copyTextToClipboard = async text => {
   const value = String(text || '');
@@ -4956,27 +5419,20 @@ const ThinkingBlock = ({
   var open = _s[0];
   var setOpen = _s[1];
   if (!text || !text.trim()) return null;
+  var charCount = text.trim().length;
   return /*#__PURE__*/React.createElement("div", {
+    className: "df-disclosure",
     style: {
-      borderRadius: 8,
-      border: '1px solid var(--line-2)',
-      background: 'var(--panel-2)',
-      overflow: 'hidden',
-      marginBottom: 6
+      marginBottom: 6,
+      maxWidth: '100%'
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "df-disclosure-btn",
     onClick: function () {
       setOpen(!open);
     },
-    style: {
-      padding: '7px 12px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6,
-      cursor: 'pointer',
-      userSelect: 'none',
-      borderBottom: open ? '1px solid var(--line-2)' : 'none'
-    }
+    "aria-expanded": open
   }, /*#__PURE__*/React.createElement("svg", {
     width: "11",
     height: "11",
@@ -4987,37 +5443,58 @@ const ThinkingBlock = ({
     strokeLinecap: "round",
     style: {
       transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
-      transition: 'transform 200ms'
+      transition: 'transform 180ms ease',
+      flexShrink: 0
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "m9 18 6-6-6-6"
-  })), /*#__PURE__*/React.createElement("span", {
+  })), /*#__PURE__*/React.createElement(I.sparkles, {
+    size: 11,
     style: {
-      fontSize: 11,
+      color: 'var(--ink-3)',
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 500,
+      color: 'var(--ink-2)'
+    }
+  }, "\u601D\u8003\u8FC7\u7A0B"), /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      marginLeft: 'auto',
+      fontSize: 10.5,
       color: 'var(--ink-3)'
     }
-  }, "\u601D\u8003\u8FC7\u7A0B")), open && /*#__PURE__*/React.createElement("div", {
+  }, charCount, " \u5B57")), open && /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: '10px 12px',
+      padding: '9px 12px 10px',
       fontSize: 12,
-      lineHeight: 1.6,
+      lineHeight: 1.62,
       color: 'var(--ink-2)',
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
-      maxHeight: 200,
-      overflowY: 'auto'
+      maxHeight: 220,
+      overflowY: 'auto',
+      borderTop: '1px solid var(--line-2)',
+      background: 'var(--panel)'
     }
   }, text));
 };
 const PromptTraceBlock = ({
   title,
-  text
+  text,
+  autoCollapse
 }) => {
-  var _s = React.useState(true);
+  var _s = React.useState(!autoCollapse);
   var open = _s[0];
   var setOpen = _s[1];
   const userToggledRef = React.useRef(false);
   const bodyRef = React.useRef(null);
+  React.useEffect(function () {
+    if (autoCollapse && !userToggledRef.current) setOpen(false);
+  }, [autoCollapse]);
   React.useEffect(function () {
     if (open && bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [text, open]);
@@ -5033,27 +5510,19 @@ const PromptTraceBlock = ({
   const finalPrompt = parsed && parsed.final_prompt ? String(parsed.final_prompt) : String(text);
   const negativePrompt = parsed && parsed.negative_prompt ? String(parsed.negative_prompt) : '';
   return /*#__PURE__*/React.createElement("div", {
+    className: "df-disclosure",
     style: {
-      borderRadius: 8,
-      border: '1px solid var(--line-2)',
-      background: 'var(--panel-2)',
-      overflow: 'hidden',
-      marginBottom: 6
+      marginBottom: 4,
+      maxWidth: '100%'
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "df-disclosure-btn",
     onClick: function () {
       userToggledRef.current = true;
       setOpen(!open);
     },
-    style: {
-      padding: '7px 12px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6,
-      cursor: 'pointer',
-      userSelect: 'none',
-      borderBottom: open ? '1px solid var(--line-2)' : 'none'
-    }
+    "aria-expanded": open
   }, /*#__PURE__*/React.createElement("svg", {
     width: "11",
     height: "11",
@@ -5064,16 +5533,31 @@ const PromptTraceBlock = ({
     strokeLinecap: "round",
     style: {
       transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
-      transition: 'transform 200ms'
+      transition: 'transform 180ms ease',
+      flexShrink: 0
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "m9 18 6-6-6-6"
-  })), /*#__PURE__*/React.createElement("span", {
+  })), /*#__PURE__*/React.createElement(I.wand, {
+    size: 11,
     style: {
-      fontSize: 11,
+      color: 'var(--accent)',
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 500,
+      color: 'var(--ink-2)'
+    }
+  }, title || '生图 Prompt'), steps.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      marginLeft: 'auto',
+      fontSize: 10.5,
       color: 'var(--ink-3)'
     }
-  }, title || '生图 Prompt')), open && /*#__PURE__*/React.createElement("div", {
+  }, steps.length, " \u6B65")), open && /*#__PURE__*/React.createElement("div", {
     ref: bodyRef,
     style: {
       padding: '10px 12px',
@@ -5083,7 +5567,9 @@ const PromptTraceBlock = ({
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
       maxHeight: 240,
-      overflowY: 'auto'
+      overflowY: 'auto',
+      borderTop: '1px solid var(--line-2)',
+      background: 'var(--panel)'
     }
   }, parsed ? /*#__PURE__*/React.createElement("div", {
     style: {
@@ -5094,9 +5580,11 @@ const PromptTraceBlock = ({
   }, steps.length > 0 ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 11,
+      fontSize: 10.5,
       color: 'var(--ink-3)',
-      marginBottom: 4
+      marginBottom: 4,
+      textTransform: 'uppercase',
+      letterSpacing: '0.04em'
     }
   }, "\u89E3\u8BFB\u6B65\u9AA4"), steps.map(function (step, idx) {
     return /*#__PURE__*/React.createElement("div", {
@@ -5109,16 +5597,19 @@ const PromptTraceBlock = ({
     }, /*#__PURE__*/React.createElement("span", {
       className: "mono",
       style: {
-        color: 'var(--ink-3)',
-        minWidth: 14
+        color: 'var(--accent)',
+        minWidth: 14,
+        fontSize: 11
       }
     }, idx + 1), /*#__PURE__*/React.createElement("span", null, step));
   })) : null, rules.length > 0 ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 11,
+      fontSize: 10.5,
       color: 'var(--ink-3)',
-      marginBottom: 4
+      marginBottom: 4,
+      textTransform: 'uppercase',
+      letterSpacing: '0.04em'
     }
   }, "\u91C7\u7528\u89C4\u5219"), rules.map(function (rule, idx) {
     return /*#__PURE__*/React.createElement("div", {
@@ -5126,20 +5617,32 @@ const PromptTraceBlock = ({
       style: {
         padding: '2px 0'
       }
-    }, "- ", rule);
+    }, "\xB7 ", rule);
   })) : null, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 11,
+      fontSize: 10.5,
       color: 'var(--ink-3)',
-      marginBottom: 4
+      marginBottom: 4,
+      textTransform: 'uppercase',
+      letterSpacing: '0.04em'
     }
-  }, "\u6700\u7EC8\u4F20\u9012\u7ED9\u751F\u56FE"), /*#__PURE__*/React.createElement("div", null, finalPrompt)), negativePrompt ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, "\u6700\u7EC8\u4F20\u9012\u7ED9\u751F\u56FE"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '7px 9px',
+      borderRadius: 7,
+      background: 'var(--panel-2)',
+      border: '1px solid var(--line-2)',
+      color: 'var(--ink)'
+    }
+  }, finalPrompt)), negativePrompt ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
-      fontSize: 11,
+      fontSize: 10.5,
       color: 'var(--ink-3)',
-      marginBottom: 4
+      marginBottom: 4,
+      textTransform: 'uppercase',
+      letterSpacing: '0.04em'
     }
   }, "\u907F\u514D"), /*#__PURE__*/React.createElement("div", null, negativePrompt)) : null) : String(text)));
 };
@@ -5455,21 +5958,23 @@ const AgentWelcome = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      width: 40,
-      height: 40,
-      borderRadius: 11,
-      background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
+      width: 44,
+      height: 44,
+      borderRadius: 13,
+      background: 'linear-gradient(135deg, var(--ink) 0%, oklch(0.32 0.1 275) 100%)',
       color: 'white',
       display: 'grid',
-      placeItems: 'center'
+      placeItems: 'center',
+      boxShadow: '0 10px 24px rgba(20, 22, 40, 0.16), 0 0 0 4px oklch(0.55 0.22 275 / 0.08)'
     }
   }, /*#__PURE__*/React.createElement(I.sparkles, {
-    size: 18,
+    size: 19,
     stroke: 1.8
   })), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 15,
-      fontWeight: 500,
+      fontSize: 16,
+      fontWeight: 600,
+      letterSpacing: '-0.015em',
       color: 'var(--ink)',
       textAlign: 'center'
     }
@@ -5543,16 +6048,63 @@ const agent2StepDetail = function (m) {
   if (m.tool === 'read_table') return args.source || '';
   return args.name || '';
 };
-const agent2StepDot = function (status) {
-  return status === 'running' ? agent2Spinner(12) : /*#__PURE__*/React.createElement("span", {
+const agent2StepDot = function (status, small) {
+  if (status === 'running') return /*#__PURE__*/React.createElement(PixelGridLoader, null);
+  var boxSize = small ? 13 : 15;
+  var iconSize = small ? 8.5 : 9.5;
+  if (status === 'failed') {
+    return /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: boxSize,
+        height: boxSize,
+        borderRadius: 99,
+        background: 'var(--warn-soft)',
+        color: 'var(--warn-ink)',
+        display: 'grid',
+        placeItems: 'center',
+        fontSize: small ? 9 : 10,
+        fontWeight: 700,
+        lineHeight: 1,
+        flexShrink: 0
+      }
+    }, "!");
+  }
+  if (status === 'stopped') {
+    return /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: boxSize,
+        height: boxSize,
+        borderRadius: 99,
+        background: 'var(--panel-2)',
+        border: '1px solid var(--line)',
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 5,
+        height: 5,
+        borderRadius: 1,
+        background: 'var(--ink-3)'
+      }
+    }));
+  }
+  return /*#__PURE__*/React.createElement("span", {
     style: {
-      width: 7,
-      height: 7,
+      width: boxSize,
+      height: boxSize,
       borderRadius: 99,
-      flexShrink: 0,
-      background: status === 'failed' ? 'var(--warn)' : status === 'stopped' ? 'var(--ink-3)' : 'var(--ok)'
+      background: 'var(--ok-soft)',
+      color: 'var(--ok-ink)',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
     }
-  });
+  }, /*#__PURE__*/React.createElement(I.check, {
+    size: iconSize,
+    stroke: 2.6
+  }));
 };
 const AgentStepsCard = ({
   steps
@@ -5584,16 +6136,15 @@ const AgentStepsCard = ({
     return sum + (s.durationMs || 0);
   }, 0);
   var seconds = totalMs ? Math.max(1, Math.round(totalMs / 1000)) : 0;
+  var firstStartedAt = steps[0] && steps[0].startedAt;
   var Chevron = open ? I.chevronDown : I.chevronRight;
   return /*#__PURE__*/React.createElement("div", {
+    className: "df-step-inline",
     style: {
       display: 'flex',
       flexDirection: 'column',
       gap: 6,
-      padding: '8px 10px',
-      borderRadius: 10,
-      background: 'var(--panel)',
-      border: '1px solid var(--line-2)',
+      padding: '6px 9px',
       maxWidth: '100%',
       boxSizing: 'border-box'
     }
@@ -5602,10 +6153,11 @@ const AgentStepsCard = ({
     onClick: function () {
       setOpen(!open);
     },
+    "aria-expanded": open,
     style: {
       display: 'flex',
       alignItems: 'center',
-      gap: 8,
+      gap: 7,
       minWidth: 0,
       padding: 0,
       border: 0,
@@ -5614,32 +6166,49 @@ const AgentStepsCard = ({
       textAlign: 'left',
       color: 'inherit'
     }
-  }, agent2StepDot(status), /*#__PURE__*/React.createElement("span", {
+  }, agent2StepDot(status, false), /*#__PURE__*/React.createElement("span", {
+    className: running ? 'df-shimmer-text' : undefined,
     style: {
       fontSize: 12,
-      color: 'var(--ink)',
+      fontWeight: 500,
+      color: 'var(--ink-2)',
       minWidth: 0,
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap'
     }
-  }, summary), seconds && !running ? /*#__PURE__*/React.createElement("span", {
+  }, summary), running && firstStartedAt ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 'auto',
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement(ChatTimer, {
+    startedAt: firstStartedAt,
+    precise: true
+  })) : null, seconds && !running ? /*#__PURE__*/React.createElement("span", {
     className: "mono",
     style: {
-      fontSize: 11,
+      marginLeft: 'auto',
+      fontSize: 10.5,
       color: 'var(--ink-3)',
       flexShrink: 0
     }
   }, seconds, "s") : null, /*#__PURE__*/React.createElement("span", {
     style: {
-      marginLeft: 'auto',
+      marginLeft: running && firstStartedAt || seconds && !running ? 2 : 'auto',
       color: 'var(--ink-3)',
       display: 'inline-flex',
       flexShrink: 0
     }
   }, /*#__PURE__*/React.createElement(Chevron, {
     size: 12
-  }))), open ? steps.map(function (s) {
+  }))), open ? /*#__PURE__*/React.createElement("div", {
+    className: "df-step-rail",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, steps.map(function (s) {
     var detail = agent2StepDetail(s);
     var secs = s.durationMs ? Math.max(1, Math.round(s.durationMs / 1000)) : 0;
     var error = s.status === 'failed' && s.result && s.result.error;
@@ -5648,19 +6217,19 @@ const AgentStepsCard = ({
       style: {
         display: 'flex',
         flexDirection: 'column',
-        gap: 2,
-        paddingLeft: 15
+        gap: 3
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 8,
+        gap: 6,
         minWidth: 0
       }
-    }, agent2StepDot(s.status), /*#__PURE__*/React.createElement("span", {
+    }, agent2StepDot(s.status, true), /*#__PURE__*/React.createElement("span", {
       style: {
-        fontSize: 11,
+        fontSize: 11.5,
+        fontWeight: 500,
         color: 'var(--ink-2)',
         flexShrink: 0
       }
@@ -5678,23 +6247,26 @@ const AgentStepsCard = ({
       className: "mono",
       style: {
         marginLeft: 'auto',
-        fontSize: 11,
+        fontSize: 10.5,
         color: 'var(--ink-3)',
         flexShrink: 0
       }
     }, secs, "s") : null), error ? /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 11,
-        color: 'var(--warn)',
+        color: 'var(--warn-ink)',
+        background: 'var(--warn-soft)',
+        border: '1px solid var(--warn-line)',
+        borderRadius: 6,
+        padding: '5px 8px',
         lineHeight: 1.45,
-        wordBreak: 'break-word',
-        paddingLeft: 15
+        wordBreak: 'break-word'
       }
     }, error) : null);
-  }) : null);
+  })) : null);
 };
 
-// Agent 调用工具的过程卡片：样式与生图卡片一致，结果逐张出现
+// Agent 调用工具的过程卡片：媒体型工具无外框、单图撑满宽、统一精致状态图标与文件行
 const AgentToolCard = ({
   m,
   openImage
@@ -5719,12 +6291,13 @@ const AgentToolCard = ({
     'delete': '删除记忆'
   }[args.action] || '记忆' : AGENT2_TOOL_LABELS[m.tool] || m.tool;
   var summary = '';
+  var priceCounts = null;
   if (m.tool === 'generate_image') {
     var count = (args.images || []).length;
-    summary = count + ' 张' + (args.aspect_ratio && args.aspect_ratio !== 'auto' ? ' · ' + args.aspect_ratio : '') + (args.group_type === 'set' ? ' · 套图' : args.group_type === 'variant' ? ' · 多方案' : '');
+    summary = (args.aspect_ratio && args.aspect_ratio !== 'auto' ? args.aspect_ratio : '') + (args.group_type === 'set' ? ' · 套图' : args.group_type === 'variant' ? ' · 多方案' : '');
+    summary = summary.replace(/^ · /, '');
   } else if (m.tool === 'check_prices') {
-    var counts = result.counts || null;
-    summary = counts ? '核对 ' + (result.checked || 0) + ' 个 · 不一致 ' + (counts['不一致'] || 0) + (counts['文案待确认'] ? ' · 文案待确认 ' + counts['文案待确认'] : '') + (counts['未识别'] ? ' · 待人工看 ' + counts['未识别'] : '') : '';
+    priceCounts = result.counts || null;
   } else if (m.tool === 'special_compose') {
     summary = [args.sku, args.name].filter(Boolean).join(' · ');
   } else if (m.tool === 'load_skill' || m.tool === 'read_skill_file' || m.tool === 'use_skill_image') {
@@ -5733,52 +6306,67 @@ const AgentToolCard = ({
     summary = args.content || '';
   }
   var compact = m.tool === 'analyze_image' || m.tool === 'load_skill' || m.tool === 'read_skill_file' || m.tool === 'use_skill_image' || m.tool === 'remember';
+  var AGENT2_SINGLE_IMAGE_TOOLS = {
+    outfit_change: true,
+    outpaint_image: true,
+    upscale_image: true,
+    remove_background: true,
+    fill_background: true,
+    special_compose: true
+  };
   var doneIdx = {};
   images.forEach(function (im) {
     doneIdx[im.position || 0] = true;
   });
   var pendingSlots = [];
   if (running && m.tool === 'generate_image') {
-    (args.images || []).forEach(function (item, idx) {
+    var reqImages = Array.isArray(args.images) && args.images.length > 0 ? args.images : [{}];
+    reqImages.forEach(function (item, idx) {
       if (!doneIdx[idx]) pendingSlots.push({
         idx: idx,
-        label: item.label || '',
+        label: item && item.label || '',
         progress: (m.progress || {})[idx] || 0
       });
     });
+  } else if (running && AGENT2_SINGLE_IMAGE_TOOLS[m.tool] && images.length === 0) {
+    pendingSlots.push({
+      idx: 0,
+      label: label,
+      progress: (m.progress || {})[0] || 0
+    });
   }
+  var totalMediaSlots = images.length + pendingSlots.length;
+  var isMediaTool = m.tool === 'generate_image' || AGENT2_SINGLE_IMAGE_TOOLS[m.tool] || totalMediaSlots > 0;
+  var isSingleMedia = totalMediaSlots === 1;
   var failedItems = Array.isArray(result.failed) ? result.failed : [];
   var seconds = m.durationMs ? Math.max(1, Math.round(m.durationMs / 1000)) : 0;
+  var genCount = m.tool === 'generate_image' ? (args.images || []).length || images.length : 0;
   return /*#__PURE__*/React.createElement("div", {
-    style: {
+    className: isMediaTool ? undefined : 'df-step-inline',
+    style: isMediaTool ? {
       display: 'flex',
       flexDirection: 'column',
-      gap: 8,
-      padding: compact ? '8px 10px' : '10px 12px',
-      borderRadius: 10,
-      background: 'var(--panel)',
-      border: '1px solid var(--line-2)',
+      gap: 7,
+      paddingTop: 2,
+      width: '100%'
+    } : {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 7,
+      padding: compact ? '6px 9px' : '8px 10px',
       width: compact ? 'auto' : '100%',
       maxWidth: '100%',
-      minWidth: compact ? 0 : 220,
       boxSizing: 'border-box'
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
-      gap: 8,
+      gap: 7,
       minWidth: 0
     }
-  }, running ? agent2Spinner(12) : /*#__PURE__*/React.createElement("span", {
-    style: {
-      width: 7,
-      height: 7,
-      borderRadius: 99,
-      flexShrink: 0,
-      background: m.status === 'failed' ? 'var(--warn)' : m.status === 'stopped' ? 'var(--ink-3)' : 'var(--ok)'
-    }
-  }), /*#__PURE__*/React.createElement("span", {
+  }, agent2StepDot(m.status, false), /*#__PURE__*/React.createElement("span", {
+    className: running ? 'df-shimmer-text' : undefined,
     style: {
       fontSize: 12,
       fontWeight: 600,
@@ -5795,12 +6383,33 @@ const AgentToolCard = ({
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap'
     }
-  }, summary) : null, seconds ? /*#__PURE__*/React.createElement("span", {
+  }, summary) : null, genCount > 1 ? /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      color: 'var(--ink-3)',
+      background: 'var(--panel-2)',
+      padding: '0 5px',
+      borderRadius: 4,
+      flexShrink: 0
+    }
+  }, "\xD7", genCount) : null, running && m.startedAt ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 'auto',
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement(ChatTimer, {
+    startedAt: m.startedAt,
+    precise: true
+  })) : null, !running && seconds ? /*#__PURE__*/React.createElement("span", {
     className: "mono",
     style: {
       marginLeft: 'auto',
-      fontSize: 11,
+      fontSize: 10.5,
       color: 'var(--ink-3)',
+      background: 'var(--panel-2)',
+      padding: '1px 5px',
+      borderRadius: 5,
       flexShrink: 0
     }
   }, seconds, "s") : null, m.status === 'stopped' ? /*#__PURE__*/React.createElement("span", {
@@ -5821,13 +6430,27 @@ const AgentToolCard = ({
     style: {
       fontSize: 11,
       color: 'var(--ink-3)',
-      lineHeight: 1.5
+      lineHeight: 1.45
     }
-  }, m.log) : null, images.length > 0 || pendingSlots.length > 0 ? /*#__PURE__*/React.createElement("div", {
+  }, m.log) : null, priceCounts ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 5
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "df-metric-chip"
+  }, "\u6838\u5BF9 ", result.checked || 0), /*#__PURE__*/React.createElement("span", {
+    className: 'df-metric-chip ' + ((priceCounts['不一致'] || 0) > 0 ? 'is-danger' : 'is-ok')
+  }, "\u4E0D\u4E00\u81F4 ", priceCounts['不一致'] || 0), priceCounts['文案待确认'] ? /*#__PURE__*/React.createElement("span", {
+    className: "df-metric-chip is-warn"
+  }, "\u6587\u6848\u5F85\u786E\u8BA4 ", priceCounts['文案待确认']) : null, priceCounts['未识别'] ? /*#__PURE__*/React.createElement("span", {
+    className: "df-metric-chip is-warn"
+  }, "\u5F85\u4EBA\u5DE5\u770B ", priceCounts['未识别']) : null) : null, totalMediaSlots > 0 ? /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'grid',
-      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-      gap: 8
+      gridTemplateColumns: isSingleMedia ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+      gap: 6
     }
   }, images.map(function (im, ii) {
     var src = agent2AbsUrl(im.url);
@@ -5837,12 +6460,16 @@ const AgentToolCard = ({
         display: 'flex',
         flexDirection: 'column',
         gap: 4,
-        minWidth: 0
+        minWidth: 0,
+        order: im.position != null ? im.position : ii
       }
-    }, /*#__PURE__*/React.createElement("img", _extends({
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "df-media-wrap"
+    }, /*#__PURE__*/React.createElement(RevealImage, {
       src: src,
-      alt: im.label || label
-    }, canvasDragProps(src), {
+      alt: im.label || label,
+      aspectRatio: args.aspect_ratio,
+      dragProps: canvasDragProps(src),
       onClick: function () {
         var items = images.map(function (x) {
           var u = agent2AbsUrl(x.url);
@@ -5853,23 +6480,21 @@ const AgentToolCard = ({
           };
         });
         openImage(src, src, im.label || label, items, ii);
-      },
-      style: {
-        width: '100%',
-        borderRadius: 8,
-        display: 'block',
-        border: '1px solid var(--line-2)',
-        cursor: 'zoom-in',
-        background: 'var(--panel-2)'
       }
-    })), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 4,
-        minWidth: 0
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "df-media-overlay"
+    }, /*#__PURE__*/React.createElement("a", {
+      href: src,
+      download: true,
+      title: "\u4E0B\u8F7D\u539F\u56FE",
+      "aria-label": "\u4E0B\u8F7D\u539F\u56FE",
+      className: "df-media-icon-btn",
+      onClick: function (e) {
+        e.stopPropagation();
       }
-    }, function () {
+    }, /*#__PURE__*/React.createElement(I.download, {
+      size: 12
+    })))), function () {
       var modelName = showModel && im.model ? AGENT2_MODEL_NAMES[im.model] || im.model : '';
       var text = [im.label, modelName && !(im.label || '').includes(modelName) ? modelName : ''].filter(Boolean).join(' · ');
       return text ? /*#__PURE__*/React.createElement("span", {
@@ -5883,50 +6508,28 @@ const AgentToolCard = ({
           whiteSpace: 'nowrap'
         }
       }, text) : null;
-    }(), /*#__PURE__*/React.createElement("a", {
-      href: src,
-      download: true,
-      title: "\u4E0B\u8F7D",
-      style: {
-        marginLeft: 'auto',
-        color: 'var(--ink-3)',
-        display: 'inline-flex',
-        padding: 2,
-        flexShrink: 0
-      }
-    }, /*#__PURE__*/React.createElement(I.download, {
-      size: 11
-    }))));
+    }());
   }), pendingSlots.map(function (slot) {
     return /*#__PURE__*/React.createElement("div", {
       key: 'p' + slot.idx,
       style: {
-        minHeight: 110,
-        borderRadius: 8,
-        border: '1px dashed var(--line-2)',
-        background: 'var(--panel)',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
         order: slot.idx
       }
-    }, agent2Spinner(14), /*#__PURE__*/React.createElement("div", {
-      className: "mono",
-      style: {
-        fontSize: 11,
-        color: 'var(--ink-3)'
-      }
-    }, slot.label ? slot.label + ' · ' : '', slot.progress, "%"));
+    }, /*#__PURE__*/React.createElement(CreativeImagePlaceholder, {
+      compact: !isSingleMedia,
+      aspectRatio: args.aspect_ratio,
+      startedAt: isSingleMedia ? m.startedAt : undefined,
+      seed: slot.idx
+    }));
   })) : null, m.status === 'failed' && result.error ? /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: '8px 10px',
-      borderRadius: 6,
-      border: '1px solid var(--warn)',
-      fontSize: 11,
-      color: 'var(--warn)',
-      lineHeight: 1.45,
+      padding: '7px 10px',
+      borderRadius: 8,
+      border: '1px solid var(--warn-line)',
+      background: 'var(--warn-soft)',
+      fontSize: 11.5,
+      color: 'var(--warn-ink)',
+      lineHeight: 1.5,
       wordBreak: 'break-word'
     }
   }, result.error) : null, failedItems.map(function (f, fi) {
@@ -5934,61 +6537,102 @@ const AgentToolCard = ({
       key: 'f' + fi,
       style: {
         fontSize: 11,
-        color: 'var(--warn)',
+        color: 'var(--warn-ink)',
+        background: 'var(--warn-soft)',
+        borderRadius: 6,
+        padding: '5px 8px',
         lineHeight: 1.45
       }
     }, (f.label || '第 ' + ((f.index || 0) + 1) + ' 张') + ' 失败：' + (f.error || ''));
   }), files.length ? /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
-      flexWrap: 'wrap',
-      gap: 6
+      flexDirection: 'column',
+      gap: 5
     }
   }, files.map(function (f) {
     return /*#__PURE__*/React.createElement("a", {
       key: f.id || f.url,
       href: agent2AbsUrl(f.url),
       download: true,
+      className: "df-file-row"
+    }, /*#__PURE__*/React.createElement("span", {
       style: {
-        fontSize: 11,
-        padding: '4px 10px',
-        borderRadius: 5,
-        background: 'var(--ink)',
-        color: 'white',
-        textDecoration: 'none',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4
+        width: 26,
+        height: 26,
+        borderRadius: 7,
+        background: 'var(--panel-2)',
+        color: 'var(--ink-2)',
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0
       }
+    }, /*#__PURE__*/React.createElement(I.file, {
+      size: 13
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 1
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 12,
+        fontWeight: 500,
+        color: 'var(--ink)',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, f.name || '结果文件'), layerCount ? /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        fontSize: 10.5,
+        color: 'var(--ink-3)'
+      }
+    }, layerCount, " \u4E2A\u56FE\u5C42") : null), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: 'var(--ink-3)',
+        display: 'inline-flex',
+        padding: 4,
+        flexShrink: 0
+      },
+      title: "\u4E0B\u8F7D"
     }, /*#__PURE__*/React.createElement(I.download, {
-      size: 10
-    }), "\u4E0B\u8F7D", f.name ? ' ' + f.name : '');
-  }), layerCount ? /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: 'var(--ink-3)',
-      alignSelf: 'center'
-    }
-  }, "\u5171 ", layerCount, " \u4E2A\u56FE\u5C42") : null) : null, result.zip_url ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex'
-    }
-  }, /*#__PURE__*/React.createElement("a", {
+      size: 13
+    })));
+  })) : null, result.zip_url ? /*#__PURE__*/React.createElement("a", {
     href: agent2AbsUrl(result.zip_url),
+    className: "df-file-row"
+  }, /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: 11,
-      padding: '4px 10px',
-      borderRadius: 5,
-      background: 'var(--ink)',
-      color: 'white',
-      textDecoration: 'none',
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 4
+      width: 26,
+      height: 26,
+      borderRadius: 7,
+      background: 'var(--panel-2)',
+      color: 'var(--ink-2)',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
     }
   }, /*#__PURE__*/React.createElement(I.download, {
-    size: 10
-  }), "\u6253\u5305\u4E0B\u8F7D")) : null);
+    size: 13
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 500,
+      color: 'var(--ink)',
+      flex: 1
+    }
+  }, "\u6253\u5305\u4E0B\u8F7D\u5168\u90E8\u7ED3\u679C"), /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      color: 'var(--ink-3)'
+    }
+  }, "ZIP")) : null);
 };
 const ChatReturned = ({
   messages,
@@ -6094,7 +6738,7 @@ const ChatReturned = ({
     style: {
       flex: 1,
       overflowY: 'auto',
-      padding: 16,
+      padding: '12px 12px 14px',
       display: 'flex',
       flexDirection: 'column'
     }
@@ -6104,7 +6748,7 @@ const ChatReturned = ({
       flex: '1 0 auto',
       display: 'flex',
       flexDirection: 'column',
-      gap: 14
+      gap: 10
     }
   }, messages.length === 0 ?
   // Agent 模式用专属欢迎页，否则随机轮播
@@ -6128,21 +6772,23 @@ const ChatReturned = ({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      width: 40,
-      height: 40,
-      borderRadius: 11,
-      background: 'linear-gradient(135deg, var(--ink), oklch(0.3 0.08 275))',
+      width: 44,
+      height: 44,
+      borderRadius: 13,
+      background: 'linear-gradient(135deg, var(--ink) 0%, oklch(0.32 0.1 275) 100%)',
       color: 'white',
       display: 'grid',
-      placeItems: 'center'
+      placeItems: 'center',
+      boxShadow: '0 10px 24px rgba(20, 22, 40, 0.16), 0 0 0 4px oklch(0.55 0.22 275 / 0.08)'
     }
   }, /*#__PURE__*/React.createElement(I.sparkles, {
-    size: 18,
+    size: 19,
     stroke: 1.8
   })), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 15,
-      fontWeight: 500,
+      fontSize: 16,
+      fontWeight: 600,
+      letterSpacing: '-0.015em',
       color: 'var(--ink)'
     }
   }, greeting.title), /*#__PURE__*/React.createElement("div", {
@@ -6150,8 +6796,8 @@ const ChatReturned = ({
       fontSize: 12,
       color: 'var(--ink-3)',
       textAlign: 'center',
-      maxWidth: 240,
-      lineHeight: 1.5
+      maxWidth: 260,
+      lineHeight: 1.55
     }
   }, greeting.sub), onPickSkill && /*#__PURE__*/React.createElement(WelcomeSkills, {
     agentSkills: agentSkills,
@@ -6162,7 +6808,7 @@ const ChatReturned = ({
   })) : groupAgentSteps(messages).map((m, i, list) => /*#__PURE__*/React.createElement(Bubble, {
     key: m.type === 'agent2-steps' ? 'steps-' + m.steps[0].callId : i,
     who: m.who,
-    meta: m.meta,
+    meta: m.type === 'ai-image-generating' ? null : m.meta,
     user: user,
     continued: i > 0 && m.meta === 'Agent' && list[i - 1].who === 'ai' && list[i - 1].meta === 'Agent'
   }, m.type === 'ai-image-generating' ? (() => {
@@ -6187,68 +6833,114 @@ const ChatReturned = ({
     const batchOkCount = batchImages ? batchImages.filter(function (im) {
       return im.status === 'done' && (im.url || im.previewUrl);
     }).length : 0;
+    const isRunningCard = m.status !== 'done' && m.status !== 'failed';
+    const runningStatusText = m.status === 'skill-planning' ? '执行 Skill · $' + m.activeSkill : m.status === 'skill-parsed' ? '提交生图' : m.status === 'queued' ? '提交中' : m.activeSkill && !m.promptTrace && (m.progress || 0) < 20 ? '整理 Prompt' : (m.progress || 0) < 20 ? '处理中' : (m.progress || 0) < 90 ? '生成中' : '下载结果';
+    const totalCount = batchImages ? batchImages.length : Number(m.batchCount) > 1 ? Number(m.batchCount) : 0;
     return React.createElement('div', {
       style: {
         display: 'flex',
         flexDirection: 'column',
-        gap: 10
+        gap: 7,
+        paddingTop: 2,
+        width: '100%'
       }
     }, React.createElement('div', {
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 8
+        gap: 7,
+        minWidth: 0
       }
-    }, m.status === 'done' ? React.createElement('div', {
+    }, m.status === 'done' ? React.createElement('span', {
       style: {
-        width: 8,
-        height: 8,
+        width: 15,
+        height: 15,
         borderRadius: 99,
-        background: 'var(--ok)',
+        background: 'var(--ok-soft)',
+        color: 'var(--ok-ink)',
+        display: 'grid',
+        placeItems: 'center',
         flexShrink: 0
       }
-    }) : m.status === 'failed' ? React.createElement('div', {
+    }, React.createElement(I.check, {
+      size: 9.5,
+      stroke: 2.6
+    })) : m.status === 'failed' ? React.createElement('span', {
       style: {
-        width: 8,
-        height: 8,
+        width: 15,
+        height: 15,
         borderRadius: 99,
-        background: 'var(--warn)',
+        background: 'var(--warn-soft)',
+        color: 'var(--warn-ink)',
+        display: 'grid',
+        placeItems: 'center',
+        fontSize: 10,
+        fontWeight: 700,
+        lineHeight: 1,
         flexShrink: 0
       }
-    }) : React.createElement('div', {
-      style: {
-        width: 14,
-        height: 14,
-        borderRadius: 99,
-        border: '2px solid var(--line-2)',
-        borderTopColor: 'var(--accent)',
-        animation: 'spin 0.8s linear infinite',
-        flexShrink: 0
-      }
-    }), React.createElement('span', {
+    }, '!') : React.createElement(PixelGridLoader, null), React.createElement('span', {
+      className: isRunningCard ? 'df-shimmer-text' : undefined,
       style: {
         fontSize: 12,
-        fontWeight: 500,
-        color: 'var(--ink)'
+        fontWeight: 600,
+        color: 'var(--ink)',
+        flexShrink: 0
       }
-    }, m.status === 'done' ? batchImages && batchOkCount < batchImages.length ? '生图完成（' + batchOkCount + '/' + batchImages.length + ' 成功）' : '生图完成' : m.status === 'failed' ? '生图失败' : m.status === 'skill-planning' ? '正在执行 Skill：$' + m.activeSkill + '…' : m.status === 'skill-parsed' ? 'Skill 已解析，正在提交到 GPT Image 2.6…' : m.status === 'queued' ? '正在提交到「' + (m.model || 'AI') + '」…' : m.activeSkill && !m.promptTrace && (m.progress || 0) < 20 ? '正在解读需求并整理生图 Prompt…' : (m.progress || 0) < 20 ? '「' + (m.model || 'AI') + '」正在处理…' : (m.progress || 0) < 90 ? '「' + (m.model || 'AI') + '」生成中 ' + (m.progress || 0) + '%' : '处理完成，正在下载…'), m.finalElapsed != null ? React.createElement('span', {
+    }, m.status === 'done' ? batchImages && batchOkCount < batchImages.length ? '生图完成（' + batchOkCount + '/' + batchImages.length + '）' : '生图完成' : m.status === 'failed' ? '生图失败' : runningStatusText), m.model ? React.createElement('span', {
       className: 'mono',
       style: {
         fontSize: 11,
-        color: 'var(--ink-3)'
+        color: 'var(--ink-3)',
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
       }
-    }, fmtSecs(m.finalElapsed)) : m.startedAt && m.status !== 'done' && m.status !== 'failed' ? React.createElement(ChatTimer, {
-      startedAt: m.startedAt
-    }) : null), m.status !== 'failed' && m.status !== 'done' && React.createElement(InlineRefStrip, {
+    }, m.model) : null, totalCount > 1 ? React.createElement('span', {
+      className: 'mono',
+      style: {
+        fontSize: 10.5,
+        color: 'var(--ink-3)',
+        background: 'var(--panel-2)',
+        padding: '0 5px',
+        borderRadius: 4,
+        flexShrink: 0
+      }
+    }, '×' + totalCount) : null, m.finalElapsed != null ? React.createElement('span', {
+      className: 'mono',
+      style: {
+        marginLeft: 'auto',
+        fontSize: 10.5,
+        color: 'var(--ink-3)',
+        background: 'var(--panel-2)',
+        padding: '1px 5px',
+        borderRadius: 5,
+        flexShrink: 0
+      }
+    }, fmtSecs(m.finalElapsed)) : m.startedAt && isRunningCard ? React.createElement('span', {
+      style: {
+        marginLeft: 'auto',
+        flexShrink: 0
+      }
+    }, React.createElement(ChatTimer, {
+      startedAt: m.startedAt,
+      precise: true
+    })) : null), isRunningCard && !batchImages && React.createElement(CreativeImagePlaceholder, {
+      aspectRatio: m.size,
+      startedAt: m.startedAt,
+      seed: i
+    }), m.status !== 'failed' && m.status !== 'done' && React.createElement(InlineRefStrip, {
       items: m.refPreviews
     }), showPromptTrace && React.createElement(PromptTraceBlock, {
       title: m.activeSkill ? 'Skill 解析 · $' + m.activeSkill : '生图 Prompt',
-      text: promptTraceText || resolvedPromptText
+      text: promptTraceText || resolvedPromptText,
+      autoCollapse: m.status === 'done'
     }), agentEnabled && promptInstruction && React.createElement('div', {
       style: {
         padding: '9px 10px',
         borderRadius: 8,
-        background: 'var(--panel)',
+        background: 'var(--panel-2)',
         border: '1px solid var(--line-2)',
         display: 'flex',
         flexDirection: 'column',
@@ -6257,40 +6949,40 @@ const ChatReturned = ({
     }, React.createElement('div', {
       className: 'mono',
       style: {
-        fontSize: 11,
+        fontSize: 10.5,
         color: 'var(--ink-3)',
         textTransform: 'uppercase',
         letterSpacing: '0.06em'
       }
     }, '执行标准'), React.createElement('div', {
       style: {
-        fontSize: 11,
+        fontSize: 11.5,
         color: 'var(--ink-2)',
-        lineHeight: 1.45
+        lineHeight: 1.5
       }
     }, String(promptInstruction).slice(0, 360), String(promptInstruction).length > 360 ? '...' : ''), promptReasoning ? React.createElement('div', {
       style: {
         fontSize: 11,
         color: 'var(--ink-3)',
-        lineHeight: 1.4
+        lineHeight: 1.45
       }
     }, '说明：', String(promptReasoning).slice(0, 180), String(promptReasoning).length > 180 ? '...' : '') : null, promptConstraints && Array.isArray(promptConstraints.mustInclude) && promptConstraints.mustInclude.length > 0 ? React.createElement('div', {
       style: {
         fontSize: 11,
         color: 'var(--ink-2)',
-        lineHeight: 1.4
+        lineHeight: 1.45
       }
     }, '必须包含：', promptConstraints.mustInclude.join('； ')) : null, promptConstraints && Array.isArray(promptConstraints.preserve) && promptConstraints.preserve.length > 0 ? React.createElement('div', {
       style: {
         fontSize: 11,
         color: 'var(--ink-2)',
-        lineHeight: 1.4
+        lineHeight: 1.45
       }
     }, '保留：', promptConstraints.preserve.join('； ')) : null, promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0 || promptNegative ? React.createElement('div', {
       style: {
         fontSize: 11,
         color: 'var(--ink-3)',
-        lineHeight: 1.4
+        lineHeight: 1.45
       }
     }, '避免：', promptConstraints && Array.isArray(promptConstraints.avoid) && promptConstraints.avoid.length > 0 ? promptConstraints.avoid.join('； ') : String(promptNegative).slice(0, 220) + (String(promptNegative).length > 220 ? '...' : '')) : null, promptParams ? React.createElement('div', {
       className: 'mono',
@@ -6299,85 +6991,57 @@ const ChatReturned = ({
         color: 'var(--ink-3)'
       }
     }, 'ratio=', promptParams.aspectRatio || promptParams.size || 'auto', ' · size=', promptParams.size || 'auto', ' · resolution=', promptParams.resolution || '默认') : null), m.status === 'done' && fullImageUrl && !batchImages && function () {
-      return React.createElement('div', null, React.createElement('img', Object.assign(canvasDragProps(fullImageUrl), {
+      return React.createElement('div', {
+        className: 'df-media-wrap'
+      }, React.createElement(RevealImage, {
         src: displayImageUrl || fullImageUrl,
         alt: m.prompt,
-        style: {
-          width: '100%',
-          borderRadius: 10,
-          display: 'block',
-          border: '1px solid var(--line-2)',
-          cursor: 'zoom-in'
-        },
+        aspectRatio: m.size,
+        dragProps: canvasDragProps(fullImageUrl),
         onClick: () => openImage(displayImageUrl, fullImageUrl, m.prompt)
-      })), React.createElement('div', {
-        style: {
-          marginTop: 6,
-          display: 'flex',
-          gap: 6,
-          flexWrap: 'wrap',
-          alignItems: 'center'
-        }
+      }), React.createElement('div', {
+        className: 'df-media-overlay'
       }, React.createElement('a', {
         href: fullImageUrl,
         download: true,
-        style: {
-          fontSize: 11,
-          padding: '4px 10px',
-          borderRadius: 5,
-          background: 'var(--ink)',
-          color: 'white',
-          textDecoration: 'none',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 4
+        title: '下载原图',
+        'aria-label': '下载原图',
+        className: 'df-media-icon-btn',
+        onClick: function (e) {
+          e.stopPropagation();
         }
       }, React.createElement(I.download, {
-        size: 10
-      }), '下载'), m.inspirationPostId ? React.createElement('button', {
-        onClick: function () {
+        size: 12
+      })), m.inspirationPostId ? React.createElement('button', {
+        type: 'button',
+        title: '已发布到灵感 · 点击取消',
+        'aria-label': '取消发布到灵感',
+        className: 'df-media-icon-btn is-ok',
+        onClick: function (e) {
+          e.stopPropagation();
           onUnpublishInspiration(m);
-        },
-        style: {
-          fontSize: 11,
-          padding: '4px 10px',
-          borderRadius: 5,
-          background: 'var(--panel)',
-          color: 'var(--ok)',
-          border: '1px solid var(--ok)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 4,
-          cursor: 'pointer'
         }
       }, React.createElement(I.check, {
-        size: 10
-      }), '已发布 · 取消') : React.createElement('button', {
-        onClick: function () {
+        size: 12
+      })) : React.createElement('button', {
+        type: 'button',
+        title: '发布到灵感',
+        'aria-label': '发布到灵感',
+        className: 'df-media-icon-btn',
+        onClick: function (e) {
+          e.stopPropagation();
           onPublishInspiration(m);
-        },
-        style: {
-          fontSize: 11,
-          padding: '4px 10px',
-          borderRadius: 5,
-          background: 'var(--panel)',
-          color: 'var(--ink-2)',
-          border: '1px solid var(--line)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 4,
-          cursor: 'pointer'
         }
       }, React.createElement(I.sparkles, {
-        size: 10
-      }), '发布到灵感')));
+        size: 12
+      }))));
     }(),
     // 批量卡：n 张图的网格，生成中/失败/完成分别渲染
     batchImages && React.createElement('div', {
       style: {
         display: 'grid',
         gridTemplateColumns: '1fr 1fr',
-        gap: 8
+        gap: 6
       }
     }, batchImages.map(function (im, bi) {
       var imFull = im.url || '';
@@ -6386,21 +7050,12 @@ const ChatReturned = ({
       if (im.status === 'done' && imFull) {
         return React.createElement('div', {
           key: im.jobId || bi,
-          style: {
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 4
-          }
-        }, React.createElement('img', Object.assign(canvasDragProps(imFull), {
+          className: 'df-media-wrap'
+        }, React.createElement(RevealImage, {
           src: imShown || imFull,
           alt: (m.prompt || '') + ' #' + (bi + 1),
-          style: {
-            width: '100%',
-            borderRadius: 8,
-            display: 'block',
-            border: '1px solid var(--line-2)',
-            cursor: 'zoom-in'
-          },
+          aspectRatio: m.size,
+          dragProps: canvasDragProps(imFull),
           onClick: function () {
             var items = [];
             var startIndex = 0;
@@ -6417,54 +7072,42 @@ const ChatReturned = ({
             });
             openImage(imShown, imFull, m.prompt, items, startIndex);
           }
-        })), React.createElement('div', {
-          style: {
-            display: 'flex',
-            gap: 4,
-            flexWrap: 'wrap',
-            alignItems: 'center'
-          }
+        }), React.createElement('div', {
+          className: 'df-media-overlay'
         }, React.createElement('a', {
           href: imFull,
           download: true,
-          style: {
-            fontSize: 11,
-            padding: '3px 8px',
-            borderRadius: 5,
-            background: 'var(--ink)',
-            color: 'white',
-            textDecoration: 'none',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 3
+          title: '下载原图',
+          'aria-label': '下载原图',
+          className: 'df-media-icon-btn',
+          onClick: function (e) {
+            e.stopPropagation();
           }
         }, React.createElement(I.download, {
-          size: 9
-        }), '下载'), im.inspirationPostId ? React.createElement('button', {
-          onClick: function () {
+          size: 12
+        })), im.inspirationPostId ? React.createElement('button', {
+          type: 'button',
+          title: '已发布到灵感 · 点击取消',
+          'aria-label': '取消发布到灵感',
+          className: 'df-media-icon-btn is-ok',
+          onClick: function (e) {
+            e.stopPropagation();
             onUnpublishInspiration(Object.assign({}, m, {
               jobId: im.jobId,
               imageUrl: imFull,
               inspirationPostId: im.inspirationPostId,
               batchImageIndex: bi
             }));
-          },
-          style: {
-            fontSize: 11,
-            padding: '3px 8px',
-            borderRadius: 5,
-            background: 'var(--panel)',
-            color: 'var(--ok)',
-            border: '1px solid var(--ok)',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 3,
-            cursor: 'pointer'
           }
         }, React.createElement(I.check, {
-          size: 9
-        }), '已发布') : React.createElement('button', {
-          onClick: function () {
+          size: 12
+        })) : React.createElement('button', {
+          type: 'button',
+          title: '发布到灵感',
+          'aria-label': '发布到灵感',
+          className: 'df-media-icon-btn',
+          onClick: function (e) {
+            e.stopPropagation();
             onPublishInspiration(Object.assign({}, m, {
               jobId: im.jobId,
               imageUrl: imFull,
@@ -6472,32 +7115,20 @@ const ChatReturned = ({
               inspirationPostId: null,
               batchImageIndex: bi
             }));
-          },
-          style: {
-            fontSize: 11,
-            padding: '3px 8px',
-            borderRadius: 5,
-            background: 'var(--panel)',
-            color: 'var(--ink-2)',
-            border: '1px solid var(--line)',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 3,
-            cursor: 'pointer'
           }
         }, React.createElement(I.sparkles, {
-          size: 9
-        }), '发布')));
+          size: 12
+        }))));
       }
       if (im.status === 'failed') {
         return React.createElement('div', {
           key: im.jobId || bi,
           style: {
-            minHeight: 110,
-            borderRadius: 8,
-            border: '1px solid var(--warn)',
-            background: 'var(--panel)',
-            padding: '8px 9px',
+            minHeight: 118,
+            borderRadius: 10,
+            border: '1px solid var(--warn-line)',
+            background: 'var(--warn-soft)',
+            padding: '9px 10px',
             display: 'flex',
             flexDirection: 'column',
             gap: 6,
@@ -6506,137 +7137,156 @@ const ChatReturned = ({
         }, React.createElement('div', {
           style: {
             fontSize: 11,
-            color: 'var(--warn)',
-            lineHeight: 1.4,
+            color: 'var(--warn-ink)',
+            lineHeight: 1.45,
             wordBreak: 'break-word'
           }
         }, '第 ' + (bi + 1) + ' 张失败：' + formatAiImageError(im.error, im.jobId)));
       }
-      return React.createElement('div', {
+      return React.createElement(CreativeImagePlaceholder, {
         key: im.jobId || bi,
-        style: {
-          minHeight: 110,
-          borderRadius: 8,
-          border: '1px dashed var(--line-2)',
-          background: 'var(--panel)',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 6
-        }
-      }, React.createElement('div', {
-        style: {
-          width: 14,
-          height: 14,
-          borderRadius: 99,
-          border: '2px solid var(--line-2)',
-          borderTopColor: 'var(--accent)',
-          animation: 'spin 0.8s linear infinite'
-        }
-      }), React.createElement('div', {
-        className: 'mono',
-        style: {
-          fontSize: 11,
-          color: 'var(--ink-3)'
-        }
-      }, (im.progress || 0) + '%'));
+        compact: true,
+        aspectRatio: m.size,
+        seed: bi
+      });
     })), m.status === 'done' && m.vlmPending && React.createElement('div', {
       style: {
-        marginTop: 8,
-        padding: '10px 12px',
-        borderRadius: 8,
-        background: 'var(--panel)',
+        padding: '9px 11px',
+        borderRadius: 9,
+        background: 'var(--panel-2)',
         border: '1px solid var(--line-2)'
       }
     }, React.createElement('div', {
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 6
+        gap: 7
       }
     }, React.createElement(I.eye, {
-      size: 11,
-      style: {
-        color: 'var(--ink-3)'
-      }
-    }), React.createElement('span', {
-      style: {
-        fontSize: 11,
-        color: 'var(--ink-2)'
-      }
-    }, '图片已生成，VLM 质检中...'))),
-    // VLM 质检反馈
-    m.status === 'done' && m.vlm && m.vlm.status === 'checked' && React.createElement('div', {
-      style: {
-        marginTop: 8,
-        padding: '10px 12px',
-        borderRadius: 8,
-        background: 'var(--panel)',
-        border: '1px solid var(--line-2)'
-      }
-    }, React.createElement('div', {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        marginBottom: 6
-      }
-    }, React.createElement(I.eye, {
-      size: 11,
+      size: 12,
       style: {
         color: 'var(--accent)'
       }
     }), React.createElement('span', {
+      className: 'df-shimmer-text',
       style: {
-        fontSize: 11,
-        fontWeight: 500,
-        color: 'var(--ink)'
-      }
-    }, 'VLM 质检')), React.createElement('div', {
-      style: {
-        display: 'flex',
-        gap: 12,
-        fontSize: 11,
-        color: 'var(--ink-2)',
-        marginBottom: 6
-      }
-    }, React.createElement('span', null, '质量 ', React.createElement('span', {
-      style: {
-        color: m.vlm.qualityScore >= 80 ? 'var(--ok)' : m.vlm.qualityScore >= 50 ? 'var(--warn)' : '#dc2626',
+        fontSize: 11.5,
         fontWeight: 500
       }
-    }, m.vlm.qualityScore)), React.createElement('span', null, '匹配度 ', React.createElement('span', {
+    }, '图片已生成，VLM 质检中...'))),
+    // VLM 质检反馈
+    m.status === 'done' && m.vlm && m.vlm.status === 'checked' && function () {
+      var scoreTone = function (v) {
+        if (v >= 80) return {
+          fg: 'var(--ok-ink)',
+          bg: 'var(--ok-soft)',
+          line: 'var(--ok-line)'
+        };
+        if (v >= 50) return {
+          fg: 'var(--warn-ink)',
+          bg: 'var(--warn-soft)',
+          line: 'var(--warn-line)'
+        };
+        return {
+          fg: 'var(--danger)',
+          bg: 'var(--danger-soft)',
+          line: 'var(--danger-line)'
+        };
+      };
+      var qTone = scoreTone(m.vlm.qualityScore);
+      var mTone = scoreTone(m.vlm.intentMatch);
+      return React.createElement('div', {
+        style: {
+          padding: '10px 11px',
+          borderRadius: 9,
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line-2)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 7
+        }
+      }, React.createElement('div', {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          flexWrap: 'wrap'
+        }
+      }, React.createElement(I.eye, {
+        size: 12,
+        style: {
+          color: 'var(--accent)'
+        }
+      }), React.createElement('span', {
+        style: {
+          fontSize: 11.5,
+          fontWeight: 600,
+          color: 'var(--ink)'
+        }
+      }, 'VLM 质检'), React.createElement('div', {
+        style: {
+          marginLeft: 'auto',
+          display: 'flex',
+          gap: 5
+        }
+      }, React.createElement('span', {
+        className: 'mono',
+        style: {
+          fontSize: 10.5,
+          fontWeight: 600,
+          padding: '1px 6px',
+          borderRadius: 99,
+          color: qTone.fg,
+          background: qTone.bg,
+          border: '1px solid ' + qTone.line
+        }
+      }, '质量 ' + m.vlm.qualityScore), React.createElement('span', {
+        className: 'mono',
+        style: {
+          fontSize: 10.5,
+          fontWeight: 600,
+          padding: '1px 6px',
+          borderRadius: 99,
+          color: mTone.fg,
+          background: mTone.bg,
+          border: '1px solid ' + mTone.line
+        }
+      }, '匹配 ' + m.vlm.intentMatch))), m.vlm.userFacingSummary && React.createElement('div', {
+        style: {
+          fontSize: 11.5,
+          color: 'var(--ink-2)',
+          lineHeight: 1.55
+        }
+      }, m.vlm.userFacingSummary), m.vlm.problemElements && m.vlm.problemElements.length > 0 && React.createElement('div', {
+        style: {
+          fontSize: 11,
+          color: 'var(--danger)',
+          background: 'var(--danger-soft)',
+          border: '1px solid var(--danger-line)',
+          borderRadius: 6,
+          padding: '5px 8px',
+          lineHeight: 1.5
+        }
+      }, '问题：' + m.vlm.problemElements.join('；')), m.vlm.nextStepSuggestion && React.createElement('div', {
+        style: {
+          fontSize: 11,
+          color: 'var(--ok-ink)',
+          background: 'var(--ok-soft)',
+          border: '1px solid var(--ok-line)',
+          borderRadius: 6,
+          padding: '5px 8px',
+          lineHeight: 1.5
+        }
+      }, '建议：' + m.vlm.nextStepSuggestion));
+    }(), m.status === 'failed' && !batchImages && React.createElement('div', {
       style: {
-        color: m.vlm.intentMatch >= 80 ? 'var(--ok)' : m.vlm.intentMatch >= 50 ? 'var(--warn)' : '#dc2626',
-        fontWeight: 500
-      }
-    }, m.vlm.intentMatch))), m.vlm.userFacingSummary && React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: 'var(--ink-2)',
-        lineHeight: 1.5
-      }
-    }, m.vlm.userFacingSummary), m.vlm.problemElements && m.vlm.problemElements.length > 0 && React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: 'var(--danger)',
-        marginTop: 4,
-        lineHeight: 1.5
-      }
-    }, '问题: ' + m.vlm.problemElements.join('; ')), m.vlm.nextStepSuggestion && React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: 'var(--ok)',
-        marginTop: 4,
-        lineHeight: 1.5
-      }
-    }, '建议: ' + m.vlm.nextStepSuggestion)), m.status === 'failed' && !batchImages && React.createElement('div', {
-      style: {
-        padding: '4px 0',
-        fontSize: 11,
-        color: 'var(--ink-3)',
-        lineHeight: 1.45,
+        padding: '8px 10px',
+        borderRadius: 8,
+        background: 'var(--warn-soft)',
+        border: '1px solid var(--warn-line)',
+        fontSize: 11.5,
+        color: 'var(--warn-ink)',
+        lineHeight: 1.5,
         wordBreak: 'break-word'
       }
     }, formatAiImageError(m.error, m.jobId || m.job_id)), m.status === 'failed' && (onRetry || onEditResend) && React.createElement('div', {
@@ -6654,10 +7304,11 @@ const ChatReturned = ({
       title: isGenerating ? '当前还有任务在生成，完成后再重试' : '用相同的描述、参考图和参数重新生成',
       style: {
         fontSize: 11,
-        padding: '4px 10px',
-        borderRadius: 5,
+        padding: '5px 11px',
+        borderRadius: 7,
         background: 'var(--ink)',
         color: 'white',
+        fontWeight: 500,
         display: 'inline-flex',
         alignItems: 'center',
         gap: 4,
@@ -6674,8 +7325,8 @@ const ChatReturned = ({
       title: '把这次的描述放回输入框，修改后再发送',
       style: {
         fontSize: 11,
-        padding: '4px 10px',
-        borderRadius: 5,
+        padding: '5px 11px',
+        borderRadius: 7,
         background: 'var(--panel)',
         color: 'var(--ink-2)',
         border: '1px solid var(--line)',
@@ -7240,28 +7891,25 @@ const ChatReturned = ({
     style: {
       display: 'flex',
       flexDirection: 'column',
-      gap: 6
+      gap: 6,
+      paddingTop: 2
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      display: 'flex',
+      display: 'inline-flex',
       alignItems: 'center',
-      gap: 6
+      gap: 7
     }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 6,
-      height: 6,
-      borderRadius: 99,
-      background: 'var(--ink-3)',
-      animation: 'pulse 1.2s ease-in-out infinite'
-    }
-  }), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement(PixelGridLoader, null), /*#__PURE__*/React.createElement("span", {
+    className: "df-shimmer-text",
     style: {
       fontSize: 12,
-      color: 'var(--ink-3)'
+      fontWeight: 500
     }
-  }, m.meta === 'Agent' ? getThinkingPreview(m.thinkingStatus || m.text) : m.text || '让我想想...')), m.thinking ? /*#__PURE__*/React.createElement(ThinkingBlock, {
+  }, m.meta === 'Agent' ? getThinkingPreview(m.thinkingStatus || m.text) : m.text || '思考中…'), m.startedAt ? /*#__PURE__*/React.createElement(ChatTimer, {
+    startedAt: m.startedAt,
+    precise: true
+  }) : null), m.thinking ? /*#__PURE__*/React.createElement(ThinkingBlock, {
     text: m.thinking
   }) : null) : /*#__PURE__*/React.createElement("div", {
     style: {
@@ -7283,26 +7931,28 @@ const ChatReturned = ({
     style: {
       display: 'flex',
       flexWrap: 'wrap',
-      gap: 6
+      gap: 6,
+      marginTop: 2
     }
   }, (m.choices || m.quickActions || []).map(function (opt, oi) {
+    const isPrimary = Boolean(opt.primary) || Array.isArray(m.quickActions) && oi === 0 && /开始|确认|生成|继续/.test(String(opt.label || ''));
     return React.createElement('button', {
       key: oi,
+      type: 'button',
+      className: 'df-choice-pill' + (isPrimary ? ' is-primary' : ''),
       onClick: function () {
         onQuickReply(opt.value);
       },
       disabled: isGenerating,
       style: {
-        fontSize: 12,
-        padding: '7px 14px',
-        borderRadius: 18,
-        border: '1px solid var(--line-2)',
-        background: 'var(--panel)',
-        color: 'var(--ink)',
         cursor: isGenerating ? 'default' : 'pointer',
-        opacity: isGenerating ? 0.5 : 1
+        opacity: isGenerating ? 0.45 : 1
       }
-    }, opt.label);
+    }, React.createElement('span', null, opt.label), React.createElement('span', {
+      className: 'df-choice-arrow'
+    }, React.createElement(I.chevronRight, {
+      size: 11
+    })));
   })) : null, m.who === 'user' && Array.isArray(m.characters) && m.characters.length > 0 ? /*#__PURE__*/React.createElement("div", {
     style: {
       alignSelf: 'flex-end',
@@ -7404,6 +8054,7 @@ const ChatReturned = ({
     }, file.name || '参考图 ' + (idx + 1)));
   }))) : null))), /*#__PURE__*/React.createElement("style", null, `@keyframes pulse { 0%,100% { opacity:0.3; } 50% { opacity:1; } }`))), hasUnseen && /*#__PURE__*/React.createElement("button", {
     type: "button",
+    className: "df-unseen-pill df-pop-in",
     onClick: () => {
       stickRef.current = true;
       setHasUnseen(false);
@@ -7411,20 +8062,18 @@ const ChatReturned = ({
     },
     style: {
       position: 'absolute',
-      bottom: 10,
+      bottom: 12,
       left: '50%',
       transform: 'translateX(-50%)',
       zIndex: 2,
-      height: 28,
-      padding: '0 12px',
+      height: 30,
+      padding: '0 13px',
       borderRadius: 99,
       display: 'inline-flex',
       alignItems: 'center',
       gap: 5,
-      background: 'var(--ink)',
-      color: 'white',
       fontSize: 12,
-      boxShadow: '0 4px 14px rgba(20,22,40,0.18)'
+      fontWeight: 500
     }
   }, "\u2193 \u6709\u65B0\u6D88\u606F"));
 };
@@ -8723,6 +9372,8 @@ const Composer = ({
     const open = prototypePanel === panel;
     return React.createElement('button', Object.assign({
       type: 'button',
+      className: 'df-tool-btn',
+      'data-active': open ? 'true' : 'false',
       onClick: function () {
         setPrototypePanel(open ? '' : panel);
       },
@@ -8735,17 +9386,8 @@ const Composer = ({
         height: 36,
         minWidth: label ? 74 : 36,
         padding: label ? '0 12px' : 0,
-        borderRadius: 10,
-        border: '1px solid ' + (open ? 'var(--ink-3)' : 'var(--line-2)'),
-        background: open ? 'var(--panel-2)' : 'transparent',
-        color: open ? 'var(--ink)' : 'var(--ink-2)',
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
         gap: 7,
         cursor: 'pointer',
-        boxShadow: 'none',
-        transition: 'background 140ms, border-color 140ms, transform 140ms, box-shadow 140ms',
         flexShrink: 0
       }, options || {})
     }), icon, label ? React.createElement('span', {
@@ -9835,20 +10477,22 @@ const Composer = ({
   }, isDraggingOver && /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'absolute',
-      inset: 0,
+      inset: 8,
       zIndex: 50,
-      background: 'rgba(79, 70, 229, 0.08)',
-      border: '2px dashed var(--accent)',
-      borderRadius: 12,
+      background: 'oklch(0.96 0.03 275 / 0.78)',
+      backdropFilter: 'blur(6px)',
+      WebkitBackdropFilter: 'blur(6px)',
+      border: '1.5px dashed var(--accent)',
+      borderRadius: 16,
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
-      gap: 8,
+      gap: 6,
       pointerEvents: 'none'
     }
   }, /*#__PURE__*/React.createElement(I.file, {
-    size: 28,
+    size: 26,
     style: {
       color: 'var(--accent)'
     }
@@ -9856,7 +10500,7 @@ const Composer = ({
     style: {
       fontSize: 13,
       fontWeight: 600,
-      color: 'var(--accent)'
+      color: 'var(--accent-ink)'
     }
   }, "\u677E\u624B\u6DFB\u52A0\u6587\u4EF6"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -10361,20 +11005,16 @@ const Composer = ({
     minWidth: 34,
     height: 34
   }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "df-tool-btn",
+    "data-active": refImages.length > 0 ? 'true' : 'false',
     onClick: () => fileInputRef.current?.click(),
     style: {
       height: 34,
       width: 34,
       minWidth: 34,
       padding: 0,
-      borderRadius: 10,
-      border: '1px solid var(--line-2)',
-      background: 'transparent',
-      color: refImages.length > 0 ? 'var(--ink)' : 'var(--ink-2)',
       cursor: 'pointer',
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
       gap: 7,
       flexShrink: 0
     },
@@ -10400,19 +11040,18 @@ const Composer = ({
     minWidth: 34,
     height: 34
   }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "df-send-btn",
+    "data-ready": canSend || isLoading && onStop ? 'true' : 'false',
     onClick: isLoading && onStop ? onStop : handleSend,
     title: isLoading && onStop ? '停止' : undefined,
     "aria-label": isLoading && onStop ? '停止' : '发送',
     style: {
       width: 34,
       height: 34,
-      borderRadius: 10,
       background: canSend || isLoading && onStop ? 'var(--ink)' : 'var(--line)',
       color: canSend || isLoading && onStop ? 'white' : 'var(--ink-3)',
-      display: 'grid',
-      placeItems: 'center',
-      cursor: canSend || isLoading && onStop ? 'pointer' : 'default',
-      boxShadow: 'none'
+      cursor: canSend || isLoading && onStop ? 'pointer' : 'default'
     }
   }, isLoading && onStop ? /*#__PURE__*/React.createElement(I.stop, {
     size: 14
@@ -10506,6 +11145,9 @@ const agent2UploadDisplay = function (uploads) {
 // 新版 Agent 的事件 → 现有消息格式。实时推送和历史回放共用这一个归约函数。
 const agent2Reduce = function (msgs, ev) {
   var p = ev && ev.payload || {};
+  var prevThinking = msgs.find(function (m) {
+    return m.a2Thinking;
+  });
   var list = msgs.filter(function (m) {
     return !m.a2Thinking;
   });
@@ -10514,7 +11156,8 @@ const agent2Reduce = function (msgs, ev) {
     type: 'thinking',
     meta: 'Agent',
     text: '正在思考…',
-    a2Thinking: true
+    a2Thinking: true,
+    startedAt: prevThinking && prevThinking.startedAt || Date.now()
   };
   var updateCard = function (callId, fn) {
     return list.map(function (m) {
@@ -10575,7 +11218,8 @@ const agent2Reduce = function (msgs, ev) {
         status: 'running',
         progress: {},
         log: '',
-        images: []
+        images: [],
+        startedAt: Date.now()
       }]);
     case 'tool.progress':
       return updateCard(p.call_id, function (m) {
@@ -10709,9 +11353,83 @@ const Chat = ({
   seedPrompt,
   onSeedConsumed,
   canvasReferenceSelection,
-  quickEditRequest
+  quickEditRequest,
+  onPendingImagesChange
 }) => {
   const [messages, setMessages] = React.useState([]);
+  // 实时把正在生成的图片占位信息同步给画布（纯临时 UI，不落库）
+  React.useEffect(() => {
+    if (!onPendingImagesChange) return;
+    const pending = [];
+    messages.forEach((m, mi) => {
+      if (!m) return;
+      if (m.type === 'ai-image-generating' && m.status !== 'done' && m.status !== 'failed') {
+        const batchImages = Array.isArray(m.images) && m.images.length > 0 ? m.images : null;
+        if (batchImages) {
+          // 整批尚未落位画布前，保持所有非失败槽位按原始索引占位，已先出图的传 previewUrl 原地提前显影
+          batchImages.forEach((im, bi) => {
+            if (im && im.status !== 'failed') {
+              const rawPreview = im.status === 'done' ? im.previewUrl || im.url || '' : '';
+              const previewUrl = rawPreview && rawPreview.startsWith('/') ? (window.API_BASE || window.location.origin) + rawPreview : rawPreview;
+              pending.push({
+                id: 'ai-' + (m.startedAt || mi) + '-' + bi,
+                label: m.model || '生成中',
+                aspectRatio: m.size || '1:1',
+                startedAt: m.startedAt || Date.now(),
+                seed: bi,
+                previewUrl: previewUrl || undefined
+              });
+            }
+          });
+        } else {
+          const count = Math.max(1, Number(m.batchCount) || 1);
+          for (let ci = 0; ci < count; ci++) {
+            pending.push({
+              id: 'ai-' + (m.startedAt || mi) + '-' + ci,
+              label: m.model || '生成中',
+              aspectRatio: m.size || '1:1',
+              startedAt: m.startedAt || Date.now(),
+              seed: ci
+            });
+          }
+        }
+      } else if (m.type === 'agent2-tool' && m.status === 'running') {
+        const args = m.args || {};
+        if (m.tool === 'generate_image') {
+          const doneByPos = {};
+          (m.images || []).forEach(im => {
+            doneByPos[im.position || 0] = im;
+          });
+          const reqImages = Array.isArray(args.images) && args.images.length > 0 ? args.images : [{}];
+          reqImages.forEach((item, idx) => {
+            const doneIm = doneByPos[idx];
+            pending.push({
+              id: 'agent-' + (m.callId || mi) + '-' + idx,
+              label: item && item.label || 'Agent 生图',
+              aspectRatio: args.aspect_ratio || '1:1',
+              startedAt: m.startedAt || Date.now(),
+              seed: idx,
+              previewUrl: doneIm && doneIm.url ? agent2AbsUrl(doneIm.url) : undefined
+            });
+          });
+        } else if (m.tool === 'outfit_change' || m.tool === 'outpaint_image' || m.tool === 'upscale_image' || m.tool === 'remove_background' || m.tool === 'fill_background') {
+          const doneIm = (m.images || [])[0];
+          pending.push({
+            id: 'agent-' + (m.callId || mi) + '-0',
+            label: AGENT2_TOOL_LABELS[m.tool] || 'Agent 出图',
+            aspectRatio: args.aspect_ratio || '1:1',
+            startedAt: m.startedAt || Date.now(),
+            seed: 0,
+            previewUrl: doneIm && doneIm.url ? agent2AbsUrl(doneIm.url) : undefined
+          });
+        }
+      }
+    });
+    onPendingImagesChange(pending);
+  }, [messages, onPendingImagesChange]);
+  React.useEffect(() => () => {
+    if (onPendingImagesChange) onPendingImagesChange([]);
+  }, [onPendingImagesChange]);
   const [defaultMessages, setDefaultMessages] = React.useState([]);
   const [isLoading, setIsLoading] = React.useState(false);
   const [lastSubmittedMessage, setLastSubmittedMessage] = React.useState('');
@@ -12433,11 +13151,11 @@ const Chat = ({
       const _endpoint = isFull ? '/special-compose-full' : '/special-compose';
       const _pollBase = isFull ? '/special-compose-full' : '/special-compose';
       const _errHint = '请提供 SKU，格式：SKU，文案，时间文案';
-      const _tplHint = isFull ? '请先在左侧选择特殊品（完整）模板' : '请先在左侧选择特殊品模板';
-      const templates = Array.isArray(window.TEMPLATES) ? window.TEMPLATES : [];
-      const effectiveTemplate = templates.find(function (t) {
+      const _tplHint = '未找到对应的特殊品模板，请联系管理员检查 Penpot 模板配置，无需手动选择模板。';
+      let templates = Array.isArray(window.TEMPLATES) ? window.TEMPLATES : [];
+      let effectiveTemplate = templates.find(function (t) {
         return isFull ? t.is_special_full : t.is_special && !t.is_special_full;
-      }) || template;
+      });
       const displayText = text.trim();
       setMessages(msgs => [...msgs, {
         who: 'user',
@@ -12468,6 +13186,16 @@ const Chat = ({
           time: parts[2] || ''
         };
         if (!sku) throw new Error(_errHint);
+        if (!effectiveTemplate) {
+          try {
+            const data = await window.API.fetchTemplates();
+            templates = window.aggregateTemplates(data);
+            window.TEMPLATES = templates;
+            effectiveTemplate = templates.find(t => isFull ? t.is_special_full : t.is_special && !t.is_special_full);
+          } catch (err) {
+            throw new Error('Penpot 模板服务暂时不可用，请稍后重试；无需手动选择模板。' + (err.message || ''));
+          }
+        }
         if (!effectiveTemplate) throw new Error(_tplHint);
         const frameIds = effectiveTemplate.frames ? effectiveTemplate.frames.map(f => f.id) : [effectiveTemplate.id];
         const fileId = effectiveTemplate.file_id || effectiveTemplate.frames && effectiveTemplate.frames[0]?.file_id;
@@ -13216,15 +13944,16 @@ const Chat = ({
     }
   })), modeMenuOpen && /*#__PURE__*/React.createElement("div", {
     role: "menu",
+    className: "df-pop-in",
     style: {
       position: 'absolute',
-      top: 32,
+      top: 34,
       left: -6,
-      width: 160,
-      borderRadius: 10,
+      width: 168,
+      borderRadius: 11,
       background: 'var(--panel)',
       border: '1px solid var(--line)',
-      boxShadow: '0 10px 24px rgba(15, 23, 42, 0.08)',
+      boxShadow: 'var(--shadow-pop)',
       zIndex: 30,
       padding: 4
     }
@@ -18207,6 +18936,7 @@ const App = () => {
   const [inspirationOpen, setInspirationOpen] = React.useState(false);
   const [seedPrompt, setSeedPrompt] = React.useState('');
   const [canvasReferenceSelection, setCanvasReferenceSelection] = React.useState(null);
+  const [pendingCanvasImages, setPendingCanvasImages] = React.useState([]);
   const [templatePanelCollapsed, setTemplatePanelCollapsed] = React.useState(true);
   const [templateRevealHovered, setTemplateRevealHovered] = React.useState(false);
   const [whatsNewRelease, setWhatsNewRelease] = React.useState(null);
@@ -18696,6 +19426,7 @@ const App = () => {
       template: activeTemplate,
       resultTemplate: resultTemplate,
       editorCommands: editorCommands,
+      pendingImages: pendingCanvasImages,
       onUseReferenceImages: handleUseCanvasReferences,
       onQuickEditGenerate: handleQuickEditGenerate,
       userId: currentUser.id
@@ -18747,7 +19478,8 @@ const App = () => {
     seedPrompt: seedPrompt,
     onSeedConsumed: handleSeedConsumed,
     canvasReferenceSelection: canvasReferenceSelection,
-    quickEditRequest: quickEditRequest
+    quickEditRequest: quickEditRequest,
+    onPendingImagesChange: setPendingCanvasImages
   }))), currentUser && whatsNewRelease && window.WhatsNewModal && React.createElement(window.WhatsNewModal, {
     release: whatsNewRelease,
     onClose: function () {

@@ -101,7 +101,7 @@ async def _prepare_with_memory(context, messages: list[dict], force: bool, user_
 
 
 async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict],
-                 tools: dict[str, Tool], model: ModelClient, request: str = "") -> AsyncIterator[str]:
+                 tools: dict[str, Tool], model: ModelClient, request: str = "", selected_skill: str = "") -> AsyncIterator[str]:
     """运行引擎；事件先落库，再通过队列按顺序推给前端。"""
     queue: asyncio.Queue = asyncio.Queue()
     session_id = session["id"]
@@ -139,7 +139,7 @@ async def _drive(*, user: dict, session: dict, turn_id: str, messages: list[dict
                 save(full)  # 本轮的用户输入先落库
                 result = await run_loop(model=model, tools=tools, messages=full, emit=emit,
                                         ctx_base={"user": user, "session_id": session_id, "turn_id": turn_id,
-                                                  "state": {"request": request}, "publish": publish},
+                                                  "state": {"request": request, "selected_skill": selected_skill}, "publish": publish},
                                         prepare=prepare, checkpoint=save)
                 save(result.messages)
                 if result.status == "waiting_user":
@@ -242,7 +242,7 @@ async def start_turn(user: dict, session: dict, text: str, uploads: list[dict], 
             r["id"] + (f"（{r['label']}）" if r.get("label") else "") for r in recovered) + "]"
     messages = settle_tool_calls(store.load_session_messages(session)) + [{"role": "user", "content": content}]
     async for chunk in _drive(user=user, session=session, turn_id=turn["id"], messages=messages,
-                              tools=tools_factory(), model=model_factory(), request=text):
+                              tools=tools_factory(), model=model_factory(), request=text, selected_skill=skill):
         yield chunk
 
 
@@ -253,6 +253,7 @@ def upload_note(uploads: list[dict]) -> str:
     note = ""
     if pictures:
         note += "\n\n[用户上传了图片：" + "、".join(u["id"] for u in pictures) + "]"
+        note += "\n[本轮固定编号：" + "；".join(f"图片{i}={u['id']}" for i, u in enumerate(pictures, 1)) + "。编号由上传顺序确定，不需要通过看图确认；内容用途明确冲突时才询问。]"
     if tables:
         note += "\n\n[用户上传了表格：" + "、".join(f"{u['id']}（{u['label']}）" for u in tables) + "]"
     return note
@@ -278,7 +279,8 @@ async def resume_turn(user: dict, session: dict, turn: dict, answer: str, claime
         "content": json.dumps({"answer": reply}, ensure_ascii=False)}]
     request = f"{turn.get('user_input') or ''}（补充：{answer}）"
     async for chunk in _drive(user=user, session=session, turn_id=turn["id"], messages=messages,
-                              tools=tools_factory(), model=model_factory(), request=request):
+                              tools=tools_factory(), model=model_factory(), request=request,
+                              selected_skill=store.turn_skill(turn['id'])):
         yield chunk
 
 

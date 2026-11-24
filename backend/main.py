@@ -20,6 +20,7 @@ import io
 import json
 import logging
 import mimetypes
+import os
 import posixpath
 import re
 import shutil
@@ -487,6 +488,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Design Tool API", version="0.1.0", lifespan=lifespan)
+_RUNTIME_INSTANCE = uuid.uuid4().hex[:12]
 
 
 def _track_ai_image_task(coro):
@@ -2534,7 +2536,10 @@ async def _probe_adobe2api(client: httpx.AsyncClient) -> dict:
 async def health():
     # UNC filesystem checks can block for seconds when the library is offline.
     # Keep them off the event loop so session heartbeats and task polls can run.
-    return await asyncio.to_thread(_local_health_payload)
+    payload = await asyncio.to_thread(_local_health_payload)
+    payload['runtime'] = {'instance': _RUNTIME_INSTANCE, 'pid': os.getpid(),
+                          'agent_guard': 'skill-policy-v2'}
+    return payload
 
 
 @app.get("/health/deep")

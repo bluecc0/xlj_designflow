@@ -7,6 +7,12 @@ from backend.agent2.image_constraints import explicit_models, numbered_reference
 
 
 class ReferenceBindingTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        for name, value in [('list_events', []), ('get_artifact', None), ('turn_characters', [])]:
+            patcher = patch.object(tools.store, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_explicit_model_aliases_and_comparison(self):
         self.assertEqual(explicit_models("调用Nano Banana Pr模型，1K"), {"nano-banana-pro"})
         self.assertEqual(explicit_models("GPT Image 2.5"), {"gpt-image-2.5"})
