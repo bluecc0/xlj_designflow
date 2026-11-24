@@ -3,9 +3,7 @@ from __future__ import annotations
 import io
 import unittest
 
-import numpy as np
-
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageDraw
 
 from backend import detail_repair as dr
 
@@ -16,8 +14,7 @@ def png(image: Image.Image) -> bytes:
     return out.getvalue()
 
 
-def source_image(size=(800, 1000)) -> Image.Image:
-    # 有渐变的底图，方便检查区域外像素是否被改动
+def source_image(size=(600, 800)) -> Image.Image:
     img = Image.new("RGB", size)
     px = img.load()
     for y in range(size[1]):
@@ -46,7 +43,6 @@ class PlacementTest(unittest.TestCase):
         self.assertEqual(layer.getchannel("A").getbbox(), (160, 130, 240, 170))
 
     def test_rotation_is_clockwise_like_css(self):
-        # 横条顺时针转 90° 变竖条
         pattern = Image.new("RGBA", (100, 10), (255, 0, 0, 255))
         layer = dr.render_pattern_layer((400, 400), pattern, dr.Placement(200, 200, 100, 10, rotation=90))
         x0, y0, x1, y1 = layer.getchannel("A").getbbox()
@@ -63,235 +59,109 @@ class PlacementTest(unittest.TestCase):
             dr.crop_pattern(pattern, (200, 200, 300, 300))
 
 
-class PlanBoxTest(unittest.TestCase):
-    def test_box_contains_region_and_matches_supported_ratio(self):
-        region = (300, 400, 380, 460)
-        box, size = dr.plan_box(region, (800, 1000))
-        self.assertLessEqual(box[0], region[0])
-        self.assertLessEqual(box[1], region[1])
-        self.assertGreaterEqual(box[2], region[2])
-        self.assertGreaterEqual(box[3], region[3])
-        ratio = dict(dr.SUPPORTED_RATIOS)[size]
-        self.assertAlmostEqual((box[2] - box[0]) / (box[3] - box[1]), ratio, delta=0.02)
+class RemovePatternBgTest(unittest.TestCase):
+    def test_strips_uniform_white_border_and_keeps_interior_white(self):
+        pat = Image.new("RGB", (120, 120), (248, 248, 248))
+        d = ImageDraw.Draw(pat)
+        d.rectangle((25, 25, 95, 95), fill=(80, 40, 160))
+        d.rectangle((45, 45, 75, 75), fill=(255, 255, 255))
+        cleaned, removed = dr.remove_pattern_bg(pat)
+        self.assertTrue(removed)
+        self.assertEqual(cleaned.getpixel((5, 5))[3], 0)
+        self.assertEqual(cleaned.getpixel((60, 60))[3], 255)
+        self.assertEqual(cleaned.getpixel((35, 35))[3], 255)
 
-    def test_box_near_edge_stays_inside_image(self):
-        for region in [(0, 0, 50, 50), (760, 950, 800, 1000), (0, 400, 800, 500)]:
-            box, _ = dr.plan_box(region, (800, 1000))
-            self.assertGreaterEqual(box[0], 0)
-            self.assertGreaterEqual(box[1], 0)
-            self.assertLessEqual(box[2], 800)
-            self.assertLessEqual(box[3], 1000)
-            self.assertLessEqual(box[0], region[0])
-            self.assertGreaterEqual(box[2], region[2])
+    def test_preserves_existing_transparent_png(self):
+        pat = Image.new("RGBA", (80, 80), (0, 0, 0, 0))
+        ImageDraw.Draw(pat).ellipse((20, 20, 60, 60), fill=(200, 30, 30, 255))
+        cleaned, removed = dr.remove_pattern_bg(pat)
+        self.assertFalse(removed)
+        self.assertEqual(cleaned.tobytes(), pat.tobytes())
 
 
-class PlanAndPasteBackTest(unittest.TestCase):
+class BuildPlanTest(unittest.TestCase):
     def setUp(self):
-        self.source = source_image()
-        # 平滑渐变的“面料”，贴回测试用（模型结果缩放后不会因为锐利的色带产生大误差）
-        self.smooth = Image.linear_gradient("L").resize((800, 1000)).convert("RGB")
-        self.smooth = Image.merge("RGB", [
-            self.smooth.getchannel(0).point(lambda v: 60 + v // 4),
-            self.smooth.getchannel(1).point(lambda v: 70 + v // 5),
-            Image.new("L", (800, 1000), 90),
-        ])
-        self.pattern = Image.new("RGB", (60, 60), "white")
-        ImageDraw.Draw(self.pattern).ellipse((10, 10, 49, 49), fill="blue")
+        self.source = source_image((600, 800))
+        self.pattern = Image.new("RGB", (80, 80), "white")
+        ImageDraw.Draw(self.pattern).ellipse((15, 15, 64, 64), fill="blue")
 
-    def test_plan_outputs_upscaled_work_image_and_region(self):
-        brush = Image.new("L", self.source.size, 0)
-        ImageDraw.Draw(brush).rectangle((380, 480, 470, 560), fill=255)
+    def test_plan_outputs_full_source_and_clean_guide_image(self):
         plan = dr.build_plan(
-            png(self.source), [(png(self.pattern), dr.Placement(420, 520, 60, 60, crop=(10, 10, 50, 50)))],
-            png(brush),
+            png(self.source),
+            [(png(self.pattern), dr.Placement(300, 400, 80, 80, crop=(10, 10, 70, 70)))],
+            None,
         )
-        work = Image.open(io.BytesIO(plan.work_image))
-        self.assertEqual(max(work.size), dr.MIN_WORK_SIDE)
-        self.assertEqual([Image.open(io.BytesIO(b)).size for b in plan.pattern_images], [(40, 40)])
-        # 图1 是未遮挡的原图局部，图2 才叠了图案
+        self.assertTrue(plan.has_pattern)
+        self.assertEqual(plan.size, "3:4")
+        work = Image.open(io.BytesIO(plan.work_image)).convert("RGB")
         guide = Image.open(io.BytesIO(plan.guide_image)).convert("RGB")
-        self.assertEqual(guide.size, work.size)
-        x0, y0, x1, y1 = plan.box
-        expected = self.source.crop(plan.box).resize(work.size, Image.LANCZOS).convert("RGB")
-        self.assertEqual(work.convert("RGB").tobytes(), expected.tobytes())
-        cx = round((420 - x0) * work.width / (x1 - x0)); cy = round((520 - y0) * work.height / (y1 - y0))
-        self.assertNotEqual(work.convert("RGB").getpixel((cx, cy)), guide.getpixel((cx, cy)))
-        self.assertEqual(guide.getpixel((cx, cy))[2] > 200 and guide.getpixel((cx, cy))[0] < 60, True)
-        # 修复区域 = 涂抹 ∪ 图案
-        self.assertEqual(plan.region_mask.getbbox(), (380, 480, 471, 561))
-        x0, y0, x1, y1 = plan.box
-        self.assertTrue(x0 <= 380 and y0 <= 480 and x1 >= 471 and y1 >= 561)
+        self.assertEqual(work.size, self.source.size)
+        self.assertEqual(guide.size, self.source.size)
+        self.assertEqual(work.tobytes(), self.source.tobytes())
+        self.assertEqual([Image.open(io.BytesIO(b)).size for b in plan.pattern_images], [(60, 60)])
+        # 图案中心在图2已叠上蓝色新图案，角落外围保持原图不变
+        px = guide.getpixel((300, 400))
+        self.assertTrue(px[2] > 200 and px[0] < 60, px)
+        self.assertEqual(guide.getpixel((5, 5)), self.source.getpixel((5, 5)))
+
+    def test_guide_erases_old_ink_without_grey_smudge(self):
+        # 白底原图中间有旧黑字（比新圆更宽），放一个略窄的蓝圆覆盖后，图2里伸出新圆外的旧黑字应擦干净且保持白底
+        src = Image.new("RGB", (400, 400), (245, 245, 245))
+        ImageDraw.Draw(src).rectangle((158, 192, 242, 208), fill=(25, 25, 25))
+        plan = dr.build_plan(png(src), [(png(self.pattern), dr.Placement(200, 200, 100, 100))], None)
+        guide = Image.open(io.BytesIO(plan.guide_image)).convert("RGB")
+        # 紧邻新圆外侧原本有旧黑字的位置已被擦回干净浅色底，无黑字残留也无大面积灰斑
+        for pt in ((162, 200), (238, 200)):
+            r, g, b = guide.getpixel(pt)
+            self.assertGreater(min(r, g, b), 220, (pt, (r, g, b)))
+
+    def test_plan_with_two_patterns_composites_both_on_full_guide(self):
+        red = Image.new("RGB", (40, 40), "red")
+        plan = dr.build_plan(png(self.source), [
+            (png(self.pattern), dr.Placement(150, 200, 60, 60)),
+            (png(red), dr.Placement(450, 600, 40, 40, rotation=20)),
+        ], None)
+        self.assertEqual([Image.open(io.BytesIO(b)).size for b in plan.pattern_images], [(80, 80), (40, 40)])
+        guide = Image.open(io.BytesIO(plan.guide_image)).convert("RGB")
+        blue_px = guide.getpixel((150, 200))
+        red_px = guide.getpixel((450, 600))
+        self.assertTrue(blue_px[2] > 200 and blue_px[0] < 60, blue_px)
+        self.assertTrue(red_px[0] > 200 and red_px[2] < 60, red_px)
 
     def test_pattern_outside_image_is_rejected(self):
         with self.assertRaises(ValueError):
             dr.build_plan(png(self.source), [(png(self.pattern), dr.Placement(-500, -500, 60, 60))], None)
-
-    def test_plan_with_two_patterns_covers_both_and_keeps_each_pattern(self):
-        red = Image.new("RGB", (30, 30), "red")
-        plan = dr.build_plan(png(self.source), [
-            (png(self.pattern), dr.Placement(150, 200, 60, 60, crop=(10, 10, 50, 50))),
-            (png(red), dr.Placement(450, 600, 40, 40, rotation=20)),
-        ], None)
-        self.assertEqual([Image.open(io.BytesIO(b)).size for b in plan.pattern_images], [(40, 40), (30, 30)])
-        # 修复区域同时包含两个图案，局部框也把两处都框进去
-        x0, y0, x1, y1 = plan.region_mask.getbbox()
-        self.assertTrue(x0 <= 120 and y0 <= 170 and x1 >= 470 and y1 >= 620)
-        bx0, by0, bx1, by1 = plan.box
-        self.assertTrue(bx0 <= x0 and by0 <= y0 and bx1 >= x1 and by1 >= y1)
-        # 图2 两处都叠了图案
-        guide = Image.open(io.BytesIO(plan.guide_image)).convert("RGB")
-        k = guide.width / (bx1 - bx0)
-        blue = guide.getpixel((round((150 - bx0) * k), round((200 - by0) * k)))
-        redpx = guide.getpixel((round((450 - bx0) * k), round((600 - by0) * k)))
-        self.assertTrue(blue[2] > 200 and blue[0] < 60, blue)
-        self.assertTrue(redpx[0] > 200 and redpx[2] < 60, redpx)
 
     def test_too_many_patterns_rejected(self):
         item = (png(self.pattern), dr.Placement(300, 300, 40, 40))
         with self.assertRaises(ValueError):
             dr.build_plan(png(self.source), [item] * (dr.MAX_PATTERNS + 1), None)
 
-    def test_multi_pattern_prompt_numbers_references(self):
+    def test_inpaint_plan_without_pattern_marks_full_image(self):
+        brush = Image.new("L", self.source.size, 0)
+        ImageDraw.Draw(brush).rectangle((250, 300, 350, 420), fill=255)
+        plan = dr.build_plan(png(self.source), [], png(brush))
+        self.assertFalse(plan.has_pattern)
+        work = Image.open(io.BytesIO(plan.work_image)).convert("RGB")
+        marked = Image.open(io.BytesIO(plan.reference_image)).convert("RGB")
+        self.assertEqual(work.size, self.source.size)
+        self.assertEqual(marked.size, self.source.size)
+        self.assertGreater(marked.getpixel((300, 360))[0], work.getpixel((300, 360))[0])
+        with self.assertRaises(ValueError):
+            dr.build_plan(png(self.source), [], None)
+
+    def test_prompts(self):
         self.assertIn("图3：新图案素材", dr.build_prompt("", 1))
         text = dr.build_prompt("鞋内侧也要", 2)
         self.assertIn("图3到图4", text)
         self.assertIn("2 个新图案", text)
         self.assertIn("补充说明：鞋内侧也要", text)
-
-    def test_pattern_prompt_preserves_original_lighting_perspective_and_folds(self):
+        self.assertNotIn("补充说明", dr.build_prompt(""))
         instruction = "保持原图的光影透视还有褶皱，仅作图案修改"
         for count in (1, 2, dr.MAX_PATTERNS):
-            with self.subTest(pattern_count=count):
-                self.assertEqual(dr.build_prompt("", count).count(instruction), 1)
-        # 自由局部重绘可能要改光影/形态，不应被图案修复的约束影响。
+            self.assertEqual(dr.build_prompt("", count).count(instruction), 1)
         self.assertNotIn(instruction, dr.build_inpaint_prompt("改成红色"))
-
-    def _fake_model_result(self, plan, shift=-30, logo=(255, 255, 255)):
-        """模拟模型输出：整体偏暗（色调漂移），图案中心多一块白色。"""
-        x0, y0, x1, y1 = plan.box
-        local = self.smooth.crop(plan.box)
-        shifted = Image.eval(local, lambda v: max(0, min(255, v + shift)))
-        draw = ImageDraw.Draw(shifted)
-        draw.rectangle((400 - 15 - x0, 500 - 15 - y0, 400 + 15 - x0, 500 + 15 - y0), fill=logo)
-        return shifted.resize((1024, round(1024 * (y1 - y0) / (x1 - x0))), Image.LANCZOS)
-
-    def test_paste_back_keeps_pixels_outside_region(self):
-        plan = dr.build_plan(png(self.smooth), [(png(self.pattern), dr.Placement(400, 500, 80, 80))], None)
-        out = dr.paste_back(self.smooth, self._fake_model_result(plan), plan.box, plan.region_mask)
-        self.assertEqual(out.size, self.smooth.size)
-        diff_bbox = ImageChops.difference(out, self.smooth).getbbox()
-        self.assertIsNotNone(diff_bbox)
-        # 改动只出现在修复区域外扩的范围内
-        rx0, ry0, rx1, ry1 = plan.region_mask.getbbox()
-        slack = dr.MASK_GROW_PX + 1
-        self.assertGreaterEqual(diff_bbox[0], rx0 - slack)
-        self.assertGreaterEqual(diff_bbox[1], ry0 - slack)
-        self.assertLessEqual(diff_bbox[2], rx1 + slack)
-        self.assertLessEqual(diff_bbox[3], ry1 + slack)
-
-    def test_paste_back_corrects_tone_shift_and_keeps_unchanged_fabric(self):
-        plan = dr.build_plan(png(self.smooth), [(png(self.pattern), dr.Placement(400, 500, 80, 80))], None)
-        out = dr.paste_back(self.smooth, self._fake_model_result(plan), plan.box, plan.region_mask)
-        # 新图案贴上了
-        self.assertTrue(all(v >= 235 for v in out.getpixel((400, 500))))
-        # 修复区域里模型只是整体变暗的地方：色调被校正回原图，不出现一块偏暗的方块
-        for pt in ((370, 470), (430, 530), (370, 530)):
-            got, want = out.getpixel(pt), self.smooth.getpixel(pt)
-            self.assertTrue(all(abs(a - b) <= 4 for a, b in zip(got, want)), (pt, got, want))
-
-    def test_paste_back_leaves_no_outline_of_removed_old_logo(self):
-        # 原图：均匀底色上有个旧 logo，边上一圈只比底色暗 12 的淡边（压缩/抗锯齿常见）
-        bg = 230
-        source = Image.new("RGB", (400, 400), (bg, bg, bg))
-        draw = ImageDraw.Draw(source)
-        draw.rectangle((170, 170, 230, 230), fill=(bg - 12,) * 3)
-        draw.rectangle((174, 174, 226, 226), fill=(40, 40, 40))
-        plan = dr.build_plan(png(source), [(png(self.pattern), dr.Placement(200, 200, 120, 120))], None)
-        x0, y0, x1, y1 = plan.box
-        # 模型结果：旧 logo 去掉了，底色干净，中间是新图案
-        result = Image.new("RGB", (x1 - x0, y1 - y0), (bg, bg, bg))
-        ImageDraw.Draw(result).ellipse((190 - x0, 190 - y0, 210 - x0, 210 - y0), fill="blue")
-        out = dr.paste_back(source, result.resize((1024, 1024)), plan.box, plan.region_mask)
-        # 旧 logo 的淡边位置不能残留半透明的轮廓
-        for pt in ((171, 200), (200, 171), (229, 200), (200, 229), (172, 172)):
-            self.assertTrue(all(abs(v - bg) <= 3 for v in out.getpixel(pt)), (pt, out.getpixel(pt)))
-
-    def _flat_case(self, bg=200):
-        source = Image.new("RGB", (400, 400), (bg, bg, bg))
-        plan = dr.build_plan(png(source), [(png(self.pattern), dr.Placement(200, 200, 120, 120))], None)
-        x0, y0, x1, y1 = plan.box
-        return source, plan, Image.new("RGB", (x1 - x0, y1 - y0), (bg, bg, bg))
-
-    def test_paste_back_does_not_import_model_folds_and_has_no_seam(self):
-        # 模型重画时自己添了一道柔和的褶皱阴影（逐像素变化很小），图案修复时不能带进来
-        source, plan, result = self._flat_case()
-        x0, y0 = plan.box[:2]
-        a = np.asarray(result, np.float64)
-        yy, xx = np.mgrid[0:a.shape[0], 0:a.shape[1]]
-        fold = 25 * np.exp(-(((xx + y0) - (yy + x0) - 0) ** 2) / (2 * 6.0 ** 2))  # 沿对角线的暗带
-        a = a - fold[..., None]
-        result = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
-        ImageDraw.Draw(result).ellipse((190 - x0, 190 - y0, 210 - x0, 210 - y0), fill="blue")
-        out = dr.paste_back(source, result.resize((1024, 1024)), plan.box, plan.region_mask)
-        o = np.asarray(out, np.float64)
-        # 新图案在
-        self.assertGreater(o[200, 200, 2] - o[200, 200, 0], 80)
-        # 褶皱经过、但离图案较远的位置保持原图底色
-        for pt in ((150, 150), (250, 250), (160, 160)):
-            self.assertTrue(np.abs(o[pt[1], pt[0]] - 200).max() <= 3, (pt, o[pt[1], pt[0]]))
-
-    def test_inpaint_paste_back_keeps_model_shading_without_seam(self):
-        # 局部重绘：模型把区域里画暗了一块（用户要求的改动），要保留，且区域边界与原图连续
-        source, plan, result = self._flat_case()
-        x0, y0 = plan.box[:2]
-        ImageDraw.Draw(result).ellipse((170 - x0, 170 - y0, 230 - x0, 230 - y0), fill=(150, 150, 150))
-        out = np.asarray(dr.paste_back(source, result.resize((1024, 1024)), plan.box, plan.region_mask,
-                                       keep_texture=False), np.float64)
-        self.assertLess(out[200, 200].max(), 160)
-        kept = np.asarray(dr.paste_back(source, result.resize((1024, 1024)), plan.box, plan.region_mask), np.float64)
-        # 同样输入按图案修复：明确的边也会保留（暗块边缘够硬），说明两种模式都不丢明显改动
-        self.assertLess(kept[200, 200].max(), 160)
-
-    def test_paste_back_realigns_shifted_model_result(self):
-        # 模型结果整体偏了 2 像素：用区域外的格纹对齐，贴回后穿过区域的竖条纹不应错位
-        src = Image.new("RGB", (400, 400), (210, 210, 210))
-        d = ImageDraw.Draw(src)
-        for x in range(20, 400, 40):
-            d.rectangle((x, 0, x + 6, 399), fill=(60, 60, 60))
-        for y in range(13, 400, 37):
-            d.rectangle((0, y, 399, y + 4), fill=(120, 120, 120))
-        plan = dr.build_plan(png(src), [(png(self.pattern), dr.Placement(200, 200, 100, 100))], None)
-        x0, y0, x1, y1 = plan.box
-        result = src.crop((x0 - 2, y0, x1 - 2, y1))
-        out = np.asarray(dr.paste_back(src, result.resize((1024, 1024), Image.LANCZOS), plan.box, plan.region_mask), np.float64)
-        ref = np.asarray(src, np.float64)
-        self.assertLess(np.abs(out[200, 150:260] - ref[200, 150:260]).max(), 40)
-
-    def test_inpaint_plan_without_pattern_uses_brush_only(self):
-        brush = Image.new("L", self.source.size, 0)
-        ImageDraw.Draw(brush).rectangle((300, 300, 360, 380), fill=255)
-        plan = dr.build_plan(png(self.source), [], png(brush))
-        self.assertFalse(plan.has_pattern)
-        self.assertEqual(plan.region_mask.getbbox(), (300, 300, 361, 381))
-        work = Image.open(io.BytesIO(plan.work_image)).convert("RGB")
-        marked = Image.open(io.BytesIO(plan.reference_image)).convert("RGB")
-        self.assertEqual(work.size, marked.size)
-        # 图2 在涂抹区中心偏红，图1 保持原样
-        cx, cy = work.width // 2, work.height // 2
-        self.assertGreater(marked.getpixel((cx, cy))[0], work.getpixel((cx, cy))[0])
-        with self.assertRaises(ValueError):
-            dr.build_plan(png(self.source), [], None)
-
-    def test_inpaint_prompt_contains_instruction(self):
         self.assertIn("改成蓝色口袋", dr.build_inpaint_prompt("改成蓝色口袋"))
-
-    def test_prompt_includes_extra_text(self):
-        self.assertIn("补充说明：图案偏亮一点", dr.build_prompt("图案偏亮一点"))
-        self.assertNotIn("补充说明", dr.build_prompt(""))
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class DetailRepairEndpointTest(unittest.TestCase):
@@ -338,37 +208,26 @@ class DetailRepairEndpointTest(unittest.TestCase):
             "placement": self.json.dumps(placement), **extra,
         }, files=files)
 
-    def test_submit_saves_plan_and_paste_back_produces_full_image(self):
+    def test_submit_dispatches_full_image_1k_batch(self):
         resp = self.submit({"center_x": 300, "center_y": 400, "width": 80, "height": 80, "rotation": 10},
                            extra_prompt="颜色偏亮")
         self.assertEqual(resp.status_code, 200, resp.text)
         body = resp.json()
-        # 一次提交固定生成 4 张供挑选，共用同一份贴回输入
         self.assertEqual(len(body["job_ids"]), self.main.DETAIL_REPAIR_BATCH)
         self.assertEqual(self.main.DETAIL_REPAIR_BATCH, 4)
         self.assertEqual(self.background.call_count, 4)
         metas = [self.job_store.load_ai_image_job(j)["request_meta"] for j in body["job_ids"]]
         self.assertEqual(sorted(m["batch_index"] for m in metas), [0, 1, 2, 3])
         self.assertEqual(len({m["detail_repair"]["storage_id"] for m in metas}), 1)
-        job = self.job_store.load_ai_image_job(body["job_id"])
-        meta = job["request_meta"]
+        meta = metas[0]
         self.assertEqual(meta["operation"], "detail-repair")
-        self.assertEqual(len(meta["detail_repair"]["box"]), 4)
+        self.assertEqual(meta["detail_repair"]["mode"], "full_image")
         kwargs = self.background.call_args.kwargs
-        self.assertEqual([name for _c, name in kwargs["refs"]], ["01_source_area.png", "02_pattern_overlay.png", "03_pattern.png"])
+        self.assertEqual(kwargs["resolution"], "1K")
+        self.assertEqual(kwargs["size"], "3:4")
+        self.assertEqual([name for _c, name in kwargs["refs"]],
+                         ["01_source_full.png", "02_pattern_overlay.png", "03_pattern.png"])
         self.assertIn("补充说明：颜色偏亮", kwargs["prompt"])
-
-        # 模拟模型生成的局部图，走贴回
-        raw_dir = self.main.settings.output_path / "ai-images" / "repair-user"
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        (raw_dir / "raw.png").write_bytes(png(Image.new("RGB", (1024, 1024), (0, 255, 0))))
-        url = self.main._finish_detail_repair("repair-user", body["job_id"], meta, "/ai-images/repair-user/raw.png")
-        out_path = self.main._resolve_public_asset_path(url)
-        with Image.open(out_path) as merged:
-            self.assertEqual(merged.size, self.source.size)
-            # 修复区域被模型结果改动（具体颜色会经过色调校正，不再逐像素等于模型输出）
-            self.assertNotEqual(merged.convert("RGB").getpixel((300, 400)), self.source.getpixel((300, 400)))
-            self.assertEqual(merged.convert("RGB").getpixel((5, 5)), self.source.getpixel((5, 5)))
 
     def test_inpaint_without_pattern(self):
         brush = Image.new("L", self.source.size, 0)
@@ -380,9 +239,8 @@ class DetailRepairEndpointTest(unittest.TestCase):
         resp = self.client.post("/ai-image/detail-repair", data={"extra_prompt": "去掉污渍"}, files=files)
         self.assertEqual(resp.status_code, 200, resp.text)
         kwargs = self.background.call_args.kwargs
-        self.assertEqual([name for _c, name in kwargs["refs"]], ["01_repair_area.png", "02_marked_area.png"])
+        self.assertEqual([name for _c, name in kwargs["refs"]], ["01_source_full.png", "02_marked_area.png"])
         self.assertIn("去掉污渍", kwargs["prompt"])
-        # 没有说明文字时拒绝
         resp = self.client.post("/ai-image/detail-repair", data={}, files=files)
         self.assertEqual(resp.status_code, 400)
 
@@ -398,12 +256,11 @@ class DetailRepairEndpointTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200, resp.text)
         kwargs = self.background.call_args.kwargs
         self.assertEqual([name for _c, name in kwargs["refs"]],
-                         ["01_source_area.png", "02_pattern_overlay.png", "03_pattern_1.png", "04_pattern_2.png"])
+                         ["01_source_full.png", "02_pattern_overlay.png", "03_pattern_1.png", "04_pattern_2.png"])
         self.assertIn("图3到图4", kwargs["prompt"])
         meta = self.job_store.load_ai_image_job(resp.json()["job_id"])["request_meta"]
         self.assertEqual([r["label"] for r in meta["reference_images"]],
-                         ["图1 · 原图区域", "图2 · 叠加效果", "图3 · 图案样式 1", "图4 · 图案样式 2"])
-        # 图案数和摆放参数数对不上时拒绝
+                         ["图1 · 完整原图", "图2 · 叠加效果", "图3 · 图案样式 1", "图4 · 图案样式 2"])
         resp = self.client.post("/ai-image/detail-repair", data={"placement": self.json.dumps(placements[:1])}, files=files)
         self.assertEqual(resp.status_code, 400)
 
@@ -413,3 +270,7 @@ class DetailRepairEndpointTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("不在原图范围内", resp.json()["detail"])
         self.background.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

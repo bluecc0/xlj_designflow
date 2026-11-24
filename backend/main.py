@@ -4867,13 +4867,6 @@ async def _execute_ai_image_background(
         provider_switched = bool(result.get("provider_switched"))
         upstream_task_id = str(result.get("task_id") or "")
         checkpoint("downloaded", local_url=result.get("url"), task_id=upstream_task_id)
-        if (request_meta or {}).get("operation") == "detail-repair":
-            # 细节修复：模型只生成了局部，按修复区域贴回原图后再落库
-            stage = "repair_paste"
-            result = dict(result)
-            result["url"] = await asyncio.to_thread(
-                _finish_detail_repair, user_id, job_id, request_meta, str(result.get("url") or ""),
-            )
         stage = "persist"
         save_ai_image_job(
             job_id=job_id, user_id=user_id, status="done",
@@ -7335,30 +7328,6 @@ DETAIL_REPAIR_MODEL = "gpt-image-2.6"
 DETAIL_REPAIR_BATCH = 4
 
 
-def _detail_repair_ref_dir(user_id: str, storage_id: str) -> Path:
-    return _ensure_user_output_dir(user_id) / "refs" / storage_id
-
-
-def _finish_detail_repair(user_id: str, job_id: str, request_meta: dict, raw_url: str) -> str:
-    """把模型生成的局部贴回原图，返回整图的公开地址。"""
-    info = (request_meta or {}).get("detail_repair") or {}
-    storage_id = str(info.get("storage_id") or "")
-    box = info.get("box")
-    if not storage_id or not isinstance(box, list) or len(box) != 4:
-        raise RuntimeError("细节修复缺少贴回参数")
-    raw_path = _resolve_public_asset_path(raw_url)
-    if not raw_path.is_file():
-        raise RuntimeError("模型生成的局部图不存在")
-    merged = detail_repair.finish_from_files(
-        _detail_repair_ref_dir(user_id, storage_id), raw_path, tuple(int(v) for v in box),
-        # 局部重绘（没放图案）可能要求改任何内容，整块区域都用模型结果；旧任务没有该字段时按图案修复处理
-        keep_texture=bool(info.get("has_pattern", True)),
-    )
-    out_path = _ensure_user_dated_output_dir(user_id) / f"{job_id}_repair.png"
-    atomic_write(out_path, merged)
-    return _ai_image_public_url(out_path)
-
-
 @app.post("/ai-image/detail-repair")
 @_ai_image_submit_dedup
 async def ai_image_detail_repair(
@@ -7371,7 +7340,7 @@ async def ai_image_detail_repair(
     source_name: str = Form(""),
     client_request_id: str = Form(""),
 ):
-    """细节修复：原图 + 用户摆好的图案（+ 涂抹区域），模型只生成局部，结果贴回原图。
+    """细节修复（整图直出）：原图 + 用户摆好的去底图案（+ 可选涂抹区域），模型直接输出完整结果图。
 
     不传图案时是局部重绘：必须有涂抹区域和修改说明（extra_prompt），只改涂抹区域。
 
@@ -7422,8 +7391,8 @@ async def ai_image_detail_repair(
         count = len(plan.pattern_images)
         prompt = detail_repair.build_prompt(extra_prompt, count)
         display_prompt = "细节修复" + (f"：{extra_prompt.strip()[:60]}" if extra_prompt.strip() else "")
-        refs = [(plan.work_image, "01_source_area.png"), (plan.guide_image, "02_pattern_overlay.png")]
-        ref_labels = ["图1 · 原图区域", "图2 · 叠加效果"]
+        refs = [(plan.work_image, "01_source_full.png"), (plan.guide_image, "02_pattern_overlay.png")]
+        ref_labels = ["图1 · 完整原图", "图2 · 叠加效果"]
         for i, data in enumerate(plan.pattern_images):
             suffix = "" if count == 1 else f"_{i + 1}"
             refs.append((data, f"{i + 3:02d}_pattern{suffix}.png"))
@@ -7431,8 +7400,8 @@ async def ai_image_detail_repair(
     else:
         prompt = detail_repair.build_inpaint_prompt(extra_prompt)
         display_prompt = f"局部重绘：{extra_prompt.strip()[:60]}"
-        refs = [(plan.work_image, "01_repair_area.png"), (plan.reference_image, "02_marked_area.png")]
-        ref_labels = ["图1 · 修改区域", "图2 · 标出的修改范围"]
+        refs = [(plan.work_image, "01_source_full.png"), (plan.reference_image, "02_marked_area.png")]
+        ref_labels = ["图1 · 完整原图", "图2 · 标出的修改范围"]
 
     created_at = time.time()
     session = create_ai_chat_session(user_id=user["id"], title=_build_ai_chat_title(display_prompt), created_at=created_at)
@@ -7446,15 +7415,11 @@ async def ai_image_detail_repair(
     storage_id = uuid.uuid4().hex
     try:
         stored_urls = [_ai_image_public_url(Path(p)) for p in save_user_refs(user["id"], storage_id, refs)]
-        await asyncio.to_thread(
-            detail_repair.save_paste_back_inputs,
-            _detail_repair_ref_dir(user["id"], storage_id), source_bytes, plan.region_mask,
-        )
     except Exception:
         logger.warning("detail-repair: failed to save refs for %s", storage_id, exc_info=True)
         raise HTTPException(503, "参考图暂时无法保存，请稍后重试")
 
-    # 同一次修复固定并发 DETAIL_REPAIR_BATCH 个任务，结果都放到画布上供挑选；共用一份贴回输入（只读）
+    # 同一次修复固定并发 DETAIL_REPAIR_BATCH 个任务，整图直出后放到画布供挑选
     batch_count = DETAIL_REPAIR_BATCH
     batch_id = uuid.uuid4().hex if batch_count > 1 else ""
     reference_images = [
@@ -7482,8 +7447,8 @@ async def ai_image_detail_repair(
             "reference_names": [name for _content, name in refs],
             "reference_images": reference_images,
             "detail_repair": {
+                "mode": "full_image",
                 "storage_id": storage_id,
-                "box": list(plan.box),
                 "source_name": (source_name or "")[:120],
                 "extra_prompt": extra_prompt.strip()[:500],
                 "has_pattern": plan.has_pattern,
@@ -7500,10 +7465,10 @@ async def ai_image_detail_repair(
         log_operation(
             user_id=user["id"], username=user["username"],
             action="ai_image",
-            detail=f"detail-repair job={jid[:8]} client={client_req} model={model_name} size={plan.size} box={plan.box} batch={batch_index + 1}/{batch_count}",
+            detail=f"detail-repair job={jid[:8]} client={client_req} model={model_name} size={plan.size} mode=full_image batch={batch_index + 1}/{batch_count}",
             payload=json.dumps({
                 "job_id": jid, "operation": "detail-repair", "client_request_id": client_req,
-                "model": model_name, "size": plan.size, "box": list(plan.box), "batch_count": batch_count,
+                "model": model_name, "size": plan.size, "mode": "full_image", "batch_count": batch_count,
             }, ensure_ascii=False),
         )
         _track_ai_image_task(
