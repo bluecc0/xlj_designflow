@@ -4,6 +4,11 @@ import { Sparkles } from 'lucide-react'
 import { CanvasGrid } from './components/CanvasGrid'
 import { FrameShape } from './components/FrameShape'
 import { ImageShape } from './components/ImageShape'
+import {
+  PendingImagePlaceholder,
+  parsePendingAspectDimensions,
+  type PendingCanvasImage,
+} from './components/PendingImagePlaceholder'
 import { TextShape } from './components/TextShape'
 import { SelectionOverlay } from './components/SelectionOverlay'
 import { CanvasZoomBar } from './components/CanvasZoomBar'
@@ -25,7 +30,17 @@ import { QuickEditMarkerOverlay } from './components/QuickEditMarkerOverlay'
 import { SnapGuides } from './components/SnapGuides'
 import type { OutpaintMargins, CanvasImage, QuickEditMarker } from './types'
 import { useViewportStore } from './store/viewportStore'
-import { gridResultPlacement, useCanvasStore } from './store/canvasStore'
+import {
+  DESIGNFLOW_GRID_CELL_HEIGHT,
+  DESIGNFLOW_GRID_CELL_WIDTH,
+  DESIGNFLOW_GRID_COLUMNS,
+  DESIGNFLOW_GRID_GAP,
+  DESIGNFLOW_GRID_ROWS_PER_BLOCK,
+  getSequentialLayoutContext,
+  getSortedSequentialImages,
+  gridResultPlacement,
+  useCanvasStore,
+} from './store/canvasStore'
 import { useHistoryStore } from './store/historyStore'
 import { useAIOperationStore } from './store/aiOperationStore'
 import {
@@ -131,6 +146,12 @@ export function App() {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved')
   const [saveError, setSaveError] = useState('')
   const [snapshotStatus, setSnapshotStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [pendingGenImages, setPendingGenImages] = useState<PendingCanvasImage[]>([])
+  // 仅对本次刚新插入画布的生成图启用像素溶解显影，刷新页面加载历史图片时不播放动画
+  const [freshRevealIds, setFreshRevealIds] = useState<Record<string, true>>({})
+  // 锁定空画布占位符的初始世界坐标，避免滚动/缩放时因重算视口中心导致卡片被“钉死”在屏幕上
+  const pendingLayoutAnchorRef = useRef<{ pageId: string; imageCount: number; ctx: { anchorX: number; anchorY: number; baseIndex: number } } | null>(null)
+  const pendingClearTimerRef = useRef<number | null>(null)
   useEffect(() => {
     if (saveStatus === 'error' && saveError) notifyError(saveError, '画布暂未保存，请保留当前页面，稍后重试。', { key: 'canvas-save', persistent: true });
     else if (saveStatus === 'saved') feedback.resolve('canvas-save');
@@ -1626,7 +1647,32 @@ export function App() {
         return
       }
 
+      if (data.type === 'designflow:pending-images') {
+        const nextItems = Array.isArray(data.items) ? data.items : []
+        if (pendingClearTimerRef.current !== null) {
+          window.clearTimeout(pendingClearTimerRef.current)
+          pendingClearTimerRef.current = null
+        }
+        if (nextItems.length === 0) {
+          // 短暂缓冲，等待紧随其后的 insert-image 到来再无缝交棒，避免先消失留白
+          pendingClearTimerRef.current = window.setTimeout(() => {
+            pendingClearTimerRef.current = null
+            pendingLayoutAnchorRef.current = null
+            setPendingGenImages([])
+          }, 450)
+        } else {
+          setPendingGenImages(nextItems)
+        }
+        return
+      }
+
       if (data.type === 'designflow:insert-image') {
+        if (pendingClearTimerRef.current !== null) {
+          window.clearTimeout(pendingClearTimerRef.current)
+          pendingClearTimerRef.current = null
+        }
+        pendingLayoutAnchorRef.current = null
+        setPendingGenImages([])
         if (!snapshotHydratedRef.current) {
           pendingHostCommandsRef.current.push(data)
           return
@@ -1639,7 +1685,14 @@ export function App() {
           ? [data.url]
           : []
         if (items.length > 0) {
-          insertImagesAuto(items, data.mode, data.name, data.select !== false)
+          const inserted = insertImagesAuto(items, data.mode, data.name, data.select !== false)
+          if (inserted.length > 0) {
+            setFreshRevealIds((prev) => {
+              const next = { ...prev }
+              inserted.forEach((im) => { next[im.id] = true })
+              return next
+            })
+          }
           const insertedUrls = items.map((it) => (typeof it === 'string' ? it : it?.url || ''))
           window.parent.postMessage({ type: 'designflow:editor-inserted', urls: insertedUrls, mode: data.mode }, '*')
         }
@@ -1875,6 +1928,15 @@ export function App() {
               image={im}
               isSelected={selectedType === 'image' && selectedIds.includes(im.id)}
               isSingleSelected={selectedType === 'image' && selectedIds.length === 1 && selectedIds[0] === im.id}
+              revealOnLoad={Boolean(freshRevealIds[im.id])}
+              onRevealComplete={() => {
+                setFreshRevealIds((prev) => {
+                  if (!prev[im.id]) return prev
+                  const next = { ...prev }
+                  delete next[im.id]
+                  return next
+                })
+              }}
               onSelect={(isShift) => {
                 if (outpaintingImageIdRef.current && outpaintingImageIdRef.current !== im.id) {
                   handleCancelOutpainting()
@@ -1911,6 +1973,61 @@ export function App() {
             />
           </div>
         ))}
+
+        {/* 正在生成的动态创意图片占位符（纯临时覆盖层，不落库，严格对齐 reflowSequentialImages 槽位顺序） */}
+        {pendingGenImages.length > 0 && (() => {
+          const cached = pendingLayoutAnchorRef.current
+          let layoutCtx: { anchorX: number; anchorY: number; baseIndex: number }
+          if (cached && cached.pageId === activePageId && cached.imageCount === currentImages.length) {
+            layoutCtx = cached.ctx
+          } else {
+            const seq = getSequentialLayoutContext(images, frames, activePageId)
+            const orderedCount = getSortedSequentialImages(images, activePageId, 'stored').length
+            layoutCtx = {
+              anchorX: seq.anchorX,
+              anchorY: seq.anchorY,
+              baseIndex: orderedCount,
+            }
+            pendingLayoutAnchorRef.current = {
+              pageId: activePageId,
+              imageCount: currentImages.length,
+              ctx: layoutCtx,
+            }
+          }
+          const itemsPerBlock = DESIGNFLOW_GRID_COLUMNS * DESIGNFLOW_GRID_ROWS_PER_BLOCK
+          const blockWidth = DESIGNFLOW_GRID_COLUMNS * (DESIGNFLOW_GRID_CELL_WIDTH + DESIGNFLOW_GRID_GAP)
+          return pendingGenImages.map((item, idx) => {
+            const { width: w, height: h } = parsePendingAspectDimensions(
+              item.aspectRatio,
+              DESIGNFLOW_GRID_CELL_WIDTH,
+              DESIGNFLOW_GRID_CELL_HEIGHT
+            )
+            const index = layoutCtx.baseIndex + idx
+            const block = Math.floor(index / itemsPerBlock)
+            const indexInBlock = index % itemsPerBlock
+            const col = indexInBlock % DESIGNFLOW_GRID_COLUMNS
+            const row = Math.floor(indexInBlock / DESIGNFLOW_GRID_COLUMNS)
+            const cellX = layoutCtx.anchorX + block * blockWidth + col * (DESIGNFLOW_GRID_CELL_WIDTH + DESIGNFLOW_GRID_GAP)
+            const cellY = layoutCtx.anchorY + row * (DESIGNFLOW_GRID_CELL_HEIGHT + DESIGNFLOW_GRID_GAP)
+            const x = cellX + Math.round((DESIGNFLOW_GRID_CELL_WIDTH - w) / 2)
+            const y = cellY
+            return (
+              <PendingImagePlaceholder
+                key={item.id}
+                item={item}
+                x={x}
+                y={y}
+                width={w}
+                height={h}
+                cellX={cellX}
+                cellWidth={DESIGNFLOW_GRID_CELL_WIDTH}
+                cellHeight={DESIGNFLOW_GRID_CELL_HEIGHT}
+                index={idx}
+                zoom={zoom}
+              />
+            )
+          })
+        })()}
 
         {/* 文本图元列表 */}
         {currentTexts.map((txt) => (

@@ -485,3 +485,220 @@ button {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* ------------------------------------------------------------- */
+/* 画布中正在生成的动态创意图片占位符（与主 UI Pixel-grid 同源）     */
+/* ------------------------------------------------------------- */
+
+@keyframes df-pixel-drive {
+  0%, 100% { background: #d0d4dc; transform: scale(0.9); }
+  16% { background: #181b24; transform: scale(1.06); }
+  34% { background: #8d95a5; transform: scale(0.96); }
+  52% { background: #d0d4dc; transform: scale(0.9); }
+}
+
+.df-pixel-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.df-pixel-grid.is-lg {
+  width: 16px;
+  height: 16px;
+  gap: 2.5px;
+}
+
+.df-pixel-grid > span {
+  display: block;
+  border-radius: 1px;
+  background: #d0d4dc;
+  animation: df-pixel-drive 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.df-pixel-grid > span:nth-child(1) { animation-delay: 0.00s; }
+.df-pixel-grid > span:nth-child(2) { animation-delay: 0.12s; }
+.df-pixel-grid > span:nth-child(3) { animation-delay: 0.24s; }
+.df-pixel-grid > span:nth-child(6) { animation-delay: 0.36s; }
+.df-pixel-grid > span:nth-child(9) { animation-delay: 0.48s; }
+.df-pixel-grid > span:nth-child(8) { animation-delay: 0.60s; }
+.df-pixel-grid > span:nth-child(7) { animation-delay: 0.72s; }
+.df-pixel-grid > span:nth-child(4) { animation-delay: 0.84s; }
+.df-pixel-grid > span:nth-child(5) { animation-delay: 0.96s; }
+
+/* ------------------------------------------------------------- */
+/* 画布中正在生成的克制柔光 + 动力学加载占位符                     */
+/* ------------------------------------------------------------- */
+
+@keyframes df-aurora-orb-a {
+  0%, 100% { transform: translate(-10%, -8%) scale(1); opacity: 0.45; }
+  50% { transform: translate(16%, 12%) scale(1.12); opacity: 0.72; }
+}
+
+@keyframes df-aurora-orb-b {
+  0%, 100% { transform: translate(10%, 10%) scale(1.04); opacity: 0.4; }
+  50% { transform: translate(-14%, -10%) scale(0.94); opacity: 0.65; }
+}
+
+@keyframes df-canvas-pending-sweep {
+  0% { transform: translateX(-140%) skewX(-20deg); }
+  100% { transform: translateX(280%) skewX(-20deg); }
+}
+
+.df-canvas-pending {
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.085);
+  background: linear-gradient(155deg, #ffffff 0%, #f5f7fb 100%);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  isolation: isolate;
+  box-shadow:
+    0 3px 14px -4px rgba(15, 23, 42, 0.065),
+    0 1px 2px rgba(15, 23, 42, 0.03),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.df-canvas-pending.is-settled {
+  border-radius: 2px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.df-canvas-pending-aurora {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition: opacity 480ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.df-canvas-pending-aurora.is-fading {
+  opacity: 0;
+}
+
+.df-canvas-pending-orb {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(48px);
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.df-canvas-pending-orb.is-a {
+  width: 76%;
+  height: 76%;
+  top: -20%;
+  left: -16%;
+  background: radial-gradient(circle, rgba(148, 163, 224, 0.14) 0%, rgba(148, 163, 224, 0) 70%);
+  animation: df-aurora-orb-a 8.8s ease-in-out infinite;
+}
+
+.df-canvas-pending-orb.is-b {
+  width: 72%;
+  height: 72%;
+  right: -18%;
+  bottom: -20%;
+  background: radial-gradient(circle, rgba(125, 194, 232, 0.12) 0%, rgba(125, 194, 232, 0) 70%);
+  animation: df-aurora-orb-b 10.2s ease-in-out infinite;
+}
+
+.df-canvas-pending-sweep {
+  position: absolute;
+  inset: 0;
+  width: 44%;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 22%, rgba(255, 255, 255, 0.42) 50%, transparent 78%);
+  animation: df-canvas-pending-sweep 4.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.df-canvas-pending-center {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+@keyframes df-phrase-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.df-phrase-fade {
+  animation: df-phrase-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.df-canvas-reveal-img {
+  transition: opacity 520ms cubic-bezier(0.22, 1, 0.36, 1),
+              filter 560ms cubic-bezier(0.22, 1, 0.36, 1),
+              transform 560ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, filter, transform;
+}
+
+.df-canvas-reveal-img.is-loading {
+  opacity: 0;
+  filter: blur(14px);
+  transform: scale(1.025);
+}
+
+.df-canvas-reveal-img.is-loaded {
+  opacity: 1;
+  filter: blur(0);
+  transform: scale(1);
+}
+
+.df-canvas-pending-label {
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+@keyframes df-pending-dot {
+  0%, 75%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-1.5px); }
+}
+
+.df-pending-dots {
+  display: inline-flex;
+  margin-left: 1px;
+}
+
+.df-pending-dots > span {
+  display: inline-block;
+  animation: df-pending-dot 1.4s ease-in-out infinite;
+}
+
+.df-pending-dots > span:nth-child(1) { animation-delay: 0s; }
+.df-pending-dots > span:nth-child(2) { animation-delay: 0.2s; }
+.df-pending-dots > span:nth-child(3) { animation-delay: 0.4s; }
+
+.df-canvas-pending-time,
+.df-canvas-pending-pct {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #a8b3c2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .df-pixel-grid > span,
+  .df-canvas-pending-orb,
+  .df-canvas-pending-sweep,
+  .df-pending-dots > span {
+    animation: none !important;
+  }
+}
