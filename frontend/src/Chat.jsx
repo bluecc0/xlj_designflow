@@ -412,54 +412,182 @@ const CreativeImagePlaceholder = ({ aspectRatio, compact, seed }) => {
   );
 };
 
-// 真实图片柔焦显影组件：加载前为柔光流光底，onLoad 后平滑清晰显影
+const REVEAL_RETRY_DELAYS = [1000, 3000, 8000];
+const REVEAL_LOAD_TIMEOUT = 25000;
+
+function buildRevealRetryUrl(source, attempt, retryNonce) {
+  var raw = String(source || '');
+  if (!raw || (!attempt && !retryNonce)) return raw;
+  if (raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
+  try {
+    var origin = typeof window !== 'undefined' && window.location ? window.location.origin : 'http://localhost';
+    var url = new URL(raw, origin);
+    if (url.origin !== origin && !raw.startsWith('/')) return raw;
+    url.searchParams.set('_imgRetry', String(attempt) + '-' + String(retryNonce || 0));
+    return raw.startsWith('/') && !raw.startsWith('//')
+      ? (url.pathname + url.search + url.hash)
+      : url.toString();
+  } catch (e) {
+    return raw;
+  }
+}
+
+// 真实图片柔焦显影组件：加载前为柔光流光底，onLoad 后平滑清晰显影；失败时有界重试 + 网络恢复自愈 + 可点击重试
 const RevealImage = ({ src, alt, aspectRatio, onClick, dragProps, style }) => {
-  var _l = React.useState(false);
-  var loaded = _l[0], setLoaded = _l[1];
+  var _s = React.useState('loading');
+  var status = _s[0], setStatus = _s[1];
+  var _a = React.useState(0);
+  var attempt = _a[0], setAttempt = _a[1];
+  var _n = React.useState(0);
+  var retryNonce = _n[0], setRetryNonce = _n[1];
   var _v = React.useState(true);
   var showVeil = _v[0], setShowVeil = _v[1];
   var imgRef = React.useRef(null);
+  var failRef = React.useRef(function() {});
+
   React.useEffect(function() {
-    if (imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0) {
-      setLoaded(true);
-      setShowVeil(false);
-    } else {
-      setLoaded(false);
-      setShowVeil(true);
-    }
+    setAttempt(0);
+    setRetryNonce(0);
+    setStatus('loading');
+    setShowVeil(true);
   }, [src]);
+
   React.useEffect(function() {
-    if (!loaded || !showVeil) return;
+    var active = true;
+    var settled = false;
+    var retryTimer = null;
+    var img = imgRef.current;
+    if (img && img.complete && img.naturalWidth > 0) {
+      setStatus('loaded');
+      setShowVeil(false);
+      return;
+    }
+    setStatus('loading');
+    setShowVeil(true);
+
+    var triggerFail = function() {
+      if (!active || settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      if (attempt < REVEAL_RETRY_DELAYS.length) {
+        retryTimer = setTimeout(function() {
+          if (active) setAttempt(function(prev) { return prev + 1; });
+        }, REVEAL_RETRY_DELAYS[attempt]);
+      } else {
+        setShowVeil(false);
+        setStatus('failed');
+      }
+    };
+
+    var timeoutId = setTimeout(triggerFail, REVEAL_LOAD_TIMEOUT);
+    failRef.current = triggerFail;
+
+    var handleLoad = function() {
+      if (!active || !img || !img.naturalWidth) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      if (retryTimer) clearTimeout(retryTimer);
+      setStatus('loaded');
+    };
+
+    if (img) {
+      img.addEventListener('load', handleLoad);
+      img.addEventListener('error', triggerFail);
+      if (img.complete) {
+        if (img.naturalWidth > 0) handleLoad();
+        else triggerFail();
+      }
+    }
+
+    return function() {
+      active = false;
+      clearTimeout(timeoutId);
+      if (retryTimer) clearTimeout(retryTimer);
+      if (img) {
+        img.removeEventListener('load', handleLoad);
+        img.removeEventListener('error', triggerFail);
+      }
+    };
+  }, [src, attempt, retryNonce]);
+
+  React.useEffect(function() {
+    if (status !== 'loaded' || !showVeil) return;
     var timer = setTimeout(function() { setShowVeil(false); }, 560);
     return function() { clearTimeout(timer); };
-  }, [loaded, showVeil]);
+  }, [status, showVeil]);
+
+  React.useEffect(function() {
+    if (typeof window === 'undefined') return;
+    var onOnline = function() {
+      if (status === 'failed') {
+        setAttempt(0);
+        setRetryNonce(function(n) { return n + 1; });
+      }
+    };
+    window.addEventListener('online', onOnline);
+    return function() { window.removeEventListener('online', onOnline); };
+  }, [status]);
+
+  var loaded = status === 'loaded';
+  var failed = status === 'failed';
+  var effectiveSrc = buildRevealRetryUrl(src, attempt, retryNonce);
+
   return React.createElement(React.Fragment, null,
     React.createElement('img', Object.assign({}, dragProps || {}, {
+      key: String(src || '') + ':' + attempt + ':' + retryNonce,
       ref: imgRef,
-      src: src,
+      src: effectiveSrc,
       alt: alt,
       className: 'df-reveal-img ' + (loaded ? 'is-loaded' : 'is-loading'),
-      onLoad: function() { setLoaded(true); },
-      onClick: onClick,
+      onError: function() { failRef.current(); },
+      onClick: loaded ? onClick : undefined,
       style: Object.assign({
-        display: 'block',
+        display: failed ? 'none' : 'block',
         width: '100%',
-        cursor: 'zoom-in',
+        cursor: loaded ? 'zoom-in' : 'default',
         minHeight: loaded ? undefined : 100,
         aspectRatio: loaded ? undefined : parseAspectRatioCss(aspectRatio),
       }, style || {}),
     })),
-    showVeil ? React.createElement('div', {
+    !failed && showVeil ? React.createElement('div', {
       className: 'df-gen-aurora' + (loaded ? ' is-fading' : ''),
       'aria-hidden': 'true',
       style: {
         zIndex: 1,
-        background: 'linear-gradient(145deg, #f8f9fd 0%, #f2f5fb 52%, #f7f5fc 100%)',
+        background: 'linear-gradient(155deg, #f9fafc 0%, #f4f6fa 100%)',
       },
     },
       React.createElement('span', { className: 'df-gen-orb is-a' }),
-      React.createElement('span', { className: 'df-gen-orb is-b' }),
-      React.createElement('span', { className: 'df-gen-orb is-c' })
+      React.createElement('span', { className: 'df-gen-orb is-b' })
+    ) : null,
+    failed ? React.createElement('button', {
+      type: 'button',
+      title: '图片加载失败，点击重试',
+      'aria-label': '图片加载失败，点击重试',
+      onClick: function(e) {
+        e.stopPropagation();
+        setAttempt(0);
+        setRetryNonce(function(n) { return n + 1; });
+      },
+      style: {
+        width: '100%',
+        minHeight: 108,
+        aspectRatio: parseAspectRatioCss(aspectRatio),
+        border: '1px solid rgba(15, 23, 42, 0.08)',
+        borderRadius: 10,
+        background: 'linear-gradient(155deg, #f9fafc 0%, #f3f5f9 100%)',
+        color: '#64748b',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        cursor: 'pointer',
+        padding: '10px 8px',
+      },
+    },
+      React.createElement(I.refresh, { size: 15, style: { color: '#64748b' } }),
+      React.createElement('span', { style: { fontSize: 11, color: '#64748b' } }, '加载失败，点击重试')
     ) : null
   );
 };

@@ -9,6 +9,11 @@ import {
   parsePendingAspectDimensions,
   type PendingCanvasImage,
 } from './components/PendingImagePlaceholder'
+import {
+  PENDING_CLEAR_BUFFER_MS,
+  applyInsertImagesToPending,
+  applyPendingImagesUpdate,
+} from './utils/pendingPlaceholders'
 import { TextShape } from './components/TextShape'
 import { SelectionOverlay } from './components/SelectionOverlay'
 import { CanvasZoomBar } from './components/CanvasZoomBar'
@@ -152,6 +157,7 @@ export function App() {
   // 锁定空画布占位符的初始世界坐标，避免滚动/缩放时因重算视口中心导致卡片被“钉死”在屏幕上
   const pendingLayoutAnchorRef = useRef<{ pageId: string; imageCount: number; ctx: { anchorX: number; anchorY: number; baseIndex: number } } | null>(null)
   const pendingClearTimerRef = useRef<number | null>(null)
+  const lastInsertAtRef = useRef<number>(0)
   useEffect(() => {
     if (saveStatus === 'error' && saveError) notifyError(saveError, '画布暂未保存，请保留当前页面，稍后重试。', { key: 'canvas-save', persistent: true });
     else if (saveStatus === 'saved') feedback.resolve('canvas-save');
@@ -1649,30 +1655,32 @@ export function App() {
 
       if (data.type === 'designflow:pending-images') {
         const nextItems = Array.isArray(data.items) ? data.items : []
-        if (pendingClearTimerRef.current !== null) {
-          window.clearTimeout(pendingClearTimerRef.current)
-          pendingClearTimerRef.current = null
-        }
-        if (nextItems.length === 0) {
-          // 短暂缓冲，等待紧随其后的 insert-image 到来再无缝交棒，避免先消失留白
-          pendingClearTimerRef.current = window.setTimeout(() => {
+        const nowMs = Date.now()
+        setPendingGenImages((prev) => {
+          const transition = applyPendingImagesUpdate(prev, nextItems, nowMs, lastInsertAtRef.current)
+          if (transition.cancelClearTimer && pendingClearTimerRef.current !== null) {
+            window.clearTimeout(pendingClearTimerRef.current)
             pendingClearTimerRef.current = null
+          }
+          if (transition.resetAnchor) {
             pendingLayoutAnchorRef.current = null
-            setPendingGenImages([])
-          }, 450)
-        } else {
-          setPendingGenImages(nextItems)
-        }
+          }
+          if (transition.scheduleClear) {
+            if (pendingClearTimerRef.current !== null) {
+              window.clearTimeout(pendingClearTimerRef.current)
+            }
+            pendingClearTimerRef.current = window.setTimeout(() => {
+              pendingClearTimerRef.current = null
+              pendingLayoutAnchorRef.current = null
+              setPendingGenImages([])
+            }, PENDING_CLEAR_BUFFER_MS)
+          }
+          return transition.nextItems
+        })
         return
       }
 
       if (data.type === 'designflow:insert-image') {
-        if (pendingClearTimerRef.current !== null) {
-          window.clearTimeout(pendingClearTimerRef.current)
-          pendingClearTimerRef.current = null
-        }
-        pendingLayoutAnchorRef.current = null
-        setPendingGenImages([])
         if (!snapshotHydratedRef.current) {
           pendingHostCommandsRef.current.push(data)
           return
@@ -1684,6 +1692,20 @@ export function App() {
           : data.url
           ? [data.url]
           : []
+        const insertedUrls = items.map((it) => (typeof it === 'string' ? it : it?.url || ''))
+        lastInsertAtRef.current = Date.now()
+        const hadClearTimer = pendingClearTimerRef.current !== null
+        setPendingGenImages((prev) => {
+          const transition = applyInsertImagesToPending(prev, insertedUrls, hadClearTimer)
+          if (transition.cancelClearTimer && pendingClearTimerRef.current !== null) {
+            window.clearTimeout(pendingClearTimerRef.current)
+            pendingClearTimerRef.current = null
+          }
+          if (transition.resetAnchor) {
+            pendingLayoutAnchorRef.current = null
+          }
+          return transition.nextItems
+        })
         if (items.length > 0) {
           const inserted = insertImagesAuto(items, data.mode, data.name, data.select !== false)
           if (inserted.length > 0) {
@@ -1693,7 +1715,6 @@ export function App() {
               return next
             })
           }
-          const insertedUrls = items.map((it) => (typeof it === 'string' ? it : it?.url || ''))
           window.parent.postMessage({ type: 'designflow:editor-inserted', urls: insertedUrls, mode: data.mode }, '*')
         }
         return
