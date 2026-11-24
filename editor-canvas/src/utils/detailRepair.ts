@@ -1,6 +1,8 @@
 // 细节修复：快捷编辑里叠在原图上的图案图层与涂抹笔迹。
 // 所有“局部坐标”都是原图在画布上的未旋转坐标（左上角为原点，单位与 image.width 相同）。
 
+import type { QuickEditMarker } from '../types'
+
 export interface RepairCrop {
   x: number
   y: number
@@ -49,6 +51,49 @@ export const MIN_CROP_PX = 8
 export const DEFAULT_PATCH_OPACITY = 0.7
 /** 一次细节修复最多叠几个图案（与后端 MAX_PATTERNS 一致） */
 export const MAX_PATCHES = 4
+/** 图案在原图上缩放的最大边长倍数（低于后端 4x 内存安全上限） */
+export const MAX_PATCH_SCALE_RATIO = 3
+
+/** 限制图案缩放比例，避免缩小到不可见或异常放大触发后端内存上限。 */
+export function clampPatchScale(
+  scale: number,
+  crop: { width: number; height: number },
+  target: { width: number; height: number }
+): number {
+  const maxCropSide = Math.max(1, crop.width, crop.height)
+  const minScale = 4 / maxCropSide
+  const maxSide = Math.max(4, Math.max(target.width, target.height) * MAX_PATCH_SCALE_RATIO)
+  const maxScale = Math.max(minScale, maxSide / maxCropSide)
+  if (!Number.isFinite(scale)) return minScale
+  return Math.max(minScale, Math.min(maxScale, scale))
+}
+
+/** 把快捷编辑的点/选框标记坐标附加到修复说明中，避免 <标记N> 变成无坐标的字面文本。 */
+export function formatRepairPromptWithMarkers(prompt: string, markers: QuickEditMarker[] = []): string {
+  const clean = (prompt || '').trim()
+  if (!markers || markers.length === 0) return clean
+  const sorted = [...markers].sort((a, b) => a.number - b.number)
+  const markerLines = sorted.map((m) => {
+    const pctX = Math.round(m.ratioX * 100)
+    const pctY = Math.round(m.ratioY * 100)
+    const normX = Math.round(m.ratioX * 1000)
+    const normY = Math.round(m.ratioY * 1000)
+
+    if (m.type === 'rect' && m.ratioWidth && m.ratioHeight) {
+      const pctW = Math.round(m.ratioWidth * 100)
+      const pctH = Math.round(m.ratioHeight * 100)
+      const ymin = normY
+      const xmin = normX
+      const ymax = Math.round((m.ratioY + m.ratioHeight) * 1000)
+      const xmax = Math.round((m.ratioX + m.ratioWidth) * 1000)
+      return `- <标记${m.number}> [选框区域]: 左上角 (x: ${pctX}%, y: ${pctY}%), 宽高 (w: ${pctW}%, h: ${pctH}%), 归一化选框 [ymin: ${ymin}, xmin: ${xmin}, ymax: ${ymax}, xmax: ${xmax}], 像素范围 [x: ${m.pixelX}px, y: ${m.pixelY}px, 宽: ${m.pixelWidth || 0}px, 高: ${m.pixelHeight || 0}px]`
+    }
+
+    return `- <标记${m.number}> [坐标点]: 坐标 (x: ${pctX}%, y: ${pctY}%), 归一化坐标 (${normX}, ${normY}), 像素位置 (x: ${m.pixelX}px, y: ${m.pixelY}px)`
+  })
+  const markerSection = `[参考图标记位置（以图1左上角为原点 (0%, 0%)，包含百分比与归一化坐标）]\n${markerLines.join('\n')}`
+  return clean ? `${clean}\n\n${markerSection}` : markerSection
+}
 
 /** 新图案图层：长边约为原图短边的 35%，默认放在 at（局部坐标）或原图中心。 */
 export function createPatch(

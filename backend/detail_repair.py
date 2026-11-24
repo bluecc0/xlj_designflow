@@ -25,6 +25,14 @@ from PIL import Image, ImageChops, ImageFilter, ImageOps
 
 # 一次修复最多叠几个图案（参考图 = 完整原图 + 完整引导图 + 每个图案）
 MAX_PATTERNS = 4
+# 单张输入图与摆放中间图的安全预算，防止异常放大或恶意参数耗尽内存
+MAX_IMAGE_SIDE = 12000
+MAX_IMAGE_PIXELS = 40_000_000
+MAX_PLACEMENT_SIDE = 12000
+MAX_PLACEMENT_PIXELS = 40_000_000
+MAX_PLACEMENT_SCALE_RATIO = 4
+# 额外说明（含可选的快捷编辑标记坐标）最大长度
+MAX_EXTRA_PROMPT_LEN = 2000
 
 SUPPORTED_RATIOS: list[tuple[str, float]] = [
     ("1:1", 1.0),
@@ -76,6 +84,12 @@ class Placement:
         )
         if placement.width < 1 or placement.height < 1:
             raise ValueError("图案尺寸过小")
+        if (
+            placement.width > MAX_PLACEMENT_SIDE
+            or placement.height > MAX_PLACEMENT_SIDE
+            or placement.width * placement.height > MAX_PLACEMENT_PIXELS
+        ):
+            raise ValueError("图案摆放尺寸超出允许范围")
         return placement
 
 
@@ -98,6 +112,11 @@ class RepairPlan:
 
 def open_image(data: bytes) -> Image.Image:
     with Image.open(io.BytesIO(data)) as src:
+        w, h = src.size
+        if w < 1 or h < 1:
+            raise ValueError("图片尺寸无效")
+        if w > MAX_IMAGE_SIDE or h > MAX_IMAGE_SIDE or w * h > MAX_IMAGE_PIXELS:
+            raise ValueError("图片尺寸过大，请缩小后重试")
         src.load()
         return ImageOps.exif_transpose(src).copy()
 
@@ -169,10 +188,33 @@ def remove_pattern_bg(pattern: Image.Image) -> tuple[Image.Image, bool]:
     return Image.fromarray(out, "RGBA"), True
 
 
+def _validate_placement_budget(size: tuple[int, int], w: int, h: int, rotation: float) -> None:
+    """在任何 resize / rotate 分配内存之前校验目标尺寸与旋转后包围盒预算。"""
+    src_w, src_h = size
+    if src_w < 1 or src_h < 1:
+        raise ValueError("原图尺寸无效")
+    max_side = min(MAX_PLACEMENT_SIDE, max(src_w, src_h) * MAX_PLACEMENT_SCALE_RATIO)
+    max_pixels = min(MAX_PLACEMENT_PIXELS, max(src_w * src_h * 4, 4_000_000))
+    if w > max_side or h > max_side or w * h > max_pixels:
+        raise ValueError("图案摆放尺寸超出允许范围")
+    rad = math.radians(rotation)
+    cos_a = abs(math.cos(rad))
+    sin_a = abs(math.sin(rad))
+    rot_w = math.ceil(w * cos_a + h * sin_a)
+    rot_h = math.ceil(w * sin_a + h * cos_a)
+    if (
+        rot_w > min(MAX_PLACEMENT_SIDE, max_side * 2)
+        or rot_h > min(MAX_PLACEMENT_SIDE, max_side * 2)
+        or rot_w * rot_h > min(MAX_PLACEMENT_PIXELS, max_pixels * 2)
+    ):
+        raise ValueError("图案旋转后尺寸超出允许范围")
+
+
 def render_pattern_layer(size: tuple[int, int], pattern: Image.Image, placement: Placement) -> Image.Image:
     """把（已裁切的）图案按摆放参数画到一张原图尺寸的透明图层上。"""
     w = max(1, round(placement.width))
     h = max(1, round(placement.height))
+    _validate_placement_budget(size, w, h, placement.rotation)
     scaled = pattern.convert("RGBA").resize((w, h), Image.LANCZOS)
     # PIL 的 rotate 是逆时针，CSS rotate 是顺时针
     rotated = scaled.rotate(-placement.rotation, resample=Image.BICUBIC, expand=True)
@@ -352,7 +394,7 @@ def build_inpaint_prompt(instruction: str) -> str:
         "",
         "要求：",
         "- 以图1为底图输出完全相同构图的完整照片，不要出现红色标记。",
-        f"- 只修改图2红色标出的区域：{instruction.strip()[:500]}",
+        f"- 只修改图2红色标出的区域：{instruction.strip()[:MAX_EXTRA_PROMPT_LEN]}",
         "- 修改后的内容与周围的光照、阴影、透视和材质纹理自然衔接。",
         "- 红色区域以外的人物、背景、商品其余部分与画面文案保持完全不变。",
     ])
@@ -404,7 +446,7 @@ def _build_multi_prompt(extra_prompt: str, count: int) -> str:
 def _with_extra(lines: list[str], extra_prompt: str) -> str:
     extra = (extra_prompt or "").strip()
     if extra:
-        lines += ["", f"补充说明：{extra[:500]}"]
+        lines += ["", f"补充说明：{extra[:MAX_EXTRA_PROMPT_LEN]}"]
     return "\n".join(lines)
 
 

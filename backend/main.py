@@ -82,10 +82,9 @@ from .ai_image import (
 from .common_helpers import _extract_first_json_object, _resolve_image_data_url, make_sse
 from .product_sku_library import SkuFolderLibrary
 from . import outfit_change, view_angle, detail_repair
-from .ai_image import _ensure_user_output_dir, _ensure_user_dated_output_dir
 from .bfl_vto import FLUX_VTO_MODEL, PROVIDER_BFL, generate_vto_async
 from .ai_job_recovery import execute_image_job
-from .task_checkpoint import atomic_write, checkpoint, execution_lock
+from .task_checkpoint import checkpoint, execution_lock
 from .matting_service import matting_service
 from .bfl_outpainting import (
     BFL_ALLOWED_MODES,
@@ -7387,10 +7386,11 @@ async def ai_image_detail_repair(
 
     model_name = normalize_model_name(DETAIL_REPAIR_MODEL)
     resolution = "1K"
+    display_extra = (extra_prompt or "").strip().splitlines()[0].strip()[:60] if (extra_prompt or "").strip() else ""
     if plan.has_pattern:
         count = len(plan.pattern_images)
         prompt = detail_repair.build_prompt(extra_prompt, count)
-        display_prompt = "细节修复" + (f"：{extra_prompt.strip()[:60]}" if extra_prompt.strip() else "")
+        display_prompt = "细节修复" + (f"：{display_extra}" if display_extra else "")
         refs = [(plan.work_image, "01_source_full.png"), (plan.guide_image, "02_pattern_overlay.png")]
         ref_labels = ["图1 · 完整原图", "图2 · 叠加效果"]
         for i, data in enumerate(plan.pattern_images):
@@ -7399,7 +7399,7 @@ async def ai_image_detail_repair(
             ref_labels.append(f"图{i + 3} · 图案样式" + (f" {i + 1}" if count > 1 else ""))
     else:
         prompt = detail_repair.build_inpaint_prompt(extra_prompt)
-        display_prompt = f"局部重绘：{extra_prompt.strip()[:60]}"
+        display_prompt = f"局部重绘：{display_extra}"
         refs = [(plan.work_image, "01_source_full.png"), (plan.reference_image, "02_marked_area.png")]
         ref_labels = ["图1 · 完整原图", "图2 · 标出的修改范围"]
 
@@ -7450,7 +7450,7 @@ async def ai_image_detail_repair(
                 "mode": "full_image",
                 "storage_id": storage_id,
                 "source_name": (source_name or "")[:120],
-                "extra_prompt": extra_prompt.strip()[:500],
+                "extra_prompt": extra_prompt.strip()[:detail_repair.MAX_EXTRA_PROMPT_LEN],
                 "has_pattern": plan.has_pattern,
             },
         }

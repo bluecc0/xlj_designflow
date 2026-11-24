@@ -87,3 +87,45 @@ test('笔迹按倍数画出，擦除用 destination-out', () => {
   assert.deepEqual(calls.filter((c) => c[0] === 'op').map((c) => c[1]), ['source-over', 'destination-out', 'source-over'])
   assert.deepEqual(calls.find((c) => c[0] === 'arc').slice(1, 4), [2, 2, 2])
 })
+
+test('缩放比例受最小和最大上限约束', () => {
+  const crop = { width: 100, height: 50 }
+  const target = { width: 400, height: 600 }
+  // 最大边长 = 600 * 3 = 1800 -> maxScale = 1800 / 100 = 18
+  near(dr.clampPatchScale(999, crop, target), 18)
+  near(dr.clampPatchScale(0.0001, crop, target), 0.04)
+  near(dr.clampPatchScale(Number.NaN, crop, target), 0.04)
+  near(dr.clampPatchScale(2.5, crop, target), 2.5)
+})
+
+test('修复模式保留快捷编辑标记坐标，无标记时保持原样', () => {
+  assert.equal(dr.formatRepairPromptWithMarkers('  颜色偏亮  ', []), '颜色偏亮')
+  const out = dr.formatRepairPromptWithMarkers('<标记1> 改红，<标记2> 去污', [
+    {
+      id: 'm2',
+      number: 2,
+      type: 'point',
+      ratioX: 0.25,
+      ratioY: 0.5,
+      pixelX: 250,
+      pixelY: 500,
+    },
+    {
+      id: 'm1',
+      number: 1,
+      type: 'rect',
+      ratioX: 0.1,
+      ratioY: 0.2,
+      ratioWidth: 0.3,
+      ratioHeight: 0.4,
+      pixelX: 100,
+      pixelY: 200,
+      pixelWidth: 300,
+      pixelHeight: 400,
+    },
+  ])
+  assert.ok(out.startsWith('<标记1> 改红，<标记2> 去污\n\n[参考图标记位置'))
+  const i1 = out.indexOf('- <标记1> [选框区域]: 左上角 (x: 10%, y: 20%), 宽高 (w: 30%, h: 40%), 归一化选框 [ymin: 200, xmin: 100, ymax: 600, xmax: 400]')
+  const i2 = out.indexOf('- <标记2> [坐标点]: 坐标 (x: 25%, y: 50%), 归一化坐标 (250, 500)')
+  assert.ok(i1 > 0 && i2 > i1, out)
+})

@@ -27,6 +27,7 @@ import { decodeCanvasImages, encodeCanvasImages, layoutPastedImages } from './ut
 import {
   canvasToLocal,
   createPatch,
+  formatRepairPromptWithMarkers,
   MAX_PATCHES,
   hasPaint,
   isInsideTarget,
@@ -684,24 +685,20 @@ export function App() {
   )
 
   const handleRepairSubmit = useCallback(
-    async (extraPrompt: string) => {
+    async (extraPrompt: string, markers: QuickEditMarker[] = []) => {
       const target = quickEditImage
       const patches = repairPatches
+      const strokes = repairStrokes
       const hasPatch = patches.length > 0
-      if (!target || (!hasPatch && !hasPaint(repairStrokes)) || isRepairSubmitting) return
+      if (!target || (!hasPatch && !hasPaint(strokes)) || isRepairSubmitting) return
       setIsRepairSubmitting(true)
       const origin = useTeamStore.getState().source
       const taskId = 'repair-' + Math.random().toString(36).slice(2, 10)
+      const finalExtraPrompt = formatRepairPromptWithMarkers(extraPrompt, markers)
       let submitted: { jobIds: string[]; model: string; size: string }
       try {
-        const natural =
-          target.naturalWidth && target.naturalHeight
-            ? { width: target.naturalWidth, height: target.naturalHeight }
-            : await getImageDimensions(normalizeAssetUrl(target.url))
-        const mask = hasPaint(repairStrokes) ? await renderMaskBlob(repairStrokes, target, natural) : null
-        const patterns = await Promise.all(
-          patches.map((p) => (p.file ? Promise.resolve(p.file) : loadImageAsUploadFile(p.sourceUrl, 'pattern')))
-        )
+        // 整个异步准备阶段（读取原图尺寸、生成遮罩、下载远程图案）均纳入占位任务，
+        // 确保提交前即可阻止切换画布；发出收费生图请求前再次校验画布来源。
         submitted = await submitWithPlaceholder(
           () =>
             setOutfitTasks((prev) => [
@@ -715,19 +712,32 @@ export function App() {
                 total: 1,
                 done: 0,
                 failed: 0,
-                message: '正在提交…',
+                message: '正在准备素材…',
               },
             ]),
           () => dismissOutfitTask(taskId),
-          () =>
-            submitDetailRepair({
+          async () => {
+            const natural =
+              target.naturalWidth && target.naturalHeight
+                ? { width: target.naturalWidth, height: target.naturalHeight }
+                : await getImageDimensions(normalizeAssetUrl(target.url))
+            const mask = hasPaint(strokes) ? await renderMaskBlob(strokes, target, natural) : null
+            const patterns = await Promise.all(
+              patches.map((p) => (p.file ? Promise.resolve(p.file) : loadImageAsUploadFile(p.sourceUrl, 'pattern')))
+            )
+            if (!sameCanvasSource(origin, useTeamStore.getState().source)) {
+              throw new Error('画布已切换，已取消本次提交')
+            }
+            updateOutfitTask(taskId, { message: '正在提交…' })
+            return submitDetailRepair({
               sourceUrl: target.url,
               patterns,
               mask,
               placements: patches.map((p) => toSourcePlacement(p, target, natural)),
-              extraPrompt,
+              extraPrompt: finalExtraPrompt,
               sourceName: target.name || '',
             })
+          }
         )
       } catch (err: any) {
         notifyError(feedback.message(err) || '提交失败，请稍后重试')
@@ -1889,7 +1899,7 @@ export function App() {
     personalSnapshotUrl: editorSnapshotUrl,
     getBusyReason: () => {
       // 生成结果会写回发起时的画布，任务未完成前不能换到另一份文档
-      if (aiState.status === 'running' || outfitTasks.some((t) => t.status === 'running')) {
+      if (aiState.status === 'running' || isRepairSubmitting || outfitTasks.some((t) => t.status === 'running')) {
         return '有 AI 任务正在进行，完成后再切换画布'
       }
       return null
@@ -2406,7 +2416,7 @@ export function App() {
           }}
           onSubmit={(prompt, image, markers) =>
             repairPatches.length || hasPaint(repairStrokes)
-              ? handleRepairSubmit(prompt)
+              ? handleRepairSubmit(prompt, markers)
               : handleQuickEditSubmit(prompt, image, markers)
           }
           isSubmitting={isQuickEditSubmitting || isRepairSubmitting}

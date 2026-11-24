@@ -5,6 +5,7 @@ import { useViewportStore } from '../store/viewportStore'
 import {
   applyCrop,
   canvasToLocal,
+  clampPatchScale,
   normalizeAngle,
   localDeltaToPatch,
   type RepairCrop,
@@ -119,8 +120,8 @@ export const RepairPatchLayer = memo(function RepairPatchLayer({
     startDrag(e, (local, start) => {
       const d0 = Math.hypot(start.x - origin.cx, start.y - origin.cy) || 1
       const d1 = Math.hypot(local.x - origin.cx, local.y - origin.cy)
-      const minScale = 4 / Math.max(origin.crop.width, origin.crop.height)
-      onPatchChange({ ...origin, scale: Math.max(minScale, (origin.scale * d1) / d0) })
+      const nextScale = clampPatchScale((origin.scale * d1) / d0, origin.crop, image)
+      onPatchChange({ ...origin, scale: nextScale })
     })
   }
 

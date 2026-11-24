@@ -36,6 +36,33 @@ class PlacementTest(unittest.TestCase):
             dr.Placement.from_dict({"center_x": "nan", "center_y": 1, "width": 10, "height": 10})
         with self.assertRaises(ValueError):
             dr.Placement.from_dict({"center_y": 1, "width": 10, "height": 10})
+        with self.assertRaises(ValueError):
+            dr.Placement.from_dict({"center_x": 50, "center_y": 50, "width": 100000, "height": 100000})
+        with self.assertRaises(ValueError):
+            dr.Placement.from_dict({"center_x": 50, "center_y": 50, "width": 8000, "height": 8000})
+
+    def test_render_pattern_layer_rejects_oversized_before_resize(self):
+        from unittest.mock import patch
+        pattern = Image.new("RGBA", (20, 20), (255, 0, 0, 255))
+        with patch.object(Image.Image, "resize", side_effect=AssertionError("resize should not be called")):
+            with self.assertRaises(ValueError):
+                dr.render_pattern_layer((100, 100), pattern, dr.Placement(50, 50, 100000, 100000))
+            with self.assertRaises(ValueError):
+                dr.render_pattern_layer((100, 100), pattern, dr.Placement(50, 50, 500, 500))
+            # 旋转后包围盒超限也必须在 resize 前拦截
+            with self.assertRaises(ValueError):
+                dr.render_pattern_layer((3000, 3000), pattern, dr.Placement(1500, 1500, 10000, 3900, rotation=45))
+
+    def test_open_image_rejects_oversized_header_before_load(self):
+        from unittest.mock import MagicMock, patch
+        fake = MagicMock()
+        fake.size = (20000, 20000)
+        fake.__enter__.return_value = fake
+        fake.__exit__.return_value = False
+        with patch.object(Image, "open", return_value=fake):
+            with self.assertRaises(ValueError):
+                dr.open_image(b"fake")
+        fake.load.assert_not_called()
 
     def test_pattern_layer_lands_at_center_with_size(self):
         pattern = Image.new("RGBA", (10, 10), (255, 0, 0, 255))
@@ -269,7 +296,23 @@ class DetailRepairEndpointTest(unittest.TestCase):
         resp = self.submit({"center_x": -900, "center_y": -900, "width": 50, "height": 50})
         self.assertEqual(resp.status_code, 400)
         self.assertIn("不在原图范围内", resp.json()["detail"])
+        oversized = self.submit({"center_x": 300, "center_y": 400, "width": 100000, "height": 100000})
+        self.assertEqual(oversized.status_code, 400)
+        self.assertIn("超出允许范围", oversized.json()["detail"])
         self.background.assert_not_called()
+
+    def test_extra_prompt_preserves_marker_coordinates_over_500_chars(self):
+        marker_lines = [
+            f"- <标记{i}> [选框区域]: 左上角 (x: {i * 5}%, y: {i * 5}%), 宽高 (w: 10%, h: 10%), 归一化选框 [ymin: 100, xmin: 100, ymax: 200, xmax: 200]"
+            for i in range(1, 10)
+        ]
+        extra = "<标记1> 改红，其余按图案修复\n\n[参考图标记位置]\n" + "\n".join(marker_lines)
+        self.assertGreater(len(extra), 500)
+        resp = self.submit({"center_x": 300, "center_y": 400, "width": 80, "height": 80}, extra_prompt=extra)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        kwargs = self.background.call_args.kwargs
+        self.assertIn("<标记9>", kwargs["prompt"])
+        self.assertEqual(kwargs["original_prompt"], "细节修复：<标记1> 改红，其余按图案修复")
 
 
 if __name__ == "__main__":

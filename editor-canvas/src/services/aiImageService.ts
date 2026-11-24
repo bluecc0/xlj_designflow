@@ -748,7 +748,7 @@ export interface DetailRepairRequest {
   sourceName?: string
 }
 
-/** 细节修复：原图 + 摆好的图案（+ 涂抹区域），或只有涂抹区域的局部重绘；后端只重绘局部并贴回原图。 */
+/** 细节修复：原图 + 摆好的图案（+ 涂抹区域），或只有涂抹区域的局部重绘；后端基于整图直出融合实拍效果。 */
 export async function submitDetailRepair(
   req: DetailRepairRequest
 ): Promise<{ jobIds: string[]; model: string; size: string }> {
