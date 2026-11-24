@@ -356,6 +356,14 @@ def character_artifact_ids(session_id: str) -> dict[str, str]:
     return {json.loads(r["meta_json"] or "{}").get("image_id"): r["id"] for r in rows}
 
 
+def turn_skill(turn_id: str) -> str:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT payload_json FROM agent2_events WHERE turn_id = ? AND type = 'turn.started' LIMIT 1", (turn_id,),
+        ).fetchone()
+    return str(json.loads(row['payload_json']).get('skill') or '') if row else ''
+
+
 def turn_characters(turn_id: str) -> list[dict]:
     """这一轮用户选的人物，记在 turn.started 事件里，所以等待用户回答后继续时也能读到。"""
     with _connect() as conn:
