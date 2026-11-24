@@ -216,6 +216,7 @@ const App = () => {
   const [inspirationOpen, setInspirationOpen] = React.useState(false);
   const [seedPrompt, setSeedPrompt] = React.useState('');
   const [canvasReferenceSelection, setCanvasReferenceSelection] = React.useState(null);
+  const [pendingCanvasImages, setPendingCanvasImages] = React.useState([]);
   const [templatePanelCollapsed, setTemplatePanelCollapsed] = React.useState(true);
   const [templateRevealHovered, setTemplateRevealHovered] = React.useState(false);
   const [whatsNewRelease, setWhatsNewRelease] = React.useState(null);
@@ -680,15 +681,16 @@ const App = () => {
             <FlipStage
               inspirationOpen={inspirationOpen}
               childrenA={
-                <Canvas
-                  key={'canvas:' + currentUser.id}
-                  template={activeTemplate}
-                  resultTemplate={resultTemplate}
-                  editorCommands={editorCommands}
-                  onUseReferenceImages={handleUseCanvasReferences}
-                  onQuickEditGenerate={handleQuickEditGenerate}
-                  userId={currentUser.id}
-                />
+                  <Canvas
+                    key={'canvas:' + currentUser.id}
+                    template={activeTemplate}
+                    resultTemplate={resultTemplate}
+                    editorCommands={editorCommands}
+                    pendingImages={pendingCanvasImages}
+                    onUseReferenceImages={handleUseCanvasReferences}
+                    onQuickEditGenerate={handleQuickEditGenerate}
+                    userId={currentUser.id}
+                  />
               }
               childrenB={
                 <InspirationPanel
@@ -724,6 +726,7 @@ const App = () => {
               onSeedConsumed={handleSeedConsumed}
               canvasReferenceSelection={canvasReferenceSelection}
               quickEditRequest={quickEditRequest}
+              onPendingImagesChange={setPendingCanvasImages}
             />
           </div>
         </>

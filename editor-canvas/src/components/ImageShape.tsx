@@ -11,6 +11,8 @@ interface Props {
   image: CanvasImage
   isSelected: boolean
   isSingleSelected?: boolean
+  revealOnLoad?: boolean
+  onRevealComplete?: () => void
   onSelect: (isShift: boolean) => void
   onContextMenu?: (e: React.MouseEvent) => void
   onDoubleClick?: () => void
@@ -20,6 +22,8 @@ function ImageShapeInner({
   image,
   isSelected,
   isSingleSelected = false,
+  revealOnLoad = false,
+  onRevealComplete,
   onSelect,
   onContextMenu,
   onDoubleClick,
@@ -162,7 +166,14 @@ function ImageShapeInner({
         borderRadius: 2,
       }}
     >
-      <RecoverableImage key={image.url} source={image.url} name={image.name || 'image'} opacity={image.opacity ?? 1} />
+      <RecoverableImage
+        key={image.url}
+        source={image.url}
+        name={image.name || 'image'}
+        opacity={image.opacity ?? 1}
+        revealOnLoad={revealOnLoad}
+        onRevealComplete={onRevealComplete}
+      />
     </div>
   )
 }

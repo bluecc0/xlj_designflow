@@ -1,11 +1,13 @@
 ﻿// Main canvas — hosts the editor-canvas iframe and relays commands to it.
 
-const Canvas = ({ template, resultTemplate, editorCommands, onUseReferenceImages, onQuickEditGenerate, userId }) => {
+const Canvas = ({ template, resultTemplate, editorCommands, pendingImages, onUseReferenceImages, onQuickEditGenerate, userId }) => {
   const t = template;
   const hasResult = resultTemplate != null;
   const iframeRef = React.useRef(null);
   const editorReadyRef = React.useRef(false);
   const pendingMessagesRef = React.useRef([]);
+  const latestPendingImagesRef = React.useRef([]);
+  latestPendingImagesRef.current = Array.isArray(pendingImages) ? pendingImages : [];
   const [iframeNonce, setIframeNonce] = React.useState(0);
   const [editorInsertState, setEditorInsertState] = React.useState(null);
 
@@ -47,7 +49,18 @@ const Canvas = ({ template, resultTemplate, editorCommands, onUseReferenceImages
       });
       pendingMessagesRef.current = [];
     }
+    if (latestPendingImagesRef.current.length > 0) {
+      postToEditor({ type: 'designflow:pending-images', items: latestPendingImagesRef.current });
+    }
   }, [postToEditor]);
+
+  React.useEffect(() => {
+    if (!editorReadyRef.current) return;
+    postToEditor({
+      type: 'designflow:pending-images',
+      items: Array.isArray(pendingImages) ? pendingImages : [],
+    });
+  }, [pendingImages, postToEditor]);
 
   // 接收编辑器的 ready 信号，用于命令就绪判定（不控制 UI 可见性）
   React.useEffect(() => {
