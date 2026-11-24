@@ -283,7 +283,9 @@ async def _run_tool(tool: Tool | None, name: str, call: dict, ctx_base: dict, em
     started = time.monotonic()
     ctx = ToolContext(call_id=call_id, emit=emit, **ctx_base)
     try:
-        result = await tool.handler(ctx, args)
+        from .skill_policy import SKILL_TOOLS, rejection
+        denied = rejection(str(ctx.user['id']), ctx.state, str(args.get('name') or '')) if name in SKILL_TOOLS else None
+        result = denied if denied is not None else await tool.handler(ctx, args)
         ok = not (isinstance(result, dict) and result.get("error"))
     except Exception as exc:  # 工具内部错误转成模型能据此行动的提示
         logger.exception("[agent2] tool %s failed", name)
