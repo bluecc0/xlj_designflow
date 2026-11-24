@@ -253,6 +253,7 @@ def upload_note(uploads: list[dict]) -> str:
     note = ""
     if pictures:
         note += "\n\n[用户上传了图片：" + "、".join(u["id"] for u in pictures) + "]"
+        note += "\n[本轮固定编号：" + "；".join(f"图片{i}={u['id']}" for i, u in enumerate(pictures, 1)) + "。编号由上传顺序确定，不需要通过看图确认；内容用途明确冲突时才询问。]"
     if tables:
         note += "\n\n[用户上传了表格：" + "、".join(f"{u['id']}（{u['label']}）" for u in tables) + "]"
     return note
