@@ -42,6 +42,29 @@ class AdminCostCenterTest(unittest.TestCase):
         self.assertEqual(llm_src, "estimated")
         self.assertGreater(llm_cost, 0)
 
+    def test_bfl_outpainting_actual_credits_and_idempotent_backfill(self):
+        job_store.init_db()
+        job_store.save_ai_image_job(job_id="outpaint-cost", user_id="u", status="done",
+            model="flux-tools/outpainting-v1", provider="bfl", prompt="extend", size="1024x1024",
+            request_meta={"cost": 5.7, "operation": "outpainting"})
+        with job_store._connect() as conn:
+            row = conn.execute("SELECT cost,cost_source,cost_unit FROM ai_image_jobs WHERE id='outpaint-cost'").fetchone()
+            self.assertEqual(tuple(row), (0.057, "upstream", "USD"))
+            conn.execute("UPDATE ai_image_jobs SET cost=0,cost_source='manual'")
+            job_store._backfill_ai_image_costs(conn)
+            job_store._backfill_ai_image_costs(conn)
+            row = conn.execute("SELECT cost,cost_source,cost_unit FROM ai_image_jobs WHERE id='outpaint-cost'").fetchone()
+            self.assertEqual(tuple(row), (0.057, "upstream", "USD"))
+
+    def test_bfl_missing_or_invalid_cost_is_not_marked_actual(self):
+        job_store.init_db()
+        for index, cost in enumerate([None, True, -1, "nan", "invalid"]):
+            job_store.save_ai_image_job(job_id=f"invalid-{index}", user_id="u", status="done",
+                model="flux-tools/outpainting-v1", provider="bfl", prompt="extend", size="1024x1024",
+                request_meta={"cost": cost})
+        with job_store._connect() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM ai_image_jobs WHERE cost_source='upstream'").fetchone()[0], 0)
+
     def test_kie_credits_not_treated_as_usd(self):
         # Without KIE_CREDIT_TO_USD, 10 KIE credits must NOT become $10.00 upstream USD
         with patch.dict(os.environ, {}, clear=False):

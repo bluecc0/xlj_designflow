@@ -1185,6 +1185,8 @@ def save_ai_image_job(
                 updated_at,
             ),
         )
+        if status == "done" and model == "flux-tools/outpainting-v1" and provider == "bfl":
+            _persist_bfl_outpainting_cost(conn, job_id, request_meta_json)
         conn.commit()
 
 
@@ -3772,11 +3774,45 @@ def _load_db_pricing_overrides(conn: sqlite3.Connection) -> tuple[dict[str, dict
     return img_map, llm_map
 
 
+def _persist_bfl_outpainting_cost(conn: sqlite3.Connection, job_id: str, meta_json: str | None) -> None:
+    """BFL AsyncResponse.cost is credits, with one credit equal to USD 0.01."""
+    import math
+    try:
+        raw = json.loads(meta_json or "{}").get("cost")
+        if raw is None:
+            average = conn.execute(
+                "SELECT AVG(cost) FROM ai_image_jobs WHERE status='done' AND provider='bfl' "
+                "AND model='flux-tools/outpainting-v1' AND cost_source='upstream' AND cost_unit='USD'"
+            ).fetchone()[0]
+            if average is not None:
+                conn.execute("UPDATE ai_image_jobs SET cost=?,cost_source='estimated',cost_unit='USD' WHERE id=?",
+                             (round(average, 6), job_id))
+            return
+        if isinstance(raw, bool):
+            return
+        credits = float(raw)
+        if not math.isfinite(credits) or credits < 0:
+            return
+    except (ValueError, TypeError, AttributeError):
+        return
+    conn.execute(
+        "UPDATE ai_image_jobs SET cost = ?, cost_source = 'upstream', cost_unit = 'USD' WHERE id = ?",
+        (round(credits * 0.01, 6), job_id),
+    )
+
+
 def _backfill_ai_image_costs(conn: sqlite3.Connection) -> None:
     """Idempotent backfill of cost & token usage from operation_logs into ai_image_jobs."""
     from .cost_pricing import is_credit_based_provider, resolve_image_cost
 
     img_overrides, _ = _load_db_pricing_overrides(conn)
+
+    # Recompute from raw credits, never from an already converted USD column.
+    for job in conn.execute(
+        "SELECT id, request_meta_json FROM ai_image_jobs "
+        "WHERE status = 'done' AND provider = 'bfl' AND model = 'flux-tools/outpainting-v1'"
+    ).fetchall():
+        _persist_bfl_outpainting_cost(conn, job["id"], job["request_meta_json"])
 
     # Load operation_logs index once when either legacy repair or null backfill is needed
     need_op_index = bool(
