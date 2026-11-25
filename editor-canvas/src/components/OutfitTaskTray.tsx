@@ -1,10 +1,10 @@
 import React, { memo, useEffect } from 'react'
-import { AlertCircle, CheckCircle2, Loader2, Rotate3d, Shirt, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Loader2, Rotate3d, Shirt, WandSparkles, X } from 'lucide-react'
 
 export interface OutfitTask {
   id: string
   /** 任务来源，默认 AI 换装 */
-  kind?: 'outfit' | 'view-angle'
+  kind?: 'outfit' | 'view-angle' | 'detail-repair'
   label: string
   thumbUrl: string
   status: 'running' | 'done' | 'error'
@@ -94,11 +94,13 @@ export const OutfitTaskTray = memo(function OutfitTaskTray({ tasks, onDismiss }:
                 {task.status === 'error' && <AlertCircle size={13} color="#ef4444" style={{ flexShrink: 0 }} />}
                 {task.kind === 'view-angle'
                   ? <Rotate3d size={12} color="#687083" style={{ flexShrink: 0 }} />
-                  : <Shirt size={12} color="#687083" style={{ flexShrink: 0 }} />}
+                  : task.kind === 'detail-repair'
+                    ? <WandSparkles size={12} color="#687083" style={{ flexShrink: 0 }} />
+                    : <Shirt size={12} color="#687083" style={{ flexShrink: 0 }} />}
                 <span
                   style={{ fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                 >
-                  {task.kind === 'view-angle' ? '切换视角' : 'AI 换装'} · {task.label}
+                  {task.kind === 'detail-repair' ? task.label : `${task.kind === 'view-angle' ? '切换视角' : 'AI 换装'} · ${task.label}`}
                 </span>
                 {task.total > 1 && (
                   <span style={{ color: '#94a3b8', flexShrink: 0 }}>

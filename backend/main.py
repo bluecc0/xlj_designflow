@@ -82,7 +82,7 @@ from .ai_image import (
 )
 from .common_helpers import _extract_first_json_object, _resolve_image_data_url, make_sse
 from .product_sku_library import SkuFolderLibrary
-from . import outfit_change, view_angle
+from . import outfit_change, view_angle, detail_repair
 from .bfl_vto import FLUX_VTO_MODEL, PROVIDER_BFL, generate_vto_async
 from .ai_job_recovery import execute_image_job
 from .task_checkpoint import checkpoint, execution_lock
@@ -7325,6 +7325,179 @@ async def ai_image_outfit_change(
         response["job_ids"] = job_ids
         response["batch_id"] = batch_id
     return response
+
+
+DETAIL_REPAIR_MODEL = "gpt-image-2.6"
+# 每次细节修复 / 局部重绘同时生成几张供挑选
+DETAIL_REPAIR_BATCH = 4
+
+
+@app.post("/ai-image/detail-repair")
+@_ai_image_submit_dedup
+async def ai_image_detail_repair(
+    request: Request,
+    image: UploadFile = File(...),
+    pattern: Optional[List[UploadFile]] = File(None),
+    mask: Optional[UploadFile] = File(None),
+    placement: str = Form(""),
+    extra_prompt: str = Form(""),
+    source_name: str = Form(""),
+    client_request_id: str = Form(""),
+):
+    """细节修复（整图直出）：原图 + 用户摆好的去底图案（+ 可选涂抹区域），模型直接输出完整结果图。
+
+    不传图案时是局部重绘：必须有涂抹区域和修改说明（extra_prompt），只改涂抹区域。
+
+    pattern 可以传多个（例如鞋子外侧、内侧各一个），placement 为对应顺序的列表（单个图案也可以只传一个对象）：
+    {"center_x", "center_y", "width", "height", "rotation", "crop": {"x","y","width","height"}}
+    坐标为原图像素；crop 为图案原图像素。返回结构与 /ai-image 一致，前端轮询 GET /ai-image/{job_id}。
+    """
+    user = _current_user(request)
+    client_req = _sanitize_log_field(
+        (client_request_id or "").strip() or (request.headers.get("x-client-request-id") or "").strip() or "-",
+        64,
+    )
+    pattern_files = list(pattern or [])
+    placements: list = []
+    if pattern_files:
+        if len(pattern_files) > detail_repair.MAX_PATTERNS:
+            raise HTTPException(400, f"一次最多叠加 {detail_repair.MAX_PATTERNS} 个图案")
+        try:
+            raw = json.loads(placement or "{}")
+            raw_list = raw if isinstance(raw, list) else [raw]
+            if not all(isinstance(item, dict) for item in raw_list):
+                raise ValueError("格式不对")
+            if len(raw_list) != len(pattern_files):
+                raise ValueError("图案数量与摆放参数数量不一致")
+            placements = [detail_repair.Placement.from_dict(item) for item in raw_list]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"图案摆放参数无效：{exc}") from exc
+    elif not extra_prompt.strip():
+        raise HTTPException(400, "请描述涂抹区域要改成什么")
+
+    source_bytes = await _read_outfit_upload(image, label="原图")
+    patterns = [
+        (await _read_outfit_upload(f, label="图案素材"), p) for f, p in zip(pattern_files, placements)
+    ]
+    mask_bytes = await _read_outfit_upload(mask, label="涂抹区域") if mask is not None else None
+    try:
+        plan = await asyncio.to_thread(
+            detail_repair.build_plan, source_bytes, patterns, mask_bytes,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, "图片无法解析，请确认是 PNG/JPG/WEBP 图片") from exc
+
+    model_name = normalize_model_name(DETAIL_REPAIR_MODEL)
+    resolution = "1K"
+    display_extra = (extra_prompt or "").strip().splitlines()[0].strip()[:60] if (extra_prompt or "").strip() else ""
+    if plan.has_pattern:
+        count = len(plan.pattern_images)
+        prompt = detail_repair.build_prompt(extra_prompt, count)
+        display_prompt = "细节修复" + (f"：{display_extra}" if display_extra else "")
+        refs = [(plan.work_image, "01_source_full.png"), (plan.guide_image, "02_pattern_overlay.png")]
+        ref_labels = ["图1 · 完整原图", "图2 · 叠加效果"]
+        for i, data in enumerate(plan.pattern_images):
+            suffix = "" if count == 1 else f"_{i + 1}"
+            refs.append((data, f"{i + 3:02d}_pattern{suffix}.png"))
+            ref_labels.append(f"图{i + 3} · 图案样式" + (f" {i + 1}" if count > 1 else ""))
+    else:
+        prompt = detail_repair.build_inpaint_prompt(extra_prompt)
+        display_prompt = f"局部重绘：{display_extra}"
+        refs = [(plan.work_image, "01_source_full.png"), (plan.reference_image, "02_marked_area.png")]
+        ref_labels = ["图1 · 完整原图", "图2 · 标出的修改范围"]
+
+    created_at = time.time()
+    session = create_ai_chat_session(user_id=user["id"], title=_build_ai_chat_title(display_prompt), created_at=created_at)
+    session_id = session["id"]
+    append_ai_chat_message(
+        session_id=session_id, user_id=user["id"], role="user", type="user_text", text=display_prompt,
+        meta={"model": model_name, "size": plan.size, "resolution": resolution, "batchCount": DETAIL_REPAIR_BATCH, "operation": "detail-repair"},
+        created_at=created_at,
+    )
+
+    storage_id = uuid.uuid4().hex
+    try:
+        stored_urls = [_ai_image_public_url(Path(p)) for p in save_user_refs(user["id"], storage_id, refs)]
+    except Exception:
+        logger.warning("detail-repair: failed to save refs for %s", storage_id, exc_info=True)
+        raise HTTPException(503, "参考图暂时无法保存，请稍后重试")
+
+    # 同一次修复固定并发 DETAIL_REPAIR_BATCH 个任务，整图直出后放到画布供挑选
+    batch_count = DETAIL_REPAIR_BATCH
+    batch_id = uuid.uuid4().hex if batch_count > 1 else ""
+    reference_images = [
+        {"type": "manual", "name": name, "url": url, "label": label}
+        for (_content, name), url, label in zip(refs, stored_urls, ref_labels)
+    ]
+    job_ids: list[str] = []
+    for batch_index in range(batch_count):
+        jid = uuid.uuid4().hex
+        job_ids.append(jid)
+        request_meta = {
+            "operation": "detail-repair",
+            "recovery": {"version": 1, "phase": "queued"},
+            "execution_prompt": prompt,
+            "client_request_id": client_req,
+            "chat_session_id": session_id,
+            "variant": "flare",
+            "quality": "auto",
+            "batch_id": batch_id,
+            "batch_index": batch_index,
+            "batch_count": batch_count,
+            "reference_storage_job_id": storage_id,
+            "manual_reference_count": len(refs),
+            "context_reference_count": 0,
+            "reference_names": [name for _content, name in refs],
+            "reference_images": reference_images,
+            "detail_repair": {
+                "mode": "full_image",
+                "storage_id": storage_id,
+                "source_name": (source_name or "")[:120],
+                "extra_prompt": extra_prompt.strip()[:detail_repair.MAX_EXTRA_PROMPT_LEN],
+                "has_pattern": plan.has_pattern,
+            },
+        }
+        save_ai_image_job(
+            job_id=jid, user_id=user["id"], status="processing",
+            model=model_name, prompt=display_prompt, size=plan.size,
+            provider=PROVIDER_AUTO, resolution=resolution,
+            original_prompt=display_prompt, resolved_prompt=prompt,
+            has_reference=True, reference_count=len(refs),
+            request_meta=request_meta, created_at=created_at,
+        )
+        log_operation(
+            user_id=user["id"], username=user["username"],
+            action="ai_image",
+            detail=f"detail-repair job={jid[:8]} client={client_req} model={model_name} size={plan.size} mode=full_image batch={batch_index + 1}/{batch_count}",
+            payload=json.dumps({
+                "job_id": jid, "operation": "detail-repair", "client_request_id": client_req,
+                "model": model_name, "size": plan.size, "mode": "full_image", "batch_count": batch_count,
+            }, ensure_ascii=False),
+        )
+        _track_ai_image_task(
+            _run_ai_image_background(
+                job_id=jid, user_id=user["id"], username=user["username"],
+                session_id=session_id, provider=PROVIDER_AUTO,
+                model=model_name, prompt=prompt, size=plan.size, resolution=resolution,
+                variant="flare", quality="auto",
+                refs=refs, has_reference=True, created_at=created_at,
+                original_prompt=display_prompt, resolved_prompt=prompt,
+                request_meta=request_meta,
+                batch_id=batch_id, batch_index=batch_index, batch_count=batch_count,
+            )
+        )
+    return {
+        "job_id": job_ids[0],
+        "job_ids": job_ids,
+        "batch_id": batch_id,
+        "chat_session_id": session_id,
+        "status": "processing",
+        "client_request_id": client_req,
+        "size": plan.size,
+        "model": model_name,
+    }
 
 
 VIEW_ANGLE_MODEL = "gpt-image-2.6"

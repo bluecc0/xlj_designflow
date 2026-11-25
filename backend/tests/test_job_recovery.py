@@ -499,6 +499,11 @@ class RecoveryTest(unittest.IsolatedAsyncioTestCase):
         job_store.save_image_checkpoint("image-job", self.job()["request_meta"], provider="apimart", task_id="", status="failed")
         self.assertEqual(job_store.load_recoverable_image_jobs(), [])
 
+    async def test_recovery_scan_includes_detail_repair_jobs(self):
+        job_store.save_ai_image_job(job_id="repair-job", user_id="owner", status="processing",
+            model="gpt-image-2.6", prompt="p", size="auto", request_meta={"operation": "detail-repair"})
+        self.assertEqual([job["id"] for job in job_store.load_recoverable_image_jobs()], ["repair-job"])
+
     async def test_missing_queued_references_fails_before_post(self):
         self.seed()
         with job_store._connect() as connection:

@@ -16,6 +16,8 @@ interface Props {
   onSelect: (isShift: boolean) => void
   onContextMenu?: (e: React.MouseEvent) => void
   onDoubleClick?: () => void
+  /** 设置后拖动不移动图片，而是拖出半透明副本，松手时回调落点（快捷编辑里拖图案用） */
+  onGhostDrag?: (clientX: number, clientY: number, moved: boolean) => void
 }
 
 function ImageShapeInner({
@@ -27,6 +29,7 @@ function ImageShapeInner({
   onSelect,
   onContextMenu,
   onDoubleClick,
+  onGhostDrag,
 }: Props) {
   const zoom = useViewportStore((s) => s.zoom)
   const updateImages = useCanvasStore((s) => s.updateImages)
@@ -35,6 +38,11 @@ function ImageShapeInner({
     // 仅响应鼠标主键（左键）
     if (e.button !== 0) return
     e.stopPropagation()
+
+    if (onGhostDrag) {
+      startGhostDrag(e, image, onGhostDrag)
+      return
+    }
 
     const isShift = e.shiftKey || e.metaKey
 
@@ -176,6 +184,47 @@ function ImageShapeInner({
       />
     </div>
   )
+}
+
+function startGhostDrag(
+  e: React.MouseEvent,
+  image: CanvasImage,
+  onDrop: (clientX: number, clientY: number, moved: boolean) => void
+) {
+  const startX = e.clientX
+  const startY = e.clientY
+  let ghost: HTMLImageElement | null = null
+  const onMove = (ev: MouseEvent) => {
+    if (!ghost && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 3) {
+      ghost = document.createElement('img')
+      ghost.src = image.url
+      Object.assign(ghost.style, {
+        position: 'fixed',
+        width: '120px',
+        height: 'auto',
+        opacity: '0.7',
+        pointerEvents: 'none',
+        zIndex: '2000',
+        transform: 'translate(-50%, -50%)',
+        borderRadius: '4px',
+        boxShadow: '0 6px 20px rgba(0,0,0,0.18)',
+      })
+      document.body.appendChild(ghost)
+    }
+    if (ghost) {
+      ghost.style.left = `${ev.clientX}px`
+      ghost.style.top = `${ev.clientY}px`
+    }
+  }
+  const onUp = (ev: MouseEvent) => {
+    window.removeEventListener('mousemove', onMove, true)
+    window.removeEventListener('mouseup', onUp, true)
+    const moved = Boolean(ghost)
+    ghost?.remove()
+    onDrop(ev.clientX, ev.clientY, moved)
+  }
+  window.addEventListener('mousemove', onMove, true)
+  window.addEventListener('mouseup', onUp, true)
 }
 
 export const ImageShape = memo(ImageShapeInner)
