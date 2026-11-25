@@ -3810,7 +3810,8 @@ def _backfill_ai_image_costs(conn: sqlite3.Connection) -> None:
     # Recompute from raw credits, never from an already converted USD column.
     for job in conn.execute(
         "SELECT id, request_meta_json FROM ai_image_jobs "
-        "WHERE status = 'done' AND provider = 'bfl' AND model = 'flux-tools/outpainting-v1'"
+        "WHERE status = 'done' AND provider = 'bfl' AND model = 'flux-tools/outpainting-v1' "
+        "ORDER BY CASE WHEN json_valid(request_meta_json) THEN json_extract(request_meta_json, '$.cost') IS NULL ELSE 1 END"
     ).fetchall():
         _persist_bfl_outpainting_cost(conn, job["id"], job["request_meta_json"])
 
