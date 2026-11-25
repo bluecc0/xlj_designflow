@@ -8,6 +8,9 @@ from backend.agent2.image_constraints import explicit_models, numbered_reference
 
 class ReferenceBindingTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        preflight = patch.object(tools, "check_submission", AsyncMock(return_value=None))
+        preflight.start()
+        self.addCleanup(preflight.stop)
         for name, value in [('list_events', []), ('get_artifact', None), ('turn_characters', [])]:
             patcher = patch.object(tools.store, name, return_value=value)
             patcher.start()
@@ -67,6 +70,43 @@ class ReferenceBindingTest(unittest.IsolatedAsyncioTestCase):
             await tools.analyze_image(self.context(), {"image_id": "result", "reference_image_ids": ["scene"]})
         content = model.call_args.args[1]["messages"][0]["content"]
         self.assertEqual(sum(x["type"] == "image_url" for x in content), 2)
+
+    async def test_memory_cannot_save_a_model_contradicting_this_request(self):
+        ctx = self.context()
+        ctx.state["request"] = "调用GPT Image 2.6模型，1K"
+        with patch.object(tools.memory, "add_memory") as save:
+            result = await tools.remember(ctx, {"content": "出图偏好：Nano Banana Pro，1K"})
+        self.assertIn("error", result)
+        save.assert_not_called()
+
+    async def test_skill_repair_limit_blocks_even_autonomous_extra_calls(self):
+        ctx = self.context()
+        ctx.state.update(skill_repair_limit=2, skill_reference_generations={("scene",): 3})
+        with patch.object(tools, "check_reference_roles", AsyncMock(return_value=None)), \
+             patch.object(tools, "_generate_one", AsyncMock()) as generate:
+            result = await tools.generate_image(ctx, {"images": [
+                {"prompt": "same scene", "reference_image_ids": ["scene"]}]})
+        self.assertIn("返修上限", result["error"])
+        generate.assert_not_called()
+
+    async def test_generated_inspection_uses_roles_without_mutating_repair_state(self):
+        ctx = self.context()
+        ctx.state.update(request="红门场景", skill_repair_limit=2,
+                         quality_failures={"old": "场景：不符合"},
+                         quality_failure_refs={"old": ["scene", "action"]})
+        artifact = {"source_tool_call_id": "call", "meta": {
+            "reference_image_ids": ["scene", "action"],
+            "reference_roles": {"scene": "场景", "action": "仅动作"}, "prompt": "红门"}}
+        response = SimpleNamespace(json=lambda: {"choices": [{"message": {"content": "场景：符合"}}]})
+        with patch.object(tools.store, "get_artifact", return_value=artifact), \
+             patch.object(tools, "_artifact_bytes", return_value=(b"image", "a.png")), \
+             patch.object(tools, "compress_image_to_data_url", return_value="image"), \
+             patch.object(tools, "routed_chat_completion", AsyncMock(return_value=response)) as model:
+            await tools.analyze_image(ctx, {"image_id": "replacement"})
+        text = model.call_args.args[1]["messages"][0]["content"][0]["text"]
+        self.assertIn("参考职责", text)
+        self.assertIn("红门场景", text)
+        self.assertEqual(ctx.state["quality_failures"], {"old": "场景：不符合"})
 
     async def test_retry_keeps_model_after_skill_reference_rejection(self):
         ctx = self.context()

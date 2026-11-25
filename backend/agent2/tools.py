@@ -31,6 +31,9 @@ from . import memory, store
 from .engine import Tool, ToolContext, user_cancelled
 from .image_constraints import explicit_models, numbered_references, turn_inputs, reference_order_error, bind_upload_numbers
 from .reference_preflight import check_reference_roles
+from .submission_preflight import check_submission
+from .image_constraints import explicit_output_parameters, requested_image_count
+from .reference_isolation import action_only, isolate_action, excludes_action_scene
 
 DEFAULT_IMAGE_MODEL = "gpt-image-2.6"
 IMAGE_MODELS = ["gpt-image-2.6", "gpt-image-2.5", "gpt-image-2", "nano-banana-pro", "nano-banana-2.1",
@@ -171,6 +174,21 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str,
     inputs = ctx.state.get('upload_number_inputs') or []
     prompt = _with_character_prompt(ctx, bind_upload_numbers(written_prompt, ref_ids, inputs), ref_ids)
     roles = item.get("reference_roles") or {}
+    isolated = []
+    request_excludes_action_scene = excludes_action_scene(str(ctx.state.get("request") or ""))
+    for i, rid in enumerate(ref_ids):
+        artifact = store.get_artifact(rid, ctx.user["id"])
+        role = str(roles.get(rid) or "")
+        if (artifact and artifact.get("kind") == "skill_ref" and
+                (action_only(role) or (request_excludes_action_scene and re.search(r"动作|姿势|pose|action", role, re.I)))):
+            cache = ctx.state.setdefault("isolated_action_refs", {})
+            if rid not in cache:
+                cache[rid] = await asyncio.to_thread(isolate_action, refs[i][0])
+            refs = list(refs)
+            refs[i] = (cache[rid], f"action_{i + 1}_isolated.png")
+            isolated.append(rid)
+    if isolated:
+        prompt += "\n动作参考已去除原场景并保留原画幅，灰色底仅用于隔离，不是目标背景。环境、地面、墙体、标识和光影必须来自指定场景图。"
     if roles:
         prompt += "\n\n参考图职责（按实际发送顺序，优先于上文的参考图编号）：\n" + "\n".join(
             f"参考图{i + 1}：{roles[rid]}" for i, rid in enumerate(ref_ids) if rid in roles
@@ -183,7 +201,8 @@ async def _generate_one(ctx: ToolContext, index: int, item: dict, *, model: str,
             "recovery": {"version": 1, "phase": "queued"}, "execution_prompt": prompt, "chat_session_id": "",
             "variant": variant, "quality": "auto", "reference_storage_job_id": job_id,
             "reference_names": [name for _data, name in refs],
-            "reference_image_ids": ref_ids, "reference_roles": roles, **(extra_meta or {})}
+            "reference_image_ids": ref_ids, "reference_roles": roles,
+            "isolated_action_reference_ids": isolated, **(extra_meta or {})}
     # 和普通生图一致：2.6 文生图且提示词要动图时出 GIF
     if model in GPT_IMAGE_26_MODELS and not refs and wants_gif_output(prompt):
         meta["output_format"] = "gif"
@@ -277,6 +296,16 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
             defaults["model"] = next(iter(item_models))
     explicit_model = args.get("model")
     args = {**defaults, **args}
+    constraints = explicit_output_parameters(inputs)
+    for key, expected in constraints.items():
+        actual = str(args.get(key) or ("1K" if key == "resolution" else "auto"))
+        if expected and actual.upper() != expected.upper():
+            return {"error": f"用户明确指定 {key}={expected}，不能提交 {actual}。请保留用户要求修正参数，尚未付费提交。"}
+    target = None
+    for payload in inputs:
+        count = requested_image_count(str(payload.get("text") or payload.get("answer") or ""))
+        if count is not None:
+            target = count
     if len(requested_models) == 1:
         requested_model = next(iter(requested_models))
         supplied_models = {upgrade_seedream_model(item.get("model") or explicit_model or requested_model)
@@ -297,6 +326,8 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
     bad = sorted({m for m in models if m not in IMAGE_MODELS})
     if bad:
         return {"error": f"model 只能是 {', '.join(IMAGE_MODELS)}（收到 {', '.join(bad)}）"}
+    if target and used + len(items) > target and not (used >= target and ctx.state.get("skill_repair_limit")):
+        return {"error": f"用户要求 {target} 张，本轮已提交 {used} 张，本次不能再提交 {len(items)} 张。请勿超量付费。"}
     if SEEDREAM_MODEL in models and resolution not in {"1K", "1.5K", "2K"}:
         return {"error": "Seedream 5.5 仅支持 1K、1.5K、2K"}
     if any(m != SEEDREAM_MODEL for m in models):
@@ -386,7 +417,23 @@ async def generate_image(ctx: ToolContext, args: dict) -> dict:
                                             complete=routed_chat_completion)
     if preflight:
         return preflight
+    submission = await check_submission(ctx, items, shared_ids, read_image=_artifact_bytes,
+                                       encode_image=compress_image_to_data_url, complete=routed_chat_completion)
+    if submission:
+        return submission
     refs = [_artifact_bytes(ctx, rid) for rid in shared_ids]
+    repair_limit = ctx.state.get("skill_repair_limit", 0)
+    if repair_limit:
+        counts = ctx.state.setdefault("skill_reference_generations", {})
+        proposed = dict(counts)
+        for ids in effective:
+            key = tuple(ids)
+            if not key:
+                continue
+            proposed[key] = proposed.get(key, 0) + 1
+            if proposed[key] > 1 + min(2, repair_limit):
+                return {"error": "这组参考图已达到技能返修上限，不能继续付费重做。请如实报告仍未解决的问题。"}
+        ctx.state["skill_reference_generations"] = proposed
     ctx.state["images"] = used + len(items)
     group_type = args.get("group_type") if args.get("group_type") in {"set", "variant"} else None
     group_id = ("grp_" + uuid.uuid4().hex[:8]) if group_type else None
@@ -408,7 +455,11 @@ async def analyze_image(ctx: ToolContext, args: dict) -> dict:
     question += "\n若描述动作，必须包含滑板等必要道具、支撑物、脚手接触关系。图片的平台编号由上传元数据确定，不是视觉判断任务，不要因无法验证编号而要求用户确认。"
     reference_ids = list(dict.fromkeys(args.get("reference_image_ids") or []))
     artifact = store.get_artifact(str(args.get("image_id") or ""), ctx.user["id"])
+    if artifact:
+        question += "\n当前被检查素材登记：" + str(artifact.get("label") or "")
+        question += "\n若此图是场景素材，动作适配只判断其空间、地面、墙面是否可供合成目标动作；原有人物未做该动作或未持有道具，不代表不适配，不能拿场景人物的姿势否定动作包。"
     expected = []
+    meta = {}
     if artifact and artifact.get("source_tool_call_id"):
         meta = artifact.get("meta") or json.loads(artifact.get("meta_json") or "{}")
         expected = meta.get("reference_image_ids") or []
@@ -425,22 +476,29 @@ async def analyze_image(ctx: ToolContext, args: dict) -> dict:
                 break
     # Generated-image inspection uses the actual source references by default.
     reference_ids = list(dict.fromkeys([*reference_ids, *expected]))
+    if expected:
+        question += "\n这是生成结果验收，不是图片描述。按用户要求分别检查人物、商品、场景、动作、表情、机位和构图，每项回答符合/不符合/无法判断及可见证据。场景必须对照指定场景图，带入动作图独有的背景、海报、招牌才是不符合；指定场景原有门窗、涂鸦、木牌、装饰均属于场景，不得凭空要求删除。只去除场景原人物，不等于删除场景标识。"
+        question += "\n本轮用户要求：" + str(ctx.state.get("request") or "")[:6000]
+        question += "\n只以用户原话、每张原始参考图职责和可见事实验收，不继承上一轮验收的断言，不把 Agent 返修时自加的要求当作用户要求。商品细节必须先描述原商品图的可见特征，再判断成图差异，不能凭记忆比较。"
+        question += "\n参考职责：" + json.dumps(meta.get("reference_roles") or {}, ensure_ascii=False)
+        question += "\n按可见证据验收，不得把商品自带兜帽当成额外添加的帽子，不得在鞋子完整入画时声称裁切；仅透视、褶皱、开合穿法不同不等于款式不符。动作与机位允许自然摄影误差，但不得省略核心动作或替换背景。"
+        question += "\n动作包允许中性功能物替换时，比较握持位置、方向和接触关系，不要求复制原道具外观；场景允许因全身构图与机位改变而调整取景范围，画外木牌等非核心装饰不可见不等于换错场景。"
     if len(reference_ids) > MAX_REFERENCES_PER_IMAGE:
         return {"error": f"最多对照 {MAX_REFERENCES_PER_IMAGE} 张参考图"}
     comparisons = []
     for index, rid in enumerate(reference_ids):
         ref, _ = _artifact_bytes(ctx, rid)
         comparisons.extend([
-            {"type": "text", "text": f"对照参考图{index + 1}（{rid}）："},
+            {"type": "text", "text": f"对照参考图{index + 1}（{rid}），唯一职责：{(meta.get('reference_roles') or {}).get(rid, '按用户说明')}。只比较此职责，不比较其余部分："},
             {"type": "image_url", "image_url": {"url": compress_image_to_data_url(ref, 1024)}},
         ])
     payload = {
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": question + "\n第一张为待检查图片，后续为对照参考图。没有对照图时不得声称一致性已验证。用中文简洁回答，不超过 200 字。"},
+            {"type": "text", "text": question + "\n第一张为待检查图片，后续为对照参考图。没有对照图时不得声称一致性已验证。用中文逐项回答，不超过 600 字。"},
             {"type": "image_url", "image_url": {"url": compress_image_to_data_url(data, 1024)}},
             *comparisons,
         ]}],
-        "max_tokens": 600, "temperature": 0.2,
+        "max_tokens": 1400, "temperature": 0,
     }
     resp = await routed_chat_completion("vlm", payload, timeout=60)
     content = (((resp.json() or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
@@ -513,6 +571,7 @@ def _whitelisted_platform_note(skill) -> str:
 
 async def load_skill(ctx: ToolContext, args: dict) -> dict:
     skill = _load_skill(ctx, args.get("name"))
+    ctx.state["skill_repair_limit"] = self_check_repairs(skill)
     note = _whitelisted_platform_note(skill) if whitelist_entry(skill) is not None else SKILL_PLATFORM_NOTE
     return {"name": skill.name, "content": build_skill_context(skill) + note,
             "references": skill.references}
@@ -520,7 +579,27 @@ async def load_skill(ctx: ToolContext, args: dict) -> dict:
 
 async def run_skill_script(ctx: ToolContext, args: dict) -> dict:
     skill = _load_skill(ctx, args.get("name"))
+    script = str(args.get("script") or "")
+    for allowed in allowed_scripts(skill):
+        if script == allowed.replace("/", "."):
+            args = {**args, "script": allowed}
+            break
     raw_args = args.get("args")
+    if (skill.name == "kids-lookbook" and str(args.get("script") or "").endswith("query_action_packs.py")
+            and isinstance(raw_args, list)):
+        raw_args = list(raw_args)
+        for i, arg in enumerate(raw_args[:-1]):
+            if arg == "--id" and re.fullmatch(r"\d{4}", str(raw_args[i + 1])):
+                raw_args[i] = "--asset-id"
+        selectors = [(i, raw_args[i + 1]) for i, value in enumerate(raw_args[:-1])
+                     if value == "--asset-id"]
+        if len(selectors) > 1:
+            positions = {j for i, _ in selectors for j in (i, i + 1)}
+            common = [v for i, v in enumerate(raw_args) if i not in positions]
+            results = await asyncio.gather(*[asyncio.to_thread(
+                _run_skill_script, skill, str(args.get("script") or ""),
+                common + ["--asset-id", value], None) for _, value in selectors])
+            return {"queries": results, "note": "多个素材编号已逐个精确查询，避免命令行只保留最后一个编号。"}
     return await asyncio.to_thread(
         _run_skill_script, skill, str(args.get("script") or ""),
         raw_args if isinstance(raw_args, list) else [],
@@ -666,6 +745,11 @@ async def special_compose(ctx: ToolContext, args: dict) -> dict:
 async def remember(ctx: ToolContext, args: dict) -> dict:
     action = str(args.get("action") or "add")
     uid = ctx.user["id"]
+    if action in {"add", "update"}:
+        requested = explicit_models(str(ctx.state.get("request") or ""))
+        remembered = explicit_models(str(args.get("content") or ""))
+        if requested and remembered and not remembered <= requested:
+            return {"error": "记忆中的模型与用户本轮明确指定的模型冲突，不得保存错误偏好。请按用户原话修正。"}
     try:
         if action == "add":
             entry = memory.add_memory(uid, args.get("content"), args.get("kind") or "preference",

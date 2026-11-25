@@ -86,3 +86,24 @@ def explicit_reference_roles(text: str, index: int) -> list[str]:
     """Extract direct assignments without asking a model to renumber images."""
     pattern = rf"(?:图片|参考图|图)\s*{index}(?![0-9])\s*(?:是|作|作为|用作|只参考)\s*([^，。；;\n@]{{1,60}})"
     return list(dict.fromkeys(match.strip() for match in re.findall(pattern, text)))
+
+
+def explicit_output_parameters(inputs):
+    """Only enforce one positive value per turn message; comparisons remain per-image."""
+    result = {}
+    for payload in inputs:
+        text = str(payload.get("text") or payload.get("answer") or "")
+        clauses = [part for part in re.split(r"[，。；;\n]", text)
+                   if not re.search(r"不要|不用|别用|不使用|instead of|do not|don't", part, re.I)]
+        positive = "，".join(clauses)
+        for key, pattern in [("resolution", r"(?<![a-zA-Z0-9_.])(1\.5|1|2|4)\s*[kK](?![a-zA-Z0-9_])"),
+                             ("aspect_ratio", r"(?<!\d)(\d{1,2})\s*[:：]\s*(\d{1,2})(?!\d)")]:
+            matches = re.findall(pattern, positive)
+            values = {value.upper().replace(" ", "") + "K" if isinstance(value, str)
+                      else ":".join(value) for value in matches}
+            if key == "aspect_ratio":
+                values &= {"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4",
+                           "9:16", "16:9", "2:1", "1:2", "21:9"}
+            if values:
+                result[key] = next(iter(values)) if len(values) == 1 else None
+    return result
