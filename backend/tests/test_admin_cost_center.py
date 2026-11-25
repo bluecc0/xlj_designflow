@@ -49,12 +49,24 @@ class AdminCostCenterTest(unittest.TestCase):
             request_meta={"cost": 5.7, "operation": "outpainting"})
         with job_store._connect() as conn:
             row = conn.execute("SELECT cost,cost_source,cost_unit FROM ai_image_jobs WHERE id='outpaint-cost'").fetchone()
-            self.assertEqual(tuple(row), (0.057, "upstream", "USD"))
+            self.assertEqual(tuple(row), (0.0456, "upstream", "USD"))
             conn.execute("UPDATE ai_image_jobs SET cost=0,cost_source='manual'")
             job_store._backfill_ai_image_costs(conn)
             job_store._backfill_ai_image_costs(conn)
             row = conn.execute("SELECT cost,cost_source,cost_unit FROM ai_image_jobs WHERE id='outpaint-cost'").fetchone()
-            self.assertEqual(tuple(row), (0.057, "upstream", "USD"))
+            self.assertEqual(tuple(row), (0.0456, "upstream", "USD"))
+
+    def test_bfl_missing_cost_uses_discounted_average_without_second_discount(self):
+        job_store.init_db()
+        for jid, credits in [("priced", 5.7), ("missing", None)]:
+            job_store.save_ai_image_job(job_id=jid, user_id="u", status="done",
+                model="flux-tools/outpainting-v1", provider="bfl", prompt="extend", size="1024x1024",
+                request_meta={"cost": credits})
+        with job_store._connect() as conn:
+            job_store._backfill_ai_image_costs(conn)
+            job_store._backfill_ai_image_costs(conn)
+            row = conn.execute("SELECT cost,cost_source FROM ai_image_jobs WHERE id='missing'").fetchone()
+            self.assertEqual(tuple(row), (0.0456, "estimated"))
 
     def test_bfl_missing_or_invalid_cost_is_not_marked_actual(self):
         job_store.init_db()

@@ -3775,7 +3775,7 @@ def _load_db_pricing_overrides(conn: sqlite3.Connection) -> tuple[dict[str, dict
 
 
 def _persist_bfl_outpainting_cost(conn: sqlite3.Connection, job_id: str, meta_json: str | None) -> None:
-    """BFL AsyncResponse.cost is credits, with one credit equal to USD 0.01."""
+    """Convert raw BFL credits to USD with the account's 20% discount."""
     import math
     try:
         raw = json.loads(meta_json or "{}").get("cost")
@@ -3797,7 +3797,7 @@ def _persist_bfl_outpainting_cost(conn: sqlite3.Connection, job_id: str, meta_js
         return
     conn.execute(
         "UPDATE ai_image_jobs SET cost = ?, cost_source = 'upstream', cost_unit = 'USD' WHERE id = ?",
-        (round(credits * 0.01, 6), job_id),
+        (round(credits * 0.01 * 0.8, 6), job_id),
     )
 
 
