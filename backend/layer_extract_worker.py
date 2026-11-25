@@ -525,6 +525,7 @@ def main() -> int:
 
     _emit({
         "ok": True,
+        "cost": ((remote.get("raw_result") or {}).get("task") or {}).get("cost") if provider == "apimart" else None,
         "psd_path": str(psd_path),
         "manifest_path": str(manifest_path),
         "source_size": [source_width, source_height],

@@ -1187,6 +1187,8 @@ def save_ai_image_job(
         )
         if status == "done" and model == "flux-tools/outpainting-v1" and provider == "bfl":
             _persist_bfl_outpainting_cost(conn, job_id, request_meta_json)
+        if status == "done" and model == "layer-extract" and provider == "apimart":
+            _persist_apimart_layer_cost(conn, job_id, prompt_trace)
         conn.commit()
 
 
@@ -3774,6 +3776,22 @@ def _load_db_pricing_overrides(conn: sqlite3.Connection) -> tuple[dict[str, dict
     return img_map, llm_map
 
 
+def _persist_apimart_layer_cost(conn: sqlite3.Connection, job_id: str, trace: str | None) -> None:
+    """Use the APIMart task's settled USD cost, not the generic layer-extract tariff."""
+    import math
+    try:
+        raw = json.loads(trace or "{}").get("cost")
+        if raw is None or isinstance(raw, bool):
+            return
+        cost = float(raw)
+        if not math.isfinite(cost) or cost < 0:
+            return
+    except (TypeError, ValueError, AttributeError):
+        return
+    conn.execute("UPDATE ai_image_jobs SET cost=?,cost_source='upstream',cost_unit='USD' WHERE id=?",
+                 (round(cost, 6), job_id))
+
+
 def _persist_bfl_outpainting_cost(conn: sqlite3.Connection, job_id: str, meta_json: str | None) -> None:
     """Convert raw BFL credits to USD with the account's 20% discount."""
     import math
@@ -3806,6 +3824,10 @@ def _backfill_ai_image_costs(conn: sqlite3.Connection) -> None:
     from .cost_pricing import is_credit_based_provider, resolve_image_cost
 
     img_overrides, _ = _load_db_pricing_overrides(conn)
+
+    for job in conn.execute("SELECT id,prompt_trace FROM ai_image_jobs WHERE status='done' "
+                            "AND provider='apimart' AND model='layer-extract'").fetchall():
+        _persist_apimart_layer_cost(conn, job["id"], job["prompt_trace"])
 
     # Recompute from raw credits, never from an already converted USD column.
     for job in conn.execute(

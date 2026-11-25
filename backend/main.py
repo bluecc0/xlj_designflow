@@ -2098,6 +2098,7 @@ async def _run_layer_extract_background(job_id: str, user: dict, src_path: Path,
         # done 但 layer_extract 尚未准备好的中间状态。
         extra = {
             "psd_url": psd_url,
+            "cost": payload.get("cost"),
             "manifest_url": manifest_url,
             "layers_url_prefix": layers_url_prefix,
             "background_status": payload.get("background_status", ""),

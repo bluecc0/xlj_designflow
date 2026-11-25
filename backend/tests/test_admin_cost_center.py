@@ -56,6 +56,21 @@ class AdminCostCenterTest(unittest.TestCase):
             row = conn.execute("SELECT cost,cost_source,cost_unit FROM ai_image_jobs WHERE id='outpaint-cost'").fetchone()
             self.assertEqual(tuple(row), (0.0456, "upstream", "USD"))
 
+    def test_apimart_layer_cost_uses_upstream_usd_without_bfl_discount(self):
+        job_store.init_db()
+        job_store.save_ai_image_job(job_id="layer-cost", user_id="u", status="done",
+            model="layer-extract", provider="apimart", prompt="layers", size="1080x1440",
+            prompt_trace=json.dumps({"cost": 0.1024}))
+        with job_store._connect() as conn:
+            job_store._backfill_ai_image_costs(conn)
+            row = conn.execute("SELECT cost,cost_source,cost_unit FROM ai_image_jobs WHERE id='layer-cost'").fetchone()
+            self.assertEqual(tuple(row), (0.1024, "upstream", "USD"))
+            conn.execute("UPDATE ai_image_jobs SET cost=0,cost_source='manual'")
+            job_store._backfill_ai_image_costs(conn)
+            job_store._backfill_ai_image_costs(conn)
+            row = conn.execute("SELECT cost,cost_source,cost_unit FROM ai_image_jobs WHERE id='layer-cost'").fetchone()
+            self.assertEqual(tuple(row), (0.1024, "upstream", "USD"))
+
     def test_bfl_missing_cost_uses_discounted_average_without_second_discount(self):
         job_store.init_db()
         for jid, credits in [("priced", 5.7), ("missing", None)]:
