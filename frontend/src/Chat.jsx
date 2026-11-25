@@ -5076,20 +5076,15 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
       if (m.type === 'ai-image-generating' && m.status !== 'done' && m.status !== 'failed') {
         const batchImages = Array.isArray(m.images) && m.images.length > 0 ? m.images : null;
         if (batchImages) {
-          // 整批尚未落位画布前，保持所有非失败槽位按原始索引占位，已先出图的传 previewUrl 原地提前显影
+          // 已出图的槽位会立即作为真实图元落位画布并可选中，占位层只保留仍在生成中的槽位
           batchImages.forEach((im, bi) => {
-            if (im && im.status !== 'failed') {
-              const rawPreview = im.status === 'done' ? (im.previewUrl || im.url || '') : '';
-              const previewUrl = rawPreview && rawPreview.startsWith('/')
-                ? ((window.API_BASE || window.location.origin) + rawPreview)
-                : rawPreview;
+            if (im && im.status !== 'done' && im.status !== 'failed') {
               pending.push({
                 id: 'ai-' + (m.startedAt || mi) + '-' + bi,
                 label: m.model || '生成中',
                 aspectRatio: m.size || '1:1',
                 startedAt: m.startedAt || Date.now(),
                 seed: bi,
-                previewUrl: previewUrl || undefined,
               });
             }
           });
@@ -5112,25 +5107,23 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
           (m.images || []).forEach((im) => { doneByPos[im.position || 0] = im; });
           const reqImages = Array.isArray(args.images) && args.images.length > 0 ? args.images : [{}];
           reqImages.forEach((item, idx) => {
-            const doneIm = doneByPos[idx];
+            if (doneByPos[idx]) return;
             pending.push({
               id: 'agent-' + (m.callId || mi) + '-' + idx,
               label: (item && item.label) || 'Agent 生图',
               aspectRatio: args.aspect_ratio || '1:1',
               startedAt: m.startedAt || Date.now(),
               seed: idx,
-              previewUrl: doneIm && doneIm.url ? agent2AbsUrl(doneIm.url) : undefined,
             });
           });
         } else if (m.tool === 'outfit_change' || m.tool === 'outpaint_image' || m.tool === 'upscale_image' || m.tool === 'remove_background' || m.tool === 'fill_background') {
-          const doneIm = (m.images || [])[0];
+          if (Array.isArray(m.images) && m.images.length > 0) return;
           pending.push({
             id: 'agent-' + (m.callId || mi) + '-0',
             label: AGENT2_TOOL_LABELS[m.tool] || 'Agent 出图',
             aspectRatio: args.aspect_ratio || '1:1',
             startedAt: m.startedAt || Date.now(),
             seed: 0,
-            previewUrl: doneIm && doneIm.url ? agent2AbsUrl(doneIm.url) : undefined,
           });
         }
       }
@@ -5241,12 +5234,22 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     if (ev.type === 'input.required') agentTurnRef.current.waitingTurnId = ev.turn_id;
     setMessages(function(msgs) { return agent2Reduce(msgs, ev); });
     var p = ev.payload || {};
-    if (ev.type === 'tool.finished' && p.ok && window.Agent2Cursor.deliverOnce(cursor, 'call:' + p.call_id)) {
-      pushAgentImagesToCanvas(p.result);
+    // 每生成完一张图片立即按图片 ID 交付到画布（立即可选中操作，同时由 deliverOnce 避免重复落位）
+    if (ev.type === 'artifact.created' && p.artifact && p.artifact.kind !== 'file' && p.artifact.url) {
+      var artKey = 'img:' + (p.artifact.id || p.artifact.url);
+      if (window.Agent2Cursor.deliverOnce(cursor, artKey)) {
+        pushAgentImagesToCanvas({ images: [p.artifact] });
+      }
     }
-    // 服务重启后由后台补回的图片：按图片 ID 交付一次
-    if (ev.type === 'artifact.created' && p.recovered && p.artifact && p.artifact.kind !== 'file' && window.Agent2Cursor.deliverOnce(cursor, 'img:' + p.artifact.id)) {
-      pushAgentImagesToCanvas({ images: [p.artifact] });
+    if (ev.type === 'tool.finished' && p.ok && window.Agent2Cursor.deliverOnce(cursor, 'call:' + p.call_id)) {
+      var resultImages = (p.result && Array.isArray(p.result.images)) ? p.result.images : [];
+      var undelivered = resultImages.filter(function(im) {
+        if (!im || !im.url) return false;
+        return window.Agent2Cursor.deliverOnce(cursor, 'img:' + (im.id || im.url));
+      });
+      if (undelivered.length) {
+        pushAgentImagesToCanvas({ images: undelivered });
+      }
     }
     return !!AGENT2_TERMINAL[ev.type];
   }, [pushAgentImagesToCanvas]);
@@ -5780,15 +5783,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
     }
 
     const apiBase = window.API_BASE || window.location.origin;
-    const collected = [];
-    var doneCount = 0;
-    const tryFlushCollected = function() {
-      doneCount++;
-      if (doneCount === batchCount && onComposeComplete && collected.length > 0) {
-        const sorted = collected.slice().sort(function(a, b) { return a.index - b.index; });
-        onComposeComplete(null, null, sorted, null);
-      }
-    };
+    const tryFlushCollected = function() {};
     const submitOne = function(slotAt, index) {
       return new Promise(function(resolve) {
         const clientRequestId = newClientRequestId();
@@ -5964,26 +5959,28 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
                         : m
                     ));
                     loadAiChatHistory();
-                    collected.push({
-                      url: statusData.image_url,
-                      index: index,
-                      prompt: finalPrompt,
-                      originalPrompt: (statusData && statusData.original_prompt) || originalPrompt || finalPrompt,
-                      resolvedPrompt: (statusData && statusData.resolved_prompt) || plannedPrompt || finalPrompt,
-                      promptTrace: (statusData && statusData.prompt_trace) || plannedPromptTrace || '',
-                      model: model,
-                      provider: (statusData && statusData.provider) || provider,
-                      jobId: jobId,
-                      clientRequestId: clientRequestId,
-                      size: aiOptions.size || '1024x1024',
-                      resolution: aiOptions.resolution || '1K',
-                      variant: (statusData && statusData.variant) || aiOptions.variant || 'flare',
-                      quality: quality || 'auto',
-                      skill: activeSkill || '',
-                      hasReference: refImages.length > 0,
-                      refCount: refImages.length,
-                      createdAt: Date.now(),
-                    });
+                    if (onComposeComplete) {
+                      onComposeComplete(null, null, [{
+                        url: statusData.image_url,
+                        index: index,
+                        prompt: finalPrompt,
+                        originalPrompt: (statusData && statusData.original_prompt) || originalPrompt || finalPrompt,
+                        resolvedPrompt: (statusData && statusData.resolved_prompt) || plannedPrompt || finalPrompt,
+                        promptTrace: (statusData && statusData.prompt_trace) || plannedPromptTrace || '',
+                        model: model,
+                        provider: (statusData && statusData.provider) || provider,
+                        jobId: jobId,
+                        clientRequestId: clientRequestId,
+                        size: aiOptions.size || '1024x1024',
+                        resolution: aiOptions.resolution || '1K',
+                        variant: (statusData && statusData.variant) || aiOptions.variant || 'flare',
+                        quality: quality || 'auto',
+                        skill: activeSkill || '',
+                        hasReference: refImages.length > 0,
+                        refCount: refImages.length,
+                        createdAt: Date.now(),
+                      }], null, { select: batchCount === 1 });
+                    }
                     tryFlushCollected();
                     resolve();
                   } else if (statusData.status === 'done' && !statusData.image_url) {
@@ -6163,6 +6160,29 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
               }));
             };
 
+            const buildBatchCanvasItem = function(jid, i, t) {
+              return {
+                url: t.url,
+                index: i,
+                prompt: finalPrompt,
+                originalPrompt: (t && t.original_prompt) || originalPrompt || finalPrompt,
+                resolvedPrompt: plannedPrompt || finalPrompt,
+                promptTrace: plannedPromptTrace || '',
+                model: model,
+                provider: t.provider || provider,
+                jobId: jid,
+                clientRequestId: clientRequestId,
+                size: aiOptions.size || '1024x1024',
+                resolution: aiOptions.resolution || '1K',
+                variant: (t && t.variant) || aiOptions.variant || 'flare',
+                quality: quality || 'auto',
+                skill: activeSkill || '',
+                hasReference: refImages.length > 0,
+                refCount: refImages.length,
+                createdAt: Date.now(),
+              };
+            };
+
             const finishIfAllTerminal = function() {
               if (finished) return;
               if (jobIds.some(function(jid) { return !terminal[jid]; })) return;
@@ -6173,26 +6193,7 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
               jobIds.forEach(function(jid, i) {
                 var t = terminal[jid];
                 if (t.status === 'done' && t.url) {
-                  okOrdered.push({
-                    url: t.url,
-                    index: i,
-                    prompt: finalPrompt,
-                    originalPrompt: (t && t.original_prompt) || originalPrompt || finalPrompt,
-                    resolvedPrompt: plannedPrompt || finalPrompt,
-                    promptTrace: plannedPromptTrace || '',
-                    model: model,
-                    provider: t.provider || provider,
-                    jobId: jid,
-                    clientRequestId: clientRequestId,
-                    size: aiOptions.size || '1024x1024',
-                    resolution: aiOptions.resolution || '1K',
-                    variant: (t && t.variant) || aiOptions.variant || 'flare',
-                    quality: quality || 'auto',
-                    skill: activeSkill || '',
-                    hasReference: refImages.length > 0,
-                    refCount: refImages.length,
-                    createdAt: Date.now(),
-                  });
+                  okOrdered.push(buildBatchCanvasItem(jid, i, t));
                 }
               });
               var failCount = jobIds.length - okOrdered.length;
@@ -6229,9 +6230,6 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
                 });
               }
               loadAiChatHistory();
-              if (okOrdered.length && onComposeComplete) {
-                onComposeComplete(null, null, okOrdered, null);
-              }
               resolve();
             };
 
@@ -6241,6 +6239,10 @@ const Chat = ({ template, onComposeComplete, user, onRequestSpecialTemplate, see
               patchImage(jid, t.status === 'done'
                 ? { status: 'done', url: t.url, previewUrl: t.previewUrl, progress: 100, provider: t.provider, variant: t.variant, quality: t.quality, providerSwitched: t.providerSwitched }
                 : { status: 'failed', error: t.error, progress: 100, provider: t.provider, variant: t.variant, quality: t.quality, providerSwitched: t.providerSwitched });
+              // 出图完成一张即刻落位到画布，用户在其余并发槽位仍在生成时即可直接点选/拖拽
+              if (t.status === 'done' && t.url && onComposeComplete) {
+                onComposeComplete(null, null, [buildBatchCanvasItem(jid, jobIds.indexOf(jid), t)], null, { select: jobIds.length === 1 });
+              }
               finishIfAllTerminal();
             };
 
