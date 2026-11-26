@@ -19,8 +19,6 @@
   var connectionStatus = document.getElementById("connectionStatus");
 
   var promptInput = document.getElementById("promptInput");
-  var cropHintBanner = document.getElementById("cropHintBanner");
-  var queueHintBanner = document.getElementById("queueHintBanner");
   var expandButton = document.getElementById("expandButton");
   var cancelButton = document.getElementById("cancelButton");
 
@@ -48,6 +46,7 @@
   var busyTimerId = null;
   var statusTimerId = null;
   var activeVariants = null;    // { taskId, documentId, groupName, cacheDir, items: [...], activeIndex: 0 }
+  var renderedVariantsTaskId = null;
   var isSwitchingVariant = false;
 
   // ─── 日志 ─────────────────────────────────────────────
@@ -93,7 +92,7 @@
   function setLogExpanded(expanded) {
     isLogExpanded = expanded;
     if (logPanel) logPanel.classList.toggle("log-panel--collapsed", !expanded);
-    if (toggleLogButton) toggleLogButton.textContent = expanded ? "收起日志" : "展开日志";
+    if (toggleLogButton) toggleLogButton.textContent = expanded ? "收起" : "日志";
   }
 
   function stopBusyTimer() {
@@ -106,7 +105,7 @@
   function updateExpandButtonLabel() {
     if (!expandButton) return;
     if (phase === "selecting_crop") {
-      expandButton.textContent = "等待画布确认裁剪...";
+      expandButton.textContent = "拖出范围 · Enter 确认";
       return;
     }
     if (phase === "waiting_result" && activeTask) {
@@ -121,49 +120,19 @@
     var totalSec = Math.max(10, Math.round(Math.max(1, aheadCount) * (Number(avgSec) || 20)));
     if (totalSec >= 60) {
       var mins = Math.floor(totalSec / 60);
-      var rem = totalSec % 60;
-      return rem >= 10 ? ("约 " + mins + " 分 " + rem + " 秒") : ("约 " + mins + " 分钟");
+      return "约 " + mins + " 分钟";
     }
-    return "约 " + totalSec + " 秒";
+    return "约 " + totalSec + "s";
   }
 
   function updateQueueBanner() {
-    if (!queueHintBanner) return;
-
-    if (phase === "waiting_result" && activeTask) {
-      if (activeTask.remoteStatus === "queued") {
-        var pos = Math.max(1, Number(activeTask.queuePosition || 1));
-        var ahead = Math.max(0, pos - 1);
-        queueHintBanner.className = "queue-banner";
-        queueHintBanner.textContent = ahead > 0
-          ? ("当前排第 " + pos + " 位，前方还有 " + ahead + " 个任务（预计 " + formatEtaText(ahead, lastWorkerStatus.avg_duration_sec) + "）")
-          : "当前排第 1 位，即将开始生成式扩展...";
-        return;
-      }
-      if (activeTask.remoteStatus === "processing") {
-        queueHintBanner.className = "queue-banner queue-banner--active";
-        queueHintBanner.textContent = "已轮到你，Photoshop 正在执行原生生成式扩展...";
-        return;
-      }
-    }
-
-    if (phase === "idle" && lastWorkerStatus && lastWorkerStatus.online) {
-      var pending = Number(lastWorkerStatus.queue_length || 0) + (lastWorkerStatus.busy ? 1 : 0);
-      if (pending > 0) {
-        queueHintBanner.className = "queue-banner";
-        queueHintBanner.textContent = "当前前方有 " + pending + " 个任务排队中（预计 " + formatEtaText(pending, lastWorkerStatus.avg_duration_sec) + "）";
-        return;
-      }
-    }
-
-    queueHintBanner.className = "queue-banner queue-banner--hidden";
-    queueHintBanner.textContent = "";
+    // 极简模式：排队与执行状态统一收敛到顶部胶囊、主按钮与底部单行状态
   }
 
   function updateCancelButtonLabel() {
     if (!cancelButton) return;
     if (phase === "selecting_crop") {
-      cancelButton.textContent = "取消裁剪";
+      cancelButton.textContent = "取消";
       return;
     }
     if (phase === "waiting_result" && activeTask) {
@@ -186,9 +155,6 @@
     if (openTemplateButton) openTemplateButton.disabled = locked;
     if (exportAssetsButton) exportAssetsButton.disabled = locked;
 
-    if (cropHintBanner) {
-      cropHintBanner.classList.toggle("crop-banner--hidden", phase !== "selecting_crop");
-    }
     if (cancelButton) {
       cancelButton.classList.toggle("cancel-button--hidden", phase === "idle");
     }
@@ -199,7 +165,6 @@
     }
     updateExpandButtonLabel();
     updateCancelButtonLabel();
-    updateQueueBanner();
     renderVariants();
   }
 
@@ -338,7 +303,7 @@
 
       setPhase("selecting_crop");
       setConnectionState("裁剪中", "busy");
-      setStatus("请在画布拖出扩展范围，按 Enter 确认", "default");
+      setStatus("拖出扩展范围，Enter 确认", "default");
       appendLog("已切换至裁剪工具，原图 " + snapshot.origWidth + "x" + snapshot.origHeight + "。", "muted");
       startCropFallbackPoll();
     } catch (error) {
@@ -479,10 +444,10 @@
       var variantsComplete = finalResult.variants_complete !== false && downloaded.length >= expectedCount;
       if (!variantsComplete) {
         var warnText = finalResult.variant_warning || ("仅返回 " + downloaded.length + "/" + expectedCount + " 个变体");
-        setStatus("扩展完成（仅返回 " + downloaded.length + "/" + expectedCount + " 变体）", "default");
+        setStatus("完成（仅 " + downloaded.length + "/" + expectedCount + " 变体）", "default");
         appendLog("扩图完成但变体不足：" + warnText + "，总耗时 " + elapsed + "。", "error");
       } else {
-        setStatus("扩展完成（共 " + downloaded.length + " 个变体，点击缩略图切换）", "success");
+        setStatus("完成 · " + downloaded.length + " 变体", "success");
         appendLog("扩图完成，共 " + downloaded.length + " 个变体，总耗时 " + elapsed + "。", "success");
       }
     } catch (error) {
@@ -519,20 +484,20 @@
         activeTask.queuePosition = pos;
         activeTask.stageText = pos > 1 ? ("排队第" + pos + "位") : "排队中";
         setConnectionState("排队中", "busy");
-        setStatus(pos > 1 ? ("排队等待中（第 " + pos + " 位）...") : "排队等待订阅机接单...", "default");
+        setStatus(pos > 1 ? ("排队第 " + pos + " 位（" + formatEtaText(pos - 1, lastWorkerStatus.avg_duration_sec) + "）") : "排队中...", "default");
       } else if (st === "processing") {
         activeTask.queuePosition = 0;
         setConnectionState("扩图中", "busy");
         var stage = String(data.stage || "");
         if (stage === "downloading") {
-          activeTask.stageText = "读取原图";
-          setStatus("订阅机正在读取原图...", "default");
+          activeTask.stageText = "读取中";
+          setStatus("读取原图...", "default");
         } else if (stage === "uploading") {
-          activeTask.stageText = "回传结果";
-          setStatus("订阅机正在回传变体...", "default");
+          activeTask.stageText = "回传中";
+          setStatus("回传变体...", "default");
         } else {
-          activeTask.stageText = "云端扩图中";
-          setStatus("Photoshop 正在执行原生生成式扩展...", "default");
+          activeTask.stageText = "扩图中";
+          setStatus("扩图中...", "default");
         }
       } else if (st === "succeeded") {
         return data;
@@ -578,40 +543,51 @@
     }
   }
 
-  // ─── 3 变体缩略图渲染与画布秒切 ───────────────────────
+  // ─── 3 变体缩略图渲染与画布秒切（原地更新 DOM 消除缩略图闪烁） ───
 
   function renderVariants() {
     if (!variantsSection || !variantsGrid) return;
     if (!activeVariants || !activeVariants.items || !activeVariants.items.length) {
       variantsSection.classList.add("variants-section--hidden");
-      variantsGrid.innerHTML = "";
+      if (renderedVariantsTaskId !== null) {
+        variantsGrid.innerHTML = "";
+        renderedVariantsTaskId = null;
+      }
       return;
     }
 
     variantsSection.classList.remove("variants-section--hidden");
     if (variantsMeta) {
-      variantsMeta.textContent = (activeVariants.activeIndex + 1) + " / " + activeVariants.items.length;
+      variantsMeta.textContent = (activeVariants.activeIndex + 1) + "/" + activeVariants.items.length;
     }
 
     var disabled = phase !== "idle" || isSwitchingVariant;
-    variantsGrid.innerHTML = activeVariants.items.map(function (item, idx) {
-      var isActive = idx === activeVariants.activeIndex;
-      return (
-        '<button type="button" class="variant-card' + (isActive ? " variant-card--active" : "") + '"' +
-        ' data-variant-idx="' + idx + '"' + (disabled ? " disabled" : "") +
-        ' title="切换到变体 ' + (idx + 1) + '">' +
-        '<img class="variant-card__img" src="' + utils.escapeHtml(item.fileUrl) + '" alt="变体 ' + (idx + 1) + '" />' +
-        '<span class="variant-card__badge">' + (idx + 1) + "</span>" +
-        "</button>"
-      );
-    }).join("");
+
+    // 仅当任务变更时才重建 <img> DOM，避免每次点击/状态更新导致图片重载闪烁
+    if (renderedVariantsTaskId !== activeVariants.taskId) {
+      renderedVariantsTaskId = activeVariants.taskId;
+      variantsGrid.innerHTML = activeVariants.items.map(function (item, idx) {
+        return (
+          '<button type="button" class="variant-card" data-variant-idx="' + idx + '" title="变体 ' + (idx + 1) + '">' +
+          '<img class="variant-card__img" src="' + utils.escapeHtml(item.fileUrl) + '" alt="变体 ' + (idx + 1) + '" />' +
+          '<span class="variant-card__badge">' + (idx + 1) + "</span>" +
+          "</button>"
+        );
+      }).join("");
+
+      var createdButtons = variantsGrid.querySelectorAll(".variant-card");
+      Array.prototype.forEach.call(createdButtons, function (btn) {
+        btn.addEventListener("click", function () {
+          var idx = Number(btn.getAttribute("data-variant-idx"));
+          if (!isNaN(idx)) applyVariantByIndex(idx, false);
+        });
+      });
+    }
 
     var buttons = variantsGrid.querySelectorAll(".variant-card");
-    Array.prototype.forEach.call(buttons, function (btn) {
-      btn.addEventListener("click", function () {
-        var idx = Number(btn.getAttribute("data-variant-idx"));
-        if (!isNaN(idx)) applyVariantByIndex(idx, false);
-      });
+    Array.prototype.forEach.call(buttons, function (btn, idx) {
+      btn.classList.toggle("variant-card--active", idx === activeVariants.activeIndex);
+      btn.disabled = disabled;
     });
   }
 

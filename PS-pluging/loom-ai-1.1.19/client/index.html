@@ -10,31 +10,16 @@
 <body>
   <main class="panel">
     <div class="title-row">
-      <div class="title-group">
-        <h1 class="title">Loom AI</h1>
-        <span class="version-tag">v2.0.0</span>
-      </div>
-      <div class="header-actions">
-        <span id="connectionStatus" class="connection-status connection-status--checking">Checking</span>
-      </div>
+      <h1 class="title">Loom AI</h1>
+      <span id="connectionStatus" class="connection-status connection-status--checking">检测中</span>
     </div>
 
     <section class="section">
-      <div class="section__header">
-        <h2 class="section__title" id="docHint">生成式扩展</h2>
-      </div>
-
       <textarea
         id="promptInput"
         class="prompt-input"
-        placeholder="可选：描述要扩展的内容，留空则智能无缝延展"
+        placeholder="提示词（可选，留空无缝扩展）"
       ></textarea>
-
-      <div id="cropHintBanner" class="crop-banner crop-banner--hidden">
-        请在画布拖出扩展范围，按 <strong>Enter</strong> 确认裁剪
-      </div>
-
-      <div id="queueHintBanner" class="queue-banner queue-banner--hidden"></div>
 
       <div class="action-stack">
         <button id="expandButton" class="primary-button" type="button">生成式扩展</button>
@@ -44,7 +29,7 @@
 
     <section id="variantsSection" class="section variants-section variants-section--hidden">
       <div class="section__header">
-        <h2 class="section__title">变体结果（点击切换）</h2>
+        <h2 class="section__title">变体</h2>
         <span id="variantsMeta" class="variants-meta"></span>
       </div>
       <div id="variantsGrid" class="variants-grid"></div>
@@ -62,8 +47,8 @@
 
     <div class="status-card">
       <div class="status-row">
-        <p id="statusText" class="status-text" aria-live="polite">点击「生成式扩展」进入裁剪</p>
-        <button id="toggleLogButton" class="log-toggle" type="button">展开日志</button>
+        <p id="statusText" class="status-text" aria-live="polite">就绪</p>
+        <button id="toggleLogButton" class="log-toggle" type="button">日志</button>
       </div>
       <div id="logPanel" class="log-panel log-panel--collapsed"></div>
     </div>
