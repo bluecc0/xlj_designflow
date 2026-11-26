@@ -120,6 +120,9 @@ def init_ps_expand_tables() -> None:
                 input_filename TEXT NOT NULL,
                 spec_json TEXT NOT NULL,
                 outputs_json TEXT DEFAULT '[]',
+                requested_variants INTEGER DEFAULT 3,
+                variants_complete INTEGER DEFAULT 1,
+                variant_warning TEXT DEFAULT '',
                 error_code TEXT,
                 error_message TEXT,
                 duration_ms INTEGER,
@@ -136,6 +139,16 @@ def init_ps_expand_tables() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_expand_tasks_client_status ON expand_tasks(client_id, status)"
         )
+        # 兼容已有旧表：按需补齐多变体完整性字段
+        existing_cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(expand_tasks)").fetchall()
+        }
+        if "requested_variants" not in existing_cols:
+            conn.execute("ALTER TABLE expand_tasks ADD COLUMN requested_variants INTEGER DEFAULT 3")
+        if "variants_complete" not in existing_cols:
+            conn.execute("ALTER TABLE expand_tasks ADD COLUMN variants_complete INTEGER DEFAULT 1")
+        if "variant_warning" not in existing_cols:
+            conn.execute("ALTER TABLE expand_tasks ADD COLUMN variant_warning TEXT DEFAULT ''")
         # 服务重启时，之前处于 processing 的任务视为中断超时，避免前端永久等待
         now_iso = _now_iso()
         now_ts = _now_ts()
@@ -342,6 +355,7 @@ def normalize_expand_spec(raw_spec: dict[str, Any], orig_w: int, orig_h: int) ->
 class ConnectedWorker:
     worker_id: str
     websocket: WebSocket
+    hello_received: bool = False
     ps_version: str = ""
     worker_version: str = ""
     exec_mode: str = "cep"
@@ -445,11 +459,17 @@ class ExpandCoordinator:
         return queue_len, max(5.0, min(120.0, avg_sec))
 
     async def dispatch_next(self) -> bool:
-        """若存在空闲、未暂停且未隔离的在线 Worker，从队列原子领取最早的 1 条任务并下发。"""
+        """若存在已完成握手、空闲、未暂停且未隔离的在线 Worker，从队列原子领取最早的 1 条任务并下发。"""
         async with self._lock:
             idle_worker = None
             for w in self._workers.values():
-                if self._is_worker_alive(w) and not w.busy and not w.paused and not w.quarantined:
+                if (
+                    w.hello_received
+                    and self._is_worker_alive(w)
+                    and not w.busy
+                    and not w.paused
+                    and not w.quarantined
+                ):
                     idle_worker = w
                     break
             if idle_worker is None:
@@ -553,18 +573,45 @@ class ExpandCoordinator:
         worker.last_heartbeat_iso = _now_iso()
 
         if msg_type == "worker.hello":
+            worker.hello_received = True
             worker.ps_version = str(data.get("ps_version") or "")
             worker.worker_version = str(data.get("worker_version") or "")
             worker.exec_mode = str(data.get("exec_mode") or "cep")
             worker.paused = bool(data.get("paused", False))
+            worker.quarantined = bool(data.get("quarantined", False))
+            worker.busy = bool(data.get("busy", False)) or worker.quarantined
+            reported_task_id = str(data.get("current_task_id") or "").strip()
+            worker.current_task_id = reported_task_id or None
             logger.info(
-                "[ps_expand] worker hello: id=%s ps=%s ver=%s mode=%s",
+                "[ps_expand] worker hello: id=%s ps=%s ver=%s busy=%s paused=%s quarantined=%s task=%s",
                 worker.worker_id,
                 worker.ps_version,
                 worker.worker_version,
-                worker.exec_mode,
+                worker.busy,
+                worker.paused,
+                worker.quarantined,
+                worker.current_task_id,
             )
-            await self.dispatch_next()
+            if not worker.busy and not worker.paused and not worker.quarantined:
+                await self.dispatch_next()
+            return
+
+        if msg_type == "task.rejected":
+            task_id = str(data.get("task_id") or "")
+            reason = str(data.get("reason") or "busy")
+            worker.paused = bool(data.get("paused", worker.paused))
+            worker.quarantined = bool(data.get("quarantined", worker.quarantined))
+            worker.busy = bool(data.get("busy", True)) or worker.quarantined
+            reported_task_id = str(data.get("current_task_id") or "").strip()
+            worker.current_task_id = reported_task_id or None
+            logger.warning(
+                "[ps_expand] worker %s rejected task %s (reason=%s); requeuing",
+                worker.worker_id,
+                task_id,
+                reason,
+            )
+            if task_id:
+                self._requeue_task(task_id)
             return
 
         if msg_type == "ping":
@@ -611,6 +658,21 @@ class ExpandCoordinator:
             task_id = str(data.get("task_id") or "")
             outputs = data.get("outputs") if isinstance(data.get("outputs"), list) else []
             duration_ms = int(data.get("duration_ms") or 0)
+            requested_variants = max(1, int(data.get("requested_variants") or (3 if len(outputs) > 1 else 1)))
+            if "requested_variants" not in data and task_id:
+                with _get_conn() as conn:
+                    spec_row = conn.execute(
+                        "SELECT requested_variants FROM expand_tasks WHERE task_id = ?",
+                        (task_id,),
+                    ).fetchone()
+                    if spec_row and spec_row["requested_variants"]:
+                        requested_variants = int(spec_row["requested_variants"])
+            variants_complete = bool(data.get("variants_complete", len(outputs) >= requested_variants))
+            if len(outputs) < requested_variants:
+                variants_complete = False
+            variant_warning = str(data.get("variant_warning") or "").strip()
+            if not variants_complete and not variant_warning:
+                variant_warning = f"仅生成 {len(outputs)}/{requested_variants} 个变体（当前 Photoshop 版本暂不支持自动切换多变体）。"
             if task_id:
                 with _get_conn() as conn:
                     conn.execute(
@@ -619,6 +681,9 @@ class ExpandCoordinator:
                         SET status = 'succeeded',
                             stage = 'done',
                             outputs_json = ?,
+                            requested_variants = ?,
+                            variants_complete = ?,
+                            variant_warning = ?,
                             duration_ms = ?,
                             error_code = NULL,
                             error_message = NULL,
@@ -626,7 +691,16 @@ class ExpandCoordinator:
                             updated_ts = ?
                         WHERE task_id = ? AND status = 'processing'
                         """,
-                        (json.dumps(outputs, ensure_ascii=False), duration_ms, _now_iso(), _now_ts(), task_id),
+                        (
+                            json.dumps(outputs, ensure_ascii=False),
+                            requested_variants,
+                            1 if variants_complete else 0,
+                            variant_warning,
+                            duration_ms,
+                            _now_iso(),
+                            _now_ts(),
+                            task_id,
+                        ),
                     )
                     conn.commit()
             if worker.current_task_id == task_id:
@@ -809,12 +883,18 @@ def _row_to_task_response(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[st
         outputs = json.loads(row["outputs_json"] or "[]")
     except Exception:
         outputs = []
+    requested_variants = int(row["requested_variants"] or 3)
+    variants_complete = bool(row["variants_complete"]) if row["variants_complete"] is not None else True
+    variant_warning = str(row["variant_warning"] or "")
     return {
         "task_id": row["task_id"],
         "status": row["status"],
         "stage": row["stage"] or "",
         "queue_position": _queue_position_for_task(conn, row["task_id"]) if row["status"] == "queued" else 0,
         "outputs": outputs,
+        "requested_variants": requested_variants,
+        "variants_complete": variants_complete,
+        "variant_warning": variant_warning,
         "duration_ms": row["duration_ms"],
         "error_code": row["error_code"],
         "error_message": row["error_message"],
@@ -923,12 +1003,13 @@ async def create_expand_task(
         tdir = _task_dir(task_id)
         (tdir / input_filename).write_bytes(raw_bytes)
 
+        requested_variants = 3 if normalized_spec.get("return_all_variants", True) else 1
         conn.execute(
             """
             INSERT INTO expand_tasks (
                 task_id, status, stage, client_id, client_request_id,
-                input_filename, spec_json, created_at, updated_ts
-            ) VALUES (?, 'queued', '', ?, ?, ?, ?, ?, ?)
+                input_filename, spec_json, requested_variants, created_at, updated_ts
+            ) VALUES (?, 'queued', '', ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -936,6 +1017,7 @@ async def create_expand_task(
                 client_request_id,
                 input_filename,
                 json.dumps(normalized_spec, ensure_ascii=False),
+                requested_variants,
                 now_iso,
                 now_ts,
             ),

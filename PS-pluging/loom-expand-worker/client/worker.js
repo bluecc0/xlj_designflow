@@ -219,7 +219,17 @@
   async function executeAssignedTask(msg) {
     var taskId = msg.task_id;
     if (isBusy || isPaused || isQuarantined) {
-      appendLog("忽略任务 " + taskId + "（当前忙碌、暂停或处于超时隔离态）。", "muted");
+      var rejectReason = isQuarantined ? "quarantined" : (isBusy ? "busy" : "paused");
+      appendLog("拒收任务 " + taskId + "（当前状态：" + rejectReason + "），已通知服务端重新排队。", "muted");
+      sendWsJson({
+        type: "task.rejected",
+        task_id: taskId,
+        reason: rejectReason,
+        busy: isBusy,
+        paused: isPaused,
+        quarantined: isQuarantined,
+        current_task_id: currentTaskId
+      });
       return;
     }
 
@@ -294,13 +304,27 @@
       }
 
       var durationMs = Date.now() - currentTaskStartedAt;
+      var requestedVariants = Number((jsxRes && jsxRes.requested_variants) || ((msg.spec && msg.spec.return_all_variants === false) ? 1 : 3));
+      var variantsComplete = Boolean(jsxRes && jsxRes.variants_complete) && uploadedOutputs.length >= requestedVariants;
+      var variantWarning = String((jsxRes && jsxRes.variant_warning) || "");
       sendWsJson({
         type: "task.result",
         task_id: taskId,
         outputs: uploadedOutputs,
+        requested_variants: requestedVariants,
+        variants_complete: variantsComplete,
+        variant_warning: variantWarning,
         duration_ms: durationMs
       });
-      appendLog("完成 " + taskId + "（" + uploadedOutputs.length + " 变体，" + (durationMs / 1000).toFixed(1) + "s）。", "success");
+      if (!variantsComplete) {
+        appendLog(
+          "完成（变体不足）" + taskId + "：" + uploadedOutputs.length + "/" + requestedVariants +
+          "（" + (variantWarning || "多变体切换不可用") + "）。",
+          "error"
+        );
+      } else {
+        appendLog("完成 " + taskId + "（" + uploadedOutputs.length + " 变体，" + (durationMs / 1000).toFixed(1) + "s）。", "success");
+      }
     } catch (err) {
       var code = (err && err.code) || "PS_EXEC_FAILED";
       var message = (err && err.message) || String(err || "未知错误");
@@ -395,7 +419,10 @@
         ps_version: psVersion,
         worker_version: $W.CONFIG.workerVersion || "1.0.0",
         exec_mode: "cep",
-        paused: isPaused
+        busy: isBusy,
+        paused: isPaused,
+        quarantined: isQuarantined,
+        current_task_id: currentTaskId
       });
       pingTimer = setInterval(function () {
         sendWsJson({

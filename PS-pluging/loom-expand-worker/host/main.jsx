@@ -203,15 +203,16 @@ $._loomExpandWorker.runGenerativeExpand = function (args) {
       // 3. 执行 Adobe 原生 Generative Expand
       $._loomExpandWorker._executeGenerativeFillDescriptor(spec.prompt || "");
 
-      // 4. 导出 1~3 个变体
+      // 4. 导出 1~3 个变体（不静默吞掉多变体切换失败，明确上报变体完整性）
       var exported = [];
       var maxVariants = returnAll ? 3 : 1;
+      var variantWarning = "";
       for (var i = 0; i < maxVariants; i += 1) {
         if (i > 0) {
           try {
             $._loomExpandWorker._selectVariationIndex(i);
-          } catch (_varErr) {
-            // 若当前 PS 版本切变体 descriptor 不兼容，安全降级为已导出的变体
+          } catch (varErr) {
+            variantWarning = "PS " + app.version + " 变体切换不可用（" + (varErr.message || varErr.toString()) + "），仅导出 " + exported.length + "/" + maxVariants + " 个变体";
             break;
           }
         }
@@ -230,7 +231,10 @@ $._loomExpandWorker.runGenerativeExpand = function (args) {
       return {
         files: exported,
         width: expanded.width,
-        height: expanded.height
+        height: expanded.height,
+        requested_variants: maxVariants,
+        variants_complete: exported.length >= maxVariants,
+        variant_warning: variantWarning
       };
     }));
   } catch (e) {

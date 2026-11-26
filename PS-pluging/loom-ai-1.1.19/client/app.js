@@ -451,9 +451,11 @@
       var finalResult = await pollExpandTaskUntilDone(submitRes.task_id);
       if (!activeTask || activeTask.cancelled) return;
 
-      activeTask.stageText = "下载变体";
+      var expectedCount = Number(finalResult.requested_variants || 3);
+      var actualCount = (finalResult.outputs && finalResult.outputs.length) || 0;
+      activeTask.stageText = "下载成图";
       updateExpandButtonLabel();
-      setStatus("正在下载 3 张变体成图...", "default");
+      setStatus("正在下载 " + actualCount + " 张变体成图...", "default");
       var downloaded = await api.downloadVariantImages(finalResult.outputs, submitRes.task_id);
       if (!activeTask || activeTask.cancelled) return;
 
@@ -475,8 +477,15 @@
       await applyVariantByIndex(0, true);
 
       var elapsed = utils.formatElapsed(activeTask.startedAt);
-      setStatus("扩展完成（共 " + downloaded.length + " 个变体，点击缩略图切换）", "success");
-      appendLog("扩图完成，共 " + downloaded.length + " 个变体，总耗时 " + elapsed + "。", "success");
+      var variantsComplete = finalResult.variants_complete !== false && downloaded.length >= expectedCount;
+      if (!variantsComplete) {
+        var warnText = finalResult.variant_warning || ("仅返回 " + downloaded.length + "/" + expectedCount + " 个变体");
+        setStatus("扩展完成（仅返回 " + downloaded.length + "/" + expectedCount + " 变体）", "default");
+        appendLog("扩图完成但变体不足：" + warnText + "，总耗时 " + elapsed + "。", "error");
+      } else {
+        setStatus("扩展完成（共 " + downloaded.length + " 个变体，点击缩略图切换）", "success");
+        appendLog("扩图完成，共 " + downloaded.length + " 个变体，总耗时 " + elapsed + "。", "success");
+      }
     } catch (error) {
       if (activeTask && activeTask.cancelled) return;
       var msg = error && error.message ? error.message : String(error || "扩图失败");

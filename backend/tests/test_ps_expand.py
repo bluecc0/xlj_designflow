@@ -240,6 +240,120 @@ class TestPsExpand(unittest.TestCase):
             self.assertEqual(assigned2["type"], "task.assign")
             self.assertEqual(assigned2["task_id"], task2_id)
 
+    def test_reconnect_preserves_quarantine_and_busy_state(self) -> None:
+        """二审 P1 回归：同 PS 断线重连携带 busy/quarantined 时严禁派发第二单；task.rejected 可安全放回队列。"""
+        img = _make_png_bytes(200, 100)
+        r1 = self.client.post(
+            "/api/v1/expand/tasks",
+            headers=self.CLIENT_HEADERS,
+            files={"image": ("a.png", img, "image/png")},
+            data={"spec": json.dumps({"mode": "padding", "padding": {"top": 50, "right": 0, "bottom": 0, "left": 0}, "client_id": "u1"})},
+        )
+        r2 = self.client.post(
+            "/api/v1/expand/tasks",
+            headers=self.CLIENT_HEADERS,
+            files={"image": ("b.png", img, "image/png")},
+            data={"spec": json.dumps({"mode": "padding", "padding": {"top": 0, "right": 50, "bottom": 0, "left": 0}, "client_id": "u2"})},
+        )
+        task1_id = r1.json()["task_id"]
+        task2_id = r2.json()["task_id"]
+
+        # 第一单软超时后连接断开
+        with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=test-worker-secret") as ws1:
+            ws1.send_json({"type": "worker.hello", "ps_version": "26.0.0", "worker_version": "1.0.0", "busy": False, "quarantined": False})
+            assigned1 = ws1.receive_json()
+            self.assertEqual(assigned1["task_id"], task1_id)
+            ws1.send_json({
+                "type": "task.error",
+                "task_id": task1_id,
+                "error_code": "PS_EXEC_TIMEOUT",
+                "error_message": "soft timeout",
+                "quarantined": True,
+            })
+
+        # 同一个 PS（尚未重启恢复）用相同 worker_id 重连，hello 携带 busy=True, quarantined=True
+        with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=test-worker-secret") as ws_reconn:
+            ws_reconn.send_json({
+                "type": "worker.hello",
+                "ps_version": "26.0.0",
+                "worker_version": "1.0.0",
+                "busy": True,
+                "quarantined": True,
+                "current_task_id": task1_id,
+            })
+            ws_reconn.send_json({"type": "ping", "busy": True, "paused": False, "quarantined": True})
+            pong = ws_reconn.receive_json()
+            self.assertEqual(pong["type"], "pong")
+
+            # 第二单必须仍然处于 queued，绝不能被错误派发
+            t2_state = self.client.get(f"/api/v1/expand/tasks/{task2_id}", headers=self.CLIENT_HEADERS).json()
+            self.assertEqual(t2_state["status"], "queued")
+            st = self.client.get("/api/v1/expand/worker/status", headers=self.CLIENT_HEADERS).json()
+            self.assertTrue(st["quarantined"])
+            self.assertTrue(st["busy"])
+
+            # 只有当 Worker 明确上报原生已结束（busy=False, quarantined=False）才派发第二单
+            ws_reconn.send_json({"type": "ping", "busy": False, "paused": False, "quarantined": False})
+            msg_a = ws_reconn.receive_json()
+            msg_b = ws_reconn.receive_json()
+            types = {msg_a["type"]: msg_a, msg_b["type"]: msg_b}
+            self.assertIn("task.assign", types)
+            self.assertEqual(types["task.assign"]["task_id"], task2_id)
+
+            # 测试 task.rejected 兜底：若 Worker 拒收，任务放回 queued
+            ws_reconn.send_json({
+                "type": "task.rejected",
+                "task_id": task2_id,
+                "reason": "busy",
+                "busy": True,
+                "paused": False,
+                "quarantined": False,
+                "current_task_id": task1_id,
+            })
+            ws_reconn.send_json({"type": "ping", "busy": True, "paused": False, "quarantined": False})
+            self.assertEqual(ws_reconn.receive_json()["type"], "pong")
+            t2_after_reject = self.client.get(f"/api/v1/expand/tasks/{task2_id}", headers=self.CLIENT_HEADERS).json()
+            self.assertEqual(t2_after_reject["status"], "queued")
+
+    def test_partial_variants_reported_explicitly(self) -> None:
+        """二审 P2 回归：请求 3 变体但 PS 仅返回 1 张时，必须明确标记 variants_complete=False 与 warning。"""
+        img = _make_png_bytes(200, 100)
+        r_sub = self.client.post(
+            "/api/v1/expand/tasks",
+            headers=self.CLIENT_HEADERS,
+            files={"image": ("demo.png", img, "image/png")},
+            data={"spec": json.dumps({"mode": "padding", "padding": {"top": 32, "right": 32, "bottom": 0, "left": 0}, "return_all_variants": True})},
+        )
+        task_id = r_sub.json()["task_id"]
+
+        with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=test-worker-secret") as ws:
+            ws.send_json({"type": "worker.hello", "ps_version": "26.0.0", "worker_version": "1.0.0"})
+            assigned = ws.receive_json()
+            ru = self.client.post(
+                assigned["upload_url"],
+                headers=self.WORKER_HEADERS,
+                data={"task_id": task_id, "variant_index": "0"},
+                files={"file": ("v0.png", _make_png_bytes(232, 132), "image/png")},
+            )
+            ws.send_json({
+                "type": "task.result",
+                "task_id": task_id,
+                "outputs": [ru.json()],
+                "requested_variants": 3,
+                "variants_complete": False,
+                "variant_warning": "PS 26.0.0 变体切换不可用，仅导出 1/3 个变体",
+                "duration_ms": 8200,
+            })
+            ws.send_json({"type": "ping", "busy": False, "paused": False, "quarantined": False})
+            self.assertEqual(ws.receive_json()["type"], "pong")
+
+        res = self.client.get(f"/api/v1/expand/tasks/{task_id}", headers=self.CLIENT_HEADERS).json()
+        self.assertEqual(res["status"], "succeeded")
+        self.assertEqual(len(res["outputs"]), 1)
+        self.assertEqual(res["requested_variants"], 3)
+        self.assertFalse(res["variants_complete"])
+        self.assertIn("1/3", res["variant_warning"])
+
     def test_end_to_end_worker_ws_flow(self) -> None:
         img = _make_png_bytes(200, 100)
 
