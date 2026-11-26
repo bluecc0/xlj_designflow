@@ -701,9 +701,16 @@ class ExpandCoordinator:
             variant_warning = str(data.get("variant_warning") or "").strip()
             if not variants_complete and not variant_warning:
                 variant_warning = f"仅生成 {len(outputs)}/{requested_variants} 个变体（当前 Photoshop 版本暂不支持自动切换多变体）。"
+            ack_payload: dict[str, Any] = {
+                "type": "task.ack",
+                "task_id": task_id,
+                "accepted": False,
+                "status": "not_found",
+                "reason": "task_id_missing",
+            }
             if task_id:
                 with _get_conn() as conn:
-                    conn.execute(
+                    cur = conn.execute(
                         """
                         UPDATE expand_tasks
                         SET status = 'succeeded',
@@ -731,12 +738,48 @@ class ExpandCoordinator:
                             worker.worker_id,
                         ),
                     )
-                    conn.commit()
+                    if cur.rowcount == 1:
+                        conn.commit()
+                        ack_payload = {
+                            "type": "task.ack",
+                            "task_id": task_id,
+                            "accepted": True,
+                            "status": "succeeded",
+                        }
+                    else:
+                        row = conn.execute(
+                            "SELECT status, worker_id FROM expand_tasks WHERE task_id = ?",
+                            (task_id,),
+                        ).fetchone()
+                        if not row:
+                            ack_payload = {
+                                "type": "task.ack",
+                                "task_id": task_id,
+                                "accepted": False,
+                                "status": "not_found",
+                                "reason": "task_not_found",
+                            }
+                        elif row["status"] == "succeeded" and row["worker_id"] == worker.worker_id:
+                            ack_payload = {
+                                "type": "task.ack",
+                                "task_id": task_id,
+                                "accepted": True,
+                                "idempotent": True,
+                                "status": "succeeded",
+                            }
+                        else:
+                            ack_payload = {
+                                "type": "task.ack",
+                                "task_id": task_id,
+                                "accepted": False,
+                                "status": str(row["status"]),
+                                "reason": "task_not_processing_or_owner_mismatch",
+                            }
             if worker.current_task_id == task_id:
                 worker.busy = False
                 worker.current_task_id = None
             try:
-                await worker.websocket.send_json({"type": "task.ack", "task_id": task_id, "status": "succeeded"})
+                await worker.websocket.send_json(ack_payload)
             except Exception:
                 pass
             await self.dispatch_next()
@@ -748,9 +791,16 @@ class ExpandCoordinator:
             error_message = str(data.get("error_message") or "Photoshop 执行失败。")
             next_status = "timeout" if error_code == "PS_EXEC_TIMEOUT" else "failed"
             should_quarantine = (error_code == "PS_EXEC_TIMEOUT") or bool(data.get("quarantined", False))
+            err_ack_payload: dict[str, Any] = {
+                "type": "task.ack",
+                "task_id": task_id,
+                "accepted": False,
+                "status": "not_found",
+                "reason": "task_id_missing",
+            }
             if task_id:
                 with _get_conn() as conn:
-                    conn.execute(
+                    cur = conn.execute(
                         """
                         UPDATE expand_tasks
                         SET status = ?,
@@ -763,9 +813,45 @@ class ExpandCoordinator:
                         """,
                         (next_status, error_code, error_message, _now_iso(), _now_ts(), task_id, worker.worker_id),
                     )
-                    conn.commit()
+                    if cur.rowcount == 1:
+                        conn.commit()
+                        err_ack_payload = {
+                            "type": "task.ack",
+                            "task_id": task_id,
+                            "accepted": True,
+                            "status": next_status,
+                        }
+                    else:
+                        row = conn.execute(
+                            "SELECT status, worker_id FROM expand_tasks WHERE task_id = ?",
+                            (task_id,),
+                        ).fetchone()
+                        if not row:
+                            err_ack_payload = {
+                                "type": "task.ack",
+                                "task_id": task_id,
+                                "accepted": False,
+                                "status": "not_found",
+                                "reason": "task_not_found",
+                            }
+                        elif row["status"] == next_status and row["worker_id"] == worker.worker_id:
+                            err_ack_payload = {
+                                "type": "task.ack",
+                                "task_id": task_id,
+                                "accepted": True,
+                                "idempotent": True,
+                                "status": next_status,
+                            }
+                        else:
+                            err_ack_payload = {
+                                "type": "task.ack",
+                                "task_id": task_id,
+                                "accepted": False,
+                                "status": str(row["status"]),
+                                "reason": "task_not_processing_or_owner_mismatch",
+                            }
             try:
-                await worker.websocket.send_json({"type": "task.ack", "task_id": task_id, "status": next_status})
+                await worker.websocket.send_json(err_ack_payload)
             except Exception:
                 pass
             if should_quarantine:

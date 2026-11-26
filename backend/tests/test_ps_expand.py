@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import gc
 import io
 import json
 import tempfile
+import time
 import unittest
 import warnings
 from pathlib import Path
@@ -408,12 +410,79 @@ class TestPsExpand(unittest.TestCase):
             })
             ack = ws2.receive_json()
             self.assertEqual(ack["type"], "task.ack")
+            self.assertTrue(ack["accepted"])
             self.assertEqual(ack["task_id"], task_id)
             self.assertEqual(ack["status"], "succeeded")
+
+            # 幂等重复交付应返回 accepted=True, idempotent=True
+            ws2.send_json({
+                "type": "task.result",
+                "task_id": task_id,
+                "outputs": [ru.json()],
+                "requested_variants": 1,
+                "variants_complete": True,
+                "duration_ms": 9500,
+            })
+            ack_dup = ws2.receive_json()
+            self.assertEqual(ack_dup["type"], "task.ack")
+            self.assertTrue(ack_dup["accepted"])
+            self.assertTrue(ack_dup.get("idempotent"))
+            self.assertEqual(ack_dup["status"], "succeeded")
 
         done = self.client.get(f"/api/v1/expand/tasks/{task_id}", headers=self.CLIENT_HEADERS).json()
         self.assertEqual(done["status"], "succeeded")
         self.assertEqual(len(done["outputs"]), 1)
+
+    def test_late_result_after_sweep_timeout_returns_rejected_ack(self) -> None:
+        """四审 P2 回归：sweeper 已判超时后迟到交付 task.result，ack 必须返回 accepted=False 与真实终态 timeout。"""
+        img = _make_png_bytes(200, 100)
+        r_sub = self.client.post(
+            "/api/v1/expand/tasks",
+            headers=self.CLIENT_HEADERS,
+            files={"image": ("demo.png", img, "image/png")},
+            data={"spec": json.dumps({"mode": "padding", "padding": {"top": 40, "right": 0, "bottom": 0, "left": 0}, "return_all_variants": False})},
+        )
+        task_id = r_sub.json()["task_id"]
+
+        with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=test-worker-secret") as ws1:
+            ws1.send_json({"type": "worker.hello", "ps_version": "26.0.0", "worker_version": "1.0.0"})
+            assigned = ws1.receive_json()
+            self.assertEqual(assigned["task_id"], task_id)
+
+        # 模拟断线超过宽限期并执行 sweep_once
+        ps_expand.coordinator._disconnected_at["win-ps-01"] = time.time() - (ps_expand._DISCONNECT_GRACE_SEC + 10)
+        asyncio.run(ps_expand.coordinator.sweep_once())
+
+        timed_out = self.client.get(f"/api/v1/expand/tasks/{task_id}", headers=self.CLIENT_HEADERS).json()
+        self.assertEqual(timed_out["status"], "timeout")
+
+        # 同 Worker 重连补交结果，服务端必须如实返回 accepted=False, status='timeout'
+        with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=test-worker-secret") as ws2:
+            ws2.send_json({
+                "type": "worker.hello",
+                "ps_version": "26.0.0",
+                "worker_version": "1.0.0",
+                "busy": True,
+                "quarantined": False,
+                "current_task_id": task_id,
+            })
+            ws2.send_json({
+                "type": "task.result",
+                "task_id": task_id,
+                "outputs": [{"variant_index": 0, "url": f"/api/v1/expand/files/{task_id}/v0.png"}],
+                "requested_variants": 1,
+                "variants_complete": True,
+                "duration_ms": 60000,
+            })
+            ack = ws2.receive_json()
+            self.assertEqual(ack["type"], "task.ack")
+            self.assertFalse(ack["accepted"])
+            self.assertEqual(ack["status"], "timeout")
+            self.assertEqual(ack["reason"], "task_not_processing_or_owner_mismatch")
+
+        after = self.client.get(f"/api/v1/expand/tasks/{task_id}", headers=self.CLIENT_HEADERS).json()
+        self.assertEqual(after["status"], "timeout")
+        self.assertEqual(after["outputs"], [])
 
     def test_end_to_end_worker_ws_flow(self) -> None:
         img = _make_png_bytes(200, 100)

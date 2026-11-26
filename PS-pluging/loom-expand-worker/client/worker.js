@@ -219,19 +219,21 @@
     return false;
   }
 
-  function clearPendingFinal(taskId, reason) {
+  function clearPendingFinal(taskId, shouldDeleteWorkDir, reason, logVariant) {
     if (!pendingFinal) return;
     if (taskId && pendingFinal.taskId !== taskId) return;
     var item = pendingFinal;
     pendingFinal = null;
     if (item.retryTimer) clearInterval(item.retryTimer);
-    removeDirRecursive(item.workDir);
+    if (shouldDeleteWorkDir) {
+      removeDirRecursive(item.workDir);
+    }
     if (!isQuarantined && currentTaskId === item.taskId) {
       isBusy = false;
       currentTaskId = null;
       currentTaskStartedAt = 0;
     }
-    if (reason) appendLog(reason, "muted");
+    if (reason) appendLog(reason, logVariant || "muted");
     refreshStatusUI(ws && ws.readyState === window.WebSocket.OPEN ? "connected" : "offline");
     writeHeartbeatFile();
   }
@@ -239,7 +241,13 @@
   function flushPendingFinal() {
     if (!pendingFinal) return;
     if (Date.now() - pendingFinal.createdAt > 120000) {
-      clearPendingFinal(pendingFinal.taskId, "结果回传确认超时（>120s），已放弃重发并清理本地临时目录。");
+      var preservedDir = pendingFinal.workDir;
+      clearPendingFinal(
+        pendingFinal.taskId,
+        false,
+        "结果回传确认超时（>120s），已停止重发并保留本地成图目录供排查：" + preservedDir,
+        "error"
+      );
       return;
     }
     if (sendWsJson(pendingFinal.payload)) {
@@ -505,7 +513,24 @@
       if (msg.type === "task.assign") {
         executeAssignedTask(msg);
       } else if (msg.type === "task.ack") {
-        clearPendingFinal(msg.task_id, "服务端已确认任务 " + msg.task_id + " 结果（" + (msg.status || "ok") + "）。");
+        if (msg.accepted === false) {
+          var keptDir = pendingFinal && pendingFinal.taskId === msg.task_id ? pendingFinal.workDir : "";
+          clearPendingFinal(
+            msg.task_id,
+            false,
+            "服务端未接收任务 " + msg.task_id + " 的结果（真实状态=" + (msg.status || "unknown") +
+              "，原因=" + (msg.reason || "rejected") + "），已保留本地目录供排查：" + keptDir,
+            "error"
+          );
+        } else {
+          clearPendingFinal(
+            msg.task_id,
+            true,
+            "服务端已确认任务 " + msg.task_id + " 结果（" + (msg.status || "ok") +
+              (msg.idempotent ? "，幂等确认" : "") + "）。",
+            "muted"
+          );
+        }
       }
     };
 
