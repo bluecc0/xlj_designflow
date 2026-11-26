@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loom AI</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="panel">
+    <div class="title-row">
+      <div class="title-group">
+        <h1 class="title">Loom AI</h1>
+        <span class="version-tag">v2.0.0</span>
+      </div>
+      <div class="header-actions">
+        <span id="connectionStatus" class="connection-status connection-status--checking">Checking</span>
+      </div>
+    </div>
+
+    <section class="section">
+      <div class="section__header">
+        <h2 class="section__title" id="docHint">生成式扩展</h2>
+      </div>
+
+      <textarea
+        id="promptInput"
+        class="prompt-input"
+        placeholder="可选：描述要扩展的内容，留空则智能无缝延展"
+      ></textarea>
+
+      <div id="cropHintBanner" class="crop-banner crop-banner--hidden">
+        请在画布拖出扩展范围，按 <strong>Enter</strong> 确认裁剪
+      </div>
+
+      <div id="queueHintBanner" class="queue-banner queue-banner--hidden"></div>
+
+      <div class="action-stack">
+        <button id="expandButton" class="primary-button" type="button">生成式扩展</button>
+        <button id="cancelButton" class="cancel-button cancel-button--hidden" type="button">取消</button>
+      </div>
+    </section>
+
+    <section id="variantsSection" class="section variants-section variants-section--hidden">
+      <div class="section__header">
+        <h2 class="section__title">变体结果（点击切换）</h2>
+        <span id="variantsMeta" class="variants-meta"></span>
+      </div>
+      <div id="variantsGrid" class="variants-grid"></div>
+    </section>
+
+    <section class="section section--tools">
+      <div class="section__header">
+        <h2 class="section__title">特殊品</h2>
+      </div>
+      <div class="tool-grid">
+        <button id="openTemplateButton" class="secondary-button" type="button">打开模板</button>
+        <button id="exportAssetsButton" class="secondary-button" type="button">导出素材</button>
+      </div>
+    </section>
+
+    <div class="status-card">
+      <div class="status-row">
+        <p id="statusText" class="status-text" aria-live="polite">点击「生成式扩展」进入裁剪</p>
+        <button id="toggleLogButton" class="log-toggle" type="button">展开日志</button>
+      </div>
+      <div id="logPanel" class="log-panel log-panel--collapsed"></div>
+    </div>
+  </main>
+
+  <script src="./CSInterface.js"></script>
+  <script src="./config.js"></script>
+  <script src="./utils.js"></script>
+  <script src="./api.js"></script>
+  <script src="./host-bridge.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
