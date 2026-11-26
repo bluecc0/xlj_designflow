@@ -219,6 +219,9 @@ class TestPsExpand(unittest.TestCase):
                 "error_message": "soft timeout",
                 "quarantined": True,
             })
+            ack = ws.receive_json()
+            self.assertEqual(ack["type"], "task.ack")
+            self.assertEqual(ack["task_id"], task1_id)
             # 发 ping 确认同步点：此时仍处于隔离态，第二单不能被派发
             ws.send_json({"type": "ping", "busy": True, "paused": False, "quarantined": True})
             pong = ws.receive_json()
@@ -344,6 +347,9 @@ class TestPsExpand(unittest.TestCase):
                 "variant_warning": "PS 26.0.0 变体切换不可用，仅导出 1/3 个变体",
                 "duration_ms": 8200,
             })
+            ack = ws.receive_json()
+            self.assertEqual(ack["type"], "task.ack")
+            self.assertEqual(ack["task_id"], task_id)
             ws.send_json({"type": "ping", "busy": False, "paused": False, "quarantined": False})
             self.assertEqual(ws.receive_json()["type"], "pong")
 
@@ -353,6 +359,61 @@ class TestPsExpand(unittest.TestCase):
         self.assertEqual(res["requested_variants"], 3)
         self.assertFalse(res["variants_complete"])
         self.assertIn("1/3", res["variant_warning"])
+
+    def test_transient_disconnect_recovers_and_delivers_result(self) -> None:
+        """三审 P1 回归：执行中短暂断线不立即判 timeout，同 Worker 重连后可正常交付 task.result 并收到 task.ack。"""
+        img = _make_png_bytes(200, 100)
+        r_sub = self.client.post(
+            "/api/v1/expand/tasks",
+            headers=self.CLIENT_HEADERS,
+            files={"image": ("demo.png", img, "image/png")},
+            data={"spec": json.dumps({"mode": "padding", "padding": {"top": 40, "right": 0, "bottom": 0, "left": 0}, "return_all_variants": False})},
+        )
+        task_id = r_sub.json()["task_id"]
+
+        # 接单后模拟短暂网络断线
+        with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=test-worker-secret") as ws1:
+            ws1.send_json({"type": "worker.hello", "ps_version": "26.0.0", "worker_version": "1.0.0"})
+            assigned = ws1.receive_json()
+            self.assertEqual(assigned["task_id"], task_id)
+
+        # 断线后仍在宽限期内，任务必须保持 processing 而非立刻 timeout
+        mid = self.client.get(f"/api/v1/expand/tasks/{task_id}", headers=self.CLIENT_HEADERS).json()
+        self.assertEqual(mid["status"], "processing")
+
+        # 同一个 Worker 重连上报原任务 busy，上传成图并交付 task.result
+        with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=test-worker-secret") as ws2:
+            ws2.send_json({
+                "type": "worker.hello",
+                "ps_version": "26.0.0",
+                "worker_version": "1.0.0",
+                "busy": True,
+                "quarantined": False,
+                "current_task_id": task_id,
+            })
+            ru = self.client.post(
+                assigned["upload_url"],
+                headers=self.WORKER_HEADERS,
+                data={"task_id": task_id, "variant_index": "0"},
+                files={"file": ("v0.png", _make_png_bytes(200, 140), "image/png")},
+            )
+            self.assertEqual(ru.status_code, 200)
+            ws2.send_json({
+                "type": "task.result",
+                "task_id": task_id,
+                "outputs": [ru.json()],
+                "requested_variants": 1,
+                "variants_complete": True,
+                "duration_ms": 9500,
+            })
+            ack = ws2.receive_json()
+            self.assertEqual(ack["type"], "task.ack")
+            self.assertEqual(ack["task_id"], task_id)
+            self.assertEqual(ack["status"], "succeeded")
+
+        done = self.client.get(f"/api/v1/expand/tasks/{task_id}", headers=self.CLIENT_HEADERS).json()
+        self.assertEqual(done["status"], "succeeded")
+        self.assertEqual(len(done["outputs"]), 1)
 
     def test_end_to_end_worker_ws_flow(self) -> None:
         img = _make_png_bytes(200, 100)
@@ -399,6 +460,8 @@ class TestPsExpand(unittest.TestCase):
                 outputs.append(ru.json())
 
             ws.send_json({"type": "task.result", "task_id": task_id, "outputs": outputs, "duration_ms": 12340})
+            ack = ws.receive_json()
+            self.assertEqual(ack["type"], "task.ack")
             ws.send_json({"type": "ping", "busy": False, "paused": False, "quarantined": False})
             pong = ws.receive_json()
             self.assertEqual(pong["type"], "pong")

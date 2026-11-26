@@ -310,20 +310,13 @@
           return;
         }
         if (state.width !== cropSession.origWidth || state.height !== cropSession.origHeight) {
-          // 给原生 JSON 回调 180ms 优先处理（可拿到精确不对称坐标）
+          // 检测到画布尺寸变化，等待原生 Crop 事件送达精确裁剪坐标（绝不通过宽高猜测对称坐标，避免破坏单侧扩图）
           var capturedSession = cropSession;
+          stopCropFallbackPoll();
           setTimeout(function () {
             if (phase !== "selecting_crop" || cropSession !== capturedSession || cropHandling) return;
-            var dw = state.width - capturedSession.origWidth;
-            var dh = state.height - capturedSession.origHeight;
-            var fallbackRect = {
-              left: dw > 0 ? -Math.floor(dw / 2) : Math.floor(-dw / 2),
-              top: dh > 0 ? -Math.floor(dh / 2) : Math.floor(-dh / 2),
-              right: capturedSession.origWidth + (dw > 0 ? Math.ceil(dw / 2) : -Math.ceil(-dw / 2)),
-              bottom: capturedSession.origHeight + (dh > 0 ? Math.ceil(dh / 2) : -Math.ceil(-dh / 2))
-            };
-            handleCropConfirmed(fallbackRect, "poll");
-          }, 180);
+            cancelCropSession("未捕获到 Photoshop 精确裁剪坐标，已取消本次提交（请撤销裁剪后重试）。");
+          }, 1200);
         }
       } catch (_pollErr) {}
     }, CONFIG.cropFallbackPollMs || 700);
@@ -474,7 +467,13 @@
       activeTask.stageText = "写回画布";
       updateExpandButtonLabel();
       setStatus("正在置入默认变体...", "default");
-      await applyVariantByIndex(0, true);
+      var placeResult = await applyVariantByIndex(0, true);
+      if (!placeResult || !placeResult.ok) {
+        var placeErr = (placeResult && placeResult.error) || "置入画布失败";
+        setStatus("成图已下载，但置入画布失败：" + placeErr, "error");
+        appendLog("默认变体写回画布失败：" + placeErr + "（已保留变体缩略图，可恢复文档后点击缩略图重试）。", "error");
+        return;
+      }
 
       var elapsed = utils.formatElapsed(activeTask.startedAt);
       var variantsComplete = finalResult.variants_complete !== false && downloaded.length >= expectedCount;
@@ -617,8 +616,8 @@
   }
 
   async function applyVariantByIndex(index, isInitial) {
-    if (!activeVariants || !activeVariants.items[index]) return;
-    if (!isInitial && (phase !== "idle" || isSwitchingVariant)) return;
+    if (!activeVariants || !activeVariants.items[index]) return { ok: false, error: "变体数据不存在" };
+    if (!isInitial && (phase !== "idle" || isSwitchingVariant)) return { ok: false, error: "当前正在操作中" };
 
     var item = activeVariants.items[index];
     isSwitchingVariant = true;
@@ -642,10 +641,14 @@
           "muted"
         );
       }
+      return { ok: true, created: Boolean(res && res.created) };
     } catch (error) {
       var msg = error && error.message ? error.message : "切换变体失败";
-      setStatus(msg, "error");
-      appendLog("切换变体 " + (index + 1) + " 失败：" + msg, "error");
+      if (!isInitial) {
+        setStatus(msg, "error");
+        appendLog("切换变体 " + (index + 1) + " 失败：" + msg, "error");
+      }
+      return { ok: false, error: msg };
     } finally {
       isSwitchingVariant = false;
       renderVariants();

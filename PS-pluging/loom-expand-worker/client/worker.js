@@ -33,6 +33,7 @@
   var isQuarantined = false;
   var currentTaskId = null;
   var currentTaskStartedAt = 0;
+  var pendingFinal = null; // { taskId, payload, workDir, retryTimer, createdAt }
   var psVersion = "unknown";
   var completedCount = 0;
   var reconnectAttempt = 0;
@@ -213,7 +214,62 @@
   function sendWsJson(obj) {
     if (ws && ws.readyState === window.WebSocket.OPEN) {
       ws.send(JSON.stringify(obj));
+      return true;
     }
+    return false;
+  }
+
+  function clearPendingFinal(taskId, reason) {
+    if (!pendingFinal) return;
+    if (taskId && pendingFinal.taskId !== taskId) return;
+    var item = pendingFinal;
+    pendingFinal = null;
+    if (item.retryTimer) clearInterval(item.retryTimer);
+    removeDirRecursive(item.workDir);
+    if (!isQuarantined && currentTaskId === item.taskId) {
+      isBusy = false;
+      currentTaskId = null;
+      currentTaskStartedAt = 0;
+    }
+    if (reason) appendLog(reason, "muted");
+    refreshStatusUI(ws && ws.readyState === window.WebSocket.OPEN ? "connected" : "offline");
+    writeHeartbeatFile();
+  }
+
+  function flushPendingFinal() {
+    if (!pendingFinal) return;
+    if (Date.now() - pendingFinal.createdAt > 120000) {
+      clearPendingFinal(pendingFinal.taskId, "结果回传确认超时（>120s），已放弃重发并清理本地临时目录。");
+      return;
+    }
+    if (sendWsJson(pendingFinal.payload)) {
+      appendLog("已发送任务 " + pendingFinal.taskId + " 最终结果，等待服务端确认...", "muted");
+    }
+  }
+
+  function enqueueFinalDelivery(taskId, payload, workDir) {
+    if (pendingFinal && pendingFinal.retryTimer) clearInterval(pendingFinal.retryTimer);
+    pendingFinal = {
+      taskId: taskId,
+      payload: payload,
+      workDir: workDir,
+      createdAt: Date.now(),
+      retryTimer: setInterval(flushPendingFinal, 3000)
+    };
+    flushPendingFinal();
+  }
+
+  function uploadVariantWithRetry(uploadUrl, taskId, variantIndex, filePath) {
+    var attempts = 0;
+    function tryOnce() {
+      attempts += 1;
+      return uploadVariantFile(uploadUrl, taskId, variantIndex, filePath).catch(function (err) {
+        if (attempts >= 3) throw err;
+        appendLog("上传变体 " + variantIndex + " 失败（第 " + attempts + " 次），2s 后重试...", "muted");
+        return new Promise(function (resolve) { setTimeout(resolve, 2000); }).then(tryOnce);
+      });
+    }
+    return tryOnce();
   }
 
   async function executeAssignedTask(msg) {
@@ -299,7 +355,7 @@
       appendLog("上传 " + exportedFiles.length + " 张变体成图...", "muted");
       var uploadedOutputs = [];
       for (var i = 0; i < exportedFiles.length; i += 1) {
-        var uploaded = await uploadVariantFile(msg.upload_url, taskId, i, exportedFiles[i]);
+        var uploaded = await uploadVariantWithRetry(msg.upload_url, taskId, i, exportedFiles[i]);
         uploadedOutputs.push(uploaded);
       }
 
@@ -307,7 +363,7 @@
       var requestedVariants = Number((jsxRes && jsxRes.requested_variants) || ((msg.spec && msg.spec.return_all_variants === false) ? 1 : 3));
       var variantsComplete = Boolean(jsxRes && jsxRes.variants_complete) && uploadedOutputs.length >= requestedVariants;
       var variantWarning = String((jsxRes && jsxRes.variant_warning) || "");
-      sendWsJson({
+      var resultPayload = {
         type: "task.result",
         task_id: taskId,
         outputs: uploadedOutputs,
@@ -315,7 +371,7 @@
         variants_complete: variantsComplete,
         variant_warning: variantWarning,
         duration_ms: durationMs
-      });
+      };
       if (!variantsComplete) {
         appendLog(
           "完成（变体不足）" + taskId + "：" + uploadedOutputs.length + "/" + requestedVariants +
@@ -325,6 +381,9 @@
       } else {
         appendLog("完成 " + taskId + "（" + uploadedOutputs.length + " 变体，" + (durationMs / 1000).toFixed(1) + "s）。", "success");
       }
+      // 等待服务端 task.ack 后再清理临时目录与释放 isBusy，断线重连时自动重发
+      enqueueFinalDelivery(taskId, resultPayload, workDir);
+      return;
     } catch (err) {
       var code = (err && err.code) || "PS_EXEC_FAILED";
       var message = (err && err.message) || String(err || "未知错误");
@@ -343,16 +402,17 @@
         refreshStatusUI(ws && ws.readyState === window.WebSocket.OPEN ? "connected" : "offline");
         writeHeartbeatFile();
       } else {
-        sendWsJson({
+        appendLog("失败 " + taskId + " [" + code + "] " + message, "error");
+        enqueueFinalDelivery(taskId, {
           type: "task.error",
           task_id: taskId,
           error_code: code,
           error_message: message
-        });
-        appendLog("失败 " + taskId + " [" + code + "] " + message, "error");
+        }, workDir);
+        return;
       }
     } finally {
-      if (!enteredQuarantine) {
+      if (!enteredQuarantine && !pendingFinal) {
         removeDirRecursive(workDir);
         isBusy = false;
         currentTaskId = null;
@@ -424,6 +484,9 @@
         quarantined: isQuarantined,
         current_task_id: currentTaskId
       });
+      if (pendingFinal) {
+        flushPendingFinal();
+      }
       pingTimer = setInterval(function () {
         sendWsJson({
           type: "ping",
@@ -441,6 +504,8 @@
       if (!msg || !msg.type) return;
       if (msg.type === "task.assign") {
         executeAssignedTask(msg);
+      } else if (msg.type === "task.ack") {
+        clearPendingFinal(msg.task_id, "服务端已确认任务 " + msg.task_id + " 结果（" + (msg.status || "ok") + "）。");
       }
     };
 

@@ -60,6 +60,7 @@ _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _ASPECT_RATIO_RE = re.compile(r"^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$")
 
 _HEARTBEAT_TIMEOUT_SEC = 45.0
+_DISCONNECT_GRACE_SEC = 45.0
 _SWEEPER_INTERVAL_SEC = 15.0
 _PROCESSING_GRACE_SEC = 30.0
 _DEFAULT_AVG_DURATION_SEC = 20.0
@@ -370,6 +371,7 @@ class ConnectedWorker:
 class ExpandCoordinator:
     def __init__(self) -> None:
         self._workers: dict[str, ConnectedWorker] = {}
+        self._disconnected_at: dict[str, float] = {}
         self._lock = asyncio.Lock()
         self._sweeper_task: Optional[asyncio.Task] = None
 
@@ -398,6 +400,7 @@ class ExpandCoordinator:
         old_worker: Optional[ConnectedWorker] = None
         async with self._lock:
             old_worker = self._workers.get(worker_id)
+            self._disconnected_at.pop(worker_id, None)
             worker = ConnectedWorker(worker_id=worker_id, websocket=websocket)
             self._workers[worker_id] = worker
         if old_worker is not None:
@@ -409,17 +412,19 @@ class ExpandCoordinator:
         return worker
 
     async def unregister_worker(self, worker_id: str, websocket: WebSocket) -> None:
-        orphaned_task_id: Optional[str] = None
+        in_flight_task_id: Optional[str] = None
         async with self._lock:
             current = self._workers.get(worker_id)
             if current and current.websocket is websocket:
-                orphaned_task_id = current.current_task_id
+                in_flight_task_id = current.current_task_id
                 del self._workers[worker_id]
-        if orphaned_task_id:
-            logger.warning("[ps_expand] worker %s disconnected during task %s", worker_id, orphaned_task_id)
-            self._mark_task_timeout(
-                orphaned_task_id,
-                "订阅机连接中断，任务已超时，请重新提交。",
+                self._disconnected_at[worker_id] = _now_ts()
+        if in_flight_task_id:
+            # 短暂网络抖动不会中断 PS 原生生成：保留 processing 状态等待宽限期内重连交付结果，超时由 sweeper 回收
+            logger.warning(
+                "[ps_expand] worker %s disconnected during task %s; keeping processing within grace window",
+                worker_id,
+                in_flight_task_id,
             )
 
     def get_worker_status(self) -> dict[str, Any]:
@@ -567,6 +572,23 @@ class ExpandCoordinator:
             )
             conn.commit()
 
+    def _mark_worker_stale_processing_timeout(self, worker_id: str, message: str) -> None:
+        with _get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE expand_tasks
+                SET status = 'timeout',
+                    stage = '',
+                    error_code = 'PS_EXEC_TIMEOUT',
+                    error_message = ?,
+                    finished_at = ?,
+                    updated_ts = ?
+                WHERE worker_id = ? AND status = 'processing'
+                """,
+                (message, _now_iso(), _now_ts(), worker_id),
+            )
+            conn.commit()
+
     async def handle_worker_message(self, worker: ConnectedWorker, data: dict[str, Any]) -> None:
         msg_type = str(data.get("type") or "").strip()
         worker.last_heartbeat_ts = _now_ts()
@@ -592,6 +614,12 @@ class ExpandCoordinator:
                 worker.quarantined,
                 worker.current_task_id,
             )
+            # 若 Worker 重连后明确上报空闲且未隔离（说明 PS 已重启，原执行任务已中断），回收其遗留 processing 任务
+            if not worker.busy and not worker.quarantined:
+                self._mark_worker_stale_processing_timeout(
+                    worker.worker_id,
+                    "订阅机已重启，中断的任务已超时，请重新提交。",
+                )
             if not worker.busy and not worker.paused and not worker.quarantined:
                 await self.dispatch_next()
             return
@@ -689,7 +717,7 @@ class ExpandCoordinator:
                             error_message = NULL,
                             finished_at = ?,
                             updated_ts = ?
-                        WHERE task_id = ? AND status = 'processing'
+                        WHERE task_id = ? AND status = 'processing' AND worker_id = ?
                         """,
                         (
                             json.dumps(outputs, ensure_ascii=False),
@@ -700,12 +728,17 @@ class ExpandCoordinator:
                             _now_iso(),
                             _now_ts(),
                             task_id,
+                            worker.worker_id,
                         ),
                     )
                     conn.commit()
             if worker.current_task_id == task_id:
                 worker.busy = False
                 worker.current_task_id = None
+            try:
+                await worker.websocket.send_json({"type": "task.ack", "task_id": task_id, "status": "succeeded"})
+            except Exception:
+                pass
             await self.dispatch_next()
             return
 
@@ -726,11 +759,15 @@ class ExpandCoordinator:
                             error_message = ?,
                             finished_at = ?,
                             updated_ts = ?
-                        WHERE task_id = ? AND status = 'processing'
+                        WHERE task_id = ? AND status = 'processing' AND worker_id = ?
                         """,
-                        (next_status, error_code, error_message, _now_iso(), _now_ts(), task_id),
+                        (next_status, error_code, error_message, _now_iso(), _now_ts(), task_id, worker.worker_id),
                     )
                     conn.commit()
+            try:
+                await worker.websocket.send_json({"type": "task.ack", "task_id": task_id, "status": next_status})
+            except Exception:
+                pass
             if should_quarantine:
                 # 软超时不代表 Photoshop 原生动作已退出：隔离 Worker，禁止继续派单，等待原生完成或 Watchdog 重启恢复
                 worker.quarantined = True
@@ -778,16 +815,24 @@ class ExpandCoordinator:
             except Exception:
                 pass
 
-        # 2. 扫描执行超时的孤儿 processing 任务
+        # 2. 扫描执行超时或断线超过宽限期的孤儿 processing 任务
         timed_out_ids: list[str] = []
+        async with self._lock:
+            connected_ids = set(self._workers.keys())
+            disconnected_snapshot = dict(self._disconnected_at)
         with _get_conn() as conn:
             rows = conn.execute(
                 "SELECT task_id, worker_id, started_at FROM expand_tasks WHERE status = 'processing'"
             ).fetchall()
             for r in rows:
                 started = float(r["started_at"] or 0.0)
+                wid = str(r["worker_id"] or "")
                 if started and (now - started) > timeout_limit:
                     timed_out_ids.append(r["task_id"])
+                elif wid and wid not in connected_ids:
+                    disc_ts = disconnected_snapshot.get(wid, started)
+                    if disc_ts and (now - disc_ts) > _DISCONNECT_GRACE_SEC:
+                        timed_out_ids.append(r["task_id"])
 
         for tid in timed_out_ids:
             logger.warning("[ps_expand] task %s exceeded processing timeout, marking timeout and quarantining worker", tid)
