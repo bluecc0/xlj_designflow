@@ -1250,6 +1250,7 @@ async def get_expand_input_file_for_worker(
 async def upload_expand_variant_from_worker(
     task_id: str = Form(...),
     variant_index: int = Form(0),
+    artifact_type: str = Form("preview"),
     file: UploadFile = File(...),
     x_worker_token: Optional[str] = Header(default=None, alias="X-Worker-Token"),
     token: Optional[str] = Query(default=None),
@@ -1258,9 +1259,31 @@ async def upload_expand_variant_from_worker(
     if not _SAFE_SEGMENT_RE.match(task_id):
         raise HTTPException(status_code=400, detail="Invalid task_id")
 
+    kind = str(artifact_type or "preview").strip().lower()
+    if kind not in ("preview", "psd"):
+        raise HTTPException(status_code=400, detail="Invalid artifact_type")
+
     raw_bytes = await file.read()
     if not raw_bytes:
         raise HTTPException(status_code=400, detail="Empty upload")
+
+    tdir = _task_dir(task_id)
+
+    if kind == "psd":
+        # 校验 Adobe Photoshop PSD/PSB 文件头（8BPS + version 1 或 2）
+        if len(raw_bytes) < 26 or raw_bytes[:4] != b"8BPS":
+            raise HTTPException(status_code=400, detail="Invalid PSD upload (missing 8BPS header)")
+        if len(raw_bytes) > 200 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="PSD upload exceeds 200MB limit")
+        filename = f"v{int(variant_index)}.psd"
+        out_path = tdir / filename
+        out_path.write_bytes(raw_bytes)
+        return {
+            "variant_index": int(variant_index),
+            "artifact_type": "psd",
+            "url": f"/api/v1/expand/files/{task_id}/{filename}",
+            "size_bytes": len(raw_bytes),
+        }
 
     try:
         with Image.open(BytesIO(raw_bytes)) as img:
@@ -1271,12 +1294,12 @@ async def upload_expand_variant_from_worker(
 
     ext = ".png" if fmt == "PNG" else ".jpg"
     filename = f"v{int(variant_index)}{ext}"
-    tdir = _task_dir(task_id)
     out_path = tdir / filename
     out_path.write_bytes(raw_bytes)
 
     return {
         "variant_index": int(variant_index),
+        "artifact_type": "preview",
         "url": f"/api/v1/expand/files/{task_id}/{filename}",
         "width": w,
         "height": h,

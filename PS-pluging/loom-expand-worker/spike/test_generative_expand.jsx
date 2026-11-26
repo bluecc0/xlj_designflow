@@ -70,7 +70,7 @@
     desc.putEnumerated(stringIDToTypeID("dualCrop"), stringIDToTypeID("dualCrop"), stringIDToTypeID("dualCrop"));
     executeAction(stringIDToTypeID("syntheticFill"), desc, DialogModes.NO);
 
-    // 尝试导出 3 个变体
+    // 使用 PS 26.0.0 ScriptingListener 录制的精确 selectGeneratedVariation 导出 3 个变体（预览 JPG + 原生分层 PSD）
     var exported = [];
     var variantSwitchSupported = true;
     for (var i = 0; i < 3; i += 1) {
@@ -80,8 +80,9 @@
           var vRef = new ActionReference();
           vRef.putEnumerated(charIDToTypeID("Lyr "), charIDToTypeID("Ordn"), charIDToTypeID("Trgt"));
           vDesc.putReference(charIDToTypeID("null"), vRef);
-          vDesc.putInteger(stringIDToTypeID("variationIndex"), i);
-          executeAction(stringIDToTypeID("setVariation"), vDesc, DialogModes.NO);
+          vDesc.putInteger(stringIDToTypeID("index"), i);
+          vDesc.putInteger(stringIDToTypeID("remainingVariationsCount"), 3);
+          executeAction(stringIDToTypeID("selectGeneratedVariation"), vDesc, DialogModes.NO);
         } catch (varErr) {
           variantSwitchSupported = false;
           break;
@@ -94,6 +95,15 @@
       var outFile = new File(outDir.fsName + "/spike_v" + i + ".jpg");
       dup.saveAs(outFile, jpgOpt, true, Extension.LOWERCASE);
       dup.close(SaveOptions.DONOTSAVECHANGES);
+
+      var psdOpt = new PhotoshopSaveOptions();
+      psdOpt.layers = true;
+      psdOpt.alphaChannels = true;
+      psdOpt.embedColorProfile = true;
+      psdOpt.maximizeCompatibility = true;
+      var psdFile = new File(outDir.fsName + "/spike_v" + i + ".psd");
+      testDoc.saveAs(psdFile, psdOpt, true, Extension.LOWERCASE);
+
       exported.push(outFile.fsName);
     }
 

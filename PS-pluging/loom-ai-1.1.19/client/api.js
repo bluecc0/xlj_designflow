@@ -349,14 +349,24 @@
       } catch (_e) {}
 
       var localPath = path.join(cacheDir, "v" + variantIndex + ext);
-      return downloadBinaryFile(remoteUrl, localPath).then(function () {
+      var psdUrl = item.psd_url || "";
+      var psdLocalPath = psdUrl ? path.join(cacheDir, "v" + variantIndex + ".psd") : "";
+
+      var downloads = [downloadBinaryFile(remoteUrl, localPath)];
+      if (psdUrl && psdLocalPath) {
+        downloads.push(downloadBinaryFile(psdUrl, psdLocalPath));
+      }
+
+      return Promise.all(downloads).then(function () {
         return {
           variantIndex: variantIndex,
           localPath: localPath,
+          psdLocalPath: psdLocalPath,
           fileUrl: u.toFileUrl(localPath),
           width: item.width || 0,
           height: item.height || 0,
           sizeBytes: item.size_bytes || u.getFileSize(localPath),
+          psdSizeBytes: item.psd_size_bytes || (psdLocalPath ? u.getFileSize(psdLocalPath) : 0),
           cacheDir: cacheDir
         };
       });

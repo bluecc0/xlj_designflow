@@ -1198,55 +1198,76 @@ $._loomAiPainter.applyExpandVariant = function (rawArgs) {
         };
       }
 
-      if (!args.imagePath) {
-        throw new Error("变体图片路径缺失。");
-      }
-      var imageFile = new File(args.imagePath);
-      if (!imageFile.exists) {
-        throw new Error("变体本地缓存文件不存在：" + args.imagePath);
-      }
+      var insertedLayer = null;
+      var usedNativePsd = false;
 
-      var docW = Math.round($._loomAiPainter._toPx(targetDoc.width));
-      var docH = Math.round($._loomAiPainter._toPx(targetDoc.height));
-
-      var sourceDoc = app.open(imageFile);
-      try {
+      // 优先从原生分层 PSD 中直接 duplicate 带蒙版的生成式图层，完整保留 hasUserMask 与 isSyntheticFill
+      if (args.psdPath && (new File(args.psdPath)).exists) {
+        var psdDoc = app.open(new File(args.psdPath));
         try {
-          if (sourceDoc.artLayers.length > 1 || sourceDoc.layerSets.length > 0) {
-            sourceDoc.mergeVisibleLayers();
+          if (!psdDoc.layers || !psdDoc.layers.length) {
+            throw new Error("原生分层 PSD 中未找到可用图层。");
           }
-        } catch (_mergeErr) {}
-        sourceDoc.selection.selectAll();
-        sourceDoc.selection.copy();
-      } finally {
-        sourceDoc.close(SaveOptions.DONOTSAVECHANGES);
+          // 原生生成式扩展图层位于分层 PSD 最顶层（layers[0]）
+          var genLayer = psdDoc.layers[0];
+          insertedLayer = genLayer.duplicate(group, ElementPlacement.INSIDE);
+          usedNativePsd = true;
+        } finally {
+          try { psdDoc.close(SaveOptions.DONOTSAVECHANGES); } catch (_psdCloseErr) {}
+        }
+        app.activeDocument = targetDoc;
+        insertedLayer.name = layerName;
+      } else {
+        if (!args.imagePath) {
+          throw new Error("变体图片路径缺失。");
+        }
+        var imageFile = new File(args.imagePath);
+        if (!imageFile.exists) {
+          throw new Error("变体本地缓存文件不存在：" + args.imagePath);
+        }
+
+        var docW = Math.round($._loomAiPainter._toPx(targetDoc.width));
+        var docH = Math.round($._loomAiPainter._toPx(targetDoc.height));
+
+        var sourceDoc = app.open(imageFile);
+        try {
+          try {
+            if (sourceDoc.artLayers.length > 1 || sourceDoc.layerSets.length > 0) {
+              sourceDoc.mergeVisibleLayers();
+            }
+          } catch (_mergeErr) {}
+          sourceDoc.selection.selectAll();
+          sourceDoc.selection.copy();
+        } finally {
+          sourceDoc.close(SaveOptions.DONOTSAVECHANGES);
+        }
+
+        app.activeDocument = targetDoc;
+        $._loomAiPainter._ensureWritableTargetLayer(targetDoc);
+        targetDoc.paste();
+
+        insertedLayer = targetDoc.activeLayer;
+        insertedLayer.name = layerName;
+        insertedLayer.move(group, ElementPlacement.INSIDE);
+
+        // 精确对齐并铺满当前扩展后的画布
+        var lb = insertedLayer.bounds;
+        var lLeft = $._loomAiPainter._toPx(lb[0]);
+        var lTop = $._loomAiPainter._toPx(lb[1]);
+        var lRight = $._loomAiPainter._toPx(lb[2]);
+        var lBottom = $._loomAiPainter._toPx(lb[3]);
+        var lW = Math.max(1, lRight - lLeft);
+        var lH = Math.max(1, lBottom - lTop);
+
+        if (Math.abs(lW - docW) > 1 || Math.abs(lH - docH) > 1) {
+          insertedLayer.resize((docW / lW) * 100, (docH / lH) * 100, AnchorPosition.TOPLEFT);
+          lb = insertedLayer.bounds;
+          lLeft = $._loomAiPainter._toPx(lb[0]);
+          lTop = $._loomAiPainter._toPx(lb[1]);
+        }
+
+        insertedLayer.translate(-lLeft, -lTop);
       }
-
-      app.activeDocument = targetDoc;
-      $._loomAiPainter._ensureWritableTargetLayer(targetDoc);
-      targetDoc.paste();
-
-      var insertedLayer = targetDoc.activeLayer;
-      insertedLayer.name = layerName;
-      insertedLayer.move(group, ElementPlacement.INSIDE);
-
-      // 精确对齐并铺满当前扩展后的画布
-      var lb = insertedLayer.bounds;
-      var lLeft = $._loomAiPainter._toPx(lb[0]);
-      var lTop = $._loomAiPainter._toPx(lb[1]);
-      var lRight = $._loomAiPainter._toPx(lb[2]);
-      var lBottom = $._loomAiPainter._toPx(lb[3]);
-      var lW = Math.max(1, lRight - lLeft);
-      var lH = Math.max(1, lBottom - lTop);
-
-      if (Math.abs(lW - docW) > 1 || Math.abs(lH - docH) > 1) {
-        insertedLayer.resize((docW / lW) * 100, (docH / lH) * 100, AnchorPosition.TOPLEFT);
-        lb = insertedLayer.bounds;
-        lLeft = $._loomAiPainter._toPx(lb[0]);
-        lTop = $._loomAiPainter._toPx(lb[1]);
-      }
-
-      insertedLayer.translate(-lLeft, -lTop);
 
       for (i = 0; i < group.artLayers.length; i += 1) {
         group.artLayers[i].visible = (group.artLayers[i] === insertedLayer);
@@ -1256,6 +1277,7 @@ $._loomAiPainter.applyExpandVariant = function (rawArgs) {
 
       return {
         created: true,
+        nativePsd: usedNativePsd,
         groupName: groupName,
         layerName: layerName,
         variantIndex: Number(args.variantIndex) || 0

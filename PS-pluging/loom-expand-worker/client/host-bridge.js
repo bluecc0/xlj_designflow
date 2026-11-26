@@ -35,91 +35,105 @@
     return path.dirname(path.dirname(normalized));
   }
 
-  var hostReadyPromise = null;
-
-  function ensureHostLoaded() {
-    if (hostReadyPromise) return hostReadyPromise;
+  function readHostScriptBody() {
     var hostPath = path.join(getExtensionRootPath(), "host", "main.jsx");
-    var script = "(function(){var f=new File(" + JSON.stringify(hostPath) + ");if(!f.exists){return 'MISSING';}$.evalFile(f);return (typeof $._loomExpandWorker==='object')?'OK':'NOT_READY';}())";
-    hostReadyPromise = evalScriptRaw(script).then(function (res) {
-      if (res !== "OK") {
-        hostReadyPromise = null;
-        throw new Error("加载 Worker 宿主脚本失败：" + res);
-      }
-      return true;
-    });
-    return hostReadyPromise;
+    if (!fs.existsSync(hostPath)) {
+      throw new Error("宿主脚本不存在：" + hostPath);
+    }
+    var raw = fs.readFileSync(hostPath, "utf8");
+    // 去掉首行 #target photoshop 与 BOM，确保在单次 evalScript 内联执行时语法合法
+    return raw.replace(/^\uFEFF/, "").replace(/^\s*#target\s+photoshop\s*\r?\n/i, "");
   }
 
+  /**
+   * 每次调用均内联携带 host/main.jsx 正文执行：
+   * 避免 PS 26.0.0 CEP 下 $.evalFile 失败、跨 evalScript 调用全局对象丢失，以及 rejected Promise 永久缓存问题。
+   */
   function evalHost(methodName, payload, timeoutMs, onLateSettle) {
-    return ensureHostLoaded().then(function () {
-      var payloadPath = path.join(os.tmpdir(), "loom-worker-payload-" + Date.now() + "-" + Math.random().toString(16).slice(2) + ".json");
-      fs.writeFileSync(payloadPath, JSON.stringify(payload || {}), "utf8");
-      var callScript = "$._loomExpandWorker.invokeFromPath(" + JSON.stringify(methodName) + "," + JSON.stringify(payloadPath) + ")";
+    var hostBody;
+    try {
+      hostBody = readHostScriptBody();
+    } catch (readErr) {
+      return Promise.reject(readErr);
+    }
 
-      return new Promise(function (resolve, reject) {
-        var timedOut = false;
-        var settled = false;
-        var timer = null;
+    var payloadPath = path.join(
+      os.tmpdir(),
+      "loom-worker-payload-" + Date.now() + "-" + Math.random().toString(16).slice(2) + ".json"
+    );
+    fs.writeFileSync(payloadPath, JSON.stringify(payload || {}), "utf8");
 
-        function cleanupPayload() {
-          try { if (fs.existsSync(payloadPath)) fs.unlinkSync(payloadPath); } catch (_e) {}
-        }
+    var inlineScript = [
+      "(function () {",
+      "  try {",
+      hostBody,
+      "    return $._loomExpandWorker.invokeFromPath(" + JSON.stringify(methodName) + "," + JSON.stringify(payloadPath) + ");",
+      "  } catch (e) {",
+      "    return '{\"ok\":false,\"errorCode\":\"PS_HOST_BOOTSTRAP_ERROR\",\"error\":\"' + String((e && e.message) || e).replace(/\\\\/g, '\\\\\\\\').replace(/\"/g, '\\\\\"').replace(/\\r?\\n/g, ' ') + '\"}';",
+      "  }",
+      "}())"
+    ].join("\n");
 
-        if (timeoutMs && timeoutMs > 0) {
-          timer = setTimeout(function () {
-            if (settled) return;
-            settled = true;
-            timedOut = true;
-            // 注意：此时 Photoshop 原生脚本可能仍在运行，暂不删除 payload，等原生回调真正返回或 PS 重启后再清理
-            var err = new Error("Photoshop 执行超时（>" + Math.round(timeoutMs / 1000) + "s）");
-            err.code = "PS_EXEC_TIMEOUT";
-            reject(err);
-          }, timeoutMs);
-        }
+    return new Promise(function (resolve, reject) {
+      var timedOut = false;
+      var settled = false;
+      var timer = null;
 
-        evalScriptRaw(callScript).then(function (raw) {
-          cleanupPayload();
-          if (timedOut) {
-            if (typeof onLateSettle === "function") {
-              try { onLateSettle(null, raw); } catch (_lateErr) {}
-            }
-            return;
-          }
+      function cleanupPayload() {
+        try { if (fs.existsSync(payloadPath)) fs.unlinkSync(payloadPath); } catch (_e) {}
+      }
+
+      if (timeoutMs && timeoutMs > 0) {
+        timer = setTimeout(function () {
           if (settled) return;
           settled = true;
-          if (timer) clearTimeout(timer);
-          try {
-            var parsed = JSON.parse(raw);
-            if (!parsed.ok) {
-              var err = new Error(parsed.error || "Photoshop 执行失败");
-              if (parsed.errorCode) err.code = parsed.errorCode;
-              reject(err);
-              return;
-            }
-            resolve(parsed.data);
-          } catch (_parseErr) {
-            reject(new Error("无法解析 JSX 返回值：" + String(raw).slice(0, 200)));
-          }
-        }, function (err) {
-          cleanupPayload();
-          if (timedOut) {
-            if (typeof onLateSettle === "function") {
-              try { onLateSettle(err, null); } catch (_lateErr) {}
-            }
-            return;
-          }
-          if (settled) return;
-          settled = true;
-          if (timer) clearTimeout(timer);
+          timedOut = true;
+          var err = new Error("Photoshop 执行超时（>" + Math.round(timeoutMs / 1000) + "s）");
+          err.code = "PS_EXEC_TIMEOUT";
           reject(err);
-        });
+        }, timeoutMs);
+      }
+
+      evalScriptRaw(inlineScript).then(function (raw) {
+        cleanupPayload();
+        if (timedOut) {
+          if (typeof onLateSettle === "function") {
+            try { onLateSettle(null, raw); } catch (_lateErr) {}
+          }
+          return;
+        }
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        try {
+          var parsed = JSON.parse(raw);
+          if (!parsed.ok) {
+            var err = new Error(parsed.error || "Photoshop 执行失败");
+            if (parsed.errorCode) err.code = parsed.errorCode;
+            reject(err);
+            return;
+          }
+          resolve(parsed.data);
+        } catch (_parseErr) {
+          reject(new Error("无法解析 JSX 返回值：" + String(raw).slice(0, 200)));
+        }
+      }, function (err) {
+        cleanupPayload();
+        if (timedOut) {
+          if (typeof onLateSettle === "function") {
+            try { onLateSettle(err, null); } catch (_lateErr) {}
+          }
+          return;
+        }
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        reject(new Error("宿主调用 [" + methodName + "] 失败：" + (err && err.message ? err.message : String(err))));
       });
     });
   }
 
   window.__worker.hostBridge = {
-    evalHost: evalHost,
-    ensureHostLoaded: ensureHostLoaded
+    evalHost: evalHost
   };
 })();

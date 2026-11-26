@@ -145,16 +145,18 @@ $._loomExpandWorker._executeGenerativeFillDescriptor = function (promptText) {
   executeAction(stringIDToTypeID("syntheticFill"), desc, DialogModes.NO);
 };
 
-$._loomExpandWorker._selectVariationIndex = function (index) {
+$._loomExpandWorker._selectVariationIndex = function (index, totalCount) {
+  // 来自 PS 26.0.0 ScriptingListener 实测录制的精确 ActionDescriptor
   var desc = new ActionDescriptor();
   var ref = new ActionReference();
   ref.putEnumerated(charIDToTypeID("Lyr "), charIDToTypeID("Ordn"), charIDToTypeID("Trgt"));
   desc.putReference(charIDToTypeID("null"), ref);
-  desc.putInteger(stringIDToTypeID("variationIndex"), index);
-  executeAction(stringIDToTypeID("setVariation"), desc, DialogModes.NO);
+  desc.putInteger(stringIDToTypeID("index"), index);
+  desc.putInteger(stringIDToTypeID("remainingVariationsCount"), totalCount || 3);
+  executeAction(stringIDToTypeID("selectGeneratedVariation"), desc, DialogModes.NO);
 };
 
-$._loomExpandWorker._exportCurrentDoc = function (doc, outputPath, format, quality) {
+$._loomExpandWorker._exportCurrentDocPreview = function (doc, outputPath, format, quality) {
   var dup = doc.duplicate();
   try {
     dup.flatten();
@@ -173,6 +175,17 @@ $._loomExpandWorker._exportCurrentDoc = function (doc, outputPath, format, quali
   } finally {
     try { dup.close(SaveOptions.DONOTSAVECHANGES); } catch (_e) {}
   }
+};
+
+$._loomExpandWorker._exportCurrentDocLayeredPsd = function (doc, psdPath) {
+  // 保留原生分层结构（hasUserMask=true, isSyntheticFill=true），使用 asCopy=true 不改变当前文档状态
+  var psdFile = new File(psdPath);
+  var psdOpt = new PhotoshopSaveOptions();
+  psdOpt.layers = true;
+  psdOpt.alphaChannels = true;
+  psdOpt.embedColorProfile = true;
+  psdOpt.maximizeCompatibility = true;
+  doc.saveAs(psdFile, psdOpt, true, Extension.LOWERCASE);
 };
 
 $._loomExpandWorker.runGenerativeExpand = function (args) {
@@ -203,22 +216,28 @@ $._loomExpandWorker.runGenerativeExpand = function (args) {
       // 3. 执行 Adobe 原生 Generative Expand
       $._loomExpandWorker._executeGenerativeFillDescriptor(spec.prompt || "");
 
-      // 4. 导出 1~3 个变体（不静默吞掉多变体切换失败，明确上报变体完整性）
+      // 4. 导出 1~3 个原生变体（每个变体同时导出轻量预览图 + 原生分层 PSD 保留蒙版）
       var exported = [];
       var maxVariants = returnAll ? 3 : 1;
       var variantWarning = "";
       for (var i = 0; i < maxVariants; i += 1) {
         if (i > 0) {
           try {
-            $._loomExpandWorker._selectVariationIndex(i);
+            $._loomExpandWorker._selectVariationIndex(i, 3);
           } catch (varErr) {
             variantWarning = "PS " + app.version + " 变体切换不可用（" + (varErr.message || varErr.toString()) + "），仅导出 " + exported.length + "/" + maxVariants + " 个变体";
             break;
           }
         }
-        var outPath = args.outputDir + "/v" + i + "." + format;
-        $._loomExpandWorker._exportCurrentDoc(doc, outPath, format, quality);
-        exported.push(outPath);
+        var previewPath = args.outputDir + "/v" + i + "." + format;
+        var psdPath = args.outputDir + "/v" + i + ".psd";
+        $._loomExpandWorker._exportCurrentDocPreview(doc, previewPath, format, quality);
+        $._loomExpandWorker._exportCurrentDocLayeredPsd(doc, psdPath);
+        exported.push({
+          variantIndex: i,
+          previewPath: previewPath,
+          psdPath: psdPath
+        });
       }
 
       doc.close(SaveOptions.DONOTSAVECHANGES);
@@ -229,7 +248,7 @@ $._loomExpandWorker.runGenerativeExpand = function (args) {
       }
 
       return {
-        files: exported,
+        variants: exported,
         width: expanded.width,
         height: expanded.height,
         requested_variants: maxVariants,

@@ -484,6 +484,38 @@ class TestPsExpand(unittest.TestCase):
         self.assertEqual(after["status"], "timeout")
         self.assertEqual(after["outputs"], [])
 
+    def test_psd_artifact_upload_validation_and_download(self) -> None:
+        """验证原生分层 PSD 工件上传（8BPS 文件头校验）与鉴权下载。"""
+        fake_psd = b"8BPS\x00\x01" + b"\x00" * 32
+        task_id = "exp_psd_test_001"
+
+        # 非法文件头应返回 400
+        r_bad = self.client.post(
+            "/api/v1/expand/internal/upload",
+            headers=self.WORKER_HEADERS,
+            data={"task_id": task_id, "variant_index": "0", "artifact_type": "psd"},
+            files={"file": ("v0.psd", b"NOT_A_PSD_HEADER_1234567890", "application/octet-stream")},
+        )
+        self.assertEqual(r_bad.status_code, 400)
+
+        # 合法 8BPS PSD 上传成功
+        r_ok = self.client.post(
+            "/api/v1/expand/internal/upload",
+            headers=self.WORKER_HEADERS,
+            data={"task_id": task_id, "variant_index": "0", "artifact_type": "psd"},
+            files={"file": ("v0.psd", fake_psd, "application/octet-stream")},
+        )
+        self.assertEqual(r_ok.status_code, 200)
+        body = r_ok.json()
+        self.assertEqual(body["artifact_type"], "psd")
+        self.assertTrue(body["url"].endswith("/v0.psd"))
+
+        # 未鉴权下载拒绝，携带客户端令牌下载成功
+        self.assertEqual(self.client.get(body["url"]).status_code, 401)
+        r_dl = self.client.get(body["url"], headers=self.CLIENT_HEADERS)
+        self.assertEqual(r_dl.status_code, 200)
+        self.assertEqual(r_dl.content, fake_psd)
+
     def test_end_to_end_worker_ws_flow(self) -> None:
         img = _make_png_bytes(200, 100)
 

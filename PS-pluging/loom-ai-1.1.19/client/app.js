@@ -630,7 +630,8 @@
         groupName: activeVariants.groupName,
         variantIndex: index,
         layerName: "变体 " + (index + 1),
-        imagePath: item.localPath
+        imagePath: item.localPath,
+        psdPath: item.psdLocalPath || ""
       });
       activeVariants.activeIndex = index;
       if (!isInitial) {

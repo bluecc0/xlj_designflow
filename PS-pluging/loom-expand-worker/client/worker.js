@@ -160,14 +160,16 @@
     });
   }
 
-  function uploadVariantFile(uploadUrl, taskId, variantIndex, filePath) {
+  function uploadVariantFile(uploadUrl, taskId, variantIndex, filePath, artifactType) {
     return new Promise(function (resolve, reject) {
       var boundary = "----loom-worker-" + Date.now() + "-" + Math.random().toString(16).slice(2);
       var ext = path.extname(filePath || ".jpg").toLowerCase();
-      var mime = ext === ".png" ? "image/png" : "image/jpeg";
+      var kind = artifactType || (ext === ".psd" ? "psd" : "preview");
+      var mime = kind === "psd" ? "application/octet-stream" : (ext === ".png" ? "image/png" : "image/jpeg");
       var chunks = [];
       chunks.push(Buffer.from("--" + boundary + "\r\nContent-Disposition: form-data; name=\"task_id\"\r\n\r\n" + taskId + "\r\n", "utf8"));
       chunks.push(Buffer.from("--" + boundary + "\r\nContent-Disposition: form-data; name=\"variant_index\"\r\n\r\n" + String(variantIndex) + "\r\n", "utf8"));
+      chunks.push(Buffer.from("--" + boundary + "\r\nContent-Disposition: form-data; name=\"artifact_type\"\r\n\r\n" + kind + "\r\n", "utf8"));
       chunks.push(Buffer.from("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"v" + variantIndex + ext + "\"\r\nContent-Type: " + mime + "\r\n\r\n", "utf8"));
       chunks.push(fs.readFileSync(filePath));
       chunks.push(Buffer.from("\r\n--" + boundary + "--\r\n", "utf8"));
@@ -194,7 +196,7 @@
           res.on("end", function () {
             var text = Buffer.concat(resChunks).toString("utf8");
             if (res.statusCode < 200 || res.statusCode >= 300) {
-              reject(new Error("上传变体失败 HTTP " + res.statusCode + ": " + text.slice(0, 160)));
+              reject(new Error("上传工件(" + kind + ")失败 HTTP " + res.statusCode + ": " + text.slice(0, 160)));
               return;
             }
             try { resolve(JSON.parse(text)); }
@@ -203,7 +205,7 @@
         }
       );
       req.on("error", reject);
-      req.setTimeout(60000, function () { req.destroy(new Error("上传变体超时")); });
+      req.setTimeout(120000, function () { req.destroy(new Error("上传工件(" + kind + ")超时")); });
       req.write(body);
       req.end();
     });
@@ -267,13 +269,13 @@
     flushPendingFinal();
   }
 
-  function uploadVariantWithRetry(uploadUrl, taskId, variantIndex, filePath) {
+  function uploadVariantWithRetry(uploadUrl, taskId, variantIndex, filePath, artifactType) {
     var attempts = 0;
     function tryOnce() {
       attempts += 1;
-      return uploadVariantFile(uploadUrl, taskId, variantIndex, filePath).catch(function (err) {
+      return uploadVariantFile(uploadUrl, taskId, variantIndex, filePath, artifactType).catch(function (err) {
         if (attempts >= 3) throw err;
-        appendLog("上传变体 " + variantIndex + " 失败（第 " + attempts + " 次），2s 后重试...", "muted");
+        appendLog("上传变体 " + variantIndex + "(" + (artifactType || "preview") + ") 失败（第 " + attempts + " 次），2s 后重试...", "muted");
         return new Promise(function (resolve) { setTimeout(resolve, 2000); }).then(tryOnce);
       });
     }
@@ -354,17 +356,28 @@
         }
       );
 
-      var exportedFiles = (jsxRes && jsxRes.files) || [];
-      if (!exportedFiles.length) {
+      var exportedVariants = (jsxRes && jsxRes.variants) || [];
+      if (!exportedVariants.length) {
         throw new Error("Photoshop 未导出任何变体图片。");
       }
 
       sendWsJson({ type: "task.progress", task_id: taskId, stage: "uploading" });
-      appendLog("上传 " + exportedFiles.length + " 张变体成图...", "muted");
+      appendLog("上传 " + exportedVariants.length + " 组变体（预览图 + 原生分层 PSD）...", "muted");
       var uploadedOutputs = [];
-      for (var i = 0; i < exportedFiles.length; i += 1) {
-        var uploaded = await uploadVariantWithRetry(msg.upload_url, taskId, i, exportedFiles[i]);
-        uploadedOutputs.push(uploaded);
+      for (var i = 0; i < exportedVariants.length; i += 1) {
+        var entry = exportedVariants[i];
+        var vIdx = typeof entry.variantIndex === "number" ? entry.variantIndex : i;
+        var previewRes = await uploadVariantWithRetry(msg.upload_url, taskId, vIdx, entry.previewPath, "preview");
+        var psdRes = await uploadVariantWithRetry(msg.upload_url, taskId, vIdx, entry.psdPath, "psd");
+        uploadedOutputs.push({
+          variant_index: vIdx,
+          url: previewRes.url,
+          psd_url: psdRes.url,
+          width: previewRes.width,
+          height: previewRes.height,
+          size_bytes: previewRes.size_bytes,
+          psd_size_bytes: psdRes.size_bytes
+        });
       }
 
       var durationMs = Date.now() - currentTaskStartedAt;
