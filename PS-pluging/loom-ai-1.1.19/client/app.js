@@ -344,7 +344,7 @@
       activeTask = {
         taskId: null,
         documentId: session.documentId,
-        groupName: "Loom 扩展 " + utils.formatShortClock(new Date()),
+        groupName: "AI 扩展 " + utils.formatShortClock(new Date()),
         startedAt: Date.now(),
         cancelled: false,
         stageText: "准备原图",

@@ -1155,7 +1155,7 @@ $._loomAiPainter._findArtLayerInSet = function (layerSet, layerName) {
 $._loomAiPainter._applyExpandVariantInner = function (targetDoc, args) {
   app.activeDocument = targetDoc;
 
-  var groupName = args.groupName || "Loom 扩展";
+  var groupName = args.groupName || "AI 扩展";
   var layerName = args.layerName || ("变体 " + ((Number(args.variantIndex) || 0) + 1));
   var group = $._loomAiPainter._findTopLevelLayerSet(targetDoc, groupName);
 
@@ -1296,7 +1296,7 @@ $._loomAiPainter.applyExpandVariant = function (rawArgs) {
       $._loomAiPainter._tmpVariantError = null;
       try {
         targetDoc.suspendHistory(
-          "Loom 扩展",
+          "AI 扩展",
           "try { $._loomAiPainter._tmpVariantResult = $._loomAiPainter._applyExpandVariantInner($._loomAiPainter._tmpVariantDoc, $._loomAiPainter._tmpVariantArgs); } catch (e) { $._loomAiPainter._tmpVariantError = e; }"
         );
       } finally {
