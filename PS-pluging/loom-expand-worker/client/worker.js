@@ -30,6 +30,7 @@
   var ws = null;
   var isBusy = false;
   var isPaused = false;
+  var isQuarantined = false;
   var currentTaskId = null;
   var currentTaskStartedAt = 0;
   var psVersion = "unknown";
@@ -62,7 +63,10 @@
   }
 
   function refreshStatusUI(connState) {
-    if (connState === "connected") {
+    if (isQuarantined) {
+      statusDot.className = "dot dot--offline";
+      statusBadge.textContent = "超时隔离中";
+    } else if (connState === "connected") {
       statusDot.className = isBusy ? "dot dot--busy" : "dot dot--online";
       statusBadge.textContent = isPaused ? "已暂停" : (isBusy ? "执行中" : "在线空闲");
     } else if (connState === "connecting") {
@@ -72,7 +76,9 @@
       statusDot.className = "dot dot--offline";
       statusBadge.textContent = "断开重连中";
     }
-    taskStateText.textContent = currentTaskId ? ("任务: " + currentTaskId) : (isPaused ? "已暂停接单" : "空闲");
+    taskStateText.textContent = isQuarantined
+      ? ("等待恢复: " + (currentTaskId || ""))
+      : (currentTaskId ? ("任务: " + currentTaskId) : (isPaused ? "已暂停接单" : "空闲"));
     if (pauseBtn) pauseBtn.textContent = isPaused ? "恢复接单" : "暂停接单";
   }
 
@@ -88,6 +94,7 @@
         ps_version: psVersion,
         busy: isBusy,
         paused: isPaused,
+        quarantined: isQuarantined,
         task_id: currentTaskId,
         task_started_at: currentTaskStartedAt ? Math.floor(currentTaskStartedAt / 1000) : null
       };
@@ -211,8 +218,8 @@
 
   async function executeAssignedTask(msg) {
     var taskId = msg.task_id;
-    if (isBusy || isPaused) {
-      appendLog("忽略任务 " + taskId + "（当前忙碌或已暂停）。", "muted");
+    if (isBusy || isPaused || isQuarantined) {
+      appendLog("忽略任务 " + taskId + "（当前忙碌、暂停或处于超时隔离态）。", "muted");
       return;
     }
 
@@ -223,6 +230,7 @@
     writeHeartbeatFile();
 
     var workDir = path.join($W.TEMP_ROOT, taskId);
+    var enteredQuarantine = false;
     try {
       if (!fs.existsSync(workDir)) fs.mkdirSync(workDir, { recursive: true });
       var inputExt = path.extname(String(msg.image_url || ".png")) || ".png";
@@ -249,7 +257,27 @@
           spec: msg.spec || {},
           purgeAfter: shouldPurge
         },
-        softTimeout
+        softTimeout,
+        function () {
+          // 若超时后 Photoshop 最终自行结束了原生脚本（未触发 Watchdog 强杀），此时再安全清理并解除隔离
+          removeDirRecursive(workDir);
+          if (currentTaskId === taskId && isQuarantined) {
+            isQuarantined = false;
+            isBusy = false;
+            currentTaskId = null;
+            currentTaskStartedAt = 0;
+            appendLog("超时任务 " + taskId + " 的 PS 原生执行已结束，清理完成并解除隔离。", "success");
+            refreshStatusUI(ws && ws.readyState === window.WebSocket.OPEN ? "connected" : "offline");
+            writeHeartbeatFile();
+            sendWsJson({
+              type: "ping",
+              ts: Math.floor(Date.now() / 1000),
+              busy: false,
+              paused: isPaused,
+              quarantined: false
+            });
+          }
+        }
       );
 
       var exportedFiles = (jsxRes && jsxRes.files) || [];
@@ -276,20 +304,38 @@
     } catch (err) {
       var code = (err && err.code) || "PS_EXEC_FAILED";
       var message = (err && err.message) || String(err || "未知错误");
-      sendWsJson({
-        type: "task.error",
-        task_id: taskId,
-        error_code: code,
-        error_message: message
-      });
-      appendLog("失败 " + taskId + " [" + code + "] " + message, "error");
+      if (code === "PS_EXEC_TIMEOUT") {
+        // 软超时不代表 PS 原生执行已退出：保持 isBusy/currentTaskId/task_started_at 与工作目录，等待原生完成或 Watchdog 重启恢复
+        enteredQuarantine = true;
+        isQuarantined = true;
+        sendWsJson({
+          type: "task.error",
+          task_id: taskId,
+          error_code: code,
+          error_message: message,
+          quarantined: true
+        });
+        appendLog("超时隔离 " + taskId + "：已暂停接单并保留心跳超时状态，等待 PS 结束或 Watchdog 重启。", "error");
+        refreshStatusUI(ws && ws.readyState === window.WebSocket.OPEN ? "connected" : "offline");
+        writeHeartbeatFile();
+      } else {
+        sendWsJson({
+          type: "task.error",
+          task_id: taskId,
+          error_code: code,
+          error_message: message
+        });
+        appendLog("失败 " + taskId + " [" + code + "] " + message, "error");
+      }
     } finally {
-      removeDirRecursive(workDir);
-      isBusy = false;
-      currentTaskId = null;
-      currentTaskStartedAt = 0;
-      refreshStatusUI(ws && ws.readyState === window.WebSocket.OPEN ? "connected" : "offline");
-      writeHeartbeatFile();
+      if (!enteredQuarantine) {
+        removeDirRecursive(workDir);
+        isBusy = false;
+        currentTaskId = null;
+        currentTaskStartedAt = 0;
+        refreshStatusUI(ws && ws.readyState === window.WebSocket.OPEN ? "connected" : "offline");
+        writeHeartbeatFile();
+      }
     }
   }
 
@@ -322,6 +368,12 @@
       ws = null;
     }
 
+    if (!String($W.CONFIG.token || "").trim()) {
+      refreshStatusUI("offline");
+      appendLog("未配置 Worker Secret，请先在上方填入与后端 .env 一致的 PS_EXPAND_WORKER_SECRET 后点击「保存并重连」。", "error");
+      return;
+    }
+
     refreshStatusUI("connecting");
     appendLog("正在连接 FastAPI（" + $W.CONFIG.serverUrl + "）...", "muted");
 
@@ -350,7 +402,8 @@
           type: "ping",
           ts: Math.floor(Date.now() / 1000),
           busy: isBusy,
-          paused: isPaused
+          paused: isPaused,
+          quarantined: isQuarantined
         });
       }, $W.CONFIG.wsPingIntervalMs || 15000);
     };

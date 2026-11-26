@@ -160,7 +160,8 @@ class Settings:
     outpaint_recommended_area_pixels: int = int(os.getenv("OUTPAINT_RECOMMENDED_AREA_PIXELS", "2097152"))
 
     # Photoshop 原生生成式扩展（Loom AI / Windows 订阅机 Worker）
-    ps_expand_worker_secret: str = os.getenv("PS_EXPAND_WORKER_SECRET", "loom-expand-dev-secret").strip()
+    # 安全默认（Fail-Closed）：未在 .env 中显式配置非空强密钥时，对应接口默认拒绝服务
+    ps_expand_worker_secret: str = os.getenv("PS_EXPAND_WORKER_SECRET", "").strip()
     ps_expand_client_token: str = os.getenv("PS_EXPAND_CLIENT_TOKEN", "").strip()
     ps_expand_max_side: int = int(os.getenv("PS_EXPAND_MAX_SIDE", "6000"))
     ps_expand_max_queue_size: int = int(os.getenv("PS_EXPAND_MAX_QUEUE_SIZE", "20"))

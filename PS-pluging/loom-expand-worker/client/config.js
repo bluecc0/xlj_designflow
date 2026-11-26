@@ -16,7 +16,8 @@ function loadConfig() {
     workerVersion: "1.0.0",
     serverUrl: "http://127.0.0.1:8000",
     workerId: "win-ps-01",
-    token: "loom-expand-dev-secret",
+    // 必须与正式机 .env 中的 PS_EXPAND_WORKER_SECRET 一致（留空时拒绝连接）
+    token: "",
     heartbeatIntervalMs: 10000,
     wsPingIntervalMs: 15000,
     evalTimeoutMs: 75000,

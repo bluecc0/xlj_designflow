@@ -14,9 +14,9 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\install-dev.ps1
 ```
 重启 Photoshop，打开 `窗口 > 扩展（旧版） > Loom Expand Worker`，停靠在右侧工作区，填入：
-- **FastAPI 服务地址**：如 `http://192.168.150.52:8000`
+- **FastAPI 服务地址**：如 `http://127.0.0.1:8000`
 - **Worker ID**：如 `win-ps-01`
-- **Worker Secret**：与后端 `.env` 中 `PS_EXPAND_WORKER_SECRET` 一致（默认 `loom-expand-dev-secret`）
+- **Worker Secret**：必填，与后端 `.env` 中 `PS_EXPAND_WORKER_SECRET` 一致（后端未配置强密钥时默认拒绝服务，无公开默认密钥）
 
 ## 3. 启动 Watchdog 守护（开机自启）
 ```powershell

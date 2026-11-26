@@ -15,11 +15,12 @@ import shutil
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from fastapi import (
     APIRouter,
@@ -86,12 +87,22 @@ def _task_dir(task_id: str) -> Path:
     return d
 
 
-def _get_conn() -> sqlite3.Connection:
+@contextmanager
+def _get_conn() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=15000")
-    return conn
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=15000")
+        yield conn
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
 
 
 def init_ps_expand_tables() -> None:
@@ -336,6 +347,7 @@ class ConnectedWorker:
     exec_mode: str = "cep"
     busy: bool = False
     paused: bool = False
+    quarantined: bool = False
     current_task_id: Optional[str] = None
     last_heartbeat_ts: float = field(default_factory=_now_ts)
     last_heartbeat_iso: str = field(default_factory=_now_iso)
@@ -402,8 +414,9 @@ class ExpandCoordinator:
         queue_len, avg_sec = self._query_queue_metrics()
         return {
             "online": primary is not None,
-            "busy": bool(primary and primary.busy),
+            "busy": bool(primary and (primary.busy or primary.quarantined)),
             "paused": bool(primary and primary.paused),
+            "quarantined": bool(primary and primary.quarantined),
             "worker_count": len(alive),
             "ps_version": primary.ps_version if primary else "",
             "worker_version": primary.worker_version if primary else "",
@@ -432,11 +445,11 @@ class ExpandCoordinator:
         return queue_len, max(5.0, min(120.0, avg_sec))
 
     async def dispatch_next(self) -> bool:
-        """若存在空闲且未暂停的在线 Worker，从队列原子领取最早的 1 条任务并下发。"""
+        """若存在空闲、未暂停且未隔离的在线 Worker，从队列原子领取最早的 1 条任务并下发。"""
         async with self._lock:
             idle_worker = None
             for w in self._workers.values():
-                if self._is_worker_alive(w) and not w.busy and not w.paused:
+                if self._is_worker_alive(w) and not w.busy and not w.paused and not w.quarantined:
                     idle_worker = w
                     break
             if idle_worker is None:
@@ -556,18 +569,29 @@ class ExpandCoordinator:
 
         if msg_type == "ping":
             reported_busy = bool(data.get("busy", False))
+            reported_quarantined = bool(data.get("quarantined", False))
             worker.paused = bool(data.get("paused", False))
-            # 如果 Worker 重启后回报空闲，但服务端仍记录它占用某个任务，回收该孤儿任务
-            if not reported_busy and worker.busy and worker.current_task_id:
-                stale_id = worker.current_task_id
-                worker.busy = False
-                worker.current_task_id = None
-                self._mark_task_timeout(stale_id, "订阅机状态重置，任务已超时，请重试。")
+            if reported_quarantined:
+                worker.quarantined = True
+                worker.busy = True
+            elif not reported_busy:
+                # Worker 确认原生执行已彻底结束（或重启后恢复空闲）才解除隔离
+                if worker.quarantined:
+                    logger.info("[ps_expand] worker %s recovered from quarantine", worker.worker_id)
+                worker.quarantined = False
+                if worker.busy and worker.current_task_id:
+                    stale_id = worker.current_task_id
+                    worker.busy = False
+                    worker.current_task_id = None
+                    self._mark_task_timeout(stale_id, "订阅机状态重置，任务已超时，请重试。")
+                else:
+                    worker.busy = False
+                    worker.current_task_id = None
             try:
                 await worker.websocket.send_json({"type": "pong", "ts": int(_now_ts())})
             except Exception:
                 pass
-            if not worker.busy and not worker.paused:
+            if not worker.busy and not worker.paused and not worker.quarantined:
                 await self.dispatch_next()
             return
 
@@ -616,6 +640,7 @@ class ExpandCoordinator:
             error_code = str(data.get("error_code") or "PS_EXEC_FAILED")
             error_message = str(data.get("error_message") or "Photoshop 执行失败。")
             next_status = "timeout" if error_code == "PS_EXEC_TIMEOUT" else "failed"
+            should_quarantine = (error_code == "PS_EXEC_TIMEOUT") or bool(data.get("quarantined", False))
             if task_id:
                 with _get_conn() as conn:
                     conn.execute(
@@ -632,6 +657,17 @@ class ExpandCoordinator:
                         (next_status, error_code, error_message, _now_iso(), _now_ts(), task_id),
                     )
                     conn.commit()
+            if should_quarantine:
+                # 软超时不代表 Photoshop 原生动作已退出：隔离 Worker，禁止继续派单，等待原生完成或 Watchdog 重启恢复
+                worker.quarantined = True
+                worker.busy = True
+                logger.warning(
+                    "[ps_expand] worker %s quarantined after %s on task %s; pausing dispatch until recovery",
+                    worker.worker_id,
+                    error_code,
+                    task_id,
+                )
+                return
             if worker.current_task_id == task_id:
                 worker.busy = False
                 worker.current_task_id = None
@@ -680,13 +716,13 @@ class ExpandCoordinator:
                     timed_out_ids.append(r["task_id"])
 
         for tid in timed_out_ids:
-            logger.warning("[ps_expand] task %s exceeded processing timeout, marking timeout", tid)
+            logger.warning("[ps_expand] task %s exceeded processing timeout, marking timeout and quarantining worker", tid)
             self._mark_task_timeout(tid, "任务执行超时，订阅机正在恢复，请稍后重试。")
             async with self._lock:
                 for w in self._workers.values():
                     if w.current_task_id == tid:
-                        w.busy = False
-                        w.current_task_id = None
+                        w.quarantined = True
+                        w.busy = True
 
         if timed_out_ids:
             await self.dispatch_next()
@@ -714,20 +750,38 @@ coordinator = ExpandCoordinator()
 def _verify_client_auth(authorization: Optional[str]) -> None:
     expected = settings.ps_expand_client_token
     if not expected:
-        return
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "PS_EXPAND_DISABLED",
+                "error_message": "PS 扩图服务未配置 PS_EXPAND_CLIENT_TOKEN，默认已禁用。",
+            },
+        )
     token = ""
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization[7:].strip()
     if not token or not secrets.compare_digest(token, expected):
-        raise HTTPException(status_code=401, detail="Invalid client token")
+        raise HTTPException(
+            status_code=401,
+            detail={"error_code": "UNAUTHORIZED", "error_message": "无效的客户端访问令牌。"},
+        )
 
 
 def _verify_worker_secret(token: Optional[str]) -> None:
     expected = settings.ps_expand_worker_secret
     if not expected:
-        return
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "PS_EXPAND_DISABLED",
+                "error_message": "未配置 PS_EXPAND_WORKER_SECRET，Worker 接入默认已禁用。",
+            },
+        )
     if not token or not secrets.compare_digest(token.strip(), expected):
-        raise HTTPException(status_code=401, detail="Invalid worker secret")
+        raise HTTPException(
+            status_code=401,
+            detail={"error_code": "UNAUTHORIZED", "error_message": "无效的 Worker Secret。"},
+        )
 
 
 def _queue_position_for_task(conn: sqlite3.Connection, task_id: str) -> int:
@@ -1024,7 +1078,10 @@ async def expand_worker_websocket(
     token: str = Query(default=""),
 ):
     expected = settings.ps_expand_worker_secret
-    if expected and not secrets.compare_digest(token.strip(), expected):
+    if not expected:
+        await websocket.close(code=4403, reason="PS_EXPAND_WORKER_SECRET not configured")
+        return
+    if not token or not secrets.compare_digest(token.strip(), expected):
         await websocket.close(code=4401, reason="Unauthorized")
         return
 

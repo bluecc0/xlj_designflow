@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import gc
 import io
 import json
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
+from starlette.websockets import WebSocketDisconnect
 
 from backend import ps_expand
 from backend.config import settings
@@ -21,6 +24,9 @@ def _make_png_bytes(width: int = 200, height: int = 100, color: tuple[int, int, 
 
 
 class TestPsExpand(unittest.TestCase):
+    CLIENT_HEADERS = {"Authorization": "Bearer test-client-token"}
+    WORKER_HEADERS = {"X-Worker-Token": "test-worker-secret"}
+
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         tmp_path = Path(self._tmpdir.name)
@@ -34,8 +40,8 @@ class TestPsExpand(unittest.TestCase):
         ps_expand.DB_PATH = tmp_path / "test_expand.db"
         settings.output_path = tmp_path / "output"
         settings.output_path.mkdir(parents=True, exist_ok=True)
-        settings.ps_expand_worker_secret = "test-secret"
-        settings.ps_expand_client_token = ""
+        settings.ps_expand_worker_secret = "test-worker-secret"
+        settings.ps_expand_client_token = "test-client-token"
         settings.ps_expand_max_side = 6000
         settings.ps_expand_max_queue_size = 3
 
@@ -55,7 +61,49 @@ class TestPsExpand(unittest.TestCase):
         settings.ps_expand_client_token = self._orig_client_token
         settings.ps_expand_max_side = self._orig_max_side
         settings.ps_expand_max_queue_size = self._orig_max_queue
+        gc.collect()
         self._tmpdir.cleanup()
+
+    def test_fail_closed_auth_when_secrets_unset_or_invalid(self) -> None:
+        img = _make_png_bytes(200, 100)
+
+        # 未配置客户端 token 时默认禁用（503）
+        settings.ps_expand_client_token = ""
+        self.assertEqual(self.client.get("/api/v1/expand/worker/status").status_code, 503)
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/expand/tasks",
+                files={"image": ("demo.png", img, "image/png")},
+                data={"spec": json.dumps({"mode": "padding", "padding": {"top": 50, "right": 0, "bottom": 0, "left": 0}})},
+            ).status_code,
+            503,
+        )
+
+        # 未配置 Worker secret 时拒绝 WS 连接与内部上传
+        settings.ps_expand_worker_secret = ""
+        with self.assertRaises(WebSocketDisconnect) as ctx:
+            with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=anything"):
+                pass
+        self.assertEqual(ctx.exception.code, 4403)
+
+        r_up = self.client.post(
+            "/api/v1/expand/internal/upload",
+            data={"task_id": "exp_demo", "variant_index": "0"},
+            files={"file": ("v0.png", img, "image/png")},
+        )
+        self.assertEqual(r_up.status_code, 503)
+
+        # 配置客户端 token 后，缺失或错误 token 返回 401
+        settings.ps_expand_client_token = "strong-secret-token"
+        self.assertEqual(self.client.get("/api/v1/expand/worker/status").status_code, 401)
+        self.assertEqual(
+            self.client.get("/api/v1/expand/worker/status", headers={"Authorization": "Bearer wrong"}).status_code,
+            401,
+        )
+        self.assertEqual(
+            self.client.get("/api/v1/expand/worker/status", headers={"Authorization": "Bearer strong-secret-token"}).status_code,
+            200,
+        )
 
     def test_normalize_expand_spec_modes(self) -> None:
         spec_pad = ps_expand.normalize_expand_spec(
@@ -83,96 +131,153 @@ class TestPsExpand(unittest.TestCase):
         self.assertEqual(spec_ar["target_height"], 200)
         self.assertEqual(spec_ar["padding"], {"top": 50, "right": 0, "bottom": 50, "left": 0})
 
-    def test_submit_validation_queue_and_cancel(self) -> None:
+    def test_submit_validation_queue_and_cancel_no_resource_warning(self) -> None:
         img = _make_png_bytes(200, 100)
 
-        # 1. 超过 6000px 硬上限直接拒绝
-        r_bad = self.client.post(
-            "/api/v1/expand/tasks",
-            files={"image": ("demo.png", img, "image/png")},
-            data={"spec": json.dumps({"mode": "padding", "padding": {"top": 6000, "right": 0, "bottom": 0, "left": 0}})},
-        )
-        self.assertEqual(r_bad.status_code, 400)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
 
-        # 2. 正常提交入队（Worker 离线时 status=queued）
+            r_bad = self.client.post(
+                "/api/v1/expand/tasks",
+                headers=self.CLIENT_HEADERS,
+                files={"image": ("demo.png", img, "image/png")},
+                data={"spec": json.dumps({"mode": "padding", "padding": {"top": 6000, "right": 0, "bottom": 0, "left": 0}})},
+            )
+            self.assertEqual(r_bad.status_code, 400)
+
+            r1 = self.client.post(
+                "/api/v1/expand/tasks",
+                headers=self.CLIENT_HEADERS,
+                files={"image": ("demo.png", img, "image/png")},
+                data={"spec": json.dumps({"mode": "padding", "padding": {"top": 100, "right": 0, "bottom": 0, "left": 0}, "client_id": "mac-a:alice"})},
+            )
+            self.assertEqual(r1.status_code, 202)
+            t1 = r1.json()
+            self.assertEqual(t1["status"], "queued")
+            self.assertEqual(t1["queue_position"], 1)
+
+            r_dup = self.client.post(
+                "/api/v1/expand/tasks",
+                headers=self.CLIENT_HEADERS,
+                files={"image": ("demo.png", img, "image/png")},
+                data={"spec": json.dumps({"mode": "padding", "padding": {"top": 100, "right": 0, "bottom": 0, "left": 0}, "client_id": "mac-a:alice"})},
+            )
+            self.assertEqual(r_dup.status_code, 409)
+            self.assertEqual(r_dup.json()["error_code"], "CLIENT_TASK_ACTIVE")
+
+            r2 = self.client.post(
+                "/api/v1/expand/tasks",
+                headers=self.CLIENT_HEADERS,
+                files={"image": ("demo.png", img, "image/png")},
+                data={"spec": json.dumps({"mode": "padding", "padding": {"top": 0, "right": 80, "bottom": 0, "left": 0}, "client_id": "win-b:bob"})},
+            )
+            self.assertEqual(r2.status_code, 202)
+            t2 = r2.json()
+            self.assertEqual(t2["queue_position"], 2)
+
+            rc = self.client.post(f"/api/v1/expand/tasks/{t1['task_id']}/cancel", headers=self.CLIENT_HEADERS)
+            self.assertEqual(rc.status_code, 200)
+            self.assertEqual(rc.json()["status"], "cancelled")
+
+            rt2 = self.client.get(f"/api/v1/expand/tasks/{t2['task_id']}", headers=self.CLIENT_HEADERS)
+            self.assertEqual(rt2.status_code, 200)
+            self.assertEqual(rt2.json()["queue_position"], 1)
+
+            gc.collect()
+            resource_warnings = [w for w in caught if issubclass(w.category, ResourceWarning)]
+            self.assertEqual(resource_warnings, [])
+
+    def test_timeout_quarantines_worker_until_recovery(self) -> None:
+        """回归测试：第一单 PS_EXEC_TIMEOUT 后必须隔离 Worker，绝不立即派发第二单；直到恢复/重启重连后再派发。"""
+        img = _make_png_bytes(200, 100)
+
         r1 = self.client.post(
             "/api/v1/expand/tasks",
-            files={"image": ("demo.png", img, "image/png")},
-            data={"spec": json.dumps({"mode": "padding", "padding": {"top": 100, "right": 0, "bottom": 0, "left": 0}, "client_id": "mac-a:alice"})},
+            headers=self.CLIENT_HEADERS,
+            files={"image": ("a.png", img, "image/png")},
+            data={"spec": json.dumps({"mode": "padding", "padding": {"top": 50, "right": 0, "bottom": 0, "left": 0}, "client_id": "u1"})},
         )
-        self.assertEqual(r1.status_code, 202)
-        t1 = r1.json()
-        self.assertEqual(t1["status"], "queued")
-        self.assertEqual(t1["queue_position"], 1)
-
-        # 3. 同一设计师同时只能有 1 条在排/在跑任务
-        r_dup = self.client.post(
-            "/api/v1/expand/tasks",
-            files={"image": ("demo.png", img, "image/png")},
-            data={"spec": json.dumps({"mode": "padding", "padding": {"top": 100, "right": 0, "bottom": 0, "left": 0}, "client_id": "mac-a:alice"})},
-        )
-        self.assertEqual(r_dup.status_code, 409)
-        self.assertEqual(r_dup.json()["error_code"], "CLIENT_TASK_ACTIVE")
-
-        # 4. 另一个设计师提交排第 2 位
         r2 = self.client.post(
             "/api/v1/expand/tasks",
-            files={"image": ("demo.png", img, "image/png")},
-            data={"spec": json.dumps({"mode": "padding", "padding": {"top": 0, "right": 80, "bottom": 0, "left": 0}, "client_id": "win-b:bob"})},
+            headers=self.CLIENT_HEADERS,
+            files={"image": ("b.png", img, "image/png")},
+            data={"spec": json.dumps({"mode": "padding", "padding": {"top": 0, "right": 50, "bottom": 0, "left": 0}, "client_id": "u2"})},
         )
-        self.assertEqual(r2.status_code, 202)
-        t2 = r2.json()
-        self.assertEqual(t2["queue_position"], 2)
+        task1_id = r1.json()["task_id"]
+        task2_id = r2.json()["task_id"]
 
-        # 5. 排队中可以取消
-        rc = self.client.post(f"/api/v1/expand/tasks/{t1['task_id']}/cancel")
-        self.assertEqual(rc.status_code, 200)
-        self.assertEqual(rc.json()["status"], "cancelled")
+        with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=test-worker-secret") as ws:
+            ws.send_json({"type": "worker.hello", "ps_version": "26.0.0", "worker_version": "1.0.0"})
+            assigned1 = ws.receive_json()
+            self.assertEqual(assigned1["task_id"], task1_id)
 
-        # 取消后 t2 前移至第 1 位
-        rt2 = self.client.get(f"/api/v1/expand/tasks/{t2['task_id']}")
-        self.assertEqual(rt2.status_code, 200)
-        self.assertEqual(rt2.json()["queue_position"], 1)
+            # Worker 触发软超时并上报 PS_EXEC_TIMEOUT
+            ws.send_json({
+                "type": "task.error",
+                "task_id": task1_id,
+                "error_code": "PS_EXEC_TIMEOUT",
+                "error_message": "soft timeout",
+                "quarantined": True,
+            })
+            # 发 ping 确认同步点：此时仍处于隔离态，第二单不能被派发
+            ws.send_json({"type": "ping", "busy": True, "paused": False, "quarantined": True})
+            pong = ws.receive_json()
+            self.assertEqual(pong["type"], "pong")
+
+            st = self.client.get("/api/v1/expand/worker/status", headers=self.CLIENT_HEADERS).json()
+            self.assertTrue(st["quarantined"])
+            self.assertTrue(st["busy"])
+
+            t1_state = self.client.get(f"/api/v1/expand/tasks/{task1_id}", headers=self.CLIENT_HEADERS).json()
+            t2_state = self.client.get(f"/api/v1/expand/tasks/{task2_id}", headers=self.CLIENT_HEADERS).json()
+            self.assertEqual(t1_state["status"], "timeout")
+            self.assertEqual(t2_state["status"], "queued")
+
+        # 模拟 Watchdog 强杀重启 PS 后 Worker 全新重连，第二单才被派发
+        with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=test-worker-secret") as ws2:
+            ws2.send_json({"type": "worker.hello", "ps_version": "26.0.0", "worker_version": "1.0.0"})
+            assigned2 = ws2.receive_json()
+            self.assertEqual(assigned2["type"], "task.assign")
+            self.assertEqual(assigned2["task_id"], task2_id)
 
     def test_end_to_end_worker_ws_flow(self) -> None:
         img = _make_png_bytes(200, 100)
 
         r_sub = self.client.post(
             "/api/v1/expand/tasks",
+            headers=self.CLIENT_HEADERS,
             files={"image": ("demo.png", img, "image/png")},
             data={"spec": json.dumps({"mode": "padding", "padding": {"top": 50, "right": 50, "bottom": 0, "left": 0}, "client_id": "mac-a:alice"})},
         )
         self.assertEqual(r_sub.status_code, 202)
         task_id = r_sub.json()["task_id"]
 
-        with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=test-secret") as ws:
+        with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=test-worker-secret") as ws:
             ws.send_json({"type": "worker.hello", "ps_version": "26.1.0", "worker_version": "1.0.0"})
             assigned = ws.receive_json()
             self.assertEqual(assigned["type"], "task.assign")
             self.assertEqual(assigned["task_id"], task_id)
 
-            st = self.client.get("/api/v1/expand/worker/status").json()
+            st = self.client.get("/api/v1/expand/worker/status", headers=self.CLIENT_HEADERS).json()
             self.assertTrue(st["online"])
             self.assertTrue(st["busy"])
+            self.assertFalse(st["quarantined"])
             self.assertEqual(st["current_task_id"], task_id)
 
-            # processing 状态的任务不可取消（409）
-            rc = self.client.post(f"/api/v1/expand/tasks/{task_id}/cancel")
+            rc = self.client.post(f"/api/v1/expand/tasks/{task_id}/cancel", headers=self.CLIENT_HEADERS)
             self.assertEqual(rc.status_code, 409)
 
-            # Worker 下载原图
-            r_in = self.client.get(assigned["image_url"], headers={"X-Worker-Token": "test-secret"})
+            r_in = self.client.get(assigned["image_url"], headers=self.WORKER_HEADERS)
             self.assertEqual(r_in.status_code, 200)
             self.assertEqual(len(r_in.content), len(img))
 
-            # Worker 上报进度并上传 3 张变体
             ws.send_json({"type": "task.progress", "task_id": task_id, "stage": "expanding"})
             outputs = []
             for idx, color in enumerate([(200, 60, 60), (60, 200, 60), (60, 60, 200)]):
                 out_bytes = _make_png_bytes(250, 150, color)
                 ru = self.client.post(
                     assigned["upload_url"],
-                    headers={"X-Worker-Token": "test-secret"},
+                    headers=self.WORKER_HEADERS,
                     data={"task_id": task_id, "variant_index": str(idx)},
                     files={"file": (f"v{idx}.png", out_bytes, "image/png")},
                 )
@@ -180,18 +285,20 @@ class TestPsExpand(unittest.TestCase):
                 outputs.append(ru.json())
 
             ws.send_json({"type": "task.result", "task_id": task_id, "outputs": outputs, "duration_ms": 12340})
-            ws.send_json({"type": "ping", "busy": False, "paused": False})
+            ws.send_json({"type": "ping", "busy": False, "paused": False, "quarantined": False})
             pong = ws.receive_json()
             self.assertEqual(pong["type"], "pong")
 
-        r_done = self.client.get(f"/api/v1/expand/tasks/{task_id}")
+        r_done = self.client.get(f"/api/v1/expand/tasks/{task_id}", headers=self.CLIENT_HEADERS)
         self.assertEqual(r_done.status_code, 200)
         body = r_done.json()
         self.assertEqual(body["status"], "succeeded")
         self.assertEqual(len(body["outputs"]), 3)
         self.assertEqual(body["duration_ms"], 12340)
 
-        r_file = self.client.get(body["outputs"][0]["url"])
+        # 未携带令牌访问输出文件被拒绝（401），携带令牌可正常下载（200）
+        self.assertEqual(self.client.get(body["outputs"][0]["url"]).status_code, 401)
+        r_file = self.client.get(body["outputs"][0]["url"], headers=self.CLIENT_HEADERS)
         self.assertEqual(r_file.status_code, 200)
         self.assertGreater(len(r_file.content), 0)
 

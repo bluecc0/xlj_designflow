@@ -51,20 +51,27 @@
     return hostReadyPromise;
   }
 
-  function evalHost(methodName, payload, timeoutMs) {
+  function evalHost(methodName, payload, timeoutMs, onLateSettle) {
     return ensureHostLoaded().then(function () {
       var payloadPath = path.join(os.tmpdir(), "loom-worker-payload-" + Date.now() + "-" + Math.random().toString(16).slice(2) + ".json");
       fs.writeFileSync(payloadPath, JSON.stringify(payload || {}), "utf8");
       var callScript = "$._loomExpandWorker.invokeFromPath(" + JSON.stringify(methodName) + "," + JSON.stringify(payloadPath) + ")";
 
       return new Promise(function (resolve, reject) {
+        var timedOut = false;
         var settled = false;
         var timer = null;
+
+        function cleanupPayload() {
+          try { if (fs.existsSync(payloadPath)) fs.unlinkSync(payloadPath); } catch (_e) {}
+        }
+
         if (timeoutMs && timeoutMs > 0) {
           timer = setTimeout(function () {
             if (settled) return;
             settled = true;
-            try { if (fs.existsSync(payloadPath)) fs.unlinkSync(payloadPath); } catch (_e) {}
+            timedOut = true;
+            // 注意：此时 Photoshop 原生脚本可能仍在运行，暂不删除 payload，等原生回调真正返回或 PS 重启后再清理
             var err = new Error("Photoshop 执行超时（>" + Math.round(timeoutMs / 1000) + "s）");
             err.code = "PS_EXEC_TIMEOUT";
             reject(err);
@@ -72,10 +79,16 @@
         }
 
         evalScriptRaw(callScript).then(function (raw) {
+          cleanupPayload();
+          if (timedOut) {
+            if (typeof onLateSettle === "function") {
+              try { onLateSettle(null, raw); } catch (_lateErr) {}
+            }
+            return;
+          }
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
-          try { if (fs.existsSync(payloadPath)) fs.unlinkSync(payloadPath); } catch (_e) {}
           try {
             var parsed = JSON.parse(raw);
             if (!parsed.ok) {
@@ -89,10 +102,16 @@
             reject(new Error("无法解析 JSX 返回值：" + String(raw).slice(0, 200)));
           }
         }, function (err) {
+          cleanupPayload();
+          if (timedOut) {
+            if (typeof onLateSettle === "function") {
+              try { onLateSettle(err, null); } catch (_lateErr) {}
+            }
+            return;
+          }
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
-          try { if (fs.existsSync(payloadPath)) fs.unlinkSync(payloadPath); } catch (_e) {}
           reject(err);
         });
       });
