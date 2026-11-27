@@ -362,21 +362,25 @@
       }
 
       sendWsJson({ type: "task.progress", task_id: taskId, stage: "uploading" });
-      appendLog("上传 " + exportedVariants.length + " 组变体（预览图 + 原生分层 PSD）...", "muted");
+      appendLog("上传 " + exportedVariants.length + " 张预览图 + 1 份原生分层 PSD...", "muted");
+      var sharedPsdRes = null;
+      if (jsxRes && jsxRes.psdPath) {
+        sharedPsdRes = await uploadVariantWithRetry(msg.upload_url, taskId, 0, jsxRes.psdPath, "psd");
+      }
       var uploadedOutputs = [];
       for (var i = 0; i < exportedVariants.length; i += 1) {
         var entry = exportedVariants[i];
         var vIdx = typeof entry.variantIndex === "number" ? entry.variantIndex : i;
         var previewRes = await uploadVariantWithRetry(msg.upload_url, taskId, vIdx, entry.previewPath, "preview");
-        var psdRes = await uploadVariantWithRetry(msg.upload_url, taskId, vIdx, entry.psdPath, "psd");
+        var psdRes = sharedPsdRes || (entry.psdPath ? await uploadVariantWithRetry(msg.upload_url, taskId, vIdx, entry.psdPath, "psd") : null);
         uploadedOutputs.push({
           variant_index: vIdx,
           url: previewRes.url,
-          psd_url: psdRes.url,
+          psd_url: psdRes ? psdRes.url : "",
           width: previewRes.width,
           height: previewRes.height,
           size_bytes: previewRes.size_bytes,
-          psd_size_bytes: psdRes.size_bytes
+          psd_size_bytes: psdRes ? psdRes.size_bytes : 0
         });
       }
 

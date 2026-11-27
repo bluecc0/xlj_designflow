@@ -216,7 +216,7 @@ $._loomExpandWorker.runGenerativeExpand = function (args) {
       // 3. 执行 Adobe 原生 Generative Expand
       $._loomExpandWorker._executeGenerativeFillDescriptor(spec.prompt || "");
 
-      // 4. 导出 1~3 个原生变体（每个变体同时导出轻量预览图 + 原生分层 PSD 保留蒙版）
+      // 4. 导出 1~3 个原生变体预览图，并只保存 1 份原生分层 PSD（内嵌全部 3 个变体 + 原生蒙版）
       var exported = [];
       var maxVariants = returnAll ? 3 : 1;
       var variantWarning = "";
@@ -230,15 +230,21 @@ $._loomExpandWorker.runGenerativeExpand = function (args) {
           }
         }
         var previewPath = args.outputDir + "/v" + i + "." + format;
-        var psdPath = args.outputDir + "/v" + i + ".psd";
         $._loomExpandWorker._exportCurrentDocPreview(doc, previewPath, format, quality);
-        $._loomExpandWorker._exportCurrentDocLayeredPsd(doc, psdPath);
         exported.push({
           variantIndex: i,
-          previewPath: previewPath,
-          psdPath: psdPath
+          previewPath: previewPath
         });
       }
+
+      // 切回默认变体 0 后只保存 1 份分层 PSD，避免传输 3 份重复 PSD
+      if (exported.length > 1) {
+        try {
+          $._loomExpandWorker._selectVariationIndex(0, 3);
+        } catch (_resetVarErr) {}
+      }
+      var resultPsdPath = args.outputDir + "/result.psd";
+      $._loomExpandWorker._exportCurrentDocLayeredPsd(doc, resultPsdPath);
 
       doc.close(SaveOptions.DONOTSAVECHANGES);
       doc = null;
@@ -249,6 +255,7 @@ $._loomExpandWorker.runGenerativeExpand = function (args) {
 
       return {
         variants: exported,
+        psdPath: resultPsdPath,
         width: expanded.width,
         height: expanded.height,
         requested_variants: maxVariants,

@@ -516,6 +516,55 @@ class TestPsExpand(unittest.TestCase):
         self.assertEqual(r_dl.status_code, 200)
         self.assertEqual(r_dl.content, fake_psd)
 
+    def test_xlj_studio_operation_logs_and_admin_stats(self) -> None:
+        """验证 PS 扩图完成记录同步写入 operation_logs，并被 load_admin_stats() 汇总。"""
+        from backend import job_store
+
+        orig_store_db = job_store._DB_PATH
+        job_store._DB_PATH = ps_expand.DB_PATH
+        try:
+            job_store.init_db()
+            ps_expand.init_ps_expand_tables()
+
+            img = _make_png_bytes(200, 100)
+            r_sub = self.client.post(
+                "/api/v1/expand/tasks",
+                headers=self.CLIENT_HEADERS,
+                files={"image": ("demo.png", img, "image/png")},
+                data={"spec": json.dumps({"mode": "padding", "padding": {"top": 40, "right": 0, "bottom": 0, "left": 0}, "client_id": "design-mac:xuduo"})},
+            )
+            task_id = r_sub.json()["task_id"]
+
+            with self.client.websocket_connect("/api/v1/expand/worker?worker_id=win-ps-01&token=test-worker-secret") as ws:
+                ws.send_json({"type": "worker.hello", "ps_version": "26.0.0", "worker_version": "1.0.0"})
+                assigned = ws.receive_json()
+                ru = self.client.post(
+                    assigned["upload_url"],
+                    headers=self.WORKER_HEADERS,
+                    data={"task_id": task_id, "variant_index": "0"},
+                    files={"file": ("v0.png", _make_png_bytes(200, 140), "image/png")},
+                )
+                ws.send_json({
+                    "type": "task.result",
+                    "task_id": task_id,
+                    "outputs": [ru.json()],
+                    "requested_variants": 1,
+                    "variants_complete": True,
+                    "duration_ms": 11000,
+                })
+                ack = ws.receive_json()
+                self.assertTrue(ack["accepted"])
+
+            stats = job_store.load_admin_stats()
+            self.assertIn("ps_expand", stats)
+            self.assertEqual(stats["ps_expand"]["total"], 1)
+            self.assertEqual(stats["ps_expand"]["succeeded"], 1)
+            self.assertEqual(stats["ps_expand"]["avg_duration_ms"], 11000)
+            self.assertEqual(stats["ps_expand"]["by_client"][0]["client_id"], "design-mac:xuduo")
+            self.assertGreaterEqual(stats["operations_logged"], 1)
+        finally:
+            job_store._DB_PATH = orig_store_db
+
     def test_end_to_end_worker_ws_flow(self) -> None:
         img = _make_png_bytes(200, 100)
 

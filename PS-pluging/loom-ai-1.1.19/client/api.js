@@ -337,6 +337,17 @@
     var cacheDir = path.join($L.EXPAND_CACHE_ROOT || path.join(os.tmpdir(), "loom-expand-cache"), String(taskId || ("task-" + Date.now())));
     if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
 
+    // 多个变体共享同一份原生分层 PSD 时仅下载 1 次，避免重复传输
+    var psdPromiseByUrl = {};
+    function downloadSharedPsd(psdUrl, variantIndex) {
+      if (!psdUrl) return Promise.resolve("");
+      if (!psdPromiseByUrl[psdUrl]) {
+        var targetPsdPath = path.join(cacheDir, "v" + variantIndex + ".psd");
+        psdPromiseByUrl[psdUrl] = downloadBinaryFile(psdUrl, targetPsdPath);
+      }
+      return psdPromiseByUrl[psdUrl];
+    }
+
     var tasks = list.map(function (item, idx) {
       var variantIndex = typeof item.variant_index === "number" ? item.variant_index : idx;
       var remoteUrl = item.url || "";
@@ -350,14 +361,12 @@
 
       var localPath = path.join(cacheDir, "v" + variantIndex + ext);
       var psdUrl = item.psd_url || "";
-      var psdLocalPath = psdUrl ? path.join(cacheDir, "v" + variantIndex + ".psd") : "";
 
-      var downloads = [downloadBinaryFile(remoteUrl, localPath)];
-      if (psdUrl && psdLocalPath) {
-        downloads.push(downloadBinaryFile(psdUrl, psdLocalPath));
-      }
-
-      return Promise.all(downloads).then(function () {
+      return Promise.all([
+        downloadBinaryFile(remoteUrl, localPath),
+        downloadSharedPsd(psdUrl, variantIndex)
+      ]).then(function (results) {
+        var psdLocalPath = results[1] || "";
         return {
           variantIndex: variantIndex,
           localPath: localPath,

@@ -106,6 +106,73 @@ def _get_conn() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _record_ps_expand_operation_log(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    status: str,
+    duration_ms: Optional[int] = None,
+    outputs_count: int = 0,
+    requested_variants: int = 3,
+    error_code: Optional[str] = None,
+) -> None:
+    """将 PS 原生扩图任务同步记录到 XLJ Studio 的 operation_logs（供管理后台查询）。"""
+    try:
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operation_logs'"
+        ).fetchone()
+        if not has_table:
+            return
+        row = conn.execute(
+            "SELECT client_id, spec_json FROM expand_tasks WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        client_id = str(row["client_id"] or "").strip() if row else ""
+        spec = {}
+        if row and row["spec_json"]:
+            try:
+                spec = json.loads(row["spec_json"])
+            except Exception:
+                spec = {}
+        src_w = spec.get("source_width") or 0
+        src_h = spec.get("source_height") or 0
+        tgt_w = spec.get("target_width") or 0
+        tgt_h = spec.get("target_height") or 0
+        size_part = f"{src_w}x{src_h}->{tgt_w}x{tgt_h}" if src_w and tgt_w else "unknown"
+        dur_part = f" duration={int(duration_ms)}ms" if duration_ms else ""
+        err_part = f" error={error_code}" if error_code else ""
+        detail = f"task={task_id} status={status} size={size_part} variants={outputs_count}/{requested_variants}{dur_part}{err_part}"
+        payload = json.dumps(
+            {
+                "task_id": task_id,
+                "status": status,
+                "client_id": client_id,
+                "source_width": src_w,
+                "source_height": src_h,
+                "target_width": tgt_w,
+                "target_height": tgt_h,
+                "outputs_count": outputs_count,
+                "requested_variants": requested_variants,
+                "duration_ms": duration_ms,
+                "error_code": error_code,
+            },
+            ensure_ascii=False,
+        )
+        conn.execute(
+            "INSERT INTO operation_logs (user_id, username, action, detail, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                f"ps:{client_id}" if client_id else "ps:plugin",
+                client_id or "ps-plugin",
+                "ps_expand",
+                detail,
+                payload,
+                _now_ts(),
+            ),
+        )
+    except Exception as exc:
+        logger.warning("[ps_expand] failed to write operation_logs for %s: %s", task_id, exc)
+
+
 def init_ps_expand_tables() -> None:
     """初始化 expand_tasks 独立任务表，并在重启时回收遗留的 processing 任务。"""
     with _get_conn() as conn:
@@ -739,6 +806,14 @@ class ExpandCoordinator:
                         ),
                     )
                     if cur.rowcount == 1:
+                        _record_ps_expand_operation_log(
+                            conn,
+                            task_id=task_id,
+                            status="succeeded",
+                            duration_ms=duration_ms,
+                            outputs_count=len(outputs),
+                            requested_variants=requested_variants,
+                        )
                         conn.commit()
                         ack_payload = {
                             "type": "task.ack",
@@ -814,6 +889,12 @@ class ExpandCoordinator:
                         (next_status, error_code, error_message, _now_iso(), _now_ts(), task_id, worker.worker_id),
                     )
                     if cur.rowcount == 1:
+                        _record_ps_expand_operation_log(
+                            conn,
+                            task_id=task_id,
+                            status=next_status,
+                            error_code=error_code,
+                        )
                         conn.commit()
                         err_ack_payload = {
                             "type": "task.ack",

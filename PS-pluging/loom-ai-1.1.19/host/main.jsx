@@ -1152,46 +1152,56 @@ $._loomAiPainter._findArtLayerInSet = function (layerSet, layerName) {
   return null;
 };
 
+$._loomAiPainter._findTopLevelArtLayer = function (doc, layerName) {
+  var i;
+  for (i = 0; i < doc.artLayers.length; i += 1) {
+    if (doc.artLayers[i].name === layerName) {
+      return doc.artLayers[i];
+    }
+  }
+  return null;
+};
+
+$._loomAiPainter._selectGeneratedVariationOnActiveLayer = function (index, totalCount) {
+  var desc = new ActionDescriptor();
+  var ref = new ActionReference();
+  ref.putEnumerated(charIDToTypeID("Lyr "), charIDToTypeID("Ordn"), charIDToTypeID("Trgt"));
+  desc.putReference(charIDToTypeID("null"), ref);
+  desc.putInteger(stringIDToTypeID("index"), index);
+  desc.putInteger(stringIDToTypeID("remainingVariationsCount"), totalCount || 3);
+  executeAction(stringIDToTypeID("selectGeneratedVariation"), desc, DialogModes.NO);
+};
+
 $._loomAiPainter._applyExpandVariantInner = function (targetDoc, args) {
   app.activeDocument = targetDoc;
 
-  var groupName = args.groupName || "AI 扩展";
-  var layerName = args.layerName || ("变体 " + ((Number(args.variantIndex) || 0) + 1));
-  var group = $._loomAiPainter._findTopLevelLayerSet(targetDoc, groupName);
+  var layerName = args.layerName || args.groupName || "AI 扩展";
+  var variantIndex = Number(args.variantIndex) || 0;
+  var totalVariants = Number(args.totalVariants) || 3;
+  var existingLayer = $._loomAiPainter._findTopLevelArtLayer(targetDoc, layerName);
 
-  if (!group) {
-    group = targetDoc.layerSets.add();
-    group.name = groupName;
-    try {
-      if (targetDoc.layers.length > 1) {
-        group.move(targetDoc.layers[0], ElementPlacement.PLACEBEFORE);
-      }
-    } catch (_moveGroupErr) {}
-  }
-
-  var existingLayer = $._loomAiPainter._findArtLayerInSet(group, layerName);
-  var i;
+  // 情况 1：单原生生成式图层已存在 -> 直接调用 selectGeneratedVariation 原地零闪烁切换（不打开任何文件、不新增图层）
   if (existingLayer) {
-    for (i = 0; i < group.artLayers.length; i += 1) {
-      var shouldShow = (group.artLayers[i] === existingLayer);
-      if (group.artLayers[i].visible !== shouldShow) {
-        group.artLayers[i].visible = shouldShow;
-      }
-    }
-    if (!group.visible) group.visible = true;
     targetDoc.activeLayer = existingLayer;
-    return {
-      created: false,
-      groupName: groupName,
-      layerName: layerName,
-      variantIndex: Number(args.variantIndex) || 0
-    };
+    if (!existingLayer.visible) existingLayer.visible = true;
+    try {
+      $._loomAiPainter._selectGeneratedVariationOnActiveLayer(variantIndex, totalVariants);
+      return {
+        created: false,
+        nativeSwitch: true,
+        layerName: layerName,
+        variantIndex: variantIndex
+      };
+    } catch (_switchErr) {
+      // 兜底：若旧版 PS 不支持直接切内嵌变体，则删除旧层并原地替换为新层，依然保证文档中只有 1 个图层
+      try { existingLayer.remove(); } catch (_rmErr) {}
+    }
   }
 
   var insertedLayer = null;
   var usedNativePsd = false;
 
-  // 优先从原生分层 PSD 中直接 duplicate 带蒙版的生成式图层，完整保留 hasUserMask 与 isSyntheticFill
+  // 情况 2：首次导入 -> 打开 1 份原生分层 PSD，只把顶层 1 个带蒙版的生成式图层直接复制到文档顶层
   if (args.psdPath && (new File(args.psdPath)).exists) {
     var psdDoc = app.open(new File(args.psdPath));
     try {
@@ -1199,13 +1209,19 @@ $._loomAiPainter._applyExpandVariantInner = function (targetDoc, args) {
         throw new Error("原生分层 PSD 中未找到可用图层。");
       }
       var genLayer = psdDoc.layers[0];
-      insertedLayer = genLayer.duplicate(group, ElementPlacement.INSIDE);
+      insertedLayer = genLayer.duplicate(targetDoc, ElementPlacement.PLACEATBEGINNING);
       usedNativePsd = true;
     } finally {
       try { psdDoc.close(SaveOptions.DONOTSAVECHANGES); } catch (_psdCloseErr) {}
     }
     app.activeDocument = targetDoc;
     insertedLayer.name = layerName;
+    targetDoc.activeLayer = insertedLayer;
+    if (variantIndex > 0) {
+      try {
+        $._loomAiPainter._selectGeneratedVariationOnActiveLayer(variantIndex, totalVariants);
+      } catch (_initVarErr) {}
+    }
   } else {
     if (!args.imagePath) {
       throw new Error("变体图片路径缺失。");
@@ -1237,7 +1253,11 @@ $._loomAiPainter._applyExpandVariantInner = function (targetDoc, args) {
 
     insertedLayer = targetDoc.activeLayer;
     insertedLayer.name = layerName;
-    insertedLayer.move(group, ElementPlacement.INSIDE);
+    try {
+      if (targetDoc.layers.length > 1) {
+        insertedLayer.move(targetDoc.layers[0], ElementPlacement.PLACEBEFORE);
+      }
+    } catch (_mvErr) {}
 
     var lb = insertedLayer.bounds;
     var lLeft = $._loomAiPainter._toPx(lb[0]);
@@ -1257,21 +1277,13 @@ $._loomAiPainter._applyExpandVariantInner = function (targetDoc, args) {
     insertedLayer.translate(-lLeft, -lTop);
   }
 
-  for (i = 0; i < group.artLayers.length; i += 1) {
-    var vis = (group.artLayers[i] === insertedLayer);
-    if (group.artLayers[i].visible !== vis) {
-      group.artLayers[i].visible = vis;
-    }
-  }
-  if (!group.visible) group.visible = true;
   targetDoc.activeLayer = insertedLayer;
-
   return {
     created: true,
+    nativeSwitch: false,
     nativePsd: usedNativePsd,
-    groupName: groupName,
     layerName: layerName,
-    variantIndex: Number(args.variantIndex) || 0
+    variantIndex: variantIndex
   };
 };
 

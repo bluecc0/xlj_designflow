@@ -2362,6 +2362,56 @@ def load_admin_stats() -> dict:
         chat_total = _count("ai_chat_sessions")
         active_sessions = _count("sessions")
         op_total = _count("operation_logs")
+
+        ps_expand_stats = {
+            "total": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "timeout": 0,
+            "avg_duration_ms": 0,
+            "by_client": [],
+        }
+        has_expand = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='expand_tasks'"
+        ).fetchone()
+        if has_expand:
+            summary = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                    SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) AS timeout,
+                    AVG(CASE WHEN status = 'succeeded' AND duration_ms > 0 THEN duration_ms END) AS avg_ms
+                FROM expand_tasks
+                """
+            ).fetchone()
+            client_rows = conn.execute(
+                """
+                SELECT COALESCE(NULLIF(TRIM(client_id), ''), 'unknown') AS client_id,
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded
+                FROM expand_tasks
+                GROUP BY COALESCE(NULLIF(TRIM(client_id), ''), 'unknown')
+                ORDER BY total DESC
+                LIMIT 20
+                """
+            ).fetchall()
+            ps_expand_stats = {
+                "total": int(summary["total"] or 0),
+                "succeeded": int(summary["succeeded"] or 0),
+                "failed": int(summary["failed"] or 0),
+                "timeout": int(summary["timeout"] or 0),
+                "avg_duration_ms": int(round(float(summary["avg_ms"] or 0))),
+                "by_client": [
+                    {
+                        "client_id": r["client_id"],
+                        "total": int(r["total"] or 0),
+                        "succeeded": int(r["succeeded"] or 0),
+                    }
+                    for r in client_rows
+                ],
+            }
     return {
         "users": user_count,
         "jobs": {
@@ -2371,6 +2421,7 @@ def load_admin_stats() -> dict:
         },
         "special_jobs": special_total,
         "ai_images": {"total": ai_total, "done": ai_done},
+        "ps_expand": ps_expand_stats,
         "agent_projects": agent_total,
         "ai_chat_sessions": chat_total,
         "active_sessions": active_sessions,
