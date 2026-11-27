@@ -159,6 +159,16 @@ class Settings:
     outpaint_max_area_pixels: int = int(os.getenv("OUTPAINT_MAX_AREA_PIXELS", "4194304"))
     outpaint_recommended_area_pixels: int = int(os.getenv("OUTPAINT_RECOMMENDED_AREA_PIXELS", "2097152"))
 
+    # Photoshop 原生生成式扩展（Loom AI / Windows 订阅机 Worker）
+    # 安全默认（Fail-Closed）：未在 .env 中显式配置非空强密钥时，对应接口默认拒绝服务
+    ps_expand_worker_secret: str = os.getenv("PS_EXPAND_WORKER_SECRET", "").strip()
+    ps_expand_client_token: str = os.getenv("PS_EXPAND_CLIENT_TOKEN", "").strip()
+    ps_expand_max_side: int = int(os.getenv("PS_EXPAND_MAX_SIDE", "6000"))
+    ps_expand_max_queue_size: int = int(os.getenv("PS_EXPAND_MAX_QUEUE_SIZE", "20"))
+    ps_expand_task_timeout_seconds: int = int(os.getenv("PS_EXPAND_TASK_TIMEOUT_SECONDS", "90"))
+    ps_expand_max_upload_bytes: int = int(os.getenv("PS_EXPAND_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+    ps_expand_file_retention_hours: int = int(os.getenv("PS_EXPAND_FILE_RETENTION_HOURS", "24"))
+
     # 图层分离转 PSD（默认使用 APIMart Seedream 5.5；留空自动复用 AI_IMAGE_* 配置）
     layer_extract_provider: str = os.getenv("LAYER_EXTRACT_PROVIDER", "apimart").strip().lower()
     layer_extract_base_url: str = os.getenv("LAYER_EXTRACT_BASE_URL", "")

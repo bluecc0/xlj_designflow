@@ -131,6 +131,11 @@ from .character_cards import (
     resolve_cards,
     router as character_cards_router,
 )
+from .ps_expand import (
+    coordinator as ps_expand_coordinator,
+    init_ps_expand_tables,
+    router as ps_expand_router,
+)
 from .output_access import (
     is_output_asset_owner,
     output_asset_parts,
@@ -420,6 +425,8 @@ async def lifespan(app: FastAPI):
     init_team_canvas_tables()
     init_user_profile_tables()
     init_character_card_tables()
+    init_ps_expand_tables()
+    ps_expand_coordinator.start()
     agent2_fail_stale_turns()
     app.state.outpainting_semaphore = asyncio.Semaphore(
         max(1, int(settings.bfl_outpainting_max_concurrency or 2))
@@ -484,10 +491,12 @@ async def lifespan(app: FastAPI):
             task.cancel()
         if outpainting_tasks:
             await asyncio.gather(*outpainting_tasks, return_exceptions=True)
+        await ps_expand_coordinator.stop()
         await proxy_download_stop()
 
 
 app = FastAPI(title="Design Tool API", version="0.1.0", lifespan=lifespan)
+app.include_router(ps_expand_router)
 _RUNTIME_INSTANCE = uuid.uuid4().hex[:12]
 
 
@@ -680,6 +689,7 @@ _IMAGE_COPY_FORMATS = {
     "AVIF": ("image/avif", "avif"),
 }
 _AUTH_EXEMPT_PREFIXES = (
+    "/api/v1/expand",
     "/auth/session",
     "/auth/login-lite",
     "/auth/options",

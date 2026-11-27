@@ -1,0 +1,19 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="loomIconBg" x1="4" y1="4" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#151821"/>
+      <stop offset="1" stop-color="#3E2A63"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="40" height="40" rx="11" fill="url(#loomIconBg)"/>
+  <g stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 10V14"/>
+    <path d="M20 26V30"/>
+    <path d="M10 20H14"/>
+    <path d="M26 20H30"/>
+    <path d="M13.6 13.6L16.4 16.4"/>
+    <path d="M23.6 23.6L26.4 26.4"/>
+    <path d="M13.6 26.4L16.4 23.6"/>
+    <path d="M23.6 16.4L26.4 13.6"/>
+  </g>
+</svg>
