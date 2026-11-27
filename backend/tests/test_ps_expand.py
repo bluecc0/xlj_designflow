@@ -565,6 +565,55 @@ class TestPsExpand(unittest.TestCase):
         finally:
             job_store._DB_PATH = orig_store_db
 
+    def test_server_side_timeout_paths_write_operation_log_once(self) -> None:
+        """五审 P2 回归：服务端判定的超时（_mark_task_timeout / worker 重启回收 / 启动回收）均幂等写入 operation_logs。"""
+        from backend import job_store
+
+        orig_store_db = job_store._DB_PATH
+        job_store._DB_PATH = ps_expand.DB_PATH
+        try:
+            job_store.init_db()
+            ps_expand.init_ps_expand_tables()
+            img = _make_png_bytes(200, 100)
+
+            def _submit_and_claim(client_id: str) -> str:
+                r = self.client.post(
+                    "/api/v1/expand/tasks",
+                    headers=self.CLIENT_HEADERS,
+                    files={"image": ("demo.png", img, "image/png")},
+                    data={"spec": json.dumps({"mode": "padding", "padding": {"top": 40, "right": 0, "bottom": 0, "left": 0}, "client_id": client_id})},
+                )
+                tid = r.json()["task_id"]
+                row = ps_expand.coordinator._claim_next_queued_task("win-ps-01")
+                self.assertIsNotNone(row)
+                self.assertEqual(row["task_id"], tid)
+                return tid
+
+            # 1. _mark_task_timeout 首次写日志，重复调用不重复记账
+            t1 = _submit_and_claim("c1")
+            ps_expand.coordinator._mark_task_timeout(t1, "timeout 1")
+            ps_expand.coordinator._mark_task_timeout(t1, "timeout 1 dup")
+
+            # 2. _mark_worker_stale_processing_timeout
+            t2 = _submit_and_claim("c2")
+            ps_expand.coordinator._mark_worker_stale_processing_timeout("win-ps-01", "worker restarted")
+
+            # 3. init_ps_expand_tables 启动回收
+            t3 = _submit_and_claim("c3")
+            ps_expand.init_ps_expand_tables()
+
+            with ps_expand._get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT detail FROM operation_logs WHERE action = 'ps_expand' ORDER BY rowid ASC"
+                ).fetchall()
+            self.assertEqual(len(rows), 3)
+            details = [r["detail"] for r in rows]
+            self.assertTrue(any(t1 in d and "status=timeout" in d for d in details))
+            self.assertTrue(any(t2 in d and "status=timeout" in d for d in details))
+            self.assertTrue(any(t3 in d and "status=timeout" in d for d in details))
+        finally:
+            job_store._DB_PATH = orig_store_db
+
     def test_end_to_end_worker_ws_flow(self) -> None:
         img = _make_png_bytes(200, 100)
 

@@ -217,22 +217,34 @@ def init_ps_expand_tables() -> None:
             conn.execute("ALTER TABLE expand_tasks ADD COLUMN variants_complete INTEGER DEFAULT 1")
         if "variant_warning" not in existing_cols:
             conn.execute("ALTER TABLE expand_tasks ADD COLUMN variant_warning TEXT DEFAULT ''")
-        # 服务重启时，之前处于 processing 的任务视为中断超时，避免前端永久等待
+        # 服务重启时，之前处于 processing 的任务视为中断超时，逐条更新并补写操作日志（幂等防重复）
         now_iso = _now_iso()
         now_ts = _now_ts()
-        conn.execute(
-            """
-            UPDATE expand_tasks
-            SET status = 'timeout',
-                stage = '',
-                error_code = 'PS_EXEC_TIMEOUT',
-                error_message = '服务端重启，处理中的任务已中断，请重新提交。',
-                finished_at = ?,
-                updated_ts = ?
-            WHERE status = 'processing'
-            """,
-            (now_iso, now_ts),
-        )
+        stale_rows = conn.execute(
+            "SELECT task_id, requested_variants FROM expand_tasks WHERE status = 'processing'"
+        ).fetchall()
+        for r in stale_rows:
+            cur = conn.execute(
+                """
+                UPDATE expand_tasks
+                SET status = 'timeout',
+                    stage = '',
+                    error_code = 'PS_EXEC_TIMEOUT',
+                    error_message = '服务端重启，处理中的任务已中断，请重新提交。',
+                    finished_at = ?,
+                    updated_ts = ?
+                WHERE task_id = ? AND status = 'processing'
+                """,
+                (now_iso, now_ts, r["task_id"]),
+            )
+            if cur.rowcount == 1:
+                _record_ps_expand_operation_log(
+                    conn,
+                    task_id=r["task_id"],
+                    status="timeout",
+                    requested_variants=int(r["requested_variants"] or 3),
+                    error_code="PS_EXEC_TIMEOUT",
+                )
         conn.commit()
 
 
@@ -624,7 +636,7 @@ class ExpandCoordinator:
 
     def _mark_task_timeout(self, task_id: str, message: str) -> None:
         with _get_conn() as conn:
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE expand_tasks
                 SET status = 'timeout',
@@ -637,23 +649,50 @@ class ExpandCoordinator:
                 """,
                 (message, _now_iso(), _now_ts(), task_id),
             )
+            if cur.rowcount == 1:
+                row = conn.execute(
+                    "SELECT requested_variants FROM expand_tasks WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
+                _record_ps_expand_operation_log(
+                    conn,
+                    task_id=task_id,
+                    status="timeout",
+                    requested_variants=int((row["requested_variants"] if row else 3) or 3),
+                    error_code="PS_EXEC_TIMEOUT",
+                )
             conn.commit()
 
     def _mark_worker_stale_processing_timeout(self, worker_id: str, message: str) -> None:
         with _get_conn() as conn:
-            conn.execute(
-                """
-                UPDATE expand_tasks
-                SET status = 'timeout',
-                    stage = '',
-                    error_code = 'PS_EXEC_TIMEOUT',
-                    error_message = ?,
-                    finished_at = ?,
-                    updated_ts = ?
-                WHERE worker_id = ? AND status = 'processing'
-                """,
-                (message, _now_iso(), _now_ts(), worker_id),
-            )
+            stale_rows = conn.execute(
+                "SELECT task_id, requested_variants FROM expand_tasks WHERE worker_id = ? AND status = 'processing'",
+                (worker_id,),
+            ).fetchall()
+            now_iso = _now_iso()
+            now_ts = _now_ts()
+            for r in stale_rows:
+                cur = conn.execute(
+                    """
+                    UPDATE expand_tasks
+                    SET status = 'timeout',
+                        stage = '',
+                        error_code = 'PS_EXEC_TIMEOUT',
+                        error_message = ?,
+                        finished_at = ?,
+                        updated_ts = ?
+                    WHERE task_id = ? AND status = 'processing'
+                    """,
+                    (message, now_iso, now_ts, r["task_id"]),
+                )
+                if cur.rowcount == 1:
+                    _record_ps_expand_operation_log(
+                        conn,
+                        task_id=r["task_id"],
+                        status="timeout",
+                        requested_variants=int(r["requested_variants"] or 3),
+                        error_code="PS_EXEC_TIMEOUT",
+                    )
             conn.commit()
 
     async def handle_worker_message(self, worker: ConnectedWorker, data: dict[str, Any]) -> None:
