@@ -1152,11 +1152,21 @@ $._loomAiPainter._findArtLayerInSet = function (layerSet, layerName) {
   return null;
 };
 
-$._loomAiPainter._findTopLevelArtLayer = function (doc, layerName) {
+$._loomAiPainter._findLayerById = function (container, layerId) {
+  if (!container || !layerId) return null;
   var i;
-  for (i = 0; i < doc.artLayers.length; i += 1) {
-    if (doc.artLayers[i].name === layerName) {
-      return doc.artLayers[i];
+  var found;
+  if (container.artLayers) {
+    for (i = 0; i < container.artLayers.length; i += 1) {
+      if (container.artLayers[i].id === layerId) {
+        return container.artLayers[i];
+      }
+    }
+  }
+  if (container.layerSets) {
+    for (i = 0; i < container.layerSets.length; i += 1) {
+      found = $._loomAiPainter._findLayerById(container.layerSets[i], layerId);
+      if (found) return found;
     }
   }
   return null;
@@ -1178,30 +1188,37 @@ $._loomAiPainter._applyExpandVariantInner = function (targetDoc, args) {
   var layerName = args.layerName || args.groupName || "AI 扩展";
   var variantIndex = Number(args.variantIndex) || 0;
   var totalVariants = Number(args.totalVariants) || 3;
-  var existingLayer = $._loomAiPainter._findTopLevelArtLayer(targetDoc, layerName);
+  var isInitial = Boolean(args.isInitial);
+  var requestedLayerId = (args.layerId !== null && typeof args.layerId !== "undefined") ? Number(args.layerId) : 0;
 
-  // 情况 1：单原生生成式图层已存在 -> 直接调用 selectGeneratedVariation 原地零闪烁切换（不打开任何文件、不新增图层）
-  if (existingLayer) {
+  // 情况 1：非首次导入且持有本任务专属 layerId -> 按唯一 layerId 精确找回该任务图层，原地切换原生变体
+  // 绝不按显示名匹配复用，避免同一分钟内二次扩图误命中上一个任务的图层
+  if (!isInitial && requestedLayerId > 0) {
+    var existingLayer = $._loomAiPainter._findLayerById(targetDoc, requestedLayerId);
+    if (!existingLayer) {
+      throw new Error("当前任务的扩展图层已不存在（可能已被手动删除），无法切换变体。");
+    }
     targetDoc.activeLayer = existingLayer;
     if (!existingLayer.visible) existingLayer.visible = true;
     try {
       $._loomAiPainter._selectGeneratedVariationOnActiveLayer(variantIndex, totalVariants);
-      return {
-        created: false,
-        nativeSwitch: true,
-        layerName: layerName,
-        variantIndex: variantIndex
-      };
-    } catch (_switchErr) {
-      // 兜底：若旧版 PS 不支持直接切内嵌变体，则删除旧层并原地替换为新层，依然保证文档中只有 1 个图层
-      try { existingLayer.remove(); } catch (_rmErr) {}
+    } catch (switchErr) {
+      // 保留用户原图层（含蒙版与变换），严禁删除重建或静默吞错
+      throw new Error("当前 Photoshop 无法切换该图层的原生变体：" + (switchErr.message || switchErr.toString()));
     }
+    return {
+      created: false,
+      nativeSwitch: true,
+      layerId: existingLayer.id,
+      layerName: existingLayer.name,
+      variantIndex: variantIndex
+    };
   }
 
   var insertedLayer = null;
   var usedNativePsd = false;
 
-  // 情况 2：首次导入 -> 打开 1 份原生分层 PSD，只把顶层 1 个带蒙版的生成式图层直接复制到文档顶层
+  // 情况 2：每个新任务首次导入 -> 必须打开新任务的原生分层 PSD，创建本任务独立的生成式图层并返回其唯一 layerId
   if (args.psdPath && (new File(args.psdPath)).exists) {
     var psdDoc = app.open(new File(args.psdPath));
     try {
@@ -1220,7 +1237,9 @@ $._loomAiPainter._applyExpandVariantInner = function (targetDoc, args) {
     if (variantIndex > 0) {
       try {
         $._loomAiPainter._selectGeneratedVariationOnActiveLayer(variantIndex, totalVariants);
-      } catch (_initVarErr) {}
+      } catch (initVarErr) {
+        throw new Error("已置入默认变体，但切换至变体 " + (variantIndex + 1) + " 失败：" + (initVarErr.message || initVarErr.toString()));
+      }
     }
   } else {
     if (!args.imagePath) {
@@ -1282,7 +1301,8 @@ $._loomAiPainter._applyExpandVariantInner = function (targetDoc, args) {
     created: true,
     nativeSwitch: false,
     nativePsd: usedNativePsd,
-    layerName: layerName,
+    layerId: insertedLayer.id,
+    layerName: insertedLayer.name,
     variantIndex: variantIndex
   };
 };

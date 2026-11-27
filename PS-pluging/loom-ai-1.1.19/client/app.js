@@ -424,6 +424,7 @@
         taskId: submitRes.task_id,
         documentId: session.documentId,
         groupName: activeTask.groupName,
+        layerId: null,
         cacheDir: cacheDir,
         items: downloaded,
         activeIndex: 0
@@ -603,17 +604,23 @@
       var startedAt = Date.now();
       var res = await hostBridge.evalHost("applyExpandVariant", {
         documentId: activeVariants.documentId,
+        taskId: activeVariants.taskId,
+        layerId: isInitial ? null : activeVariants.layerId,
+        isInitial: Boolean(isInitial),
         layerName: activeVariants.groupName || "AI 扩展",
         variantIndex: index,
         totalVariants: activeVariants.items.length || 3,
         imagePath: item.localPath,
         psdPath: item.psdLocalPath || ""
       });
+      if (res && typeof res.layerId === "number") {
+        activeVariants.layerId = res.layerId;
+      }
       activeVariants.activeIndex = index;
       if (!isInitial) {
         setStatus("变体 " + (index + 1), "success");
         appendLog(
-          "切换至变体 " + (index + 1) + (res.nativeSwitch ? "（原生单层零闪烁切换）" : (res.created ? "（置入单层）" : "（原地替换）")) +
+          "切换至变体 " + (index + 1) + (res.nativeSwitch ? "（原生单层零闪烁切换）" : "（首次置入单层）") +
           "，耗时 " + utils.formatElapsed(startedAt) + "。",
           "muted"
         );
